@@ -1,0 +1,137 @@
+(ns kmet.agent.session
+  "EDNL session storage — line-delimited EDN with parent-child IDs for tree branching.
+   Each entry is an EDN map on one line: {:id str :parent-id str-or-nil :role keyword ...}
+   Port of @earendil-works/pi-agent session storage."
+  (:require [clojure.java.io :as io]
+            [clojure.edn :as edn]))
+
+;; ─── Session record ─────────────────────────────────────────────────────────
+
+(defrecord Session [file id entries leaf-id])
+
+(defn- generate-id []
+  (let [now (System/currentTimeMillis)
+        rand (rand-int 0xFFFF)]
+    (str (Long/toHexString now) "-" (Integer/toHexString rand))))
+
+(defn- timestamp []
+  (java.time.Instant/now))
+
+;; ─── CRUD ───────────────────────────────────────────────────────────────────
+
+(defn create-session
+  "Create a new session file in dir. Returns Session record."
+  [dir]
+  (let [session-dir (io/file dir)]
+    (.mkdirs session-dir)
+    (let [id (generate-id)
+          file (io/file session-dir (str id ".ednl"))]
+      (spit file "")
+      (map->Session {:file (.getAbsolutePath file)
+                     :id id
+                     :entries (atom [])
+                     :leaf-id (atom nil)}))))
+
+(defn load-session
+  "Load an existing session from file path. Returns Session record."
+  [path]
+  (let [file (io/file path)
+        entries (with-open [rdr (java.io.PushbackReader. (io/reader file))]
+                  (loop [entries []]
+                    (let [e (try (edn/read {:eof nil} rdr) (catch Exception _ nil))]
+                      (if (nil? e) entries (recur (conj entries e))))))
+        leaf-id (some-> entries last :id)]
+    (map->Session {:file (.getAbsoluteFile file)
+                   :id (clojure.string/replace (.getName file) #"\.ednl$" "")
+                   :entries (atom entries)
+                   :leaf-id (atom leaf-id)})))
+
+(defn append-entry
+  "Append an entry to the session file and atom."
+  [session entry]
+  (let [entry (assoc entry :id (generate-id)
+                     :parent-id @(:leaf-id session)
+                     :timestamp (str (timestamp)))
+        file (:file session)]
+    (spit file (prn-str entry) :append true)
+    (swap! (:entries session) conj entry)
+    (reset! (:leaf-id session) (:id entry))
+    entry))
+
+(defn get-branch
+  "Get entries from root to leaf-id (active branch)."
+  [session]
+  (let [entries @(:entries session)]
+    (if (empty? entries)
+      []
+      (let [index (reduce (fn [m e] (assoc m (:id e) e)) {} entries)
+            path (volatile! [])]
+        (loop [id @(:leaf-id session)]
+          (when id
+            (when-let [e (get index id)]
+              (vswap! path conj e)
+              (recur (:parent-id e)))))
+        (vec (reverse @path))))))
+
+(defn compact!
+  "Summarize older entries beyond a threshold by replacing them with a summary."
+  [session max-entries]
+  (let [entries @(:entries session)
+        n (count entries)]
+    (when (> n max-entries)
+      (let [keep (vec (take-last (quot max-entries 2) entries))
+            summarize (vec (drop-last (quot max-entries 2) (drop-last (count keep) entries)))]
+        (when (seq summarize)
+          (let [summary-text (str "[Compacted " (count summarize)
+                                  " messages — " (first summarize) " to "
+                                  (last summarize) "]")
+                summary-entry {:role :system
+                               :content [{:type :text :text summary-text}]
+                               :id (generate-id)
+                               :parent-id (or (:parent-id (first summarize)) nil)
+                               :timestamp (str (timestamp))}
+                new-entries (vec (concat [summary-entry] keep))]
+            (reset! (:entries session) new-entries)
+            (reset! (:leaf-id session) (:id (last new-entries)))
+            ;; Rewrite file
+            (spit (:file session) (apply str (map prn-str new-entries))))))
+      @(:leaf-id session))))
+
+(defn fork-session
+  "Create a new session forked at the given entry-id."
+  [session entry-id]
+  (let [entries @(:entries session)
+        index (reduce (fn [m e] (assoc m (:id e) e)) {} entries)
+        target (get index entry-id)]
+    (when target
+      (let [fork-dir (io/file (.getParent (io/file (:file session))) "forks")]
+        (.mkdirs fork-dir)
+        (let [fork (create-session (.getAbsolutePath fork-dir))
+              ;; Copy branch up to target
+              branch (loop [id entry-id result []]
+                       (if id
+                         (if-let [e (get index id)]
+                           (recur (:parent-id e) (conj result e))
+                           result)
+                         result))]
+          (doseq [e (reverse branch)]
+            (let [clean (dissoc e :id :parent-id :timestamp)]
+              (append-entry fork clean)))
+          fork)))))
+
+;; ─── Convenience ───────────────────────────────────────────────────────────
+
+(defn list-sessions
+  "List all session files in a directory, newest first."
+  [dir]
+  (let [d (io/file dir)]
+    (when (.isDirectory d)
+      (->> (.listFiles d #(and (.isFile %) (.endsWith (.getName %) ".ednl")))
+           (sort-by #(.lastModified %) >)
+           (mapv #(.getAbsolutePath %))))))
+
+(defn delete-session!
+  "Delete a session file."
+  [session]
+  (let [f (io/file (:file session))]
+    (when (.exists f) (.delete f))))

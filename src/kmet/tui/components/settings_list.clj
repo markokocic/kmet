@@ -19,25 +19,26 @@
 ;; ─── SettingsList component ─────────────────────────────────────────────────
 
 (defrecord SettingsList [items-atom selected-idx-atom filter-atom
-                         focused? theme-atom cache-atom]
+                         focused? theme-atom cache-atom
+                         on-change-atom on-escape-atom]
   protocols/IComponent
 
   (render [this width]
     (let [items @items-atom
-          filter @filter-atom
+          flt @filter-atom
           selected @selected-idx-atom
           theme @theme-atom
           cache @cache-atom]
       (if (and cache (= (:width cache) width) (= (:items cache) items)
-               (= (:filter cache) filter) (= (:theme cache) theme))
+               (= (:filter cache) flt) (= (:theme cache) theme))
         (:lines cache)
-        (let [filtered (if (empty? filter)
+        (let [filtered (if (empty? flt)
                          items
                          (->> items
                               (filter #(let [label (:label %)]
                                         (clojure.string/includes?
                                           (clojure.string/lower-case label)
-                                          (clojure.string/lower-case filter))))))
+                                          (clojure.string/lower-case flt))))))
               n (count filtered)
               selected (min selected (max 0 (dec n)))
               _ (reset! selected-idx-atom selected)
@@ -45,7 +46,7 @@
           ;; Header
           (vswap! lines conj
             (str " \u001b[1mSettings"
-                 (if (empty? filter) "" (str " (filter: " filter ")"))
+                 (if (empty? flt) "" (str " (filter: " flt ")"))
                  "\u001b[0m"))
           ;; Items
           (doseq [[idx item] (map-indexed vector filtered)]
@@ -74,25 +75,25 @@
               (str "  \u001b[2mNo matching settings\u001b[0m"
                    (apply str (repeat (max 0 (- width 35)) \space)))))
           (let [result @lines]
-            (reset! cache-atom {:width width :items items :filter filter
+            (reset! cache-atom {:width width :items items :filter flt
                                 :theme theme :lines result})
             result)))))
 
   (handle-input [this data]
     (let [items @items-atom
-          filter @filter-atom
-          filtered (if (empty? filter)
+          flt @filter-atom
+          filtered (if (empty? flt)
                      items
                      (->> items
                           (filter #(clojure.string/includes?
                                      (clojure.string/lower-case (:label %))
-                                     (clojure.string/lower-case filter)))))
+                                     (clojure.string/lower-case flt)))))
           n (count filtered)
           selected @selected-idx-atom]
       (cond
         ;; Escape — close
         (keys/matches-key? data "escape")
-        (do (when-let [cb @(:on-escape (meta this))] (cb))
+        (do (when-let [cb @on-escape-atom] (cb))
             nil)
 
         ;; Down / Ctrl+n
@@ -118,7 +119,7 @@
                         next-idx (mod (inc (if (neg? cur-idx) -1 cur-idx))
                                       (count possible))
                         new-val (nth possible next-idx)]
-                    (when-let [cb @(:on-change (meta this))]
+                    (when-let [cb @on-change-atom]
                       (cb (:id item) new-val))
                     (swap! items-atom update-in
                       [(.indexOf items item) :value] (constantly new-val))
@@ -136,7 +137,7 @@
                         prev-idx (mod (dec (if (neg? cur-idx) 0 cur-idx))
                                       (count possible))
                         new-val (nth possible prev-idx)]
-                    (when-let [cb @(:on-change (meta this))]
+                    (when-let [cb @on-change-atom]
                       (cb (:id item) new-val))
                     (swap! items-atom update-in
                       [(.indexOf items item) :value] (constantly new-val))
@@ -172,18 +173,17 @@
    Options: :theme (default-theme), :on-change callback"
   [items & {:keys [theme on-change]
             :or {theme default-theme}}]
-  (let [sl (map->SettingsList {:items-atom (atom items)
-                               :selected-idx-atom (atom 0)
-                               :filter-atom (atom "")
-                               :focused? (atom false)
-                               :theme-atom (atom theme)
-                               :cache-atom (atom nil)})]
-    ;; Store callbacks in metadata
-    (with-meta sl {:on-change (atom on-change)
-                   :on-escape (atom nil)})))
+  (map->SettingsList {:items-atom (atom items)
+                      :selected-idx-atom (atom 0)
+                      :filter-atom (atom "")
+                      :focused? (atom false)
+                      :theme-atom (atom theme)
+                      :cache-atom (atom nil)
+                      :on-change-atom (atom on-change)
+                      :on-escape-atom (atom nil)}))
 
 (defn settings-list-set-on-escape! [sl f]
-  (alter-meta! sl assoc :on-escape (atom f)))
+  (reset! (:on-escape-atom sl) f))
 
 ;; ─── Public helpers ─────────────────────────────────────────────────────────
 

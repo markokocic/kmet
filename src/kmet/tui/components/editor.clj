@@ -259,11 +259,11 @@
 
 ;; ─── Word navigation
 
-(defn- word-boundary-left [lines cursor-line cursor-col]
+(defn- word-boundary-left [editor-lines cursor-line cursor-col]
   (let [cl (max 0 cursor-line) cc (max 0 cursor-col)]
     (if (and (zero? cl) (zero? cc))
       [0 0]
-      (let [line (get lines cl "") n (count line)]
+      (let [line (get editor-lines cl "") n (count line)]
         (if (> cc 0)
           (let [before (subs line 0 cc)
                 no-trail (clojure.string/replace before #"\s+$" "")
@@ -281,9 +281,9 @@
                         word-char? (if is-word (recur (dec i)) (inc i))
                         :else (if is-word (inc i) (recur (dec i))))))))))
           (if (> cl 0)
-            (let [prev-line (get lines (dec cl) "")]
+            (let [prev-line (get editor-lines (dec cl) "")]
               (if (zero? (count prev-line))
-                (word-boundary-left lines (dec cl) 0)
+                (word-boundary-left editor-lines (dec cl) 0)
                 (let [no-trail (clojure.string/replace prev-line #"\s+$" "")
                       trimmed (count no-trail)]
                   (if (zero? trimmed) [(dec cl) 0]
@@ -300,10 +300,10 @@
                               :else (if is-word (inc i) (recur (dec i))))))))))))
             [0 0])))))
 
-(defn- word-boundary-right [lines cursor-line cursor-col]
-  (let [cl (max 0 cursor-line) cc (max 0 cursor-col) total (count lines)]
-    (if (and (>= cl (dec total)) (>= cc (count (get lines cl "")))) [cl cc]
-      (let [line (get lines cl "") n (count line)]
+(defn- word-boundary-right [editor-lines cursor-line cursor-col]
+  (let [cl (max 0 cursor-line) cc (max 0 cursor-col) total (count editor-lines)]
+    (if (and (>= cl (dec total)) (>= cc (count (get editor-lines cl "")))) [cl cc]
+      (let [line (get editor-lines cl "") n (count line)]
         (if (< cc n)
           (let [bi (java.text.BreakIterator/getWordInstance)]
             (.setText bi line)
@@ -583,15 +583,15 @@
 ;; ─── Cursor movement
 
 (defn- move-cursor-word-left [editor]
-  (let [state @(:state-atom editor) lines (:lines state)
-        [nl nc] (word-boundary-left lines (:cursor-line state) (:cursor-col state))]
+  (let [s @(:state-atom editor)
+        [nl nc] (word-boundary-left (:lines s) (:cursor-line s) (:cursor-col s))]
     (swap! (:state-atom editor) assoc :cursor-line nl :cursor-col nc)
     (reset! (:preferred-col-atom editor) nil)
     (reset! (:last-action editor) nil)))
 
 (defn- move-cursor-word-right [editor]
-  (let [state @(:state-atom editor) lines (:lines state)
-        [nl nc] (word-boundary-right lines (:cursor-line state) (:cursor-col state))]
+  (let [s @(:state-atom editor)
+        [nl nc] (word-boundary-right (:lines s) (:cursor-line s) (:cursor-col s))]
     (swap! (:state-atom editor) assoc :cursor-line nl :cursor-col nc)
     (reset! (:preferred-col-atom editor) nil)
     (reset! (:last-action editor) nil)))

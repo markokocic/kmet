@@ -32,8 +32,9 @@ The TUI is a Clojure port of [@earendil-works/pi-tui](https://github.com/badlogi
 
 - **JLine3** (bundled with bb 1.12.215+) for terminal I/O — raw mode, input reading, dimensions
 - **No external TUI libraries** — build from scratch to match pi-tui's API exactly
-- **core.async** for communication between TUI thread and agent thread
-- **babashka.http-client** for LLM API calls
+- **Atoms + futures** for communication between TUI thread and agent thread (no core.async yet)
+- **babashka.http-client** for LLM API calls (SSE streaming)
+- **cheshire.core** for JSON (bundled with bb)
 - **clojure.edn** (bundled) for EDN read/write
 - **EDN for config** (`~/.config/kmet/settings.edn`, `.kmet/settings.edn`)
 - **bb task runner** for development (`bb run`, `bb test`)
@@ -55,22 +56,41 @@ kmet/
 │   │   ├── terminal.clj     # JLine3 wrapper: raw mode, write, dimensions
 │   │   ├── keys.clj         # Key parsing and matching (matches-key?, parse-key)
 │   │   ├── utils.clj        # visible-width, truncate-to-width, wrap-text, ANSI helpers
-│   │   ├── index.clj        # Re-exports for convenient (require 'kmet.tui)
+│   │   ├── protocols.clj    # IComponent, IFocusable protocols
 │   │   └── components/
-│   │       ├── container.clj  # IComponent that groups children (TODO)
+│   │       ├── container.clj  # IComponent that groups children
 │   │       ├── text.clj       # Multi-line word-wrapped text
 │   │       ├── spacer.clj     # N empty lines
-│   │       ├── box.clj        # Box with padding + background (TODO)
-│   │       ├── input.clj      # Single-line input (TODO)
-│   │       ├── editor.clj     # Multi-line editor (TODO)
-│   │       ├── select_list.clj # Selection list (TODO)
-│   │       ├── settings_list.clj # Settings toggle list (TODO)
-│   │       └── markdown.clj   # Markdown to ANSI renderer (TODO)
+│   │       ├── box.clj        # Container with padding + background
+│   │       ├── input.clj      # Single-line input with undo, yank, word nav
+│   │       ├── editor.clj     # Multi-line editor with undo/redo, word-wrap, kill-ring
+│   │       ├── select_list.clj # Interactive selection list with fuzzy filtering
+│   │       ├── settings_list.clj # Toggle/cycle through setting values
+│   │       └── markdown.clj   # Markdown to ANSI renderer
 │   └── agent/
-│       ├── llm.clj           # LLM API client — Anthropic + OpenAI (TODO)
-│       ├── tools.clj         # Tool definitions and execution (TODO)
-│       ├── loop.clj          # Agent turn loop (TODO)
-│       └── session.clj       # EDNL session storage (TODO)
+│       ├── llm.clj           # LLM API client — OpenAI + Anthropic, SSE streaming
+│       ├── tools.clj         # 7 built-in tools (read/write/edit/bash/grep/find/ls)
+│       ├── loop.clj          # Agent turn loop with tool call cycling
+│       └── session.clj       # EDNL session storage with branching
+├── test/
+│   ├── kmet/
+│   │   ├── runner.clj        # Test runner
+│   │   ├── test_utils.clj    # visible-width, truncate tests
+│   │   ├── test_keys.clj     # Key parsing tests
+│   │   ├── test_session.clj  # Session CRUD tests
+│   │   ├── test_tools.clj    # Tool execution tests
+│   │   ├── test_llm.clj      # LLM module tests
+│   │   ├── test_loop.clj     # Agent loop tests
+│   │   └── tui/components/
+│   │       ├── test_text.clj
+│   │       ├── test_spacer.clj
+│   │       ├── test_container.clj
+│   │       ├── test_box.clj
+│   │       ├── test_input.clj
+│   │       ├── test_editor.clj
+│   │       ├── test_select_list.clj
+│   │       ├── test_settings_list.clj
+│   │       └── test_markdown.clj
 ```
 
 ---
@@ -90,7 +110,9 @@ kmet/
 
 **Legacy sequences mapped:** arrows, home/end, page up/down, insert/delete, function keys F1-F12, shift+arrows, ctrl+arrows, alt+arrows.
 
-**Next:** Add more CSI-u (Kitty protocol) parsing and `parse-key` improvements for complex sequences.
+**Implemented:** ASCII/Basic control chars, legacy escape sequences (arrows, home/end, page up/down, insert/delete, F-keys, shift/ctrl/alt variants), Kitty protocol state tracking.
+
+**Tests:** `test_keys.clj` — 9 test vars, all passing.
 
 ### 3.2 `kmet.tui.terminal` — JLine3 Wrapper
 
@@ -112,6 +134,8 @@ kmet/
 (t/columns term)  ;; => 80
 ```
 
+**Tests:** Terminal tests in `test_terminal.clj`.
+
 ### 3.3 `kmet.tui.utils` — Text Utilities
 
 **Functions:**
@@ -124,7 +148,11 @@ kmet/
 
 **Width calculation:** ASCII = 1, CJK (U+2E80..U+9FFF, Hangul, fullwidth) = 2, emoji ranges = 2, tabs = 4, controls = 0.
 
-### 3.4 `kmet.tui.core` — TUI Class
+### 3.4 `kmet.tui.protocols` — Protocols
+
+**Implemented:** `IComponent` (render, handle-input, invalidate), `IFocusable` (focused, set-focused!).
+
+### 3.5 `kmet.tui.core` — TUI Class
 
 **Protocols:**
 
@@ -642,10 +670,36 @@ Zero-width APC sequence `\x1b_pi:c\x07` emitted by `IFocusable` components at th
 
 1. ~~**Phase 1** — TUI Foundation~~ ✅ DONE
 2. ~~**Phase 2a** — `input.clj`, `container.clj`, `box.clj` (basic interactive components)~~ ✅ DONE
-3. **Phase 2b** — `editor.clj` (the big one — core of user input) ← CURRENT
-4. **Phase 2c** — `select_list.clj`, `settings_list.clj`, `markdown.clj`
-5. **Phase 3a** — `llm.clj` (Anthropic first, then OpenAI)
-6. **Phase 3b** — `tools.clj` (read, write, edit, bash)
-7. **Phase 3c** — `loop.clj` + `session.clj` (agent orchestration)
-8. **Phase 4** — Chat history integration, main TUI layout, commands
+3. ~~**Phase 2b** — `editor.clj` (multi-line editor with undo/redo, word-wrap, kill-ring, paste markers, jump mode, history, autocomplete)~~ ✅ DONE
+4. ~~**Phase 2c** — `select_list.clj`, `settings_list.clj`, `markdown.clj`~~ ✅ DONE
+5. ~~**Phase 3a** — `llm.clj` (OpenAI first, then Anthropic — SSE streaming, tool use)~~ ✅ DONE
+6. ~~**Phase 3b** — `tools.clj` (read, write, edit, bash, grep, find, ls — parameter validation, tool registry)~~ ✅ DONE
+7. ~~**Phase 3c** — `loop.clj` + `session.clj` (agent orchestration with tool cycle, EDNL session persistence)~~ ✅ DONE
+8. **Phase 4** — Chat history integration, main TUI layout, commands ← CURRENT
 9. **Phase 5** — Themes, config, polish
+
+---
+
+## Test Coverage
+
+**219 tests, 532 assertions, 0 failures.**
+
+| Module | Tests | Key coverage |
+|--------|-------|-------------|
+| `kmet.tui.utils` | 2 | visible-width, truncate-to-width |
+| `kmet.tui.keys` | 9 | constants, modifiers, parse-key (ctrl/special/legacy/alt/regular), matches-key |
+| `kmet.tui.components.text` | 5 | create, render, padding, set-text, word-wrap |
+| `kmet.tui.components.spacer` | 2 | create, render |
+| `kmet.tui.components.container` | 3 | create, add/remove children, render |
+| `kmet.tui.components.box` | 5 | create, render (with/without padding), empty, multiple children, background fn |
+| `kmet.tui.components.input` | 20 | create, typing, cursor movement, backspace/delete, line editing (ctrl+u/k/w), undo, yank, word nav, submit/escape, edge cases |
+| `kmet.tui.components.editor` | 29 | create, typing, multi-line, backspace/delete, cursor movement, undo/redo, line editing, yank, word nav, submit, set-text, history, height, on-change, render, edge cases |
+| `kmet.tui.components.select-list` | 17 | create, navigation (up/down/home/end/page), ctrl+n/p, filtering, selection, escape, get-selected, set-items, theme, render, cache |
+| `kmet.tui.components.settings-list` | 14 | create, navigation, value cycling (right/left/wrap), on-change, filtering, escape, get-item/set-value, render |
+| `kmet.tui.components.markdown` | 16 | create, render (plain, headings, code, bold, italic, inline-code, lists, blockquotes, links, hr), set-text/append, invalidate, cache |
+| `kmet.agent.session` | 11 | create, append, parent chain, get-branch, save/load, list, fork, compact, delete |
+| `kmet.agent.tools` | 17 | registry (get/get-all/unknown), all 7 tool executions, error handling, schemas (Anthropic/OpenAI), custom registration |
+| `kmet.agent.llm` | 8 | module loading, no-API-key errors, unknown provider, tool schema consistency, future return |
+| `kmet.agent.loop` | 10 | state construction, context, setter helpers, cancel, status transitions, run-turn error handling |
+
+Run tests: `bb test`
