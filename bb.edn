@@ -3,6 +3,8 @@
  :tasks
  {run     {:doc "Run kmet demo"
            :requires ([kmet.demo :as demo])
-           :task (demo/-main)}
+           :task (demo/-main)
+           :override-builtin true}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run   Run TUI demo")}}}
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run   Run TUI demo")
+           :override-builtin true}}}
