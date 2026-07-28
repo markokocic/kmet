@@ -9,7 +9,8 @@
             [kmet.tui.components.container :as container]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.box :as box]
-            [kmet.tui.components.input :as input]))
+            [kmet.tui.components.input :as input]
+            [kmet.tui.components.editor :as editor]))
 
 ;; Re-exports from core
 (def IComponent core/IComponent)
@@ -90,3 +91,8 @@
 (def input-get-value input/input-get-value)
 (def input-set-on-submit! input/input-set-on-submit!)
 (def input-set-on-escape! input/input-set-on-escape!)
+(def make-editor editor/make-editor)
+(def editor-set-text! editor/editor-set-text!)
+(def editor-get-text editor/editor-get-text)
+(def editor-set-on-submit! editor/editor-set-on-submit!)
+(def editor-set-on-change! editor/editor-set-on-change!)
