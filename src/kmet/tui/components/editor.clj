@@ -179,52 +179,178 @@
                         :cursor-line (max 0 (dec last-idx))
                         :cursor-col (count (last lines))}))))
 
-;; ─── Public helpers (needed before internal helpers reference them) ────────
+;; ─── Public helpers ────────
 
 (defn editor-get-text [editor]
   (clojure.string/join "\n" (:lines @(:state-atom editor))))
 
-;; ─── Internal helpers (defined before defrecord) ───────────────────────────
+
+
+;; ─── Kill ring
+
+(defrecord KillRing [entries])
+
+(defn make-kill-ring []
+  (map->KillRing {:entries (atom [])}))
+
+(defn- kill-ring-push [kr text & {:keys [prepend accumulate]}]
+  (when (seq text)
+    (swap! (:entries kr)
+      (fn [es]
+        (if (and accumulate (seq es))
+          (let [last (peek es)]
+            (conj (vec (butlast es))
+                  (if prepend (str text last) (str last text))))
+          (conj (vec es) text))))))
+
+(defn- kill-ring-peek [kr]
+  (peek @(:entries kr)))
+
+(defn- kill-ring-rotate [kr]
+  (swap! (:entries kr)
+    (fn [es]
+      (if (> (count es) 1)
+        (into [(peek es)] (vec (butlast es)))
+        es))))
+
+(defn- kill-ring-length [kr]
+  (count @(:entries kr)))
+
+;; ─── Undo/redo stacks
+
+(defn- snapshot-state [state-atom]
+  (let [s @state-atom]
+    {:lines (:lines s) :cursor-line (:cursor-line s) :cursor-col (:cursor-col s)}))
+
+(defn- undo-push [stack-atom snapshot]
+  (swap! stack-atom conj snapshot))
+
+(defn- undo-pop [stack-atom]
+  (let [s @stack-atom]
+    (when (seq s)
+      (let [snapshot (peek s)]
+        (swap! stack-atom pop)
+        snapshot))))
+
+(defn- push-undo-state [editor]
+  (undo-push (:undo-stack editor) (snapshot-state (:state-atom editor))))
+
+(defn- handle-undo [editor]
+  (when-let [snapshot (undo-pop (:undo-stack editor))]
+    (undo-push (:redo-stack editor) (snapshot-state (:state-atom editor)))
+    (reset! (:state-atom editor)
+      (map->EditorState {:lines (:lines snapshot)
+                         :cursor-line (:cursor-line snapshot)
+                         :cursor-col (:cursor-col snapshot)}))
+    (reset! (:preferred-col-atom editor) nil)
+    (reset! (:last-action editor) nil)))
+
+(defn- handle-redo [editor]
+  (when-let [snapshot (undo-pop (:redo-stack editor))]
+    (undo-push (:undo-stack editor) (snapshot-state (:state-atom editor)))
+    (reset! (:state-atom editor)
+      (map->EditorState {:lines (:lines snapshot)
+                         :cursor-line (:cursor-line snapshot)
+                         :cursor-col (:cursor-col snapshot)}))
+    (reset! (:preferred-col-atom editor) nil)
+    (reset! (:last-action editor) nil)))
+
+;; ─── Word navigation
+
+(defn- word-boundary-left [lines cursor-line cursor-col]
+  (let [cl (max 0 cursor-line) cc (max 0 cursor-col)]
+    (if (and (zero? cl) (zero? cc))
+      [0 0]
+      (let [line (get lines cl "") n (count line)]
+        (if (> cc 0)
+          (let [before (subs line 0 cc)
+                no-trail (clojure.string/replace before #"\s+$" "")
+                trimmed (count no-trail)]
+            (if (zero? trimmed) [cl 0]
+              (let [last-char (subs no-trail (dec trimmed))
+                    word-char? (boolean (re-find #"^\w" last-char))]
+                (loop [i (dec trimmed)]
+                  (if (<= i 0) [cl 0]
+                    (let [c (subs line i (inc i))
+                          is-word (re-find #"^\w" c)
+                          is-space (re-find #"^\s" c)]
+                      (cond
+                        is-space (if word-char? (inc i) (recur (dec i)))
+                        word-char? (if is-word (recur (dec i)) (inc i))
+                        :else (if is-word (inc i) (recur (dec i))))))))))
+          (if (> cl 0)
+            (let [prev-line (get lines (dec cl) "")]
+              (if (zero? (count prev-line))
+                (word-boundary-left lines (dec cl) 0)
+                (let [no-trail (clojure.string/replace prev-line #"\s+$" "")
+                      trimmed (count no-trail)]
+                  (if (zero? trimmed) [(dec cl) 0]
+                    (let [last-char (subs no-trail (dec trimmed))
+                          word-char? (boolean (re-find #"^\w" last-char))]
+                      (loop [i (dec trimmed)]
+                        (if (<= i 0) [(dec cl) 0]
+                          (let [c (subs prev-line i (inc i))
+                                is-word (re-find #"^\w" c)
+                                is-space (re-find #"^\s" c)]
+                            (cond
+                              is-space (if word-char? (inc i) (recur (dec i)))
+                              word-char? (if is-word (recur (dec i)) (inc i))
+                              :else (if is-word (inc i) (recur (dec i))))))))))))
+            [0 0])))))
+
+(defn- word-boundary-right [lines cursor-line cursor-col]
+  (let [cl (max 0 cursor-line) cc (max 0 cursor-col) total (count lines)]
+    (if (and (>= cl (dec total)) (>= cc (count (get lines cl "")))) [cl cc]
+      (let [line (get lines cl "") n (count line)]
+        (if (< cc n)
+          (let [bi (java.text.BreakIterator/getWordInstance)]
+            (.setText bi line)
+            (loop [p cc]
+              (let [nxt (.following bi p)]
+                (if (== nxt java.text.BreakIterator/DONE)
+                  (if (< cl (dec total)) [(inc cl) 0] [cl n])
+                  (let [c (subs line p (min (inc p) n))]
+                    (if (re-find #"^\s" c) (recur nxt) [cl nxt]))))))
+          (if (< cl (dec total)) [(inc cl) 0] [cl cc])))))))
+
+;; ─── Line editing actions
 
 (defn- insert-character [editor char]
-  (let [state @(:state-atom editor)
-        lines (:lines state)
-        cl (:cursor-line state)
-        cc (:cursor-col state)
-        line (or (nth lines cl) "")]
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
+        cc (:cursor-col state) line (or (nth lines cl) "")]
+    (when (or (re-find #"^\s" char) (not= @(:last-action editor) :type-word))
+      (push-undo-state editor))
+    (reset! (:last-action editor) :type-word)
+    (reset! (:redo-stack editor) [])
     (swap! (:state-atom editor) assoc
       :lines (assoc lines cl (str (subs line 0 cc) char (subs line cc)))
       :cursor-col (+ cc (count char)))
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
 
 (defn- handle-backspace [editor]
-  (let [state @(:state-atom editor)
-        lines (:lines state)
-        cl (:cursor-line state)
-        cc (:cursor-col state)]
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state) cc (:cursor-col state)]
+    (push-undo-state editor)
+    (reset! (:last-action editor) nil)
+    (reset! (:redo-stack editor) [])
     (if (> cc 0)
-      (let [line (or (nth lines cl) "")
-            glen (grapheme-left line cc)]
+      (let [line (or (nth lines cl) "") glen (grapheme-left line cc)]
         (swap! (:state-atom editor) assoc
           :lines (assoc lines cl (str (subs line 0 glen) (subs line cc)))
           :cursor-col glen))
       (when (> cl 0)
-        (let [prev-line (or (nth lines (dec cl)) "")
-              cur-line (or (nth lines cl) "")]
+        (let [prev-line (or (nth lines (dec cl)) "") cur-line (or (nth lines cl) "")]
           (swap! (:state-atom editor) assoc
             :lines (vec (concat (subvec lines 0 (dec cl))
-                                [(str prev-line cur-line)]
-                                (subvec lines (inc cl))))
-            :cursor-line (dec cl)
-            :cursor-col (count prev-line)))))
+                                [(str prev-line cur-line)] (subvec lines (inc cl))))
+            :cursor-line (dec cl) :cursor-col (count prev-line)))))
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
 
 (defn- handle-forward-delete [editor]
-  (let [state @(:state-atom editor)
-        lines (:lines state)
-        cl (:cursor-line state)
-        cc (:cursor-col state)
-        line (or (nth lines cl) "")]
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
+        cc (:cursor-col state) line (or (nth lines cl) "")]
+    (push-undo-state editor)
+    (reset! (:last-action editor) nil)
+    (reset! (:redo-stack editor) [])
     (if (< cc (count line))
       (let [nxt (grapheme-right line cc)]
         (swap! (:state-atom editor) assoc
@@ -233,27 +359,243 @@
         (let [next-line (or (nth lines (inc cl)) "")]
           (swap! (:state-atom editor) assoc
             :lines (vec (concat (subvec lines 0 (inc cl))
-                                [(str line next-line)]
-                                (subvec lines (+ cl 2))))
-            :cursor-col cc))))
+                                [(str line next-line)] (subvec lines (+ cl 2))))))))
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
 
 (defn- add-new-line [editor]
-  (let [state @(:state-atom editor)
-        lines (:lines state)
-        cl (:cursor-line state)
-        cc (:cursor-col state)
-        line (or (nth lines cl) "")]
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
+        cc (:cursor-col state) line (or (nth lines cl) "")]
+    (push-undo-state editor)
+    (reset! (:last-action editor) nil)
+    (reset! (:redo-stack editor) [])
     (swap! (:state-atom editor) assoc
-      :lines (vec (concat (subvec lines 0 cl)
-                          [(subs line 0 cc)]
-                          [(subs line cc)]
+      :lines (vec (concat (subvec lines 0 cl) [(subs line 0 cc)] [(subs line cc)]
                           (subvec lines (inc cl))))
-      :cursor-line (inc cl)
-      :cursor-col 0)
+      :cursor-line (inc cl) :cursor-col 0)
     (reset! (:preferred-col-atom editor) nil)
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
 
+(defn- handle-kill-to-line-start [editor]
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
+        cc (:cursor-col state) line (or (nth lines cl) "")]
+    (when (pos? cc)
+      (push-undo-state editor)
+      (let [deleted (subs line 0 cc)]
+        (kill-ring-push (:kill-ring editor) deleted :prepend true
+                        :accumulate (= @(:last-action editor) :kill))
+        (reset! (:last-action editor) :kill)
+        (reset! (:redo-stack editor) [])
+        (swap! (:state-atom editor) assoc
+          :lines (assoc lines cl (subs line cc)) :cursor-col 0))
+      (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
+
+(defn- handle-kill-to-line-end [editor]
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
+        cc (:cursor-col state) line (or (nth lines cl) "")]
+    (when (< cc (count line))
+      (push-undo-state editor)
+      (let [deleted (subs line cc)]
+        (kill-ring-push (:kill-ring editor) deleted :prepend false
+                        :accumulate (= @(:last-action editor) :kill))
+        (reset! (:last-action editor) :kill)
+        (reset! (:redo-stack editor) [])
+        (swap! (:state-atom editor) assoc
+          :lines (assoc lines cl (subs line 0 cc))))
+      (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
+
+(defn- handle-delete-word-backward [editor]
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state) cc (:cursor-col state)]
+    (when (or (pos? cc) (pos? cl))
+      (push-undo-state editor)
+      (let [[new-line new-col] (word-boundary-left lines cl cc)
+            deleted (if (= new-line cl)
+                      (subs (nth lines cl) new-col cc)
+                      (str (subs (nth lines new-line) new-col) "\n"
+                           (clojure.string/join "\n" (subvec lines (inc new-line) cl)) "\n"
+                           (subs (nth lines cl) 0 cc)))]
+        (kill-ring-push (:kill-ring editor) deleted :prepend true
+                        :accumulate (= @(:last-action editor) :kill))
+        (reset! (:last-action editor) :kill)
+        (reset! (:redo-stack editor) [])
+        (let [new-lines (if (= new-line cl)
+                          (assoc lines cl (str (subs (nth lines cl) 0 new-col) (subs (nth lines cl) cc)))
+                          (vec (concat (subvec lines 0 new-line)
+                                       [(str (subs (nth lines new-line) 0 new-col) (subs (nth lines cl) cc))]
+                                       (subvec lines (inc cl)))))]
+          (swap! (:state-atom editor) assoc :lines new-lines :cursor-line new-line :cursor-col new-col)))
+      (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
+
+(defn- handle-delete-word-forward [editor]
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state) cc (:cursor-col state)]
+    (let [[tline tcol] (word-boundary-right lines cl cc)]
+      (when (or (not= tline cl) (not= tcol cc))
+        (push-undo-state editor)
+        (let [deleted (if (= tline cl)
+                        (subs (nth lines cl) cc tcol)
+                        (str (subs (nth lines cl) cc) "\n"
+                             (clojure.string/join "\n" (subvec lines (inc cl) tline)) "\n"
+                             (subs (nth lines tline) 0 tcol)))]
+          (kill-ring-push (:kill-ring editor) deleted :prepend false
+                          :accumulate (= @(:last-action editor) :kill))
+          (reset! (:last-action editor) :kill)
+          (reset! (:redo-stack editor) [])
+          (let [new-lines (if (= tline cl)
+                            (assoc lines cl (str (subs (nth lines cl) 0 cc) (subs (nth lines cl) tcol)))
+                            (vec (concat (subvec lines 0 cl)
+                                         [(str (subs (nth lines cl) 0 cc) (subs (nth lines tline) tcol))]
+                                         (subvec lines (inc tline)))))]
+            (swap! (:state-atom editor) assoc :lines new-lines)))
+        (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))
+
+(defn- handle-kill-line [editor]
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)]
+    (when (seq lines)
+      (push-undo-state editor)
+      (let [deleted (nth lines cl "")
+            new-lines (if (= 1 (count lines)) [""]
+                          (vec (concat (subvec lines 0 cl) (subvec lines (inc cl)))))
+            new-cl (min cl (dec (count new-lines)))]
+        (kill-ring-push (:kill-ring editor) (str deleted "\n") :prepend false
+                        :accumulate (= @(:last-action editor) :kill))
+        (reset! (:last-action editor) :kill)
+        (reset! (:redo-stack editor) [])
+        (swap! (:state-atom editor) assoc :lines new-lines :cursor-line new-cl :cursor-col 0))
+      (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
+
+;; ─── Yank helpers
+
+(defn- handle-yank [editor]
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
+        cc (:cursor-col state) text (kill-ring-peek (:kill-ring editor))]
+    (when text
+      (push-undo-state editor)
+      (reset! (:redo-stack editor) [])
+      (if (.contains text "\n")
+        (let [parts (clojure.string/split text #"\n" -1)
+              first-part (first parts) rest-parts (rest parts)
+              line (nth lines cl "")
+              new-line (str (subs line 0 cc) first-part)
+              remaining (subs line cc)
+              new-lines (vec (concat (subvec lines 0 cl) [new-line] rest-parts
+                                     (when (seq remaining) [remaining])
+                                     (subvec lines (inc cl))))]
+          (swap! (:state-atom editor) assoc
+            :lines new-lines :cursor-line (+ cl (count rest-parts))
+            :cursor-col (count (or (last rest-parts) ""))))
+        (let [line (nth lines cl "")
+              new-val (str (subs line 0 cc) text (subs line cc))]
+          (swap! (:state-atom editor) assoc
+            :lines (assoc lines cl new-val) :cursor-col (+ cc (count text)))))
+      (reset! (:last-action editor) :yank)
+      (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
+
+(defn- handle-yank-pop [editor]
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
+        cc (:cursor-col state) kr (:kill-ring editor)]
+    (when (and (= @(:last-action editor) :yank) (> (kill-ring-length kr) 1))
+      (push-undo-state editor)
+      (reset! (:redo-stack editor) [])
+      (let [_ (kill-ring-rotate kr)
+            new-text (or (kill-ring-peek kr) "")]
+        (if (.contains new-text "\n")
+          (let [parts (clojure.string/split new-text #"\n" -1)
+                first-part (first parts) rest-parts (rest parts)
+                line (nth lines cl "")
+                new-line (str (subs line 0 cc) first-part)
+                remaining (subs line cc)
+                new-lines (vec (concat (subvec lines 0 cl) [new-line] rest-parts
+                                       (when (seq remaining) [remaining])
+                                       (subvec lines (inc cl))))]
+            (swap! (:state-atom editor) assoc
+              :lines new-lines :cursor-line (+ cl (count rest-parts))
+              :cursor-col (count (or (last rest-parts) ""))))
+          (let [line (nth lines cl "")
+                new-val (str (subs line 0 cc) new-text (subs line cc))]
+            (swap! (:state-atom editor) assoc
+              :lines (assoc lines cl new-val) :cursor-col (+ cc (count new-text)))))
+        (reset! (:last-action editor) :yank)
+        (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))
+
+;; ─── Paste markers
+
+(def ^:private paste-counter (atom 0))
+
+(defn- handle-paste [editor text]
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
+        cc (:cursor-col state) paste-lines (clojure.string/split-lines text)
+        line-count (count paste-lines)]
+    (push-undo-state editor)
+    (reset! (:last-action editor) nil)
+    (reset! (:redo-stack editor) [])
+    (if (<= line-count 10)
+      (let [first-line (first paste-lines) rest-lines (rest paste-lines)
+            cur-line (nth lines cl "")
+            new-cur-line (str (subs cur-line 0 cc) first-line (subs cur-line cc))
+            new-lines (if (empty? rest-lines)
+                        (assoc lines cl new-cur-line)
+                        (vec (concat (subvec lines 0 cl)
+                                     [(str (subs cur-line 0 cc) first-line)]
+                                     (mapv (fn [l] l) rest-lines)
+                                     [(subs cur-line cc)]
+                                     (subvec lines (inc cl)))))]
+        (swap! (:state-atom editor) assoc
+          :lines new-lines :cursor-line (+ cl (count rest-lines))
+          :cursor-col (count (or (last rest-lines) ""))))
+      (let [n (swap! paste-counter inc)
+            marker (str "[paste #" n " +" line-count " lines]")
+            cur-line (nth lines cl "")
+            new-cur-line (str (subs cur-line 0 cc) marker (subs cur-line cc))]
+        (swap! (:paste-store editor) assoc n text)
+        (swap! (:state-atom editor) assoc
+          :lines (assoc lines cl new-cur-line) :cursor-col (+ cc (count marker)))))
+    (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
+
+;; ─── Character jump mode
+
+(defn- enter-jump-mode [editor dir]
+  (reset! (:jump-mode editor) {:dir dir :char nil}))
+
+(defn- handle-jump-character [editor char]
+  (let [jm @(:jump-mode editor) dir (:dir jm)
+        state @(:state-atom editor) lines (:lines state)
+        cl (:cursor-line state) cc (:cursor-col state)]
+    (reset! (:jump-mode editor) nil)
+    (when (and dir char)
+      (let [result (if (= dir :forward)
+                     (let [line (nth lines cl "") idx (.indexOf line char cc)]
+                       (if (>= idx 0) [cl idx]
+                         (loop [i (inc cl)]
+                           (when (< i (count lines))
+                             (let [li (nth lines i "") idx (.indexOf li char)]
+                               (if (>= idx 0) [i idx] (recur (inc i))))))))
+                     (let [line (nth lines cl "")
+                           idx (if (<= cc 0) -1 (.lastIndexOf line char (dec cc)))]
+                       (if (>= idx 0) [cl idx]
+                         (loop [i (dec cl)]
+                           (when (>= i 0)
+                             (let [li (nth lines i "") idx (.lastIndexOf li char)]
+                               (if (>= idx 0) [i idx] (recur (dec i)))))))))]
+        (when result
+          (swap! (:state-atom editor) assoc
+            :cursor-line (first result) :cursor-col (second result))
+          (reset! (:preferred-col-atom editor) nil))))))
+
+;; ─── Cursor movement
+
+(defn- move-cursor-word-left [editor]
+  (let [state @(:state-atom editor) lines (:lines state)
+        [nl nc] (word-boundary-left lines (:cursor-line state) (:cursor-col state))]
+    (swap! (:state-atom editor) assoc :cursor-line nl :cursor-col nc)
+    (reset! (:preferred-col-atom editor) nil)
+    (reset! (:last-action editor) nil)))
+
+(defn- move-cursor-word-right [editor]
+  (let [state @(:state-atom editor) lines (:lines state)
+        [nl nc] (word-boundary-right lines (:cursor-line state) (:cursor-col state))]
+    (swap! (:state-atom editor) assoc :cursor-line nl :cursor-col nc)
+    (reset! (:preferred-col-atom editor) nil)
+    (reset! (:last-action editor) nil)))
+;; ─── Internal helpers (cursor movement)
 (defn- move-cursor-horizontal [editor dir]
   (let [state @(:state-atom editor)
         lines (:lines state)
@@ -311,7 +653,10 @@
 
 (defrecord Editor [state-atom scroll-offset-atom preferred-col-atom
                    last-width-atom focused? on-submit on-change
-                   disable-submit padding-x border-fn]
+                   disable-submit padding-x border-fn
+                   undo-stack redo-stack kill-ring last-action
+                   paste-buffer paste-state paste-store
+                   jump-mode]
   protocols/IComponent
 
   (render [this width]
@@ -381,54 +726,141 @@
         @result)))
 
   (handle-input [this data]
-    (let [state @state-atom
-          lines (:lines state)
-          cursor-line (:cursor-line state)
-          cursor-col (:cursor-col state)]
-      (cond
-        (keys/matches-key? data "enter")
-        (do (when-let [cb @on-submit] (cb (clojure.string/join "\n" lines))) nil)
-        (or (keys/matches-key? data (keys/shift "enter"))
-            (keys/matches-key? data (keys/ctrl "enter"))
-            (keys/matches-key? data (keys/alt "enter"))
-            (keys/matches-key? data (keys/ctrl "j")))
-        (do (add-new-line this) nil)
-        (or (keys/matches-key? data "backspace")
-            (keys/matches-key? data (keys/ctrl "h")))
-        (do (handle-backspace this) nil)
-        (or (keys/matches-key? data "delete")
-            (keys/matches-key? data (keys/ctrl "d")))
-        (do (handle-forward-delete this) nil)
-        (keys/matches-key? data "up")
-        (do (move-cursor-vertical this -1) nil)
-        (keys/matches-key? data "down")
-        (do (move-cursor-vertical this 1) nil)
-        (or (keys/matches-key? data "left")
-            (keys/matches-key? data (keys/ctrl "b")))
-        (do (move-cursor-horizontal this -1) nil)
-        (or (keys/matches-key? data "right")
-            (keys/matches-key? data (keys/ctrl "f")))
-        (do (move-cursor-horizontal this 1) nil)
-        (or (keys/matches-key? data "home")
-            (keys/matches-key? data (keys/ctrl "a")))
-        (do (swap! state-atom assoc :cursor-col 0)
-            (reset! preferred-col-atom nil) nil)
-        (or (keys/matches-key? data "end")
-            (keys/matches-key? data (keys/ctrl "e")))
-        (do (let [line (nth (:lines @state-atom) (:cursor-line @state-atom) "")]
-              (swap! state-atom assoc :cursor-col (count line))
-              (reset! preferred-col-atom nil))
-            nil)
-        (keys/matches-key? data "pageUp")
-        (do (page-scroll this -1) nil)
-        (keys/matches-key? data "pageDown")
-        (do (page-scroll this 1) nil)
-        :else
-        (let [has-ctrl? (some #(let [c (int %)]
-                                 (or (< c 32) (== c 127)
-                                     (and (>= c 128) (<= c 159))))
-                              data)]
-          (when-not has-ctrl? (insert-character this data))))))
+    (if (and @jump-mode (:dir @jump-mode) (nil? (:char @jump-mode)))
+      (let [char (first data)]
+        (when (and char (not= (int char) 27))
+          (handle-jump-character this (str char)))
+        nil)
+      (let [state @state-atom
+            lines (:lines state)]
+        (cond
+          (and (keys/matches-key? data "enter") (not @disable-submit))
+          (do (when-let [cb @on-submit] (cb (clojure.string/join "\n" lines))) nil)
+
+          (or (keys/matches-key? data (keys/shift "enter"))
+              (keys/matches-key? data (keys/ctrl "enter"))
+              (keys/matches-key? data (keys/alt "enter"))
+              (keys/matches-key? data (keys/ctrl "j")))
+          (do (add-new-line this) nil)
+
+          (keys/matches-key? data "escape")
+          (do (reset! jump-mode nil)
+              (when-let [cb @on-submit] (cb nil))
+              nil)
+
+          (or (keys/matches-key? data "backspace")
+              (keys/matches-key? data (keys/ctrl "h")))
+          (do (handle-backspace this) nil)
+
+          (or (keys/matches-key? data "delete")
+              (keys/matches-key? data (keys/ctrl "d")))
+          (do (handle-forward-delete this) nil)
+
+          (keys/matches-key? data (keys/ctrl "-"))
+          (do (handle-undo this) nil)
+
+          (keys/matches-key? data (keys/ctrl "z"))
+          (do (handle-redo this) nil)
+
+          (keys/matches-key? data (keys/ctrl "]"))
+          (do (enter-jump-mode this :forward) nil)
+
+          (keys/matches-key? data (keys/ctrl-shift "]"))
+          (do (enter-jump-mode this :backward) nil)
+
+          (keys/matches-key? data (keys/ctrl "u"))
+          (do (handle-kill-to-line-start this) nil)
+
+          (keys/matches-key? data (keys/ctrl "k"))
+          (do (handle-kill-to-line-end this) nil)
+
+          (keys/matches-key? data (keys/ctrl "w"))
+          (do (handle-kill-line this) nil)
+
+          (or (keys/matches-key? data (keys/alt "backspace"))
+              (keys/matches-key? data (keys/alt "h")))
+          (do (handle-delete-word-backward this) nil)
+
+          (or (keys/matches-key? data (keys/alt "d"))
+              (keys/matches-key? data (keys/alt "delete")))
+          (do (handle-delete-word-forward this) nil)
+
+          (keys/matches-key? data (keys/ctrl "y"))
+          (do (handle-yank this) nil)
+
+          (keys/matches-key? data (keys/alt "y"))
+          (do (handle-yank-pop this) nil)
+
+          (keys/matches-key? data "up")
+          (do (move-cursor-vertical this -1) nil)
+
+          (keys/matches-key? data "down")
+          (do (move-cursor-vertical this 1) nil)
+
+          (or (keys/matches-key? data "left")
+              (keys/matches-key? data (keys/ctrl "b")))
+          (do (move-cursor-horizontal this -1) nil)
+
+          (or (keys/matches-key? data "right")
+              (keys/matches-key? data (keys/ctrl "f")))
+          (do (move-cursor-horizontal this 1) nil)
+
+          (or (keys/matches-key? data "home")
+              (keys/matches-key? data (keys/ctrl "a")))
+          (do (swap! state-atom assoc :cursor-col 0)
+              (reset! preferred-col-atom nil)
+              (reset! last-action nil) nil)
+
+          (or (keys/matches-key? data "end")
+              (keys/matches-key? data (keys/ctrl "e")))
+          (do (let [line (nth (:lines @state-atom) (:cursor-line @state-atom) "")]
+                (swap! state-atom assoc :cursor-col (count line))
+                (reset! preferred-col-atom nil)
+                (reset! last-action nil))
+              nil)
+
+          (or (keys/matches-key? data (keys/alt "left"))
+              (keys/matches-key? data (keys/ctrl "left"))
+              (keys/matches-key? data (keys/alt "b")))
+          (do (move-cursor-word-left this) nil)
+
+          (or (keys/matches-key? data (keys/alt "right"))
+              (keys/matches-key? data (keys/ctrl "right"))
+              (keys/matches-key? data (keys/alt "f")))
+          (do (move-cursor-word-right this) nil)
+
+          (keys/matches-key? data "pageUp")
+          (do (page-scroll this -1) nil)
+
+          (keys/matches-key? data "pageDown")
+          (do (page-scroll this 1) nil)
+
+          (.contains data "\u001b[200~")
+          (do (reset! paste-state :buffering)
+              (reset! paste-buffer "")
+              (let [remaining (.replace data "\u001b[200~" "")]
+                (when (seq remaining)
+                  (protocols/handle-input this remaining)))
+              nil)
+
+          (= @paste-state :buffering)
+          (do (swap! paste-buffer str data)
+              (let [buf @paste-buffer
+                    end-idx (.indexOf buf "\u001b[201~")]
+                (when (>= end-idx 0)
+                  (let [paste-text (subs buf 0 end-idx)]
+                    (handle-paste this paste-text)))
+                (reset! paste-state :idle)
+                (reset! paste-buffer ""))
+              nil)
+
+          :else
+          (let [has-ctrl? (some #(let [c (int %)]
+                                   (or (< c 32) (== c 127)
+                                       (and (>= c 128) (<= c 159))))
+                                data)]
+            (when-not has-ctrl?
+              (insert-character this data)))))))
 
   (invalidate [_this] nil))
 
@@ -446,12 +878,24 @@
                 :on-change (atom nil)
                 :disable-submit (atom false)
                 :padding-x (atom 0)
-                :border-fn (atom nil)}))
+                :border-fn (atom nil)
+                :undo-stack (atom [])
+                :redo-stack (atom [])
+                :kill-ring (make-kill-ring)
+                :last-action (atom nil)
+                :paste-buffer (atom "")
+                :paste-state (atom :idle)
+                :paste-store (atom {})
+                :jump-mode (atom nil)}))
 
 (defn editor-set-text! [editor text]
   (reset! (:state-atom editor) (make-editor-state text))
   (reset! (:scroll-offset-atom editor) 0)
-  (reset! (:preferred-col-atom editor) nil))
+  (reset! (:preferred-col-atom editor) nil)
+  (reset! (:undo-stack editor) [])
+  (reset! (:redo-stack editor) [])
+  (reset! (:last-action editor) nil)
+  (reset! (:jump-mode editor) nil))
 
 (defn editor-set-on-submit! [editor f]
   (reset! (:on-submit editor) f))
