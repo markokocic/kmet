@@ -1,0 +1,35 @@
+# Clojure / Leinigen
+/target
+/classes
+/checkouts
+pom.xml
+pom.xml.asc
+*.jar
+*.class
+/lib/
+/libdev/
+
+# Clojure deps (tools.deps)
+/.cpcache
+
+# Babashka
+/.bb
+
+# REPL
+/.nrepl-port
+
+# Editor/IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+.#*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

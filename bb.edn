@@ -1,0 +1,8 @@
+{:min-bb-version "1.12.215"
+ :paths ["src"]
+ :tasks
+ {run     {:doc "Run kmet demo"
+           :requires ([kmet.demo :as demo])
+           :task (demo/-main)}
+  help    {:doc "Show this help"
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run   Run TUI demo")}}}

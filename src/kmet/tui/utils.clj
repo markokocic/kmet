@@ -1,0 +1,114 @@
+(ns kmet.tui.utils
+  "Text width calculation and wrapping utilities.")
+
+;; ─── Width calculation ─────────────────────────────────────────────────────
+
+(def ^:const CJK-START 0x2E80)
+(def ^:const CJK-END 0x9FFF)
+(def ^:const FULLWIDTH-START 0xFF00)
+(def ^:const FULLWIDTH-END 0xFFEF)
+
+(defn- cjk? [cp]
+  (or (and (>= cp CJK-START) (<= cp CJK-END))
+      (and (>= cp 0xAC00) (<= cp 0xD7AF))   ;; Hangul
+      (and (>= cp 0x3000) (<= cp 0x303F))    ;; CJK symbols
+      (and (>= cp 0xFE30) (<= cp 0xFE4F))    ;; CJK compatibility
+      (and (>= cp FULLWIDTH-START) (<= cp FULLWIDTH-END))))
+
+(defn- emoji? [cp]
+  (or (and (>= cp 0x1F000) (<= cp 0x1FBFF))
+      (and (>= cp 0x2600) (<= cp 0x27BF))
+      (and (>= cp 0x2300) (<= cp 0x23FF))
+      (and (>= cp 0xFE00) (<= cp 0xFE0F))    ;; Variation selectors
+      (= cp 0x200D)                           ;; ZWJ
+      (and (>= cp 0x1F1E6) (<= cp 0x1F1FF)))) ;; Regional indicators
+
+(defn- char-width [cp]
+  (cond
+    (= cp 9) 4                                ;; Tab
+    (< cp 32) 0                                ;; Control chars
+    (>= cp 0x200B (int (Character/MIN_VALUE))) (int (Character/MIN_VALUE)) ;; zero-width space
+    (>= cp 0xFE00) (int (Character/MIN_VALUE)) ;; Variation selectors are zero-width
+    (or (cjk? cp) (emoji? cp)) 2
+    :else 1))
+
+(defn visible-width
+  "Calculate the visible display width of a string in terminal columns.
+   Strips ANSI escape codes before measuring."
+  [^String s]
+  (if (empty? s) 0
+      (let [clean (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" "")]
+        (if (every? #(let [c (int %)] (and (>= c 32) (<= c 126))) clean)
+          (count clean)
+          (loop [i 0, n (count clean), total 0]
+            (if (>= i n) total
+                (let [cp (.codePointAt clean i)
+                      w (char-width cp)
+                      nchars (Character/charCount cp)]
+                  (recur (+ i nchars) n (+ total w)))))))))
+
+;; ─── Truncation ─────────────────────────────────────────────────────────────
+
+(defn truncate-to-width
+  "Truncate string to fit within max-width visible columns."
+  ([s max-width] (truncate-to-width s max-width ""))
+  ([^String s max-width ellipsis]
+   (let [clean (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" "")
+         e-width (visible-width ellipsis)
+         target (- max-width e-width)]
+     (if (<= (visible-width clean) target) s
+         (let [sb (StringBuilder.)
+               total (atom 0)
+               _ (loop [i 0, n (count clean)]
+                   (when (and (< i n) (< @total target))
+                     (let [cp (.codePointAt clean i)
+                           w (char-width cp)
+                           nchars (Character/charCount cp)]
+                       (.append sb (subs clean i (+ i nchars)))
+                       (swap! total + w)
+                       (recur (+ i nchars) n))))]
+           (str sb ellipsis))))))
+
+;; ─── Word wrapping ──────────────────────────────────────────────────────────
+
+(defn wrap-text-with-ansi
+  "Simple word wrap preserving ANSI escape codes."
+  [^String text max-width]
+  (if (or (empty? text) (<= max-width 0))
+    [""]
+    (let [clean (clojure.string/replace text #"\u001b\[[0-9;]*[a-zA-Z]" "")]
+      (if (<= (visible-width clean) max-width)
+        [text]
+        (let [words (clojure.string/split text #"(?<=\s)" -1)
+              result (volatile! [])
+              line (volatile! "")]
+          (doseq [w words]
+            (let [ww (visible-width w)
+                  lw (visible-width @line)
+                  sep (if (zero? lw) 0 1)]
+              (if (<= (+ lw sep ww) max-width)
+                (vswap! line str w)
+                (do (vswap! result conj @line)
+                    (if (<= ww max-width)
+                      (vreset! line w)
+                      (let [clipped (truncate-to-width w max-width)]
+                        (vswap! result conj clipped)
+                        (vreset! line "")))))))
+          (let [last-line @line]
+            (if (seq last-line)
+              (conj @result last-line)
+              @result)))))))
+
+;; ─── ANSI helpers ───────────────────────────────────────────────────────────
+
+(defn strip-ansi-codes [^String s]
+  (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))
+
+(defn sgr
+  ([code] (str "\u001b[" code "m"))
+  ([& codes] (str "\u001b[" (clojure.string/join \; codes) "m")))
+
+(defn apply-background-to-line [line width bg-fn]
+  (let [pad (max 0 (- width (visible-width line)))
+        padded (str line (apply str (repeat pad \space)))]
+    (if bg-fn (bg-fn padded) padded)))
