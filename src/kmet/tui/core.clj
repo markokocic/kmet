@@ -11,7 +11,10 @@
             [kmet.tui.components.container :as container]
             [kmet.tui.components.box :as box]
             [kmet.tui.components.input :as input]
-            [kmet.tui.components.editor :as editor])
+            [kmet.tui.components.editor :as editor]
+            [kmet.tui.components.select-list :as select-list]
+            [kmet.tui.components.settings-list :as settings-list]
+            [kmet.tui.components.markdown :as markdown])
   ;; Protocols are re-exported into this namespace so that implementors
   ;; can do (ns ... (:require [kmet.tui.core :as tui]) ... (tui/IComponent ...))
   (:refer-clojure :exclude [render]))
@@ -249,3 +252,29 @@
 (def editor-get-text editor/editor-get-text)
 (def editor-set-on-submit! editor/editor-set-on-submit!)
 (def editor-set-on-change! editor/editor-set-on-change!)
+(def editor-set-on-tab! editor/editor-set-on-tab!)
+(def editor-push-history! editor/editor-push-history!)
+(def editor-get-history editor/editor-get-history)
+(def editor-set-history! editor/editor-set-history!)
+(def editor-get-paste editor/editor-get-paste)
+(def editor-set-height! editor/editor-set-height!)
+(def editor-get-text-length editor/editor-get-text-length)
+
+;; SelectList
+(def make-select-list select-list/make-select-list)
+(def select-list-set-items! select-list/select-list-set-items!)
+(def select-list-get-selected select-list/select-list-get-selected)
+(def select-list-set-theme! select-list/select-list-set-theme!)
+(def default-theme select-list/default-theme)
+
+;; SettingsList
+(def make-settings-list settings-list/make-settings-list)
+(def settings-list-set-on-escape! settings-list/settings-list-set-on-escape!)
+(def settings-list-get-item settings-list/settings-list-get-item)
+(def settings-list-set-value! settings-list/settings-list-set-value!)
+
+;; Markdown
+(def make-markdown markdown/make-markdown)
+(def markdown-set-text! markdown/markdown-set-text!)
+(def markdown-append! markdown/markdown-append!)
+(def markdown-get-text markdown/markdown-get-text)

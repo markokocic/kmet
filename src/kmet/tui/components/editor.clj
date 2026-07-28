@@ -243,7 +243,8 @@
                          :cursor-line (:cursor-line snapshot)
                          :cursor-col (:cursor-col snapshot)}))
     (reset! (:preferred-col-atom editor) nil)
-    (reset! (:last-action editor) nil)))
+    (reset! (:last-action editor) nil)
+    (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
 
 (defn- handle-redo [editor]
   (when-let [snapshot (undo-pop (:redo-stack editor))]
@@ -253,7 +254,8 @@
                          :cursor-line (:cursor-line snapshot)
                          :cursor-col (:cursor-col snapshot)}))
     (reset! (:preferred-col-atom editor) nil)
-    (reset! (:last-action editor) nil)))
+    (reset! (:last-action editor) nil)
+    (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
 
 ;; ─── Word navigation
 
@@ -518,8 +520,6 @@
 
 ;; ─── Paste markers
 
-(def ^:private paste-counter (atom 0))
-
 (defn- handle-paste [editor text]
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
         cc (:cursor-col state) paste-lines (clojure.string/split-lines text)
@@ -541,8 +541,8 @@
         (swap! (:state-atom editor) assoc
           :lines new-lines :cursor-line (+ cl (count rest-lines))
           :cursor-col (count (or (last rest-lines) ""))))
-      (let [n (swap! paste-counter inc)
-            marker (str "[paste #" n " +" line-count " lines]")
+      (let [n (swap! (:paste-counter editor) inc)
+            marker (str "[paste #" n " +" line-count " lines — ctrl+o to expand]")
             cur-line (nth lines cl "")
             new-cur-line (str (subs cur-line 0 cc) marker (subs cur-line cc))]
         (swap! (:paste-store editor) assoc n text)
@@ -595,6 +595,83 @@
     (swap! (:state-atom editor) assoc :cursor-line nl :cursor-col nc)
     (reset! (:preferred-col-atom editor) nil)
     (reset! (:last-action editor) nil)))
+
+;; ─── History navigation
+
+(defn- history-set-state! [editor text]
+  (reset! (:state-atom editor) (make-editor-state text))
+  (reset! (:scroll-offset-atom editor) 0)
+  (reset! (:preferred-col-atom editor) nil)
+  (reset! (:undo-stack editor) [])
+  (reset! (:redo-stack editor) [])
+  (reset! (:last-action editor) nil)
+  (reset! (:jump-mode editor) nil))
+
+(defn- history-backward [editor]
+  (let [h @(:history editor)
+        idx @(:history-idx editor)]
+    (if (or (neg? idx) (empty? h))
+      nil
+      (let [next-idx (max -1 (dec idx))
+            entry (nth h idx)]
+        (reset! (:history-idx editor) next-idx)
+        (history-set-state! editor entry)
+        ;; Move cursor to end
+        (let [lines (:lines @(:state-atom editor))]
+          (swap! (:state-atom editor) assoc
+            :cursor-line (max 0 (dec (count lines)))
+            :cursor-col (count (last lines))))
+        (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))
+
+(defn- history-forward [editor]
+  (let [h @(:history editor)
+        idx @(:history-idx editor)
+        n (count h)]
+    (if (or (neg? idx) (zero? n))
+      nil
+      (let [next-idx (inc idx)]
+        (if (< next-idx n)
+          (let [entry (nth h next-idx)]
+            (reset! (:history-idx editor) next-idx)
+            (history-set-state! editor entry)
+            (let [lines (:lines @(:state-atom editor))]
+              (swap! (:state-atom editor) assoc
+                :cursor-line (max 0 (dec (count lines)))
+                :cursor-col (count (last lines))))
+            (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))
+          (do
+            (reset! (:history-idx editor) -1)
+            (history-set-state! editor "")
+            (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))))
+
+(defn editor-push-history! [editor text]
+  (when (and (seq text) (not= text (peek @(:history editor))))
+    (swap! (:history editor) conj text)
+    (reset! (:history-idx editor) -1)))
+
+;; ─── Autocomplete
+
+(defn- handle-tab [editor]
+  (if-let [ap @(:autocomplete-provider editor)]
+    (let [state @(:state-atom editor)
+          lines (:lines state)
+          cl (:cursor-line state) cc (:cursor-col state)
+          line (or (nth lines cl) "")
+          before-cursor (subs line 0 cc)
+          word-start (or (last (keep-indexed #(when (re-find #"[\s/]" (str %2)) %1) before-cursor))
+                         -1)
+          partial (subs before-cursor (inc word-start))
+          result (ap partial (editor-get-text editor))]
+      (when result
+        (insert-character editor result)))
+    ;; Default tab: insert 4 spaces
+    (insert-character editor "    ")))
+
+;; ─── Height helper
+
+(defn- get-editor-height [editor]
+  (or @(:height-atom editor) 12))
+
 ;; ─── Internal helpers (cursor movement)
 (defn- move-cursor-horizontal [editor dir]
   (let [state @(:state-atom editor)
@@ -643,9 +720,7 @@
   (let [width @(:last-width-atom editor)
         lines (:lines @(:state-atom editor))
         visual-lines (build-visual-line-map lines width)
-        terminal-rows 24
-        max-visible (max 5 (quot terminal-rows 10))
-        page-size (max 1 (dec max-visible))]
+        page-size (max 1 (dec (get-editor-height editor)))]
     (dotimes [_ page-size]
       (move-cursor-vertical editor dir))))
 
@@ -653,10 +728,12 @@
 
 (defrecord Editor [state-atom scroll-offset-atom preferred-col-atom
                    last-width-atom focused? on-submit on-change
-                   disable-submit padding-x border-fn
+                   disable-submit padding-x border-fn height-atom
                    undo-stack redo-stack kill-ring last-action
-                   paste-buffer paste-state paste-store
-                   jump-mode]
+                   paste-buffer paste-state paste-store paste-counter
+                   jump-mode
+                   history history-idx
+                   autocomplete-provider]
   protocols/IComponent
 
   (render [this width]
@@ -671,8 +748,7 @@
           cursor-line (:cursor-line state)
           cursor-col (:cursor-col state)
           visual-lines (build-visual-line-map lines layout-width)
-          terminal-rows 24
-          max-visible (max 5 (quot terminal-rows 10))
+          max-visible (get-editor-height this)
           cursor-visual-idx (find-current-visual-line visual-lines cursor-line cursor-col)
           scroll-offset @scroll-offset-atom
           new-offset (cond
@@ -762,6 +838,10 @@
           (keys/matches-key? data (keys/ctrl "z"))
           (do (handle-redo this) nil)
 
+          (or (keys/matches-key? data "tab")
+              (keys/matches-key? data (keys/ctrl "i")))
+          (do (handle-tab this) nil)
+
           (keys/matches-key? data (keys/ctrl "]"))
           (do (enter-jump-mode this :forward) nil)
 
@@ -792,10 +872,31 @@
           (do (handle-yank-pop this) nil)
 
           (keys/matches-key? data "up")
-          (do (move-cursor-vertical this -1) nil)
+          (do (let [lines (:lines @state-atom)
+                    cl (:cursor-line @state-atom)
+                    cc (:cursor-col @state-atom)]
+                (if (and (zero? cl) (zero? cc)
+                         (or (empty? lines) (= (first lines) "")))
+                  (history-backward this)
+                  (move-cursor-vertical this -1)))
+              nil)
 
           (keys/matches-key? data "down")
-          (do (move-cursor-vertical this 1) nil)
+          (do (let [lines (:lines @state-atom)
+                    cl (:cursor-line @state-atom)
+                    cc (:cursor-col @state-atom)
+                    last-idx (dec (count lines))
+                    line (nth lines cl "")]
+                (if (and (= cl last-idx) (>= cc (count line)))
+                  (history-forward this)
+                  (move-cursor-vertical this 1)))
+              nil)
+
+          (keys/matches-key? data (keys/ctrl "p"))
+          (do (history-backward this) nil)
+
+          (keys/matches-key? data (keys/ctrl "n"))
+          (do (history-forward this) nil)
 
           (or (keys/matches-key? data "left")
               (keys/matches-key? data (keys/ctrl "b")))
@@ -867,8 +968,12 @@
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-editor
-  "Create a new Editor component."
-  []
+  "Create a new Editor component.
+   Options key-value pairs:
+     :height  — number of visible lines (default 12)
+     :padding-x — horizontal padding (default 0)
+     :border-fn — function to style border chars"
+  [& {:keys [height padding-x border-fn] :or {height 12 padding-x 0}}]
   (map->Editor {:state-atom (atom (make-editor-state))
                 :scroll-offset-atom (atom 0)
                 :preferred-col-atom (atom nil)
@@ -877,8 +982,9 @@
                 :on-submit (atom nil)
                 :on-change (atom nil)
                 :disable-submit (atom false)
-                :padding-x (atom 0)
-                :border-fn (atom nil)
+                :padding-x (atom padding-x)
+                :border-fn (atom border-fn)
+                :height-atom (atom height)
                 :undo-stack (atom [])
                 :redo-stack (atom [])
                 :kill-ring (make-kill-ring)
@@ -886,7 +992,11 @@
                 :paste-buffer (atom "")
                 :paste-state (atom :idle)
                 :paste-store (atom {})
-                :jump-mode (atom nil)}))
+                :paste-counter (atom 0)
+                :jump-mode (atom nil)
+                :history (atom [])
+                :history-idx (atom -1)
+                :autocomplete-provider (atom nil)}))
 
 (defn editor-set-text! [editor text]
   (reset! (:state-atom editor) (make-editor-state text))
@@ -895,13 +1005,33 @@
   (reset! (:undo-stack editor) [])
   (reset! (:redo-stack editor) [])
   (reset! (:last-action editor) nil)
-  (reset! (:jump-mode editor) nil))
+  (reset! (:jump-mode editor) nil)
+  (reset! (:history-idx editor) -1))
 
 (defn editor-set-on-submit! [editor f]
   (reset! (:on-submit editor) f))
 
 (defn editor-set-on-change! [editor f]
   (reset! (:on-change editor) f))
+
+(defn editor-set-on-tab! [editor f]
+  (reset! (:autocomplete-provider editor) f))
+
+(defn editor-get-history [editor]
+  @(:history editor))
+
+(defn editor-set-history! [editor history]
+  (reset! (:history editor) (vec history))
+  (reset! (:history-idx editor) -1))
+
+(defn editor-get-paste [editor id]
+  (get @(:paste-store editor) id))
+
+(defn editor-set-height! [editor h]
+  (reset! (:height-atom editor) h))
+
+(defn editor-get-text-length [editor]
+  (count (editor-get-text editor)))
 
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────
 

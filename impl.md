@@ -25,7 +25,7 @@ The TUI is a Clojure port of [@earendil-works/pi-tui](https://github.com/badlogi
 - **Minimal core** — provide the essential building blocks, let the user (or future extensions) add features
 - **Differential rendering** — only write changed lines to the terminal (CSI 2026 synchronized output)
 - **Component-based** — every visual element implements `IComponent` (render / handle-input / invalidate)
-- **JSONL sessions** — session files are line-delimited JSON with parent-child IDs for tree branching
+- **EDNL sessions** — session files are line-delimited EDN with parent-child IDs for tree branching
 - **Multi-provider LLM** — start with Anthropic and OpenAI, add more via a registry
 
 ### Babashka-specific choices
@@ -34,7 +34,7 @@ The TUI is a Clojure port of [@earendil-works/pi-tui](https://github.com/badlogi
 - **No external TUI libraries** — build from scratch to match pi-tui's API exactly
 - **core.async** for communication between TUI thread and agent thread
 - **babashka.http-client** for LLM API calls
-- **cheshire** (bundled) for JSON
+- **clojure.edn** (bundled) for EDN read/write
 - **EDN for config** (`~/.config/kmet/settings.edn`, `.kmet/settings.edn`)
 - **bb task runner** for development (`bb run`, `bb test`)
 
@@ -70,7 +70,7 @@ kmet/
 │       ├── llm.clj           # LLM API client — Anthropic + OpenAI (TODO)
 │       ├── tools.clj         # Tool definitions and execution (TODO)
 │       ├── loop.clj          # Agent turn loop (TODO)
-│       └── session.clj       # JSONL session storage (TODO)
+│       └── session.clj       # EDNL session storage (TODO)
 ```
 
 ---
@@ -456,12 +456,12 @@ IDLE → (user prompt) → THINKING → (tool calls) → TOOL RESULT → THINKIN
 
 ### 5.5 `kmet.agent.session` — Session Storage
 
-**Purpose:** Persist conversation history as JSONL files.
+**Purpose:** Persist conversation history as EDNL files.
 
-**File format (JSONL, matching pi's session format):**
-```jsonl
-{"id":"msg1","parentId":null,"role":"user","content":[{"type":"text","text":"Hello"}]}
-{"id":"msg2","parentId":"msg1","role":"assistant","content":[{"type":"text","text":"Hi!"}]}
+**File format (.ednl, one entry per line):**
+```ednl
+{:id "msg1", :parent-id nil, :role :user, :content [{:type :text, :text "Hello"}]}
+{:id "msg2", :parent-id "msg1", :role :assistant, :content [{:type :text, :text "Hi!"}]}
 ```
 
 **Session record:**
