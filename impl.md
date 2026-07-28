@@ -182,89 +182,62 @@ kmet/
 
 ## 4. Phase 2 — Interactive Components
 
-### 4.1 `kmet.tui.components.container` — Container
+### 4.1 `kmet.tui.components.container` — Container (DONE)
 
 **Purpose:** Group child components vertically.
 
-**Status:** Already in `kmet.tui.core` as `Container` record, but needs its own file for clarity.
-
 **Implementation:**
-```clojure
-(defrecord Container [children]
-  IComponent
-  (render [this width] (mapcat #(render % width) @children))
-  (handle-input [this data] (some #(handle-input % data) @children))
-  (invalidate [this] (doseq [c @children] (invalidate c))))
-```
+- Extracted from `core.clj` into `src/kmet/tui/components/container.clj`
+- `Container` record + `make-container`, `container-add-child`, `container-remove-child`, `container-clear`
+- Renders children sequentially, passes `handle-input` to each (stops at first handler)
 
-### 4.2 `kmet.tui.components.box` — Box
+### 4.2 `kmet.tui.components.box` — Box (DONE)
 
 **Purpose:** Container with padding and background color.
 
-**Implementation plan:**
-- `padding-x`, `padding-y` — internal padding
-- `bg-fn` — function that wraps text in ANSI background code
-- Render: apply padding, render children into content area, apply background to each line
-- Cache: invalidate on child changes or bg-fn changes
+**Implementation:**
+- `padding-x`, `padding-y`, `bg-fn`, `cache` fields
+- Renders children into content area (width - 2*padding-x), pads each line with left padding
+- Applies `bg-fn` to each line, pads to full width
+- Render cache (invalidates on width/bg-fn/child-lines change)
+- API: `make-box`, `box-add-child`, `box-remove-child`, `box-clear`, `box-set-bg-fn`
 
-```clojure
-(defrecord Box [children padding-x padding-y bg-fn cache]
-  IComponent
-  (render [this width]
-    ;; compute content width = width - 2*padding-x
-    ;; render children to content width
-    ;; prepend/appent padding lines (top/bottom)
-    ;; apply bg-fn + pad to full width for each line
-    ))
-```
-
-### 4.3 `kmet.tui.components.input` — Input
+### 4.3 `kmet.tui.components.input` — Input (DONE)
 
 **Purpose:** Single-line text input with horizontal scrolling and cursor.
 
 **Port of:** pi-tui `Input` component.
 
-**Features:**
+**Features implemented:**
 - Single line of text with editable cursor
-- Horizontal scrolling (text may exceed terminal width)
-- Cursor rendered as inverted block (`\x1b[7m`)
-- Keybindings:
-  - `enter` → submit callback
-  - `left` / `right` → move cursor
-  - `home` / `end` → line start/end
-  - `ctrl+a` / `ctrl+e` → line start/end
-  - `ctrl+w` / `alt+backspace` → delete word backward
-  - `ctrl+u` → delete to line start
-  - `ctrl+k` → delete to line end
-  - `backspace` / `delete`
-  - Typing inserts characters at cursor
+- Horizontal scrolling when text exceeds available width
+- Cursor rendered as inverse video block with `CURSOR_MARKER` for IME
+- Grapheme-aware cursor movement (Java `BreakIterator`)
+- All keybindings: enter/submit, escape/cancel, left/right, home/end, ctrl+a/e, backspace/delete, ctrl+w/alt+backspace, ctrl+d, ctrl+u, ctrl+k, alt+d/alt+delete
+- Word navigation: alt+left/right, ctrl+left/right, alt+b/f
+- Kill ring: ctrl+y (yank), alt+y (yank-pop) with accumulate
+- Undo stack with coalescing (consecutive word chars = one undo unit)
+- Bracketed paste mode support
+- IFocusable protocol for hardware cursor positioning
 
-**Implementation approach:**
-
-```clojure
-(defrecord Input [value-atom cursor-atom on-submit focussed cache]
-  IFocusable  ;; for IME cursor positioning
-  IComponent
-  (render [this width]
-    ;; Render the line with cursor at cursor position
-    ;; If text > width, scroll viewport to keep cursor visible
-    ;; Emit CURSOR_MARKER at cursor position
-    )
-  (handle-input [this data]
-    ;; Map key names to editing actions
-    ;; Update value-atom and cursor-atom
-    ))
-```
-
-Key challenge: rendering the cursor correctly when text is wider than the available width (horizontal scrolling).
+**Key implementation details:**
+- Uses Java `BreakIterator` for grapheme and word segmentation
+- `render-line` emits `CURSOR_MARKER` when focused for IME positioning
+- Horizontal scrolling centers cursor in viewport
+- Undo coalescing: whitespace chars trigger snapshot, word chars coalesce
 
 ### 4.4 `kmet.tui.components.editor` — Editor
 
 **Purpose:** Multi-line text editor with word-wrap, vertical scrolling, undo/redo, kill-ring, paste markers.
 
-**Port of:** pi-tui `Editor` component — the most complex TUI component.
+**Port of:** pi-tui `Editor` component — the most complex TUI component (~1950 lines JS).
 
-**Features:**
+**Sub-phases:**
+- **2b.1** — Core Editor: multi-line editing, word-wrap layout, cursor movement (arrows, home/end, page up/down), basic editing (typing, backspace, delete, enter newline, submit), vertical scrolling with scroll indicators, border
+- **2b.2** — Editor Features: undo/redo stack, kill-ring/yank/yank-pop, line editing (ctrl+u/k/w, ctrl+w/alt+d), paste markers, character jump mode
+- **2b.3** — History & Autocomplete: up/down history navigation, slash/filename autocomplete (SelectList overlay), trigger/debounce logic
+
+**Overall features:**
 - Multi-line editing with word-wrap
 - Slash command autocomplete (type `/`)
 - File path autocomplete (type `@`, press Tab)
@@ -293,13 +266,13 @@ Key challenge: rendering the cursor correctly when text is wider than the availa
 | `escape` | Abort/cancel |
 
 **Implementation approach:**
-- Internal state: `[lines cursor-line cursor-col]`
-- Word-wrap: split each logical line into visual lines for display
-- Cursor tracking: maintain preferred visual column for up/down movement
+- Internal state: `{:lines [] :cursor-line N :cursor-col N}`
+- Word-wrap: `wordWrapLine` splits a logical line into visual chunks at word boundaries
+- Visual line map: maps visual line indices back to logical lines + offsets
+- Cursor tracking: maintain preferred visual column for up/down movement (sticky column)
 - Undo stack: record state before each modification
 - Kill-ring: circular buffer of deleted text blocks
 - Autocomplete: async provider with debounce, renders SelectList overlay
-- Paste detection: if input arrives faster than typing speed, group as paste
 - Paste markers: replace >10 line pastes with `[paste #N +M lines]` markers
 
 ### 4.5 `kmet.tui.components.select_list` — SelectList
@@ -668,8 +641,8 @@ Zero-width APC sequence `\x1b_pi:c\x07` emitted by `IFocusable` components at th
 ## Implementation Order
 
 1. ~~**Phase 1** — TUI Foundation~~ ✅ DONE
-2. **Phase 2a** — `input.clj`, `container.clj`, `box.clj` (basic interactive components)
-3. **Phase 2b** — `editor.clj` (the big one — core of user input)
+2. ~~**Phase 2a** — `input.clj`, `container.clj`, `box.clj` (basic interactive components)~~ ✅ DONE
+3. **Phase 2b** — `editor.clj` (the big one — core of user input) ← CURRENT
 4. **Phase 2c** — `select_list.clj`, `settings_list.clj`, `markdown.clj`
 5. **Phase 3a** — `llm.clj` (Anthropic first, then OpenAI)
 6. **Phase 3b** — `tools.clj` (read, write, edit, bash)
