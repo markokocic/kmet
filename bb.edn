@@ -1,10 +1,14 @@
 {:min-bb-version "1.12.215"
- :paths ["src"]
+ :paths ["src" "test"]
  :tasks
  {run     {:doc "Run kmet demo"
            :requires ([kmet.demo :as demo])
            :task (demo/-main)
            :override-builtin true}
+  test    {:doc "Run tests"
+           :requires ([kmet.runner :as runner])
+           :task (runner/-main)
+           :override-builtin true}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run   Run TUI demo")
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run   Run TUI demo\n  test  Run tests")
            :override-builtin true}}}

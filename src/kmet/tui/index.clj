@@ -8,7 +8,8 @@
             [kmet.tui.components.text :as text]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.spacer :as spacer]
-            [kmet.tui.components.box :as box]))
+            [kmet.tui.components.box :as box]
+            [kmet.tui.components.input :as input]))
 
 ;; Re-exports from core
 (def IComponent core/IComponent)
@@ -18,12 +19,6 @@
 (def invalidate core/invalidate)
 (def focused core/focused)
 (def set-focused! core/set-focused!)
-(def Container core/Container)
-(def make-container core/make-container)
-(def container-add-child core/container-add-child)
-(def container-remove-child core/container-remove-child)
-(def container-clear core/container-clear)
-(def TUI core/TUI)
 (def create-tui core/create-tui)
 (def tui-add-child core/tui-add-child)
 (def tui-remove-child core/tui-remove-child)
@@ -38,7 +33,6 @@
 
 ;; Re-exports from terminal
 (def ITerminal terminal/ITerminal)
-(def JLineTerminal terminal/JLineTerminal)
 (def create-terminal terminal/create-terminal)
 
 ;; Re-exports from keys
@@ -73,14 +67,26 @@
 (def visible-width utils/visible-width)
 (def truncate-to-width utils/truncate-to-width)
 (def wrap-text-with-ansi utils/wrap-text-with-ansi)
-(def apply-background utils/apply-background)
+(def apply-background-to-line utils/apply-background-to-line)
 (def strip-ansi-codes utils/strip-ansi-codes)
 (def sgr utils/sgr)
+(def slice-by-column utils/slice-by-column)
 
 ;; Re-exports from components
-(def Text text/Text)
 (def make-text text/make-text)
-(def Spacer spacer/Spacer)
+(def text-set! text/text-set!)
 (def make-spacer spacer/make-spacer)
-(def Box box/Box)
+(def make-container container/make-container)
+(def container-add-child container/container-add-child)
+(def container-remove-child container/container-remove-child)
+(def container-clear container/container-clear)
 (def make-box box/make-box)
+(def box-add-child box/box-add-child)
+(def box-remove-child box/box-remove-child)
+(def box-clear box/box-clear)
+(def box-set-bg-fn box/box-set-bg-fn)
+(def make-input input/make-input)
+(def input-set-value! input/input-set-value!)
+(def input-get-value input/input-get-value)
+(def input-set-on-submit! input/input-set-on-submit!)
+(def input-set-on-escape! input/input-set-on-escape!)

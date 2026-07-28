@@ -11,23 +11,6 @@
   (focused [this])
   (set-focused! [this val]))
 
-;; ─── Container ──────────────────────────────────────────────────────────────
-
-(defrecord Container [children]
-  IComponent
-  (render [this width] (mapcat #(render % width) @children))
-  (handle-input [this data] (some #(handle-input % data) @children))
-  (invalidate [this] (doseq [c @children] (invalidate c))))
-
-(defn make-container
-  ([] (map->Container {:children (atom [])}))
-  ([children] (map->Container {:children (atom (vec children))})))
-
-(defn container-add-child [c child] (swap! (:children c) conj child))
-(defn container-remove-child [c child]
-  (swap! (:children c) (fn [v] (vec (remove #(identical? % child) v)))))
-(defn container-clear [c] (reset! (:children c) []))
-
 ;; ─── Overlay ────────────────────────────────────────────────────────────────
 
 (defrecord Overlay [component x y width height focused?])

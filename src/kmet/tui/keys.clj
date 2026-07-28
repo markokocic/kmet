@@ -55,11 +55,16 @@
        [ "\u001bOb"    (ctrl KEY-DOWN)]
        [ "\u001bOc"    (ctrl KEY-RIGHT)]
        [ "\u001bOd"    (ctrl KEY-LEFT)]
-       ;; Alt + arrows (ESC prefix sequences)
+       ;; Alt + arrows (ESC + legacy)
        [ "\u001b\u001b[A"  (alt KEY-UP)]
        [ "\u001b\u001b[B"  (alt KEY-DOWN)]
        [ "\u001b\u001b[C"  (alt KEY-RIGHT)]
        [ "\u001b\u001b[D"  (alt KEY-LEFT)]
+       ;; Emacs-style alt bindings (ESC + letter)
+       [ "\u001bb"    (alt KEY-LEFT)]
+       [ "\u001bf"    (alt KEY-RIGHT)]
+       [ "\u001bp"    (alt KEY-UP)]
+       [ "\u001bn"    (alt KEY-DOWN)]
        ;; Function keys
        [ "\u001bOP"    "f1"]
        [ "\u001bOQ"    "f2"]
@@ -108,13 +113,23 @@
                      13 "enter"
                      27 "escape"
                      127 "backspace"
-                     ;; 0x01-0x1a -> ctrl+a..ctrl+z
+                     ;; default: 0x01-0x1a -> ctrl+a..ctrl+z
+                     ;;          0x1c-0x1f -> ctrl+\\, ctrl+], ctrl+^, ctrl+_
                      (let [n (int (first data))]
-                       (when (and (>= n 1) (<= n 26))
-                         (str "ctrl+" (char (+ (dec n) (int \a))))))
-                     ;; 0x1c-0x1f -> ctrl+\\, ctrl+], ctrl+^, ctrl+_
-                     nil)]
+                       (cond
+                         (and (>= n 1) (<= n 26))
+                         (str "ctrl+" (char (+ (dec n) (int \a))))
+                         (== n 28) "ctrl+\\"
+                         (== n 29) "ctrl+]"
+                         (== n 30) "ctrl+^"
+                         (== n 31) "ctrl+-"
+                         :else nil)))]
           base))
+      ;; Backspace (DEL = 0x7f, BS = 0x08)
+      (when (and (= (count data) 1)
+                 (let [c (int (first data))]
+                   (or (== c 0x7f) (== c 0x08))))
+        "backspace")
       ;; Regular character
       (when (= (count data) 1)
         (let [c (first data)]

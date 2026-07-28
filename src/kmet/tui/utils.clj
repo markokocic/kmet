@@ -27,8 +27,12 @@
   (cond
     (= cp 9) 4                                ;; Tab
     (< cp 32) 0                                ;; Control chars
-    (>= cp 0x200B (int (Character/MIN_VALUE))) (int (Character/MIN_VALUE)) ;; zero-width space
-    (>= cp 0xFE00) (int (Character/MIN_VALUE)) ;; Variation selectors are zero-width
+    ;; Zero-width characters
+    (or (== cp 0x200B) (== cp 0x200C) (== cp 0x200D) (== cp 0x200E) (== cp 0x200F)
+        (== cp 0x2060) (== cp 0x2061) (== cp 0x2062) (== cp 0x2063) (== cp 0x2064)
+        (and (>= cp 0xFE00) (<= cp 0xFE0F))  ;; Variation selectors
+        (and (>= cp 0xE0100) (<= cp 0xE01EF))) ;; Variation selectors supplement
+    0
     (or (cjk? cp) (emoji? cp)) 2
     :else 1))
 
@@ -112,3 +116,28 @@
   (let [pad (max 0 (- width (visible-width line)))
         padded (str line (apply str (repeat pad \space)))]
     (if bg-fn (bg-fn padded) padded)))
+
+;; ─── Column-based slicing ──────────────────────────────────────────────────
+
+(defn slice-by-column
+  "Extract a substring from `text` representing the visible columns
+   from start-col with the given length-in-columns.
+   Handles wide (CJK/emoji) characters. Expects plain text without ANSI codes.
+   When strict? is true, wide characters at the boundary are excluded."
+  [text start-col length & {:keys [strict?] :or {strict? false}}]
+  (let [s (if (string? text) text (str text))
+        n (count s)]
+    (loop [i 0 col 0 result []]
+      (if (>= i n)
+        (apply str result)
+        (let [cp (.codePointAt s i)
+              w (char-width cp)
+              nchars (Character/charCount cp)
+              char-str (subs s i (+ i nchars))]
+          (if (>= col (+ start-col length))
+            (apply str result)
+            (if (>= col start-col)
+              (if (and strict? (> (+ col w) (+ start-col length)))
+                (apply str result)
+                (recur (+ i nchars) (+ col w) (conj result char-str)))
+              (recur (+ i nchars) (+ col w) result))))))))
