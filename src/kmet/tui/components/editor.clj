@@ -4,7 +4,7 @@
    Phase 2b.1 — Core Editor: multi-line editing, word-wrap, cursor movement,
    vertical scrolling, border, basic editing (typing, backspace, delete,
    enter newline, submit)."
-  (:require [kmet.tui.core :as core]
+  (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as u]))
 
@@ -312,7 +312,7 @@
 (defrecord Editor [state-atom scroll-offset-atom preferred-col-atom
                    last-width-atom focused? on-submit on-change
                    disable-submit padding-x border-fn]
-  core/IComponent
+  protocols/IComponent
 
   (render [this width]
     (let [state @state-atom
@@ -462,6 +462,6 @@
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────
 
 (extend-type Editor
-  core/IFocusable
+  protocols/IFocusable
   (focused [this] @(:focused? this))
   (set-focused! [this val] (reset! (:focused? this) val)))

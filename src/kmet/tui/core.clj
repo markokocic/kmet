@@ -1,26 +1,49 @@
 (ns kmet.tui.core
-  "TUI - Main class for managing terminal UI with differential rendering."
-  (:require [kmet.tui.terminal :as t]))
+  "TUI - Main class for managing terminal UI with differential rendering.
+   Primary entry point for kmet.tui — all public symbols are re-exported
+   from this namespace for convenience."
+  (:require [kmet.tui.protocols :as protocols]
+            [kmet.tui.terminal :as terminal]
+            [kmet.tui.keys :as keys]
+            [kmet.tui.utils :as utils]
+            [kmet.tui.components.text :as text]
+            [kmet.tui.components.spacer :as spacer]
+            [kmet.tui.components.container :as container]
+            [kmet.tui.components.box :as box]
+            [kmet.tui.components.input :as input]
+            [kmet.tui.components.editor :as editor])
+  ;; Protocols are re-exported into this namespace so that implementors
+  ;; can do (ns ... (:require [kmet.tui.core :as tui]) ... (tui/IComponent ...))
+  (:refer-clojure :exclude [render]))
 
-(defprotocol IComponent
-  (render [this width] "Render component to lines (seq of strings)")
-  (handle-input [this data] "Handle keyboard input")
-  (invalidate [this] "Clear cached render state"))
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Protocol re-exports
+;; ═══════════════════════════════════════════════════════════════════════════
 
-(defprotocol IFocusable
-  (focused [this])
-  (set-focused! [this val]))
+(def IComponent protocols/IComponent)
+(def IFocusable protocols/IFocusable)
+(def render protocols/render)
+(def handle-input protocols/handle-input)
+(def invalidate protocols/invalidate)
+(def focused protocols/focused)
+(def set-focused! protocols/set-focused!)
 
-;; ─── Overlay ────────────────────────────────────────────────────────────────
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Overlay
+;; ═══════════════════════════════════════════════════════════════════════════
 
 (defrecord Overlay [component x y width height focused?])
 
-;; ─── CSI 2026 sync ─────────────────────────────────────────────────────────
+;; ═══════════════════════════════════════════════════════════════════════════
+;; CSI 2026 sync
+;; ═══════════════════════════════════════════════════════════════════════════
 
 (def CSI-2026-H "\u001b[?2026h")
 (def CSI-2026-L "\u001b[?2026l")
 
-;; ─── TUI ────────────────────────────────────────────────────────────────────
+;; ═══════════════════════════════════════════════════════════════════════════
+;; TUI
+;; ═══════════════════════════════════════════════════════════════════════════
 
 (defrecord TUI [terminal components focused-component
                 input-listeners previous-lines
@@ -56,7 +79,9 @@
 (defn tui-remove-input-listener [tui f]
   (swap! (:input-listeners tui) (fn [v] (vec (remove #(= % f) v)))))
 
-;; ─── Overlays ───────────────────────────────────────────────────────────────
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Overlays
+;; ═══════════════════════════════════════════════════════════════════════════
 
 (defn tui-show-overlay [tui component & {:keys [x y width height]}]
   (let [o (map->Overlay {:component component :x x :y y
@@ -78,7 +103,9 @@
 
 (declare tui-request-render tui-stop)
 
-;; ─── Diff ──────────────────────────────────────────────────────────────────
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Diff
+;; ═══════════════════════════════════════════════════════════════════════════
 
 (defn- diff-lines [prev next]
   (let [n (max (count prev) (count next))]
@@ -88,7 +115,9 @@
             (if (= a b) (recur (inc i) r)
                 (recur (inc i) (conj r (str "\u001b[" (inc i) "H\u001b[2K" b)))))))))
 
-;; ─── Input reader ──────────────────────────────────────────────────────────
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Input reader
+;; ═══════════════════════════════════════════════════════════════════════════
 
 (defn- start-input-reader [tui]
   (let [jline (.terminal (:terminal tui))]
@@ -108,7 +137,9 @@
                  (when @(:running? tui)
                    (binding [*out* *err*] (println "input:" (.getMessage e)))))))))))
 
-;; ─── Start / Stop ──────────────────────────────────────────────────────────
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Start / Stop
+;; ═══════════════════════════════════════════════════════════════════════════
 
 (defn tui-request-render [tui]
   (reset! (:render-requested? tui) true))
@@ -122,9 +153,9 @@
   [tui]
   (let [term (:terminal tui)
         jline (.terminal term)]
-    (t/start! term (fn [_] nil) (fn [] (tui-request-render tui)))
-    (t/hide-cursor! term)
-    (t/write-output term "\u001b[2J\u001b[H")
+    (terminal/start! term (fn [_] nil) (fn [] (tui-request-render tui)))
+    (terminal/hide-cursor! term)
+    (terminal/write-output term "\u001b[2J\u001b[H")
     (reset! (:running? tui) true)
     (reset! (:stopped? tui) false)
     (start-input-reader tui)
@@ -139,15 +170,82 @@
               (when (not= prev lines)
                 (let [d (diff-lines prev lines)]
                   (when (seq d)
-                    (t/write-output term CSI-2026-H)
-                    (doseq [x d] (t/write-output term x))
-                    (t/write-output term CSI-2026-L)
+                    (terminal/write-output term CSI-2026-H)
+                    (doseq [x d] (terminal/write-output term x))
+                    (terminal/write-output term CSI-2026-L)
                     (let [cr (min (count lines) (dec h))]
-                      (t/write-output term (str "\u001b[" (max 1 (inc cr)) "H")))))
+                      (terminal/write-output term (str "\u001b[" (max 1 (inc cr)) "H")))))
                 (reset! (:previous-lines tui) lines)
                 (reset! (:previous-width tui) w)))))
         (Thread/sleep 33)
         (recur)))
     (reset! (:running? tui) false)
-    (t/show-cursor! term)
-    (t/stop! term)))
+    (terminal/show-cursor! term)
+    (terminal/stop! term)))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Re-exports — convenience aliases for all public symbols.
+;; ═══════════════════════════════════════════════════════════════════════════
+
+;; Terminal
+(def ITerminal terminal/ITerminal)
+(def create-terminal terminal/create-terminal)
+
+;; Keys
+(def matches-key? keys/matches-key?)
+(def parse-key keys/parse-key)
+(def is-key-release? keys/is-key-release?)
+(def is-key-repeat? keys/is-key-repeat?)
+(def set-kitty-active! keys/set-kitty-active!)
+(def kitty-active? keys/kitty-active?)
+(def KEY-UP keys/KEY-UP)
+(def KEY-DOWN keys/KEY-DOWN)
+(def KEY-LEFT keys/KEY-LEFT)
+(def KEY-RIGHT keys/KEY-RIGHT)
+(def KEY-ENTER keys/KEY-ENTER)
+(def KEY-ESC keys/KEY-ESC)
+(def KEY-TAB keys/KEY-TAB)
+(def KEY-BACKSPACE keys/KEY-BACKSPACE)
+(def KEY-DELETE keys/KEY-DELETE)
+(def KEY-HOME keys/KEY-HOME)
+(def KEY-END keys/KEY-END)
+(def KEY-PAGE-UP keys/KEY-PAGE-UP)
+(def KEY-PAGE-DOWN keys/KEY-PAGE-DOWN)
+(def KEY-SPACE keys/KEY-SPACE)
+(def KEY-INSERT keys/KEY-INSERT)
+(def ctrl keys/ctrl)
+(def shift keys/shift)
+(def alt keys/alt)
+
+;; Utils
+(def visible-width utils/visible-width)
+(def truncate-to-width utils/truncate-to-width)
+(def wrap-text-with-ansi utils/wrap-text-with-ansi)
+(def apply-background-to-line utils/apply-background-to-line)
+(def strip-ansi-codes utils/strip-ansi-codes)
+(def sgr utils/sgr)
+(def slice-by-column utils/slice-by-column)
+
+;; Components
+(def make-text text/make-text)
+(def text-set! text/text-set!)
+(def make-spacer spacer/make-spacer)
+(def make-container container/make-container)
+(def container-add-child container/container-add-child)
+(def container-remove-child container/container-remove-child)
+(def container-clear container/container-clear)
+(def make-box box/make-box)
+(def box-add-child box/box-add-child)
+(def box-remove-child box/box-remove-child)
+(def box-clear box/box-clear)
+(def box-set-bg-fn box/box-set-bg-fn)
+(def make-input input/make-input)
+(def input-set-value! input/input-set-value!)
+(def input-get-value input/input-get-value)
+(def input-set-on-submit! input/input-set-on-submit!)
+(def input-set-on-escape! input/input-set-on-escape!)
+(def make-editor editor/make-editor)
+(def editor-set-text! editor/editor-set-text!)
+(def editor-get-text editor/editor-get-text)
+(def editor-set-on-submit! editor/editor-set-on-submit!)
+(def editor-set-on-change! editor/editor-set-on-change!)

@@ -1,7 +1,7 @@
 (ns kmet.tui.components.box
   "Box component - a container that applies padding and background to all children.
    Port of @earendil-works/pi-tui Box."
-  (:require [kmet.tui.core :as core]
+  (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]))
 
 ;; ─── Internal helpers (defined before record to be visible in method bodies) ─
@@ -15,14 +15,14 @@
 ;; ─── Box record ─────────────────────────────────────────────────────────────
 
 (defrecord Box [children padding-x padding-y bg-fn cache]
-  core/IComponent
+  protocols/IComponent
   (render [this width]
     (if (empty? @children)
       []
       (let [content-width (max 1 (- width (* 2 padding-x)))
             left-pad (apply str (repeat padding-x \space))
             child-lines (mapcat (fn [c]
-                                  (map #(str left-pad %) (core/render c content-width)))
+                                  (map #(str left-pad %) (protocols/render c content-width)))
                                 @children)
             bg-sample (when bg-fn (bg-fn "test"))
             cached @cache]
@@ -40,10 +40,10 @@
                            :child-lines child-lines :lines result})
             result)))))
   (handle-input [_this data]
-    (some #(core/handle-input % data) @children))
+    (some #(protocols/handle-input % data) @children))
   (invalidate [this]
     (reset! (:cache this) nil)
-    (doseq [c @children] (core/invalidate c))))
+    (doseq [c @children] (protocols/invalidate c))))
 
 ;; ─── Constructors & helpers ─────────────────────────────────────────────────
 

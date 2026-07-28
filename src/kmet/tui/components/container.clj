@@ -1,13 +1,13 @@
 (ns kmet.tui.components.container
   "Container component - groups child components vertically.
    Port of @earendil-works/pi-tui Container."
-  (:require [kmet.tui.core :as core]))
+  (:require [kmet.tui.protocols :as protocols]))
 
 (defrecord Container [children]
-  core/IComponent
-  (render [_this width] (mapcat #(core/render % width) @children))
-  (handle-input [_this data] (some #(core/handle-input % data) @children))
-  (invalidate [_this] (doseq [c @children] (core/invalidate c))))
+  protocols/IComponent
+  (render [_this width] (mapcat #(protocols/render % width) @children))
+  (handle-input [_this data] (some #(protocols/handle-input % data) @children))
+  (invalidate [_this] (doseq [c @children] (protocols/invalidate c))))
 
 (defn make-container
   ([] (map->Container {:children (atom [])}))

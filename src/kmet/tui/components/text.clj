@@ -1,10 +1,10 @@
 (ns kmet.tui.components.text
   "Text component - displays multi-line text with word wrapping."
-  (:require [kmet.tui.core :as core]
+  (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]))
 
 (defrecord Text [text-atom padding-x padding-y bg-fn cache]
-  core/IComponent
+  protocols/IComponent
   (render [this width]
     (let [text @text-atom
           cached @cache]
@@ -42,4 +42,4 @@
 
 (defn text-set! [text new-text]
   (reset! (:text-atom text) new-text)
-  (core/invalidate text))
+  (protocols/invalidate text))

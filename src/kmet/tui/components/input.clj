@@ -1,7 +1,7 @@
 (ns kmet.tui.components.input
   "Single-line text input with horizontal scrolling and cursor.
    Port of @earendil-works/pi-tui Input."
-  (:require [kmet.tui.core :as core]
+  (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as u]))
 
@@ -288,7 +288,7 @@
 
 (defrecord Input [value-atom cursor-atom on-submit on-escape focused?
                   paste-buffer paste-state kill-ring last-action undo-stack]
-  core/IComponent
+  protocols/IComponent
 
   (render [_this width]
     (let [prompt "> "
@@ -335,7 +335,7 @@
             (reset! paste-buffer "")
             (let [remaining (.replace data "\u001b[200~" "")]
               (when (seq remaining)
-                (core/handle-input this remaining)))
+                (protocols/handle-input this remaining)))
             nil)
 
         ;; Inside paste buffer
@@ -495,6 +495,6 @@
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────
 
 (extend-type Input
-  core/IFocusable
+  protocols/IFocusable
   (focused [this] @(:focused? this))
   (set-focused! [this val] (reset! (:focused? this) val)))

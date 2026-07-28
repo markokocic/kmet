@@ -1,9 +1,9 @@
 (ns kmet.tui.components.spacer
   "Spacer component - renders empty lines."
-  (:require [kmet.tui.core :as core]))
+  (:require [kmet.tui.protocols :as protocols]))
 
 (defrecord Spacer [lines-atom]
-  core/IComponent
+  protocols/IComponent
   (render [this _width]
     (vec (repeat @lines-atom "")))
   (handle-input [this _data] nil)
