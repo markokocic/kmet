@@ -36,7 +36,7 @@
 
 (defn- render-tool-msg
   "Render a tool call/result message into a vector of ANSI-styled lines."
-  [{:keys [name content is-error]} width {:keys [tool-title tool-output error muted]}]
+  [{:keys [name content is-error]} width {:keys [tool-title tool-output error]}]
   (let [cw (max 1 (- width 4))
         title-color (if is-error error tool-title)
         name-part (str bold title-color "─── " name " " reset)
