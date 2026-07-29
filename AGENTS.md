@@ -10,12 +10,20 @@ Minimal coding agent in Babashka/Clojure with a JLine3-based TUI (differential r
 - **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`; JLine3 bundled externally.
 
 ### API Preferences (avoid Java interop)
-- `babashka.fs` over `java.io.File` for file operations
+- **`babashka.fs`** over `java.io.File` for all file operations:
+  - `fs/file-name` over `.getName()`
+  - `fs/parent` over `.getParent()`
+  - `fs/directory?` over `.isDirectory()`
+  - `fs/regular-file?` over `.isFile()`
+  - `fs/list-dir` over `.listFiles()` / `file-seq`
+  - `fs/exists?` over `.exists()`
+  - `slurp` / `spit` over Java `Reader`/`Writer` constructors
 - `babashka.process` over `java.lang.ProcessBuilder` for subprocesses
 - `clojure.string` functions (`starts-with?`, `includes?`, `index-of`) over Java `.startsWith()`, `.contains()`, `.indexOf()`
 - Pure Clojure for string/character operations (grapheme clusters, char widths) over `java.text.BreakIterator`
-- `clojure.java.io/reader` + `line-seq` over `java.io.BufferedReader`/`InputStreamReader`
-- Avoid `^String`, `^java.io.File` etc. type hints — stay Babashka-compatible.
+- `clojure.java.io/reader` + `line-seq` over `java.io.BufferedReader`/`InputStreamReader` (only when stream semantics needed; prefer `slurp` for simple reads)
+- Avoid `^String`, `^java.io.File`, `^java.io.Reader` etc. type hints — stay Babashka-compatible.
+- No `java.io.*` or `java.nio.file.*` imports — everything is available via `babashka.fs` and `slurp`/`spit`
 
 ### Code Style
 - **Naming**: kebab-case for fns/vars, `kmet.tui.*` namespace, components in `kmet.tui.components.*`

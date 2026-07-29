@@ -20,13 +20,13 @@
   (println "Starting kmet demo...")
   (let [terminal (term/create-terminal)
         t (tui/create-tui terminal)
-        greeting (text/make-text "kmet — minimal coding agent" 1 1)
-        info (text/make-text "Multi-line editor demo. Enter to submit, Shift+Enter for newline, Ctrl+Z to quit." 1 1)
+        greeting (text/make-text "kmet — minimal coding agent" 1 0)
+        info (text/make-text "Multi-line editor demo. Enter to submit, Shift+Enter for newline, Ctrl+Z to quit." 1 0)
         spacer1 (spacer/make-spacer 1)
         editor (tui/make-editor :height 10 :padding-x 2)
         last-msg (atom "")
         spacer2 (spacer/make-spacer 1)
-        output (text/make-text "" 1 1)
+        output (text/make-text "" 1 0)
         history (atom [])]
 
     ;; Handle submit from editor

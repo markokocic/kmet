@@ -39,6 +39,30 @@
 (defrecord Overlay [component x y width height focused?])
 
 ;; ═══════════════════════════════════════════════════════════════════════════
+;; Cursor marker
+;; ═══════════════════════════════════════════════════════════════════════════
+
+(def ^:const CURSOR-MARKER "\u001b_pi:c\u0007")
+
+(defn- extract-cursor-position
+  "Find CURSOR-MARKER in rendered lines, strip it from output,
+   and return {:lines cleared-lines :cursor {:row r :col c}}.
+   Returns {:lines original-lines :cursor nil} when no marker found."
+  [lines]
+  (loop [i (dec (count lines))]
+    (if (>= i 0)
+      (let [line (nth lines i)]
+        (if-let [marker-idx (clojure.string/index-of line CURSOR-MARKER)]
+          (let [before (subs line 0 marker-idx)
+                after (subs line (+ marker-idx (count CURSOR-MARKER)))
+                col (utils/visible-width before)
+                new-line (str before after)
+                new-lines (assoc lines i new-line)]
+            {:lines new-lines :cursor {:row i :col col}})
+          (recur (dec i))))
+      {:lines lines :cursor nil})))
+
+;; ═══════════════════════════════════════════════════════════════════════════
 ;; CSI 2026 sync
 ;; ═══════════════════════════════════════════════════════════════════════════
 
@@ -112,6 +136,16 @@
 ;; Diff
 ;; ═══════════════════════════════════════════════════════════════════════════
 
+(defn- pad-lines-to-width
+  "Ensure all lines are exactly width columns wide."
+  [lines width]
+  (mapv (fn [line]
+          (let [vis (utils/visible-width line)]
+            (if (>= vis width)
+              line
+              (str line (apply str (repeat (- width vis) \space))))))
+        lines))
+
 (defn- diff-lines [prev next]
   (let [n (max (count prev) (count next))]
     (loop [i 0, r []]
@@ -124,20 +158,78 @@
 ;; Input reader
 ;; ═══════════════════════════════════════════════════════════════════════════
 
+(def ^:private PASTE-START "\u001b[200~")
+(def ^:private PASTE-END "\u001b[201~")
+
+(def ^:private MAX-ESC-WAIT 30)
+(def ^:private ESC-WAIT-STEP 3)
+
+(defn- dispatch-input!
+  "Dispatch a complete input sequence to listeners and focused component."
+  [tui data]
+  (doseq [l @(:input-listeners tui)] (l data))
+  (if-let [fc @(:focused-component tui)]
+    (handle-input fc data)
+    (when-let [c (first @(:components tui))]
+      (handle-input c data)))
+  (tui-request-render tui))
+
+(defn- process-input-buffer!
+  "Process buffered input. Tries to complete ESC sequences with
+   brief waits, then dispatches the first complete sequence."
+  [tui reader buf]
+  (let [s @buf]
+    (cond
+      ;; Paste markers — dispatch immediately
+      (and (>= (count s) 6)
+           (or (clojure.string/includes? s PASTE-START)
+               (clojure.string/includes? s PASTE-END)))
+      (let [marker (if (clojure.string/includes? s PASTE-START) PASTE-START PASTE-END)
+            idx (clojure.string/index-of s marker)
+            before (subs s 0 idx)]
+        (reset! buf (or (when (seq before) before) ""))
+        (dispatch-input! tui marker))
+
+      ;; Starts with ESC — try to complete sequence
+      (= (first s) \u001b)
+      (loop [waited 0]
+        (let [current @buf]
+          (if-let [key (keys/parse-key current)]
+            (do (reset! buf "")
+                (dispatch-input! tui current))
+            (if (and (< waited MAX-ESC-WAIT)
+                     (keys/escape-prefix? current)
+                     (< (count current) 12))
+              (if (.ready reader)
+                (let [ch (.read reader)]
+                  (when (>= ch 0)
+                    (swap! buf str (char ch)))
+                  (recur 0))
+                (do (Thread/sleep ESC-WAIT-STEP)
+                    (recur (+ waited ESC-WAIT-STEP))))
+              ;; Timeout or invalid — dispatch first char, keep rest
+              (let [first-char (subs current 0 1)
+                    rest (subs current 1)]
+                (reset! buf rest)
+                (dispatch-input! tui first-char))))))
+
+      ;; Non-ESC — dispatch immediately (single char)
+      :else
+      (let [first-char (subs s 0 1)
+            rest (subs s 1)]
+        (reset! buf rest)
+        (dispatch-input! tui first-char)))))
+
 (defn- start-input-reader [tui]
   (let [jline (.terminal (:terminal tui))]
     (future
-      (let [reader (.reader jline)]
+      (let [reader (.reader jline)
+            buf (atom "")]
         (while (and @(:running? tui) (not @(:stopped? tui)))
           (try (let [ch (.read reader)]
                  (when (>= ch 0)
-                   (let [data (str (char ch))]
-                     (doseq [l @(:input-listeners tui)] (l data))
-                     (if-let [fc @(:focused-component tui)]
-                       (handle-input fc data)
-                       (when-let [c (first @(:components tui))]
-                         (handle-input c data)))
-                     (tui-request-render tui))))
+                   (swap! buf str (char ch))
+                   (process-input-buffer! tui reader buf)))
                (catch Exception e
                  (when @(:running? tui)
                    (binding [*out* *err*] (println "input:" (.getMessage e)))))))))))
@@ -158,7 +250,8 @@
   [tui]
   (let [term (:terminal tui)
         jline (.terminal term)
-        started (terminal/start! term (fn [_] nil) (fn [] (tui-request-render tui)))]
+        started (terminal/start! term (fn [_] nil) (fn [] (tui-request-render tui)))
+        max-lines-rendered (atom 0)]
     (terminal/hide-cursor! started)
     (terminal/write-output started "\u001b[2J\u001b[H")
     (reset! (:running? tui) true)
@@ -168,34 +261,64 @@
     (try
       (loop []
         (when @(:running? tui)
-        (let [w (.getWidth jline)
-              h (.getHeight jline)]
-          (when @(:render-requested? tui)
-            (reset! (:render-requested? tui) false)
-            (let [overlays @(:overlays tui)
-                  lines (if (seq overlays)
-                          ;; Render top overlay component
-                          (let [o (peek overlays)
-                                ow (or (:width o) w)
-                                ox (or (:x o) 0)
-                                oy (or (:y o) 0)
-                                comp-lines (vec (render (:component o) ow))]
-                            (vec (concat
-                                   (repeat oy "")
-                                   (mapv #(str (apply str (repeat ox " ")) %) comp-lines)
-                                   (repeat (max 0 (- h oy (count comp-lines))) ""))))
-                          (vec (mapcat #(render % w) @(:components tui))))
-                  prev @(:previous-lines tui)]
-              (when (not= prev lines)
-                (let [d (diff-lines prev lines)]
-                  (when (seq d)
-                    (terminal/write-output started CSI-2026-H)
-                    (doseq [x d] (terminal/write-output started x))
-                    (terminal/write-output started CSI-2026-L)
-                    (let [cr (min (count lines) (dec h))]
-                      (terminal/write-output started (str "\u001b[" (max 1 (inc cr)) "H")))))
-                (reset! (:previous-lines tui) lines)
-                (reset! (:previous-width tui) w)))))
+          (let [w (.getWidth jline)
+                h (.getHeight jline)]
+            (when @(:render-requested? tui)
+              (reset! (:render-requested? tui) false)
+              (let [overlays @(:overlays tui)
+                    raw-lines (if (seq overlays)
+                                ;; Render top overlay component
+                                (let [o (peek overlays)
+                                      ow (or (:width o) w)
+                                      ox (or (:x o) 0)
+                                      oy (or (:y o) 0)
+                                      comp-lines (vec (render (:component o) ow))]
+                                  (vec (concat
+                                         (repeat oy "")
+                                         (mapv #(str (apply str (repeat ox " ")) %) comp-lines)
+                                         (repeat (max 0 (- h oy (count comp-lines))) ""))))
+                                (vec (mapcat #(render % w) @(:components tui))))
+                  cursor-result (extract-cursor-position raw-lines)
+                  cursor (:cursor cursor-result)
+                  lines (:lines cursor-result)
+                  lines (pad-lines-to-width lines w)
+                  prev @(:previous-lines tui)
+                  prev-w @(:previous-width tui)
+                  width-changed (and (pos? prev-w) (not= prev-w w))
+                  content-shrunk (and (not (seq overlays))
+                                      (< (count lines) @max-lines-rendered))]
+              ;; Full redraw: first render, width change, or shrunk content
+              (if (or width-changed content-shrunk (empty? prev))
+                (do
+                  (when (seq prev)
+                    (terminal/write-output started "\u001b[2J\u001b[H"))
+                  (terminal/write-output started CSI-2026-H)
+                  (doseq [i (range (count lines))]
+                    (when (pos? i) (terminal/write-output started "\r\n"))
+                    (terminal/write-output started (nth lines i)))
+                  (terminal/write-output started CSI-2026-L)
+                  (reset! max-lines-rendered (count lines)))
+                ;; Differential render
+                (when (not= prev lines)
+                  (let [d (diff-lines prev lines)]
+                    (when (seq d)
+                      (terminal/write-output started CSI-2026-H)
+                      (doseq [x d] (terminal/write-output started x))
+                      (terminal/write-output started CSI-2026-L)))))
+              ;; Position hardware cursor
+              (if cursor
+                (let [cr (min (:row cursor) (dec h))
+                      cc (min (:col cursor) (dec w))]
+                  (terminal/write-output started (str "\u001b[" (inc cr) "H\u001b[" (inc cc) "G"))
+                  (terminal/show-cursor! started))
+                (do
+                  (let [cr (min (count lines) (dec h))]
+                    (terminal/write-output started (str "\u001b[" (max 1 (inc cr)) "H")))
+                  (terminal/hide-cursor! started)))
+              (reset! (:previous-lines tui) lines)
+              (reset! (:previous-width tui) w)
+              (when (> (count lines) @max-lines-rendered)
+                (reset! max-lines-rendered (count lines))))))
         (Thread/sleep 33)
         (recur)))
       (finally

@@ -7,14 +7,17 @@
 
 ;; ─── Theme ──────────────────────────────────────────────────────────────────
 
-(defrecord SettingsListTheme [label value current-value cursor])
+(defrecord SettingsListTheme [label value description cursor hint])
 
 (def default-theme
   (map->SettingsListTheme
-    {:label identity
-     :value (fn [v] (str "\u001b[36m" v "\u001b[0m"))
-     :current-value (fn [v] (str "\u001b[1m\u001b[33m" v "\u001b[0m\u001b[22m"))
-     :cursor (fn [s] (str "\u001b[7m" s "\u001b[27m"))}))
+    {:label (fn [s sel] (if sel (str "\u001b[36m" s "\u001b[39m") s))
+     :value (fn [s sel] (if sel
+                           (str "\u001b[36m" s "\u001b[39m")
+                           (str "\u001b[2m" s "\u001b[22m")))
+     :description (fn [s] (str "\u001b[2m" s "\u001b[22m"))
+     :cursor (str "\u001b[36m→ \u001b[39m")
+     :hint (fn [s] (str "\u001b[2m" s "\u001b[22m"))}))
 
 ;; ─── SettingsList component ─────────────────────────────────────────────────
 
@@ -51,7 +54,7 @@
           ;; Items
           (doseq [[idx item] (map-indexed vector filtered)]
             (let [is-selected (= idx selected)
-                  label ((:label theme) (:label item))
+                  label ((:label theme) (:label item) is-selected)
                   current (or (:value item) "")
                   possible (:values item)
                   is-cycling (and is-selected possible (> (count possible) 1))
@@ -59,12 +62,12 @@
                               is-cycling
                               (str " < "
                                    (clojure.string/join " | " (map #(if (= % current)
-                                                                      ((:current-value theme) (pr-str %))
-                                                                      ((:value theme) (pr-str %)))
+                                                                      ((:value theme) (pr-str %) true)
+                                                                      ((:value theme) (pr-str %) false))
                                                                     possible))
                                    " > ")
-                              :else (str "  " ((:value theme) (pr-str current))))
-                  cursor (if (and is-selected @focused?) "▸ " "  ")
+                              :else (str "  " ((:value theme) (pr-str current) is-selected)))
+                  cursor (if (and is-selected @focused?) (:cursor theme) "  ")
                   line-str (str cursor label value-str)
                   truncated (u/truncate-to-width line-str (- width 1))
                   padded (str truncated

@@ -17,14 +17,18 @@
                         (u/wrap-text-with-ansi normalized cw))
               left (apply str (repeat padding-x \space))
               right (apply str (repeat padding-x \space))
-              lines (mapv (fn [line]
-                            (let [padded (str left line right)
-                                  vis (u/visible-width padded)
-                                  need (max 0 (- width vis))
-                                  filled (str padded (apply str (repeat need \space)))]
-                              (if bg-fn (bg-fn filled) filled)))
-                          wrapped)
-              result lines]
+              empty-line (apply str (repeat width \space))
+              pad-lines (vec (repeat padding-y empty-line))
+              content-lines (mapv (fn [line]
+                                    (let [padded (str left line right)
+                                          vis (u/visible-width padded)
+                                          need (max 0 (- width vis))
+                                          filled (str padded (apply str (repeat need \space)))]
+                                      (if bg-fn (bg-fn filled) filled)))
+                                  wrapped)
+              result (if (clojure.string/blank? text)
+                       []
+                       (into [] (concat pad-lines content-lines pad-lines)))]
           (reset! cache {:w width :text text :lines result})
           result))))
   (handle-input [this data] nil)

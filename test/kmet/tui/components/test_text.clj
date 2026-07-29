@@ -18,8 +18,11 @@
 (t/deftest test-text-render-padding
   (let [t (text/make-text "hi" 1 1)]
     (let [lines (core/render t 10)]
-      (t/is (= 1 (count lines)))
-      (t/is (= 10 (count (first lines)))))))
+      ;; With padding-y=1: 1 empty top + 1 content + 1 empty bottom = 3 lines
+      (t/is (= 3 (count lines)))
+      (t/is (= 10 (count (first lines))))
+      (t/is (= 10 (count (second lines))))
+      (t/is (= 10 (count (nth lines 2)))))))
 
 (t/deftest test-text-set!
   (let [t (text/make-text "a" 0 0)]

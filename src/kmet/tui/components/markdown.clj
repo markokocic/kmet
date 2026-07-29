@@ -6,33 +6,36 @@
             [kmet.tui.utils :as u]))
 
 ;; ─── Theme ──────────────────────────────────────────────────────────────────
+;; Matches pi's MarkdownTheme interface.
 
 (defrecord MarkdownTheme [heading link link-url code code-block
                           code-block-border quote quote-border hr
-                          list-bullet bold italic])
+                          list-bullet bold italic underline strikethrough])
+
+(def ^:private rst "\u001b[0m")
+(def ^:private bold-ansi "\u001b[1m")
+(def ^:private dim-ansi "\u001b[2m")
+(def ^:private italic-ansi "\u001b[3m")
+(def ^:private ul-ansi "\u001b[4m")
+(def ^:private strike-ansi "\u001b[9m")
 
 (def default-theme
   (map->MarkdownTheme
-    {:heading (fn [level s]
-                (let [codes (case level
-                              1 "\u001b[1m\u001b[33m"  ;; bold + yellow
-                              2 "\u001b[1m\u001b[36m"  ;; bold + cyan
-                              3 "\u001b[1m\u001b[32m"  ;; bold + green
-                              4 "\u001b[1m\u001b[34m"  ;; bold + blue
-                              5 "\u001b[1m\u001b[35m"  ;; bold + magenta
-                              "\u001b[1m")]
-                  (str codes s "\u001b[0m")))
-     :link (fn [text url] (str "\u001b[4m\u001b[36m" text "\u001b[0m"))
-     :link-url (fn [url] (str " \u001b[2m(" url ")\u001b[0m"))
-     :code (fn [s] (str "\u001b[33m" s "\u001b[0m"))
-     :code-block (fn [s] (str "\u001b[33m" s "\u001b[0m"))
+    {:heading (fn [s]
+                (str bold-ansi "\u001b[33m" s rst))
+     :link (fn [s] (str ul-ansi "\u001b[36m" s rst))
+     :link-url (fn [s] (str " " dim-ansi "(" s ")" rst))
+     :code (fn [s] (str "\u001b[33m" s rst))
+     :code-block (fn [s] (str "\u001b[33m" s rst))
      :code-block-border identity
-     :quote (fn [s] (str "\u001b[2m\u001b[37m" s "\u001b[0m"))
-     :quote-border (fn [s] (str "\u001b[2m\u001b[90m" s "\u001b[0m"))
-     :hr (fn [s] (str "\u001b[2m" s "\u001b[0m"))
-     :list-bullet (fn [s] (str "\u001b[36m" s "\u001b[0m"))
-     :bold (fn [s] (str "\u001b[1m" s "\u001b[22m"))
-     :italic (fn [s] (str "\u001b[3m" s "\u001b[23m"))}))
+     :quote (fn [s] (str dim-ansi "\u001b[37m" s rst))
+     :quote-border (fn [s] (str dim-ansi "\u001b[90m" s rst))
+     :hr (fn [s] (str dim-ansi s rst))
+     :list-bullet (fn [s] (str "\u001b[36m" s rst))
+     :bold (fn [s] (str bold-ansi s "\u001b[22m"))
+     :italic (fn [s] (str italic-ansi s "\u001b[23m"))
+     :underline (fn [s] (str ul-ansi s "\u001b[24m"))
+     :strikethrough (fn [s] (str strike-ansi s "\u001b[29m"))}))
 
 ;; ─── Minimal inline parser ─────────────────────────────────────────────────
 
@@ -153,7 +156,7 @@
                 (re-matches heading-re trimmed)
                 (let [[_ level-str content] (re-find heading-re trimmed)
                       level (count level-str)
-                      styled ((:heading theme) level (parse-inlines content theme))
+                      styled ((:heading theme) (parse-inlines content theme))
                       line-width (u/visible-width styled)
                       padded (str left-pad styled
                                   (apply str (repeat (max 0 (- content-width line-width)) \space)))]

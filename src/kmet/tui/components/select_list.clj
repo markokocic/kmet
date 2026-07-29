@@ -6,14 +6,15 @@
             [kmet.tui.utils :as u]))
 
 ;; ─── Default theme ──────────────────────────────────────────────────────────
+;; Matches pi's SelectListTheme interface.
 
 (defrecord SelectListTheme [selected-prefix selected-text description
                             scroll-info no-match])
 
 (def default-theme
   (map->SelectListTheme
-    {:selected-prefix "▸ "
-     :selected-text (fn [s] (str "\u001b[1m" s "\u001b[22m"))
+    {:selected-prefix (fn [s] (str "\u001b[36m" s "\u001b[39m"))  ;; accent cyan
+     :selected-text (fn [s] (str "\u001b[36m" s "\u001b[39m"))   ;; accent cyan
      :description (fn [s] (str "\u001b[2m" s "\u001b[22m"))
      :scroll-info (fn [s] (str "\u001b[2m" s "\u001b[22m"))
      :no-match (fn [s] (str "\u001b[31m" s "\u001b[0m"))}))
@@ -95,8 +96,8 @@
               (str "  " ((:no-match theme) (str "No matches for \"" filter "\""))))
             (doseq [[idx item] (map-indexed vector visible)]
               (let [global-idx (+ idx scroll-offset)
-                    prefix (if (= global-idx selected)
-                             (:selected-prefix theme) "  ")
+                    prefix ((if (= global-idx selected)
+                              (:selected-prefix theme) (fn [s] s)) "▸ ")
                     label ((:selected-text theme) (:label item))
                     desc (when (:description item)
                            (let [d ((:description theme) (:description item))]

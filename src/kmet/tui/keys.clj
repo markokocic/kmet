@@ -159,3 +159,35 @@
                    (str/includes? data "A") (str/includes? data "B")
                    (str/includes? data "C") (str/includes? data "D")))
       true)))
+
+;; ─── Escape sequence prefix detection ──────────────────────────────────────
+
+(defn- csi-prefix?
+  "True if s is a valid prefix of a CSI sequence (ESC [ ... final byte)."
+  [s]
+  (and (str/starts-with? s "\u001b[")
+       (let [payload (.substring s 2)]
+         (or (empty? payload)
+             (and (not (re-find #"[\x40-\x7e]$" payload))
+                  (not (re-find #"[\x00-\x1f]" payload)))))))
+
+(defn- ss3-prefix?
+  "True if s is a valid prefix of an SS3 sequence (ESC O + 1 char)."
+  [s]
+  (and (str/starts-with? s "\u001bO")
+       (< (count s) 3)))
+
+(defn escape-prefix?
+  "Check if string s could be the prefix of a known escape sequence.
+   Returns true if more characters might complete a valid sequence."
+  [s]
+  (or (= s "\u001b")
+      (= s "\u001b\u001b")
+      (csi-prefix? s)
+      (ss3-prefix? s)
+      ;; ESC + single char that could be alt/modifier prefix
+      (and (str/starts-with? s "\u001b")
+           (= (count s) 2)
+           (let [c (int (nth s 1))]
+             (or (and (>= c 32) (<= c 126))
+                 (= c 27))))))

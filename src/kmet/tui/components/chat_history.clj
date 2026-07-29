@@ -16,34 +16,34 @@
 
 (defn- render-user-msg
   "Render a user message into a vector of ANSI-styled lines."
-  [content width {:keys [accent text]}]
+  [content width theme]
   (let [cw (max 1 (- width 4))
-        header (str bold accent "─── You " reset
+        header (str bold (theme/fg theme :accent "─── You ") reset
                     (apply str (repeat (max 0 (- width 8)) "─")))
         wrapped (u/wrap-text-with-ansi content cw)
-        body (mapv #(str "  " text % reset) wrapped)]
+        body (mapv #(str "  " (theme/fg theme :text %) reset) wrapped)]
     (into [header] body)))
 
 (defn- render-assistant-msg
   "Render an assistant message into a vector of ANSI-styled lines."
-  [content width {:keys [accent text]}]
+  [content width theme]
   (let [cw (max 1 (- width 4))
-        header (str bold accent "─── Assistant " reset
+        header (str bold (theme/fg theme :accent "─── Assistant ") reset
                     (apply str (repeat (max 0 (- width 13)) "─")))
         wrapped (u/wrap-text-with-ansi content cw)
-        body (mapv #(str "  " text % reset) wrapped)]
+        body (mapv #(str "  " (theme/fg theme :text %) reset) wrapped)]
     (into [header] body)))
 
 (defn- render-tool-msg
   "Render a tool call/result message into a vector of ANSI-styled lines."
-  [{:keys [name content is-error]} width {:keys [tool-title tool-output error]}]
+  [{:keys [name content is-error]} width theme]
   (let [cw (max 1 (- width 4))
-        title-color (if is-error error tool-title)
-        name-part (str bold title-color "─── " name " " reset)
+        title-color (if is-error :error :tool-title)
+        name-part (str bold (theme/fg theme title-color (str "─── " name " ")) reset)
         sep-len (max 0 (- width (+ 5 (count name))))
         header (str name-part (apply str (repeat sep-len "─")))
-        display (if is-error (str error content reset)
-                         (str tool-output content reset))
+        content-color (if is-error :error :tool-output)
+        display (theme/fg theme content-color content)
         wrapped (u/wrap-text-with-ansi display cw)
         body (mapv #(str "  " %) wrapped)]
     (into [header] body)))
@@ -51,11 +51,10 @@
 (defn- render-streaming-msg
   "Render the in-progress streaming assistant response.
    Shows thinking text dimmed above the response."
-  [msg-text thinking-text width {:keys [accent muted] :as theme}]
-  (let [text-color (:text theme reset)
+  [msg-text thinking-text width theme]
+  (let [cw (max 1 (- width 4))
         dim-color dim
-        cw (max 1 (- width 4))
-        header (str bold accent "─── Assistant " reset
+        header (str bold (theme/fg theme :accent "─── Assistant ") reset
                     (apply str (repeat (max 0 (- width 13)) "─")))
         thinking-lines (when (seq thinking-text)
                          (let [wrapped (u/wrap-text-with-ansi thinking-text cw)
@@ -64,9 +63,9 @@
         body-lines (if (empty? msg-text)
                      []
                      (let [wrapped (u/wrap-text-with-ansi msg-text cw)]
-                       (mapv #(str "  " text-color % reset) wrapped)))
+                       (mapv #(str "  " (theme/fg theme :text %) reset) wrapped)))
         cursor (when (or (seq msg-text) (seq thinking-text))
-                 (str "  " bold muted "▍" reset))
+                 (str "  " bold (theme/fg theme :muted "▍") reset))
         all-lines (let [v (vec (concat (when (seq thinking-lines) thinking-lines)
                                        (when (seq body-lines) body-lines)))
                         v (if cursor (conj v cursor) v)]

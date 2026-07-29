@@ -410,7 +410,7 @@ Be precise and concise in your responses.")
                          (skills/emit-event! evt)))
 
         ;; Components
-        hdr (text/make-text "" 1 1)
+        hdr (text/make-text "" 1 0)
         sp1 (spacer/make-spacer 1)
         ch (chat/make-chat-history :max-lines 100
                                    :theme (cfg/get-theme config))
@@ -418,7 +418,7 @@ Be precise and concise in your responses.")
         ed (tui/make-editor :height 8 :padding-x 2
             :border-fn (fn [c] (str DIM c RST)))
         sp3 (spacer/make-spacer 1)
-        ftr (text/make-text "" 1 1)
+        ftr (text/make-text "" 1 0)
 
         ;; Core state
         cs (map->CoreState {:tui t
