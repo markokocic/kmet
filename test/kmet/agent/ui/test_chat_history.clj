@@ -52,20 +52,20 @@
   (testing "render a tool message with Pi-style box"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-add-message! ch
-        {:role :tool :name "read" :content "file contents" :is-error false})
+        {:role :tool :name "my-tool" :content "file contents" :is-error false})
       (let [lines (plain-lines ch 40)]
         (is (pos? (count lines)))
-        (is (some #(re-find #"read" %) lines))
+        (is (some #(re-find #"my-tool" %) lines))
         (is (some #(re-find #"file contents" %) lines))))))
 
 (deftest test-render-tool-error
   (testing "render a tool error message with Pi-style box"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-add-message! ch
-        {:role :tool :name "bash" :content "command not found" :is-error true})
+        {:role :tool :name "my-tool" :content "command not found" :is-error true})
       (let [lines (plain-lines ch 40)]
         (is (pos? (count lines)))
-        (is (some #(re-find #"bash" %) lines))
+        (is (some #(re-find #"my-tool" %) lines))
         (is (some #(re-find #"command not found" %) lines))))))
 
 (deftest test-render-info

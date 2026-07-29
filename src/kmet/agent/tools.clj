@@ -29,7 +29,7 @@
 
 ;; ─── Tool record ────────────────────────────────────────────────────────────
 
-(defrecord Tool [name label description prompt-snippet prompt-guidelines parameters execute])
+(defrecord Tool [name label description prompt-snippet prompt-guidelines parameters execute render-call render-result])
 
 ;; ─── Parameter helpers ──────────────────────────────────────────────────────
 
@@ -191,6 +191,11 @@
           {:content (str "Contents of " (str (fs/canonicalize dir)) ":\n" result)})))
     (catch Exception e
       {:content (str "Error listing: " (.getMessage e)) :is-error true})))
+
+;; ─── Render function lookup ────────────────────────────────────────────────
+;; Render functions are stored as optional fields on the Tool record.
+;; The renderers live in kmet.agent.ui.tool-execution for theme access.
+;; When nil, the ToolExecutionComponent falls back to default rendering.
 
 ;; ─── Tool registry ─────────────────────────────────────────────────────────
 

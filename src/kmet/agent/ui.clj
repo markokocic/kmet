@@ -31,6 +31,8 @@
 (def tool-execution-set-content! tool-execution/tool-execution-set-content!)
 (def tool-execution-set-error! tool-execution/tool-execution-set-error!)
 (def tool-execution-set-expanded! tool-execution/tool-execution-set-expanded!)
+(def tool-execution-set-render-call-fn! tool-execution/tool-execution-set-render-call-fn!)
+(def tool-execution-set-render-result-fn! tool-execution/tool-execution-set-render-result-fn!)
 
 ;; CustomMessageComponent
 (def make-custom-message custom-message/make-custom-message)

@@ -26,7 +26,7 @@
 
 (deftest test-render-error
   (testing "error tool uses tool-error-bg"
-    (let [c (te/make-tool-execution :name "bash" :content "failed" :is-error true)]
+    (let [c (te/make-tool-execution :name "my-tool" :content "failed" :is-error true)]
       (let [rendered (core/render c 40)]
         ;; Content visible for errors
         (is (some #(re-find #"failed" %) (mapv strip-ansi rendered)))))))

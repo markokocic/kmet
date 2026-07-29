@@ -62,7 +62,8 @@
 ;; ─── Adding messages ──────────────────────────────────────────────────────
 
 (defn- make-component-for-msg
-  "Create the appropriate component for a message map."
+  "Create the appropriate component for a message map.
+   For tool messages, looks up render functions from the tool registry."
   [msg theme output-pad]
   (case (:role msg)
     :user (um/make-user-message :text (:content msg "") :theme theme :output-pad output-pad)
