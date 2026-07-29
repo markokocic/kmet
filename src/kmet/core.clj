@@ -524,10 +524,16 @@ Be precise and concise in your responses.")
           (assoc opts :help true)
 
           (.startsWith arg "@")
-          (let [file-path (subs arg 1)
-                file-content (try (slurp file-path)
-                                  (catch Exception _ ""))]
-            (recur rest-args (update opts :messages conj file-content)))
+          (let [file-path (subs arg 1)]
+            (if (seq file-path)
+              (let [file-content (try (slurp file-path)
+                                      (catch Exception _
+                                        (binding [*out* *err*]
+                                          (println "Warning: could not read" file-path))
+                                        ""))]
+                (recur rest-args (update opts :messages conj file-content)))
+              (do (binding [*out* *err*] (println "Warning: empty path after @"))
+                  (recur rest-args opts))))
 
           :else
           (recur rest-args (update opts :messages conj arg)))))))

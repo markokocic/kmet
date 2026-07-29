@@ -41,7 +41,8 @@
         (edn/read-string (slurp f))
         (catch Exception e
           (binding [*out* *err*]
-            (println "Warning: Failed to load" path ":" (.getMessage e)))
+            (println "Warning: Failed to load" path ":" (.getMessage e))
+            (.printStackTrace e))
           nil)))))
 
 (defn load-config

@@ -3,76 +3,16 @@
    Port of @earendil-works/pi-tui Input."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
-            [kmet.tui.utils :as u]))
+            [kmet.tui.utils :as u]
+            [kmet.tui.components.editing :as edit]))
 
 ;; ─── Cursor marker ─────────────────────────────────────────────────────────
 ;; Zero-width APC sequence emitted at cursor position for IME positioning.
 ;; TUI finds this marker and positions the hardware cursor there.
 (def ^:const CURSOR-MARKER "\u001b_pi:c\u0007")
 
-;; ─── Grapheme helpers (Java BreakIterator) ─────────────────────────────────
-
-(defn- grapheme-left
-  "Move cursor one grapheme cluster left."
-  [s pos]
-  (if (<= pos 0)
-    0
-    (let [bi (java.text.BreakIterator/getCharacterInstance)]
-      (.setText bi s)
-      (let [prev (.preceding bi pos)]
-        (if (== prev java.text.BreakIterator/DONE) 0 prev)))))
-
-(defn- grapheme-right
-  "Move cursor one grapheme cluster right."
-  [s pos]
-  (if (>= pos (count s))
-    (count s)
-    (let [bi (java.text.BreakIterator/getCharacterInstance)]
-      (.setText bi s)
-      (let [nxt (.following bi pos)]
-        (if (== nxt java.text.BreakIterator/DONE)
-          (count s)
-          nxt)))))
-
-(defn- grapheme-at
-  "Return the grapheme cluster at cursor position (or space if at end)."
-  [s pos]
-  (if (>= pos (count s))
-    " "
-    (let [bi (java.text.BreakIterator/getCharacterInstance)]
-      (.setText bi s)
-      (let [nxt (.following bi pos)]
-        (subs s pos (if (== nxt java.text.BreakIterator/DONE) (count s) nxt))))))
-
-;; ─── Kill ring ──────────────────────────────────────────────────────────────
-
-(defrecord KillRing [entries])
-
-(defn make-kill-ring []
-  (map->KillRing {:entries (atom [])}))
-
-(defn- kill-ring-push [kr text & {:keys [prepend accumulate]}]
-  (when (seq text)
-    (swap! (:entries kr)
-      (fn [es]
-        (if (and accumulate (seq es))
-          (let [last (peek es)]
-            (conj (vec (butlast es))
-                  (if prepend (str text last) (str last text))))
-          (conj (vec es) text))))))
-
-(defn- kill-ring-peek [kr]
-  (peek @(:entries kr)))
-
-(defn- kill-ring-rotate [kr]
-  (swap! (:entries kr)
-    (fn [es]
-      (if (> (count es) 1)
-        (into [(peek es)] (vec (butlast es)))
-        es))))
-
-(defn- kill-ring-length [kr]
-  (count @(:entries kr)))
+;; ─── Grapheme helpers and kill ring ──────────────────────────────────────
+;; Imported from kmet.tui.components.editing
 
 ;; ─── Undo stack ─────────────────────────────────────────────────────────────
 
@@ -92,58 +32,7 @@
         snapshot))))
 
 ;; ─── Word navigation helpers ────────────────────────────────────────────────
-
-(defn- word-boundary-left [text pos]
-  "Find cursor position after moving one word backward.
-   Skips whitespace, then skips either a word or a punctuation run.
-   After skipping punctuation, continues past whitespace to land at
-   the start of the preceding word."
-  (let [n (count text)
-        pos (min pos n)]
-    (if (<= pos 0)
-      0
-      (let [before (subs text 0 pos)
-            no-trail (clojure.string/replace before #"\s+$" "")
-            trimmed (count no-trail)]
-        (if (zero? trimmed)
-          0
-          (let [last-char (subs no-trail (dec trimmed))
-                word-char? (boolean (re-find #"^\w" last-char))]
-            (loop [i (dec trimmed)]
-              (if (<= i 0)
-                0
-                (let [c (subs text i (inc i))
-                      is-word (re-find #"^\w" c)
-                      is-space (re-find #"^\s" c)]
-                  (cond
-                    is-space (if word-char?
-                               ;; Word: stop at start of space
-                               (inc i)
-                               ;; Punctuation: skip past space too
-                               (recur (dec i)))
-                    word-char? (if is-word
-                                 (recur (dec i))
-                                 (inc i))
-                    ;; Not word char, not space (punctuation)
-                    :else (if is-word
-                            (inc i)
-                            (recur (dec i)))))))))))))
-
-(defn- word-boundary-right [text pos]
-  "Find cursor position after moving one word forward."
-  (let [n (count text)]
-    (if (>= pos n)
-      n
-      (let [bi (java.text.BreakIterator/getWordInstance)]
-        (.setText bi text)
-        (loop [p pos]
-          (let [nxt (.following bi p)]
-            (if (== nxt java.text.BreakIterator/DONE)
-              n
-              (let [c (subs text p (min (inc p) n))]
-                (if (re-find #"^\s" c)
-                  (recur nxt)
-                  nxt)))))))))
+;; Imported from kmet.tui.components.editing
 
 ;; ─── Input action helpers ───────────────────────────────────────────────────
 ;; Defined before defrecord so method bodies can reference them.
@@ -166,7 +55,7 @@
     (reset! (:last-action input) nil)
     (when (> cursor 0)
       (undo-push (:undo-stack input) {:value value :cursor cursor})
-      (let [glen (grapheme-left value cursor)]
+      (let [glen (edit/grapheme-left value cursor)]
         (reset! (:value-atom input)
           (str (subs value 0 glen) (subs value cursor)))
         (reset! (:cursor-atom input) glen)))))
@@ -177,7 +66,7 @@
     (reset! (:last-action input) nil)
     (when (< cursor (count value))
       (undo-push (:undo-stack input) {:value value :cursor cursor})
-      (let [nxt (grapheme-right value cursor)]
+      (let [nxt (edit/grapheme-right value cursor)]
         (reset! (:value-atom input)
           (str (subs value 0 cursor) (subs value nxt)))))))
 
@@ -187,7 +76,7 @@
     (when (pos? cursor)
       (undo-push (:undo-stack input) {:value value :cursor cursor})
       (let [deleted (subs value 0 cursor)]
-        (kill-ring-push (:kill-ring input) deleted :prepend true
+        (edit/kill-ring-push (:kill-ring input) deleted :prepend true
                         :accumulate (= @(:last-action input) :kill))
         (reset! (:last-action input) :kill)
         (reset! (:value-atom input) (subs value cursor))
@@ -199,7 +88,7 @@
     (when (< cursor (count value))
       (undo-push (:undo-stack input) {:value value :cursor cursor})
       (let [deleted (subs value cursor)]
-        (kill-ring-push (:kill-ring input) deleted :prepend false
+        (edit/kill-ring-push (:kill-ring input) deleted :prepend false
                         :accumulate (= @(:last-action input) :kill))
         (reset! (:last-action input) :kill)
         (reset! (:value-atom input) (subs value 0 cursor))))))
@@ -211,9 +100,9 @@
       (let [was-kill (= @(:last-action input) :kill)]
         (undo-push (:undo-stack input) {:value value :cursor cursor})
         (let [old-cursor cursor
-              new-cursor (word-boundary-left value cursor)]
+              new-cursor (edit/word-boundary-left value cursor)]
           (let [deleted (subs value new-cursor old-cursor)]
-            (kill-ring-push (:kill-ring input) deleted :prepend true
+            (edit/kill-ring-push (:kill-ring input) deleted :prepend true
                             :accumulate was-kill)
             (reset! (:last-action input) :kill)
             (reset! (:value-atom input)
@@ -227,9 +116,9 @@
       (let [was-kill (= @(:last-action input) :kill)]
         (undo-push (:undo-stack input) {:value value :cursor cursor})
         (let [old-cursor cursor
-              new-cursor (word-boundary-right value cursor)]
+              new-cursor (edit/word-boundary-right value cursor)]
           (let [deleted (subs value old-cursor new-cursor)]
-            (kill-ring-push (:kill-ring input) deleted :prepend false
+            (edit/kill-ring-push (:kill-ring input) deleted :prepend false
                             :accumulate was-kill)
             (reset! (:last-action input) :kill)
             (reset! (:value-atom input)
@@ -238,7 +127,7 @@
 (defn- yank-action [input]
   (let [value @(:value-atom input)
         cursor @(:cursor-atom input)
-        text (kill-ring-peek (:kill-ring input))]
+        text (edit/kill-ring-peek (:kill-ring input))]
     (when text
       (undo-push (:undo-stack input) {:value value :cursor cursor})
       (let [new-val (str (subs value 0 cursor) text (subs value cursor))]
@@ -251,22 +140,18 @@
         cursor @(:cursor-atom input)
         kr (:kill-ring input)]
     (when (and (= @(:last-action input) :yank)
-               (> (kill-ring-length kr) 1))
+               (> (edit/kill-ring-length kr) 1))
       (undo-push (:undo-stack input) {:value value :cursor cursor})
-      (let [prev-text (or (kill-ring-peek kr) "")]
-        (let [new-val (str (subs value 0 (- cursor (count prev-text)))
-                           (subs value cursor))]
+      (let [prev-text (or (edit/kill-ring-peek kr) "")
+            after-remove (subs value cursor)
+            new-cursor (- cursor (count prev-text))
+            stripped (str (subs value 0 new-cursor) after-remove)]
+        (edit/kill-ring-rotate kr)
+        (let [text (or (edit/kill-ring-peek kr) "")
+              new-val (str stripped text after-remove)]
           (reset! (:value-atom input) new-val)
-          (reset! (:cursor-atom input) (- cursor (count prev-text))))
-        (kill-ring-rotate kr)
-        (let [text (or (kill-ring-peek kr) "")]
-          (let [new-cursor @(:cursor-atom input)]
-            (let [new-val (str (subs @(:value-atom input) 0 new-cursor)
-                               text
-                               (subs @(:value-atom input) new-cursor))]
-              (reset! (:value-atom input) new-val)
-              (reset! (:cursor-atom input) (+ new-cursor (count text)))
-              (reset! (:last-action input) :yank))))))))
+          (reset! (:cursor-atom input) (+ new-cursor (count text)))
+          (reset! (:last-action input) :yank))))))
 
 ;; ─── Render helper ──────────────────────────────────────────────────────────
 
@@ -275,7 +160,7 @@
    Returns the line string WITHOUT the prompt."
   [value cursor focused? scrolled?]
   (let [at-end? (>= cursor (count value))
-        at-char (if at-end? " " (grapheme-at value cursor))
+        at-char (if at-end? " " (edit/grapheme-at value cursor))
         char-len (count at-char)
         before (subs value 0 cursor)
         after (subs value (min (count value) (+ cursor char-len)))]
@@ -412,14 +297,14 @@
         (or (keys/matches-key? data "left")
             (keys/matches-key? data (keys/ctrl "b")))
         (do (reset! last-action nil)
-            (reset! cursor-atom (grapheme-left value cursor))
+            (reset! cursor-atom (edit/grapheme-left value cursor))
             nil)
 
         ;; Cursor right
         (or (keys/matches-key? data "right")
             (keys/matches-key? data (keys/ctrl "f")))
         (do (reset! last-action nil)
-            (reset! cursor-atom (grapheme-right value cursor))
+            (reset! cursor-atom (edit/grapheme-right value cursor))
             nil)
 
         ;; Cursor line start
@@ -441,7 +326,7 @@
             (keys/matches-key? data (keys/ctrl "left"))
             (keys/matches-key? data (keys/alt "b")))
         (do (reset! last-action nil)
-            (reset! cursor-atom (word-boundary-left @value-atom @cursor-atom))
+            (reset! cursor-atom (edit/word-boundary-left @value-atom @cursor-atom))
             nil)
 
         ;; Cursor word right
@@ -449,7 +334,7 @@
             (keys/matches-key? data (keys/ctrl "right"))
             (keys/matches-key? data (keys/alt "f")))
         (do (reset! last-action nil)
-            (reset! cursor-atom (word-boundary-right @value-atom @cursor-atom))
+            (reset! cursor-atom (edit/word-boundary-right @value-atom @cursor-atom))
             nil)
 
         ;; Regular character input (reject control chars)
@@ -475,7 +360,7 @@
                :focused? (atom false)
                :paste-buffer (atom "")
                :paste-state (atom :idle)
-               :kill-ring (make-kill-ring)
+               :kill-ring (edit/make-kill-ring)
                :last-action (atom nil)
                :undo-stack (make-undo-stack)}))
 

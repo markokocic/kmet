@@ -2,6 +2,7 @@
   "Agent conversation loop — orchestrates user input, LLM calls, and tool execution.
    State machine: IDLE → THINKING → EXECUTING → THINKING → ... → IDLE"
   (:require [clojure.string :as str]
+            [cheshire.core :as json]
             [kmet.agent.llm :as llm]
             [kmet.agent.tools :as tools]
             [kmet.agent.session :as session]))
@@ -76,7 +77,7 @@ Be precise and concise in your responses."}}]
                       (for [[id {:keys [name arguments]}] @pending]
                         {:id id :name name
                          :arguments (try
-                                      (cheshire.core/parse-string arguments)
+                                      (json/parse-string arguments)
                                       (catch Exception _ arguments))}))]
          (reset! pending {})
          result))]))
@@ -166,7 +167,8 @@ Be precise and concise in your responses."}}]
                 (let [promise (do (reset! text-buf "") (call-llm agent api-key text-buf on-text))
                       result (deref promise 120000 :timeout)]
                   (if (= :timeout result)
-                    (do (when on-error (on-error "LLM call timed out after 120s"))
+                    (do (reset! (:signal agent) true)
+                        (when on-error (on-error "LLM call timed out after 120s"))
                         (reset! (:status agent) :error))
                     (if (:error result)
                     (do (when on-error (on-error (:error result)))

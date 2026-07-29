@@ -6,55 +6,15 @@
    enter newline, submit)."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
-            [kmet.tui.utils :as u]))
+            [kmet.tui.utils :as u]
+            [kmet.tui.components.editing :as edit]))
 
 ;; ─── Cursor marker ─────────────────────────────────────────────────────────
 (def ^:const CURSOR-MARKER "\u001b_pi:c\u0007")
 
-;; ─── Grapheme helpers (Java BreakIterator) ─────────────────────────────────
-
-(def ^:private ^java.text.BreakIterator cached-bi
-  (java.text.BreakIterator/getCharacterInstance))
-
-(defn- grapheme-left
-  "Move cursor one grapheme cluster left."
-  [s pos]
-  (if (<= pos 0) 0
-      (let [^java.text.BreakIterator bi cached-bi]
-        (.setText bi s)
-        (let [prev (.preceding bi pos)]
-          (if (== prev java.text.BreakIterator/DONE) 0 prev)))))
-
-(defn- grapheme-right
-  "Move cursor one grapheme cluster right."
-  [s pos]
-  (if (>= pos (count s)) (count s)
-      (let [^java.text.BreakIterator bi cached-bi]
-        (.setText bi s)
-        (let [nxt (.following bi pos)]
-          (if (== nxt java.text.BreakIterator/DONE) (count s) nxt)))))
-
-(defn- grapheme-at
-  "Return the grapheme cluster at cursor position (or empty string if at end)."
-  [s pos]
-  (if (>= pos (count s)) ""
-      (let [^java.text.BreakIterator bi cached-bi]
-        (.setText bi s)
-        (let [nxt (.following bi pos)]
-          (subs s pos (if (== nxt java.text.BreakIterator/DONE) (count s) nxt))))))
-
-(defn- grapheme-segments
-  "Return a vector of {:text str :start idx} for each grapheme cluster in s."
-  [s]
-  (if (empty? s) []
-      (let [^java.text.BreakIterator bi cached-bi]
-        (.setText bi s)
-        (loop [seg [] pos (.first bi)]
-          (if (== pos java.text.BreakIterator/DONE) seg
-              (let [nxt (.next bi)]
-                (if (== nxt java.text.BreakIterator/DONE)
-                  (conj seg {:text (subs s pos) :start pos})
-                  (recur (conj seg {:text (subs s pos nxt) :start pos}) nxt))))))))
+;; ─── Grapheme helpers ─────────────────────────────────────────────────────
+;; Imported from kmet.tui.components.editing (grapheme-left, grapheme-right,
+;; grapheme-at, grapheme-segments, KillRing, etc.)
 
 ;; ─── Word-wrapped line layout ──────────────────────────────────────────────
 
@@ -68,7 +28,7 @@
     (let [line-width (u/visible-width line)]
       (if (<= line-width max-width)
         [(map->TextChunk {:text line :start-index 0 :end-index (count line)})]
-        (let [segments (grapheme-segments line)
+        (let [segments (edit/grapheme-segments line)
               n (count segments)
               result (volatile! [])
               cw (volatile! 0)    ;; current line width
@@ -190,34 +150,7 @@
 
 
 ;; ─── Kill ring
-
-(defrecord KillRing [entries])
-
-(defn make-kill-ring []
-  (map->KillRing {:entries (atom [])}))
-
-(defn- kill-ring-push [kr text & {:keys [prepend accumulate]}]
-  (when (seq text)
-    (swap! (:entries kr)
-      (fn [es]
-        (if (and accumulate (seq es))
-          (let [last (peek es)]
-            (conj (vec (butlast es))
-                  (if prepend (str text last) (str last text))))
-          (conj (vec es) text))))))
-
-(defn- kill-ring-peek [kr]
-  (peek @(:entries kr)))
-
-(defn- kill-ring-rotate [kr]
-  (swap! (:entries kr)
-    (fn [es]
-      (if (> (count es) 1)
-        (into [(peek es)] (vec (butlast es)))
-        es))))
-
-(defn- kill-ring-length [kr]
-  (count @(:entries kr)))
+;; Imported from kmet.tui.components.editing
 
 ;; ─── Undo/redo stacks
 
@@ -338,7 +271,7 @@
     (reset! (:last-action editor) nil)
     (reset! (:redo-stack editor) [])
     (if (> cc 0)
-      (let [line (or (nth lines cl) "") glen (grapheme-left line cc)]
+      (let [line (or (nth lines cl) "") glen (edit/grapheme-left line cc)]
         (swap! (:state-atom editor) assoc
           :lines (assoc lines cl (str (subs line 0 glen) (subs line cc)))
           :cursor-col glen))
@@ -357,7 +290,7 @@
     (reset! (:last-action editor) nil)
     (reset! (:redo-stack editor) [])
     (if (< cc (count line))
-      (let [nxt (grapheme-right line cc)]
+      (let [nxt (edit/grapheme-right line cc)]
         (swap! (:state-atom editor) assoc
           :lines (assoc lines cl (str (subs line 0 cc) (subs line nxt)))))
       (when (< cl (dec (count lines)))
@@ -386,7 +319,7 @@
     (when (pos? cc)
       (push-undo-state editor)
       (let [deleted (subs line 0 cc)]
-        (kill-ring-push (:kill-ring editor) deleted :prepend true
+        (edit/kill-ring-push (:kill-ring editor) deleted :prepend true
                         :accumulate (= @(:last-action editor) :kill))
         (reset! (:last-action editor) :kill)
         (reset! (:redo-stack editor) [])
@@ -400,7 +333,7 @@
     (when (< cc (count line))
       (push-undo-state editor)
       (let [deleted (subs line cc)]
-        (kill-ring-push (:kill-ring editor) deleted :prepend false
+        (edit/kill-ring-push (:kill-ring editor) deleted :prepend false
                         :accumulate (= @(:last-action editor) :kill))
         (reset! (:last-action editor) :kill)
         (reset! (:redo-stack editor) [])
@@ -418,7 +351,7 @@
                       (str (subs (nth lines new-line) new-col) "\n"
                            (clojure.string/join "\n" (subvec lines (inc new-line) cl)) "\n"
                            (subs (nth lines cl) 0 cc)))]
-        (kill-ring-push (:kill-ring editor) deleted :prepend true
+        (edit/kill-ring-push (:kill-ring editor) deleted :prepend true
                         :accumulate (= @(:last-action editor) :kill))
         (reset! (:last-action editor) :kill)
         (reset! (:redo-stack editor) [])
@@ -440,7 +373,7 @@
                         (str (subs (nth lines cl) cc) "\n"
                              (clojure.string/join "\n" (subvec lines (inc cl) tline)) "\n"
                              (subs (nth lines tline) 0 tcol)))]
-          (kill-ring-push (:kill-ring editor) deleted :prepend false
+          (edit/kill-ring-push (:kill-ring editor) deleted :prepend false
                           :accumulate (= @(:last-action editor) :kill))
           (reset! (:last-action editor) :kill)
           (reset! (:redo-stack editor) [])
@@ -460,7 +393,7 @@
             new-lines (if (= 1 (count lines)) [""]
                           (vec (concat (subvec lines 0 cl) (subvec lines (inc cl)))))
             new-cl (min cl (dec (count new-lines)))]
-        (kill-ring-push (:kill-ring editor) (str deleted "\n") :prepend false
+        (edit/kill-ring-push (:kill-ring editor) (str deleted "\n") :prepend false
                         :accumulate (= @(:last-action editor) :kill))
         (reset! (:last-action editor) :kill)
         (reset! (:redo-stack editor) [])
@@ -471,7 +404,7 @@
 
 (defn- handle-yank [editor]
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
-        cc (:cursor-col state) text (kill-ring-peek (:kill-ring editor))]
+        cc (:cursor-col state) text (edit/kill-ring-peek (:kill-ring editor))]
     (when text
       (push-undo-state editor)
       (reset! (:redo-stack editor) [])
@@ -497,11 +430,11 @@
 (defn- handle-yank-pop [editor]
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
         cc (:cursor-col state) kr (:kill-ring editor)]
-    (when (and (= @(:last-action editor) :yank) (> (kill-ring-length kr) 1))
+    (when (and (= @(:last-action editor) :yank) (> (edit/kill-ring-length kr) 1))
       (push-undo-state editor)
       (reset! (:redo-stack editor) [])
-      (let [_ (kill-ring-rotate kr)
-            new-text (or (kill-ring-peek kr) "")]
+      (let [_ (edit/kill-ring-rotate kr)
+            new-text (or (edit/kill-ring-peek kr) "")]
         (if (.contains new-text "\n")
           (let [parts (clojure.string/split new-text #"\n" -1)
                 first-part (first parts) rest-parts (rest parts)
@@ -685,14 +618,14 @@
     (reset! (:preferred-col-atom editor) nil)
     (if (neg? dir)
       (if (> cc 0)
-        (swap! (:state-atom editor) assoc :cursor-col (grapheme-left line cc))
+        (swap! (:state-atom editor) assoc :cursor-col (edit/grapheme-left line cc))
         (when (> cl 0)
           (let [prev-line (or (nth lines (dec cl)) "")]
             (swap! (:state-atom editor) assoc
               :cursor-line (dec cl)
               :cursor-col (count prev-line)))))
       (if (< cc (count line))
-        (swap! (:state-atom editor) assoc :cursor-col (grapheme-right line cc))
+        (swap! (:state-atom editor) assoc :cursor-col (edit/grapheme-right line cc))
         (when (< cl (dec (count lines)))
           (swap! (:state-atom editor) assoc
             :cursor-line (inc cl)
@@ -787,7 +720,7 @@
                               right-pad))]
             (if (and vl-has-cursor (>= vl-cursor-col 0) (<= vl-cursor-col (count display-text)))
               (let [before (subs display-text 0 vl-cursor-col)
-                    at-cursor (grapheme-at display-text vl-cursor-col)
+                    at-cursor (edit/grapheme-at display-text vl-cursor-col)
                     after (subs display-text
                                 (min (count display-text) (+ vl-cursor-col (count at-cursor))))]
                 (vswap! result conj
@@ -990,7 +923,7 @@
                 :height-atom (atom height)
                 :undo-stack (atom [])
                 :redo-stack (atom [])
-                :kill-ring (make-kill-ring)
+                :kill-ring (edit/make-kill-ring)
                 :last-action (atom nil)
                 :paste-buffer (atom "")
                 :paste-state (atom :idle)

@@ -5,6 +5,26 @@
   (:require [clojure.string :as str]
             [clojure.java.io :as io]))
 
+;; ─── Safe file traversal ──────────────────────────────────────────────────
+
+(def ^:private max-traverse-files 10000)
+
+(defn- safe-file-seq
+  "Like file-seq but with symlink cycle protection and a max-files limit."
+  [^java.io.File dir]
+  (let [visited (atom #{})]
+    (take max-traverse-files
+      (filter #(.isFile ^java.io.File %)
+        (tree-seq
+          (fn [^java.io.File f]
+            (and (.isDirectory f)
+                 (let [cp (.getCanonicalPath f)]
+                   (when-not (contains? @visited cp)
+                     (swap! visited conj cp)
+                     true))))
+          (fn [^java.io.File d] (seq (.listFiles d)))
+          dir)))))
+
 ;; ─── Tool record ────────────────────────────────────────────────────────────
 
 (defrecord Tool [name label description parameters execute])
@@ -19,9 +39,8 @@
   {:type "object"
    :properties (reduce-kv (fn [m k v]
                             (assoc m (name k)
-                              (cond-> {:type (name (:type v))
-                                       :description (:description v)}
-                                (:optional v) (assoc :optional true))))
+                              {:type (name (:type v))
+         :description (:description v)}))
                           {} params)
    :required (vec (->> params (remove #(:optional (val %))) (map key) (map name)))})
 
@@ -84,16 +103,14 @@
   [{:keys [command timeout]}]
   (try
     (let [timeout (or timeout 30)
-          proc (.exec (Runtime/getRuntime) (into-array String ["sh" "-c" command]))
+          pb (ProcessBuilder. ["sh" "-c" command])
+          _ (.redirectErrorStream pb true)
+          proc (.start pb)
           _ (future
               (Thread/sleep (* timeout 1000))
               (.destroy proc))
           exit-code (.waitFor proc)
-          stdout (slurp (.getInputStream proc))
-          stderr (slurp (.getErrorStream proc))
-          output (str (when (seq stdout) stdout)
-                      (when (and (seq stdout) (seq stderr)) "\n")
-                      (when (seq stderr) stderr))]
+          output (slurp (.getInputStream proc))]
       {:content output
        :is-error (not= exit-code 0)})
     (catch Exception e
@@ -111,8 +128,7 @@
           (doseq [[idx line] (map-indexed vector (line-seq rdr))]
             (when (re-find (re-pattern pattern) line)
               (vswap! results conj (str (.getName f) ":" (inc idx) ": " line)))))
-        (doseq [file (file-seq f)
-                :when (.isFile file)]
+        (doseq [file (safe-file-seq f)]
           (try
             (with-open [rdr (io/reader file)]
               (doseq [[idx line] (map-indexed vector (line-seq rdr))]
@@ -138,8 +154,7 @@
   (try
     (let [dir (if path (io/file path) (io/file "."))
           results (volatile! [])]
-      (doseq [file (file-seq dir)
-              :when (.isFile file)]
+      (doseq [file (safe-file-seq dir)]
         (let [name (.getName file)]
           (when (or (re-find (re-pattern pattern) name)
                     (re-find (re-pattern pattern) (.getPath file)))

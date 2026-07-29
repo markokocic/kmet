@@ -2,6 +2,7 @@
   "LLM API client supporting OpenAI and Anthropic with streaming."
   (:require [babashka.http-client :as http]
             [clojure.string :as str]
+            [cheshire.core :as json]
             [kmet.agent.tools :as tools]))
 
 ;; ─── Configuration ─────────────────────────────────────────────────────────
@@ -182,7 +183,7 @@
         (let [response (http/post openai-url
                          {:headers {"Authorization" (str "Bearer " api-key)
                                     "Content-Type" "application/json"}
-                          :body (cheshire.core/generate-string payload)
+                          :body (json/generate-string payload)
                           :as :stream
                           :timeout 120000})]
           (process-openai-stream response
@@ -227,7 +228,7 @@
                          {:headers {"x-api-key" api-key
                                     "anthropic-version" default-anthropic-version
                                     "Content-Type" "application/json"}
-                          :body (cheshire.core/generate-string payload)
+                          :body (json/generate-string payload)
                           :as :stream
                           :timeout 120000})]
           (process-anthropic-stream response

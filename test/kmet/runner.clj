@@ -4,11 +4,15 @@
             [kmet.test-keys]
             [kmet.test-session]
             [kmet.test-tools]
+            [kmet.test-tools-regression]
             [kmet.test-llm]
             [kmet.test-loop]
+            [kmet.test-loop-regression]
             [kmet.test-theme]
             [kmet.test-config]
+            [kmet.test-config-regression]
             [kmet.test-skills]
+            [kmet.test-editing]
             [kmet.tui.components.test-text]
             [kmet.tui.components.test-spacer]
             [kmet.tui.components.test-container]
@@ -23,9 +27,13 @@
 (defn -main [& _args]
   (let [namespaces '[kmet.test-utils kmet.test-keys
                      kmet.test-session kmet.test-tools
+                     kmet.test-tools-regression
                      kmet.test-llm kmet.test-loop
+                     kmet.test-loop-regression
                      kmet.test-theme kmet.test-config
+                     kmet.test-config-regression
                      kmet.test-skills
+                     kmet.test-editing
                      kmet.tui.components.test-text
                      kmet.tui.components.test-spacer
                      kmet.tui.components.test-container
