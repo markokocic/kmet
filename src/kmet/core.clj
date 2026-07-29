@@ -366,7 +366,10 @@ Be precise and concise in your responses.")
              :provider provider
              :system system-prompt
              :session session
-             :compact-threshold (:compact-threshold config 400))
+             :compact-threshold (:compact-threshold config 400)
+             :on-event (fn [evt]
+                         ;; Forward events to extension system
+                         (skills/emit-event! evt)))
 
         ;; Components
         hdr (text/make-text "" 1 1)

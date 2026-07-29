@@ -90,6 +90,14 @@
                         "magenta" (ansi-16 45)
                         "cyan" (ansi-16 46)
                         "white" (ansi-16 47)
+                        "bright-black" (ansi-16 100)
+                        "bright-red" (ansi-16 101)
+                        "bright-green" (ansi-16 102)
+                        "bright-yellow" (ansi-16 103)
+                        "bright-blue" (ansi-16 104)
+                        "bright-magenta" (ansi-16 105)
+                        "bright-cyan" (ansi-16 106)
+                        "bright-white" (ansi-16 107)
                         rst))
     (vector? color) (apply ansi-bg-truecolor color)
     :else rst))
@@ -211,13 +219,14 @@
   [dir]
   (let [d (io/file dir)]
     (when (.isDirectory d)
-      (doseq [f (.listFiles d (fn [_ name] (.endsWith name ".edn")))]
-        (try
-          (let [data (edn/read-string (slurp f))
-                name (.getName f)
-                theme-name (clojure.string/replace name #"\.edn$" "")
-                theme (make-theme theme-name data)]
-            (register-theme! theme))
-          (catch Exception e
-            (binding [*out* *err*]
-              (println "Warning: Failed to load theme" (.getName f) ":" (.getMessage e)))))))))
+      (doseq [f (.listFiles d)]
+        (when (.endsWith (.getName f) ".edn")
+          (try
+            (let [data (edn/read-string (slurp f))
+                  name (.getName f)
+                  theme-name (clojure.string/replace name #"\.edn$" "")
+                  theme (make-theme theme-name data)]
+              (register-theme! theme))
+            (catch Exception e
+              (binding [*out* *err*]
+                (println "Warning: Failed to load theme" (.getName f) ":" (.getMessage e))))))))))

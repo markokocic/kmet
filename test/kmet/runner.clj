@@ -6,6 +6,9 @@
             [kmet.test-tools]
             [kmet.test-llm]
             [kmet.test-loop]
+            [kmet.test-theme]
+            [kmet.test-config]
+            [kmet.test-skills]
             [kmet.tui.components.test-text]
             [kmet.tui.components.test-spacer]
             [kmet.tui.components.test-container]
@@ -21,6 +24,8 @@
   (let [namespaces '[kmet.test-utils kmet.test-keys
                      kmet.test-session kmet.test-tools
                      kmet.test-llm kmet.test-loop
+                     kmet.test-theme kmet.test-config
+                     kmet.test-skills
                      kmet.tui.components.test-text
                      kmet.tui.components.test-spacer
                      kmet.tui.components.test-container

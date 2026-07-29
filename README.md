@@ -136,7 +136,7 @@ Create EDN theme files in `~/.config/kmet/themes/`. See `examples/themes/` for f
 
 ```sh
 bb demo    # Standalone editor demo
-bb test    # Run tests (234 tests, 811 assertions)
+bb test    # Run tests (278 tests, 1042 assertions)
 bb help    # Show task help
 ```
 
@@ -146,7 +146,7 @@ bb help    # Show task help
 - ✅ Phase 2 — Interactive Components
 - ✅ Phase 3 — Agent Core
 - ✅ Phase 4 — Chat History, Layout, Commands
-- 🔄 Phase 5 — Themes, Config, Polish (in progress)
+- ✅ Phase 5 — Themes, Config, Polish
 
 ## License
 

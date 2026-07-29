@@ -545,31 +545,34 @@ Zero-width APC sequence `\x1b_pi:c\x07` emitted by `IFocusable` components at th
 6. ~~**Phase 3b** — `tools.clj` (read, write, edit, bash, grep, find, ls — parameter validation, tool registry)~~ ✅ DONE
 7. ~~**Phase 3c** — `loop.clj` + `session.clj` (agent orchestration with tool cycle, EDNL session persistence)~~ ✅ DONE
 8. ~~**Phase 4** — Chat history integration, main TUI layout, commands~~ ✅ DONE
-9. **Phase 5** — Themes, config, polish ← CURRENT
+9. ~~**Phase 5** — Themes, config, polish~~ ✅ DONE
 
 ---
 
 ## Test Coverage
 
-**234 tests, 811 assertions, 0 failures.**
+**278 tests, 1042 assertions, 0 failures.**
 
 | Module | Tests | Key coverage |
 |--------|-------|-------------|
-| `kmet.tui.utils` | 2 | visible-width, truncate-to-width |
-| `kmet.tui.keys` | 9 | constants, modifiers, parse-key (ctrl/special/legacy/alt/regular), matches-key |
-| `kmet.tui.components.text` | 5 | create, render, padding, set-text, word-wrap |
-| `kmet.tui.components.spacer` | 2 | create, render |
-| `kmet.tui.components.container` | 3 | create, add/remove children, render |
-| `kmet.tui.components.box` | 5 | create, render (with/without padding), empty, multiple children, background fn |
-| `kmet.tui.components.input` | 20 | create, typing, cursor movement, backspace/delete, line editing (ctrl+u/k/w), undo, yank, word nav, submit/escape, edge cases |
-| `kmet.tui.components.editor` | 29 | create, typing, multi-line, backspace/delete, cursor movement, undo/redo, line editing, yank, word nav, submit, set-text, history, height, on-change, render, edge cases |
-| `kmet.tui.components.select-list` | 17 | create, navigation (up/down/home/end/page), ctrl+n/p, filtering, selection, escape, get-selected, set-items, theme, render, cache |
-| `kmet.tui.components.settings-list` | 14 | create, navigation, value cycling (right/left/wrap), on-change, filtering, escape, get-item/set-value, render |
-| `kmet.tui.components.markdown` | 16 | create, render (plain, headings, code, bold, italic, inline-code, lists, blockquotes, links, hr), set-text/append, invalidate, cache |
-| `kmet.tui.components.chat-history` | 16 | create, add, render (user/assistant/tool/error), streaming, finalize, clear, max-lines, multiple messages, cache |
-| `kmet.agent.session` | 11 | create, append, parent chain, get-branch, save/load, list, fork, compact, delete |
-| `kmet.agent.tools` | 17 | registry (get/get-all/unknown), all 7 tool executions, error handling, schemas (Anthropic/OpenAI), custom registration |
 | `kmet.agent.llm` | 8 | module loading, no-API-key errors, unknown provider, tool schema consistency, future return |
 | `kmet.agent.loop` | 10 | state construction, context, setter helpers, cancel, status transitions, run-turn error handling |
+| `kmet.agent.session` | 11 | create, append, parent chain, get-branch, save/load, list, fork, compact, delete |
+| `kmet.agent.tools` | 17 | registry (get/get-all/unknown), all 7 tool executions, error handling, schemas (Anthropic/OpenAI), custom registration |
+| `kmet.config` | 16 | Defaults, path expansion, accessors, model resolution, configuration merging |
+| `kmet.skills` | 17 | Skills registration, directory loading, system prompt building, extensions, event system (register/emit/deregister/clear) |
+| `kmet.tui.components.box` | 5 | create, render (with/without padding), empty, multiple children, background fn |
+| `kmet.tui.components.chat-history` | 16 | create, add, render (user/assistant/tool/error), streaming, finalize, clear, max-lines, multiple messages, cache |
+| `kmet.tui.components.container` | 3 | create, add/remove children, render |
+| `kmet.tui.components.editor` | 29 | create, typing, multi-line, backspace/delete, cursor movement, undo/redo, line editing, yank, word nav, submit, set-text, history, height, on-change, render, edge cases |
+| `kmet.tui.components.input` | 20 | create, typing, cursor movement, backspace/delete, line editing (ctrl+u/k/w), undo, yank, word nav, submit/escape, edge cases |
+| `kmet.tui.components.markdown` | 16 | create, render (plain, headings, code, bold, italic, inline-code, lists, blockquotes, links, hr), set-text/append, invalidate, cache |
+| `kmet.tui.components.select-list` | 17 | create, navigation (up/down/home/end/page), ctrl+n/p, filtering, selection, escape, get-selected, set-items, theme, render, cache |
+| `kmet.tui.components.settings-list` | 14 | create, navigation, value cycling (right/left/wrap), on-change, filtering, escape, get-item/set-value, render |
+| `kmet.tui.components.spacer` | 2 | create, render |
+| `kmet.tui.components.text` | 5 | create, render, padding, set-text, word-wrap |
+| `kmet.tui.keys` | 9 | constants, modifiers, parse-key (ctrl/special/legacy/alt/regular), matches-key |
+| `kmet.tui.theme` | 13 | Theme record, make-theme, color resolution (named/hex/256/truecolor), registry, file loading |
+| `kmet.tui.utils` | 2 | visible-width, truncate-to-width |
 
 Run tests: `bb test`
