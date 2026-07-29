@@ -146,11 +146,31 @@
               (str line (apply str (repeat (- width vis) \space))))))
         lines))
 
+(defn- clip-lines-to-height
+  "Pad or truncate lines to exactly h lines (terminal height).
+   Pads with empty lines at the top when shorter, truncates from
+   the top when longer (keeping bottom h lines).
+   Adjusts cursor position when truncating."
+  [lines h w cursor]
+  (let [n (count lines)
+        empty-line (apply str (repeat w \space))]
+    (cond
+      (= n h) [lines cursor]
+      (< n h) (let [padded (into (vec (repeat (- h n) empty-line)) lines)]
+                [padded cursor])
+      :else (let [offset (- n h)
+                  clipped (subvec lines offset n)
+                  new-cursor (when cursor
+                               (let [new-row (- (:row cursor) offset)]
+                                 (when (>= new-row 0)
+                                   (assoc cursor :row new-row))))]
+              [clipped new-cursor]))))
+
 (defn- diff-lines [prev next]
-  (let [n (max (count prev) (count next))]
+  (let [n (count prev)] ;; prev and next are always same length (padded to height)
     (loop [i 0, r []]
       (if (>= i n) r
-          (let [a (get prev i "") b (get next i "")]
+          (let [a (nth prev i "") b (nth next i "")]
             (if (= a b) (recur (inc i) r)
                 (recur (inc i) (conj r (str "\u001b[" (inc i) "H\u001b[2K" b)))))))))
 
@@ -278,17 +298,20 @@
                                          (mapv #(str (apply str (repeat ox " ")) %) comp-lines)
                                          (repeat (max 0 (- h oy (count comp-lines))) ""))))
                                 (vec (mapcat #(render % w) @(:components tui))))
-                  cursor-result (extract-cursor-position raw-lines)
-                  cursor (:cursor cursor-result)
-                  lines (:lines cursor-result)
-                  lines (pad-lines-to-width lines w)
-                  prev @(:previous-lines tui)
-                  prev-w @(:previous-width tui)
-                  width-changed (and (pos? prev-w) (not= prev-w w))
-                  content-shrunk (and (not (seq overlays))
-                                      (< (count lines) @max-lines-rendered))]
-              ;; Full redraw: first render, width change, or shrunk content
-              (if (or width-changed content-shrunk (empty? prev))
+                    cursor-result (extract-cursor-position raw-lines)
+                    cursor (:cursor cursor-result)
+                    lines (:lines cursor-result)
+                    lines (pad-lines-to-width lines w)
+                    ;; Normalize to exactly terminal height — avoids scroll/position bugs
+                    [lines cursor] (clip-lines-to-height lines h w cursor)
+                    prev @(:previous-lines tui)
+                    prev-w @(:previous-width tui)
+                    prev-count (count prev)
+                    size-mismatch (and (pos? prev-count)
+                                       (not= prev-count (count lines)))
+                    width-changed (and (pos? prev-w) (not= prev-w w))]
+              ;; Full redraw: first render, size mismatch (resize/scroll), or width change
+              (if (or (empty? prev) size-mismatch width-changed)
                 (do
                   (when (seq prev)
                     (terminal/write-output started "\u001b[2J\u001b[H"))
@@ -305,15 +328,16 @@
                       (terminal/write-output started CSI-2026-H)
                       (doseq [x d] (terminal/write-output started x))
                       (terminal/write-output started CSI-2026-L)))))
-              ;; Position hardware cursor
+              ;; Position hardware cursor — lines is now guaranteed ≤ h
               (if cursor
                 (let [cr (min (:row cursor) (dec h))
                       cc (min (:col cursor) (dec w))]
                   (terminal/write-output started (str "\u001b[" (inc cr) "H\u001b[" (inc cc) "G"))
                   (terminal/show-cursor! started))
                 (do
-                  (let [cr (min (count lines) (dec h))]
-                    (terminal/write-output started (str "\u001b[" (max 1 (inc cr)) "H")))
+                  ;; Cursor past end of content: move to last content line
+                  (let [last-row (min (count lines) h)]
+                    (terminal/write-output started (str "\u001b[" (max 1 last-row) "H")))
                   (terminal/hide-cursor! started)))
               (reset! (:previous-lines tui) lines)
               (reset! (:previous-width tui) w)
