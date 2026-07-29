@@ -25,7 +25,7 @@
    :providers {:openai {:model "gpt-4o"}
                :anthropic {:model "claude-sonnet-4-20250514"}
                :opencode-go {:model "deepseek-v4-flash"
-                             :base-url "https://opencode.ai/zen/go/v1"
+                             :base-url "https://opencode.ai/zen/go/v1/chat/completions"
                              :api-type :openai}}})
 
 ;; ─── Path expansion ────────────────────────────────────────────────────────
@@ -82,7 +82,7 @@
             :api-type :openai}
    :anthropic {:base-url "https://api.anthropic.com/v1/messages"
                :api-type :anthropic}
-   :opencode-go {:base-url "https://opencode.ai/zen/go/v1"
+   :opencode-go {:base-url "https://opencode.ai/zen/go/v1/chat/completions"
                  :api-type :openai}})
 
 (defn get-provider-config
