@@ -290,9 +290,16 @@
   (update-header-footer! cs)
   (tui/tui-request-render (:tui cs)))
 
+(defn- on-agent-thinking [cs text]
+  "Called for each thinking/reasoning delta from the LLM during streaming."
+  (chat/chat-history-append-thinking-text! (:chat-history cs) text)
+  (update-header-footer! cs)
+  (tui/tui-request-render (:tui cs)))
+
 (defn- on-agent-done [cs]
   "Called when the LLM turn completes.
    Session persistence is handled by the agent loop internally."
+  (chat/chat-history-finalize-thinking! (:chat-history cs))
   (chat/chat-history-finalize-streaming! (:chat-history cs))
   (reset! (:running-turn? cs) false)
   (update-header-footer! cs)
@@ -300,6 +307,7 @@
 
 (defn- on-agent-error [cs error-msg]
   "Called when an error occurs during the agent turn."
+  (chat/chat-history-finalize-thinking! (:chat-history cs))
   (chat/chat-history-finalize-streaming! (:chat-history cs))
   (chat/chat-history-add-message! (:chat-history cs)
     {:role :assistant :content (str RED "Error: " error-msg RST)})
@@ -328,6 +336,7 @@
           (agent/run-agent-turn (:agent-state cs)
             {:message trimmed
              :on-text #(on-agent-text cs %)
+             :on-thinking #(on-agent-thinking cs %)
              :on-done #(on-agent-done cs)
              :on-error #(on-agent-error cs %)}))))))
 
@@ -335,6 +344,7 @@
   "Cancel the current agent turn."
   (when @(:running-turn? cs)
     (agent/cancel-turn (:agent-state cs))
+    (chat/chat-history-finalize-thinking! (:chat-history cs))
     (chat/chat-history-finalize-streaming! (:chat-history cs))
     (chat/chat-history-add-message! (:chat-history cs)
       {:role :assistant :content (str DIM "(cancelled)" RST)})

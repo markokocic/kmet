@@ -18,7 +18,7 @@
    :max-session-entries 500
    :compact-threshold 400
    :system-prompt nil
-   :thinking :max
+   :thinking :off
    :extensions-dir "~/.config/kmet/extensions"
    :skills-dir "~/.config/kmet/skills"
    :themes-dir "~/.config/kmet/themes"

@@ -44,6 +44,8 @@
              :arguments (get-in tc [:function :arguments] "")})
           (get delta :content)
           {:type :text :content (get delta :content)}
+          (get delta :reasoning_content)
+          {:type :thinking :content (get delta :reasoning_content)}
           :else {:type :delta :chunk chunk}))
       (catch Exception e
         {:type :error :message (str "Parse error: " (.getMessage e))}))))
@@ -84,6 +86,15 @@
 
 ;; ─── Message format conversion ─────────────────────────────────────────────
 
+(defn- content-text
+  "Extract plain text from a message content block vector.
+   A block has {:type :text :text \"...\"} or {:type \"text\" :text \"...\"}."
+  [content]
+  (str/join (for [b content
+                  :when (or (= (:type b) :text)
+                            (= (:type b) "text"))]
+              (:text b))))
+
 (defn- openai-messages [messages]
   (mapv (fn [m]
           (let [role (name (:role m))]
@@ -93,9 +104,7 @@
                :tool_call_id (-> m :content first :tool_use_id)
                :content (-> m :content first :content)}
               "assistant"
-              (let [text (str/join (for [b (:content m)
-                                         :when (= (:type b) "text")]
-                                     (:text b)))]
+              (let [text (content-text (:content m))]
                 (cond-> {:role "assistant" :content text}
                   (:tool-calls m)
                   (assoc :tool_calls
@@ -107,18 +116,28 @@
                                                      (:arguments tc))}})
                           (:tool-calls m)))))
               {:role role
-               :content (str/join (for [b (:content m)
-                                        :when (= (:type b) "text")]
-                                    (:text b)))})))
+               :content (content-text (:content m))})))
         messages))
+
+(defn- anthropic-content-text
+  "Extract plain text from Anthropic message content.
+   Returns the content as-is if it is a string, otherwise joins text blocks."
+  [content]
+  (if (string? content)
+    content
+    (str/join (for [b content
+                    :when (or (= (:type b) :text)
+                              (= (:type b) "text"))]
+                (:text b)))))
 
 (defn- anthropic-messages [messages]
   (mapv (fn [m]
-          (let [role (name (:role m))]
-            (cond-> {:role role :content (:content m)}
+          (let [role (name (:role m))
+                content (anthropic-content-text (:content m))]
+            (cond-> {:role role :content content}
               (and (= role "assistant") (:tool-calls m))
               (assoc :content
-                (vec (concat (:content m)
+                (vec (concat (if (string? (:content m)) [] (:content m))
                              (mapv (fn [tc]
                                      {:type "tool_use"
                                       :id (:id tc)
@@ -161,33 +180,20 @@
     (catch Exception e
       (handler {:type :error :message (str "Stream error: " (.getMessage e))}))))
 
-;; ─── Thinking config for OpenAI-compatible APIs ───────────────────────────
-
-(defn- openai-thinking-config
-  "Convert thinking level keyword to OpenAI reasoning_effort parameter.
-   Returns nil for :off and unsupported levels."
-  [level]
-  (case level
-    :low "low"
-    :medium "medium"
-    :high "high"
-    :max "max"
-    nil))
-
 ;; ─── OpenAI request ────────────────────────────────────────────────────────
 
 (defn- openai-request
-  [{:keys [api-key model messages tools signal base-url thinking
-           on-text on-tool-call on-done on-error]}]
+  [{:keys [api-key model messages tools signal base-url
+           on-text on-thinking on-tool-call on-done on-error]}]
   (future
     (let [url (or base-url default-openai-url)
-          reasoning (openai-thinking-config thinking)
-          payload (cond-> {:model (or model "gpt-4o")
-                           :messages (openai-messages messages)
-                           :stream true
-                           :stream_options {:include_usage true}}
-                    (seq tools) (assoc :tools (mapv tools/tool->openai-schema tools))
-                    reasoning (assoc :reasoning_effort reasoning))]
+          payload {:model (or model "gpt-4o")
+                   :messages (openai-messages messages)
+                   :stream true
+                   :stream_options {:include_usage true}}
+          payload (if (seq tools)
+                    (assoc payload :tools (mapv tools/tool->openai-schema tools))
+                    payload)]
       (try
         (let [response (http/post url
                          {:headers {"Authorization" (str "Bearer " api-key)
@@ -199,6 +205,7 @@
             (fn [event]
               (case (:type event)
                 :text (when on-text (on-text (:content event)))
+                :thinking (when on-thinking (on-thinking (:content event)))
                 :tool-call (when on-tool-call
                              (on-tool-call {:id (:id event)
                                             :name (:name event)

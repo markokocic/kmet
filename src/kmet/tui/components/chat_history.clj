@@ -49,24 +49,37 @@
     (into [header] body)))
 
 (defn- render-streaming-msg
-  "Render the in-progress streaming assistant response."
-  [msg-text width {:keys [accent muted] :as theme}]
-  (if (empty? msg-text)
-    []
-    (let [text-color (:text theme reset)
-          cw (max 1 (- width 4))
-          header (str bold accent "─── Assistant " reset
-                      (apply str (repeat (max 0 (- width 13)) "─")))
-          wrapped (u/wrap-text-with-ansi msg-text cw)
-          body (mapv #(str "  " text-color % reset) wrapped)
-          cursor (str "  " bold muted "▍" reset)]
-      (into [header] (conj body cursor)))))
+  "Render the in-progress streaming assistant response.
+   Shows thinking text dimmed above the response."
+  [msg-text thinking-text width {:keys [accent muted] :as theme}]
+  (let [text-color (:text theme reset)
+        dim-color dim
+        cw (max 1 (- width 4))
+        header (str bold accent "─── Assistant " reset
+                    (apply str (repeat (max 0 (- width 13)) "─")))
+        thinking-lines (when (seq thinking-text)
+                         (let [wrapped (u/wrap-text-with-ansi thinking-text cw)
+                               lines (mapv #(str "  " dim-color % reset) wrapped)]
+                           (into [(str "  " dim "(thinking)" reset)] lines)))
+        body-lines (if (empty? msg-text)
+                     []
+                     (let [wrapped (u/wrap-text-with-ansi msg-text cw)]
+                       (mapv #(str "  " text-color % reset) wrapped)))
+        cursor (when (or (seq msg-text) (seq thinking-text))
+                 (str "  " bold muted "▍" reset))
+        all-lines (cond-> []
+                    (seq thinking-lines) (into thinking-lines)
+                    (seq body-lines) (into body-lines)
+                    cursor (conj cursor))]
+    (if (or (seq msg-text) (seq thinking-text))
+      (into [header] all-lines)
+      [])))
 
 ;; ─── Build full lines from messages ────────────────────────────────────────
 
 (defn- build-all-lines
   "Given messages vector and streaming text, produce all rendered lines."
-  [messages streaming-text width theme]
+  [messages streaming-text thinking-text width theme]
   (let [msg-lines (mapcat (fn [m]
                             (case (:role m)
                               :user (render-user-msg (:content m "") width theme)
@@ -74,13 +87,14 @@
                               :tool (render-tool-msg m width theme)
                               []))
                           messages)
-        stream-lines (render-streaming-msg streaming-text width theme)]
+        stream-lines (render-streaming-msg streaming-text thinking-text width theme)]
     (vec (concat msg-lines stream-lines))))
 
 ;; ─── ChatHistory record ─────────────────────────────────────────────────────
 
 (defrecord ChatHistory [messages-atom       ;; atom of [{:role :user/:assistant/:tool :content ...}]
                         streaming-text-atom  ;; atom of string (current streaming text)
+                        thinking-text-atom   ;; atom of string (current thinking text)
                         scroll-offset-atom   ;; atom of int (starting line index)
                         max-lines-atom       ;; atom of int (visible line count)
                         focused?
@@ -92,6 +106,7 @@
   (render [this width]
     (let [messages @messages-atom
           streaming-text @streaming-text-atom
+          thinking-text @thinking-text-atom
           max-lines @max-lines-atom
           theme @theme-atom
           cached @cache-atom]
@@ -99,9 +114,10 @@
                (= (:width cached) width)
                (= (:msgs cached) messages)
                (= (:stream cached) streaming-text)
+               (= (:thinking cached) thinking-text)
                (= (:theme cached) theme))
         (:lines cached)
-        (let [all-lines (build-all-lines messages streaming-text width theme)
+        (let [all-lines (build-all-lines messages streaming-text thinking-text width theme)
               total (count all-lines)
               _ (reset! last-width-atom width)
               scroll-offset @scroll-offset-atom
@@ -118,11 +134,13 @@
             (reset! scroll-offset-atom offset))
           ;; Cache
           (reset! cache-atom {:width width :msgs messages
-                              :stream streaming-text :theme theme :lines visible})
+                              :stream streaming-text :thinking thinking-text
+                              :theme theme :lines visible})
           visible))))
 
   (handle-input [this data]
     (let [total (count (build-all-lines @messages-atom @streaming-text-atom
+                                         @thinking-text-atom
                                          @last-width-atom @theme-atom))
           max-lines @max-lines-atom
           offset @scroll-offset-atom
@@ -229,11 +247,24 @@
         (chat-history-add-message! ch msg)
         msg))))
 
+(defn chat-history-append-thinking-text!
+  "Append text to the current thinking/reasoning display."
+  [ch text]
+  (swap! (:thinking-text-atom ch) str text)
+  (protocols/invalidate ch))
+
+(defn chat-history-finalize-thinking!
+  "Clear the thinking text (called when assistant starts responding)."
+  [ch]
+  (reset! (:thinking-text-atom ch) "")
+  (protocols/invalidate ch))
+
 (defn chat-history-clear!
-  "Clear all messages and streaming text."
+  "Clear all messages, streaming text, and thinking text."
   [ch]
   (reset! (:messages-atom ch) [])
   (reset! (:streaming-text-atom ch) "")
+  (reset! (:thinking-text-atom ch) "")
   (reset! (:scroll-offset-atom ch) 0)
   (reset! (:cache-atom ch) nil))
 

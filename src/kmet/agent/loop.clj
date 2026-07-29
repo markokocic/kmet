@@ -92,23 +92,29 @@ Be precise and concise in your responses."}}]
 (defn- call-llm
   "Send messages to LLM, return a promise that delivers {:text str :tool-calls [...] :stop-reason kw}.
    Calls on-text for text deltas during streaming."
-  [agent api-key text-buf on-text]
+  [agent api-key text-buf on-text on-thinking]
   (let [done-promise (promise)
         [tc-add tc-flush] (make-tc-accumulator)
-        provider @(:provider agent)]
+        provider @(:provider agent)
+        system @(:system agent)
+        messages (if system
+                   (into [{:role :system :content [{:type :text :text system}]}]
+                         @(:messages agent))
+                   @(:messages agent))]
     (llm/send-message
       {:provider provider
        :api-type (or (:api-type agent) (cfg/get-provider-api-type provider))
        :model @(:model agent)
        :api-key api-key
        :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
-       :messages @(:messages agent)
+       :messages messages
        :tools (vals (tools/get-all-tools))
        :signal (:signal agent)
        :thinking @(:thinking agent)
        :on-text (fn [t]
                   (swap! text-buf str t)
                   (when on-text (on-text t)))
+       :on-thinking on-thinking
        :on-tool-call (fn [tc] (tc-add tc))
        :on-done (fn [reason]
                   (let [tool-calls (tc-flush)]
@@ -132,7 +138,7 @@ Be precise and concise in your responses."}}]
      :on-error — (fn [error]) error callback
 
    Returns: future that completes when the turn is done."
-  [agent {:keys [message on-text on-done on-error]}]
+  [agent {:keys [message on-text on-thinking on-done on-error]}]
   (reset! (:signal agent) false)
   (let [provider @(:provider agent)
         api-key (cfg/get-api-key provider)]
@@ -170,7 +176,7 @@ Be precise and concise in your responses."}}]
               (if (>= turn max-turns)
                 (do (when on-error (on-error "Max turn limit reached"))
                     (reset! (:status agent) :error))
-                (let [promise (do (reset! text-buf "") (call-llm agent api-key text-buf on-text))
+                (let [promise (do (reset! text-buf "") (call-llm agent api-key text-buf on-text on-thinking))
                       result (deref promise 120000 :timeout)]
                   (if (= :timeout result)
                     (do (reset! (:signal agent) true)
