@@ -15,7 +15,7 @@
             [kmet.tui.components.select-list :as select-list]
             [kmet.tui.components.settings-list :as settings-list]
             [kmet.tui.components.markdown :as markdown]
-            )
+            [kmet.tui.components.spinner :as spinner])
   ;; Protocols are re-exported into this namespace so that implementors
   ;; can do (ns ... (:require [kmet.tui.core :as tui]) ... (tui/IComponent ...))
   (:refer-clojure :exclude [render]))
@@ -441,4 +441,13 @@
 (def make-markdown markdown/make-markdown)
 (def markdown-set-text! markdown/markdown-set-text!)
 (def markdown-append! markdown/markdown-append!)
+
+;; Spinner
+(def make-spinner spinner/make-spinner)
+(def spinner-start! spinner/spinner-start!)
+(def spinner-set-start! spinner/spinner-set-start!)
+(def spinner-stop! spinner/spinner-stop!)
+(def spinner-active? spinner/spinner-active?)
+(def spinner-set-text! spinner/spinner-set-text!)
+(def spinner-set-prefix! spinner/spinner-set-prefix!)
 

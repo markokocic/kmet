@@ -71,6 +71,7 @@
                       chat-history
                       editor
                       header-text
+                      anim-timer
                       footer-comp
                       session
                       running-turn?
@@ -307,6 +308,33 @@
               (tui/tui-show-overlay (:tui cs) sl :width 70 :height (min (count items) 20))
               (tui/tui-request-render (:tui cs)))))))))
 
+;; ─── Animation timer ────────────────────────────────────────────────────────
+;; Drives re-renders while the agent turn is running, so the inline working
+;; indicator in the streaming assistant message animates smoothly.
+
+(defn- start-anim-timer!
+  "Start requesting renders every 80ms while the agent turn runs.
+   Powers the inline working indicator animation in streaming messages."
+  [cs]
+  (let [t (future
+            (try
+              (loop []
+                (when (and @(:running? (:tui cs))
+                           @(:running-turn? cs))
+                  (Thread/sleep 80)
+                  (tui/tui-request-render (:tui cs))
+                  (recur)))
+              (catch Exception e
+                (debug/log "anim timer: " e))))]
+    (reset! (:anim-timer cs) t)))
+
+(defn- stop-anim-timer!
+  "Cancel the animation timer."
+  [cs]
+  (when-let [t @(:anim-timer cs)]
+    (future-cancel t)
+    (reset! (:anim-timer cs) nil)))
+
 ;; ─── Agent response handler ────────────────────────────────────────────────
 
 (defn- on-agent-text [cs text]
@@ -332,6 +360,7 @@
    Finalize streaming FIRST (captures thinking text), then clear thinking.
    Session persistence is handled by the agent loop internally."
   (try
+    (stop-anim-timer! cs)
     (ui/chat-history-finalize-streaming! (:chat-history cs))
     (ui/chat-history-finalize-thinking! (:chat-history cs))
     (reset! (:running-turn? cs) false)
@@ -345,9 +374,18 @@
 (defn- on-agent-error [cs error-msg]
   "Called when an error occurs during the agent turn."
   (try
-    ;; Finalize streaming FIRST to capture any thinking text
-    (ui/chat-history-finalize-streaming! (:chat-history cs))
-    (ui/chat-history-finalize-thinking! (:chat-history cs))
+    (stop-anim-timer! cs)
+    ;; If streaming placeholder is still empty (just working indicator), remove it
+    ;; so we don't get a blank assistant entry before the error message.
+    (let [ch (:chat-history cs)
+          streaming @(:streaming-atom ch)]
+      (if (and streaming
+               (empty? @(:text-atom streaming))
+               (empty? @(:thinking-text-atom streaming)))
+        (do (ui/chat-history-remove-last! ch)
+            (reset! (:streaming-atom ch) nil))
+        (do (ui/chat-history-finalize-streaming! ch)
+            (ui/chat-history-finalize-thinking! ch))))
     (ui/chat-history-add-message! (:chat-history cs)
       {:role :assistant :content (str RED "Error: " error-msg RST)})
     (reset! (:running-turn? cs) false)
@@ -372,9 +410,13 @@
         ;; Regular message — agent loop handles session persistence
         (when-not @(:running-turn? cs)
           (reset! (:running-turn? cs) true)
+          (start-anim-timer! cs)
           (debug/log "user submitted: " trimmed)
           (ui/chat-history-add-message! (:chat-history cs)
             {:role :user :content trimmed})
+          ;; Pre-create streaming placeholder so the inline working indicator
+          ;; appears immediately while waiting for the first LLM delta.
+          (ui/chat-history-start-streaming! (:chat-history cs))
           (update-header-footer! cs)
           (tui/tui-request-render (:tui cs))
           (agent/run-agent-turn (:agent-state cs)
@@ -388,10 +430,14 @@
   "Cancel the current agent turn."
   (when @(:running-turn? cs)
     (debug/log "agent turn cancelled by user")
+    (stop-anim-timer! cs)
     (agent/cancel-turn (:agent-state cs))
-    ;; Finalize streaming FIRST to capture thinking text
-    (ui/chat-history-finalize-streaming! (:chat-history cs))
-    (ui/chat-history-finalize-thinking! (:chat-history cs))
+    ;; Remove empty streaming placeholder if present
+    (let [ch (:chat-history cs)]
+      (when-let [s @(:streaming-atom ch)]
+        (if (and (empty? @(:text-atom s)) (empty? @(:thinking-text-atom s)))
+          (do (ui/chat-history-remove-last! ch) (reset! (:streaming-atom ch) nil))
+          (do (ui/chat-history-finalize-streaming! ch) (ui/chat-history-finalize-thinking! ch)))))
     (ui/chat-history-add-message! (:chat-history cs)
       {:role :assistant :content (str DIM "(cancelled)" RST)})
     (reset! (:running-turn? cs) false)
@@ -418,7 +464,11 @@ Use the available tools to read, write, edit files, and execute commands.
 Be precise and concise in your responses.")
         system-prompt (skills/build-system-prompt base-prompt)
 
-        ;; Agent state — pass session so the agent loop persists entries
+        ;; Components
+        hdr (text/make-text "" 1 0)
+        sp1 (spacer/make-spacer 1)
+
+        ;; Agent state
         ag (agent/make-agent-state
              :model model
              :provider provider
@@ -430,9 +480,6 @@ Be precise and concise in your responses.")
                          ;; Forward events to extension system
                          (skills/emit-event! evt)))
 
-        ;; Components
-        hdr (text/make-text "" 1 0)
-        sp1 (spacer/make-spacer 1)
         ch (ui/make-chat-history :theme (cfg/get-theme config))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 2
@@ -446,6 +493,7 @@ Be precise and concise in your responses.")
                             :chat-history ch
                             :editor ed
                             :header-text hdr
+                            :anim-timer (atom nil)
                             :footer-comp ftr
                             :session session
                             :running-turn? (atom false)

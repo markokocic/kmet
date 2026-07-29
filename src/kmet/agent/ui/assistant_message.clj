@@ -2,12 +2,21 @@
   "AssistantMessageComponent component — Pi's AssistantMessageComponent.
    Optimized for streaming: text/thinking wrapping/parsing happens eagerly
    in append calls (on the LLM thread) so the render function returns
-   pre-rendered lines instantly."
+   pre-rendered lines instantly.
+   Shows an inline working indicator (animated spinner) while streaming
+   before any text or thinking content arrives."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.markdown :as md]
             [kmet.tui.macros :refer [with-cache]]))
+
+;; ─── Spinner frames for inline working indicator ───────────────────────────
+
+(def ^:private SPINNER-FRAMES
+  ["⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"])
+
+(def ^:private SPINNER-INTERVAL-MS 100)
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -37,6 +46,16 @@
   (when (and (not finalized) has-content)
     (str left-pad "\u001b[1m" (theme/fg theme :muted "▍") "\u001b[0m")))
 
+(defn- working-indicator-line
+  "Return the animated working indicator line.
+   Computed fresh each call so the spinner animates."
+  [left-pad theme finalized text-empty thinking-empty]
+  (when (and (not finalized) text-empty thinking-empty)
+    (let [elapsed (- (System/nanoTime) 0)
+          frame-idx (long (/ elapsed (* SPINNER-INTERVAL-MS 1000000)))
+          frame (nth SPINNER-FRAMES (mod frame-idx (count SPINNER-FRAMES)))]
+      (str left-pad (theme/fg theme :accent frame) " " (theme/fg theme :dim "Working...")))))
+
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
 (defrecord AssistantMessageComponent [text-atom thinking-text-atom theme-atom
@@ -57,6 +76,8 @@
           prev-width @last-render-width-atom
           text (let [t @text-atom] (when (seq t) t))
           thinking (let [t @thinking-text-atom] (when (seq t) t))
+          text-empty? (nil? text)
+          thinking-empty? (nil? thinking)
           width-changed? (and prev-width (not= prev-width width))
           text-lines (if width-changed?
                        (wrap-text-to-width text cw left-pad theme)
@@ -64,13 +85,21 @@
           thinking-lines (if width-changed?
                            (render-thinking-to-width thinking cw left-pad theme hide?)
                            @rendered-thinking-lines-atom)]
-      (with-cache this width
-        {:theme theme :output-pad output-pad :hide? hide? :finalized finalized
-         :text (count text) :thinking (count thinking)}
-        (fn []
-          (let [cursor (cursor-line left-pad theme finalized
-                          (or (seq thinking) (seq text)))]
-            (vec (concat thinking-lines text-lines (when cursor [cursor]))))))))
+
+      ;; Show inline working indicator when streaming but no content yet.
+      ;; Render fresh every time (no cache) so the spinner animates.
+      (if (and (not finalized) text-empty? thinking-empty?)
+        [(working-indicator-line left-pad theme finalized text-empty? thinking-empty?)]
+
+        ;; Normal rendering with cache
+        (with-cache this width
+          {:theme theme :output-pad output-pad :hide? hide? :finalized finalized
+           :text (count text) :thinking (count thinking)}
+          (fn []
+            (let [cursor (cursor-line left-pad theme finalized
+                            (or (seq thinking) (seq text)))]
+              (vec (concat thinking-lines text-lines (when cursor [cursor])))))))))
+
   (handle-input [_this _data] nil)
   (invalidate [this]
     (reset! (:cache-atom this) nil)))
