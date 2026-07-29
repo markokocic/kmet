@@ -6,8 +6,8 @@
            :task (apply core/-main *command-line-args*)
            :override-builtin true}
   demo    {:doc "Run TUI demo (standalone editor)"
-           :requires ([kmet.demo :as demo])
-           :task (apply demo/-main *command-line-args*)
+           :requires ([kmet.tui-demo :as tui-demo])
+           :task (apply tui-demo/-main *command-line-args*)
            :override-builtin true}
   test    {:doc "Run tests"
            :requires ([kmet.runner :as runner])

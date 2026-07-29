@@ -1,4 +1,4 @@
-(ns kmet.demo
+(ns kmet.tui-demo
   "Minimal demo to test the TUI stack with the multi-line editor."
   (:require [kmet.tui.core :as tui]
             [kmet.tui.terminal :as term]
