@@ -711,28 +711,32 @@
                                     (apply str (repeat (max 0 (- width 12)) "─"))))
           (vswap! result conj (apply str (repeat width bdr))))
         ;; Render visible lines
-        (doseq [vl visible]
-          (let [vl-has-cursor (and (= (:logical-line vl) cursor-line)
-                                   (>= cursor-col (:start-col vl))
-                                   (< cursor-col (+ (:start-col vl) (:length vl))))
+        (doseq [[vi vl] (map-indexed vector visible)]
+          (let [vl-has-cursor (= (+ vi scroll-offset) cursor-visual-idx)
                 vl-cursor-col (- cursor-col (:start-col vl))
                 display-text (:text vl)
-                line-width (u/visible-width display-text)
-                cur-fn (fn [t]
-                         (str left-pad t
-                              (apply str (repeat (max 0 (- content-width line-width)) \space))
-                              right-pad))]
+                line-width (u/visible-width display-text)]
             (if (and vl-has-cursor (>= vl-cursor-col 0) (<= vl-cursor-col (count display-text)))
               (let [before (subs display-text 0 vl-cursor-col)
                     at-cursor (edit/grapheme-at display-text vl-cursor-col)
                     after (subs display-text
-                                (min (count display-text) (+ vl-cursor-col (count at-cursor))))]
-                (vswap! result conj
-                  (cur-fn (str before
-                               (when @focused? CURSOR-MARKER)
-                               "\u001b[7m" (if (empty? at-cursor) " " at-cursor) "\u001b[0m"
-                               after))))
-              (vswap! result conj (cur-fn display-text)))))
+                                (min (count display-text) (+ vl-cursor-col (count at-cursor))))
+                    cursor-at-end? (empty? after)
+                    display-with-cursor (str before
+                                             (when @focused? CURSOR-MARKER)
+                                             "\u001b[7m" (if cursor-at-end? " " at-cursor) "\u001b[0m"
+                                             after)
+                    effective-width (if cursor-at-end?
+                                     (+ line-width 1)
+                                     line-width)
+                    cursor-in-padding? (and cursor-at-end?
+                                           (> effective-width content-width)
+                                           (pos? padding-x))
+                    p (apply str (repeat (max 0 (- content-width effective-width)) \space))
+                    rp (if cursor-in-padding? (subs right-pad 1) right-pad)]
+                (vswap! result conj (str left-pad display-with-cursor p rp)))
+              (let [p (apply str (repeat (max 0 (- content-width line-width)) \space))]
+                (vswap! result conj (str left-pad display-text p right-pad))))))
         ;; Bottom border
         (let [remaining (- (count visual-lines) (+ scroll-offset (count visible)))]
           (if (pos? remaining)

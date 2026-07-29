@@ -45,22 +45,24 @@
 (def ^:const CURSOR-MARKER "\u001b_pi:c\u0007")
 
 (defn- extract-cursor-position
-  "Find CURSOR-MARKER in rendered lines, strip it from output,
+  "Find CURSOR-MARKER in rendered lines (viewport only), strip it from output,
    and return {:lines cleared-lines :cursor {:row r :col c}}.
-   Returns {:lines original-lines :cursor nil} when no marker found."
-  [lines]
-  (loop [i (dec (count lines))]
-    (if (>= i 0)
-      (let [line (nth lines i)]
-        (if-let [marker-idx (clojure.string/index-of line CURSOR-MARKER)]
-          (let [before (subs line 0 marker-idx)
-                after (subs line (+ marker-idx (count CURSOR-MARKER)))
-                col (utils/visible-width before)
-                new-line (str before after)
-                new-lines (assoc lines i new-line)]
-            {:lines new-lines :cursor {:row i :col col}})
-          (recur (dec i))))
-      {:lines lines :cursor nil})))
+   Returns {:lines original-lines :cursor nil} when no marker found.
+   Only scans the bottom `height` lines (visible viewport), matching Pi's approach."
+  [lines height]
+  (let [viewport-top (max 0 (- (count lines) height))]
+    (loop [i (dec (count lines))]
+      (if (>= i viewport-top)
+        (let [line (nth lines i)]
+          (if-let [marker-idx (clojure.string/index-of line CURSOR-MARKER)]
+            (let [before (subs line 0 marker-idx)
+                  after (subs line (+ marker-idx (count CURSOR-MARKER)))
+                  col (utils/visible-width before)
+                  new-line (str before after)
+                  new-lines (assoc lines i new-line)]
+              {:lines new-lines :cursor {:row i :col col}})
+            (recur (dec i))))
+        {:lines lines :cursor nil}))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; CSI 2026 sync
@@ -156,8 +158,11 @@
         empty-line (apply str (repeat w \space))]
     (cond
       (= n h) [lines cursor]
-      (< n h) (let [padded (into (vec (repeat (- h n) empty-line)) lines)]
-                [padded cursor])
+      (< n h) (let [offset (- h n)
+                  padded (into (vec (repeat offset empty-line)) lines)
+                  new-cursor (when cursor
+                               (assoc cursor :row (+ (:row cursor) offset)))]
+              [padded new-cursor])
       :else (let [offset (- n h)
                   clipped (subvec lines offset n)
                   new-cursor (when cursor
@@ -271,7 +276,9 @@
   (let [term (:terminal tui)
         jline (.terminal term)
         started (terminal/start! term (fn [_] nil) (fn [] (tui-request-render tui)))
-        max-lines-rendered (atom 0)]
+        max-lines-rendered (atom 0)
+        hardware-cursor-row (atom 0)
+        show-hardware-cursor? (= (System/getenv "PI_HARDWARE_CURSOR") "1")]
     (terminal/hide-cursor! started)
     (terminal/write-output started "\u001b[2J\u001b[H")
     (reset! (:running? tui) true)
@@ -298,7 +305,7 @@
                                          (mapv #(str (apply str (repeat ox " ")) %) comp-lines)
                                          (repeat (max 0 (- h oy (count comp-lines))) ""))))
                                 (vec (mapcat #(render % w) @(:components tui))))
-                    cursor-result (extract-cursor-position raw-lines)
+                    cursor-result (extract-cursor-position raw-lines h)
                     cursor (:cursor cursor-result)
                     lines (:lines cursor-result)
                     lines (pad-lines-to-width lines w)
@@ -328,17 +335,23 @@
                       (terminal/write-output started CSI-2026-H)
                       (doseq [x d] (terminal/write-output started x))
                       (terminal/write-output started CSI-2026-L)))))
-              ;; Position hardware cursor — lines is now guaranteed ≤ h
+              ;; Position hardware cursor (Pi-style: relative movement from tracked position)
               (if cursor
-                (let [cr (min (:row cursor) (dec h))
-                      cc (min (:col cursor) (dec w))]
-                  (terminal/write-output started (str "\u001b[" (inc cr) "H\u001b[" (inc cc) "G"))
-                  (terminal/show-cursor! started))
-                (do
-                  ;; Cursor past end of content: move to last content line
-                  (let [last-row (min (count lines) h)]
-                    (terminal/write-output started (str "\u001b[" (max 1 last-row) "H")))
-                  (terminal/hide-cursor! started)))
+                (let [target-row (min (:row cursor) (dec h))
+                      target-col (min (:col cursor) (dec w))
+                      row-delta (- target-row @hardware-cursor-row)
+                      buf (str (cond
+                                (pos? row-delta) (str "\u001b[" row-delta "B")
+                                (neg? row-delta) (str "\u001b[" (- row-delta) "A")
+                                :else "")
+                              "\u001b[" (inc target-col) "G")]
+                  (when (seq buf)
+                    (terminal/write-output started buf))
+                  (reset! hardware-cursor-row target-row)
+                  (if show-hardware-cursor?
+                    (terminal/show-cursor! started)
+                    (terminal/hide-cursor! started)))
+                (terminal/hide-cursor! started))
               (reset! (:previous-lines tui) lines)
               (reset! (:previous-width tui) w)
               (when (> (count lines) @max-lines-rendered)
