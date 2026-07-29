@@ -118,7 +118,7 @@
                      (resolve-bg-color (get color-map k default)))
         resolve-tl (fn [levels]
                      (mapv resolve-thinking-level levels))]
-    (map->Theme {:name (name name)
+    (map->Theme {:name name
                  :text (resolve :text nil)
                  :accent (resolve :accent "cyan")
                  :muted (resolve :muted "bright-black")

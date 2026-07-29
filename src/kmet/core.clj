@@ -241,18 +241,18 @@
         (if (empty? tree)
           (chat/chat-history-add-message! (:chat-history cs)
             {:role :assistant :content "Session is empty."})
-          (letfn [(flatten-tree [nodes depth]
-                    (mapcat (fn [n]
-                              (let [prefix (apply str (repeat depth "  "))
-                                    role-str (name (:role n))
-                                    label (str prefix role-str ": " (:summary n))]
-                                (cons {:label label
-                                       :value (:id n)
-                                       :depth depth
-                                       :entry n}
-                                      (flatten-tree (:children n) (inc depth)))))
-                            nodes))
-                  items (vec (flatten-tree tree 0))]
+          (let [flatten-tree (fn flatten-tree [nodes depth]
+                              (mapcat (fn [n]
+                                        (let [prefix (apply str (repeat depth "  "))
+                                              role-str (name (:role n))
+                                              label (str prefix role-str ": " (:summary n))]
+                                          (cons {:label label
+                                                 :value (:id n)
+                                                 :depth depth
+                                                 :entry n}
+                                                (flatten-tree (:children n) (inc depth)))))
+                                      nodes))
+                items (vec (flatten-tree tree 0))]
             (let [sl-ref (atom nil)
                   on-select-fn (fn []
                                 (when-let [sel (select-list/select-list-get-selected @sl-ref)]
@@ -555,36 +555,35 @@ Be precise and concise in your responses."
           (do (println "No message provided. Usage: kmet -p \"your message\"")
               (System/exit 1))
           (do (run-print-mode (assoc opts :messages [msg]))
-              (System/exit 0))))))
+              (System/exit 0)))))
+    (println "Starting kmet...")
 
-  (println "Starting kmet...")
+    ;; Initialize configuration and themes
+    (let [config (cfg/init!)
+          _ (reset! global-config config)
+          tui-ref (atom nil)]
+      (try
+        ;; Load extensions
+        (let [ext-dir (cfg/expand-path (:extensions-dir config))]
+          (skills/load-extensions-from-dir ext-dir))
 
-  ;; Initialize configuration and themes
-  (let [config (cfg/init!)
-        _ (reset! global-config config)
-        tui-ref (atom nil)]
-    (try
-      ;; Load extensions
-      (let [ext-dir (cfg/expand-path (:extensions-dir config))]
-        (skills/load-extensions-from-dir ext-dir))
-
-      ;; Apply command-line overrides
-      (let [config (cond-> config
-                     (:model opts) (assoc :model (:model opts))
-                     (:provider opts) (assoc :provider (:provider opts)))
-            _ (reset! global-config config)
-            session (find-or-create-session)
-            cs (build-layout config session)]
-        (reset! tui-ref (:tui cs))
-        (tui/tui-start (:tui cs))
-        (println "kmet session ended.")))
-    (catch Exception e
-      ;; Restore terminal if TUI was started
-      (when-let [t @tui-ref]
-        (try (tui/tui-stop t) (catch Exception _)))
-      (binding [*out* *err*]
-        (println "Error:" (.getMessage e))
-        (.printStackTrace e))
-      (System/exit 1))))
+        ;; Apply command-line overrides
+        (let [config (cond-> config
+                       (:model opts) (assoc :model (:model opts))
+                       (:provider opts) (assoc :provider (:provider opts)))
+              _ (reset! global-config config)
+              session (find-or-create-session)
+              cs (build-layout config session)]
+          (reset! tui-ref (:tui cs))
+          (tui/tui-start (:tui cs))
+          (println "kmet session ended."))
+        (catch Exception e
+        ;; Restore terminal if TUI was started
+          (when-let [t @tui-ref]
+            (try (tui/tui-stop t) (catch Exception _)))
+          (binding [*out* *err*]
+            (println "Error:" (.getMessage e))
+            (.printStackTrace e))
+          (System/exit 1))))))
 
 
