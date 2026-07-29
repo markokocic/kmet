@@ -287,3 +287,33 @@
     (t/is (= "hello" (editor/editor-get-text e)))))
 
 
+
+;; ─── Regression: grapheme operations with cached BreakIterator ───────────
+
+(t/deftest test-editor-grapheme-cursor-movement
+  (let [e (editor/make-editor)]
+    ;; Type text
+    (doseq [c "cafe"] (core/handle-input e (str c)))
+    (t/is (= "cafe" (editor/editor-get-text e)))
+    ;; LEFT x3: cursor at index 1 (after 'c', before 'a')
+    (dotimes [_ 3] (core/handle-input e K-LEFT))
+    ;; Insert 'X' at cursor → "cXafe"
+    (core/handle-input e "X")
+    (t/is (= "cXafe" (editor/editor-get-text e)) "Insert at cursor position")
+    ;; HOME → move cursor to start
+    (core/handle-input e (ctrl 1))  ;; home
+    (core/handle-input e "X")
+    (t/is (= "XcXafe" (editor/editor-get-text e)) "Home then insert works")
+    ;; END → move to end, BACKSPACE deletes last char
+    (core/handle-input e (ctrl 5))  ;; end
+    (core/handle-input e K-BS)
+    (t/is (= "XcXaf" (editor/editor-get-text e)) "Backspace removes last char")))
+
+(t/deftest test-editor-kill-and-yank-with-graphemes
+  (let [e (editor/make-editor)]
+    (doseq [c "hello"] (core/handle-input e (str c)))
+    (core/handle-input e (ctrl 1))   ;; home
+    (core/handle-input e (ctrl 11))  ;; ctrl+k = kill to end
+    (t/is (= "" (editor/editor-get-text e)) "Kill line removes all text")
+    (core/handle-input e (ctrl 25))  ;; ctrl+y = yank
+    (t/is (= "hello" (editor/editor-get-text e)) "Yank restores killed text")))

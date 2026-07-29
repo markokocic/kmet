@@ -106,3 +106,66 @@
       (t/is (.exists (io/file f)))
       (s/delete-session! session)
       (t/is (not (.exists (io/file f)))))))
+
+;; ─── Regression: corrupted entries ────────────────────────────────────────
+
+(t/deftest test-session-load-with-corrupt-entry
+  (let [session (s/create-session test-dir)
+        file (:file session)]
+    ;; Write: valid, broken (unclosed map), valid
+    (spit file "{:id \"1\" :role :user :content \"hello\"}\n")
+    (spit file "{:bad \"entry\"\n" :append true)  ;; unclosed map → parse error
+    (spit file "{:id \"3\" :role :assistant :content \"world\"}\n" :append true)
+    (let [loaded (s/load-session file)
+          entries @(:entries loaded)]
+      (t/is (= 2 (count entries)) "Should skip corrupt entry, keep both valid ones")
+      (t/is (= "1" (:id (first entries))))
+      (t/is (= "3" (:id (second entries))))
+      (t/is (= :user (:role (first entries))))
+      (t/is (= :assistant (:role (second entries)))))))
+
+(t/deftest test-session-load-with-multiple-corrupt-entries
+  (let [session (s/create-session test-dir)
+        file (:file session)]
+    ;; Write: valid, broken, valid, broken, valid
+    (spit file "{:id \"1\" :role :user :content \"a\"}\n")
+    (spit file "garbage!@\n" :append true)         ;; invalid characters
+    (spit file "{:id \"3\" :role :user :content \"b\"}\n" :append true)
+    (spit file "{{:id \"4\"}\n" :append true)     ;; double brace → parse error
+    (spit file "{:id \"5\" :role :assistant :content \"c\"}\n" :append true)
+    (let [loaded (s/load-session file)
+          entries @(:entries loaded)]
+      (t/is (= 3 (count entries)) "Should skip all corrupt entries, keep all valid ones")
+      (t/is (= "1" (:id (nth entries 0))))
+      (t/is (= "3" (:id (nth entries 1))))
+      (t/is (= "5" (:id (nth entries 2)))))))
+
+(t/deftest test-session-load-all-corrupt
+  (let [session (s/create-session test-dir)
+        file (:file session)]
+    (spit file "{{{{{{\n")
+    (spit file "[invalid}^&*\n" :append true)
+    (let [loaded (s/load-session file)
+          entries @(:entries loaded)]
+      (t/is (empty? entries) "Should return empty entries when all lines are corrupt"))))
+
+(t/deftest test-session-load-empty-file
+  (let [session (s/create-session test-dir)
+        file (:file session)]
+    (spit file "")
+    (let [loaded (s/load-session file)
+          entries @(:entries loaded)]
+      (t/is (empty? entries) "Empty file should produce empty entries"))))
+
+(t/deftest test-session-load-with-blank-lines
+  (let [session (s/create-session test-dir)
+        file (:file session)]
+    (spit file "{:id \"1\" :role :user :content \"hi\"}\n")
+    (spit file "\n" :append true)  ;; blank line
+    (spit file "  \n" :append true)  ;; whitespace line
+    (spit file "{:id \"4\" :role :assistant :content \"bye\"}\n" :append true)
+    (let [loaded (s/load-session file)
+          entries @(:entries loaded)]
+      (t/is (= 2 (count entries)) "Should skip blank lines")
+      (t/is (= "1" (:id (first entries))))
+      (t/is (= "4" (:id (second entries)))))))

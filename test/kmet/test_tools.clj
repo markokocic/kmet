@@ -197,3 +197,24 @@
   (let [result (tools/execute-tool "grep" {:pattern "defn" :path "src"})]
     (t/is (not (:is-error result)))
     (t/is (pos? (count (:content result))))))
+
+;; ─── Regression: bash default timeout ────────────────────────────────────
+
+(t/deftest test-tool-bash-default-timeout
+  (let [result (tools/execute-tool "bash" {:command "echo default-timeout-test"})]
+    (t/is (not (:is-error result)))
+    (t/is (.contains (:content result) "default-timeout-test"))))
+
+;; ─── Regression: grep with unreadable files ──────────────────────────────
+
+(t/deftest test-tool-grep-with-unreadable
+  (.mkdirs (java.io.File. "target/test-tools-grep-skip"))
+  (spit "target/test-tools-grep-skip/readable.txt" "hello world\nfoo bar\n")
+  (spit "target/test-tools-grep-skip/unreadable.txt" "secret data\n")
+  (.setReadable (java.io.File. "target/test-tools-grep-skip/unreadable.txt") false)
+  (let [result (tools/execute-tool "grep" {:pattern "hello" :path "target/test-tools-grep-skip"})]
+    (t/is (not (:is-error result)))
+    (t/is (.contains (:content result) "readable.txt"))
+    (.setReadable (java.io.File. "target/test-tools-grep-skip/unreadable.txt") true)
+    (doseq [f (.listFiles (java.io.File. "target/test-tools-grep-skip"))] (.delete f))
+    (.delete (java.io.File. "target/test-tools-grep-skip"))))

@@ -13,11 +13,14 @@
 
 ;; ─── Grapheme helpers (Java BreakIterator) ─────────────────────────────────
 
+(def ^:private ^java.text.BreakIterator cached-bi
+  (java.text.BreakIterator/getCharacterInstance))
+
 (defn- grapheme-left
   "Move cursor one grapheme cluster left."
   [s pos]
   (if (<= pos 0) 0
-      (let [bi (java.text.BreakIterator/getCharacterInstance)]
+      (let [^java.text.BreakIterator bi cached-bi]
         (.setText bi s)
         (let [prev (.preceding bi pos)]
           (if (== prev java.text.BreakIterator/DONE) 0 prev)))))
@@ -26,7 +29,7 @@
   "Move cursor one grapheme cluster right."
   [s pos]
   (if (>= pos (count s)) (count s)
-      (let [bi (java.text.BreakIterator/getCharacterInstance)]
+      (let [^java.text.BreakIterator bi cached-bi]
         (.setText bi s)
         (let [nxt (.following bi pos)]
           (if (== nxt java.text.BreakIterator/DONE) (count s) nxt)))))
@@ -35,7 +38,7 @@
   "Return the grapheme cluster at cursor position (or empty string if at end)."
   [s pos]
   (if (>= pos (count s)) ""
-      (let [bi (java.text.BreakIterator/getCharacterInstance)]
+      (let [^java.text.BreakIterator bi cached-bi]
         (.setText bi s)
         (let [nxt (.following bi pos)]
           (subs s pos (if (== nxt java.text.BreakIterator/DONE) (count s) nxt))))))
@@ -44,7 +47,7 @@
   "Return a vector of {:text str :start idx} for each grapheme cluster in s."
   [s]
   (if (empty? s) []
-      (let [bi (java.text.BreakIterator/getCharacterInstance)]
+      (let [^java.text.BreakIterator bi cached-bi]
         (.setText bi s)
         (loop [seg [] pos (.first bi)]
           (if (== pos java.text.BreakIterator/DONE) seg

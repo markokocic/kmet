@@ -157,15 +157,16 @@
   "Start TUI render loop. Blocks the calling thread."
   [tui]
   (let [term (:terminal tui)
-        jline (.terminal term)]
-    (terminal/start! term (fn [_] nil) (fn [] (tui-request-render tui)))
-    (terminal/hide-cursor! term)
-    (terminal/write-output term "\u001b[2J\u001b[H")
+        jline (.terminal term)
+        started (terminal/start! term (fn [_] nil) (fn [] (tui-request-render tui)))]
+    (terminal/hide-cursor! started)
+    (terminal/write-output started "\u001b[2J\u001b[H")
     (reset! (:running? tui) true)
     (reset! (:stopped? tui) false)
     (start-input-reader tui)
-    (loop []
-      (when @(:running? tui)
+    (try
+      (loop []
+        (when @(:running? tui)
         (let [w (.getWidth jline)
               h (.getHeight jline)]
           (when @(:render-requested? tui)
@@ -187,18 +188,19 @@
               (when (not= prev lines)
                 (let [d (diff-lines prev lines)]
                   (when (seq d)
-                    (terminal/write-output term CSI-2026-H)
-                    (doseq [x d] (terminal/write-output term x))
-                    (terminal/write-output term CSI-2026-L)
+                    (terminal/write-output started CSI-2026-H)
+                    (doseq [x d] (terminal/write-output started x))
+                    (terminal/write-output started CSI-2026-L)
                     (let [cr (min (count lines) (dec h))]
-                      (terminal/write-output term (str "\u001b[" (max 1 (inc cr)) "H")))))
+                      (terminal/write-output started (str "\u001b[" (max 1 (inc cr)) "H")))))
                 (reset! (:previous-lines tui) lines)
                 (reset! (:previous-width tui) w)))))
         (Thread/sleep 33)
         (recur)))
-    (reset! (:running? tui) false)
-    (terminal/show-cursor! term)
-    (terminal/stop! term)))
+      (finally
+        (reset! (:running? tui) false)
+        (terminal/show-cursor! started)
+        (terminal/stop! started)))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Re-exports — convenience aliases for all public symbols.

@@ -83,11 +83,11 @@
   "Execute a bash command with optional timeout."
   [{:keys [command timeout]}]
   (try
-    (let [proc (.exec (Runtime/getRuntime) (into-array String ["sh" "-c" command]))
-          _ (when timeout
-              (future
-                (Thread/sleep (* timeout 1000))
-                (.destroy proc)))
+    (let [timeout (or timeout 30)
+          proc (.exec (Runtime/getRuntime) (into-array String ["sh" "-c" command]))
+          _ (future
+              (Thread/sleep (* timeout 1000))
+              (.destroy proc))
           exit-code (.waitFor proc)
           stdout (slurp (.getInputStream proc))
           stderr (slurp (.getErrorStream proc))
@@ -104,7 +104,8 @@
   [{:keys [pattern path]}]
   (try
     (let [f (if path (io/file path) (io/file "."))
-          results (volatile! [])]
+          results (volatile! [])
+          skipped (volatile! [])]
       (if (.isFile f)
         (with-open [rdr (io/reader f)]
           (doseq [[idx line] (map-indexed vector (line-seq rdr))]
@@ -117,12 +118,17 @@
               (doseq [[idx line] (map-indexed vector (line-seq rdr))]
                 (when (re-find (re-pattern pattern) line)
                   (vswap! results conj (str (.getPath file) ":" (inc idx) ": " line)))))
-            (catch Exception _))))
-      (let [r @results]
-        (if (empty? r)
+            (catch Exception e
+              (vswap! skipped conj (.getPath file))))))
+      (let [r @results
+            sk @skipped]
+        (if (and (empty? r) (empty? sk))
           {:content (str "No matches for \"" pattern "\"")}
-          {:content (str/join "\n" (take 100 r))
-           :truncated (> (count r) 100)})))
+          (let [base (str/join "\n" (take 100 r))
+                sk-msg (when (seq sk)
+                         (str "\n\n[Skipped " (count sk) " unreadable files]"))]
+            {:content (str base (or sk-msg ""))
+             :truncated (> (count r) 100)}))))
     (catch Exception e
       {:content (str "Error searching: " (.getMessage e)) :is-error true})))
 

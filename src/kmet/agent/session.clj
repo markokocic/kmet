@@ -37,10 +37,17 @@
   "Load an existing session from file path. Returns Session record."
   [path]
   (let [file (io/file path)
-        entries (with-open [rdr (java.io.PushbackReader. (io/reader file))]
-                  (loop [entries []]
-                    (let [e (try (edn/read {:eof nil} rdr) (catch Exception _ nil))]
-                      (if (nil? e) entries (recur (conj entries e))))))
+        content (slurp file)
+        lines (str/split-lines content)
+        entries (vec (keep identity
+          (for [line lines]
+            (let [trimmed (str/trim line)]
+              (when (seq trimmed)
+                (try (edn/read-string trimmed)
+                     (catch Exception ex
+                       (binding [*out* *err*]
+                         (println "Warning: Skipping invalid entry in" path ":" (.getMessage ex)))
+                       nil)))))))
         leaf-id (some-> entries last :id)]
     (map->Session {:file (.getAbsoluteFile file)
                    :id (clojure.string/replace (.getName file) #"\.ednl$" "")

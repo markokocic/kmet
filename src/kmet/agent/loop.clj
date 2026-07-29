@@ -163,9 +163,12 @@ Be precise and concise in your responses."}}]
               (if (>= turn max-turns)
                 (do (when on-error (on-error "Max turn limit reached"))
                     (reset! (:status agent) :error))
-                (let [promise (call-llm agent api-key text-buf on-text)
-                      result @promise]
-                  (if (:error result)
+                (let [promise (do (reset! text-buf "") (call-llm agent api-key text-buf on-text))
+                      result (deref promise 120000 :timeout)]
+                  (if (= :timeout result)
+                    (do (when on-error (on-error "LLM call timed out after 120s"))
+                        (reset! (:status agent) :error))
+                    (if (:error result)
                     (do (when on-error (on-error (:error result)))
                         (reset! (:status agent) :error))
                     (let [text (:text result)
@@ -206,7 +209,7 @@ Be precise and concise in your responses."}}]
                             (session/append-entry (:session agent) assistant-msg))
                           (reset! (:status agent) :idle)
                           (emit agent {:type :status :status :idle})
-                          (when on-done (on-done @text-buf))))))))))
+                          (when on-done (on-done @text-buf)))))))))))
 
           (catch Exception e
             (reset! (:status agent) :error)

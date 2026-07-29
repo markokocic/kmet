@@ -164,8 +164,9 @@
     (if (seq args)
       (chat/chat-history-add-message! (:chat-history cs)
         {:role :assistant
-         :content (str "Theme set to: " (str/trim args)
-                       ". Available: dark, light. Install custom themes in ~/.config/kmet/themes/")})
+         :content (str "Theme switching not yet implemented. "
+                       "Available themes: dark, light. "
+                       "Current theme: " (cfg/get-theme-name (:config cs)))})
       (chat/chat-history-add-message! (:chat-history cs)
         {:role :assistant
          :content (str "Current theme: " (cfg/get-theme-name (:config cs))
@@ -288,7 +289,7 @@
   (update-header-footer! cs)
   (tui/tui-request-render (:tui cs)))
 
-(defn- on-agent-done [cs response-text]
+(defn- on-agent-done [cs]
   "Called when the LLM turn completes.
    Session persistence is handled by the agent loop internally."
   (chat/chat-history-finalize-streaming! (:chat-history cs))
@@ -326,7 +327,7 @@
           (agent/run-agent-turn (:agent-state cs)
             {:message trimmed
              :on-text #(on-agent-text cs %)
-             :on-done #(on-agent-done cs %)
+             :on-done #(on-agent-done cs)
              :on-error #(on-agent-error cs %)}))))))
 
 (defn- handle-cancel [cs]
@@ -422,7 +423,9 @@ Be precise and concise in your responses.")
           (tui/tui-stop t)
 
           (keys/matches-key? data (keys/ctrl "l"))
-          (do (term/write-output jline-term "\u001b[2J\u001b[H")
+          (do (let [w (.writer (.terminal jline-term))]
+                (.write w "\u001b[2J\u001b[H")
+                (.flush w))
               (tui/tui-request-render t))
 
           (keys/matches-key? data "escape")
@@ -582,9 +585,10 @@ Be precise and concise in your responses.")
                        (:provider opts) (assoc :provider (:provider opts))
                        (:thinking opts) (assoc :thinking (:thinking opts)))
               _ (reset! global-config config)
-              session (find-or-create-session)
+              session (if (:resume opts) nil (find-or-create-session))
               cs (build-layout config session)]
           (reset! tui-ref (:tui cs))
+          (when (:resume opts) (resume-session cs ensure-session-dir))
           (tui/tui-start (:tui cs))
           (println "kmet session ended."))
         (catch Exception e

@@ -139,3 +139,22 @@
     (t/is (empty? @(:messages agent)))
     (swap! (:messages agent) conj {:role :user :content [{:type :text :text "hi"}]})
     (t/is (= 1 (count @(:messages agent))))))
+
+;; ─── Regression: run-agent-turn signals cleanup ─────────────────────────
+
+(t/deftest test-loop-run-agent-turn-resets-signal
+  (let [agent (loop/make-agent-state)]
+    (reset! (:signal agent) true)
+    (reset! (:status agent) :thinking)
+    ;; run with no API key — should exercire error path
+    (let [errors (atom [])]
+      (loop/run-agent-turn agent
+        {:message "test"
+         :on-error (fn [e] (swap! errors conj e))})
+      (Thread/sleep 200)
+      ;; signal should have been reset by run-agent-turn
+      (t/is (false? @(:signal agent)) "Signal reset at start of turn")
+      (t/is (pos? (count @errors)) "Error callback called")
+      (t/is (.contains (first @errors) "No API key") "Error message is about API key"))))
+
+

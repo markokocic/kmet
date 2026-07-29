@@ -34,9 +34,12 @@
 
   (stop! [this]
     (when (:running? this)
-      (.write (:writer this) "\u001b[?2004l")
-      (.flush (:writer this))
-      (.close (:terminal this))
+      (try
+        (when-let [w (:writer this)]
+          (.write w "\u001b[?2004l")
+          (.flush w))
+        (finally
+          (.close (:terminal this))))
       (assoc this :running? false)))
 
   (write-output [this s]
