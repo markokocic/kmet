@@ -58,46 +58,63 @@
                                  0 0)))}
    "bash"  {:render-call (fn [name args theme width]
                            (let [cmd (:command args)
-                                 truncated (if (> (count cmd) 77) (str (subs cmd 0 74) "...") cmd)
-                                 timeout (:timeout args)]
+                                 timeout (:timeout args)
+                                 cmd-display (if (nil? cmd)
+                                              (theme/fg theme :error "[invalid arg]")
+                                              (if (empty? cmd)
+                                                (theme/fg theme :tool-output "...")
+                                                cmd))
+                                 timeout-suffix (when timeout
+                                                  (theme/fg theme :muted (str " (timeout: " timeout "s)")))]
                              (text/make-text
                                (str (theme/fg theme :tool-title (theme/bold "$ "))
-                                    (theme/fg theme :accent (or truncated cmd))
-                                    (when timeout
-                                      (theme/fg theme :dim (str " (timeout: " timeout "s)"))))
+                                    (theme/fg theme :accent cmd-display)
+                                    timeout-suffix)
                                0 0)))
             :render-result (fn [content is-error theme width expanded?]
                              (let [lines (str/split-lines content)
-                                   n (count (filter #(not (str/blank? %)) lines))
+                                   footer-re #"^\[Showing.*Full output:.*\]$"
+                                   footer-line (last (filter #(re-find footer-re %) lines))
+                                   output-lines (if footer-line
+                                                  (vec (butlast lines))
+                                                  lines)
+                                   n (count (filter #(not (str/blank? %)) output-lines))
                                    exit-code (some #(when (re-find #"exit code: (\d+)" %)
                                                       (last (re-find #"exit code: (\d+)" %)))
                                                    lines)]
-                               (if expanded?
-                                 (let [show (take 20 lines)
-                                       more (- n 20)
-                                       c (container/make-container)]
+                               (let [c (container/make-container)
+                                     status-str (if is-error
+                                                  (str (theme/fg theme :error (str "exit " (or exit-code "non-zero")))
+                                                       (theme/fg theme :dim (str " (" n " lines)")))
+                                                  (str (theme/fg theme :success "done")
+                                                       (theme/fg theme :dim (str " (" n " lines)"))))]
+                                 (container/container-add-child c
+                                   (text/make-text status-str 0 0))
+                                 (when (seq output-lines)
+                                   (let [styled (mapv #(theme/fg theme :tool-output %) output-lines)
+                                         BASH-PREVIEW-LINES 5]
+                                     (if expanded?
+                                       (doseq [sline styled]
+                                         (container/container-add-child c
+                                           (text/make-text sline 0 0)))
+                                       (let [total (count styled)
+                                             show-lines (take-last BASH-PREVIEW-LINES styled)
+                                             skipped (- total BASH-PREVIEW-LINES)]
+                                         (when (pos? skipped)
+                                           (container/container-add-child c
+                                             (text/make-text
+                                               (theme/fg theme :muted
+                                                 (str "... (" skipped " earlier lines, to expand)"))
+                                               0 0)))
+                                         (doseq [sline show-lines]
+                                           (container/container-add-child c
+                                             (text/make-text sline 0 0)))))))
+                                 (when (and (not is-error) footer-line)
                                    (container/container-add-child c
                                      (text/make-text
-                                       (str (if (and (not is-error)
-                                                    (or (nil? exit-code) (= exit-code "0")))
-                                              (theme/fg theme :success "done")
-                                              (theme/fg theme :error (str "exit " (or exit-code "non-zero"))))
-                                            (theme/fg theme :dim (str " (" n " lines)")))
-                                       0 0))
-                                   (doseq [line show]
-                                     (container/container-add-child c
-                                       (text/make-text (theme/fg theme :dim line) 0 0)))
-                                   (when (pos? more)
-                                     (container/container-add-child c
-                                       (text/make-text (theme/fg theme :muted (str "... " more " more output")) 0 0)))
-                                   c)
-                                 (text/make-text
-                                   (str (if (and (not is-error)
-                                                (or (nil? exit-code) (= exit-code "0")))
-                                          (theme/fg theme :success "done")
-                                          (theme/fg theme :error (str "exit " (or exit-code "non-zero"))))
-                                        (theme/fg theme :dim (str " (" n " lines)")))
-                                   0 0))))}})
+                                       (theme/fg theme :warning (str " [" footer-line "]"))
+                                       0 0)))
+                                 c)))}})
 
 ;; ─── Default renderers (fallback when no custom or built-in) ──────────────
 
