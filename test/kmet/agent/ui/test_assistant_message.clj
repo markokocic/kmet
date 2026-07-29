@@ -84,9 +84,11 @@
             "Unhiding should show thinking content")))))
 
 (deftest test-empty-message
-  (testing "empty message renders nothing"
-    (let [c (am/make-assistant-message :finalized? true)]
-      (is (empty? (core/render c 40))))))
+  (testing "empty message renders only padding (2 lines, pad-y=1)"
+    (let [c (am/make-assistant-message :finalized? true)
+          lines (core/render c 40)]
+      (is (= 2 (count lines)) "pad-y=1 gives 2 empty lines")
+      (is (every? #(= 40 (count %)) lines) "Both lines are width 40"))))
 
 (deftest test-only-thinking
   (testing "message with only thinking renders correctly"

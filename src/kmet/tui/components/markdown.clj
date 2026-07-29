@@ -249,5 +249,13 @@
     (reset! (:text-atom md) (str current "\n" text))
     (protocols/invalidate md)))
 
+(defn markdown-set-theme! [md theme]
+  (reset! (:theme-atom md) theme)
+  (protocols/invalidate md))
+
+(defn markdown-set-padding-x! [md n]
+  (reset! (:padding-x-atom md) n)
+  (protocols/invalidate md))
+
 (defn markdown-get-text [md]
   @(:text-atom md))

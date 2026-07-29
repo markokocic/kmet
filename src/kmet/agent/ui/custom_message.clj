@@ -1,45 +1,32 @@
 (ns kmet.agent.ui.custom-message
-  "CustomMessageComponent component — Pi's CustomMessageComponent."
+  "CustomMessageComponent component — Pi's CustomMessageComponent.
+   Wraps label and content Text children in a Box with custom-message-bg.
+   Matching Pi architecture: Box handles padding/background/caching."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
+            [kmet.tui.components.box :as box]
+            [kmet.tui.components.text :as text]
+            [kmet.tui.components.container :as container]
             [kmet.tui.macros :refer [with-cache]]))
 
 (def ^:private BLD "\u001b[1m")
 (def ^:private RST "\u001b[0m")
 
-(defrecord CustomMessageComponent [label-atom content-atom theme-atom output-pad-atom cache-atom]
+;; ─── Record ────────────────────────────────────────────────────────────────
+
+(defrecord CustomMessageComponent [box            ;; Box wrapping the content
+                                   inner-container ;; Container holding label + content Text children
+                                   label-atom
+                                   content-atom
+                                   theme-atom
+                                   output-pad-atom]
   protocols/IComponent
   (render [this width]
-    (let [label @label-atom
-          content @content-atom
-          theme @theme-atom
-          output-pad @output-pad-atom]
-      (with-cache this width {:label label :content content :theme theme :output-pad output-pad}
-        (fn []
-          (let [pad-x output-pad pad-y 1
-                cw (max 1 (- width (* 2 pad-x)))
-                left-pad (apply str (repeat pad-x \space))
-                bg (fn [line] (theme/bg theme :custom-message-bg
-                                (str line (apply str (repeat (max 0 (- width (u/visible-width line))) \space)))))
-                empty (apply str (repeat width \space))
-                label-lines (when (seq label)
-                              (let [label-str (str BLD (theme/fg theme :custom-message-label (str "[" label "]")) RST)
-                                    wrapped (u/wrap-text-with-ansi label-str cw)]
-                                (mapv #(str left-pad %) wrapped)))
-                content-lines (when (seq content)
-                                (let [wrapped (u/wrap-text-with-ansi content cw)
-                                      colored (mapv #(theme/fg theme :custom-message-text %) wrapped)]
-                                  (mapv #(str left-pad %) colored)))
-                top-pad (repeat pad-y (bg empty))
-                bottom-pad (repeat pad-y (bg empty))]
-            (vec (concat top-pad
-                         (when label-lines (map bg label-lines))
-                         (when content-lines (map bg content-lines))
-                         bottom-pad)))))))
+    (protocols/render @box width))
   (handle-input [_this _data] nil)
   (invalidate [this]
-    (reset! (:cache-atom this) nil)))
+    (protocols/invalidate @box)))
 
 ;; ─── IComponentKind ─────────────────────────────────────────────────────────
 
@@ -47,24 +34,67 @@
   protocols/IComponentKind
   (component-kind [_] :custom))
 
+;; ─── Internal: rebuild the content children ────────────────────────────────
+
+(defn- rebuild-content!
+  "Rebuild the Text children inside the inner container with current content/theme."
+  [comp]
+  (let [theme @(:theme-atom comp)
+        label @(:label-atom comp)
+        content @(:content-atom comp)
+        container @(:inner-container comp)]
+    (container/container-clear container)
+    (when (seq label)
+      (let [label-str (str BLD (theme/fg theme :custom-message-label (str "[" label "]")) RST)]
+        (container/container-add-child container
+          (text/make-text label-str 0 0))))
+    (when (seq content)
+      (let [colored (theme/fg theme :custom-message-text content)]
+        (container/container-add-child container
+          (text/make-text colored 0 0))))
+    (protocols/invalidate @(:box comp))))
+
+;; ─── Public API (defined before make- to avoid forward ref) ──────────────
+
+(defn custom-message-set-label! [comp label]
+  (reset! (:label-atom comp) label)
+  (rebuild-content! comp))
+
+(defn custom-message-set-content! [comp content]
+  (reset! (:content-atom comp) content)
+  (rebuild-content! comp))
+
+(defn custom-message-set-theme! [comp theme]
+  (reset! (:theme-atom comp) theme)
+  (box/box-set-bg-fn @(:box comp) #(theme/bg theme :custom-message-bg %))
+  (rebuild-content! comp))
+
+(defn custom-message-set-output-pad! [comp n]
+  (reset! (:output-pad-atom comp) n)
+  ;; Rebuild box with new padding
+  (let [theme @(:theme-atom comp)
+        inner-container (container/make-container)
+        b (box/make-box n 1 #(theme/bg theme :custom-message-bg %))]
+    (box/box-add-child b inner-container)
+    (reset! (:box comp) b)
+    (reset! (:inner-container comp) inner-container)
+    (rebuild-content! comp)))
+
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-custom-message
   [& {:keys [label content theme output-pad]
       :or {content "" theme theme/dark-theme output-pad 1}}]
-  (map->CustomMessageComponent {:label-atom (atom label)
-                       :content-atom (atom content)
-                       :theme-atom (atom theme)
-                       :output-pad-atom (atom output-pad)
-                       :cache-atom (atom nil)}))
-
-;; ─── Public API ────────────────────────────────────────────────────────────
-
-(defn custom-message-set-label! [comp label]
-  (reset! (:label-atom comp) label) (protocols/invalidate comp))
-(defn custom-message-set-content! [comp content]
-  (reset! (:content-atom comp) content) (protocols/invalidate comp))
-(defn custom-message-set-theme! [comp theme]
-  (reset! (:theme-atom comp) theme) (protocols/invalidate comp))
-(defn custom-message-set-output-pad! [comp n]
-  (reset! (:output-pad-atom comp) n) (protocols/invalidate comp))
+  (let [inner-container (container/make-container)
+        b (box/make-box output-pad 1 nil)]
+    (box/box-add-child b inner-container)
+    (let [comp (map->CustomMessageComponent {:box (atom b)
+                                              :inner-container (atom inner-container)
+                                              :label-atom (atom label)
+                                              :content-atom (atom content)
+                                              :theme-atom (atom theme)
+                                              :output-pad-atom (atom output-pad)})]
+      ;; Set initial content
+      (rebuild-content! comp)
+      (box/box-set-bg-fn b #(theme/bg theme :custom-message-bg %))
+      comp)))

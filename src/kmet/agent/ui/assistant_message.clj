@@ -1,21 +1,21 @@
 (ns kmet.agent.ui.assistant-message
   "AssistantMessageComponent component — Pi's AssistantMessageComponent.
+   Uses a Spinner (Pi's Loader equivalent) for the inline working indicator
+   and has consistent pad-y=1 vertical spacing matching other message components.
    Optimized for streaming: text/thinking wrapping/parsing happens eagerly
    in append calls (on the LLM thread) so the render function returns
-   pre-rendered lines instantly.
-   Shows an inline working indicator (animated spinner) while streaming
-   before any text or thinking content arrives."
+   pre-rendered lines instantly."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.markdown :as md]
+            [kmet.tui.components.spinner :as spinner]
             [kmet.tui.macros :refer [with-cache]]))
 
-;; ─── Spinner frames for inline working indicator ───────────────────────────
+;; ─── Spinner frames — same as Pi's Loader default ─────────────────────────
 
 (def ^:private SPINNER-FRAMES
   ["⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"])
-
 (def ^:private SPINNER-INTERVAL-MS 100)
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
@@ -47,14 +47,13 @@
     (str left-pad "\u001b[1m" (theme/fg theme :muted "▍") "\u001b[0m")))
 
 (defn- working-indicator-line
-  "Return the animated working indicator line.
-   Computed fresh each call so the spinner animates."
-  [left-pad theme finalized text-empty thinking-empty]
-  (when (and (not finalized) text-empty thinking-empty)
-    (let [elapsed (- (System/nanoTime) 0)
-          frame-idx (long (/ elapsed (* SPINNER-INTERVAL-MS 1000000)))
-          frame (nth SPINNER-FRAMES (mod frame-idx (count SPINNER-FRAMES)))]
-      (str left-pad (theme/fg theme :accent frame) " " (theme/fg theme :dim "Working...")))))
+  "Render the animated working indicator via the Spinner component.
+   Starts the Spinner on first call; keeps it running until content arrives."
+  [spinner left-pad theme width]
+  (when-not (spinner/spinner-active? spinner)
+    (spinner/spinner-start! spinner))
+  (let [lines (protocols/render spinner width)]
+    (mapv #(str left-pad %) lines)))
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
@@ -63,6 +62,7 @@
                              rendered-text-lines-atom
                              rendered-thinking-lines-atom
                              last-render-width-atom
+                             spinner        ;; Spinner component for working indicator
                              cache-atom]
   protocols/IComponent
   (render [this width]
@@ -85,21 +85,26 @@
           thinking-lines (if width-changed?
                            (render-thinking-to-width thinking cw left-pad theme hide?)
                            @rendered-thinking-lines-atom)]
-
       ;; Show inline working indicator when streaming but no content yet.
-      ;; Render fresh every time (no cache) so the spinner animates.
+      ;; Uses Spinner component render — started once, kept running.
       (if (and (not finalized) text-empty? thinking-empty?)
-        [(working-indicator-line left-pad theme finalized text-empty? thinking-empty?)]
-
-        ;; Normal rendering with cache
-        (with-cache this width
-          {:theme theme :output-pad output-pad :hide? hide? :finalized finalized
-           :text (count text) :thinking (count thinking)}
-          (fn []
-            (let [cursor (cursor-line left-pad theme finalized
-                            (or (seq thinking) (seq text)))]
-              (vec (concat thinking-lines text-lines (when cursor [cursor])))))))))
-
+        (working-indicator-line spinner left-pad theme width)
+        ;; Normal: stop spinner (if running), then render with cache + pad-y=1
+        (do (when (spinner/spinner-active? spinner)
+              (spinner/spinner-stop! spinner))
+          (with-cache this width
+            {:theme theme :output-pad output-pad :hide? hide? :finalized finalized
+             :text (count text) :thinking (count thinking)}
+            (fn []
+              (let [cursor (cursor-line left-pad theme finalized
+                              (or (seq thinking) (seq text)))
+                    pad-y 1
+                    empty (apply str (repeat width \space))
+                    content (vec (concat thinking-lines text-lines
+                                         (when cursor [cursor])))]
+                (vec (concat (repeat pad-y empty)
+                             content
+                             (repeat pad-y empty))))))))))
   (handle-input [_this _data] nil)
   (invalidate [this]
     (reset! (:cache-atom this) nil)))
@@ -135,7 +140,15 @@
   [& {:keys [text thinking theme output-pad hide-thinking? finalized?]
       :or {text "" thinking "" theme theme/dark-theme
            output-pad 1 hide-thinking? false finalized? false}}]
-  (let [comp (map->AssistantMessageComponent {:text-atom (atom text)
+  (let [sp (spinner/make-spinner
+             :text "Working..."
+             :active false
+             :prefix ""
+             :frames SPINNER-FRAMES
+             :interval-ms SPINNER-INTERVAL-MS
+             :spinner-color-fn #(theme/fg theme :accent %)
+             :message-color-fn #(theme/fg theme :dim %))
+        comp (map->AssistantMessageComponent {:text-atom (atom text)
                           :thinking-text-atom (atom thinking)
                           :theme-atom (atom theme)
                           :output-pad-atom (atom output-pad)
@@ -144,6 +157,7 @@
                           :rendered-text-lines-atom (atom [])
                           :rendered-thinking-lines-atom (atom [])
                           :last-render-width-atom (atom nil)
+                          :spinner sp
                           :cache-atom (atom nil)})]
     ;; Do initial render so lines are ready immediately
     (reflow-all! comp 80)
@@ -184,6 +198,11 @@
 
 (defn assistant-message-set-theme! [comp theme]
   (reset! (:theme-atom comp) theme)
+  ;; Update spinner color functions
+  (spinner/spinner-set-spinner-color-fn! (:spinner comp)
+    #(theme/fg theme :accent %))
+  (spinner/spinner-set-message-color-fn! (:spinner comp)
+    #(theme/fg theme :dim %))
   (when-let [w @(:last-render-width-atom comp)]
     (reflow-all! comp w))
   (protocols/invalidate comp))

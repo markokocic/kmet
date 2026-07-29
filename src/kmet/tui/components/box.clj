@@ -10,7 +10,7 @@
   (let [vis (u/visible-width line)
         pad (max 0 (- width vis))
         padded (str line (apply str (repeat pad \space)))]
-    (if bg-fn (bg-fn padded) padded)))
+    (if-let [f @bg-fn] (f padded) padded)))
 
 ;; ─── Box record ─────────────────────────────────────────────────────────────
 
@@ -24,7 +24,8 @@
             child-lines (mapcat (fn [c]
                                   (map #(str left-pad %) (protocols/render c content-width)))
                                 @children)
-            bg-sample (when bg-fn (bg-fn "test"))
+            bg-fn-val (when-let [f @bg-fn] f)
+            bg-sample (when bg-fn-val (bg-fn-val "test"))
             cached @cache]
         (if (and cached
                  (= (:width cached) width)
@@ -50,12 +51,12 @@
 (defn make-box
   ([] (map->Box {:children (atom [])
                  :padding-x 1 :padding-y 1
-                 :bg-fn nil :cache (atom nil)}))
+                 :bg-fn (atom nil) :cache (atom nil)}))
   ([padding-x padding-y] (make-box padding-x padding-y nil))
   ([padding-x padding-y bg-fn]
    (map->Box {:children (atom [])
               :padding-x padding-x :padding-y padding-y
-              :bg-fn bg-fn :cache (atom nil)})))
+              :bg-fn (atom bg-fn) :cache (atom nil)})))
 
 (defn box-add-child [box child]
   (swap! (:children box) conj child)
@@ -70,4 +71,5 @@
   (reset! (:cache box) nil))
 
 (defn box-set-bg-fn [box bg-fn]
-  (reset! (:bg-fn box) bg-fn))
+  (reset! (:bg-fn box) bg-fn)
+  (reset! (:cache box) nil))

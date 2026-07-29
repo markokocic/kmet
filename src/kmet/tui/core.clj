@@ -454,6 +454,9 @@
 (def make-markdown markdown/make-markdown)
 (def markdown-set-text! markdown/markdown-set-text!)
 (def markdown-append! markdown/markdown-append!)
+(def markdown-set-theme! markdown/markdown-set-theme!)
+(def markdown-set-padding-x! markdown/markdown-set-padding-x!)
+(def markdown-get-text markdown/markdown-get-text)
 
 ;; Spinner
 (def make-spinner spinner/make-spinner)
@@ -463,4 +466,6 @@
 (def spinner-active? spinner/spinner-active?)
 (def spinner-set-text! spinner/spinner-set-text!)
 (def spinner-set-prefix! spinner/spinner-set-prefix!)
+(def spinner-set-spinner-color-fn! spinner/spinner-set-spinner-color-fn!)
+(def spinner-set-message-color-fn! spinner/spinner-set-message-color-fn!)
 
