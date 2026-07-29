@@ -11,6 +11,7 @@
             [kmet.tui.components.select-list :as select-list]
             [kmet.agent.loop :as agent]
             [kmet.agent.session :as session]
+            [kmet.agent.tools :as tools]
             [kmet.config :as cfg]
             [kmet.skills :as skills]
             [clojure.string :as str]
@@ -488,7 +489,8 @@ Be precise and concise in your responses.")
                         "You are kmet, a minimal coding agent. Help the user with their tasks.
 Use the available tools to read, write, edit files, and execute commands.
 Be precise and concise in your responses.")
-        system-prompt (skills/build-system-prompt base-prompt)
+        system-prompt (skills/build-system-prompt base-prompt
+                        :tools (vals (tools/get-all-tools)))
         resolved-provider (or provider (cfg/get-provider config))
         resolved-model (or model (cfg/get-model config))
         ag (agent/make-agent-state

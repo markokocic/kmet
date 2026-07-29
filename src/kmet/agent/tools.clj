@@ -29,7 +29,7 @@
 
 ;; ─── Tool record ────────────────────────────────────────────────────────────
 
-(defrecord Tool [name label description parameters execute])
+(defrecord Tool [name label description prompt-snippet prompt-guidelines parameters execute])
 
 ;; ─── Parameter helpers ──────────────────────────────────────────────────────
 
@@ -198,60 +198,75 @@
   {"read"  (map->Tool
              {:name "read"
               :label "Read file"
-              :description "Read the contents of a file. Supports offset/limit for large files."
+              :description "Read the contents of a file. Supports offset/limit for large files. Output is truncated to 2000 lines or 50KB (whichever is hit first)."
+              :prompt-snippet "Read file contents"
+              :prompt-guidelines ["Use read to examine files instead of cat or sed"]
               :parameters (->json-schema
-                            {:path     (param :path :string "File path to read")
-                             :offset   (param :offset :number "Line offset (0-indexed)" :optional? true)
-                             :limit    (param :limit :number "Max lines to read" :optional? true)})
+                            {:path     (param :path :string "File path to read (relative or absolute)")
+                             :offset   (param :offset :number "Line number to start reading from (0-indexed)" :optional? true)
+                             :limit    (param :limit :number "Maximum number of lines to read" :optional? true)})
               :execute tool-read})
    "write" (map->Tool
              {:name "write"
               :label "Write file"
-              :description "Write content to a file. Creates the file if it doesn't exist, overwrites if it does."
+              :description "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
+              :prompt-snippet "Create or overwrite files"
+              :prompt-guidelines ["Use write only for new files or complete rewrites"]
               :parameters (->json-schema
-                            {:path    (param :path :string "File path to write to")
-                             :content (param :content :string "Content to write")})
+                            {:path    (param :path :string "File path to write to (relative or absolute)")
+                             :content (param :content :string "Content to write to the file")})
               :execute tool-write})
    "edit"  (map->Tool
              {:name "edit"
               :label "Edit file"
-              :description "Precise text replacement in a file. The old-text must match exactly."
+              :description "Make precise file edits with exact text replacement. When changing multiple separate locations in one file, use one edit call with multiple entries."
+              :prompt-snippet "Make precise file edits with exact text replacement"
+              :prompt-guidelines ["Use edit for precise changes (edits[].oldText must match exactly)"
+                                  "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls"]
               :parameters (->json-schema
                             {:path    (param :path :string "File path to edit")
-                             :old-text (param :old-text :string "Exact text to find and replace")
+                             :old-text (param :old-text :string "Exact text to find and replace — must match exactly including whitespace")
                              :new-text (param :new-text :string "Replacement text")})
               :execute tool-edit})
    "bash"  (map->Tool
              {:name "bash"
               :label "Execute command"
-              :description "Execute a bash command with a timeout. For long-running commands, keep the timeout reasonable."
+              :description "Execute a bash command with a timeout. For long-running commands, keep the timeout reasonable. Standard streams (stdout/stderr) are captured and returned."
+              :prompt-snippet "Execute bash commands (ls, grep, find, etc.)"
+              :prompt-guidelines ["Use bash for file operations like ls, grep, find"]
               :parameters (->json-schema
                             {:command (param :command :string "Bash command to execute")
-                             :timeout (param :timeout :number "Timeout in seconds" :optional? true)})
+                             :timeout (param :timeout :number "Timeout in seconds (optional)" :optional? true)})
               :execute tool-bash})
    "grep"  (map->Tool
              {:name "grep"
               :label "Search files"
-              :description "Search file contents using a regular expression pattern."
+              :description "Search file contents using a regular expression pattern. Returns matching lines with file paths and line numbers."
+              :prompt-snippet "Search file contents for patterns"
+              :prompt-guidelines []
               :parameters (->json-schema
-                            {:pattern (param :pattern :string "Regex pattern to search for")
-                             :path    (param :path :string "File or directory to search" :optional? true)})
+                            {:pattern (param :pattern :string "Search pattern (regex or literal string)")
+                             :path    (param :path :string "Directory or file to search (default: current directory)" :optional? true)})
               :execute tool-grep})
    "find"  (map->Tool
              {:name "find"
               :label "Find files"
-              :description "Find files matching a pattern in their name or path."
+              :description "Find files matching a pattern in their name or path. Returns matching file paths relative to the search directory."
+              :prompt-snippet "Find files by glob pattern"
+              :prompt-guidelines []
               :parameters (->json-schema
-                            {:pattern (param :pattern :string "Pattern to match")
-                             :path    (param :path :string "Directory to search" :optional? true)})
+                            {:pattern (param :pattern :string "Glob pattern to match, e.g. '*.clj', '**/*.md'")
+                             :path    (param :path :string "Directory to search in (default: current directory)" :optional? true)})
               :execute tool-find})
    "ls"    (map->Tool
              {:name "ls"
               :label "List directory"
-              :description "List contents of a directory."
+              :description "List contents of a directory. Returns entries sorted alphabetically, with '/' suffix for directories."
+              :prompt-snippet "List directory contents"
+              :prompt-guidelines []
               :parameters (->json-schema
-                            {:path  (param :path :string "Directory path" :optional? true)
-                             :long? (param :long? :boolean "Show detailed listing" :optional? true)})
+                            {:path  (param :path :string "Directory path (default: current directory)" :optional? true)
+                             :long? (param :long? :boolean "Show detailed listing with file sizes and permissions" :optional? true)})
               :execute tool-ls})})
 
 ;; ─── Tool schema helpers ────────────────────────────────────────────────────

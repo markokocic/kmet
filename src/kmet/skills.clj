@@ -89,14 +89,26 @@
   (first (filter #(= (:name %) name) @skills)))
 
 (defn build-system-prompt
-  "Build a system prompt by combining skills content.
-   Returns a string with all skills appended."
-  [base-prompt]
-  (let [skill-texts (mapv :content (sort-by :name @skills))]
-    (if (empty? skill-texts)
-      base-prompt
-      (str base-prompt "\n\n--- Skills ---\n\n"
-           (str/join "\n\n---\n\n" skill-texts)))))
+  "Build a system prompt by combining tool guidelines and skills content.
+   base-prompt — the base system prompt string
+   opts:
+     :tools — seq of Tool records (for guidelines)
+   Returns a string with all guidelines and skills appended."
+  [base-prompt & {:keys [tools]}]
+  (let [guidelines (when (seq tools)
+                     (let [lines (mapcat (fn [t]
+                                         (cons (str "- " (:name t) ": " (:prompt-snippet t ""))
+                                               (map #(str "  - " %) (:prompt-guidelines t []))))
+                                       tools)]
+                       (str/join "\n" (cons "\nAvailable tools:" lines))))
+        skill-texts (mapv :content (sort-by :name @skills))
+        skills-section (if (empty? skill-texts)
+                         ""
+                         (str "\n\n--- Skills ---\n\n"
+                              (str/join "\n\n---\n\n" skill-texts)))]
+    (str base-prompt
+         (or guidelines "")
+         skills-section)))
 
 ;; ─── Extensions ────────────────────────────────────────────────────────────
 
