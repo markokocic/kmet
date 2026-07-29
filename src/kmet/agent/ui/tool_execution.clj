@@ -12,13 +12,10 @@
             [kmet.tui.macros :refer [with-cache]]
             [clojure.string :as str]))
 
-(def ^:private BLD "\u001b[1m")
-(def ^:private RST "\u001b[0m")
-
 ;; ─── Built-in tool renderers ──────────────────────────────────────────────
-;; Each render-call takes (name theme width) → IComponent or nil.
+;; Each render-call takes (name args theme width) → IComponent or nil.
 ;; Each render-result takes (content is-error theme width expanded?) → IComponent or nil.
-;; nil means use default rendering (raw content in box).
+;; nil means use default rendering.
 
 (def ^:private builtin-renderers
   {"read"  {:render-call nil
@@ -53,35 +50,49 @@
                                (text/make-text
                                  (theme/fg theme (if is-error :error :success) (first m))
                                  0 0)))}
-   "bash"  {:render-call nil
+   "bash"  {:render-call (fn [name args theme width]
+                           (let [cmd (:command args)
+                                 truncated (if (> (count cmd) 77) (str (subs cmd 0 74) "...") cmd)
+                                 timeout (:timeout args)]
+                             (text/make-text
+                               (str (theme/fg theme :tool-title (theme/bold "$ "))
+                                    (theme/fg theme :accent (or truncated cmd))
+                                    (when timeout
+                                      (theme/fg theme :dim (str " (timeout: " timeout "s)"))))
+                               0 0)))
             :render-result (fn [content is-error theme width expanded?]
                              (let [lines (str/split-lines content)
-                                   n (count (filter #(not (str/blank? %)) lines))]
+                                   n (count (filter #(not (str/blank? %)) lines))
+                                   exit-code (some #(when (re-find #"exit code: (\d+)" %)
+                                                      (last (re-find #"exit code: (\d+)" %)))
+                                                   lines)]
                                (if expanded?
                                  (let [show (take 20 lines)
                                        more (- n 20)]
                                    (text/make-text
                                      (str/join "\n"
-                                       (concat [(if is-error
-                                                  (theme/fg theme :error (str "exit "
-                                                    (or (some #(when (re-find #"exit code:" %) %) lines) "non-zero")))
-                                                  (theme/fg theme :success (str "done  (" n " lines)")))]
+                                       (concat [(str (if (and (not is-error)
+                                                              (or (nil? exit-code) (= exit-code "0")))
+                                                       (theme/fg theme :success "done")
+                                                       (theme/fg theme :error (str "exit " (or exit-code "non-zero"))))
+                                                    (theme/fg theme :dim (str " (" n " lines)")))]
                                                (mapv #(theme/fg theme :dim %) show)
                                                (when (pos? more)
-                                                 [(theme/fg theme :muted (str "... " more " more lines"))])))
+                                                 [(theme/fg theme :muted (str "... " more " more output"))])))
                                      0 0))
                                  (text/make-text
-                                   (if is-error
-                                     (theme/fg theme :error (str "exit "
-                                       (or (some #(when (re-find #"exit code:" %) %) lines) "non-zero")))
-                                     (theme/fg theme :success (str "done  (" n " lines)")))
+                                   (str (if (and (not is-error)
+                                                (or (nil? exit-code) (= exit-code "0")))
+                                          (theme/fg theme :success "done")
+                                          (theme/fg theme :error (str "exit " (or exit-code "non-zero"))))
+                                        (theme/fg theme :dim (str " (" n " lines)")))
                                    0 0))))}})
 
 ;; ─── Default renderers (fallback when no custom or built-in) ──────────────
 
 (defn- default-render-call
   "Default render-call: show tool name bolded in tool-title color (matching pi)."
-  [name theme _width]
+  [name _args theme _width]
   (text/make-text (theme/fg theme :tool-title (theme/bold name)) 0 0))
 
 (defn- default-render-result
@@ -91,13 +102,14 @@
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
-(defrecord ToolExecutionComponent [name-atom content-atom is-error-atom theme-atom
+(defrecord ToolExecutionComponent [name-atom args-atom content-atom is-error-atom theme-atom
                           output-pad-atom expanded-atom
                           custom-render-call-atom custom-render-result-atom
                           cache-atom]
   protocols/IComponent
   (render [this width]
     (let [name @name-atom
+          args @args-atom
           content @content-atom
           is-error @is-error-atom
           theme @theme-atom
@@ -122,7 +134,7 @@
                         (str line (apply str (repeat (max 0 (- width (u/visible-width line))) \space)))))
                 empty (apply str (repeat width \space))
                 ;; Render-call component: get lines from its render
-                call-comp (render-call-fn name theme content-width)
+                call-comp (render-call-fn name args theme content-width)
                 call-lines (protocols/render call-comp content-width)
                 call-indented (mapv #(str left-pad %) call-lines)
                 ;; Render-result component
@@ -133,7 +145,7 @@
                    (repeat pad-y (bg empty))
                    (map bg call-indented)
                    (when (seq call-lines)
-                     (map bg [(str left-pad (apply str (repeat (max 0 (- content-width (count name))) "─")))]))
+                     (map bg [(str left-pad (apply str (repeat (max 0 (- content-width 1)) "─")))]))
                    (map bg result-indented)
                    (repeat pad-y (bg empty)))))))))
   (handle-input [_this _data] nil)
@@ -149,10 +161,11 @@
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-tool-execution
-  [& {:keys [name content is-error theme output-pad expanded? render-call-fn render-result-fn]
-      :or {name "" content "" is-error false theme theme/dark-theme
+  [& {:keys [name args content is-error theme output-pad expanded? render-call-fn render-result-fn]
+      :or {name "" args {} content "" is-error false theme theme/dark-theme
            output-pad 1 expanded? false}}]
   (map->ToolExecutionComponent {:name-atom (atom name)
+                       :args-atom (atom args)
                        :content-atom (atom content)
                        :is-error-atom (atom is-error)
                        :theme-atom (atom theme)

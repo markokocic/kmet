@@ -76,6 +76,7 @@
                  :finalized? true)
     :tool (te/make-tool-execution
             :name (:name msg "")
+            :args (:args msg {})
             :content (:content msg "")
             :is-error (:is-error msg false)
             :theme theme

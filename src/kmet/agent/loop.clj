@@ -210,6 +210,7 @@ Be precise and concise in your responses."}}]
                               (emit agent {:type :tool-result
                                            :id (:id tc)
                                            :name (:name tc)
+                                           :args (:arguments tc)
                                            :result result})))
 
                           ;; State: thinking again, continue loop

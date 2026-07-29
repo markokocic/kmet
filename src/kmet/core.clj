@@ -483,6 +483,7 @@ Be precise and concise in your responses.")
                            (let [result (:result evt)
                                  msg {:role :tool
                                       :name (:name evt)
+                                      :args (:args evt {})
                                       :content (:content result)
                                       :is-error (:is-error result false)}]
                              ;; Finalize any current streaming before showing tool result
