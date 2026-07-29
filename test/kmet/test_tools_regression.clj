@@ -7,7 +7,7 @@
 ;; ─── Tool schemas: no per-property :optional ─────────────────────────────
 
 (t/deftest test-schema-no-optional
-  (doseq [tool-name ["read" "write" "edit" "bash" "grep" "find" "ls"]]
+  (doseq [tool-name ["read" "write" "edit" "bash"]]
     (let [tool (tools/get-tool tool-name)
           params (:parameters tool)
           props (:properties params)]
@@ -15,19 +15,6 @@
         (t/is (not (contains? v :optional))
           (str "Property " k " of " tool-name " should not have :optional"))))))
 
-;; ─── Safe file traversal (file-seq replacement) ──────────────────────────
-
-(t/deftest test-safe-file-seq-basic
-  ;; find tool should work on a normal directory
-  (let [result (tools/execute-tool "find" {:pattern "test" :path "src"})]
-    (t/is (not (:is-error result)) "find should work on src dir")
-    (t/is (string? (:content result)))))
-
-(t/deftest test-safe-file-seq-grep
-  ;; grep tool should work on a normal directory
-  (let [result (tools/execute-tool "grep" {:pattern "defn" :path "src"})]
-    (t/is (not (:is-error result)) "grep should work on src dir")
-    (t/is (string? (:content result)))))
 
 ;; ─── Bash: large stderr output (deadlock regression) ────────────────────
 
@@ -49,21 +36,7 @@
     (t/is (.contains (:content result) "hello"))
     (t/is (.contains (:content result) "world"))))
 
-;; ─── grep/find on small trees with unreadable files ─────────────────────
 
-(t/deftest test-safe-file-seq-graceful
-  ;; Create a small tree with a readable subdir
-  (.mkdirs (io/file "target/test-tools-reg/sub"))
-  (spit "target/test-tools-reg/sub/a.txt" "hello world")
-  (spit "target/test-tools-reg/b.txt" "foo bar")
-  (let [result (tools/execute-tool "grep" {:pattern "hello" :path "target/test-tools-reg"})]
-    (t/is (not (:is-error result)))
-    (t/is (.contains (:content result) "a.txt")))
-  ;; Cleanup
-  (.delete (io/file "target/test-tools-reg/sub/a.txt"))
-  (.delete (io/file "target/test-tools-reg/sub"))
-  (.delete (io/file "target/test-tools-reg/b.txt"))
-  (.delete (io/file "target/test-tools-reg")))
 
 ;; ─── Bash process builder (no Runtime.exec) ─────────────────────────────
 

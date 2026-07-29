@@ -11,10 +11,7 @@
     (t/is (contains? all "read"))
     (t/is (contains? all "write"))
     (t/is (contains? all "edit"))
-    (t/is (contains? all "bash"))
-    (t/is (contains? all "grep"))
-    (t/is (contains? all "find"))
-    (t/is (contains? all "ls"))))
+    (t/is (contains? all "bash"))))
 
 (t/deftest test-tools-get
   (let [t (tools/get-tool "read")]
@@ -111,42 +108,8 @@
   (let [result (tools/execute-tool "bash" {:command "ls /nonexistent-path-xyz"})]
     (t/is (:is-error result))))
 
-;; ─── Tool grep ────────────────────────────────────────────────────────────
 
-(t/deftest test-tool-grep
-  (spit "target/test-tools-grep.txt" "apple\nbanana\ncherry\ndate")
-  (let [result (tools/execute-tool "grep" {:pattern "anana" :path "target/test-tools-grep.txt"})]
-    (t/is (not (:is-error result)))
-    (t/is (.contains (:content result) "banana"))))
 
-(t/deftest test-tool-grep-no-match
-  (spit "target/test-tools-grep.txt" "abc\ndef")
-  (let [result (tools/execute-tool "grep" {:pattern "zzz" :path "target/test-tools-grep.txt"})]
-    (t/is (not (:is-error result)))
-    (t/is (.contains (:content result) "No matches"))))
-
-;; ─── Tool find ────────────────────────────────────────────────────────────
-
-(t/deftest test-tool-find
-  (let [result (tools/execute-tool "find" {:pattern "\\.clj" :path "."})]
-    (t/is (not (:is-error result)))
-    (t/is (.contains (:content result) ".clj"))))
-
-(t/deftest test-tool-find-no-match
-  (let [result (tools/execute-tool "find" {:pattern "zzz-nonexistent-file" :path "."})]
-    (t/is (not (:is-error result)))
-    (t/is (.contains (:content result) "No files"))))
-
-;; ─── Tool ls ──────────────────────────────────────────────────────────────
-
-(t/deftest test-tool-ls
-  (let [result (tools/execute-tool "ls" {:path "src"})]
-    (t/is (not (:is-error result)))
-    (t/is (.contains (:content result) "kmet"))))
-
-(t/deftest test-tool-ls-nonexistent
-  (let [result (tools/execute-tool "ls" {:path "nonexistent-dir"})]
-    (t/is (:is-error result))))
 
 ;; ─── Unknown tool ─────────────────────────────────────────────────────────
 
@@ -193,11 +156,6 @@
   (let [result (tools/execute-tool "read" {:path "target/test-tools-binary.bin"})]
     (t/is (string? (:content result)))))
 
-(t/deftest test-tool-grep-directory-recursive
-  (let [result (tools/execute-tool "grep" {:pattern "defn" :path "src"})]
-    (t/is (not (:is-error result)))
-    (t/is (pos? (count (:content result))))))
-
 ;; ─── Regression: bash default timeout ────────────────────────────────────
 
 (t/deftest test-tool-bash-default-timeout
@@ -205,16 +163,3 @@
     (t/is (not (:is-error result)))
     (t/is (.contains (:content result) "default-timeout-test"))))
 
-;; ─── Regression: grep with unreadable files ──────────────────────────────
-
-(t/deftest test-tool-grep-with-unreadable
-  (.mkdirs (java.io.File. "target/test-tools-grep-skip"))
-  (spit "target/test-tools-grep-skip/readable.txt" "hello world\nfoo bar\n")
-  (spit "target/test-tools-grep-skip/unreadable.txt" "secret data\n")
-  (.setReadable (java.io.File. "target/test-tools-grep-skip/unreadable.txt") false)
-  (let [result (tools/execute-tool "grep" {:pattern "hello" :path "target/test-tools-grep-skip"})]
-    (t/is (not (:is-error result)))
-    (t/is (.contains (:content result) "readable.txt"))
-    (.setReadable (java.io.File. "target/test-tools-grep-skip/unreadable.txt") true)
-    (doseq [f (.listFiles (java.io.File. "target/test-tools-grep-skip"))] (.delete f))
-    (.delete (java.io.File. "target/test-tools-grep-skip"))))
