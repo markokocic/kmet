@@ -1,6 +1,6 @@
 (ns kmet.agent.ui.chat-history
-  "ChatHistory — thin Container wrapper that composes per-message-type components
-   (UserMessage, AssistantMessage, ToolExecution, CustomMessage) as children.
+  "ChatHistoryComponent — thin Container wrapper that composes per-message-type components
+   (UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent, CustomMessageComponent) as children.
    This is the Pi architecture: a flat Container with separate component
    classes per message role, not a monolithic renderer."
   (:require [kmet.tui.protocols :as protocols]
@@ -15,7 +15,7 @@
 ;; ─── Info component at top ─────────────────────────────────────────────────
 
 (defn- make-info-msg
-  "Create a CustomMessage for the top info banner."
+  "Create a CustomMessageComponent for the top info banner."
   [msg theme output-pad]
   (when msg
     (cm/make-custom-message :label (:label msg)
@@ -23,13 +23,13 @@
                             :theme theme
                             :output-pad output-pad)))
 
-;; ─── ChatHistory record — wraps a Container ───────────────────────────────
+;; ─── ChatHistoryComponent record — wraps a Container ───────────────────────────────
 
-(defrecord ChatHistory [container       ;; Container that holds message components
-                        info-comp-atom  ;; atom of CustomMessage or nil
+(defrecord ChatHistoryComponent [container       ;; Container that holds message components
+                        info-comp-atom  ;; atom of CustomMessageComponent or nil
                         theme-atom
                         output-pad-atom
-                        streaming-atom  ;; atom of AssistantMessage or nil (current streaming)
+                        streaming-atom  ;; atom of AssistantMessageComponent or nil (current streaming)
                         children-atom]  ;; atom of vec (parallel to container children for iteration)
   protocols/IComponent
 
@@ -45,14 +45,14 @@
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-chat-history
-  "Create a ChatHistory component (Pi-style: Container of message components).
+  "Create a ChatHistoryComponent component (Pi-style: Container of message components).
    Options:
      :theme       — Theme record (default dark-theme)
      :output-pad  — horizontal padding for boxed messages (default 1)"
   [& {:keys [theme output-pad]
       :or {theme theme/dark-theme output-pad 1}}]
   (let [c (container/make-container)]
-    (map->ChatHistory {:container c
+    (map->ChatHistoryComponent {:container c
                        :info-comp-atom (atom nil)
                        :theme-atom (atom theme)
                        :output-pad-atom (atom output-pad)
@@ -88,8 +88,8 @@
 
 (defn chat-history-add-message!
   "Add a message to the chat history.
-   Creates the appropriate component (UserMessage, AssistantMessage,
-   ToolExecution, or CustomMessage) and adds it to the container.
+   Creates the appropriate component (UserMessageComponent, AssistantMessageComponent,
+   ToolExecutionComponent, or CustomMessageComponent) and adds it to the container.
    Auto-scrolls to bottom."
   [ch msg]
   (let [comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch))]
@@ -181,7 +181,7 @@
 (defn chat-history-set-info-msg!
   "Set or clear the info message at the top.
    Pass {:label \"...\" :content \"...\"} or nil to clear.
-   The info message is a CustomMessage component at index 0."
+   The info message is a CustomMessageComponent component at index 0."
   [ch msg]
   (when-let [old @(:info-comp-atom ch)]
     (container/container-remove-child (:container ch) old))
@@ -227,14 +227,14 @@
     (am/assistant-message-set-hide-thinking! child (not current))))
 
 (defn chat-history-toggle-tool-expanded!
-  "Toggle tool output expansion on all ToolExecution children."
+  "Toggle tool output expansion on all ToolExecutionComponent children."
   [ch]
   (doseq [child @(:children-atom ch)]
     (when (= (kind-of child) :tool)
       (toggle-expanded! child))))
 
 (defn chat-history-get-tool-expanded
-  "Check if tools are expanded. Returns false if no ToolExecution children."
+  "Check if tools are expanded. Returns false if no ToolExecutionComponent children."
   [ch]
   (boolean
     (some (fn [child]
@@ -243,14 +243,14 @@
           @(:children-atom ch))))
 
 (defn chat-history-toggle-thinking-hidden!
-  "Toggle thinking block visibility on all AssistantMessage children."
+  "Toggle thinking block visibility on all AssistantMessageComponent children."
   [ch]
   (doseq [child @(:children-atom ch)]
     (when (= (kind-of child) :assistant)
       (toggle-hide-thinking! child))))
 
 (defn chat-history-get-thinking-hidden
-  "Check if thinking is hidden. Returns false if no AssistantMessage children."
+  "Check if thinking is hidden. Returns false if no AssistantMessageComponent children."
   [ch]
   (boolean
     (some (fn [child]
@@ -340,7 +340,7 @@
 
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────
 
-(extend-type ChatHistory
+(extend-type ChatHistoryComponent
   protocols/IFocusable
   (focused [this] false)
   (set-focused! [this val]))

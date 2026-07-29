@@ -1,5 +1,5 @@
 (ns kmet.agent.ui.custom-message
-  "CustomMessage component — Pi's CustomMessageComponent."
+  "CustomMessageComponent component — Pi's CustomMessageComponent."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
@@ -8,7 +8,7 @@
 (def ^:private BLD "\u001b[1m")
 (def ^:private RST "\u001b[0m")
 
-(defrecord CustomMessage [label-atom content-atom theme-atom output-pad-atom cache-atom]
+(defrecord CustomMessageComponent [label-atom content-atom theme-atom output-pad-atom cache-atom]
   protocols/IComponent
   (render [this width]
     (let [label @label-atom
@@ -43,7 +43,7 @@
 
 ;; ─── IComponentKind ─────────────────────────────────────────────────────────
 
-(extend-type CustomMessage
+(extend-type CustomMessageComponent
   protocols/IComponentKind
   (component-kind [_] :custom))
 
@@ -52,7 +52,7 @@
 (defn make-custom-message
   [& {:keys [label content theme output-pad]
       :or {content "" theme theme/dark-theme output-pad 1}}]
-  (map->CustomMessage {:label-atom (atom label)
+  (map->CustomMessageComponent {:label-atom (atom label)
                        :content-atom (atom content)
                        :theme-atom (atom theme)
                        :output-pad-atom (atom output-pad)

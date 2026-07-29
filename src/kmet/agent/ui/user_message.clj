@@ -1,5 +1,5 @@
 (ns kmet.agent.ui.user-message
-  "UserMessage component — Pi's UserMessageComponent.
+  "UserMessageComponent component — Pi's UserMessageComponent.
    Renders user messages in a Box with user-message-bg background
    and user-message-text foreground color."
   (:require [kmet.tui.protocols :as protocols]
@@ -7,7 +7,7 @@
             [kmet.tui.theme :as theme]
             [kmet.tui.macros :refer [with-cache]]))
 
-(defrecord UserMessage [text-atom theme-atom output-pad-atom cache-atom]
+(defrecord UserMessageComponent [text-atom theme-atom output-pad-atom cache-atom]
   protocols/IComponent
   (render [this width]
     (let [text @text-atom
@@ -34,7 +34,7 @@
 
 ;; ─── IComponentKind ─────────────────────────────────────────────────────────
 
-(extend-type UserMessage
+(extend-type UserMessageComponent
   protocols/IComponentKind
   (component-kind [_] :user))
 
@@ -43,7 +43,7 @@
 (defn make-user-message
   [& {:keys [text theme output-pad]
       :or {text "" theme theme/dark-theme output-pad 1}}]
-  (map->UserMessage {:text-atom (atom text)
+  (map->UserMessageComponent {:text-atom (atom text)
                      :theme-atom (atom theme)
                      :output-pad-atom (atom output-pad)
                      :cache-atom (atom nil)}))

@@ -16,9 +16,9 @@
     (let [c (ft/make-footer :status "idle" :n-msgs 3)]
       (let [plain (mapv strip-ansi (core/render c 40))]
         (is (some #(re-find #"kmet" %) plain)
-            "Footer should show app name")
+            "FooterComponent should show app name")
         (is (some #(re-find #"msgs:3" %) plain)
-            "Footer should show message count")))))
+            "FooterComponent should show message count")))))
 
 (deftest test-render-status
   (testing "renders status text"
@@ -51,7 +51,7 @@
   (testing "first line is a separator"
     (let [c (ft/make-footer :status "" :n-msgs 0)]
       (let [lines (core/render c 40)]
-        (is (>= (count lines) 2) "Footer should have at least 2 lines")
+        (is (>= (count lines) 2) "FooterComponent should have at least 2 lines")
         (let [plain (mapv strip-ansi lines)]
           ;; First line should be dashes
           (is (re-find #"^─+" (first plain))))))))

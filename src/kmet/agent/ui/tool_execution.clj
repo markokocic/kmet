@@ -1,5 +1,5 @@
 (ns kmet.agent.ui.tool-execution
-  "ToolExecution component — Pi's ToolExecutionComponent."
+  "ToolExecutionComponent component — Pi's ToolExecutionComponent."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
@@ -8,7 +8,7 @@
 (def ^:private BLD "\u001b[1m")
 (def ^:private RST "\u001b[0m")
 
-(defrecord ToolExecution [name-atom content-atom is-error-atom theme-atom
+(defrecord ToolExecutionComponent [name-atom content-atom is-error-atom theme-atom
                           output-pad-atom expanded-atom cache-atom]
   protocols/IComponent
   (render [this width]
@@ -46,7 +46,7 @@
 
 ;; ─── IComponentKind ─────────────────────────────────────────────────────────
 
-(extend-type ToolExecution
+(extend-type ToolExecutionComponent
   protocols/IComponentKind
   (component-kind [_] :tool))
 
@@ -56,7 +56,7 @@
   [& {:keys [name content is-error theme output-pad expanded?]
       :or {name "" content "" is-error false theme theme/dark-theme
            output-pad 1 expanded? false}}]
-  (map->ToolExecution {:name-atom (atom name)
+  (map->ToolExecutionComponent {:name-atom (atom name)
                        :content-atom (atom content)
                        :is-error-atom (atom is-error)
                        :theme-atom (atom theme)

@@ -1,5 +1,5 @@
 (ns kmet.agent.ui.footer
-  "Footer component — Pi's FooterComponent."
+  "FooterComponent — Pi's FooterComponent."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
             [kmet.tui.macros :refer [with-cache]]))
@@ -8,7 +8,7 @@
 (def ^:private RST "\u001b[0m")
 (def ^:private CYN "\u001b[36m")
 
-(defrecord Footer [status-text-atom n-msgs-atom cache-atom]
+(defrecord FooterComponent [status-text-atom n-msgs-atom cache-atom]
   protocols/IComponent
   (render [this width]
     (let [status-text @status-text-atom
@@ -32,7 +32,7 @@
 
 (defn make-footer
   [& {:keys [status n-msgs] :or {status "" n-msgs 0}}]
-  (map->Footer {:status-text-atom (atom status)
+  (map->FooterComponent {:status-text-atom (atom status)
                 :n-msgs-atom (atom n-msgs)
                 :cache-atom (atom nil)}))
 

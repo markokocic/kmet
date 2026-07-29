@@ -1,12 +1,12 @@
 (ns kmet.agent.ui.assistant-message
-  "AssistantMessage component — Pi's AssistantMessageComponent."
+  "AssistantMessageComponent component — Pi's AssistantMessageComponent."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.markdown :as md]
             [kmet.tui.macros :refer [with-cache]]))
 
-(defrecord AssistantMessage [text-atom thinking-text-atom theme-atom
+(defrecord AssistantMessageComponent [text-atom thinking-text-atom theme-atom
                              output-pad-atom hide-thinking-atom finalized-atom
                              cache-atom]
   protocols/IComponent
@@ -45,7 +45,7 @@
 
 ;; ─── IComponentKind ─────────────────────────────────────────────────────────
 
-(extend-type AssistantMessage
+(extend-type AssistantMessageComponent
   protocols/IComponentKind
   (component-kind [_] :assistant))
 
@@ -55,7 +55,7 @@
   [& {:keys [text thinking theme output-pad hide-thinking? finalized?]
       :or {text "" thinking "" theme theme/dark-theme
            output-pad 1 hide-thinking? false finalized? false}}]
-  (map->AssistantMessage {:text-atom (atom text)
+  (map->AssistantMessageComponent {:text-atom (atom text)
                           :thinking-text-atom (atom thinking)
                           :theme-atom (atom theme)
                           :output-pad-atom (atom output-pad)

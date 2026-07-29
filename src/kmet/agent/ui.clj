@@ -9,13 +9,13 @@
             [kmet.agent.ui.footer :as footer]
             [kmet.agent.ui.chat-history :as chat-history]))
 
-;; UserMessage
+;; UserMessageComponent
 (def make-user-message user-message/make-user-message)
 (def user-message-set-text! user-message/user-message-set-text!)
 (def user-message-set-theme! user-message/user-message-set-theme!)
 (def user-message-set-output-pad! user-message/user-message-set-output-pad!)
 
-;; AssistantMessage
+;; AssistantMessageComponent
 (def make-assistant-message assistant-message/make-assistant-message)
 (def assistant-message-set-text! assistant-message/assistant-message-set-text!)
 (def assistant-message-append-text! assistant-message/assistant-message-append-text!)
@@ -26,13 +26,13 @@
 (def assistant-message-get-text assistant-message/assistant-message-get-text)
 (def assistant-message-get-thinking assistant-message/assistant-message-get-thinking)
 
-;; ToolExecution
+;; ToolExecutionComponent
 (def make-tool-execution tool-execution/make-tool-execution)
 (def tool-execution-set-content! tool-execution/tool-execution-set-content!)
 (def tool-execution-set-error! tool-execution/tool-execution-set-error!)
 (def tool-execution-set-expanded! tool-execution/tool-execution-set-expanded!)
 
-;; CustomMessage
+;; CustomMessageComponent
 (def make-custom-message custom-message/make-custom-message)
 (def custom-message-set-content! custom-message/custom-message-set-content!)
 
@@ -41,7 +41,7 @@
 (def footer-set-status! footer/footer-set-status!)
 (def footer-set-n-msgs! footer/footer-set-n-msgs!)
 
-;; ChatHistory
+;; ChatHistoryComponent
 (def make-chat-history chat-history/make-chat-history)
 (def chat-history-add-message! chat-history/chat-history-add-message!)
 (def chat-history-add-messages! chat-history/chat-history-add-messages!)
