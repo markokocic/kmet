@@ -1,7 +1,4 @@
-# kmet — Agent Guidelines
-
-## Project
-Minimal coding agent in Babashka/Clojure with a JLine3-based TUI (differential rendering, component model, overlays).
+# kmet specific guidelines Agent Guidelines
 
 ## Conventions
 
@@ -10,27 +7,17 @@ Minimal coding agent in Babashka/Clojure with a JLine3-based TUI (differential r
 - **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`; JLine3 bundled externally.
 
 ### API Preferences (avoid Java interop)
-- **`babashka.fs`** over `java.io.File` for all file operations:
-  - `fs/file-name` over `.getName()`
-  - `fs/parent` over `.getParent()`
-  - `fs/directory?` over `.isDirectory()`
-  - `fs/regular-file?` over `.isFile()`
-  - `fs/list-dir` over `.listFiles()` / `file-seq`
-  - `fs/exists?` over `.exists()`
-  - `slurp` / `spit` over Java `Reader`/`Writer` constructors
+- **`babashka.fs`** over `java.io.File` for all file operations
 - `babashka.process` over `java.lang.ProcessBuilder` for subprocesses
-- `clojure.string` functions (`starts-with?`, `includes?`, `index-of`) over Java `.startsWith()`, `.contains()`, `.indexOf()`
-- Pure Clojure for string/character operations (grapheme clusters, char widths) over `java.text.BreakIterator`
-- `clojure.java.io/reader` + `line-seq` over `java.io.BufferedReader`/`InputStreamReader` (only when stream semantics needed; prefer `slurp` for simple reads)
+- `clojure.string` over Java `.startsWith()`, `.contains()`, `.indexOf()`
+- `clojure.java.io`  over `java.io.*`
 - Avoid `^String`, `^java.io.File`, `^java.io.Reader` etc. type hints — stay Babashka-compatible.
 - No `java.io.*` or `java.nio.file.*` imports — everything is available via `babashka.fs` and `slurp`/`spit`
 
 ### Code Style
-- **Naming**: kebab-case for fns/vars, `kmet.tui.*` namespace, components in `kmet.tui.components.*`
 - **Records, not deftype**: use `defrecord` + `map->` constructors
 - **Protocols** for extension: `IComponent` (render/handle-input/invalidate), `IFocusable` (focused/set-focused!)
 - **State**: atoms for mutable state (component children, input listeners, render flags)
-- **No core.async yet** — kept simple with atoms and futures
 - **Private vars**: use `defn-` / `def-` for implementation details not part of public API
 
 ## File layout
@@ -52,7 +39,7 @@ src/kmet/
 ## Testing
 - **Framework**: `clojure.test`
 - **Layout**: `test/kmet/` mirrors `src/kmet/`
-- **Run**: `bb test`
+- **Run**: `bb test` to validate
 
 ## Environment
 Termux on Android — glibc babashka via `ld-linux-aarch64.so.1 --library-path`.
