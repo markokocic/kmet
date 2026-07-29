@@ -14,7 +14,8 @@
             [kmet.tui.components.editor :as editor]
             [kmet.tui.components.select-list :as select-list]
             [kmet.tui.components.settings-list :as settings-list]
-            [kmet.tui.components.markdown :as markdown])
+            [kmet.tui.components.markdown :as markdown]
+            [kmet.tui.components.chat-history :as chat-history])
   ;; Protocols are re-exported into this namespace so that implementors
   ;; can do (ns ... (:require [kmet.tui.core :as tui]) ... (tui/IComponent ...))
   (:refer-clojure :exclude [render]))
@@ -278,3 +279,15 @@
 (def markdown-set-text! markdown/markdown-set-text!)
 (def markdown-append! markdown/markdown-append!)
 (def markdown-get-text markdown/markdown-get-text)
+
+;; ChatHistory
+(def make-chat-history chat-history/make-chat-history)
+(def chat-history-add-message! chat-history/chat-history-add-message!)
+(def chat-history-add-messages! chat-history/chat-history-add-messages!)
+(def chat-history-set-streaming-text! chat-history/chat-history-set-streaming-text!)
+(def chat-history-append-streaming-text! chat-history/chat-history-append-streaming-text!)
+(def chat-history-finalize-streaming! chat-history/chat-history-finalize-streaming!)
+(def chat-history-clear! chat-history/chat-history-clear!)
+(def chat-history-get-messages chat-history/chat-history-get-messages)
+(def chat-history-set-max-lines! chat-history/chat-history-set-max-lines!)
+(def chat-history-get-streaming-text chat-history/chat-history-get-streaming-text)

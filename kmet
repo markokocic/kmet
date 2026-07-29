@@ -1,0 +1,3 @@
+#!/usr/bin/env bb
+(require '[kmet.core :as core])
+(apply core/-main *command-line-args*)

@@ -1,14 +1,18 @@
 {:min-bb-version "1.12.215"
  :paths ["src" "test"]
  :tasks
- {run     {:doc "Run kmet demo"
+ {run     {:doc "Run kmet (interactive TUI)"
+           :requires ([kmet.core :as core])
+           :task (apply core/-main *command-line-args*)
+           :override-builtin true}
+  demo    {:doc "Run TUI demo (standalone editor)"
            :requires ([kmet.demo :as demo])
-           :task (demo/-main)
+           :task (apply demo/-main *command-line-args*)
            :override-builtin true}
   test    {:doc "Run tests"
            :requires ([kmet.runner :as runner])
            :task (runner/-main)
            :override-builtin true}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run   Run TUI demo\n  test  Run tests")
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run    Interactive TUI (--help for options)\n  demo   Standalone editor demo\n  test   Run tests")
            :override-builtin true}}}

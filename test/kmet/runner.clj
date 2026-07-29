@@ -14,7 +14,8 @@
             [kmet.tui.components.test-editor]
             [kmet.tui.components.test-select-list]
             [kmet.tui.components.test-settings-list]
-            [kmet.tui.components.test-markdown]))
+            [kmet.tui.components.test-markdown]
+            [kmet.tui.components.test-chat-history]))
 
 (defn -main [& _args]
   (let [namespaces '[kmet.test-utils kmet.test-keys
@@ -28,7 +29,8 @@
                      kmet.tui.components.test-editor
                      kmet.tui.components.test-select-list
                      kmet.tui.components.test-settings-list
-                     kmet.tui.components.test-markdown]
+                     kmet.tui.components.test-markdown
+                     kmet.tui.components.test-chat-history]
         results (apply t/run-tests namespaces)]
     (println "\\nResults:" (:pass results) "passed," (:fail results) "failed," (:error results) "errors")
     (System/exit (if (pos? (+ (:fail results) (:error results))) 1 0))))
