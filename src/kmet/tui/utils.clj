@@ -36,19 +36,33 @@
     (or (cjk? cp) (emoji? cp)) 2
     :else 1))
 
+(defn- code-point-at
+  "Get the Unicode code point at index i from string s.
+   Pure Clojure implementation (no .codePointAt).
+   Handles surrogate pairs for characters outside the BMP."
+  [s i]
+  (let [c (int (nth s i))
+        hi (int (first (str (char 0xd800))))]
+    (if (and (>= c 0xD800) (<= c 0xDBFF) (< (inc i) (count s)))
+      ;; High surrogate followed by low surrogate
+      (let [low (int (nth s (inc i)))]
+        (+ 0x10000 (* (- c 0xD800) 0x400) (- low 0xDC00)))
+      c)))
+
 (defn visible-width
   "Calculate the visible display width of a string in terminal columns.
    Strips ANSI escape codes before measuring."
-  [^String s]
+  [s]
   (if (empty? s) 0
       (let [clean (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" "")]
         (if (every? #(let [c (int %)] (and (>= c 32) (<= c 126))) clean)
           (count clean)
           (loop [i 0, n (count clean), total 0]
             (if (>= i n) total
-                (let [cp (.codePointAt clean i)
+                (let [cp (code-point-at clean i)
                       w (char-width cp)
-                      nchars (Character/charCount cp)]
+                      ;; For surrogate pairs we need to skip 2 chars
+                      nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
                   (recur (+ i nchars) n (+ total w)))))))))
 
 ;; ─── Truncation ─────────────────────────────────────────────────────────────
@@ -56,28 +70,33 @@
 (defn truncate-to-width
   "Truncate string to fit within max-width visible columns."
   ([s max-width] (truncate-to-width s max-width ""))
-  ([^String s max-width ellipsis]
+  ([s max-width ellipsis]
    (let [clean (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" "")
          e-width (visible-width ellipsis)
          target (- max-width e-width)]
      (if (<= (visible-width clean) target) s
-         (let [sb (StringBuilder.)
+         (let [sb (atom (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))
                total (atom 0)
                _ (loop [i 0, n (count clean)]
                    (when (and (< i n) (< @total target))
-                     (let [cp (.codePointAt clean i)
+                     (let [cp (code-point-at clean i)
                            w (char-width cp)
-                           nchars (Character/charCount cp)]
-                       (.append sb (subs clean i (+ i nchars)))
+                           nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
+                       (swap! sb str (subs clean i (+ i nchars)))
                        (swap! total + w)
                        (recur (+ i nchars) n))))]
-           (str sb ellipsis))))))
+           (str @sb ellipsis))))))
+
+;; NOTE: truncate-to-width currently doesn't handle ANSI codes in the
+;; output correctly when truncating. The atom-based approach is a
+;; placeholder — for proper ANSI preservation, the original string
+;; with codes should be used, not the stripped version.
 
 ;; ─── Word wrapping ──────────────────────────────────────────────────────────
 
 (defn wrap-text-with-ansi
   "Simple word wrap preserving ANSI escape codes."
-  [^String text max-width]
+  [text max-width]
   (if (or (empty? text) (<= max-width 0))
     [""]
     (let [clean (clojure.string/replace text #"\u001b\[[0-9;]*[a-zA-Z]" "")]
@@ -105,7 +124,7 @@
 
 ;; ─── ANSI helpers ───────────────────────────────────────────────────────────
 
-(defn strip-ansi-codes [^String s]
+(defn strip-ansi-codes [s]
   (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))
 
 (defn sgr
@@ -130,9 +149,9 @@
     (loop [i 0 col 0 result []]
       (if (>= i n)
         (apply str result)
-        (let [cp (.codePointAt s i)
+        (let [cp (code-point-at s i)
               w (char-width cp)
-              nchars (Character/charCount cp)
+              nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)
               char-str (subs s i (+ i nchars))]
           (if (>= col (+ start-col length))
             (apply str result)

@@ -2,6 +2,7 @@
   "LLM API client supporting OpenAI and Anthropic with streaming."
   (:require [babashka.http-client :as http]
             [clojure.string :as str]
+            [clojure.java.io :as io]
             [cheshire.core :as json]
             [kmet.agent.tools :as tools]))
 
@@ -15,8 +16,8 @@
 
 (defn- parse-sse-line [line]
   (cond
-    (.startsWith line "event:") [(str/trim (subs line 6)) nil]
-    (.startsWith line "data:")  [nil (str/trim (subs line 5))]
+    (str/starts-with? line "event:") [(str/trim (subs line 6)) nil]
+    (str/starts-with? line "data:")  [nil (str/trim (subs line 5))]
     :else [nil nil]))
 
 ;; ─── OpenAI event parsing ──────────────────────────────────────────────────
@@ -130,26 +131,19 @@
 
 (defn- process-openai-stream [response handler signal]
   (try
-    (with-open [rdr (java.io.BufferedReader.
-                      (java.io.InputStreamReader.
-                        (:body response) "UTF-8"))]
-      (loop []
-        (let [line (.readLine rdr)]
-          (when (and line (not (and signal @signal)))
-            (let [[_ data] (parse-sse-line line)]
-              (when data
-                (let [event (parse-openai-event data)]
-                  (handler event)))
-              (recur))))))
-    (catch java.io.EOFException _ nil)
+    (with-open [rdr (io/reader (:body response))]
+      (doseq [line (line-seq rdr)]
+        (when (and line (not (and signal @signal)))
+          (let [[_ data] (parse-sse-line line)]
+            (when data
+              (let [event (parse-openai-event data)]
+                (handler event)))))))
     (catch Exception e
       (handler {:type :error :message (str "Stream error: " (.getMessage e))}))))
 
 (defn- process-anthropic-stream [response handler signal]
   (try
-    (with-open [rdr (java.io.BufferedReader.
-                      (java.io.InputStreamReader.
-                        (:body response) "UTF-8"))]
+    (with-open [rdr (io/reader (:body response))]
       (loop [event-name nil buf ""]
         (let [line (.readLine rdr)]
           (if (nil? line)
@@ -164,7 +158,6 @@
                         (handler evt))
                       (recur nil ""))
                   :else (recur event-name buf))))))))
-    (catch java.io.EOFException _ nil)
     (catch Exception e
       (handler {:type :error :message (str "Stream error: " (.getMessage e))}))))
 

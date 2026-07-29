@@ -4,7 +4,8 @@
    Extensions: Clojure files loaded from extension directories.
    Event system: global event bus for extensions to hook into agent lifecycle." 
   (:require [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [babashka.fs :as fs]))
 
 ;; ─── Extension event system ────────────────────────────────────────────────
 ;; Defined first to avoid any load-order issues in SCI.
@@ -55,21 +56,21 @@
   "Load all .md skill files from a directory."
   [dir]
   (let [d (io/file dir)]
-    (when (.isDirectory d)
+    (when (fs/directory? d)
       (let [loaded (volatile! [])]
-        (doseq [f (.listFiles d)]
-          (when (and (.isFile f) (.endsWith (.getName f) ".md"))
+        (doseq [f (fs/list-dir d)]
+          (when (and (fs/regular-file? f) (str/ends-with? (fs/file-name f) ".md"))
             (try
               (let [content (slurp f)
-                    name (.getName f)
+                    name (fs/file-name f)
                     skill-name (str/replace name #"\.md$" "")]
                 (vswap! loaded conj
                   {:name skill-name
-                   :file (.getAbsolutePath f)
+                   :file (fs/absolute-path f)
                    :content content}))
               (catch Exception e
                 (binding [*out* *err*]
-                  (println "Warning: Failed to load skill" (.getName f) ":" (.getMessage e)))))))
+                  (println "Warning: Failed to load skill" (fs/file-name f) ":" (.getMessage e)))))))
         (swap! skills into @loaded)))))
 
 (defn register-skill!
@@ -104,14 +105,14 @@
    Each file is loaded with load-string for side effects."
   [dir]
   (let [d (io/file dir)]
-    (when (.isDirectory d)
-      (doseq [f (.listFiles d)]
-        (when (.endsWith (.getName f) ".clj")
+    (when (fs/directory? d)
+      (doseq [f (fs/list-dir d)]
+        (when (str/ends-with? (fs/file-name f) ".clj")
           (try
             (let [code (slurp f)]
               (load-string code)
               (swap! extensions conj
-                {:name (.getName f) :file (.getAbsolutePath f)}))
+                {:name (fs/file-name f) :file (fs/absolute-path f)}))
             (catch Exception e
               (binding [*out* *err*]
-                (println "Warning: Failed to load extension" (.getName f) ":" (.getMessage e))))))))))
+                (println "Warning: Failed to load extension" (fs/file-name f) ":" (.getMessage e))))))))))

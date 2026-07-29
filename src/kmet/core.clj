@@ -13,8 +13,8 @@
             [kmet.agent.session :as session]
             [kmet.config :as cfg]
             [kmet.skills :as skills]
-            [clojure.string :as str])
-  (:import [java.io File]))
+            [clojure.string :as str]
+            [babashka.fs :as fs]))
 
 (declare resume-session show-session-tree)
 
@@ -40,9 +40,9 @@
     (str (System/getProperty "user.home") "/.local/share/kmet/sessions")))
 
 (defn- ensure-session-dir []
-  (let [d (File. (get-session-dir))]
-    (.mkdirs d)
-    (.getAbsolutePath d)))
+  (let [d (get-session-dir)]
+    (fs/create-dirs d)
+    d))
 
 (defn- find-or-create-session []
   (let [dir (ensure-session-dir)
@@ -311,11 +311,11 @@
 (defn- handle-submit [cs text]
   (let [trimmed (str/trim text)]
     (when (seq trimmed)
-      (if (.startsWith trimmed "/")
+      (if (str/starts-with? trimmed "/")
         ;; Command
-        (let [space (.indexOf trimmed " ")
-              cmd (if (neg? space) (subs trimmed 1) (subs trimmed 1 space))
-              args (if (neg? space) "" (str/trim (subs trimmed (inc space))))]
+        (let [space (str/index-of trimmed " ")
+              cmd (if (nil? space) (subs trimmed 1) (subs trimmed 1 space))
+              args (if (nil? space) "" (str/trim (subs trimmed (inc space))))]
           (handle-command cs cmd args))
         ;; Regular message — agent loop handles session persistence
         (when-not @(:running-turn? cs)
@@ -523,7 +523,7 @@ Be precise and concise in your responses.")
           (#{"-h" "--help"} arg)
           (assoc opts :help true)
 
-          (.startsWith arg "@")
+          (str/starts-with? arg "@")
           (let [file-path (subs arg 1)]
             (if (seq file-path)
               (let [file-content (try (slurp file-path)
@@ -605,5 +605,3 @@ Be precise and concise in your responses.")
             (println "Error:" (.getMessage e))
             (.printStackTrace e))
           (System/exit 1))))))
-
-

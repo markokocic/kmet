@@ -241,14 +241,18 @@
     (if (and (>= cl (dec total)) (>= cc (count (get editor-lines cl "")))) [cl cc]
       (let [line (get editor-lines cl "") n (count line)]
         (if (< cc n)
-          (let [bi (java.text.BreakIterator/getWordInstance)]
-            (.setText bi line)
-            (loop [p cc]
-              (let [nxt (.following bi p)]
-                (if (== nxt java.text.BreakIterator/DONE)
-                  (if (< cl (dec total)) [(inc cl) 0] [cl n])
-                  (let [c (subs line p (min (inc p) n))]
-                    (if (re-find #"^\s" c) (recur nxt) [cl nxt]))))))
+          ;; Pure Clojure word boundary detection
+          (let [after (subs line cc)
+                skip-ws (count (take-while #(re-find #"^\s" (str %)) after))
+                start (+ cc skip-ws)]
+            (if (>= start n)
+              (if (< cl (dec total)) [(inc cl) 0] [cl n])
+              (let [rest-str (subs line start)
+                    word-len (count (take-while #(re-find #"^\w" (str %)) rest-str))]
+                (if (pos? word-len)
+                  [cl (+ start word-len)]
+                  (let [non-ws (count (take-while #(not (re-find #"^\s" (str %))) rest-str))]
+                    [cl (+ start (max 1 non-ws))])))))
           (if (< cl (dec total)) [(inc cl) 0] [cl cc])))))))
 
 ;; ─── Line editing actions
@@ -408,7 +412,7 @@
     (when text
       (push-undo-state editor)
       (reset! (:redo-stack editor) [])
-      (if (.contains text "\n")
+      (if (clojure.string/includes? text "\n")
         (let [parts (clojure.string/split text #"\n" -1)
               first-part (first parts) rest-parts (rest parts)
               line (nth lines cl "")
@@ -435,7 +439,7 @@
       (reset! (:redo-stack editor) [])
       (let [_ (edit/kill-ring-rotate kr)
             new-text (or (edit/kill-ring-peek kr) "")]
-        (if (.contains new-text "\n")
+        (if (clojure.string/includes? new-text "\n")
           (let [parts (clojure.string/split new-text #"\n" -1)
                 first-part (first parts) rest-parts (rest parts)
                 line (nth lines cl "")
@@ -498,18 +502,18 @@
     (reset! (:jump-mode editor) nil)
     (when (and dir char)
       (let [result (if (= dir :forward)
-                     (let [line (nth lines cl "") idx (.indexOf line char cc)]
+                     (let [line (nth lines cl "") idx (clojure.string/index-of line (str char) cc)]
                        (if (>= idx 0) [cl idx]
                          (loop [i (inc cl)]
                            (when (< i (count lines))
-                             (let [li (nth lines i "") idx (.indexOf li char)]
+                             (let [li (nth lines i "") idx (clojure.string/index-of li (str char))]
                                (if (>= idx 0) [i idx] (recur (inc i))))))))
                      (let [line (nth lines cl "")
-                           idx (if (<= cc 0) -1 (.lastIndexOf line char (dec cc)))]
+                           idx (if (<= cc 0) -1 (clojure.string/last-index-of line (str char) (dec cc)))]
                        (if (>= idx 0) [cl idx]
                          (loop [i (dec cl)]
                            (when (>= i 0)
-                             (let [li (nth lines i "") idx (.lastIndexOf li char)]
+                             (let [li (nth lines i "") idx (clojure.string/last-index-of li (str char))]
                                (if (>= idx 0) [i idx] (recur (dec i)))))))))]
         (when result
           (swap! (:state-atom editor) assoc
@@ -872,10 +876,10 @@
           (keys/matches-key? data "pageDown")
           (do (page-scroll this 1) nil)
 
-          (.contains data "\u001b[200~")
+          (clojure.string/includes? data "\u001b[200~")
           (do (reset! paste-state :buffering)
               (reset! paste-buffer "")
-              (let [remaining (.replace data "\u001b[200~" "")]
+              (let [remaining (clojure.string/replace data "\u001b[200~" "")]
                 (when (seq remaining)
                   (protocols/handle-input this remaining)))
               nil)
@@ -883,7 +887,7 @@
           (= @paste-state :buffering)
           (do (swap! paste-buffer str data)
               (let [buf @paste-buffer
-                    end-idx (.indexOf buf "\u001b[201~")]
+                    end-idx (clojure.string/index-of buf "\u001b[201~")]
                 (when (>= end-idx 0)
                   (let [paste-text (subs buf 0 end-idx)]
                     (handle-paste this paste-text)))

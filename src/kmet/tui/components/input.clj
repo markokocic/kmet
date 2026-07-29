@@ -215,10 +215,10 @@
           cursor @cursor-atom]
       (cond
         ;; Paste start marker
-        (.contains data "\u001b[200~")
+        (clojure.string/includes? data "\u001b[200~")
         (do (reset! paste-state :buffering)
             (reset! paste-buffer "")
-            (let [remaining (.replace data "\u001b[200~" "")]
+            (let [remaining (clojure.string/replace data "\u001b[200~" "")]
               (when (seq remaining)
                 (protocols/handle-input this remaining)))
             nil)
@@ -227,7 +227,7 @@
         (= @paste-state :buffering)
         (do (swap! paste-buffer str data)
             (let [buf @paste-buffer
-                  end-idx (.indexOf buf "\u001b[201~")]
+                  end-idx (clojure.string/index-of buf "\u001b[201~")]
               (when (>= end-idx 0)
                 (let [paste-text (subs buf 0 end-idx)
                       clean (clojure.string/replace paste-text #"\r\n|\r|\n" " ")

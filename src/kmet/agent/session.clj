@@ -4,7 +4,8 @@
    Port of @earendil-works/pi-agent session storage."
   (:require [clojure.java.io :as io]
             [clojure.edn :as edn]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [babashka.fs :as fs]))
 
 ;; ─── Session record ─────────────────────────────────────────────────────────
 
@@ -13,7 +14,7 @@
 (defn- generate-id []
   (let [now (System/currentTimeMillis)
         rand (rand-int 0xFFFF)]
-    (str (Long/toHexString now) "-" (Integer/toHexString rand))))
+    (str (format "%x" now) "-" (format "%x" rand))))
 
 (defn- timestamp []
   (java.time.Instant/now))
@@ -24,11 +25,11 @@
   "Create a new session file in dir. Returns Session record."
   [dir]
   (let [session-dir (io/file dir)]
-    (.mkdirs session-dir)
+    (fs/create-dirs session-dir)
     (let [id (generate-id)
           file (io/file session-dir (str id ".ednl"))]
       (spit file "")
-      (map->Session {:file (.getAbsolutePath file)
+      (map->Session {:file (fs/absolute-path file)
                      :id id
                      :entries (atom [])
                      :leaf-id (atom nil)}))))
@@ -49,8 +50,8 @@
                          (println "Warning: Skipping invalid entry in" path ":" (.getMessage ex)))
                        nil)))))))
         leaf-id (some-> entries last :id)]
-    (map->Session {:file (.getAbsoluteFile file)
-                   :id (clojure.string/replace (.getName file) #"\.ednl$" "")
+    (map->Session {:file (fs/absolute-file file)
+                   :id (str/replace (fs/file-name file) #"\.ednl$" "")
                    :entries (atom entries)
                    :leaf-id (atom leaf-id)})))
 
@@ -134,9 +135,9 @@
         index (reduce (fn [m e] (assoc m (:id e) e)) {} entries)
         target (get index entry-id)]
     (when target
-      (let [fork-dir (io/file (.getParent (io/file (:file session))) "forks")]
-        (.mkdirs fork-dir)
-        (let [fork (create-session (.getAbsolutePath fork-dir))
+      (let [fork-dir (io/file (fs/parent (:file session)) "forks")]
+        (fs/create-dirs fork-dir)
+        (let [fork (create-session (fs/absolute-path fork-dir))
               ;; Copy branch up to target
               branch (loop [id entry-id result []]
                        (if id
@@ -146,8 +147,8 @@
                          result))]
           (doseq [e (reverse branch)]
             (let [clean (dissoc e :id :parent-id :timestamp)]
-              (append-entry fork clean)))
-          fork)))))
+              (append-entry fork clean))))
+        fork))))
 
 ;; ─── Convenience ───────────────────────────────────────────────────────────
 
@@ -155,13 +156,14 @@
   "List all session files in a directory, newest first."
   [dir]
   (let [d (io/file dir)]
-    (when (.isDirectory d)
-      (->> (.listFiles d #(and (.isFile %) (.endsWith (.getName %) ".ednl")))
-           (sort-by #(.lastModified %) >)
-           (mapv #(.getAbsolutePath %))))))
+    (when (fs/directory? d)
+      (->> (fs/list-dir d)
+           (filter #(str/ends-with? (fs/file-name %) ".ednl"))
+           (sort-by #(fs/last-modified-time %) >)
+           (mapv fs/absolute-path)))))
 
 (defn delete-session!
   "Delete a session file."
   [session]
-  (let [f (io/file (:file session))]
-    (when (.exists f) (.delete f))))
+  (let [f (:file session)]
+    (when (fs/exists? f) (fs/delete f))))

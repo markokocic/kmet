@@ -49,39 +49,39 @@
           (cond
             ;; Code span: `code`
             (= c "`")
-            (let [end (.indexOf remaining "`" 1)]
+            (let [end (clojure.string/index-of remaining "`" 1)]
               (if (>= end 0)
                 (let [code ((:code theme) (subs line (inc i) (+ i end)))]
                   (recur (+ i end 1) n (conj result code)))
                 (recur (inc i) n (conj result c))))
             ;; Bold: **text**
-            (and (= c "*") (< (inc i) n) (= (.charAt line (inc i)) \*))
-            (let [end (.indexOf remaining "**" 2)]
+            (and (= c "*") (< (inc i) n) (= (nth line (inc i)) \*))
+            (let [end (clojure.string/index-of remaining "**" 2)]
               (if (>= end 0)
                 (let [inner ((:bold theme) (parse-inlines (subs line (+ i 2) (+ i end)) theme))]
                   (recur (+ i end 2) n (conj result inner)))
                 (recur (inc i) n (conj result c))))
             ;; Italic: *text*
             (= c "*")
-            (let [end (.indexOf remaining "*" 1)]
+            (let [end (clojure.string/index-of remaining "*" 1)]
               (if (>= end 0)
                 (let [inner ((:italic theme) (parse-inlines (subs line (inc i) (+ i end)) theme))]
                   (recur (+ i end 1) n (conj result inner)))
                 (recur (inc i) n (conj result c))))
             ;; Strikethrough: ~~text~~ (GitHub flavored)
             (and (= c "~") (>= n (+ i 2)) (= (subs line (inc i) (+ i 2)) "~"))
-            (let [end (.indexOf remaining "~~" 2)]
+            (let [end (clojure.string/index-of remaining "~~" 2)]
               (if (>= end 0)
                 (let [inner (str "\u001b[9m" (parse-inlines (subs line (+ i 2) (+ i end)) theme) "\u001b[29m")]
                   (recur (+ i end 2) n (conj result inner)))
                 (recur (inc i) n (conj result c))))
             ;; Link: [text](url)
             (= c "[")
-            (let [close-b (.indexOf remaining "]")]
+            (let [close-b (clojure.string/index-of remaining "]")]
               (if (>= close-b 0)
-                (let [paren (.indexOf remaining "(" close-b)]
+                (let [paren (clojure.string/index-of remaining "(" close-b)]
                   (if (and (>= paren 0) (= paren (inc close-b)))
-                    (let [close-p (.indexOf remaining ")" paren)]
+                    (let [close-p (clojure.string/index-of remaining ")" paren)]
                       (if (>= close-p 0)
                         (let [text (subs line (inc i) (+ i close-b))
                               url (subs line (+ i paren 1) (+ i close-p))

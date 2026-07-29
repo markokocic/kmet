@@ -1,7 +1,8 @@
 (ns kmet.tui.keys
   "Keyboard input handling.
    Supports both legacy terminal sequences and Kitty keyboard protocol.
-   Port of @earendil-works/pi-tui keys.ts")
+   Port of @earendil-works/pi-tui keys.ts"
+  (:require [clojure.string :as str]))
 
 ;; ─── Key constants ──────────────────────────────────────────────────────────
 
@@ -101,7 +102,7 @@
 (defn parse-key
   "Parse raw terminal input into a key identifier string.
    Returns the key-id or nil if unrecognized."
-  [^String data]
+  [data]
   (or (get @legacy-map data)
       ;; Ctrl+letter or Ctrl+symbol
       (when (and (= (count data) 1)
@@ -143,18 +144,18 @@
   "Check if the data looks like a key release event (Kitty protocol)"
   [data]
   (when kitty-active
-    (when (and (.contains data ":3")
-               (or (.contains data "u") (.contains data "~")
-                   (.contains data "A") (.contains data "B")
-                   (.contains data "C") (.contains data "D")))
+    (when (and (str/includes? data ":3")
+               (or (str/includes? data "u") (str/includes? data "~")
+                   (str/includes? data "A") (str/includes? data "B")
+                   (str/includes? data "C") (str/includes? data "D")))
       true)))
 
 (defn is-key-repeat?
   "Check if the data looks like a key repeat event (Kitty protocol)"
   [data]
   (when kitty-active
-    (when (and (.contains data ":2")
-               (or (.contains data "u") (.contains data "~")
-                   (.contains data "A") (.contains data "B")
-                   (.contains data "C") (.contains data "D")))
+    (when (and (str/includes? data ":2")
+               (or (str/includes? data "u") (str/includes? data "~")
+                   (str/includes? data "A") (str/includes? data "B")
+                   (str/includes? data "C") (str/includes? data "D")))
       true)))

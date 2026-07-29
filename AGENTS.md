@@ -5,7 +5,14 @@ Minimal coding agent in Babashka/Clojure with a JLine3-based TUI (differential r
 
 ## Conventions
 - **Entry**: `bb run` — runs `kmet.demo/-main`
-- **Deps**: built-in Babashka only (JLine3 bundled). No external deps in `deps.edn`.
+- **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`; JLine3 bundled externally.
+- **Java interop**: avoid direct Java calls. Prefer Babashka and Clojure APIs:
+  - `babashka.fs` over `java.io.File` for file operations
+  - `babashka.process` over `java.lang.ProcessBuilder` for subprocesses
+  - `clojure.string` functions (`starts-with?`, `includes?`, `index-of`) over Java `.startsWith()`, `.contains()`, `.indexOf()`
+  - Pure Clojure for string/character operations (grapheme clusters, char widths) over `java.text.BreakIterator`
+  - `clojure.java.io/reader` + `line-seq` over `java.io.BufferedReader`/`InputStreamReader`
+- **Type hints**: avoid `^String`, `^java.io.File`, etc. — use Babashka-compatible alternatives.
 - **Naming**: kebab-case for fns/vars, `kmet.tui.*` namespace, components in `kmet.tui.components.*`
 - **Records, not deftype**: use `defrecord` + `map->` constructors
 - **Protocols** for extension: `IComponent` (render/handle-input/invalidate), `IFocusable` (focused/set-focused!)

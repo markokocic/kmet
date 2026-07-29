@@ -28,7 +28,7 @@
         (loop [pi 0 ti 0]
           (if (>= pi pl) true
               (if (>= ti tl) false
-                  (if (= (.charAt pattern pi) (.charAt text ti))
+                  (if (= (nth pattern pi) (nth text ti))
                     (recur (inc pi) (inc ti))
                     (recur pi (inc ti)))))))))
 
@@ -37,14 +37,14 @@
   [pattern text]
   (if (empty? pattern) 0
       (let [n (count text)
-            idx (.indexOf (.toLowerCase text) (.toLowerCase pattern))]
+            idx (clojure.string/index-of (clojure.string/lower-case text) (clojure.string/lower-case pattern))]
         (if (>= idx 0)
           (- n idx)  ;; Prefer matches earlier in string
           ;; Fuzzy: count contiguous/recent matches
           (let [pl (count pattern)]
             (loop [pi 0 ti 0 score 0]
               (if (or (>= pi pl) (>= ti n)) score
-                  (if (= (.charAt pattern pi) (.charAt text ti))
+                  (if (= (nth pattern pi) (nth text ti))
                     (recur (inc pi) (inc ti) (+ score (- n ti)))
                     (recur pi (inc ti) score)))))))))
 

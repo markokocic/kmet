@@ -4,6 +4,7 @@
    (project-local overrides)."
   (:require [clojure.java.io :as io]
             [clojure.edn :as edn]
+            [babashka.fs :as fs]
             [kmet.tui.theme :as theme]))
 
 ;; ─── Defaults ───────────────────────────────────────────────────────────────
@@ -26,9 +27,10 @@
 ;; ─── Path expansion ────────────────────────────────────────────────────────
 
 (defn expand-path [path]
-  (if (.startsWith (str path) "~")
-    (str (System/getProperty "user.home") (subs (str path) 1))
-    path))
+  (let [s (str path)]
+    (if (str/starts-with? s "~")
+      (str (System/getProperty "user.home") (subs s 1))
+      s)))
 
 ;; ─── Config loading ────────────────────────────────────────────────────────
 
@@ -36,13 +38,12 @@
   "Load an EDN file, returning nil if it doesn't exist or is invalid."
   [path]
   (let [f (io/file (expand-path path))]
-    (when (.exists f)
+    (when (fs/exists? f)
       (try
         (edn/read-string (slurp f))
         (catch Exception e
           (binding [*out* *err*]
-            (println "Warning: Failed to load" path ":" (.getMessage e))
-            (.printStackTrace e))
+            (println "Warning: Failed to load" path ":" (.getMessage e)))
           nil)))))
 
 (defn load-config
@@ -88,7 +89,6 @@
   []
   (let [config (load-config)
         themes-dir (expand-path (:themes-dir config))]
-    (let [d (io/file (get-session-dir config))]
-      (.mkdirs d))
+    (fs/create-dirs (get-session-dir config))
     (theme/load-themes-from-dir themes-dir)
     config))

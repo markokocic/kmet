@@ -57,7 +57,7 @@
                            "defn " "defrecord " "defprotocol "
                            "let " "if " "when " "cond " "loop "
                            "println " "pr-str " "str " "vec "]]
-          (some #(when (.startsWith % partial) (subs % (count partial)))
+          (some #(when (clojure.string/starts-with? % partial) (subs % (count partial)))
                 suggestions))))
 
     (tui/tui-add-child t greeting)

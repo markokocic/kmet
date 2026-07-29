@@ -3,7 +3,9 @@
    Defines a Theme record with ANSI color codes, and provides loading
    from EDN files in ~/.config/kmet/themes/."
   (:require [clojure.java.io :as io]
-            [clojure.edn :as edn]))
+            [clojure.edn :as edn]
+            [clojure.string :as str]
+            [babashka.fs :as fs]))
 
 ;; ─── Theme record ──────────────────────────────────────────────────────────
 
@@ -36,17 +38,21 @@
 (defn- ansi-bg-truecolor [r g b]
   (str "\u001b[48;2;" r ";" g ";" b "m"))
 
+(defn- parse-hex [hex]
+  (let [h (subs hex 1)
+        r (Integer/parseInt (subs h 0 2) 16)
+        g (Integer/parseInt (subs h 2 4) 16)
+        b (Integer/parseInt (subs h 4 6) 16)]
+    [r g b]))
+
 (defn- resolve-color
   "Resolve a color value from EDN to an ANSI escape code."
   [color]
   (cond
     (nil? color) rst
     (number? color) (ansi-256 color)
-    (string? color) (if (.startsWith color "#")
-                      (let [h (subs color 1)
-                            r (Integer/parseInt (subs h 0 2) 16)
-                            g (Integer/parseInt (subs h 2 4) 16)
-                            b (Integer/parseInt (subs h 4 6) 16)]
+    (string? color) (if (str/starts-with? color "#")
+                      (let [[r g b] (parse-hex color)]
                         (ansi-truecolor r g b))
                       (case color
                         "black" (ansi-16 30)
@@ -75,11 +81,8 @@
   (cond
     (nil? color) rst
     (number? color) (ansi-bg-256 color)
-    (string? color) (if (.startsWith color "#")
-                      (let [h (subs color 1)
-                            r (Integer/parseInt (subs h 0 2) 16)
-                            g (Integer/parseInt (subs h 2 4) 16)
-                            b (Integer/parseInt (subs h 4 6) 16)]
+    (string? color) (if (str/starts-with? color "#")
+                      (let [[r g b] (parse-hex color)]
                         (ansi-bg-truecolor r g b))
                       (case color
                         "black" (ansi-16 40)
@@ -218,15 +221,15 @@
   "Load all .edn theme files from a directory."
   [dir]
   (let [d (io/file dir)]
-    (when (.isDirectory d)
-      (doseq [f (.listFiles d)]
-        (when (.endsWith (.getName f) ".edn")
+    (when (fs/directory? d)
+      (doseq [f (fs/list-dir d)]
+        (when (str/ends-with? (fs/file-name f) ".edn")
           (try
             (let [data (edn/read-string (slurp f))
-                  name (.getName f)
-                  theme-name (clojure.string/replace name #"\.edn$" "")
+                  name (fs/file-name f)
+                  theme-name (str/replace name #"\.edn$" "")
                   theme (make-theme theme-name data)]
               (register-theme! theme))
             (catch Exception e
               (binding [*out* *err*]
-                (println "Warning: Failed to load theme" (.getName f) ":" (.getMessage e))))))))))
+                (println "Warning: Failed to load theme" (fs/file-name f) ":" (.getMessage e))))))))))

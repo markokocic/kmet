@@ -3,7 +3,9 @@
    Port of @earendil-works/pi-agent tool system.
    Built-in tools: read, write, edit, bash, grep, find, ls."
   (:require [clojure.string :as str]
-            [clojure.java.io :as io]))
+            [clojure.java.io :as io]
+            [babashka.fs :as fs]
+            [babashka.process :as proc]))
 
 ;; ─── Safe file traversal ──────────────────────────────────────────────────
 
@@ -11,19 +13,19 @@
 
 (defn- safe-file-seq
   "Like file-seq but with symlink cycle protection and a max-files limit."
-  [^java.io.File dir]
+  [dir-path]
   (let [visited (atom #{})]
     (take max-traverse-files
-      (filter #(.isFile ^java.io.File %)
+      (filter fs/regular-file?
         (tree-seq
-          (fn [^java.io.File f]
-            (and (.isDirectory f)
-                 (let [cp (.getCanonicalPath f)]
+          (fn [f]
+            (and (fs/directory? f)
+                 (let [cp (fs/canonicalize f)]
                    (when-not (contains? @visited cp)
                      (swap! visited conj cp)
                      true))))
-          (fn [^java.io.File d] (seq (.listFiles d)))
-          dir)))))
+          (fn [d] (fs/list-dir d))
+          (fs/file dir-path))))))
 
 ;; ─── Tool record ────────────────────────────────────────────────────────────
 
@@ -51,7 +53,7 @@
   [{:keys [path offset limit]}]
   (try
     (let [f (io/file path)]
-      (if-not (.exists f)
+      (if-not (fs/exists? f)
         {:content (str "File not found: " path) :is-error true}
         (let [content (slurp f)
               lines (str/split-lines content)
@@ -73,7 +75,7 @@
   [{:keys [path content]}]
   (try
     (let [f (io/file path)]
-      (.mkdirs (.getParentFile f))
+      (fs/create-dirs (fs/parent f))
       (spit f content)
       {:content (str "Written " (count content) " bytes to " path)})
     (catch Exception e
@@ -84,11 +86,11 @@
   [{:keys [path old-text new-text]}]
   (try
     (let [f (io/file path)]
-      (if-not (.exists f)
+      (if-not (fs/exists? f)
         {:content (str "File not found: " path) :is-error true}
         (let [content (slurp f)
-              idx (.indexOf content old-text)]
-          (if (neg? idx)
+              idx (str/index-of content old-text)]
+          (if (nil? idx)
             {:content (str "Could not find old-text in " path) :is-error true}
             (let [result (str/replace-first content old-text new-text)
                   replaced (count old-text)
@@ -102,17 +104,17 @@
   "Execute a bash command with optional timeout."
   [{:keys [command timeout]}]
   (try
-    (let [timeout (or timeout 30)
-          pb (ProcessBuilder. ["sh" "-c" command])
-          _ (.redirectErrorStream pb true)
-          proc (.start pb)
-          _ (future
-              (Thread/sleep (* timeout 1000))
-              (.destroy proc))
-          exit-code (.waitFor proc)
-          output (slurp (.getInputStream proc))]
-      {:content output
-       :is-error (not= exit-code 0)})
+    (let [timeout-ms (* (or timeout 30) 1000)
+          p (proc/process ["sh" "-c" command]
+              {:out :string :err :string
+               :shutdown (fn [p] (proc/destroy p))})
+          result (deref p timeout-ms ::timeout)]
+      (if (= result ::timeout)
+        (do (proc/destroy p)
+            {:content (str "Command timed out after " (or timeout 30) "s")
+             :is-error true})
+        {:content (:out result)
+         :is-error (not= (:exit result) 0)}))
     (catch Exception e
       {:content (str "Error executing command: " (.getMessage e)) :is-error true})))
 
@@ -123,19 +125,19 @@
     (let [f (if path (io/file path) (io/file "."))
           results (volatile! [])
           skipped (volatile! [])]
-      (if (.isFile f)
+      (if (fs/regular-file? f)
         (with-open [rdr (io/reader f)]
           (doseq [[idx line] (map-indexed vector (line-seq rdr))]
             (when (re-find (re-pattern pattern) line)
-              (vswap! results conj (str (.getName f) ":" (inc idx) ": " line)))))
+              (vswap! results conj (str (fs/file-name f) ":" (inc idx) ": " line)))))
         (doseq [file (safe-file-seq f)]
           (try
             (with-open [rdr (io/reader file)]
               (doseq [[idx line] (map-indexed vector (line-seq rdr))]
                 (when (re-find (re-pattern pattern) line)
-                  (vswap! results conj (str (.getPath file) ":" (inc idx) ": " line)))))
+                  (vswap! results conj (str file ":" (inc idx) ": " line)))))
             (catch Exception e
-              (vswap! skipped conj (.getPath file))))))
+              (vswap! skipped conj (str file))))))
       (let [r @results
             sk @skipped]
         (if (and (empty? r) (empty? sk))
@@ -155,10 +157,10 @@
     (let [dir (if path (io/file path) (io/file "."))
           results (volatile! [])]
       (doseq [file (safe-file-seq dir)]
-        (let [name (.getName file)]
+        (let [name (fs/file-name file)]
           (when (or (re-find (re-pattern pattern) name)
-                    (re-find (re-pattern pattern) (.getPath file)))
-            (vswap! results conj (.getPath file)))))
+                    (re-find (re-pattern pattern) (str file)))
+            (vswap! results conj (str file)))))
       (let [r @results]
         (if (empty? r)
           {:content (str "No files matching \"" pattern "\"")}
@@ -172,20 +174,20 @@
   [{:keys [path long?]}]
   (try
     (let [dir (if path (io/file path) (io/file "."))]
-      (if-not (.isDirectory dir)
+      (if-not (fs/directory? dir)
         {:content (str "Not a directory: " path) :is-error true}
-        (let [files (.listFiles dir)
-              entries (sort-by #(.getName %) files)
+        (let [entries (fs/list-dir dir)
+              sorted (sort-by fs/file-name entries)
               result (str/join "\n"
                       (map (fn [f]
-                             (let [name (.getName f)
-                                   type (if (.isDirectory f) "d" "-")
-                                   size (.length f)]
+                             (let [name (fs/file-name f)
+                                   type (if (fs/directory? f) "d" "-")
+                                   size (fs/size f 0)]
                                (if long?
                                  (str type " " (format "%10d" size) " " name)
                                  name)))
-                           entries))]
-          {:content (str "Contents of " (.getAbsolutePath dir) ":\n" result)})))
+                           sorted))]
+          {:content (str "Contents of " (fs/absolute-path dir) ":\n" result)})))
     (catch Exception e
       {:content (str "Error listing: " (.getMessage e)) :is-error true})))
 
