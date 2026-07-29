@@ -9,6 +9,7 @@
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.text :as text]
+            [kmet.tui.components.container :as container]
             [kmet.tui.macros :refer [with-cache]]
             [clojure.string :as str]))
 
@@ -24,16 +25,21 @@
                                    n (count lines)]
                                (if expanded?
                                  (let [show (take 15 lines)
-                                       more (- n 15)]
-                                   (text/make-text
-                                     (str/join "\n"
-                                       (concat [(if is-error
-                                                  (theme/fg theme :error (first lines))
-                                                  (str (theme/fg theme :success (str n " lines"))))]
-                                               (mapv #(theme/fg theme :dim %) show)
-                                               (when (pos? more)
-                                                 [(theme/fg theme :muted (str "... " more " more lines"))])))
-                                     0 0))
+                                       more (- n 15)
+                                       c (container/make-container)]
+                                   (container/container-add-child c
+                                     (text/make-text
+                                       (if is-error
+                                         (theme/fg theme :error (first lines))
+                                         (str (theme/fg theme :success (str n " lines"))))
+                                       0 0))
+                                   (doseq [line show]
+                                     (container/container-add-child c
+                                       (text/make-text (theme/fg theme :dim line) 0 0)))
+                                   (when (pos? more)
+                                     (container/container-add-child c
+                                       (text/make-text (theme/fg theme :muted (str "... " more " more lines")) 0 0)))
+                                   c)
                                  (text/make-text
                                    (if is-error
                                      (theme/fg theme :error (first lines))
@@ -68,18 +74,23 @@
                                                    lines)]
                                (if expanded?
                                  (let [show (take 20 lines)
-                                       more (- n 20)]
-                                   (text/make-text
-                                     (str/join "\n"
-                                       (concat [(str (if (and (not is-error)
-                                                              (or (nil? exit-code) (= exit-code "0")))
-                                                       (theme/fg theme :success "done")
-                                                       (theme/fg theme :error (str "exit " (or exit-code "non-zero"))))
-                                                    (theme/fg theme :dim (str " (" n " lines)")))]
-                                               (mapv #(theme/fg theme :dim %) show)
-                                               (when (pos? more)
-                                                 [(theme/fg theme :muted (str "... " more " more output"))])))
-                                     0 0))
+                                       more (- n 20)
+                                       c (container/make-container)]
+                                   (container/container-add-child c
+                                     (text/make-text
+                                       (str (if (and (not is-error)
+                                                    (or (nil? exit-code) (= exit-code "0")))
+                                              (theme/fg theme :success "done")
+                                              (theme/fg theme :error (str "exit " (or exit-code "non-zero"))))
+                                            (theme/fg theme :dim (str " (" n " lines)")))
+                                       0 0))
+                                   (doseq [line show]
+                                     (container/container-add-child c
+                                       (text/make-text (theme/fg theme :dim line) 0 0)))
+                                   (when (pos? more)
+                                     (container/container-add-child c
+                                       (text/make-text (theme/fg theme :muted (str "... " more " more output")) 0 0)))
+                                   c)
                                  (text/make-text
                                    (str (if (and (not is-error)
                                                 (or (nil? exit-code) (= exit-code "0")))
