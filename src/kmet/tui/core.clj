@@ -164,6 +164,7 @@
     (reset! (:running? tui) true)
     (reset! (:stopped? tui) false)
     (start-input-reader tui)
+    (tui-request-render tui)
     (try
       (loop []
         (when @(:running? tui)
