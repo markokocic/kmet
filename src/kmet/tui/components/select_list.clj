@@ -39,7 +39,7 @@
   (if (empty? pattern) 0
       (let [n (count text)
             idx (clojure.string/index-of (clojure.string/lower-case text) (clojure.string/lower-case pattern))]
-        (if (>= idx 0)
+        (if (and idx (>= idx 0))
           (- n idx)  ;; Prefer matches earlier in string
           ;; Fuzzy: count contiguous/recent matches
           (let [pl (count pattern)]
