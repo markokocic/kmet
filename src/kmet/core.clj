@@ -14,6 +14,7 @@
             [kmet.agent.tools :as tools]
             [kmet.config :as cfg]
             [kmet.skills :as skills]
+            [kmet.debug :as debug]
             [clojure.string :as str]
             [babashka.fs :as fs]))
 
@@ -107,7 +108,8 @@
   [cs cmd args]
   (case cmd
     "quit"
-    (tui/tui-stop (:tui cs))
+    (do (debug/log "/quit command")
+        (tui/tui-stop (:tui cs)))
 
     "help"
     (let [help-text (str
@@ -147,6 +149,7 @@
 
     "new"
     (let [new-session (session/create-session (ensure-session-dir))]
+      (debug/log "new session created: " (:id new-session))
       (chat/chat-history-clear! (:chat-history cs))
       ;; Update both CoreState and AgentState session references
       (reset! (:session cs) new-session)
@@ -157,7 +160,8 @@
         {:role :assistant :content "Started a new session."}))
 
     "resume"
-    (resume-session cs ensure-session-dir)
+    (do (debug/log "/resume command")
+        (resume-session cs ensure-session-dir))
 
     "tree"
     (show-session-tree cs)
@@ -292,6 +296,7 @@
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
     (catch Exception e
+      (debug/log "on-agent-text callback: " e)
       (binding [*out* *err*] (println "on-agent-text error:" (.getMessage e) (.getClass e))))))
 
 (defn- on-agent-thinking [cs text]
@@ -301,6 +306,7 @@
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
     (catch Exception e
+      (debug/log "on-agent-thinking callback: " e)
       (binding [*out* *err*] (println "on-agent-thinking error:" (.getMessage e) (.getClass e))))))
 
 (defn- on-agent-done [cs]
@@ -312,7 +318,9 @@
     (reset! (:running-turn? cs) false)
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
+    (debug/log "agent turn completed")
     (catch Exception e
+      (debug/log "on-agent-done callback: " e)
       (binding [*out* *err*] (println "on-agent-done error:" (.getMessage e) (.getClass e))))))
 
 (defn- on-agent-error [cs error-msg]
@@ -325,7 +333,9 @@
     (reset! (:running-turn? cs) false)
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
+    (debug/log "agent turn error: " error-msg)
     (catch Exception e
+      (debug/log "on-agent-error callback: " e)
       (binding [*out* *err*] (println "on-agent-error error:" (.getMessage e) (.getClass e))))))
 
 ;; ─── Submit handler ────────────────────────────────────────────────────────
@@ -342,6 +352,7 @@
         ;; Regular message — agent loop handles session persistence
         (when-not @(:running-turn? cs)
           (reset! (:running-turn? cs) true)
+          (debug/log "user submitted: " trimmed)
           (chat/chat-history-add-message! (:chat-history cs)
             {:role :user :content trimmed})
           (update-header-footer! cs)
@@ -356,6 +367,7 @@
 (defn- handle-cancel [cs]
   "Cancel the current agent turn."
   (when @(:running-turn? cs)
+    (debug/log "agent turn cancelled by user")
     (agent/cancel-turn (:agent-state cs))
     (chat/chat-history-finalize-thinking! (:chat-history cs))
     (chat/chat-history-finalize-streaming! (:chat-history cs))
@@ -515,12 +527,16 @@ Be precise and concise in your responses.")
                :print false
                :continue false
                :resume false
+               :debug false
                :messages []}]
     (if (empty? args)
       opts
       (let [arg (first args)
             rest-args (rest args)]
         (cond
+          (#{"-d" "--debug"} arg)
+          (recur rest-args (assoc opts :debug true))
+
           (#{"-p" "--print"} arg)
           (recur rest-args (assoc opts :print true))
 
@@ -569,6 +585,7 @@ Be precise and concise in your responses.")
   (println "Usage: kmet [options] [@files...] [messages...]")
   (println)
   (println "Options:")
+  (println "  -d, --debug           Log to debug.log")
   (println "  -p, --print           Print response and exit (non-interactive)")
   (println "  -c, --continue        Continue most recent session")
   (println "  -r, --resume          Browse sessions")
@@ -601,6 +618,10 @@ Be precise and concise in your responses.")
               (System/exit 1))
           (do (run-print-mode (assoc opts :messages [msg] :config (cfg/load-config :no-env? true)))
               (System/exit 0)))))
+    (when (:debug opts)
+      (debug/enable!)
+      (debug/log "kmet started with --debug"))
+
     (println "Starting kmet...")
 
     ;; Initialize configuration and themes
@@ -631,6 +652,7 @@ Be precise and concise in your responses.")
         ;; Restore terminal if TUI was started
           (when-let [t @tui-ref]
             (try (tui/tui-stop t) (catch Exception _)))
+          (debug/log-error "unhandled exception: " e)
           (binding [*out* *err*]
             (println "Error:" (.getMessage e))
             (.printStackTrace e))
