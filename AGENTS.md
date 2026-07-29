@@ -55,8 +55,11 @@ Do not set `LD_LIBRARY_PATH` globally; use the glibc linker directly.
 - Let errors propagate up to the top-level handler rather than swallowing silently
 
 ## Logging
-- No logging library — keep the agent minimal and silent in normal operation
-- Use `println` for diagnostics during development only (remove before committing)
+- **Module**: `kmet.debug` — minimal file logging, no external library
+- **Debug log** (`debug.log`, cwd): opt-in via `--debug` flag. Logs lifecycle events (submit, cancel, agent turns, commands) and handled exceptions with full stack traces. Uses `kmet.debug/log`.
+- **Error log** (`kmet.error.log`, cwd): written unconditionally on unhandled exceptions in the `-main` catch block. Uses `kmet.debug/log-error`.
+- Both `log` and `log-error` accept Exception objects and expand them to class name, message, and full stack trace.
+- Log format: `[ISO_TIMESTAMP] [ERROR: ]message\n`
 
 ## Docstrings
 - Required on all public vars, protocol methods, and `defrecord` types
