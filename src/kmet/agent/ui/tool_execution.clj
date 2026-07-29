@@ -83,14 +83,14 @@
 ;; ─── Default renderers (fallback when no custom or built-in) ──────────────
 
 (defn- default-render-call
-  "Default render-call: show tool name bolded."
-  [name _theme _width]
-  (text/make-text (str BLD name RST) 0 0))
+  "Default render-call: show tool name bolded in tool-title color (matching pi)."
+  [name theme _width]
+  (text/make-text (theme/fg theme :tool-title (str BLD name RST)) 0 0))
 
 (defn- default-render-result
-  "Default render-result: show raw content in a Text component."
-  [content _is-error _theme _width _expanded?]
-  (text/make-text content 0 0))
+  "Default render-result: show raw content in tool-output color (matching pi)."
+  [content _is-error theme _width _expanded?]
+  (text/make-text (theme/fg theme :tool-output content) 0 0))
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
