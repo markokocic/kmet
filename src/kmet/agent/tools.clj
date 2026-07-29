@@ -239,7 +239,36 @@
                             {:command (param :command :string "Bash command to execute")
                              :timeout (param :timeout :number "Timeout in seconds (optional)" :optional? true)})
               :execute tool-bash})
-   ;; grep, find, ls — disabled
+   "grep" (map->Tool
+             {:name "grep"
+              :label "Grep"
+              :description "Search file contents with a pattern. Searches recursively by default. Returns file:line: match."
+              :prompt-snippet "Search file contents"
+              :prompt-guidelines []
+              :parameters (->json-schema
+                            {:pattern (param :pattern :string "Pattern to search for")
+                             :path    (param :path :string "Path to search (optional, defaults to current directory)" :optional? true)})
+              :execute tool-grep})
+   "find" (map->Tool
+             {:name "find"
+              :label "Find"
+              :description "Find files matching a pattern. Searches recursively by default."
+              :prompt-snippet "Find files"
+              :prompt-guidelines []
+              :parameters (->json-schema
+                            {:pattern (param :pattern :string "Pattern to match filenames against")
+                             :path    (param :path :string "Path to search (optional, defaults to current directory)" :optional? true)})
+              :execute tool-find})
+   "ls"   (map->Tool
+             {:name "ls"
+              :label "List"
+              :description "List directory contents."
+              :prompt-snippet "List directory"
+              :prompt-guidelines []
+              :parameters (->json-schema
+                            {:path  (param :path :string "Path to list (optional, defaults to current directory)" :optional? true)
+                             :long? (param :long? :boolean "Show detailed listing" :optional? true)})
+              :execute tool-ls})
    })
 
 ;; ─── Tool schema helpers ────────────────────────────────────────────────────
