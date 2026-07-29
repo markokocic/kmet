@@ -10,84 +10,96 @@
   (let [t theme/dark-theme]
     (t/is (instance? kmet.tui.theme.Theme t))
     (t/is (= "dark" (:name t)))
-    (t/is (string? (:text t)))
-    (t/is (string? (:accent t)))
-    (t/is (string? (:border t)))
-    (t/is (string? (:error t)))
-    (t/is (string? (:success t)))
-    (t/is (string? (:warning t)))))
+    (t/is (string? (get-in t [:fg-colors :text])))
+    (t/is (string? (get-in t [:fg-colors :accent])))
+    (t/is (string? (get-in t [:fg-colors :border])))
+    (t/is (string? (get-in t [:fg-colors :error])))
+    (t/is (string? (get-in t [:fg-colors :success])))
+    (t/is (string? (get-in t [:fg-colors :warning])))))
 
 (t/deftest test-light-theme
   (let [t theme/light-theme]
     (t/is (instance? kmet.tui.theme.Theme t))
     (t/is (= "light" (:name t)))
-    (t/is (string? (:accent t)))))
+    (t/is (string? (get-in t [:fg-colors :accent])))))
 
 ;; ─── Make theme ────────────────────────────────────────────────────────────
 
 (t/deftest test-make-theme
-  (let [t (theme/make-theme "test"
-            {:text "red"
-             :accent "blue"
-             :success "green"
-             :error "red"
-             :border "bright-black"})]
+  (let [t (theme/make-theme
+            {:name "test"
+             :text "#ff0000"
+             :accent "#0000ff"
+             :success "#00ff00"
+             :error "#ff0000"
+             :border "#505050"})]
     (t/is (= "test" (:name t)))
-    (t/is (.contains (:text t) "31m"))   ;; red
-    (t/is (.contains (:accent t) "34m")) ;; blue
-    (t/is (.contains (:success t) "32m")) ;; green
-    (t/is (.contains (:error t) "31m")))) ;; red
+    (t/is (.contains (get-in t [:fg-colors :text]) "38;2;255;0;0"))
+    (t/is (.contains (get-in t [:fg-colors :accent]) "38;2;0;0;255"))
+    (t/is (.contains (get-in t [:fg-colors :success]) "38;2;0;255;0"))
+    (t/is (.contains (get-in t [:fg-colors :error]) "38;2;255;0;0"))))
 
 (t/deftest test-make-theme-hex
-  (let [t (theme/make-theme "hex"
-            {:text "#ff0000"
+  (let [t (theme/make-theme
+            {:name "hex"
+             :text "#ff0000"
              :accent "#00ff00"
              :border "#0000ff"})]
-    (t/is (.contains (:text t) "38;2;255;0;0"))
-    (t/is (.contains (:accent t) "38;2;0;255;0"))
-    (t/is (.contains (:border t) "38;2;0;0;255"))))
+    (t/is (.contains (get-in t [:fg-colors :text]) "38;2;255;0;0"))
+    (t/is (.contains (get-in t [:fg-colors :accent]) "38;2;0;255;0"))
+    (t/is (.contains (get-in t [:fg-colors :border]) "38;2;0;0;255"))))
 
 (t/deftest test-make-theme-256
-  (let [t (theme/make-theme "256"
-            {:text 196
+  (let [t (theme/make-theme
+            {:name "256"
+             :text 196
              :accent 46
              :border 21})]
-    (t/is (.contains (:text t) "38;5;196"))
-    (t/is (.contains (:accent t) "38;5;46"))
-    (t/is (.contains (:border t) "38;5;21"))))
+    (t/is (.contains (get-in t [:fg-colors :text]) "38;5;196"))
+    (t/is (.contains (get-in t [:fg-colors :accent]) "38;5;46"))
+    (t/is (.contains (get-in t [:fg-colors :border]) "38;5;21"))))
 
 (t/deftest test-make-theme-truecolor-vector
-  (let [t (theme/make-theme "truecolor"
-            {:text [255 0 0]
-             :accent [0 255 0]
-             :border [0 0 255]})]
-    (t/is (.contains (:text t) "38;2;255;0;0"))
-    (t/is (.contains (:accent t) "38;2;0;255;0"))
-    (t/is (.contains (:border t) "38;2;0;0;255"))))
+  (let [t (theme/make-theme
+            {:name "truecolor"
+             :text "#ff0000"
+             :accent "#00ff00"
+             :border "#0000ff"})]
+    (t/is (.contains (get-in t [:fg-colors :text]) "38;2;255;0;0"))
+    (t/is (.contains (get-in t [:fg-colors :accent]) "38;2;0;255;0"))
+    (t/is (.contains (get-in t [:fg-colors :border]) "38;2;0;0;255"))))
 
 (t/deftest test-make-theme-nil-color
-  (let [t (theme/make-theme "nil-test"
-            {:text nil
+  (let [t (theme/make-theme
+            {:name "nil-test"
+             :text nil
              :accent nil})]
-    (t/is (= "\u001b[0m" (:text t)))
-    (t/is (= "\u001b[0m" (:accent t)))))
+    ;; nil means "use default" — falls back to dark theme defaults
+    (t/is (= "\u001b[38;2;212;212;212m" (get-in t [:fg-colors :text])))
+    (t/is (= "\u001b[38;2;138;190;183m" (get-in t [:fg-colors :accent])))))
 
 (t/deftest test-make-theme-with-bg
-  (let [t (theme/make-theme "bg-test"
-            {:user-bg "bright-black"
-             :assistant-bg nil
-             :selected-bg "cyan"})]
-    (t/is (.contains (:user-bg t) "100m"))   ;; bright-black bg = ANSI 100
-    (t/is (= "\u001b[0m" (:assistant-bg t))) ;; nil bg = reset
-    (t/is (.contains (:selected-bg t) "46m")))) ;; cyan bg = ANSI 46
+  (let [t (theme/make-theme
+            {:name "bg-test"
+             :user-message-bg "#505050"
+             :custom-message-bg nil
+             :selected-bg "#00ffff"})]
+    (t/is (.contains (get-in t [:bg-colors :user-message-bg]) "48;2;80;80;80"))
+    ;; nil bg means "use default" — falls back to dark theme default
+    (t/is (= "\u001b[48;2;45;40;56m" (get-in t [:bg-colors :custom-message-bg])))
+    (t/is (.contains (get-in t [:bg-colors :selected-bg]) "48;2;0;255;255"))))
 
 (t/deftest test-thinking-levels
-  (let [t (theme/make-theme "think-test"
-            {:thinking-levels [240 245 250 255]})]
-    (t/is (vector? (:thinking-levels t)))
-    (t/is (= 4 (count (:thinking-levels t))))
-    (doseq [level (:thinking-levels t)]
-      (t/is (.contains level "38;5")))))
+  (let [t (theme/make-theme
+            {:name "think-test"
+             :thinking-low 240
+             :thinking-medium 245
+             :thinking-high 250
+             :thinking-xhigh 255})]
+    (t/is (.contains (get-in t [:fg-colors :thinking-low]) "38;5;240"))
+    (t/is (.contains (get-in t [:fg-colors :thinking-medium]) "38;5;245"))
+    (t/is (.contains (get-in t [:fg-colors :thinking-high]) "38;5;250"))
+    (t/is (.contains (get-in t [:fg-colors :thinking-xhigh]) "38;5;255"))))
 
 ;; ─── Theme registry ────────────────────────────────────────────────────────
 
@@ -107,12 +119,12 @@
     (t/is (= "dark" (:name t)))))
 
 (t/deftest test-register-theme
-  (let [t (theme/make-theme "custom" {:accent "magenta"})]
+  (let [t (theme/make-theme {:name "custom" :accent "#ff00ff"})]
     (theme/register-theme! t)
     (let [loaded (theme/get-theme "custom")]
       (t/is (some? loaded))
       (t/is (= "custom" (:name loaded)))
-      (t/is (.contains (:accent loaded) "35m")))))
+      (t/is (.contains (get-in loaded [:fg-colors :accent]) "38;2;255;0;255")))))
 
 ;; ─── Theme file loading ───────────────────────────────────────────────────
 
@@ -125,7 +137,7 @@
     (io/make-parents (str tmp-dir "/test.edn"))
     ;; Write a valid theme file
     (spit (str tmp-dir "/test.edn")
-      "{:text \"green\" :accent \"cyan\" :border \"bright-black\"}")
+      "{:name \"test\" :text \"#00ff00\" :accent \"#00ffff\" :border \"#505050\"}")
     ;; Write a non-edn file (should be ignored)
     (spit (str tmp-dir "/not-a-theme.txt") "hello")
     (theme/load-themes-from-dir tmp-dir)

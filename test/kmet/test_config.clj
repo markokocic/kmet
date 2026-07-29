@@ -7,7 +7,7 @@
 (t/deftest test-default-config
   (let [c cfg/default-config]
     (t/is (map? c))
-    (t/is (= :openai (:provider c)))
+    (t/is (= :opencode-go (:provider c)))
     (t/is (= "dark" (:theme c)))
     (t/is (contains? c :session-dir))
     (t/is (contains? c :providers))
@@ -16,8 +16,9 @@
     (t/is (= 500 (:max-session-entries c)))))
 
 (t/deftest test-default-model-per-provider
-  (t/is (= "gpt-4o" (get-in cfg/default-config [:providers :openai :model])))
-  (t/is (= "claude-sonnet-4-20250514" (get-in cfg/default-config [:providers :anthropic :model]))))
+  (t/is (= "deepseek-v4-flash" (get-in cfg/default-config [:providers :opencode-go :model])))
+  (t/is (= "claude-sonnet-4-20250514" (get-in cfg/default-config [:providers :anthropic :model])))
+  (t/is (= "gpt-4o" (get-in cfg/default-config [:providers :openai :model]))))
 
 ;; ─── Path expansion ────────────────────────────────────────────────────────
 
@@ -38,18 +39,18 @@
 (t/deftest test-load-config-defaults
   (let [c (cfg/load-config :no-env? true)]
     (t/is (map? c))
-    (t/is (= :openai (:provider c)))
+    (t/is (= :opencode-go (:provider c)))
     (t/is (= "dark" (:theme c)))))
 
 ;; ─── Accessors ─────────────────────────────────────────────────────────────
 
 (t/deftest test-get-provider
   (let [c cfg/default-config]
-    (t/is (= :openai (cfg/get-provider c)))))
+    (t/is (= :opencode-go (cfg/get-provider c)))))
 
 (t/deftest test-get-model-from-default
   (let [c (assoc cfg/default-config :model nil)]
-    (t/is (= "gpt-4o" (cfg/get-model c)))))
+    (t/is (= "deepseek-v4-flash" (cfg/get-model c)))))
 
 (t/deftest test-get-model-explicit
   (let [c (assoc cfg/default-config :model "gpt-4o-mini")]

@@ -112,7 +112,9 @@
         (do (proc/destroy p)
             {:content (str "Command timed out after " (or timeout 30) "s")
              :is-error true})
-        {:content (:out result)
+        {:content (str (:out result)
+                       (when (seq (:err result))
+                         (str "\n" (:err result))))
          :is-error (not= (:exit result) 0)}))
     (catch Exception e
       {:content (str "Error executing command: " (.getMessage e)) :is-error true})))
@@ -131,7 +133,7 @@
               (vswap! results conj (str (fs/file-name f) ":" (inc idx) ": " line)))))
         (doseq [file (safe-file-seq f)]
           (try
-            (with-open [rdr (io/reader file)]
+            (with-open [rdr (io/reader (str file))]
               (doseq [[idx line] (map-indexed vector (line-seq rdr))]
                 (when (re-find (re-pattern pattern) line)
                   (vswap! results conj (str file ":" (inc idx) ": " line)))))

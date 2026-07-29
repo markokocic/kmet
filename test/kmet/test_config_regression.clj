@@ -36,7 +36,7 @@
   (let [c (cfg/load-config :no-env? true)]
     (t/is (map? c))
     ;; Config from current dir shouldn't affect this
-    (t/is (= :openai (:provider c))))
+    (t/is (= :opencode-go (:provider c))))
   (.delete (io/file "target/.kmet/settings.edn"))
   (.delete (io/file "target/.kmet")))
 

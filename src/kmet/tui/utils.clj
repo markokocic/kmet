@@ -75,7 +75,7 @@
          e-width (visible-width ellipsis)
          target (- max-width e-width)]
      (if (<= (visible-width clean) target) s
-         (let [sb (atom (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))
+         (let [sb (atom "")
                total (atom 0)
                _ (loop [i 0, n (count clean)]
                    (when (and (< i n) (< @total target))

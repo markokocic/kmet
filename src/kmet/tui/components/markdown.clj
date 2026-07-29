@@ -88,7 +88,7 @@
                       (if (>= close-p 0)
                         (let [text (subs line (inc i) (+ i close-b))
                               url (subs line (+ i paren 1) (+ i close-p))
-                              link-text ((:link theme) (parse-inlines text theme) url)
+                              link-text ((:link theme) (parse-inlines text theme))
                               url-text ((:link-url theme) url)]
                           (recur (+ i close-p 1) n (conj result link-text url-text)))
                         (recur (inc i) n (conj result c))))

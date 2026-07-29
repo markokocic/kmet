@@ -135,7 +135,7 @@
         index (reduce (fn [m e] (assoc m (:id e) e)) {} entries)
         target (get index entry-id)]
     (when target
-      (let [fork-dir (io/file (fs/parent (:file session)) "forks")]
+      (let [fork-dir (io/file (str (fs/parent (:file session))) "forks")]
         (fs/create-dirs fork-dir)
         (let [fork (create-session (str (fs/canonicalize fork-dir)))
               ;; Copy branch up to target
@@ -160,7 +160,7 @@
     (when (fs/directory? d)
       (->> (fs/list-dir d)
            (filter #(str/ends-with? (fs/file-name %) ".ednl"))
-           (sort-by #(fs/last-modified-time %) >)
+           (sort-by #(.toMillis (fs/last-modified-time %)) >)
            (mapv #(str (fs/canonicalize %)))))))
 
 (defn delete-session!

@@ -7,7 +7,7 @@
 
 (t/deftest test-llm-loaded
   (t/is (fn? llm/send-message))
-  (t/is (string? llm/openai-url))
+  (t/is (string? llm/default-openai-url))
   (t/is (string? llm/anthropic-url)))
 
 ;; ─── send-message with no API key ─────────────────────────────────────────

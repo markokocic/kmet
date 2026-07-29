@@ -61,7 +61,7 @@
         (doseq [f (fs/list-dir d)]
           (when (and (fs/regular-file? f) (str/ends-with? (fs/file-name f) ".md"))
             (try
-              (let [content (slurp f)
+              (let [content (slurp (str f))
                     name (fs/file-name f)
                     skill-name (str/replace name #"\.md$" "")]
                 (vswap! loaded conj
