@@ -343,7 +343,7 @@
               (reset! (:previous-width tui) w)
               (when (> (count lines) @max-lines-rendered)
                 (reset! max-lines-rendered (count lines))))))
-        (Thread/sleep 33)
+        (Thread/sleep 16)
         (recur)))
       (finally
         (reset! (:running? tui) false)

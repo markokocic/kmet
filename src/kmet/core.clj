@@ -313,7 +313,6 @@
   "Called for each text delta from the LLM during streaming."
   (try
     (ui/chat-history-append-streaming-text! (:chat-history cs) text)
-    (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
     (catch Exception e
       (debug/log "on-agent-text callback: " e)
@@ -323,7 +322,6 @@
   "Called for each thinking/reasoning delta from the LLM during streaming."
   (try
     (ui/chat-history-append-thinking-text! (:chat-history cs) text)
-    (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
     (catch Exception e
       (debug/log "on-agent-thinking callback: " e)

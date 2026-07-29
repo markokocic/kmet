@@ -5,7 +5,7 @@
 
 (defrecord Container [children]
   protocols/IComponent
-  (render [_this width] (mapcat #(protocols/render % width) @children))
+  (render [_this width] (into [] (mapcat #(protocols/render % width)) @children))
   (handle-input [_this data] (some #(protocols/handle-input % data) @children))
   (invalidate [_this] (doseq [c @children] (protocols/invalidate c))))
 

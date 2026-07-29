@@ -49,21 +49,28 @@
         (+ 0x10000 (* (- c 0xD800) 0x400) (- low 0xDC00)))
       c)))
 
+(defn- visible-width-plain
+  "Visible width of a string that has NO ANSI escape codes.
+   Skips the ANSI-stripping step for efficiency."
+  [s]
+  (if (empty? s) 0
+    (if (re-find #"[^\u0020-\u007e]" s)
+      (loop [i 0, n (count s), total 0]
+        (if (>= i n) total
+          (let [cp (code-point-at s i)
+                w (char-width cp)
+                nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
+            (recur (+ i nchars) n (+ total w)))))
+      (count s))))
+
 (defn visible-width
   "Calculate the visible display width of a string in terminal columns.
-   Strips ANSI escape codes before measuring."
+   Strips ANSI escape codes before measuring.
+   Fast path for plain ASCII (no CJK/emoji) — just returns count."
   [s]
   (if (empty? s) 0
       (let [clean (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" "")]
-        (if (every? #(let [c (int %)] (and (>= c 32) (<= c 126))) clean)
-          (count clean)
-          (loop [i 0, n (count clean), total 0]
-            (if (>= i n) total
-                (let [cp (code-point-at clean i)
-                      w (char-width cp)
-                      ;; For surrogate pairs we need to skip 2 chars
-                      nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
-                  (recur (+ i nchars) n (+ total w)))))))))
+        (visible-width-plain clean))))
 
 ;; ─── Truncation ─────────────────────────────────────────────────────────────
 
@@ -95,12 +102,13 @@
 ;; ─── Word wrapping ──────────────────────────────────────────────────────────
 
 (defn wrap-text-with-ansi
-  "Simple word wrap preserving ANSI escape codes."
+  "Simple word wrap preserving ANSI escape codes.
+   Internal fast path: uses visible-width-plain on already-stripped text."
   [text max-width]
   (if (or (empty? text) (<= max-width 0))
     [""]
     (let [clean (clojure.string/replace text #"\u001b\[[0-9;]*[a-zA-Z]" "")]
-      (if (<= (visible-width clean) max-width)
+      (if (<= (visible-width-plain clean) max-width)
         [text]
         (let [words (clojure.string/split text #"(?<=\s)" -1)
               result (volatile! [])
