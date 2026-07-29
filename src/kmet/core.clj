@@ -464,9 +464,10 @@ Use the available tools to read, write, edit files, and execute commands.
 Be precise and concise in your responses.")
         system-prompt (skills/build-system-prompt base-prompt)
 
-        ;; Components
+        ;; Components (define before agent state so on-event can reference them)
         hdr (text/make-text "" 1 0)
         sp1 (spacer/make-spacer 1)
+        ch (ui/make-chat-history :theme (cfg/get-theme config))
 
         ;; Agent state
         ag (agent/make-agent-state
@@ -477,10 +478,19 @@ Be precise and concise in your responses.")
              :compact-threshold (:compact-threshold config)
              :thinking (:thinking config :off)
              :on-event (fn [evt]
+                         ;; Render tool results in chat history
+                         (when (= :tool-result (:type evt))
+                           (let [result (:result evt)
+                                 msg {:role :tool
+                                      :name (:name evt)
+                                      :content (:content result)
+                                      :is-error (:is-error result false)}]
+                             ;; Finalize any current streaming before showing tool result
+                             (ui/chat-history-finalize-streaming! ch)
+                             (ui/chat-history-add-message! ch msg)
+                             (tui/tui-request-render t)))
                          ;; Forward events to extension system
                          (skills/emit-event! evt)))
-
-        ch (ui/make-chat-history :theme (cfg/get-theme config))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 2
             :border-fn (fn [c] (str DIM c RST)))
