@@ -27,10 +27,7 @@
                                    n (count lines)]
                                (if expanded?
                                  (let [show (take 15 lines)
-                                       more (- n 15)
-                                       parts (conj (vec show)
-                                                  (when (pos? more)
-                                                    (str "... " more " more lines")))]
+                                       more (- n 15)]
                                    (text/make-text
                                      (str/join "\n"
                                        (concat [(if is-error
@@ -85,7 +82,7 @@
 (defn- default-render-call
   "Default render-call: show tool name bolded in tool-title color (matching pi)."
   [name theme _width]
-  (text/make-text (theme/fg theme :tool-title (str BLD name RST)) 0 0))
+  (text/make-text (theme/fg theme :tool-title (theme/bold name)) 0 0))
 
 (defn- default-render-result
   "Default render-result: show raw content in tool-output color (matching pi)."
