@@ -44,12 +44,13 @@
     (fs/create-dirs d)
     d))
 
-(defn- find-or-create-session []
+(defn- find-session
+  "Find the most recent existing session, or nil."
+  []
   (let [dir (ensure-session-dir)
         existing (session/list-sessions dir)]
-    (if (seq existing)
-      (session/load-session (first existing))
-      (session/create-session dir))))
+    (when (seq existing)
+      (session/load-session (first existing)))))
 
 ;; ─── Core state ────────────────────────────────────────────────────────────
 
@@ -593,7 +594,10 @@ Be precise and concise in your responses.")
                        (:provider opts) (assoc :provider (:provider opts))
                        (:thinking opts) (assoc :thinking (:thinking opts)))
               _ (reset! global-config config)
-              session (if (:resume opts) nil (find-or-create-session))
+              session (cond
+                        (:resume opts) nil
+                        (:continue opts) (find-session)
+                        :else (session/create-session (ensure-session-dir)))
               cs (build-layout config session)]
           (reset! tui-ref (:tui cs))
           (when (:resume opts) (resume-session cs ensure-session-dir))
