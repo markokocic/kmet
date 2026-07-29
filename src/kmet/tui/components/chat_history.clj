@@ -67,10 +67,10 @@
                        (mapv #(str "  " text-color % reset) wrapped)))
         cursor (when (or (seq msg-text) (seq thinking-text))
                  (str "  " bold muted "▍" reset))
-        all-lines (cond-> []
-                    (seq thinking-lines) (into thinking-lines)
-                    (seq body-lines) (into body-lines)
-                    cursor (conj cursor))]
+        all-lines (let [v (vec (concat (when (seq thinking-lines) thinking-lines)
+                                       (when (seq body-lines) body-lines)))
+                        v (if cursor (conj v cursor) v)]
+                    v)]
     (if (or (seq msg-text) (seq thinking-text))
       (into [header] all-lines)
       [])))

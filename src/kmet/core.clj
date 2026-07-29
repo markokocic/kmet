@@ -286,34 +286,46 @@
 
 (defn- on-agent-text [cs text]
   "Called for each text delta from the LLM during streaming."
-  (chat/chat-history-append-streaming-text! (:chat-history cs) text)
-  (update-header-footer! cs)
-  (tui/tui-request-render (:tui cs)))
+  (try
+    (chat/chat-history-append-streaming-text! (:chat-history cs) text)
+    (update-header-footer! cs)
+    (tui/tui-request-render (:tui cs))
+    (catch Exception e
+      (binding [*out* *err*] (println "on-agent-text error:" (.getMessage e) (.getClass e))))))
 
 (defn- on-agent-thinking [cs text]
   "Called for each thinking/reasoning delta from the LLM during streaming."
-  (chat/chat-history-append-thinking-text! (:chat-history cs) text)
-  (update-header-footer! cs)
-  (tui/tui-request-render (:tui cs)))
+  (try
+    (chat/chat-history-append-thinking-text! (:chat-history cs) text)
+    (update-header-footer! cs)
+    (tui/tui-request-render (:tui cs))
+    (catch Exception e
+      (binding [*out* *err*] (println "on-agent-thinking error:" (.getMessage e) (.getClass e))))))
 
 (defn- on-agent-done [cs]
   "Called when the LLM turn completes.
    Session persistence is handled by the agent loop internally."
-  (chat/chat-history-finalize-thinking! (:chat-history cs))
-  (chat/chat-history-finalize-streaming! (:chat-history cs))
-  (reset! (:running-turn? cs) false)
-  (update-header-footer! cs)
-  (tui/tui-request-render (:tui cs)))
+  (try
+    (chat/chat-history-finalize-thinking! (:chat-history cs))
+    (chat/chat-history-finalize-streaming! (:chat-history cs))
+    (reset! (:running-turn? cs) false)
+    (update-header-footer! cs)
+    (tui/tui-request-render (:tui cs))
+    (catch Exception e
+      (binding [*out* *err*] (println "on-agent-done error:" (.getMessage e) (.getClass e))))))
 
 (defn- on-agent-error [cs error-msg]
   "Called when an error occurs during the agent turn."
-  (chat/chat-history-finalize-thinking! (:chat-history cs))
-  (chat/chat-history-finalize-streaming! (:chat-history cs))
-  (chat/chat-history-add-message! (:chat-history cs)
-    {:role :assistant :content (str RED "Error: " error-msg RST)})
-  (reset! (:running-turn? cs) false)
-  (update-header-footer! cs)
-  (tui/tui-request-render (:tui cs)))
+  (try
+    (chat/chat-history-finalize-thinking! (:chat-history cs))
+    (chat/chat-history-finalize-streaming! (:chat-history cs))
+    (chat/chat-history-add-message! (:chat-history cs)
+      {:role :assistant :content (str RED "Error: " error-msg RST)})
+    (reset! (:running-turn? cs) false)
+    (update-header-footer! cs)
+    (tui/tui-request-render (:tui cs))
+    (catch Exception e
+      (binding [*out* *err*] (println "on-agent-error error:" (.getMessage e) (.getClass e))))))
 
 ;; ─── Submit handler ────────────────────────────────────────────────────────
 
