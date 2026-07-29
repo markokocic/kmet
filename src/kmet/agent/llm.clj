@@ -8,7 +8,7 @@
 
 ;; ─── Configuration ─────────────────────────────────────────────────────────
 
-(def openai-url "https://api.openai.com/v1/chat/completions")
+(def default-openai-url "https://api.openai.com/v1/chat/completions")
 (def anthropic-url "https://api.anthropic.com/v1/messages")
 (def default-anthropic-version "2023-06-01")
 
@@ -161,19 +161,35 @@
     (catch Exception e
       (handler {:type :error :message (str "Stream error: " (.getMessage e))}))))
 
+;; ─── Thinking config for OpenAI-compatible APIs ───────────────────────────
+
+(defn- openai-thinking-config
+  "Convert thinking level keyword to OpenAI reasoning_effort parameter.
+   Returns nil for :off and unsupported levels."
+  [level]
+  (case level
+    :low "low"
+    :medium "medium"
+    :high "high"
+    :max "max"
+    nil))
+
 ;; ─── OpenAI request ────────────────────────────────────────────────────────
 
 (defn- openai-request
-  [{:keys [api-key model messages tools signal
+  [{:keys [api-key model messages tools signal base-url thinking
            on-text on-tool-call on-done on-error]}]
   (future
-    (let [payload (cond-> {:model (or model "gpt-4o")
+    (let [url (or base-url default-openai-url)
+          reasoning (openai-thinking-config thinking)
+          payload (cond-> {:model (or model "gpt-4o")
                            :messages (openai-messages messages)
                            :stream true
                            :stream_options {:include_usage true}}
-                    (seq tools) (assoc :tools (mapv tools/tool->openai-schema tools)))]
+                    (seq tools) (assoc :tools (mapv tools/tool->openai-schema tools))
+                    reasoning (assoc :reasoning_effort reasoning))]
       (try
-        (let [response (http/post openai-url
+        (let [response (http/post url
                          {:headers {"Authorization" (str "Bearer " api-key)
                                     "Content-Type" "application/json"}
                           :body (json/generate-string payload)
@@ -245,9 +261,12 @@
   "Send messages to LLM and receive streaming events via callbacks.
 
    opts:
-     :provider    — :openai or :anthropic (default :openai)
+     :provider    — :openai, :anthropic, or :opencode-go (default :openai)
+     :api-type    — :openai or :anthropic (overrides auto-detection from provider)
+     :api-key     — API key (required — resolved by caller via cfg/get-api-key)
      :model       — model identifier string
-     :api-key     — API key (or set OPENAI_API_KEY / ANTHROPIC_API_KEY env)
+     :base-url    — custom base URL (for OpenAI-compatible providers)
+     :thinking    — :off :low :medium :high :max
      :messages    — vector of message maps
      :tools       — vector of Tool records
      :signal      — atom; set to true to cancel
@@ -257,22 +276,16 @@
      :on-error    — (fn [message])
 
    Returns: future that completes when the stream ends."
-  [{:keys [provider] :or {provider :openai} :as opts}]
-  (let [api-key (or (:api-key opts)
-                    (case provider
-                      :openai (System/getenv "OPENAI_API_KEY")
-                      :anthropic (System/getenv "ANTHROPIC_API_KEY")
-                      nil))]
-    (if (nil? api-key)
-      (future
-        (when-let [on-error (:on-error opts)]
-          (on-error (str "No API key for " (name provider)
-                         ". Set " (clojure.string/upper-case (name provider))
-                         "_API_KEY environment variable."))))
-      (let [opts (assoc opts :api-key api-key)]
-        (case provider
-          :openai (openai-request opts)
-          :anthropic (anthropic-request opts)
-          (future
-            (when-let [on-error (:on-error opts)]
-              (on-error (str "Unknown provider: " (name provider))))))))))
+  [{:keys [provider api-type api-key] :or {provider :openai} :as opts}]
+  (if (nil? api-key)
+    (future
+      (when-let [on-error (:on-error opts)]
+        (on-error (str "No API key for " (name provider)
+                       ". Set the key in ~/.config/kmet/auth.edn."))))
+    (let [api-type (or api-type provider)]
+      (case api-type
+        :openai (openai-request (assoc opts :api-key api-key))
+        :anthropic (anthropic-request (assoc opts :api-key api-key))
+        (future
+          (when-let [on-error (:on-error opts)]
+            (on-error (str "Unknown provider: " (name provider)))))))))

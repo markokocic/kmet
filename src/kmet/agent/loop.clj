@@ -5,7 +5,8 @@
             [cheshire.core :as json]
             [kmet.agent.llm :as llm]
             [kmet.agent.tools :as tools]
-            [kmet.agent.session :as session]))
+            [kmet.agent.session :as session]
+            [kmet.config :as cfg]))
 
 ;; ─── Agent state ───────────────────────────────────────────────────────────
 
@@ -13,17 +14,19 @@
                        messages      ;; atom of conversation message vectors
                        session       ;; Session record or nil
                        model         ;; model identifier
-                       provider      ;; :openai or :anthropic
+                       provider      ;; :openai :anthropic :opencode-go
                        system        ;; system prompt string
                        signal        ;; atom for cancellation
                        compact-threshold ;; int: auto-compact when entries exceed this
-                       thinking      ;; :off :low :medium :high (Anthropic only)
-                       on-event])    ;; callback for state updates
+                       thinking      ;; :off :low :medium :high :max
+                       on-event      ;; callback for state updates
+                       base-url      ;; custom base URL (for OpenAI-compatible providers)
+                       api-type])    ;; :openai or :anthropic
 
 (defn make-agent-state
   "Create a new agent state.
-   opts: :model, :provider, :system, :session, :on-event, :compact-threshold, :thinking"
-  [& {:keys [model provider system session on-event compact-threshold thinking]
+   opts: :model, :provider, :system, :session, :on-event, :compact-threshold, :thinking, :base-url, :api-type"
+  [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type]
       :or {provider :openai
            thinking :off
            system "You are kmet, a minimal coding agent. Help the user with their tasks.
@@ -38,7 +41,9 @@ Be precise and concise in your responses."}}]
                     :signal (atom false)
                     :compact-threshold compact-threshold
                     :thinking (atom thinking)
-                    :on-event on-event}))
+                    :on-event on-event
+                    :base-url base-url
+                    :api-type api-type}))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -89,11 +94,14 @@ Be precise and concise in your responses."}}]
    Calls on-text for text deltas during streaming."
   [agent api-key text-buf on-text]
   (let [done-promise (promise)
-        [tc-add tc-flush] (make-tc-accumulator)]
+        [tc-add tc-flush] (make-tc-accumulator)
+        provider @(:provider agent)]
     (llm/send-message
-      {:provider @(:provider agent)
+      {:provider provider
+       :api-type (or (:api-type agent) (cfg/get-provider-api-type provider))
        :model @(:model agent)
        :api-key api-key
+       :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
        :messages @(:messages agent)
        :tools (vals (tools/get-all-tools))
        :signal (:signal agent)
@@ -126,14 +134,12 @@ Be precise and concise in your responses."}}]
    Returns: future that completes when the turn is done."
   [agent {:keys [message on-text on-done on-error]}]
   (reset! (:signal agent) false)
-  (let [api-key (case @(:provider agent)
-                  :openai (System/getenv "OPENAI_API_KEY")
-                  :anthropic (System/getenv "ANTHROPIC_API_KEY")
-                  nil)]
+  (let [provider @(:provider agent)
+        api-key (cfg/get-api-key provider)]
     (if (nil? api-key)
       (do (when on-error
-            (on-error (str "No API key for " (name @(:provider agent))
-                           ". Set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable.")))
+            (on-error (str "No API key for " (name provider)
+                           ". Set the key in ~/.config/kmet/auth.edn or the appropriate environment variable.")))
           (future))
       (future
         (try

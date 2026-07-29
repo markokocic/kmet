@@ -466,9 +466,11 @@ Be precise and concise in your responses.")
 Use the available tools to read, write, edit files, and execute commands.
 Be precise and concise in your responses.")
         system-prompt (skills/build-system-prompt base-prompt)
+        resolved-provider (or provider (cfg/get-provider config))
+        resolved-model (or model (cfg/get-model config))
         ag (agent/make-agent-state
-             :model model
-             :provider provider
+             :model resolved-model
+             :provider resolved-provider
              :system system-prompt)
         result-promise (promise)]
     (agent/run-agent-turn ag
@@ -483,7 +485,7 @@ Be precise and concise in your responses.")
 
 (defn- parse-args [args]
   (loop [args args
-         opts {:provider :openai
+         opts {:provider nil
                :model nil
                :print false
                :continue false
@@ -546,7 +548,7 @@ Be precise and concise in your responses.")
   (println "  -c, --continue        Continue most recent session")
   (println "  -r, --resume          Browse sessions")
   (println "  --model <id>          Model to use")
-  (println "  --provider <name>     Provider (openai, anthropic)")
+  (println "  --provider <name>     Provider (openai, anthropic, opencode-go)")
   (println "  -t, --thinking <level> Thinking level (off, low, medium, high)")
   (println "  -h, --help            Show this help")
   (println)
