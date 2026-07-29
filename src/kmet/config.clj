@@ -83,15 +83,16 @@
    :anthropic {:base-url "https://api.anthropic.com/v1/messages"
                :api-type :anthropic}
    :opencode-go {:base-url "https://opencode.ai/zen/go/v1/chat/completions"
-                 :api-type :openai}})
+                 :api-type :openai
+                 :supports-tools? false}})
 
 (defn get-provider-config
-  "Get provider configuration map (base-url, api-type).
+  "Get provider configuration map (base-url, api-type, supports-tools?).
    Checks provider-configs first, then falls back to :providers in default-config."
   [provider]
   (or (get provider-configs provider)
       (get-in default-config [:providers provider])
-      {:base-url nil :api-type provider}))
+      {:base-url nil :api-type provider :supports-tools? true}))
 
 ;; ─── Config loading continued ──────────────────────────────────────────────
 
@@ -141,6 +142,13 @@
   "Get the API type (:openai or :anthropic) for a given provider."
   [provider]
   (:api-type (get-provider-config provider)))
+
+(defn provider-supports-tools?
+  "Check if a provider supports tool-call conversations.
+   Some providers (e.g., opencode-go/deepseek-v4-flash) can initiate tool calls
+   but fail when sending tool results back."
+  [provider]
+  (:supports-tools? (get-provider-config provider) true))
 
 ;; ─── Initialization ─────────────────────────────────────────────────────────
 

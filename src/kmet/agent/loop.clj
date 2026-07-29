@@ -108,7 +108,8 @@ Be precise and concise in your responses."}}]
        :api-key api-key
        :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
        :messages messages
-       :tools (vals (tools/get-all-tools))
+       :tools (when (cfg/provider-supports-tools? provider)
+                (vals (tools/get-all-tools)))
        :signal (:signal agent)
        :thinking @(:thinking agent)
        :on-text (fn [t]
