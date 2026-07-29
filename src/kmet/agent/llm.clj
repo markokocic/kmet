@@ -37,11 +37,13 @@
           (let [tc (first tc-delta)]
             {:type :tool-call :id (:id tc)
              :name (get-in tc [:function :name])
-             :arguments (get-in tc [:function :arguments] "")})
+             :arguments (get-in tc [:function :arguments] "")
+             :index (:index tc)})
           (and tc-delta (get-in (first tc-delta) [:function :arguments]))
           (let [tc (first tc-delta)]
             {:type :tool-call-args :id (:id tc)
-             :arguments (get-in tc [:function :arguments] "")})
+             :arguments (get-in tc [:function :arguments] "")
+             :index (:index tc)})
           (get delta :content)
           {:type :text :content (get delta :content)}
           (get delta :reasoning_content)
@@ -119,6 +121,38 @@
                :content (content-text (:content m))})))
         messages))
 
+(defn- openai-messages-with-reasoning
+  "Like openai-messages but adds reasoning_content to assistant messages.
+   Some providers (e.g., opencode-go/deepseek-v4-flash) require a
+   reasoning_content field on assistant messages even when empty."
+  [messages]
+  (mapv (fn [m]
+          (let [role (name (:role m))
+                msg (case role
+                      "tool"
+                      {:role "tool"
+                       :tool_call_id (-> m :content first :tool_use_id)
+                       :content (-> m :content first :content)}
+                      "assistant"
+                      (let [text (content-text (:content m))
+                            has-tc (seq (:tool-calls m))
+                            msg (cond-> {:role "assistant"}
+                                  (seq text) (assoc :content text)
+                                  has-tc (assoc :tool_calls
+                                            (mapv (fn [tc]
+                                                    {:id (:id tc)
+                                                     :type "function"
+                                                     :function {:name (:name tc)
+                                                                :arguments (cheshire.core/generate-string
+                                                                             (:arguments tc))}})
+                                                  (:tool-calls m))))]
+                        ;; opencode-go requires reasoning_content on assistant messages
+                        (assoc msg :reasoning_content ""))
+                      {:role role
+                       :content (content-text (:content m))})]
+            msg))
+        messages))
+
 (defn- anthropic-content-text
   "Extract plain text from Anthropic message content.
    Returns the content as-is if it is a string, otherwise joins text blocks."
@@ -188,7 +222,7 @@
   (future
     (let [url (or base-url default-openai-url)
           payload {:model (or model "gpt-4o")
-                   :messages (openai-messages messages)
+                   :messages (openai-messages-with-reasoning messages)
                    :stream true
                    :stream_options {:include_usage true}}
           payload (if (seq tools)
@@ -209,7 +243,11 @@
                 :tool-call (when on-tool-call
                              (on-tool-call {:id (:id event)
                                             :name (:name event)
-                                            :arguments (:arguments event)}))
+                                            :arguments (:arguments event)
+                                            :index (:index event)}))
+                :tool-call-args (when on-tool-call
+                                  (on-tool-call {:arguments (:arguments event)
+                                                 :index (:index event)}))
                 :done (when on-done (on-done (:stop-reason event)))
                 :error (when on-error (on-error (:message event)))
                 nil))

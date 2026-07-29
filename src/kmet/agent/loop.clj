@@ -71,15 +71,16 @@ Be precise and concise in your responses."}}]
 (defn- make-tc-accumulator []
   (let [pending (atom {})]
     [(fn [tc]
-       (let [id (:id tc)]
-         (if-let [name (:name tc)]
-           (swap! pending assoc id
-             {:name name :arguments (or (:arguments tc) "")})
-           (swap! pending update-in [id :arguments]
+       (let [idx (:index tc)
+             name (:name tc)]
+         (if name
+           (swap! pending assoc idx
+             {:id (:id tc) :name name :arguments (or (:arguments tc) "")})
+           (swap! pending update-in [idx :arguments]
              (fn [old] (str (or old "") (or (:arguments tc) "")))))))
      (fn []
        (let [result (into []
-                      (for [[id {:keys [name arguments]}] @pending]
+                      (for [[idx {:keys [id name arguments]}] @pending]
                         {:id id :name name
                          :arguments (try
                                       (json/parse-string arguments)
@@ -108,8 +109,7 @@ Be precise and concise in your responses."}}]
        :api-key api-key
        :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
        :messages messages
-       :tools (when (cfg/provider-supports-tools? provider)
-                (vals (tools/get-all-tools)))
+       :tools (vals (tools/get-all-tools))
        :signal (:signal agent)
        :thinking @(:thinking agent)
        :on-text (fn [t]
