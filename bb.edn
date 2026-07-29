@@ -5,14 +5,10 @@
            :requires ([kmet.core :as core])
            :task (apply core/-main *command-line-args*)
            :override-builtin true}
-  demo    {:doc "Run TUI demo (standalone editor)"
-           :requires ([kmet.tui-demo :as tui-demo])
-           :task (apply tui-demo/-main *command-line-args*)
-           :override-builtin true}
   test    {:doc "Run tests"
            :requires ([kmet.runner :as runner])
            :task (runner/-main)
            :override-builtin true}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run    Interactive TUI (--help for options)\n  demo   Standalone editor demo\n  test   Run tests")
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run    Interactive TUI (--help for options)\n  test   Run tests")
            :override-builtin true}}}

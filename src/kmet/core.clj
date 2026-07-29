@@ -8,6 +8,7 @@
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.editor :as editor]
             [kmet.tui.components.chat-history :as chat]
+            [kmet.tui.components.footer :as footer]
             [kmet.tui.components.select-list :as select-list]
             [kmet.agent.loop :as agent]
             [kmet.agent.session :as session]
@@ -33,6 +34,16 @@
 ;; ─── Global config ref ────────────────────────────────────────────────────
 
 (defonce ^:private global-config (atom nil))
+
+;; ─── Theme shortcuts ─────────────────────────────────────────────────────
+
+(def ^:private RST "\u001b[0m")
+(def ^:private BLD "\u001b[1m")
+(def ^:private DIM "\u001b[2m")
+(def ^:private RED "\u001b[31m")
+(def ^:private GRN "\u001b[32m")
+(def ^:private YLW "\u001b[33m")
+(def ^:private CYN "\u001b[36m")
 
 ;; ─── Session helpers ───────────────────────────────────────────────────────
 
@@ -61,7 +72,7 @@
                       chat-history
                       editor
                       header-text
-                      footer-text
+                      footer-comp
                       session
                       running-turn?
                       config])
@@ -70,6 +81,15 @@
 
 (defn- fmt-model [provider model]
   (str (name provider) ":" model))
+
+(defn- fmt-status-str [cs]
+  (let [status (name (agent/get-status (:agent-state cs)))]
+    (case status
+      "idle" (str DIM "idle" RST)
+      "thinking" (str YLW "● thinking" RST)
+      "executing" (str YLW "● executing" RST)
+      "error" (str RED "● error" RST)
+      (str DIM status RST))))
 
 (defn- fmt-header [cs]
   (let [provider @(:provider (:agent-state cs))
@@ -81,24 +101,25 @@
     (str BLD CYN " kmet" RST " "
          DIM (fmt-model provider model) RST
          " │ " DIM "session:" RST " " (or sess-id "none")
-         " │ " (case status
-                 "idle" (str DIM "idle" RST)
-                 "thinking" (str YLW "● thinking" RST)
-                 "executing" (str YLW "● executing" RST)
-                 "error" (str RED "● error" RST)
-                 (str DIM status RST))
+         " │ " (fmt-status-str cs)
          " │ " DIM short-cwd RST)))
 
-(defn- fmt-footer [cs]
-  (let [n-msgs (count (chat/chat-history-get-messages (:chat-history cs)))]
-    (str "msgs:" n-msgs " │ "
-         DIM "/quit" RST " " DIM "/help" RST " "
-         DIM "/model" RST " " DIM "/new" RST " "
-         DIM "/resume" RST)))
+(defn- fmt-footer-str [cs]
+  (let [n-msgs (count (chat/chat-history-get-messages (:chat-history cs)))
+        expanded? (chat/chat-history-get-tool-expanded (:chat-history cs))
+        thinking-hidden? (chat/chat-history-get-thinking-hidden (:chat-history cs))
+        toggles (str (when expanded? (str CYN " O" RST))
+                     (when thinking-hidden? (str YLW " T" RST)))
+        cmds (str DIM "/quit" RST " " DIM "/help" RST " "
+                   DIM "/model" RST " " DIM "/new" RST " "
+                   DIM "/resume" RST)]
+    (str "msgs:" n-msgs
+         toggles
+         " │ " cmds)))
 
 (defn- update-header-footer! [cs]
   (text/text-set! (:header-text cs) (fmt-header cs))
-  (text/text-set! (:footer-text cs) (fmt-footer cs))
+  (footer/footer-set-status! (:footer-comp cs) (fmt-status-str cs))
   nil)
 
 ;; ─── Command handling ──────────────────────────────────────────────────────
@@ -311,10 +332,11 @@
 
 (defn- on-agent-done [cs]
   "Called when the LLM turn completes.
+   Finalize streaming FIRST (captures thinking text), then clear thinking.
    Session persistence is handled by the agent loop internally."
   (try
-    (chat/chat-history-finalize-thinking! (:chat-history cs))
     (chat/chat-history-finalize-streaming! (:chat-history cs))
+    (chat/chat-history-finalize-thinking! (:chat-history cs))
     (reset! (:running-turn? cs) false)
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
@@ -326,8 +348,9 @@
 (defn- on-agent-error [cs error-msg]
   "Called when an error occurs during the agent turn."
   (try
-    (chat/chat-history-finalize-thinking! (:chat-history cs))
+    ;; Finalize streaming FIRST to capture any thinking text
     (chat/chat-history-finalize-streaming! (:chat-history cs))
+    (chat/chat-history-finalize-thinking! (:chat-history cs))
     (chat/chat-history-add-message! (:chat-history cs)
       {:role :assistant :content (str RED "Error: " error-msg RST)})
     (reset! (:running-turn? cs) false)
@@ -369,8 +392,9 @@
   (when @(:running-turn? cs)
     (debug/log "agent turn cancelled by user")
     (agent/cancel-turn (:agent-state cs))
-    (chat/chat-history-finalize-thinking! (:chat-history cs))
+    ;; Finalize streaming FIRST to capture thinking text
     (chat/chat-history-finalize-streaming! (:chat-history cs))
+    (chat/chat-history-finalize-thinking! (:chat-history cs))
     (chat/chat-history-add-message! (:chat-history cs)
       {:role :assistant :content (str DIM "(cancelled)" RST)})
     (reset! (:running-turn? cs) false)
@@ -412,13 +436,12 @@ Be precise and concise in your responses.")
         ;; Components
         hdr (text/make-text "" 1 0)
         sp1 (spacer/make-spacer 1)
-        ch (chat/make-chat-history :max-lines 100
-                                   :theme (cfg/get-theme config))
+        ch (chat/make-chat-history :theme (cfg/get-theme config))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 2
             :border-fn (fn [c] (str DIM c RST)))
         sp3 (spacer/make-spacer 1)
-        ftr (text/make-text "" 1 0)
+        ftr (footer/make-footer :status "" :n-msgs 0)
 
         ;; Core state
         cs (map->CoreState {:tui t
@@ -426,7 +449,7 @@ Be precise and concise in your responses.")
                             :chat-history ch
                             :editor ed
                             :header-text hdr
-                            :footer-text ftr
+                            :footer-comp ftr
                             :session session
                             :running-turn? (atom false)
                             :config config})]
@@ -475,11 +498,30 @@ Be precise and concise in your responses.")
             (do (editor/editor-set-text! ed "")
                 (tui/tui-request-render t)))
 
+          ;; Pi-style: Ctrl+O toggles tool output expansion
+          (keys/matches-key? data (keys/ctrl "o"))
+          (do (chat/chat-history-toggle-tool-expanded! ch)
+              (update-header-footer! cs)
+              (tui/tui-request-render t))
+
+          ;; Pi-style: Ctrl+T toggles thinking block visibility
+          (keys/matches-key? data (keys/ctrl "t"))
+          (do (chat/chat-history-toggle-thinking-hidden! ch)
+              (update-header-footer! cs)
+              (tui/tui-request-render t))
+
           :else nil)))
 
     ;; Initialize header/footer
     (text/text-set! hdr (fmt-header cs))
-    (text/text-set! ftr (fmt-footer cs))
+    (footer/footer-set-status! ftr (fmt-status-str cs))
+
+    ;; Pi-style info message on top
+    (chat/chat-history-set-info-msg! ch
+      {:label "kmet"
+       :content (str "Welcome to kmet — minimal coding agent.\n"
+                     "Type a message, /help for commands, or use:\n"
+                     "  " DIM "Ctrl+O" RST " — toggle tool output  " DIM "Ctrl+T" RST " — toggle thinking blocks")})
 
     ;; Welcome message
     (chat/chat-history-add-message! ch

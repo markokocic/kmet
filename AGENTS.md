@@ -3,7 +3,7 @@
 ## Conventions
 
 ### Build & Run
-- **Entry**: `bb run` — runs `kmet.core/-main`; `bb demo` — runs `kmet.tui-demo/-main`
+- **Entry**: `bb run` — runs `kmet.core/-main`
 - **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`; JLine3 bundled externally.
 
 ### API Preferences (avoid Java interop)
@@ -23,7 +23,6 @@
 ## File layout
 ```
 src/kmet/
-├── tui_demo.clj      — standalone TUI editor demo
 ├── core.clj          — CLI entry, arg parsing
 ├── tui/
 │   ├── core.clj      — TUI class, render loop, overlays
