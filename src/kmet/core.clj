@@ -8,10 +8,13 @@
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.editor :as editor]
             [kmet.tui.components.chat-history :as chat]
+            [kmet.tui.components.select-list :as select-list]
             [kmet.agent.loop :as agent]
             [kmet.agent.session :as session]
             [clojure.string :as str])
   (:import [java.io File]))
+
+(declare resume-session)
 
 ;; ─── ANSI ──────────────────────────────────────────────────────────────────
 
@@ -35,15 +38,6 @@ Be precise and concise in your responses.")
 
 (def session-base-dir
   (str (System/getProperty "user.home") "/.local/share/kmet/sessions"))
-
-;; ─── Commands ──────────────────────────────────────────────────────────────
-
-(def ^:private commands
-  "Known slash commands map."
-  {"quit"  "Exit kmet"
-   "help"  "Show available commands"
-   "model" "Switch model. Usage: /model <provider:model>"
-   "new"   "Start a new session"})
 
 ;; ─── Session helpers ───────────────────────────────────────────────────────
 
@@ -97,7 +91,8 @@ Be precise and concise in your responses.")
   (let [n-msgs (count (chat/chat-history-get-messages (:chat-history cs)))]
     (str "msgs:" n-msgs " │ "
          DIM "/quit" RST " " DIM "/help" RST " "
-         DIM "/model" RST " " DIM "/new" RST)))
+         DIM "/model" RST " " DIM "/new" RST " "
+         DIM "/resume" RST)))
 
 (defn- update-header-footer! [cs]
   (text/text-set! (:header-text cs) (fmt-header cs))
@@ -106,7 +101,9 @@ Be precise and concise in your responses.")
 
 ;; ─── Command handling ──────────────────────────────────────────────────────
 
-(defn- handle-command [cs cmd args]
+(defn- handle-command
+  "Handle slash commands. Returns nil."
+  [cs cmd args]
   (case cmd
     "quit"
     (tui/tui-stop (:tui cs))
@@ -114,10 +111,11 @@ Be precise and concise in your responses.")
     "help"
     (let [help-text (str
                      "Available commands:\n"
-                     "  /quit  — Exit kmet\n"
-                     "  /help  — Show this help\n"
+                     "  /quit   — Exit kmet\n"
+                     "  /help   — Show this help\n"
                      "  /model <provider:model> — Switch model\n"
-                     "  /new   — Start a new session\n"
+                     "  /new    — Start a new session\n"
+                     "  /resume — Browse past sessions\n"
                      "\n"
                      "Shortcuts:\n"
                      "  Enter      — Submit message\n"
@@ -154,11 +152,65 @@ Be precise and concise in your responses.")
       (chat/chat-history-add-message! (:chat-history cs)
         {:role :assistant :content "Started a new session."}))
 
+    "resume"
+    (resume-session cs ensure-session-dir)
+
     ;; Unknown command
     (chat/chat-history-add-message! (:chat-history cs)
       {:role :assistant
        :content (str "Unknown command: /" cmd ". Type /help for available commands.")}))
   (update-header-footer! cs))
+
+;; ─── Resume session ────────────────────────────────────────────────────────
+
+(defn- resume-session
+  "Browse past sessions via SelectList overlay."
+  [cs session-dir-fn]
+  (let [sessions (session/list-sessions (session-dir-fn))]
+    (if (empty? sessions)
+      (chat/chat-history-add-message! (:chat-history cs)
+        {:role :assistant :content "No past sessions found."})
+      (let [items (vec (for [s sessions]
+                         (let [fname (str/replace s #".*/" "")
+                               short-id (subs fname 0 (min 8 (count fname)))
+                               loaded (session/load-session s)
+                               n-msgs (count (:entries loaded))]
+                           {:label (str short-id "... " n-msgs " msgs")
+                            :value s})))
+            sl-ref (atom nil)
+            on-select-fn (fn []
+                          (when-let [sel (select-list/select-list-get-selected @sl-ref)]
+                            (let [sess (session/load-session (:value sel))
+                                  entries (session/get-branch sess)
+                                  fname (str/replace (:value sel) #".*/" "")
+                                  short-id (subs fname 0 (min 8 (count fname)))]
+                              (chat/chat-history-clear! (:chat-history cs))
+                              (reset! (:session cs) sess)
+                              (let [new-ag (assoc (:agent-state cs) :session sess)]
+                                (reset! (:agent-state cs) new-ag))
+                              (doseq [e entries]
+                                (let [role (:role e)
+                                      texts (filter #(= (:type %) :text) (:content e))
+                                      content (str/join (map :text texts))]
+                                  (chat/chat-history-add-message! (:chat-history cs)
+                                    (merge {:role role :content content}
+                                      (when (= role :tool)
+                                        {:name (or (:name e) "tool")})))))
+                              (chat/chat-history-add-message! (:chat-history cs)
+                                {:role :assistant
+                                 :content (str "Resumed session " short-id ".")})
+                              (tui/tui-hide-overlay (:tui cs))
+                              (update-header-footer! cs)
+                              (tui/tui-request-render (:tui cs)))))
+            sl (select-list/make-select-list items
+                 :height (min (count items) 15)
+                 :on-select on-select-fn
+                 :on-escape (fn []
+                              (tui/tui-hide-overlay (:tui cs))
+                              (tui/tui-request-render (:tui cs))))]
+        (reset! sl-ref sl)
+        (tui/tui-show-overlay (:tui cs) sl :width 50 :height (min (count items) 15))
+        (tui/tui-request-render (:tui cs))))))
 
 ;; ─── Agent response handler ────────────────────────────────────────────────
 
@@ -287,7 +339,8 @@ Be precise and concise in your responses.")
               (tui/tui-request-render t))
 
           (keys/matches-key? data "escape")
-          (when @(:running-turn? cs)
+          (when (and @(:running-turn? cs)
+                     (not (tui/tui-has-overlay? t)))
             (handle-cancel cs))
 
           (keys/matches-key? data (keys/ctrl "c"))

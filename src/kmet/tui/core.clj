@@ -83,6 +83,8 @@
 (defn tui-remove-input-listener [tui f]
   (swap! (:input-listeners tui) (fn [v] (vec (remove #(= % f) v)))))
 
+(declare tui-request-render tui-stop)
+
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Overlays
 ;; ═══════════════════════════════════════════════════════════════════════════
@@ -101,11 +103,10 @@
       (if-let [next-o (:component (peek @(:overlays tui)))]
         (tui-set-focus tui next-o)
         (when-let [last (last @(:components tui))]
-          (tui-set-focus tui last))))))
+          (tui-set-focus tui last))))
+    (tui-request-render tui)))
 
 (defn tui-has-overlay? [tui] (pos? (count @(:overlays tui))))
-
-(declare tui-request-render tui-stop)
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Diff
@@ -169,7 +170,19 @@
               h (.getHeight jline)]
           (when @(:render-requested? tui)
             (reset! (:render-requested? tui) false)
-            (let [lines (vec (mapcat #(render % w) @(:components tui)))
+            (let [overlays @(:overlays tui)
+                  lines (if (seq overlays)
+                          ;; Render top overlay component
+                          (let [o (peek overlays)
+                                ow (or (:width o) w)
+                                ox (or (:x o) 0)
+                                oy (or (:y o) 0)
+                                comp-lines (vec (render (:component o) ow))]
+                            (vec (concat
+                                   (repeat oy "")
+                                   (mapv #(str (apply str (repeat ox " ")) %) comp-lines)
+                                   (repeat (max 0 (- h oy (count comp-lines))) ""))))
+                          (vec (mapcat #(render % w) @(:components tui))))
                   prev @(:previous-lines tui)]
               (when (not= prev lines)
                 (let [d (diff-lines prev lines)]
