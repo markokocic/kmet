@@ -83,7 +83,7 @@ Be precise and concise in your responses."}}]
                       (for [[idx {:keys [id name arguments]}] @pending]
                         {:id id :name name
                          :arguments (try
-                                      (json/parse-string arguments)
+                                      (json/parse-string arguments true)
                                       (catch Exception _ arguments))}))]
          (reset! pending {})
          result))]))
