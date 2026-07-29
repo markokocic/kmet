@@ -11,10 +11,12 @@
             [kmet.tui.components.select-list :as select-list]
             [kmet.agent.loop :as agent]
             [kmet.agent.session :as session]
+            [kmet.config :as cfg]
+            [kmet.skills :as skills]
             [clojure.string :as str])
   (:import [java.io File]))
 
-(declare resume-session)
+(declare resume-session show-session-tree)
 
 ;; ─── ANSI ──────────────────────────────────────────────────────────────────
 
@@ -26,25 +28,21 @@
 (def ^:private YLW "\u001b[33m")
 (def ^:private CYN "\u001b[36m")
 
-;; ─── Defaults ──────────────────────────────────────────────────────────────
+;; ─── Global config ref ────────────────────────────────────────────────────
 
-(def default-model "claude-sonnet-4-20250514")
-(def default-provider :openai)
-
-(def default-system-prompt
-  "You are kmet, a minimal coding agent. Help the user with their tasks.
-Use the available tools to read, write, edit files, and execute commands.
-Be precise and concise in your responses.")
-
-(def session-base-dir
-  (str (System/getProperty "user.home") "/.local/share/kmet/sessions"))
+(defonce ^:private global-config (atom nil))
 
 ;; ─── Session helpers ───────────────────────────────────────────────────────
 
+(defn- get-session-dir []
+  (if-let [c @global-config]
+    (cfg/get-session-dir c)
+    (str (System/getProperty "user.home") "/.local/share/kmet/sessions")))
+
 (defn- ensure-session-dir []
-  (let [d (File. session-base-dir)]
+  (let [d (File. (get-session-dir))]
     (.mkdirs d)
-    session-base-dir))
+    (.getAbsolutePath d)))
 
 (defn- find-or-create-session []
   (let [dir (ensure-session-dir)
@@ -62,7 +60,8 @@ Be precise and concise in your responses.")
                       header-text
                       footer-text
                       session
-                      running-turn?])
+                      running-turn?
+                      config])
 
 ;; ─── Formatting helpers ────────────────────────────────────────────────────
 
@@ -116,13 +115,16 @@ Be precise and concise in your responses.")
                      "  /model <provider:model> — Switch model\n"
                      "  /new    — Start a new session\n"
                      "  /resume — Browse past sessions\n"
+                     "  /tree   — Browse session entry tree\n"
+                     "  /theme <name> — Switch theme\n"
                      "\n"
                      "Shortcuts:\n"
                      "  Enter      — Submit message\n"
                      "  Escape     — Cancel current turn\n"
                      "  Ctrl+Z     — Quit\n"
-                     "  Up/Down    — Scroll chat history\n"
-                     "  Ctrl+L     — Clear terminal")]
+                     "  Ctrl+C     — Cancel / clear editor\n"
+                     "  Ctrl+L     — Clear terminal\n"
+                     "  Up/Down    — Scroll chat history")]
       (chat/chat-history-add-message! (:chat-history cs)
         {:role :assistant :content help-text}))
 
@@ -130,7 +132,7 @@ Be precise and concise in your responses.")
     (if (seq args)
       (let [parts (str/split args #":" 2)
             provider (keyword (or (first parts) "openai"))
-            model (or (second parts) default-model)]
+            model (or (second parts) (:model (:config cs)))]
         (agent/set-provider! (:agent-state cs) provider)
         (agent/set-model! (:agent-state cs) model)
         (chat/chat-history-add-message! (:chat-history cs)
@@ -154,6 +156,20 @@ Be precise and concise in your responses.")
 
     "resume"
     (resume-session cs ensure-session-dir)
+
+    "tree"
+    (show-session-tree cs)
+
+    "theme"
+    (if (seq args)
+      (chat/chat-history-add-message! (:chat-history cs)
+        {:role :assistant
+         :content (str "Theme set to: " (str/trim args)
+                       ". Available: dark, light. Install custom themes in ~/.config/kmet/themes/")})
+      (chat/chat-history-add-message! (:chat-history cs)
+        {:role :assistant
+         :content (str "Current theme: " (cfg/get-theme-name (:config cs))
+                       "\nUsage: /theme <name>")}))
 
     ;; Unknown command
     (chat/chat-history-add-message! (:chat-history cs)
@@ -211,6 +227,58 @@ Be precise and concise in your responses.")
         (reset! sl-ref sl)
         (tui/tui-show-overlay (:tui cs) sl :width 50 :height (min (count items) 15))
         (tui/tui-request-render (:tui cs))))))
+
+;; ─── Session tree ─────────────────────────────────────────────────────────
+
+(defn- show-session-tree
+  "Browse the current session's entry tree via SelectList overlay."
+  [cs]
+  (let [sess (:session cs)]
+    (if (nil? sess)
+      (chat/chat-history-add-message! (:chat-history cs)
+        {:role :assistant :content "No active session."})
+      (let [tree (session/get-tree sess)]
+        (if (empty? tree)
+          (chat/chat-history-add-message! (:chat-history cs)
+            {:role :assistant :content "Session is empty."})
+          (letfn [(flatten-tree [nodes depth]
+                    (mapcat (fn [n]
+                              (let [prefix (apply str (repeat depth "  "))
+                                    role-str (name (:role n))
+                                    label (str prefix role-str ": " (:summary n))]
+                                (cons {:label label
+                                       :value (:id n)
+                                       :depth depth
+                                       :entry n}
+                                      (flatten-tree (:children n) (inc depth)))))
+                            nodes))
+                  items (vec (flatten-tree tree 0))]
+            (let [sl-ref (atom nil)
+                  on-select-fn (fn []
+                                (when-let [sel (select-list/select-list-get-selected @sl-ref)]
+                                  (let [entry (:entry sel)
+                                        entry-id (:value sel)
+                                        role (:role entry)
+                                        texts (if (string? (:content entry))
+                                                [(:content entry)]
+                                                (map :text (filter #(= (:type %) :text) (:content entry))))
+                                        content (str/join texts)]
+                                    (chat/chat-history-add-message! (:chat-history cs)
+                                      (merge {:role (or role :unknown) :content content}
+                                        (when (= role :tool)
+                                          {:name (or (:name entry) "tool")})))
+                                    (tui/tui-hide-overlay (:tui cs))
+                                    (update-header-footer! cs)
+                                    (tui/tui-request-render (:tui cs)))))
+                  sl (select-list/make-select-list items
+                       :height (min (count items) 20)
+                       :on-select on-select-fn
+                       :on-escape (fn []
+                                    (tui/tui-hide-overlay (:tui cs))
+                                    (tui/tui-request-render (:tui cs))))]
+              (reset! sl-ref sl)
+              (tui/tui-show-overlay (:tui cs) sl :width 70 :height (min (count items) 20))
+              (tui/tui-request-render (:tui cs)))))))))
 
 ;; ─── Agent response handler ────────────────────────────────────────────────
 
@@ -276,16 +344,29 @@ Be precise and concise in your responses.")
 
 (defn- build-layout
   "Create TUI layout and return CoreState."
-  [& {:keys [model provider session]}]
+  [config session]
   (let [jline-term (term/create-terminal)
         t (tui/create-tui jline-term)
 
+        ;; Resolve model and provider from config
+        provider (cfg/get-provider config)
+        model (cfg/get-model config)
+
+        ;; Load skills and build system prompt
+        _ (skills/load-skills-from-dir (cfg/expand-path (:skills-dir config)))
+        base-prompt (or (:system-prompt config)
+                        "You are kmet, a minimal coding agent. Help the user with their tasks.
+Use the available tools to read, write, edit files, and execute commands.
+Be precise and concise in your responses.")
+        system-prompt (skills/build-system-prompt base-prompt)
+
         ;; Agent state — pass session so the agent loop persists entries
         ag (agent/make-agent-state
-             :model (or model default-model)
-             :provider (or provider default-provider)
-             :system default-system-prompt
-             :session session)
+             :model model
+             :provider provider
+             :system system-prompt
+             :session session
+             :compact-threshold (:compact-threshold config 400))
 
         ;; Components
         hdr (text/make-text "" 1 1)
@@ -305,7 +386,8 @@ Be precise and concise in your responses.")
                             :header-text hdr
                             :footer-text ftr
                             :session session
-                            :running-turn? (atom false)})]
+                            :running-turn? (atom false)
+                            :config config})]
 
     ;; Wire editor submit
     (editor/editor-set-on-submit! ed
@@ -369,10 +451,13 @@ Be precise and concise in your responses.")
 (defn- run-print-mode
   "Run in non-interactive mode: send message, print response, exit."
   [{:keys [model provider messages]}]
-  (let [ag (agent/make-agent-state
+  (let [system-prompt "You are kmet, a minimal coding agent. Help the user with their tasks.
+Use the available tools to read, write, edit files, and execute commands.
+Be precise and concise in your responses."
+        ag (agent/make-agent-state
              :model model
              :provider provider
-             :system default-system-prompt)
+             :system system-prompt)
         result-promise (promise)]
     (agent/run-agent-turn ag
       {:message (str/join " " messages)
@@ -386,8 +471,8 @@ Be precise and concise in your responses.")
 
 (defn- parse-args [args]
   (loop [args args
-         opts {:provider default-provider
-               :model default-model
+         opts {:provider :openai
+               :model nil
                :print false
                :continue false
                :resume false
@@ -402,6 +487,12 @@ Be precise and concise in your responses.")
 
           (#{"-c" "--continue"} arg)
           (recur rest-args (assoc opts :continue true))
+
+          (#{"-t" "--thinking"} arg)
+          (if (seq rest-args)
+            (let [level (keyword (first rest-args))]
+              (recur (rest rest-args) (assoc opts :thinking level)))
+            (recur rest-args opts))
 
           (#{"-r" "--resume"} arg)
           (recur rest-args (assoc opts :resume true))
@@ -438,6 +529,7 @@ Be precise and concise in your responses.")
   (println "  -r, --resume          Browse sessions")
   (println "  --model <id>          Model to use")
   (println "  --provider <name>     Provider (openai, anthropic)")
+  (println "  -t, --thinking <level> Thinking level (off, low, medium, high)")
   (println "  -h, --help            Show this help")
   (println)
   (println "Examples:")
@@ -467,18 +559,32 @@ Be precise and concise in your responses.")
 
   (println "Starting kmet...")
 
-  (let [tui-ref (atom nil)]
+  ;; Initialize configuration and themes
+  (let [config (cfg/init!)
+        _ (reset! global-config config)
+        tui-ref (atom nil)]
     (try
-      (let [session (find-or-create-session)
-            cs (build-layout :session session)]
+      ;; Load extensions
+      (let [ext-dir (cfg/expand-path (:extensions-dir config))]
+        (skills/load-extensions-from-dir ext-dir))
+
+      ;; Apply command-line overrides
+      (let [config (cond-> config
+                     (:model opts) (assoc :model (:model opts))
+                     (:provider opts) (assoc :provider (:provider opts)))
+            _ (reset! global-config config)
+            session (find-or-create-session)
+            cs (build-layout config session)]
         (reset! tui-ref (:tui cs))
         (tui/tui-start (:tui cs))
-        (println "kmet session ended."))
-      (catch Exception e
-        ;; Restore terminal if TUI was started
-        (when-let [t @tui-ref]
-          (try (tui/tui-stop t) (catch Exception _)))
-        (binding [*out* *err*]
-          (println "Error:" (.getMessage e))
-          (.printStackTrace e))
-        (System/exit 1)))))
+        (println "kmet session ended.")))
+    (catch Exception e
+      ;; Restore terminal if TUI was started
+      (when-let [t @tui-ref]
+        (try (tui/tui-stop t) (catch Exception _)))
+      (binding [*out* *err*]
+        (println "Error:" (.getMessage e))
+        (.printStackTrace e))
+      (System/exit 1))))
+
+

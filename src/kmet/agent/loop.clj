@@ -15,12 +15,13 @@
                        provider      ;; :openai or :anthropic
                        system        ;; system prompt string
                        signal        ;; atom for cancellation
+                       compact-threshold ;; int: auto-compact when entries exceed this
                        on-event])    ;; callback for state updates
 
 (defn make-agent-state
   "Create a new agent state.
-   opts: :model, :provider, :system, :session, :on-event"
-  [& {:keys [model provider system session on-event]
+   opts: :model, :provider, :system, :session, :on-event, :compact-threshold"
+  [& {:keys [model provider system session on-event compact-threshold]
       :or {provider :openai
            system "You are kmet, a minimal coding agent. Help the user with their tasks.
 Use the available tools to read, write, edit files, and execute commands.
@@ -32,6 +33,7 @@ Be precise and concise in your responses."}}]
                     :provider (atom provider)
                     :system (atom system)
                     :signal (atom false)
+                    :compact-threshold compact-threshold
                     :on-event on-event}))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
@@ -85,8 +87,8 @@ Be precise and concise in your responses."}}]
   (let [done-promise (promise)
         [tc-add tc-flush] (make-tc-accumulator)]
     (llm/send-message
-      {:provider (:provider agent)
-       :model (:model agent)
+      {:provider @(:provider agent)
+       :model @(:model agent)
        :api-key api-key
        :messages @(:messages agent)
        :tools (vals (tools/get-all-tools))
@@ -119,7 +121,7 @@ Be precise and concise in your responses."}}]
    Returns: future that completes when the turn is done."
   [agent {:keys [message on-text on-done on-error]}]
   (reset! (:signal agent) false)
-  (let [api-key (case (:provider agent)
+  (let [api-key (case @(:provider agent)
                   :openai (System/getenv "OPENAI_API_KEY")
                   :anthropic (System/getenv "ANTHROPIC_API_KEY")
                   nil)]
@@ -136,6 +138,15 @@ Be precise and concise in your responses."}}]
             (when (:session agent)
               (session/append-entry (:session agent)
                 {:role :user :content (:content user-msg)})))
+
+          ;; Auto-compact session if needed
+          (when-let [sess (:session agent)]
+            (when-let [threshold (:compact-threshold agent)]
+              (let [n-entries (count @(:entries sess))]
+                (when (>= n-entries threshold)
+                  (session/compact! sess (quot threshold 2))
+                  (binding [*out* *err*]
+                    (println "Compacted session:" n-entries "→" (count @(:entries sess)) "entries"))))))
 
           ;; State: thinking
           (reset! (:status agent) :thinking)

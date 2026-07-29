@@ -1,78 +1,155 @@
 # kmet
 
-A minimal coding agent built in Clojure, featuring a terminal user interface (TUI) with differential rendering.
+A minimal coding agent built in Clojure/Babashka, featuring a terminal user interface (TUI)
+with differential rendering, LLM integration, and tool execution.
+
+Inspired by [pi](https://pi.dev) — a terminal-based AI coding agent.
 
 ## Overview
 
-kmet is an experimental terminal-based coding agent. It uses JLine3 for terminal handling and implements a TUI framework with:
-- **Differential rendering** — only changed lines are redrawn, reducing flicker
-- **Component model** — composable UI components (text, spacer, etc.)
-- **Overlay support** — modal overlays for prompts and dialogs
-- **Raw-mode input** — keyboard-driven interaction
+kmet provides an interactive terminal UI where you can chat with an LLM (OpenAI or Anthropic),
+with the agent having access to filesystem tools (read, write, edit, bash, grep, find, ls).
+
+### Features
+
+- **TUI Framework** — differential rendering, component model, overlays, raw-mode input
+- **Multi-line Editor** — word-wrap, undo/redo, kill-ring, history, paste markers
+- **Chat History** — user/assistant/tool message display with scrolling
+- **Agent Loop** — orchestrates LLM calls and tool execution with streaming
+- **Config System** — `~/.config/kmet/settings.edn` and `.kmet/settings.edn` overrides
+- **Theme System** — customizable ANSI color themes from EDN files
+- **Session Persistence** — EDNL files with branching support
+- **Skills & Extensions** — markdown skills and Clojure extensions
+
+## Prerequisites
+
+- [Babashka](https://babashka.org/) ≥ 1.12.215 (bundles JLine3)
+- API keys: `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` environment variables
 
 ## Usage
 
-### Prerequisites
-
-- [Babashka](https://babashka.org/) ≥ 1.12.215
-- Java 11+ (JLine3 dependency)
-
-### Run the demo
-
 ```sh
+# Interactive TUI
 bb run
+
+# Or via the entry script
+./kmet
+
+# With options
+bb run --model gpt-4o --provider openai
+
+# Non-interactive mode
+bb run --print "list files in current directory"
 ```
 
-### Tasks
+### Command-line options
 
-| Task   | Description       |
-| ------ | ----------------- |
-| `run`  | Run the TUI demo  |
-| `help` | Show task help    |
+```
+  -p, --print           Print response and exit (non-interactive)
+  -c, --continue        Continue most recent session
+  -r, --resume          Browse sessions
+  --model <id>          Model to use
+  --provider <name>     Provider (openai, anthropic)
+  -t, --thinking <level> Thinking level (off, low, medium, high)
+  -h, --help            Show this help
+```
+
+### In-TUI commands
+
+| Command | Description |
+|---------|-------------|
+| `/quit` | Exit kmet |
+| `/help` | Show help |
+| `/model <provider:model>` | Switch model |
+| `/new` | Start new session |
+| `/resume` | Browse past sessions |
+| `/tree` | Browse session entry tree |
+| `/theme <name>` | Switch color theme |
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Submit message |
+| `Escape` | Cancel current turn |
+| `Ctrl+Z` | Quit |
+| `Ctrl+C` | Cancel / clear editor |
+| `Ctrl+L` | Clear terminal |
+| `Up/Down` | Scroll chat history |
 
 ## Project Structure
 
 ```
 src/kmet/
-├── demo.clj              — Demo entry point
+├── core.clj              — CLI entry, main layout, commands, session integration
+├── config.clj            — Configuration loading (settings.edn, env vars)
+├── skills.clj            — Skills & extension loading
+├── demo.clj              — Standalone editor demo
 ├── tui/
 │   ├── core.clj          — TUI framework (components, overlays, rendering)
 │   ├── terminal.clj      — JLine3 terminal wrapper
 │   ├── keys.clj          — Keyboard input handling
-│   ├── utils.clj         — Utility functions
-│   ├── index.clj         — Public API re-exports
+│   ├── utils.clj         — Text width, wrapping, ANSI helpers
+│   ├── protocols.clj     — IComponent, IFocusable protocols
+│   ├── theme.clj         — Theme record, color resolution
 │   └── components/
-│       ├── spacer.clj    — Vertical spacer component
-│       └── text.clj      — Static text component
+│       ├── text.clj, spacer.clj, box.clj, container.clj
+│       ├── input.clj, editor.clj
+│       ├── chat_history.clj, markdown.clj
+│       ├── select_list.clj, settings_list.clj
+└── agent/
+    ├── llm.clj           — LLM API client (OpenAI + Anthropic, SSE streaming)
+    ├── tools.clj         — 7 built-in tools (read/write/edit/bash/grep/find/ls)
+    ├── loop.clj          — Agent turn loop with tool cycling, compaction
+    └── session.clj       — EDNL session storage with branching, tree support
 ```
+
+## Configuration
+
+Settings are loaded from:
+
+1. `~/.config/kmet/settings.edn` — user-wide settings
+2. `.kmet/settings.edn` — project-local overrides
+3. Environment variables: `KMET_PROVIDER`, `KMET_MODEL`
+
+Example `~/.config/kmet/settings.edn`:
+
+```clojure
+{:provider :openai
+ :theme "dark"
+ :thinking :off
+ :session-dir "~/.local/share/kmet/sessions"
+ :providers {:openai {:model "gpt-4o"}
+             :anthropic {:model "claude-sonnet-4-20250514"}}}
+```
+
+## Themes
+
+Create EDN theme files in `~/.config/kmet/themes/`. See `examples/themes/` for format.
+
+## Skills & Extensions
+
+- **Skills**: Place `.md` files in `~/.config/kmet/skills/` — appended to system prompt
+- **Extensions**: Place `.clj` files in `~/.config/kmet/extensions/` — loaded at startup
 
 ## Development
 
-Start a REPL:
-
 ```sh
-clj -M -m kmet.demo
+bb demo    # Standalone editor demo
+bb test    # Run tests (234 tests, 811 assertions)
+bb help    # Show task help
 ```
 
-Run tests (if present):
+## Status
 
-```sh
-clj -M:dev -m kmet.demo
-```
+- ✅ Phase 1 — TUI Foundation
+- ✅ Phase 2 — Interactive Components
+- ✅ Phase 3 — Agent Core
+- ✅ Phase 4 — Chat History, Layout, Commands
+- 🔄 Phase 5 — Themes, Config, Polish (in progress)
 
 ## License
 
-Copyright © 2026 – present Marko Kocic <marko@euptera.com>
+Copyright © 2026 — present Marko Kocic <marko@euptera.com>
 
 Licensed under the Eclipse Public License 2.0 (EPL-2.0).
-
-You may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    https://www.eclipse.org/legal/epl-2.0/
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.

@@ -49,14 +49,26 @@ kmet/
 ├── bb.edn                   # Babashka tasks
 ├── deps.edn                 # Dependencies (currently empty, all built-in)
 ├── impl.md                  # This file
+├── kmet                     # Entry script (bb shebang)
+├── bb.edn                   # Babashka tasks (run, demo, test, help)
+├── deps.edn                 # Dependencies (currently empty, all built-in)
+├── examples/
+│   ├── settings.edn          # Example settings file
+│   └── themes/
+│       ├── dark.edn          # Dark theme example
+│       └── light.edn         # Light theme example
 ├── src/kmet/
-│   ├── core.clj             # CLI entry point, argument parsing
+│   ├── core.clj             # CLI entry point, argument parsing, main layout
+│   ├── config.clj           # Configuration loading (settings.edn, env vars)
+│   ├── skills.clj           # Skills & extension loading
+│   ├── demo.clj             # Editor demo entry point
 │   ├── tui/
 │   │   ├── core.clj         # TUI class: render loop, focus, overlays, input routing
 │   │   ├── terminal.clj     # JLine3 wrapper: raw mode, write, dimensions
 │   │   ├── keys.clj         # Key parsing and matching (matches-key?, parse-key)
 │   │   ├── utils.clj        # visible-width, truncate-to-width, wrap-text, ANSI helpers
 │   │   ├── protocols.clj    # IComponent, IFocusable protocols
+│   │   ├── theme.clj        # Theme record, color resolution, file loading
 │   │   └── components/
 │   │       ├── container.clj  # IComponent that groups children
 │   │       ├── text.clj       # Multi-line word-wrapped text
@@ -64,14 +76,15 @@ kmet/
 │   │       ├── box.clj        # Container with padding + background
 │   │       ├── input.clj      # Single-line input with undo, yank, word nav
 │   │       ├── editor.clj     # Multi-line editor with undo/redo, word-wrap, kill-ring
+│   │       ├── chat_history.clj # User/assistant/tool message display
 │   │       ├── select_list.clj # Interactive selection list with fuzzy filtering
 │   │       ├── settings_list.clj # Toggle/cycle through setting values
 │   │       └── markdown.clj   # Markdown to ANSI renderer
 │   └── agent/
 │       ├── llm.clj           # LLM API client — OpenAI + Anthropic, SSE streaming
 │       ├── tools.clj         # 7 built-in tools (read/write/edit/bash/grep/find/ls)
-│       ├── loop.clj          # Agent turn loop with tool call cycling
-│       └── session.clj       # EDNL session storage with branching
+│       ├── loop.clj          # Agent turn loop with tool call cycling, compaction
+│       └── session.clj       # EDNL session storage with branching, tree support
 ├── test/
 │   ├── kmet/
 │   │   ├── runner.clj        # Test runner
@@ -208,153 +221,9 @@ kmet/
 
 ---
 
-## 4. Phase 2 — Interactive Components
+## 4. Phase 2 — Interactive Components (DONE)
 
-### 4.1 `kmet.tui.components.container` — Container (DONE)
-
-**Purpose:** Group child components vertically.
-
-**Implementation:**
-- Extracted from `core.clj` into `src/kmet/tui/components/container.clj`
-- `Container` record + `make-container`, `container-add-child`, `container-remove-child`, `container-clear`
-- Renders children sequentially, passes `handle-input` to each (stops at first handler)
-
-### 4.2 `kmet.tui.components.box` — Box (DONE)
-
-**Purpose:** Container with padding and background color.
-
-**Implementation:**
-- `padding-x`, `padding-y`, `bg-fn`, `cache` fields
-- Renders children into content area (width - 2*padding-x), pads each line with left padding
-- Applies `bg-fn` to each line, pads to full width
-- Render cache (invalidates on width/bg-fn/child-lines change)
-- API: `make-box`, `box-add-child`, `box-remove-child`, `box-clear`, `box-set-bg-fn`
-
-### 4.3 `kmet.tui.components.input` — Input (DONE)
-
-**Purpose:** Single-line text input with horizontal scrolling and cursor.
-
-**Port of:** pi-tui `Input` component.
-
-**Features implemented:**
-- Single line of text with editable cursor
-- Horizontal scrolling when text exceeds available width
-- Cursor rendered as inverse video block with `CURSOR_MARKER` for IME
-- Grapheme-aware cursor movement (Java `BreakIterator`)
-- All keybindings: enter/submit, escape/cancel, left/right, home/end, ctrl+a/e, backspace/delete, ctrl+w/alt+backspace, ctrl+d, ctrl+u, ctrl+k, alt+d/alt+delete
-- Word navigation: alt+left/right, ctrl+left/right, alt+b/f
-- Kill ring: ctrl+y (yank), alt+y (yank-pop) with accumulate
-- Undo stack with coalescing (consecutive word chars = one undo unit)
-- Bracketed paste mode support
-- IFocusable protocol for hardware cursor positioning
-
-**Key implementation details:**
-- Uses Java `BreakIterator` for grapheme and word segmentation
-- `render-line` emits `CURSOR_MARKER` when focused for IME positioning
-- Horizontal scrolling centers cursor in viewport
-- Undo coalescing: whitespace chars trigger snapshot, word chars coalesce
-
-### 4.4 `kmet.tui.components.editor` — Editor
-
-**Purpose:** Multi-line text editor with word-wrap, vertical scrolling, undo/redo, kill-ring, paste markers.
-
-**Port of:** pi-tui `Editor` component — the most complex TUI component (~1950 lines JS).
-
-**Sub-phases:**
-- **2b.1** — Core Editor: multi-line editing, word-wrap layout, cursor movement (arrows, home/end, page up/down), basic editing (typing, backspace, delete, enter newline, submit), vertical scrolling with scroll indicators, border
-- **2b.2** — Editor Features: undo/redo stack, kill-ring/yank/yank-pop, line editing (ctrl+u/k/w, ctrl+w/alt+d), paste markers, character jump mode
-- **2b.3** — History & Autocomplete: up/down history navigation, slash/filename autocomplete (SelectList overlay), trigger/debounce logic
-
-**Overall features:**
-- Multi-line editing with word-wrap
-- Slash command autocomplete (type `/`)
-- File path autocomplete (type `@`, press Tab)
-- Large paste handling (>10 lines → `[paste #1 +50 lines]` markers)
-- Vertical scrolling when content exceeds terminal height
-- Undo/redo stack
-- Kill-ring for delete/yank operations
-- Cursor movement by character, word, line
-- Character jump mode (`ctrl+]`)
-
-**Keybindings:**
-| Key | Action |
-|-----|--------|
-| `enter` | Submit (or `disableSubmit` to prevent) |
-| `shift+enter` / `ctrl+enter` / `alt+enter` | New line |
-| `tab` | Autocomplete |
-| `up` / `down` | Cursor up/down (visual lines with word-wrap) |
-| `left` / `right` | Cursor left/right |
-| `ctrl+a` / `ctrl+e` | Line start/end |
-| `ctrl+u` | Delete to line start |
-| `ctrl+k` | Delete to line end |
-| `ctrl+w` / `alt+backspace` | Delete word backward |
-| `alt+d` / `alt+delete` | Delete word forward |
-| `ctrl+]` | Jump forward to character |
-| `ctrl+alt+]` | Jump backward to character |
-| `escape` | Abort/cancel |
-
-**Implementation approach:**
-- Internal state: `{:lines [] :cursor-line N :cursor-col N}`
-- Word-wrap: `wordWrapLine` splits a logical line into visual chunks at word boundaries
-- Visual line map: maps visual line indices back to logical lines + offsets
-- Cursor tracking: maintain preferred visual column for up/down movement (sticky column)
-- Undo stack: record state before each modification
-- Kill-ring: circular buffer of deleted text blocks
-- Autocomplete: async provider with debounce, renders SelectList overlay
-- Paste markers: replace >10 line pastes with `[paste #N +M lines]` markers
-
-### 4.5 `kmet.tui.components.select_list` — SelectList
-
-**Purpose:** Interactive selection list with keyboard navigation and fuzzy filtering.
-
-**Port of:** pi-tui `SelectList` component.
-
-**Features:**
-- Items with value, label, optional description
-- Keyboard navigation: up/down, page up/down, home/end
-- Fuzzy filtering: type to filter items
-- Scroll indicator for long lists
-- Themeable: selected prefix, selected text, description, scroll info
-
-**Theme interface:**
-```clojure
-(defrecord SelectListTheme [selected-prefix selected-text description scroll-info no-match])
-```
-
-### 4.6 `kmet.tui.components.settings_list` — SettingsList
-
-**Purpose:** Toggle/cycle through setting values.
-
-**Port of:** pi-tui `SettingsList` component.
-
-**Features:**
-- Items with id, label, current value, possible values
-- Left/right to cycle values
-- Fuzzy search by label
-
-### 4.7 `kmet.tui.components.markdown` — Markdown
-
-**Purpose:** Render CommonMark with ANSI styling.
-
-**Port of:** pi-tui `Markdown` component.
-
-**Features:**
-- Headings, bold, italic, code blocks, lists, links, blockquotes, horizontal rules
-- Syntax highlighting (optional, language-agnostic)
-- HTML tags rendered as plain text
-- Padding support
-- Render caching
-
-**Implementation approach:**
-- Use a Clojure markdown parser (or write a minimal one)
-- Convert parsed AST to ANSI-styled terminal lines
-- Theme interface for colors:
-
-```clojure
-(defrecord MarkdownTheme [heading link link-url code code-block
-                          code-block-border quote quote-border hr
-                          list-bullet bold italic])
-```
+All interactive components implemented: container, box, input, editor, select-list, settings-list, markdown.
 
 ---
 
@@ -675,14 +544,14 @@ Zero-width APC sequence `\x1b_pi:c\x07` emitted by `IFocusable` components at th
 5. ~~**Phase 3a** — `llm.clj` (OpenAI first, then Anthropic — SSE streaming, tool use)~~ ✅ DONE
 6. ~~**Phase 3b** — `tools.clj` (read, write, edit, bash, grep, find, ls — parameter validation, tool registry)~~ ✅ DONE
 7. ~~**Phase 3c** — `loop.clj` + `session.clj` (agent orchestration with tool cycle, EDNL session persistence)~~ ✅ DONE
-8. **Phase 4** — Chat history integration, main TUI layout, commands ← CURRENT
-9. **Phase 5** — Themes, config, polish
+8. ~~**Phase 4** — Chat history integration, main TUI layout, commands~~ ✅ DONE
+9. **Phase 5** — Themes, config, polish ← CURRENT
 
 ---
 
 ## Test Coverage
 
-**219 tests, 532 assertions, 0 failures.**
+**234 tests, 811 assertions, 0 failures.**
 
 | Module | Tests | Key coverage |
 |--------|-------|-------------|
@@ -697,6 +566,7 @@ Zero-width APC sequence `\x1b_pi:c\x07` emitted by `IFocusable` components at th
 | `kmet.tui.components.select-list` | 17 | create, navigation (up/down/home/end/page), ctrl+n/p, filtering, selection, escape, get-selected, set-items, theme, render, cache |
 | `kmet.tui.components.settings-list` | 14 | create, navigation, value cycling (right/left/wrap), on-change, filtering, escape, get-item/set-value, render |
 | `kmet.tui.components.markdown` | 16 | create, render (plain, headings, code, bold, italic, inline-code, lists, blockquotes, links, hr), set-text/append, invalidate, cache |
+| `kmet.tui.components.chat-history` | 16 | create, add, render (user/assistant/tool/error), streaming, finalize, clear, max-lines, multiple messages, cache |
 | `kmet.agent.session` | 11 | create, append, parent chain, get-branch, save/load, list, fork, compact, delete |
 | `kmet.agent.tools` | 17 | registry (get/get-all/unknown), all 7 tool executions, error handling, schemas (Anthropic/OpenAI), custom registration |
 | `kmet.agent.llm` | 8 | module loading, no-API-key errors, unknown provider, tool schema consistency, future return |

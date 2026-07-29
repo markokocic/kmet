@@ -3,7 +3,8 @@
    Each entry is an EDN map on one line: {:id str :parent-id str-or-nil :role keyword ...}
    Port of @earendil-works/pi-agent session storage."
   (:require [clojure.java.io :as io]
-            [clojure.edn :as edn]))
+            [clojure.edn :as edn]
+            [clojure.string :as str]))
 
 ;; ─── Session record ─────────────────────────────────────────────────────────
 
@@ -72,6 +73,28 @@
               (vswap! path conj e)
               (recur (:parent-id e)))))
         (vec (reverse @path))))))
+
+(defn get-tree
+  "Build a tree structure from session entries.
+   Returns map of {:id info, :children [...]}"
+  [session]
+  (let [entries @(:entries session)
+        index (reduce (fn [m e] (assoc m (:id e) e)) {} entries)
+        children (fn [parent-id]
+                   (filter #(= (:parent-id %) parent-id) entries))
+        root-children (filter #(nil? (:parent-id %)) entries)]
+    (letfn [(build-node [entry]
+              {:id (:id entry)
+               :role (:role entry)
+               :summary (let [content (:content entry)
+                              text (if (string? content) content
+                                       (str/join (map :text (filter #(= (:type %) :text) content))))
+                              trimmed (str/trim text)]
+                          (if (seq trimmed)
+                            (subs trimmed 0 (min 60 (count trimmed)))
+                            "(empty)"))
+               :children (mapv build-node (children (:id entry)))})]
+      (mapv build-node root-children))))
 
 (defn compact!
   "Summarize older entries beyond a threshold by replacing them with a summary."

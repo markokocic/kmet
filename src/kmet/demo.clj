@@ -6,7 +6,12 @@
             [kmet.tui.components.text :as text]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.input :as input]
-            [kmet.tui.components.box :as box]))
+            [kmet.tui.components.box :as box]
+            [kmet.tui.theme :as theme]
+            [kmet.config :as cfg]
+            [kmet.skills :as skills]))
+
+(defonce ^:private global-config (atom nil))
 
 (defn -main
   "Run the TUI demo with the multi-line editor.
