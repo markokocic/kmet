@@ -233,42 +233,14 @@
              {:name "bash"
               :label "Execute command"
               :description "Execute a bash command with a timeout. For long-running commands, keep the timeout reasonable. Standard streams (stdout/stderr) are captured and returned."
-              :prompt-snippet "Execute bash commands (ls, grep, find, etc.)"
-              :prompt-guidelines ["Use bash for file operations like ls, grep, find"]
+              :prompt-snippet "Execute bash commands"
+              :prompt-guidelines []
               :parameters (->json-schema
                             {:command (param :command :string "Bash command to execute")
                              :timeout (param :timeout :number "Timeout in seconds (optional)" :optional? true)})
               :execute tool-bash})
-   "grep"  (map->Tool
-             {:name "grep"
-              :label "Search files"
-              :description "Search file contents using a regular expression pattern. Returns matching lines with file paths and line numbers."
-              :prompt-snippet "Search file contents for patterns"
-              :prompt-guidelines []
-              :parameters (->json-schema
-                            {:pattern (param :pattern :string "Search pattern (regex or literal string)")
-                             :path    (param :path :string "Directory or file to search (default: current directory)" :optional? true)})
-              :execute tool-grep})
-   "find"  (map->Tool
-             {:name "find"
-              :label "Find files"
-              :description "Find files matching a pattern in their name or path. Returns matching file paths relative to the search directory."
-              :prompt-snippet "Find files by glob pattern"
-              :prompt-guidelines []
-              :parameters (->json-schema
-                            {:pattern (param :pattern :string "Glob pattern to match, e.g. '*.clj', '**/*.md'")
-                             :path    (param :path :string "Directory to search in (default: current directory)" :optional? true)})
-              :execute tool-find})
-   "ls"    (map->Tool
-             {:name "ls"
-              :label "List directory"
-              :description "List contents of a directory. Returns entries sorted alphabetically, with '/' suffix for directories."
-              :prompt-snippet "List directory contents"
-              :prompt-guidelines []
-              :parameters (->json-schema
-                            {:path  (param :path :string "Directory path (default: current directory)" :optional? true)
-                             :long? (param :long? :boolean "Show detailed listing with file sizes and permissions" :optional? true)})
-              :execute tool-ls})})
+   ;; grep, find, ls — disabled
+   })
 
 ;; ─── Tool schema helpers ────────────────────────────────────────────────────
 

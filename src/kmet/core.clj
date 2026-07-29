@@ -381,7 +381,7 @@
             {:message trimmed
              :on-text #(on-agent-text cs %)
              :on-thinking #(on-agent-thinking cs %)
-             :on-done #(on-agent-done cs)
+             :on-done (fn [_] (on-agent-done cs))
              :on-error #(on-agent-error cs %)}))))))
 
 (defn- handle-cancel [cs]
