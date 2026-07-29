@@ -1,7 +1,7 @@
-(ns kmet.tui.components.test-tool-execution
+(ns kmet.agent.ui.test-tool-execution
   (:require [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
-            [kmet.tui.components.tool-execution :as te]))
+            [kmet.agent.ui.tool-execution :as te]))
 
 (defn- strip-ansi [s]
   (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))

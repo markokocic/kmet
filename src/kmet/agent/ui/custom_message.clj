@@ -1,4 +1,4 @@
-(ns kmet.tui.components.custom-message
+(ns kmet.agent.ui.custom-message
   "CustomMessage component — Pi's CustomMessageComponent."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]

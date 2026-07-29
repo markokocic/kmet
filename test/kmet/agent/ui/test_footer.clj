@@ -1,7 +1,7 @@
-(ns kmet.tui.components.test-footer
+(ns kmet.agent.ui.test-footer
   (:require [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
-            [kmet.tui.components.footer :as ft]))
+            [kmet.agent.ui.footer :as ft]))
 
 (defn- strip-ansi [s]
   (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))

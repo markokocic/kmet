@@ -23,17 +23,44 @@
 ## File layout
 ```
 src/kmet/
-├── core.clj          — CLI entry, arg parsing
-├── tui/
-│   ├── core.clj      — TUI class, render loop, overlays
-│   ├── terminal.clj  — JLine3 wrapper
-│   ├── keys.clj      — key parsing/matching
-│   ├── utils.clj     — text utilities
-│   ├── index.clj     — public re-exports
+├── core.clj            — CLI entry, arg parsing
+├── agent/
+│   ├── loop.clj        — Agent conversation loop
+│   ├── llm.clj         — LLM API calls
+│   ├── session.clj     — Session persistence
+│   ├── tools.clj       — Tool registry
+│   ├── ui.clj          — Re-exports for app UI components
+│   └── ui/             — App-specific TUI components (Pi's coding-agent layer)
+│       ├── chat_history.clj
+│       ├── user_message.clj
+│       ├── assistant_message.clj
+│       ├── tool_execution.clj
+│       ├── custom_message.clj
+│       └── footer.clj
+├── tui/                — Generic TUI library (Pi's @earendil-works/pi-tui)
+│   ├── core.clj        — TUI class, render loop, overlays
+│   ├── terminal.clj    — JLine3 wrapper
+│   ├── keys.clj        — key parsing/matching
+│   ├── protocols.clj   — IComponent, IFocusable, IComponentKind
+│   ├── utils.clj       — text width, wrapping, ANSI helpers
+│   ├── theme.clj       — Theme system (fg/bg colors)
+│   ├── macros.clj      — with-cache helper
 │   └── components/
+│       ├── container.clj
+│       ├── box.clj
 │       ├── text.clj
-│       └── spacer.clj
+│       ├── spacer.clj
+│       ├── markdown.clj
+│       ├── input.clj
+│       ├── editor.clj
+│       ├── select_list.clj
+│       └── settings_list.clj
 ```
+
+### Layer boundaries
+- **`kmet.tui.*`** — generic. No dependency on agent, LLM, or session concepts.
+- **`kmet.agent.ui.*`** — app-specific. Builds on `kmet.tui.*`; imports `with-cache` from `kmet.tui.macros`.
+- **`kmet.agent.*`** (non-ui) — business logic. Never imports `kmet.tui.*` or `kmet.agent.ui.*`.
 
 ## Testing
 - **Framework**: `clojure.test`
@@ -67,6 +94,17 @@ When guidelines conflict, priority is (highest first):
 4. General best practices
 
 If the user asks for something that contradicts AGENTS.md, explain the conflict and ask for confirmation.
+
+### Component architecture
+Each message type has its own `defrecord` implementing `IComponent`:
+- `UserMessage` — user text in a `Box` with `user-message-bg`
+- `AssistantMessage` — assistant text + thinking (italic + `thinking-text` color)
+- `ToolExecution` — tool call/result in `Box` with status background
+- `CustomMessage` — info/custom messages in `Box` with `custom-message-bg`
+- `ChatHistory` — thin `Container` wrapper that composes per-role components
+
+Type dispatch uses `IComponentKind` protocol (`component-kind` returning `:user`,
+`:assistant`, `:tool`, `:custom`). Render cache managed by `kmet.tui.macros/with-cache`.
 
 ## Reference
 - Consult `~/src/cvstree/pi/` for implementation patterns before building new features — e.g., study its TUI component model before adding new components, or its diff rendering approach before implementing a diff view.

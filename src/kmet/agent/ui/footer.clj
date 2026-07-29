@@ -1,4 +1,4 @@
-(ns kmet.tui.components.footer
+(ns kmet.agent.ui.footer
   "Footer component — Pi's FooterComponent."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]

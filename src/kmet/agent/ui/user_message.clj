@@ -1,4 +1,4 @@
-(ns kmet.tui.components.user-message
+(ns kmet.agent.ui.user-message
   "UserMessage component — Pi's UserMessageComponent.
    Renders user messages in a Box with user-message-bg background
    and user-message-text foreground color."

@@ -1,7 +1,7 @@
-(ns kmet.tui.components.test-custom-message
+(ns kmet.agent.ui.test-custom-message
   (:require [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
-            [kmet.tui.components.custom-message :as cm]))
+            [kmet.agent.ui.custom-message :as cm]))
 
 (defn- strip-ansi [s]
   (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))

@@ -1,4 +1,4 @@
-(ns kmet.tui.components.chat-history
+(ns kmet.agent.ui.chat-history
   "ChatHistory — thin Container wrapper that composes per-message-type components
    (UserMessage, AssistantMessage, ToolExecution, CustomMessage) as children.
    This is the Pi architecture: a flat Container with separate component
@@ -7,10 +7,10 @@
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.container :as container]
-            [kmet.tui.components.user-message :as um]
-            [kmet.tui.components.assistant-message :as am]
-            [kmet.tui.components.tool-execution :as te]
-            [kmet.tui.components.custom-message :as cm]))
+            [kmet.agent.ui.user-message :as um]
+            [kmet.agent.ui.assistant-message :as am]
+            [kmet.agent.ui.tool-execution :as te]
+            [kmet.agent.ui.custom-message :as cm]))
 
 ;; ─── Info component at top ─────────────────────────────────────────────────
 

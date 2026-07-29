@@ -7,8 +7,7 @@
             [kmet.tui.components.text :as text]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.editor :as editor]
-            [kmet.tui.components.chat-history :as chat]
-            [kmet.tui.components.footer :as footer]
+            [kmet.agent.ui :as ui]
             [kmet.tui.components.select-list :as select-list]
             [kmet.agent.loop :as agent]
             [kmet.agent.session :as session]
@@ -105,9 +104,9 @@
          " │ " DIM short-cwd RST)))
 
 (defn- fmt-footer-str [cs]
-  (let [n-msgs (count (chat/chat-history-get-messages (:chat-history cs)))
-        expanded? (chat/chat-history-get-tool-expanded (:chat-history cs))
-        thinking-hidden? (chat/chat-history-get-thinking-hidden (:chat-history cs))
+  (let [n-msgs (count (ui/chat-history-get-messages (:chat-history cs)))
+        expanded? (ui/chat-history-get-tool-expanded (:chat-history cs))
+        thinking-hidden? (ui/chat-history-get-thinking-hidden (:chat-history cs))
         toggles (str (when expanded? (str CYN " O" RST))
                      (when thinking-hidden? (str YLW " T" RST)))
         cmds (str DIM "/quit" RST " " DIM "/help" RST " "
@@ -119,7 +118,7 @@
 
 (defn- update-header-footer! [cs]
   (text/text-set! (:header-text cs) (fmt-header cs))
-  (footer/footer-set-status! (:footer-comp cs) (fmt-status-str cs))
+  (ui/footer-set-status! (:footer-comp cs) (fmt-status-str cs))
   nil)
 
 ;; ─── Command handling ──────────────────────────────────────────────────────
@@ -150,7 +149,7 @@
                      "  Ctrl+C     — Cancel / clear editor\n"
                      "  Ctrl+L     — Clear terminal\n"
                      "  Up/Down    — Scroll chat history")]
-      (chat/chat-history-add-message! (:chat-history cs)
+      (ui/chat-history-add-message! (:chat-history cs)
         {:role :assistant :content help-text}))
 
     "model"
@@ -160,9 +159,9 @@
             model (or (second parts) (:model (:config cs)))]
         (agent/set-provider! (:agent-state cs) provider)
         (agent/set-model! (:agent-state cs) model)
-        (chat/chat-history-add-message! (:chat-history cs)
+        (ui/chat-history-add-message! (:chat-history cs)
           {:role :assistant :content (str "Switched to " (fmt-model provider model))}))
-      (chat/chat-history-add-message! (:chat-history cs)
+      (ui/chat-history-add-message! (:chat-history cs)
         {:role :assistant :content
          (str "Current model: " (fmt-model @(:provider (:agent-state cs))
                                             @(:model (:agent-state cs)))
@@ -171,13 +170,13 @@
     "new"
     (let [new-session (session/create-session (ensure-session-dir))]
       (debug/log "new session created: " (:id new-session))
-      (chat/chat-history-clear! (:chat-history cs))
+      (ui/chat-history-clear! (:chat-history cs))
       ;; Update both CoreState and AgentState session references
       (reset! (:session cs) new-session)
       (let [old-ag (:agent-state cs)
             new-ag (assoc old-ag :session new-session)]
         (reset! (:agent-state cs) new-ag))
-      (chat/chat-history-add-message! (:chat-history cs)
+      (ui/chat-history-add-message! (:chat-history cs)
         {:role :assistant :content "Started a new session."}))
 
     "resume"
@@ -189,18 +188,18 @@
 
     "theme"
     (if (seq args)
-      (chat/chat-history-add-message! (:chat-history cs)
+      (ui/chat-history-add-message! (:chat-history cs)
         {:role :assistant
          :content (str "Theme switching not yet implemented. "
                        "Available themes: dark, light. "
                        "Current theme: " (cfg/get-theme-name (:config cs)))})
-      (chat/chat-history-add-message! (:chat-history cs)
+      (ui/chat-history-add-message! (:chat-history cs)
         {:role :assistant
          :content (str "Current theme: " (cfg/get-theme-name (:config cs))
                        "\nUsage: /theme <name>")}))
 
     ;; Unknown command
-    (chat/chat-history-add-message! (:chat-history cs)
+    (ui/chat-history-add-message! (:chat-history cs)
       {:role :assistant
        :content (str "Unknown command: /" cmd ". Type /help for available commands.")}))
   (update-header-footer! cs))
@@ -212,7 +211,7 @@
   [cs session-dir-fn]
   (let [sessions (session/list-sessions (session-dir-fn))]
     (if (empty? sessions)
-      (chat/chat-history-add-message! (:chat-history cs)
+      (ui/chat-history-add-message! (:chat-history cs)
         {:role :assistant :content "No past sessions found."})
       (let [items (vec (for [s sessions]
                          (let [fname (str/replace s #".*/" "")
@@ -228,7 +227,7 @@
                                   entries (session/get-branch sess)
                                   fname (str/replace (:value sel) #".*/" "")
                                   short-id (subs fname 0 (min 8 (count fname)))]
-                              (chat/chat-history-clear! (:chat-history cs))
+                              (ui/chat-history-clear! (:chat-history cs))
                               (reset! (:session cs) sess)
                               (let [new-ag (assoc (:agent-state cs) :session sess)]
                                 (reset! (:agent-state cs) new-ag))
@@ -236,11 +235,11 @@
                                 (let [role (:role e)
                                       texts (filter #(= (:type %) :text) (:content e))
                                       content (str/join (map :text texts))]
-                                  (chat/chat-history-add-message! (:chat-history cs)
+                                  (ui/chat-history-add-message! (:chat-history cs)
                                     (merge {:role role :content content}
                                       (when (= role :tool)
                                         {:name (or (:name e) "tool")})))))
-                              (chat/chat-history-add-message! (:chat-history cs)
+                              (ui/chat-history-add-message! (:chat-history cs)
                                 {:role :assistant
                                  :content (str "Resumed session " short-id ".")})
                               (tui/tui-hide-overlay (:tui cs))
@@ -263,11 +262,11 @@
   [cs]
   (let [sess (:session cs)]
     (if (nil? sess)
-      (chat/chat-history-add-message! (:chat-history cs)
+      (ui/chat-history-add-message! (:chat-history cs)
         {:role :assistant :content "No active session."})
       (let [tree (session/get-tree sess)]
         (if (empty? tree)
-          (chat/chat-history-add-message! (:chat-history cs)
+          (ui/chat-history-add-message! (:chat-history cs)
             {:role :assistant :content "Session is empty."})
           (let [flatten-tree (fn flatten-tree [nodes depth]
                               (mapcat (fn [n]
@@ -291,7 +290,7 @@
                                                 [(:content entry)]
                                                 (map :text (filter #(= (:type %) :text) (:content entry))))
                                         content (str/join texts)]
-                                    (chat/chat-history-add-message! (:chat-history cs)
+                                    (ui/chat-history-add-message! (:chat-history cs)
                                       (merge {:role (or role :unknown) :content content}
                                         (when (= role :tool)
                                           {:name (or (:name entry) "tool")})))
@@ -313,7 +312,7 @@
 (defn- on-agent-text [cs text]
   "Called for each text delta from the LLM during streaming."
   (try
-    (chat/chat-history-append-streaming-text! (:chat-history cs) text)
+    (ui/chat-history-append-streaming-text! (:chat-history cs) text)
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
     (catch Exception e
@@ -323,7 +322,7 @@
 (defn- on-agent-thinking [cs text]
   "Called for each thinking/reasoning delta from the LLM during streaming."
   (try
-    (chat/chat-history-append-thinking-text! (:chat-history cs) text)
+    (ui/chat-history-append-thinking-text! (:chat-history cs) text)
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
     (catch Exception e
@@ -335,8 +334,8 @@
    Finalize streaming FIRST (captures thinking text), then clear thinking.
    Session persistence is handled by the agent loop internally."
   (try
-    (chat/chat-history-finalize-streaming! (:chat-history cs))
-    (chat/chat-history-finalize-thinking! (:chat-history cs))
+    (ui/chat-history-finalize-streaming! (:chat-history cs))
+    (ui/chat-history-finalize-thinking! (:chat-history cs))
     (reset! (:running-turn? cs) false)
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
@@ -349,9 +348,9 @@
   "Called when an error occurs during the agent turn."
   (try
     ;; Finalize streaming FIRST to capture any thinking text
-    (chat/chat-history-finalize-streaming! (:chat-history cs))
-    (chat/chat-history-finalize-thinking! (:chat-history cs))
-    (chat/chat-history-add-message! (:chat-history cs)
+    (ui/chat-history-finalize-streaming! (:chat-history cs))
+    (ui/chat-history-finalize-thinking! (:chat-history cs))
+    (ui/chat-history-add-message! (:chat-history cs)
       {:role :assistant :content (str RED "Error: " error-msg RST)})
     (reset! (:running-turn? cs) false)
     (update-header-footer! cs)
@@ -376,7 +375,7 @@
         (when-not @(:running-turn? cs)
           (reset! (:running-turn? cs) true)
           (debug/log "user submitted: " trimmed)
-          (chat/chat-history-add-message! (:chat-history cs)
+          (ui/chat-history-add-message! (:chat-history cs)
             {:role :user :content trimmed})
           (update-header-footer! cs)
           (tui/tui-request-render (:tui cs))
@@ -393,9 +392,9 @@
     (debug/log "agent turn cancelled by user")
     (agent/cancel-turn (:agent-state cs))
     ;; Finalize streaming FIRST to capture thinking text
-    (chat/chat-history-finalize-streaming! (:chat-history cs))
-    (chat/chat-history-finalize-thinking! (:chat-history cs))
-    (chat/chat-history-add-message! (:chat-history cs)
+    (ui/chat-history-finalize-streaming! (:chat-history cs))
+    (ui/chat-history-finalize-thinking! (:chat-history cs))
+    (ui/chat-history-add-message! (:chat-history cs)
       {:role :assistant :content (str DIM "(cancelled)" RST)})
     (reset! (:running-turn? cs) false)
     (update-header-footer! cs)
@@ -436,12 +435,12 @@ Be precise and concise in your responses.")
         ;; Components
         hdr (text/make-text "" 1 0)
         sp1 (spacer/make-spacer 1)
-        ch (chat/make-chat-history :theme (cfg/get-theme config))
+        ch (ui/make-chat-history :theme (cfg/get-theme config))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 2
             :border-fn (fn [c] (str DIM c RST)))
         sp3 (spacer/make-spacer 1)
-        ftr (footer/make-footer :status "" :n-msgs 0)
+        ftr (ui/make-footer :status "" :n-msgs 0)
 
         ;; Core state
         cs (map->CoreState {:tui t
@@ -500,13 +499,13 @@ Be precise and concise in your responses.")
 
           ;; Pi-style: Ctrl+O toggles tool output expansion
           (keys/matches-key? data (keys/ctrl "o"))
-          (do (chat/chat-history-toggle-tool-expanded! ch)
+          (do (ui/chat-history-toggle-tool-expanded! ch)
               (update-header-footer! cs)
               (tui/tui-request-render t))
 
           ;; Pi-style: Ctrl+T toggles thinking block visibility
           (keys/matches-key? data (keys/ctrl "t"))
-          (do (chat/chat-history-toggle-thinking-hidden! ch)
+          (do (ui/chat-history-toggle-thinking-hidden! ch)
               (update-header-footer! cs)
               (tui/tui-request-render t))
 
@@ -514,17 +513,17 @@ Be precise and concise in your responses.")
 
     ;; Initialize header/footer
     (text/text-set! hdr (fmt-header cs))
-    (footer/footer-set-status! ftr (fmt-status-str cs))
+    (ui/footer-set-status! ftr (fmt-status-str cs))
 
     ;; Pi-style info message on top
-    (chat/chat-history-set-info-msg! ch
+    (ui/chat-history-set-info-msg! ch
       {:label "kmet"
        :content (str "Welcome to kmet — minimal coding agent.\n"
                      "Type a message, /help for commands, or use:\n"
                      "  " DIM "Ctrl+O" RST " — toggle tool output  " DIM "Ctrl+T" RST " — toggle thinking blocks")})
 
     ;; Welcome message
-    (chat/chat-history-add-message! ch
+    (ui/chat-history-add-message! ch
       {:role :assistant
        :content (str "Welcome to " BLD "kmet" RST
                      " — minimal coding agent.\n"

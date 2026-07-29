@@ -22,12 +22,12 @@
             [kmet.tui.components.test-select-list]
             [kmet.tui.components.test-settings-list]
             [kmet.tui.components.test-markdown]
-            [kmet.tui.components.test-chat-history]
-            [kmet.tui.components.test-user-message]
-            [kmet.tui.components.test-assistant-message]
-            [kmet.tui.components.test-tool-execution]
-            [kmet.tui.components.test-custom-message]
-            [kmet.tui.components.test-footer]))
+            [kmet.agent.ui.test-chat-history]
+            [kmet.agent.ui.test-user-message]
+            [kmet.agent.ui.test-assistant-message]
+            [kmet.agent.ui.test-tool-execution]
+            [kmet.agent.ui.test-custom-message]
+            [kmet.agent.ui.test-footer]))
 
 (defn -main [& _args]
   (let [namespaces '[kmet.test-utils kmet.test-keys
@@ -48,12 +48,12 @@
                      kmet.tui.components.test-select-list
                      kmet.tui.components.test-settings-list
                      kmet.tui.components.test-markdown
-                     kmet.tui.components.test-chat-history
-                     kmet.tui.components.test-user-message
-                     kmet.tui.components.test-assistant-message
-                     kmet.tui.components.test-tool-execution
-                     kmet.tui.components.test-custom-message
-                     kmet.tui.components.test-footer]
+                     kmet.agent.ui.test-chat-history
+                     kmet.agent.ui.test-user-message
+                     kmet.agent.ui.test-assistant-message
+                     kmet.agent.ui.test-tool-execution
+                     kmet.agent.ui.test-custom-message
+                     kmet.agent.ui.test-footer]
         results (apply t/run-tests namespaces)]
     (println "\\nResults:" (:pass results) "passed," (:fail results) "failed," (:error results) "errors")
     (System/exit (if (pos? (+ (:fail results) (:error results))) 1 0))))

@@ -1,4 +1,4 @@
-(ns kmet.tui.components.tool-execution
+(ns kmet.agent.ui.tool-execution
   "ToolExecution component — Pi's ToolExecutionComponent."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]

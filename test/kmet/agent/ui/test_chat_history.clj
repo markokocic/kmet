@@ -1,7 +1,7 @@
-(ns kmet.tui.components.test-chat-history
+(ns kmet.agent.ui.test-chat-history
   (:require [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
-            [kmet.tui.components.chat-history :as ch]))
+            [kmet.agent.ui.chat-history :as ch]))
 
 (defn- strip-ansi [s]
   (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))

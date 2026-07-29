@@ -1,4 +1,4 @@
-(ns kmet.tui.components.assistant-message
+(ns kmet.agent.ui.assistant-message
   "AssistantMessage component — Pi's AssistantMessageComponent."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
