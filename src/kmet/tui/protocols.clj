@@ -10,3 +10,9 @@
 (defprotocol IFocusable
   (focused [this])
   (set-focused! [this val]))
+
+(defprotocol IComponentKind
+  "Reliable type dispatch for message components.
+   Safer than key-based duck typing (contains? :name-atom) which
+   silently breaks when record fields are renamed."
+  (component-kind [this] "Returns :user, :assistant, :tool, :custom, or nil"))

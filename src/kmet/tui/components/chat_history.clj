@@ -199,60 +199,64 @@
 
 ;; ─── Toggles ─────────────────────────────────────────────────────────────
 
-(defn- tool-execution?
-  "Check if a component is a ToolExecution (has :name-atom and :expanded-atom)."
+(defn- kind-of
+  "Get the component kind via IComponentKind protocol, falling back to key-based
+   heuristics for components that don't implement the protocol."
   [child]
-  (and (map? child) (contains? child :name-atom) (contains? child :expanded-atom)))
+  (if (satisfies? protocols/IComponentKind child)
+    (protocols/component-kind child)
+    ;; Fallback for components that don't implement the protocol yet
+    (cond
+      (and (map? child) (contains? child :name-atom) (contains? child :expanded-atom)) :tool
+      (and (map? child) (contains? child :thinking-text-atom) (contains? child :hide-thinking-atom)) :assistant
+      (and (map? child) (contains? child :text-atom) (not (contains? child :thinking-text-atom))) :user
+      (and (map? child) (contains? child :label-atom) (contains? child :content-atom)
+           (not (contains? child :name-atom))) :custom
+      :else nil)))
 
-(defn- assistant-message?
-  "Check if a component is an AssistantMessage (has :thinking-text-atom and :hide-thinking-atom)."
+(defn- toggle-expanded!
+  "Toggle the expanded state of a tool component."
   [child]
-  (and (map? child) (contains? child :thinking-text-atom) (contains? child :hide-thinking-atom)))
+  (let [current @(:expanded-atom child)]
+    (te/tool-execution-set-expanded! child (not current))))
 
-(defn- user-message?
-  "Check if a component is a UserMessage (has :text-atom and :output-pad-atom but not :thinking-text-atom)."
+(defn- toggle-hide-thinking!
+  "Toggle the thinking-hidden state of an assistant component."
   [child]
-  (and (map? child) (contains? child :text-atom) (not (contains? child :thinking-text-atom))))
-
-(defn- custom-message?
-  "Check if a component is a CustomMessage (has :label-atom and :content-atom but not :name-atom)."
-  [child]
-  (and (map? child) (contains? child :label-atom) (contains? child :content-atom)
-       (not (contains? child :name-atom))))
+  (let [current @(:hide-thinking-atom child)]
+    (am/assistant-message-set-hide-thinking! child (not current))))
 
 (defn chat-history-toggle-tool-expanded!
   "Toggle tool output expansion on all ToolExecution children."
   [ch]
   (doseq [child @(:children-atom ch)]
-    (when (tool-execution? child)
-      (let [current @(:expanded-atom child)]
-        (te/tool-execution-set-expanded! child (not current))))))
+    (when (= (kind-of child) :tool)
+      (toggle-expanded! child))))
 
 (defn chat-history-get-tool-expanded
   "Check if tools are expanded. Returns false if no ToolExecution children."
   [ch]
-  (let [val (some (fn [child]
-                    (when (tool-execution? child)
-                      @(:expanded-atom child)))
-                  @(:children-atom ch))]
-    (boolean val)))
+  (boolean
+    (some (fn [child]
+            (when (= (kind-of child) :tool)
+              @(:expanded-atom child)))
+          @(:children-atom ch))))
 
 (defn chat-history-toggle-thinking-hidden!
   "Toggle thinking block visibility on all AssistantMessage children."
   [ch]
   (doseq [child @(:children-atom ch)]
-    (when (assistant-message? child)
-      (let [current @(:hide-thinking-atom child)]
-        (am/assistant-message-set-hide-thinking! child (not current))))))
+    (when (= (kind-of child) :assistant)
+      (toggle-hide-thinking! child))))
 
 (defn chat-history-get-thinking-hidden
   "Check if thinking is hidden. Returns false if no AssistantMessage children."
   [ch]
-  (let [val (some (fn [child]
-                    (when (assistant-message? child)
-                      @(:hide-thinking-atom child)))
-                  @(:children-atom ch))]
-    (boolean val)))
+  (boolean
+    (some (fn [child]
+            (when (= (kind-of child) :assistant)
+              @(:hide-thinking-atom child)))
+          @(:children-atom ch))))
 
 ;; ─── Misc ─────────────────────────────────────────────────────────────────
 
@@ -264,53 +268,75 @@
   (reset! (:info-comp-atom ch) nil)
   (reset! (:streaming-atom ch) nil))
 
+(defn- child->msg
+  "Convert a component child back to a message map."
+  [child]
+  (case (kind-of child)
+    :user {:role :user :content @(:text-atom child)}
+    :assistant (let [m {:role :assistant :content @(:text-atom child)}]
+                 (if-let [t @(:thinking-text-atom child)]
+                   (assoc m :thinking t)
+                   m))
+    :tool {:role :tool :name @(:name-atom child)
+           :content @(:content-atom child)
+           :is-error @(:is-error-atom child)}
+    :custom {:role :info :label @(:label-atom child)
+             :content @(:content-atom child)}
+    nil))
+
 (defn chat-history-get-messages
   "Get all stored messages (converts children back to message maps for backward compat)."
   [ch]
-  (vec (keep (fn [child]
-               (cond
-                 (user-message? child)
-                 {:role :user :content @(:text-atom child)}
-                 (assistant-message? child)
-                 (let [m {:role :assistant :content @(:text-atom child)}]
-                   (if-let [t @(:thinking-text-atom child)]
-                     (assoc m :thinking t)
-                     m))
-                 (tool-execution? child)
-                 {:role :tool :name @(:name-atom child)
-                  :content @(:content-atom child)
-                  :is-error @(:is-error-atom child)}
-                 (custom-message? child)
-                 {:role :info :label @(:label-atom child)
-                  :content @(:content-atom child)}
-                 :else nil))
-             @(:children-atom ch))))
+  (vec (keep child->msg @(:children-atom ch))))
 
 (defn chat-history-set-max-lines!
   "No-op: Pi architecture doesn't use max-lines (terminal handles viewport)."
   [ch _n] nil)
 
+(defn- apply-to-kind!
+  "Apply a function to all children of a given kind."
+  [ch kind f]
+  (doseq [child @(:children-atom ch)]
+    (when (= (kind-of child) kind)
+      (f child))))
+
+(defn- set-theme-on!
+  "Set theme on a child based on its kind."
+  [child t]
+  (case (kind-of child)
+    :user (um/user-message-set-theme! child t)
+    :assistant (am/assistant-message-set-theme! child t)
+    :tool (te/tool-execution-set-theme! child t)
+    :custom (cm/custom-message-set-theme! child t)
+    nil))
+
+(defn- set-pad-on!
+  "Set output padding on a child based on its kind."
+  [child n]
+  (case (kind-of child)
+    :user (um/user-message-set-output-pad! child n)
+    :assistant (am/assistant-message-set-output-pad! child n)
+    :tool (te/tool-execution-set-output-pad! child n)
+    :custom (cm/custom-message-set-output-pad! child n)
+    nil))
+
 (defn chat-history-set-theme!
   "Set the theme on all children."
   [ch t]
   (reset! (:theme-atom ch) t)
-  (doseq [child @(:children-atom ch)]
-    (cond
-      (user-message? child) (um/user-message-set-theme! child t)
-      (assistant-message? child) (am/assistant-message-set-theme! child t)
-      (tool-execution? child) (te/tool-execution-set-theme! child t)
-      (custom-message? child) (cm/custom-message-set-theme! child t))))
+  (apply-to-kind! ch :user #(um/user-message-set-theme! % t))
+  (apply-to-kind! ch :assistant #(am/assistant-message-set-theme! % t))
+  (apply-to-kind! ch :tool #(te/tool-execution-set-theme! % t))
+  (apply-to-kind! ch :custom #(cm/custom-message-set-theme! % t)))
 
 (defn chat-history-set-output-pad!
   "Set horizontal padding on all children."
   [ch n]
   (reset! (:output-pad-atom ch) n)
-  (doseq [child @(:children-atom ch)]
-    (cond
-      (user-message? child) (um/user-message-set-output-pad! child n)
-      (assistant-message? child) (am/assistant-message-set-output-pad! child n)
-      (tool-execution? child) (te/tool-execution-set-output-pad! child n)
-      (custom-message? child) (cm/custom-message-set-output-pad! child n))))
+  (apply-to-kind! ch :user #(um/user-message-set-output-pad! % n))
+  (apply-to-kind! ch :assistant #(am/assistant-message-set-output-pad! % n))
+  (apply-to-kind! ch :tool #(te/tool-execution-set-output-pad! % n))
+  (apply-to-kind! ch :custom #(cm/custom-message-set-output-pad! % n)))
 
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────
 
