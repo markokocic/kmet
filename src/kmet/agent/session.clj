@@ -29,7 +29,7 @@
     (let [id (generate-id)
           file (io/file session-dir (str id ".ednl"))]
       (spit file "")
-      (map->Session {:file (fs/absolute-path file)
+      (map->Session {:file (str (fs/canonicalize file))
                      :id id
                      :entries (atom [])
                      :leaf-id (atom nil)}))))
@@ -50,7 +50,7 @@
                          (println "Warning: Skipping invalid entry in" path ":" (.getMessage ex)))
                        nil)))))))
         leaf-id (some-> entries last :id)]
-    (map->Session {:file (fs/absolute-file file)
+    (map->Session {:file (str (fs/canonicalize file))
                    :id (str/replace (fs/file-name file) #"\.ednl$" "")
                    :entries (atom entries)
                    :leaf-id (atom leaf-id)})))
@@ -137,7 +137,7 @@
     (when target
       (let [fork-dir (io/file (fs/parent (:file session)) "forks")]
         (fs/create-dirs fork-dir)
-        (let [fork (create-session (fs/absolute-path fork-dir))
+        (let [fork (create-session (str (fs/canonicalize fork-dir)))
               ;; Copy branch up to target
               branch (loop [id entry-id result []]
                        (if id
@@ -147,8 +147,9 @@
                          result))]
           (doseq [e (reverse branch)]
             (let [clean (dissoc e :id :parent-id :timestamp)]
-              (append-entry fork clean))))
-        fork))))
+              (append-entry fork clean)))
+          fork)))))
+
 
 ;; ─── Convenience ───────────────────────────────────────────────────────────
 
@@ -160,7 +161,7 @@
       (->> (fs/list-dir d)
            (filter #(str/ends-with? (fs/file-name %) ".ednl"))
            (sort-by #(fs/last-modified-time %) >)
-           (mapv fs/absolute-path)))))
+           (mapv #(str (fs/canonicalize %)))))))
 
 (defn delete-session!
   "Delete a session file."

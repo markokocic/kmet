@@ -66,7 +66,7 @@
                     skill-name (str/replace name #"\.md$" "")]
                 (vswap! loaded conj
                   {:name skill-name
-                   :file (fs/absolute-path f)
+                   :file (str (fs/canonicalize f))
                    :content content}))
               (catch Exception e
                 (binding [*out* *err*]
@@ -112,7 +112,7 @@
             (let [code (slurp f)]
               (load-string code)
               (swap! extensions conj
-                {:name (fs/file-name f) :file (fs/absolute-path f)}))
+                {:name (fs/file-name f) :file (str (fs/canonicalize f))}))
             (catch Exception e
               (binding [*out* *err*]
                 (println "Warning: Failed to load extension" (fs/file-name f) ":" (.getMessage e))))))))))

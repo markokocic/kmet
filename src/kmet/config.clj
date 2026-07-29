@@ -4,6 +4,7 @@
    (project-local overrides)."
   (:require [clojure.java.io :as io]
             [clojure.edn :as edn]
+            [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.tui.theme :as theme]))
 

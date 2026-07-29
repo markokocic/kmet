@@ -187,7 +187,7 @@
                                  (str type " " (format "%10d" size) " " name)
                                  name)))
                            sorted))]
-          {:content (str "Contents of " (fs/absolute-path dir) ":\n" result)})))
+          {:content (str "Contents of " (str (fs/canonicalize dir)) ":\n" result)})))
     (catch Exception e
       {:content (str "Error listing: " (.getMessage e)) :is-error true})))
 
