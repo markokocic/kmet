@@ -196,6 +196,7 @@
                                    theme theme/dark-theme}}]
   (map->ChatHistory {:messages-atom (atom [])
                      :streaming-text-atom (atom "")
+                     :thinking-text-atom (atom "")
                      :scroll-offset-atom (atom 0)
                      :max-lines-atom (atom max-lines)
                      :focused? (atom false)
