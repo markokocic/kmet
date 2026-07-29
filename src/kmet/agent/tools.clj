@@ -106,8 +106,7 @@
   (try
     (let [timeout-ms (* (or timeout 30) 1000)
           p (proc/process ["sh" "-c" command]
-              {:out :string :err :string
-               :shutdown (fn [p] (proc/destroy p))})
+              {:out :string :err :string})
           result (deref p timeout-ms ::timeout)]
       (if (= result ::timeout)
         (do (proc/destroy p)
@@ -182,7 +181,7 @@
                       (map (fn [f]
                              (let [name (fs/file-name f)
                                    type (if (fs/directory? f) "d" "-")
-                                   size (fs/size f 0)]
+                                   size (try (fs/size f) (catch Exception _ 0))]
                                (if long?
                                  (str type " " (format "%10d" size) " " name)
                                  name)))
