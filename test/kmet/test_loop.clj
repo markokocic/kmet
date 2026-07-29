@@ -15,7 +15,8 @@
     (t/is (instance? clojure.lang.Atom (:signal agent)))
     (t/is (false? @(:signal agent)))
     (t/is (nil? (:on-event agent)))
-    (t/is (nil? (:session agent)))))
+    (t/is (nil? (:session agent)))
+    (t/is (= :off @(:thinking agent)))))
 
 (t/deftest test-loop-make-agent-state-with-opts
   (let [session {:dummy :session}
@@ -84,11 +85,26 @@
 
 ;; ─── Event dispatching ───────────────────────────────────────────────────
 
-(t/deftest test-loop-on-event
+(t/deftest test-loop-on-event-fires-on-cancel
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
-    (reset! (:status agent) :thinking)
-    (t/is (= :thinking @(:status agent)))))
+    (loop/cancel-turn agent)
+    (t/is (pos? (count @events)))
+    (t/is (= :idle (:status (last @events))))))
+
+(t/deftest test-loop-on-event-no-listener
+  (let [agent (loop/make-agent-state)]
+    (t/is (nil? (:on-event agent)))
+    (loop/cancel-turn agent)
+    (t/is (= :idle @(:status agent)))))
+
+(t/deftest test-loop-make-agent-state-with-thinking
+  (let [agent (loop/make-agent-state :thinking :high)]
+    (t/is (= :high @(:thinking agent)))))
+
+(t/deftest test-loop-thinking-default
+  (let [agent (loop/make-agent-state)]
+    (t/is (= :off @(:thinking agent)))))
 
 ;; ─── run-agent-turn with no API key ──────────────────────────────────────
 

@@ -202,15 +202,26 @@
 
 ;; ─── Anthropic request ─────────────────────────────────────────────────────
 
+(defn- anthropic-thinking-config
+  "Convert thinking level keyword to Anthropic API thinking config."
+  [level]
+  (case level
+    :low    {:type "enabled" :budget_tokens 2048}
+    :medium {:type "enabled" :budget_tokens 8192}
+    :high   {:type "enabled" :budget_tokens 16384}
+    nil)) ;; :off or anything else
+
 (defn- anthropic-request
-  [{:keys [api-key model messages tools signal
+  [{:keys [api-key model messages tools signal thinking
            on-text on-tool-call on-done on-error]}]
   (future
-    (let [payload (cond-> {:model (or model "claude-sonnet-4-20250514")
-                           :max_tokens 4096
+    (let [thinking-cfg (anthropic-thinking-config thinking)
+          payload (cond-> {:model (or model "claude-sonnet-4-20250514")
+                           :max_tokens (if thinking-cfg 32000 4096)
                            :messages (anthropic-messages messages)
                            :stream true}
-                    (seq tools) (assoc :tools (mapv tools/tool->anthropic-schema tools)))]
+                    (seq tools) (assoc :tools (mapv tools/tool->anthropic-schema tools))
+                    thinking-cfg (assoc :thinking thinking-cfg))]
       (try
         (let [response (http/post anthropic-url
                          {:headers {"x-api-key" api-key

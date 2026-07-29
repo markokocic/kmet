@@ -366,7 +366,8 @@ Be precise and concise in your responses.")
              :provider provider
              :system system-prompt
              :session session
-             :compact-threshold (:compact-threshold config 400)
+             :compact-threshold (:compact-threshold config)
+             :thinking (:thinking config :off)
              :on-event (fn [evt]
                          ;; Forward events to extension system
                          (skills/emit-event! evt)))
@@ -374,7 +375,8 @@ Be precise and concise in your responses.")
         ;; Components
         hdr (text/make-text "" 1 1)
         sp1 (spacer/make-spacer 1)
-        ch (chat/make-chat-history :max-lines 100)
+        ch (chat/make-chat-history :max-lines 100
+                                   :theme (cfg/get-theme config))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 2
             :border-fn (fn [c] (str DIM c RST)))
@@ -453,10 +455,14 @@ Be precise and concise in your responses.")
 
 (defn- run-print-mode
   "Run in non-interactive mode: send message, print response, exit."
-  [{:keys [model provider messages]}]
-  (let [system-prompt "You are kmet, a minimal coding agent. Help the user with their tasks.
+  [{:keys [model provider messages config]}]
+  (let [config (or config (cfg/load-config :no-env? true))
+        _ (skills/load-skills-from-dir (cfg/expand-path (:skills-dir config)))
+        base-prompt (or (:system-prompt config)
+                        "You are kmet, a minimal coding agent. Help the user with their tasks.
 Use the available tools to read, write, edit files, and execute commands.
-Be precise and concise in your responses."
+Be precise and concise in your responses.")
+        system-prompt (skills/build-system-prompt base-prompt)
         ag (agent/make-agent-state
              :model model
              :provider provider
@@ -557,7 +563,7 @@ Be precise and concise in your responses."
         (if (empty? msg)
           (do (println "No message provided. Usage: kmet -p \"your message\"")
               (System/exit 1))
-          (do (run-print-mode (assoc opts :messages [msg]))
+          (do (run-print-mode (assoc opts :messages [msg] :config (cfg/load-config :no-env? true)))
               (System/exit 0)))))
     (println "Starting kmet...")
 
@@ -573,7 +579,8 @@ Be precise and concise in your responses."
         ;; Apply command-line overrides
         (let [config (cond-> config
                        (:model opts) (assoc :model (:model opts))
-                       (:provider opts) (assoc :provider (:provider opts)))
+                       (:provider opts) (assoc :provider (:provider opts))
+                       (:thinking opts) (assoc :thinking (:thinking opts)))
               _ (reset! global-config config)
               session (find-or-create-session)
               cs (build-layout config session)]

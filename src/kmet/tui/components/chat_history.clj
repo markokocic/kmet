@@ -3,79 +3,78 @@
    Supports scrolling and streaming text rendering."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
-            [kmet.tui.utils :as u]))
+            [kmet.tui.utils :as u]
+            [kmet.tui.theme :as theme]))
 
-;; ─── ANSI helpers ───────────────────────────────────────────────────────────
+;; ─── ANSI constants ────────────────────────────────────────────────────────
 
 (def ^:private bold "\u001b[1m")
 (def ^:private reset "\u001b[0m")
-(def ^:private green "\u001b[32m")
-(def ^:private cyan "\u001b[36m")
-(def ^:private yellow "\u001b[33m")
 (def ^:private dim "\u001b[2m")
-(def ^:private red "\u001b[31m")
 
 ;; ─── Message rendering ─────────────────────────────────────────────────────
 
 (defn- render-user-msg
   "Render a user message into a vector of ANSI-styled lines."
-  [content width]
+  [content width {:keys [accent text]}]
   (let [cw (max 1 (- width 4))
-        header (str bold green "─── You " reset
+        header (str bold accent "─── You " reset
                     (apply str (repeat (max 0 (- width 8)) "─")))
         wrapped (u/wrap-text-with-ansi content cw)
-        body (mapv #(str "  " %) wrapped)]
+        body (mapv #(str "  " text % reset) wrapped)]
     (into [header] body)))
 
 (defn- render-assistant-msg
   "Render an assistant message into a vector of ANSI-styled lines."
-  [content width]
+  [content width {:keys [accent text]}]
   (let [cw (max 1 (- width 4))
-        header (str bold cyan "─── Assistant " reset
+        header (str bold accent "─── Assistant " reset
                     (apply str (repeat (max 0 (- width 13)) "─")))
         wrapped (u/wrap-text-with-ansi content cw)
-        body (mapv #(str "  " %) wrapped)]
+        body (mapv #(str "  " text % reset) wrapped)]
     (into [header] body)))
 
 (defn- render-tool-msg
   "Render a tool call/result message into a vector of ANSI-styled lines."
-  [{:keys [name content is-error]} width]
+  [{:keys [name content is-error]} width {:keys [tool-title tool-output error muted]}]
   (let [cw (max 1 (- width 4))
-        name-part (str bold yellow "─── " name " " reset)
+        title-color (if is-error error tool-title)
+        name-part (str bold title-color "─── " name " " reset)
         sep-len (max 0 (- width (+ 5 (count name))))
         header (str name-part (apply str (repeat sep-len "─")))
-        display (if is-error (str red content reset) content)
+        display (if is-error (str error content reset)
+                         (str tool-output content reset))
         wrapped (u/wrap-text-with-ansi display cw)
         body (mapv #(str "  " %) wrapped)]
     (into [header] body)))
 
 (defn- render-streaming-msg
   "Render the in-progress streaming assistant response."
-  [text width]
-  (if (empty? text)
+  [msg-text width {:keys [accent muted] :as theme}]
+  (if (empty? msg-text)
     []
-    (let [cw (max 1 (- width 4))
-          header (str bold cyan "─── Assistant " reset
+    (let [text-color (:text theme reset)
+          cw (max 1 (- width 4))
+          header (str bold accent "─── Assistant " reset
                       (apply str (repeat (max 0 (- width 13)) "─")))
-          wrapped (u/wrap-text-with-ansi text cw)
-          body (mapv #(str "  " %) wrapped)
-          ;; blinking cursor indicator
-          cursor (str "  " bold dim "▍" reset)]
+          wrapped (u/wrap-text-with-ansi msg-text cw)
+          body (mapv #(str "  " text-color % reset) wrapped)
+          cursor (str "  " bold muted "▍" reset)]
       (into [header] (conj body cursor)))))
 
 ;; ─── Build full lines from messages ────────────────────────────────────────
 
 (defn- build-all-lines
   "Given messages vector and streaming text, produce all rendered lines."
-  [messages streaming-text width]
+  [messages streaming-text width theme]
   (let [msg-lines (mapcat (fn [m]
                             (case (:role m)
-                              :user (render-user-msg (:content m "") width)
-                              :assistant (render-assistant-msg (:content m "") width)
-                              :tool (render-tool-msg m width)
+                              :user (render-user-msg (:content m "") width theme)
+                              :assistant (render-assistant-msg (:content m "") width theme)
+                              :tool (render-tool-msg m width theme)
                               []))
                           messages)
-        stream-lines (render-streaming-msg streaming-text width)]
+        stream-lines (render-streaming-msg streaming-text width theme)]
     (vec (concat msg-lines stream-lines))))
 
 ;; ─── ChatHistory record ─────────────────────────────────────────────────────
@@ -85,6 +84,7 @@
                         scroll-offset-atom   ;; atom of int (starting line index)
                         max-lines-atom       ;; atom of int (visible line count)
                         focused?
+                        theme-atom           ;; atom of Theme record
                         cache-atom           ;; atom of {:lines [...] :width N :msgs [...]}
                         last-width-atom]     ;; atom of width value
   protocols/IComponent
@@ -93,13 +93,15 @@
     (let [messages @messages-atom
           streaming-text @streaming-text-atom
           max-lines @max-lines-atom
+          theme @theme-atom
           cached @cache-atom]
       (if (and cached
                (= (:width cached) width)
                (= (:msgs cached) messages)
-               (= (:stream cached) streaming-text))
+               (= (:stream cached) streaming-text)
+               (= (:theme cached) theme))
         (:lines cached)
-        (let [all-lines (build-all-lines messages streaming-text width)
+        (let [all-lines (build-all-lines messages streaming-text width theme)
               total (count all-lines)
               _ (reset! last-width-atom width)
               scroll-offset @scroll-offset-atom
@@ -116,12 +118,12 @@
             (reset! scroll-offset-atom offset))
           ;; Cache
           (reset! cache-atom {:width width :msgs messages
-                              :stream streaming-text :lines visible})
+                              :stream streaming-text :theme theme :lines visible})
           visible))))
 
   (handle-input [this data]
     (let [total (count (build-all-lines @messages-atom @streaming-text-atom
-                                         @last-width-atom))
+                                         @last-width-atom @theme-atom))
           max-lines @max-lines-atom
           offset @scroll-offset-atom
           max-offset (max 0 (- total max-lines))]
@@ -170,13 +172,16 @@
 (defn make-chat-history
   "Create a ChatHistory component.
    Options:
-     :max-lines — number of visible lines (default 20)"
-  [& {:keys [max-lines] :or {max-lines 20}}]
+     :max-lines — number of visible lines (default 20)
+     :theme     — Theme record (default dark-theme)"
+  [& {:keys [max-lines theme] :or {max-lines 20
+                                   theme theme/dark-theme}}]
   (map->ChatHistory {:messages-atom (atom [])
                      :streaming-text-atom (atom "")
                      :scroll-offset-atom (atom 0)
                      :max-lines-atom (atom max-lines)
                      :focused? (atom false)
+                     :theme-atom (atom theme)
                      :cache-atom (atom nil)
                      :last-width-atom (atom 80)}))
 
@@ -247,6 +252,12 @@
   "Get the current streaming text."
   [ch]
   @(:streaming-text-atom ch))
+
+(defn chat-history-set-theme!
+  "Set the theme used for rendering."
+  [ch theme]
+  (reset! (:theme-atom ch) theme)
+  (protocols/invalidate ch))
 
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────
 

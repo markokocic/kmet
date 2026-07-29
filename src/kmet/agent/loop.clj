@@ -16,13 +16,15 @@
                        system        ;; system prompt string
                        signal        ;; atom for cancellation
                        compact-threshold ;; int: auto-compact when entries exceed this
+                       thinking      ;; :off :low :medium :high (Anthropic only)
                        on-event])    ;; callback for state updates
 
 (defn make-agent-state
   "Create a new agent state.
-   opts: :model, :provider, :system, :session, :on-event, :compact-threshold"
-  [& {:keys [model provider system session on-event compact-threshold]
+   opts: :model, :provider, :system, :session, :on-event, :compact-threshold, :thinking"
+  [& {:keys [model provider system session on-event compact-threshold thinking]
       :or {provider :openai
+           thinking :off
            system "You are kmet, a minimal coding agent. Help the user with their tasks.
 Use the available tools to read, write, edit files, and execute commands.
 Be precise and concise in your responses."}}]
@@ -34,6 +36,7 @@ Be precise and concise in your responses."}}]
                     :system (atom system)
                     :signal (atom false)
                     :compact-threshold compact-threshold
+                    :thinking (atom thinking)
                     :on-event on-event}))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
@@ -93,6 +96,7 @@ Be precise and concise in your responses."}}]
        :messages @(:messages agent)
        :tools (vals (tools/get-all-tools))
        :signal (:signal agent)
+       :thinking @(:thinking agent)
        :on-text (fn [t]
                   (swap! text-buf str t)
                   (when on-text (on-text t)))
