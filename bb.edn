@@ -15,6 +15,10 @@
                     (babashka.nrepl.server/start-server! {:port 1667})
                     (println "nREPL started on port 1667")
                     (deref (promise)))} ;; block forever
+  check   {:doc "Verify all code compiles"
+           :requires ([kmet.core])
+           :task (println "All source namespaces compile successfully.")
+           :override-builtin true}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run    Interactive TUI (--help for options)\n  nrepl  Start nREPL server\n  test   Run tests")
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run    Interactive TUI (--help for options)\n  nrepl  Start nREPL server\n  test   Run tests\n  check  Verify compilation")
            :override-builtin true}}}
