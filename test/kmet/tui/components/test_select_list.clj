@@ -1,7 +1,6 @@
 (ns kmet.tui.components.test-select-list
   (:require [clojure.test :as t]
             [kmet.tui.core :as core]
-            [kmet.tui.keys :as keys]
             [kmet.tui.components.select-list :as sl]))
 
 (def ^:const K-DOWN "\u001b[B")

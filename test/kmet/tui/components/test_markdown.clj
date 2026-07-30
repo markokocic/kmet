@@ -1,7 +1,6 @@
 (ns kmet.tui.components.test-markdown
   (:require [clojure.test :as t]
             [kmet.tui.core :as core]
-            [kmet.tui.utils :as u]
             [kmet.tui.components.markdown :as md]))
 
 ;; ─── Construction ───────────────────────────────────────────────────────────

@@ -1,7 +1,6 @@
 (ns kmet.tui.components.test-settings-list
   (:require [clojure.test :as t]
             [kmet.tui.core :as core]
-            [kmet.tui.keys :as keys]
             [kmet.tui.components.settings-list :as sl]))
 
 ;; Raw key sequences
@@ -9,12 +8,8 @@
 (def ^:const K-UP "\u001b[A")
 (def ^:const K-LEFT "\u001b[D")
 (def ^:const K-RIGHT "\u001b[C")
-(def ^:const K-HOME "\u001b[H")
-(def ^:const K-END "\u001b[F")
 (def ^:const K-BS "\u007f")
-(def ^:const K-ENTER "\r")
 (def ^:const K-ESC "\u001b")
-(def ctrl (comp str char))
 
 (def sample-items
   [{:id :theme :label "Theme" :value "dark" :values ["dark" "light" "auto"]}

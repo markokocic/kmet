@@ -1,7 +1,6 @@
 (ns kmet.test-theme
   (:require [clojure.test :as t]
             [clojure.java.io :as io]
-            [clojure.string :as str]
             [kmet.tui.theme :as theme]))
 
 ;; ─── Theme record ──────────────────────────────────────────────────────────

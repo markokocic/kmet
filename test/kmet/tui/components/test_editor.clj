@@ -1,23 +1,14 @@
 (ns kmet.tui.components.test-editor
   (:require [clojure.test :as t]
             [kmet.tui.core :as core]
-            [kmet.tui.keys :as keys]
             [kmet.tui.components.editor :as editor]))
 
 ;; Raw key sequences matching what parse-key expects
 (def ^:const K-LEFT "\u001b[D")
-(def ^:const K-RIGHT "\u001b[C")
-(def ^:const K-UP "\u001b[A")
-(def ^:const K-DOWN "\u001b[B")
-(def ^:const K-HOME "\u001b[H")
-(def ^:const K-END "\u001b[F")
 (def ^:const K-DEL "\u001b[3~")
 (def ^:const K-BS "\u007f")
 (def ^:const K-ENTER "\r")
 (def ^:const K-ESC "\u001b")
-(def ^:const K-TAB "\t")
-(def ^:const K-PGUP "\u001b[5~")
-(def ^:const K-PGDN "\u001b[6~")
 (def ^:const K-ALT-LEFT "\u001bb")
 (def ^:const K-ALT-RIGHT "\u001bf")
 ;; Control characters
