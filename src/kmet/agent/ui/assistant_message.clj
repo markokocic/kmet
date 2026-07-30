@@ -82,7 +82,11 @@
                             (or (seq thinking) (seq text)))
                   pad-y 1
                   empty (apply str (repeat width \space))
-                  content (vec (concat thinking-lines text-lines
+                  ;; Pi-style: spacer between thinking and text blocks when text follows
+                  thinking-text-spacer? (and (seq thinking) (seq text))
+                  content (vec (concat thinking-lines
+                                       (when thinking-text-spacer? [empty])
+                                       text-lines
                                        (when cursor [cursor])))]
               (vec (concat (repeat pad-y empty)
                            content
