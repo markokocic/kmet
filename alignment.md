@@ -5,8 +5,6 @@ This document tracks known gaps between kmet's ToolExecutionComponent and Pi's
 
 Legend:
 - ✅ Aligned
-- ⚠️ Partial — minor cosmetic difference
-- ❌ Missing — requires infrastructure not yet in kmet
 
 ---
 
@@ -66,76 +64,7 @@ Legend:
 | **Hide empty components** | `hideComponent = true` when no content and no images | Returns `[]` when both call-comp and result-comp are nil | ✅ |
 | **Image support** | Full kitty protocol via `Image` component, PNG conversion | `terminal-image` + `ImageComponent` with Kitty encoding, dimension parsing, fallback, async PNG conversion via python3+PIL | ✅ |
 
----
-
-## 3. Remaining gaps
-
-### Image content blocks from tools (✅ Resolved)
-kmet's `tool-execution-set-images!` accepts image blocks, stores raw image
-data in `image-data-atom`, and builds `ImageComponent` children at render
-time from that data. The full pipeline is wired: tool → result →
-event handler → `image-data-atom` → render.
-
-The `read` tool now detects image files by extension (png, jpg, jpeg, gif,
-webp, bmp) and returns both a text description and an `:images` vector
-containing the base64-encoded data and MIME type. The `tool-result-message`
-function in the agent loop passes `:images` through to the event, and the
-`tool-execution-set-images!` handler renders them.
-
-**Async image format conversion (✅ Resolved).** Pi calls `maybeConvertImagesForKitty()`
-which asynchronously converts non-PNG images (JPEG, GIF, WebP) to PNG for
-terminals that only support PNG via the Kitty protocol. kmet now does the same:
-`tool-execution-set-images!` checks terminal capabilities and fires a `future`
-to call `convert-to-png` for each non-PNG image. When conversion completes,
-the `converted-images-atom` is updated and the component invalidates, causing
-a re-render with the converted PNG data.
-
-### Render context object (✅ Resolved)
-Both kmet and Pi now pass a full `ToolRenderContext` map to `renderCall`/`renderResult`:
-- `:args`
-- `:tool-call-id`
-- `:invalidate` (calls `protocols/invalidate` + `request-render-fn`)
-- `:last-component` (previously-returned component from the same renderer)
-- `:state` (value from `renderer-state-atom` — persists across renders)
-- `:cwd` (from `cwd-atom`, defaults to `user.dir`)
-- `:execution-started` (truthy when `started-at-atom` is set)
-- `:args-complete` (from `args-complete-atom`)
-- `:is-partial` (true when `ended-at-atom` is nil)
-- `:expanded`
-- `:show-images` (always true)
-- `:is-error` (from `is-error-atom`)
-
-The context is built via `tool-execution-context` private helper and passed
-as the last argument to both `renderCall` and `renderResult`. Built-in
-renderers accept and ignore it (`_context` or `& _`).
-
-### toolCallId tracking (✅ Resolved)
-Pi stores a `toolCallId` on each `ToolExecutionComponent` for correlating
-tool calls across agent turns and extensions. kmet now tracks this
-via `:tool-call-id-atom` on the defrecord, set from `(:id evt)` in the
-`:tool-start` handler, with `tool-execution-set-tool-call-id!` and
-`tool-execution-get-tool-call-id` accessors. No invalidation needed
-since the ID does not affect rendering.
-
-### `argsComplete` / `setArgsComplete()` (✅ Resolved)
-Both kmet and Pi now track whether tool arguments have been fully received.
-kmet stores this in `args-complete-atom` on the defrecord, with
-`tool-execution-set-args-complete!` to set it. In `:tool-start` (where args
-arrive as a complete map), it's set to true immediately. The render context
-includes `:args-complete`. No invalidation is needed since the value doesn't
-affect rendering.
-
-### `executionStarted` timing + default pending state (✅ Resolved)
-kmet now shows `:tool-pending-bg` from component creation (matching Pi's
-`isPartial = true` at construction), not only after `started-at` is set.
-The background logic is: `(nil? ended-at) → pending, is-error → error,
-else → success`. The elapsed timer still activates only when `started-at`
-is set (via `mark-execution-started!` in `:tool-start`), matching Pi's
-`markExecutionStarted()` + `setInterval` semantics.
-
----
-
-## 4. Minor cosmetic differences
+## 3. Minor cosmetic differences
 
 | Detail | Pi | kmet | Impact |
 |---|---|---|---|
@@ -144,13 +73,4 @@ is set (via `mark-execution-started!` in `:tool-start`), matching Pi's
 | Footer stripping logic | Matches `\n\n[` + `fullOutputPath` | Moot — replaced by proper metadata | ✅ |
 | Error content truncation | Shows all error lines joined with `\n` | All error lines joined with `\n` | ✅ |
 
-## Summary of work needed
 
-| Item | Effort | Status |
-|---|---|---|
-| Image content blocks from tools (read tool supports images) | Low | ✅ |
-| `executionStarted` timing | Low | ✅ |
-| toolCallId tracking | Low | ✅ |
-| Render context object | Low | ✅ |
-| `argsComplete` / `setArgsComplete()` | Low | ✅ |
-| Async image format conversion | Low | ✅ |
