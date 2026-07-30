@@ -7,7 +7,8 @@
             [kmet.agent.ui.tool-execution :as tool-execution]
             [kmet.agent.ui.custom-message :as custom-message]
             [kmet.agent.ui.footer :as footer]
-            [kmet.agent.ui.chat-history :as chat-history]))
+            [kmet.agent.ui.chat-history :as chat-history]
+            [kmet.agent.ui.status-indicator :as status-indicator]))
 
 ;; UserMessageComponent
 (def make-user-message user-message/make-user-message)
@@ -42,6 +43,13 @@
 (def make-footer footer/make-footer)
 (def footer-set-status! footer/footer-set-status!)
 (def footer-set-n-msgs! footer/footer-set-n-msgs!)
+
+;; StatusIndicator
+(def make-status-indicator status-indicator/make-status-indicator)
+(def status-indicator-start! status-indicator/status-indicator-start!)
+(def status-indicator-stop! status-indicator/status-indicator-stop!)
+(def status-indicator-set-text! status-indicator/status-indicator-set-text!)
+(def status-indicator-set-theme! status-indicator/status-indicator-set-theme!)
 
 ;; ChatHistoryComponent
 (def make-chat-history chat-history/make-chat-history)

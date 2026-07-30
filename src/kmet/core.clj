@@ -54,6 +54,7 @@
                       header-text
                       anim-timer
                       footer-comp
+                      status-indicator
                       session
                       running-turn?
                       config])
@@ -277,12 +278,13 @@
               (tui/tui-request-render (:tui cs)))))))))
 
 ;; ─── Animation timer ────────────────────────────────────────────────────────
-;; Drives re-renders while the agent turn is running, so the inline working
-;; indicator in the streaming assistant message animates smoothly.
+;; Drives re-renders while the agent turn is running, so the separate
+;; StatusIndicator (Pi-style) between chat and editor animates smoothly.
 
 (defn- start-anim-timer!
   "Start requesting renders every 80ms while the agent turn runs.
-   Powers the inline working indicator animation in streaming messages."
+   Powers the StatusIndicator spinner animation (Pi-style: separate layer
+   between chat and editor)."
   [cs]
   (let [t (future
             (try
@@ -329,6 +331,7 @@
    Session persistence is handled by the agent loop internally."
   (try
     (stop-anim-timer! cs)
+    (ui/status-indicator-stop! (:status-indicator cs))
     (ui/chat-history-finalize-streaming! (:chat-history cs))
     (ui/chat-history-finalize-thinking! (:chat-history cs))
     (reset! (:running-turn? cs) false)
@@ -343,7 +346,8 @@
   "Called when an error occurs during the agent turn."
   (try
     (stop-anim-timer! cs)
-    ;; If streaming placeholder is still empty (just working indicator), remove it
+    (ui/status-indicator-stop! (:status-indicator cs))
+    ;; If streaming placeholder is still empty, remove it
     ;; so we don't get a blank assistant entry before the error message.
     (let [ch (:chat-history cs)
           streaming @(:streaming-atom ch)]
@@ -378,12 +382,12 @@
         ;; Regular message — agent loop handles session persistence
         (when-not @(:running-turn? cs)
           (reset! (:running-turn? cs) true)
+          (ui/status-indicator-start! (:status-indicator cs))
           (start-anim-timer! cs)
           (debug/log "user submitted: " trimmed)
           (ui/chat-history-add-message! (:chat-history cs)
             {:role :user :content trimmed})
-          ;; Pre-create streaming placeholder so the inline working indicator
-          ;; appears immediately while waiting for the first LLM delta.
+          ;; Create streaming placeholder for incoming LLM response.
           (ui/chat-history-start-streaming! (:chat-history cs))
           (update-header-footer! cs)
           (tui/tui-request-render (:tui cs))
@@ -399,6 +403,7 @@
   (when @(:running-turn? cs)
     (debug/log "agent turn cancelled by user")
     (stop-anim-timer! cs)
+    (ui/status-indicator-stop! (:status-indicator cs))
     (agent/cancel-turn (:agent-state cs))
     ;; Remove empty streaming placeholder if present
     (let [ch (:chat-history cs)]
@@ -466,7 +471,7 @@ Be precise and concise in your responses.")
         sp3 (spacer/make-spacer 1)
         ftr (ui/make-footer :status "" :n-msgs 0 :theme (cfg/get-theme config))
 
-        ;; Core state
+        ;; Core state (status-indicator filled in after layout)
         cs (map->CoreState {:tui t
                             :agent-state ag
                             :chat-history ch
@@ -474,85 +479,91 @@ Be precise and concise in your responses.")
                             :header-text hdr
                             :anim-timer (atom nil)
                             :footer-comp ftr
+                            :status-indicator nil
                             :session session
                             :running-turn? (atom false)
                             :config config})]
 
-    ;; Wire editor submit
-    (editor/editor-set-on-submit! ed
-      (fn [text]
-        (when text
-          (handle-submit cs text)
-          (editor/editor-set-text! ed "")
-          (tui/tui-request-render t))))
-
     ;; Focus editor
     (tui/tui-set-focus t ed)
 
-    ;; Add components
-    (tui/tui-add-child t hdr)
-    (tui/tui-add-child t sp1)
-    (tui/tui-add-child t ch)
-    (tui/tui-add-child t sp2)
-    (tui/tui-add-child t ed)
-    (tui/tui-add-child t sp3)
-    (tui/tui-add-child t ftr)
+    ;; Status indicator (Pi-style: separate layer between chat and editor)
+    (let [si (ui/make-status-indicator :theme (cfg/get-theme config))
+          cs (assoc cs :status-indicator si)]
 
-    ;; Global input listeners
-    (tui/tui-add-input-listener t
-      (fn [data]
-        (cond
-          (keys/matches-key? data (keys/ctrl "z"))
-          (tui/tui-stop t)
+      ;; Add components (status indicator between chat history and editor spacer)
+      (tui/tui-add-child t hdr)
+      (tui/tui-add-child t sp1)
+      (tui/tui-add-child t ch)
+      (tui/tui-add-child t si)
+      (tui/tui-add-child t sp2)
+      (tui/tui-add-child t ed)
+      (tui/tui-add-child t sp3)
+      (tui/tui-add-child t ftr)
 
-          (keys/matches-key? data (keys/ctrl "l"))
-          (do (term/clear-screen! (:terminal t))
-              (tui/tui-request-render t))
+      ;; Wire editor submit
+      (editor/editor-set-on-submit! ed
+        (fn [text]
+          (when text
+            (handle-submit cs text)
+            (editor/editor-set-text! ed "")
+            (tui/tui-request-render t))))
 
-          (keys/matches-key? data "escape")
-          (when (and @(:running-turn? cs)
-                     (not (tui/tui-has-overlay? t)))
-            (handle-cancel cs))
+      ;; Global input listeners
+      (tui/tui-add-input-listener t
+        (fn [data]
+          (cond
+            (keys/matches-key? data (keys/ctrl "z"))
+            (tui/tui-stop t)
 
-          (keys/matches-key? data (keys/ctrl "c"))
-          (if @(:running-turn? cs)
-            (handle-cancel cs)
-            (do (editor/editor-set-text! ed "")
-                (tui/tui-request-render t)))
+            (keys/matches-key? data (keys/ctrl "l"))
+            (do (term/clear-screen! (:terminal t))
+                (tui/tui-request-render t))
 
-          ;; Pi-style: Ctrl+O toggles tool output expansion
-          (keys/matches-key? data (keys/ctrl "o"))
-          (do (ui/chat-history-toggle-tool-expanded! ch)
-              (update-header-footer! cs)
-              (tui/tui-request-render t))
+            (keys/matches-key? data "escape")
+            (when (and @(:running-turn? cs)
+                       (not (tui/tui-has-overlay? t)))
+              (handle-cancel cs))
 
-          ;; Pi-style: Ctrl+T toggles thinking block visibility
-          (keys/matches-key? data (keys/ctrl "t"))
-          (do (ui/chat-history-toggle-thinking-hidden! ch)
-              (update-header-footer! cs)
-              (tui/tui-request-render t))
+            (keys/matches-key? data (keys/ctrl "c"))
+            (if @(:running-turn? cs)
+              (handle-cancel cs)
+              (do (editor/editor-set-text! ed "")
+                  (tui/tui-request-render t)))
 
-          :else nil)))
+            ;; Pi-style: Ctrl+O toggles tool output expansion
+            (keys/matches-key? data (keys/ctrl "o"))
+            (do (ui/chat-history-toggle-tool-expanded! ch)
+                (update-header-footer! cs)
+                (tui/tui-request-render t))
 
-    ;; Initialize header/footer
-    (text/text-set! hdr (fmt-header cs))
-    (ui/footer-set-status! ftr (fmt-status-str cs))
+            ;; Pi-style: Ctrl+T toggles thinking block visibility
+            (keys/matches-key? data (keys/ctrl "t"))
+            (do (ui/chat-history-toggle-thinking-hidden! ch)
+                (update-header-footer! cs)
+                (tui/tui-request-render t))
 
-    ;; Pi-style info message on top
-    (ui/chat-history-set-info-msg! ch
-      {:label "kmet"
-       :content (str "Welcome to kmet — minimal coding agent.\n"
-                     "Type a message, /help for commands, or use:\n"
-                     "  " (th/dim "Ctrl+O") " — toggle tool output  " (th/dim "Ctrl+T") " — toggle thinking blocks")})
+            :else nil)))
 
-    ;; Welcome message
-    (ui/chat-history-add-message! ch
-      {:role :assistant
-       :content (str "Welcome to " (th/bold "kmet")
-                     " — minimal coding agent.\n"
-                     "Type your message or /help for commands.")})
+      ;; Initialize header/footer
+      (text/text-set! hdr (fmt-header cs))
+      (ui/footer-set-status! ftr (fmt-status-str cs))
 
-    cs))
+      ;; Pi-style info message on top
+      (ui/chat-history-set-info-msg! ch
+        {:label "kmet"
+         :content (str "Welcome to kmet — minimal coding agent.\n"
+                       "Type a message, /help for commands, or use:\n"
+                       "  " (th/dim "Ctrl+O") " — toggle tool output  " (th/dim "Ctrl+T") " — toggle thinking blocks")})
+
+      ;; Welcome message
+      (ui/chat-history-add-message! ch
+        {:role :assistant
+         :content (str "Welcome to " (th/bold "kmet")
+                       " — minimal coding agent.\n"
+                       "Type your message or /help for commands.")})
+
+      cs)))
 
 ;; ─── Non-interactive mode (--print) ────────────────────────────────────────
 
