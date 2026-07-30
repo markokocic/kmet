@@ -70,10 +70,12 @@ Legend:
 
 ## 3. Remaining gaps
 
-### Image content blocks not parsed from LLM responses (⚠️ Low)
-kmet's `tool-execution-set-images!` accepts image blocks and renders them,
-but the LLM content pipeline doesn't parse image blocks from tool results yet.
-Currently images must be injected via `:images` in the tool result map.
+### Image content blocks from tools (⚠️ Low)
+kmet's `tool-execution-set-images!` accepts image blocks and renders them
+as `ImageComponent` children. The full pipeline is wired: tool → result →
+event handler → `image-comps-atom` → render. No built-in tool currently
+produces image blocks, but the infrastructure handles them. Custom tools
+can return `:images [{:data base64 :mime-type "..."}]` in their result.
 
 ### Render context object (⚠️ Architectural)
 Pi passes a `ToolRenderContext` to `renderCall`/`renderResult` with `state`,
@@ -103,6 +105,6 @@ Not needed for current rendering functionality.
 
 | Item | Effort | Status |
 |---|---|---|
-| Image content blocks from LLM results | Low | ⚠️ |
+| Image content blocks from tools | Low | ⚠️ |
 | Render context object | Low | ⚠️ |
 | toolCallId tracking | Low | ⚠️ |
