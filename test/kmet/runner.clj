@@ -22,6 +22,7 @@
             [kmet.tui.components.test-select-list]
             [kmet.tui.components.test-settings-list]
             [kmet.tui.components.test-markdown]
+            [kmet.tui.test-terminal-image]
             [kmet.agent.ui.test-chat-history]
             [kmet.agent.ui.test-user-message]
             [kmet.agent.ui.test-assistant-message]
@@ -48,6 +49,7 @@
                      kmet.tui.components.test-select-list
                      kmet.tui.components.test-settings-list
                      kmet.tui.components.test-markdown
+                     kmet.tui.test-terminal-image
                      kmet.agent.ui.test-chat-history
                      kmet.agent.ui.test-user-message
                      kmet.agent.ui.test-assistant-message
