@@ -70,15 +70,10 @@ Legend:
 
 ## 3. Remaining gaps
 
-### Image rendering not wired into tool result pipeline (⚠️ Partial)
-The `terminal-image` protocol layer and `ImageComponent` exist but are not yet
-integrated into `ToolExecutionComponent`. Pi's `updateResult()` iterates over
-result content blocks looking for `"image"` type entries and creates `Image`
-components with spacers. kmet needs the same:
-- Tool results need to carry structured content blocks (text + images) instead
-  of a flat string
-- `ToolExecutionComponent.render` needs to detect image blocks, create
-  `ImageComponent` children, and clean them up on replacement
+### Image content blocks not parsed from LLM responses (⚠️ Low)
+kmet's `tool-execution-set-images!` accepts image blocks and renders them,
+but the LLM content pipeline doesn't parse image blocks from tool results yet.
+Currently images must be injected via `:images` in the tool result map.
 
 ### Render context object (⚠️ Architectural)
 Pi passes a `ToolRenderContext` to `renderCall`/`renderResult` with `state`,
@@ -108,6 +103,6 @@ Not needed for current rendering functionality.
 
 | Item | Effort | Status |
 |---|---|---|
-| Image rendering wired into tool result pipeline | Medium | ⚠️ |
+| Image content blocks from LLM results | Low | ⚠️ |
 | Render context object | Low | ⚠️ |
 | toolCallId tracking | Low | ⚠️ |
