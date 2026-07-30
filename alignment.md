@@ -125,13 +125,13 @@ arrive as a complete map), it's set to true immediately. The render context
 includes `:args-complete`. No invalidation is needed since the value doesn't
 affect rendering.
 
-### `executionStarted` timing (✅ Resolved)
-kmet now calls `tool-execution-mark-execution-started!` in the `:tool-start`
-event handler, which sets `started-at-atom` immediately. This activates the
-pending background (`:tool-pending-bg`) and elapsed timer from tool start
-rather than waiting for first `set-content!` (in `:tool-result`). The
-`set-content!` function still has the guard — it won't overwrite an already-set
-`started-at-atom`. Matches Pi's `markExecutionStarted()` behavior.
+### `executionStarted` timing + default pending state (✅ Resolved)
+kmet now shows `:tool-pending-bg` from component creation (matching Pi's
+`isPartial = true` at construction), not only after `started-at` is set.
+The background logic is: `(nil? ended-at) → pending, is-error → error,
+else → success`. The elapsed timer still activates only when `started-at`
+is set (via `mark-execution-started!` in `:tool-start`), matching Pi's
+`markExecutionStarted()` + `setInterval` semantics.
 
 ---
 

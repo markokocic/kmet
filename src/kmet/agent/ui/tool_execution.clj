@@ -396,7 +396,8 @@
                 (into [""] content-lines)
                 []))
             (let [bg-key (cond
-                           (and started-at (not ended-at)) :tool-pending-bg
+                           ;; Pi: isPartial=true until result arrives; ended-at=nil = pending
+                           (nil? ended-at) :tool-pending-bg
                            is-error :tool-error-bg
                            :else :tool-success-bg)
                   _ (box/box-set-bg-fn @box #(theme/bg theme bg-key %))
