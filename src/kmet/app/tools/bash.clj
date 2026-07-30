@@ -1,43 +1,40 @@
 (ns kmet.app.tools.bash
-  "Bash tool implementation — execute shell commands with timeout and truncation."
+  "Bash tool implementation — delegates to kmet.app.bash-executor for execution.
+   Pi: bash tool wraps createLocalBashOperations, same engine as ! commands."
   (:require [clojure.string :as str]
-            [babashka.process :as proc]
+            [kmet.app.bash-executor :as bash-exec]
             [kmet.app.tools.protocol :as proto]))
 
 (defn execute
-  "Execute a bash command with optional timeout.
-   When output exceeds MAX-BASH-OUTPUT-LINES, returns truncated content
-   with a :truncation map referencing the full output in a temp file."
+  "Execute a bash command via the shared bash executor.
+   Returns {:content str :is-error bool :truncation map?}
+   matching the expected tool result format."
   [{:keys [command timeout]}]
   (try
-    (let [timeout-ms (* (or timeout 30) 1000)
-          p (proc/process ["sh" "-c" command]
-              {:out :string :err :string})
-          result (deref p timeout-ms ::timeout)]
-      (if (= result ::timeout)
-        (do (proc/destroy p)
-            {:content (str "Command timed out after " (or timeout 30) "s")
-             :is-error true})
-        (let [full-output (str (:out result)
-                               (when (seq (:err result))
-                                 (str "\n" (:err result))))
-              lines (str/split-lines full-output)
-              total-lines (count lines)
-              is-error (not= (:exit result) 0)]
-          (if (<= total-lines proto/MAX-BASH-OUTPUT-LINES)
-            {:content full-output
-             :is-error is-error}
-            ;; Truncate and save full output to temp file
-            (let [tmp-file (java.io.File/createTempFile proto/TMP-PREFIX proto/TMP-SUFFIX)
-                  tmp-path (str tmp-file)
-                  shown-lines (take proto/MAX-BASH-OUTPUT-LINES lines)
-                  truncated-content (str/join "\n" shown-lines)]
-              (.deleteOnExit tmp-file)
-              (spit tmp-path full-output)
-              {:content truncated-content
-               :is-error is-error
-               :truncation {:total-lines total-lines
-                            :shown-lines proto/MAX-BASH-OUTPUT-LINES
-                            :full-output-path tmp-path}})))))
+    (let [result (bash-exec/execute-bash
+                   {:command command
+                    :cwd (or (System/getProperty "user.dir") ".")
+                    :timeout timeout  ;; nil = no timeout (pi: optional, no default)
+                    :on-chunk nil  ;; no streaming for LLM tool calls
+                    :max-lines bash-exec/DEFAULT-MAX-LINES
+                    :max-bytes bash-exec/DEFAULT-MAX-BYTES})
+          {:keys [output exit-code cancelled truncated full-output-path]} result]
+      (if cancelled
+        {:content (str output "\n\nCommand cancelled.") :is-error true}
+        (let [is-error (and exit-code (not= exit-code 0))
+              content (if is-error
+                        (str output "\n\nCommand exited with code " exit-code)
+                        output)]
+          (if truncated
+            {:content content
+             :is-error is-error
+             :truncation {:total-lines (count (str/split-lines output))
+                          :shown-lines bash-exec/DEFAULT-MAX-LINES
+                          :full-output-path full-output-path}}
+            {:content content
+             :is-error is-error}))))
     (catch Exception e
-      {:content (str "Error executing command: " (.getMessage e)) :is-error true})))
+      (let [msg (.getMessage e)]
+        (if (str/includes? msg "timeout")
+          {:content (str "Command timed out after " (or timeout "?") "s") :is-error true}
+          {:content (str "Error: " msg) :is-error true})))))

@@ -142,12 +142,12 @@
 
 (defn- resolve-shell []
   (or (when (fs/exists? "/bin/bash") "/bin/bash")
+      (when (fs/exists? "/usr/bin/bash") "/usr/bin/bash")
       (try
-        (let [p (proc/process ["which" "bash"] {:out :pipe :err :inherit})
-              _ @p  ;; wait for completion
-              output (slurp (:out p))]
-          (when (seq (str/trim output))
-            (str/trim output)))
+        (let [p (proc/process ["sh" "-c" "command -v bash"] {:out :pipe :err :inherit})
+              _ @p
+              output (str/trim (slurp (:out p)))]
+          (when (seq output) output))
         (catch Exception _ nil))
       "sh"))
 
@@ -302,7 +302,7 @@
               (spawn-hook {:command command :cwd cwd :env merged-env})
               {:command command :cwd cwd :env merged-env})
 
-            shell-args ["-c" command]
+            shell-args [shell "-c" command]
             proc-opts {:dir final-cwd
                        :err :pipe
                        :out :pipe

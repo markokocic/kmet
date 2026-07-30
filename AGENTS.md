@@ -28,7 +28,8 @@ src/kmet/
 ├── core.clj            — CLI entry, arg parsing, main layout
 ├── config.clj          — Configuration loading
 ├── debug.clj           — Debug/error logging
-├── app/                — App-level business logic (renamed from agent/)
+├── app/                — App-level business logic
+│   ├── bash_executor.clj — Bash command execution (raw byte streaming, truncation, temp file)
 │   ├── llm.clj         — LLM API calls
 │   ├── loop.clj        — Agent conversation loop
 │   ├── session.clj     — Session persistence
@@ -47,6 +48,7 @@ src/kmet/
 │   │   └── registry.clj   — tool map, schema conversion, registration, execution
 │   ├── ui.clj          — Re-exports for app UI components
 │   └── ui/             — App-specific TUI components (Pi's coding-agent layer)
+│       ├── bash_execution.clj  — BashExecutionComponent (!/!! TUI display)
 │       ├── chat_history.clj
 │       ├── user_message.clj
 │       ├── assistant_message.clj
@@ -92,9 +94,12 @@ src/kmet/
 - **Layout**: `test/kmet/` mirrors `src/kmet/`
 - **Run**: `bb test` to validate
 
-## Environment
-Termux on Android — glibc babashka via `ld-linux-aarch64.so.1 --library-path`.
-Do not set `LD_LIBRARY_PATH` globally; use the glibc linker directly.
+## Platform
+- **Target**: cross-platform (any system with Babashka and a terminal)
+- **Primary dev environment**: Termux on Android — glibc babashka via `ld-linux-aarch64.so.1 --library-path`.
+  Do not set `LD_LIBRARY_PATH` globally; use the glibc linker directly when on Termux.
+- **Shell resolution** (`kmet.app.bash-executor`): `/bin/bash` → `which bash` → `sh`.
+  Works on any Unix-like system. Windows support requires Git Bash or WSL (not tested).
 
 ## Error handling
 - Use `ex-info` with a `:cause` or `:type` key for structured errors

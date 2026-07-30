@@ -4,13 +4,6 @@
   (:require [clojure.string :as str]
             [babashka.fs :as fs]))
 
-;; ─── Constants ────────────────────────────────────────────────────────────
-
-;; Max output lines before bash output is truncated server-side.
-(def MAX-BASH-OUTPUT-LINES 500)
-(def TMP-PREFIX "kmet-bash-")
-(def TMP-SUFFIX ".txt")
-
 ;; ─── Safe file traversal ──────────────────────────────────────────────────
 
 (def ^:private max-traverse-files 10000)
