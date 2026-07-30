@@ -3,7 +3,8 @@
   (:require [clojure.string :as str]))
 
 (defrecord Tool [name label description prompt-snippet prompt-guidelines
-                 parameters execute render-call render-result])
+                 parameters execute render-call render-result
+                 constrained-sampling render-shell prepare-arguments])
 
 (defn param
   "Define a tool parameter for JSON schema generation."

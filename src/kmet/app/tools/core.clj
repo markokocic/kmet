@@ -11,13 +11,19 @@
 (def ->json-schema tool/->json-schema)
 
 (defn make-tool
-  "Create a Tool record."
-  [& {:keys [name label description prompt-snippet prompt-guidelines parameters execute render-call render-result]}]
+  "Create a Tool record.
+   See tool/Tool for all fields."
+  [& {:keys [name label description prompt-snippet prompt-guidelines
+             parameters execute render-call render-result
+             constrained-sampling render-shell prepare-arguments]}]
   (tool/map->Tool
     {:name name :label label :description description
      :prompt-snippet prompt-snippet :prompt-guidelines prompt-guidelines
      :parameters parameters :execute execute
-     :render-call render-call :render-result render-result}))
+     :render-call render-call :render-result render-result
+     :constrained-sampling constrained-sampling
+     :render-shell render-shell
+     :prepare-arguments prepare-arguments}))
 
 ;; ─── From registry.clj (registry + execution) ───────────────────────────────
 
