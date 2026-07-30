@@ -1,7 +1,7 @@
 (ns kmet.app.tools.registry
-  "Tool registry — built-in tool map, custom tool registration, schema conversion, execution."
-  (:require [kmet.app.tools.protocol :as proto :refer [->json-schema param map->Tool]]
-            [kmet.app.tools.read :as read]
+  "Tool registry — built-in tool map, custom tool registration, schema conversion, execution.
+   Tool definitions are plain maps (not Tool records) to avoid circular deps with tools.clj."
+  (:require [kmet.app.tools.read :as read]
             [kmet.app.tools.write :as write]
             [kmet.app.tools.edit :as edit]
             [kmet.app.tools.bash :as bash]
@@ -12,64 +12,64 @@
 ;; ─── Built-in tools ─────────────────────────────────────────────────────────
 
 (def built-in-tools
-  "Map of tool name → Tool record for all built-in tools."
-  {"read"  (map->Tool
-             {:name "read"
-              :label "Read file"
-              :description "Read the contents of a file. Supports offset/limit for large files. Output is truncated to 2000 lines or 50KB (whichever is hit first)."
-              :prompt-snippet "Read file contents"
-              :prompt-guidelines ["Use read to examine files instead of cat or sed"]
-              :parameters (->json-schema
-                            {:path     (param :path :string "File path to read (relative or absolute)")
-                             :offset   (param :offset :number "Line number to start reading from (0-indexed)" :optional? true)
-                             :limit    (param :limit :number "Maximum number of lines to read" :optional? true)})
-              :execute read/execute})
-   "write" (map->Tool
-             {:name "write"
-              :label "Write file"
-              :description "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
-              :prompt-snippet "Create or overwrite files"
-              :prompt-guidelines ["Use write only for new files or complete rewrites"]
-              :parameters (->json-schema
-                            {:path    (param :path :string "File path to write to (relative or absolute)")
-                             :content (param :content :string "Content to write to the file")})
-              :execute write/execute})
-   "edit"  (map->Tool
-             {:name "edit"
-              :label "Edit file"
-              :description "Make precise file edits with exact text replacement. When changing multiple separate locations in one file, use one edit call with multiple entries."
-              :prompt-snippet "Make precise file edits with exact text replacement"
-              :prompt-guidelines ["Use edit for precise changes (edits[].oldText must match exactly)"
-                                  "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls"]
-              :parameters (->json-schema
-                            {:path    (param :path :string "File path to edit")
-                             :old-text (param :old-text :string "Exact text to find and replace — must match exactly including whitespace")
-                             :new-text (param :new-text :string "Replacement text")})
-              :execute edit/execute})
-   "bash"  (map->Tool
-             {:name "bash"
-              :label "Execute command"
-              :description "Execute a bash command with a timeout. For long-running commands, keep the timeout reasonable. Standard streams (stdout/stderr) are captured and returned."
-              :prompt-snippet "Execute bash commands"
-              :prompt-guidelines []
-              :parameters (->json-schema
-                            {:command (param :command :string "Bash command to execute")
-                             :timeout (param :timeout :number "Timeout in seconds (optional)" :optional? true)})
-              :execute bash/execute})
+  "Map of tool name → tool map for all built-in tools."
+  {"read"  {:name "read"
+            :label "Read file"
+            :description "Read the contents of a file. Supports offset/limit for large files. Output is truncated to 2000 lines or 50KB (whichever is hit first)."
+            :prompt-snippet "Read file contents"
+            :prompt-guidelines ["Use read to examine files instead of cat or sed"]
+            :parameters {:type "object"
+                         :properties {:path {:type "string" :description "File path to read (relative or absolute)"}
+                                      :offset {:type "number" :description "Line number to start reading from (0-indexed)"}
+                                      :limit {:type "number" :description "Maximum number of lines to read"}}
+                         :required ["path"]}
+            :execute read/execute}
+   "write" {:name "write"
+            :label "Write file"
+            :description "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
+            :prompt-snippet "Create or overwrite files"
+            :prompt-guidelines ["Use write only for new files or complete rewrites"]
+            :parameters {:type "object"
+                         :properties {:path {:type "string" :description "File path to write to (relative or absolute)"}
+                                      :content {:type "string" :description "Content to write to the file"}}
+                         :required ["path" "content"]}
+            :execute write/execute}
+   "edit"  {:name "edit"
+            :label "Edit file"
+            :description "Make precise file edits with exact text replacement. When changing multiple separate locations in one file, use one edit call with multiple entries."
+            :prompt-snippet "Make precise file edits with exact text replacement"
+            :prompt-guidelines ["Use edit for precise changes (edits[].oldText must match exactly)"
+                                "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls"]
+            :parameters {:type "object"
+                         :properties {:path {:type "string" :description "File path to edit"}
+                                      :old-text {:type "string" :description "Exact text to find and replace — must match exactly including whitespace"}
+                                      :new-text {:type "string" :description "Replacement text"}}
+                         :required ["path" "old-text" "new-text"]}
+            :execute edit/execute}
+   "bash"  {:name "bash"
+            :label "Execute command"
+            :description "Execute a bash command with a timeout. For long-running commands, keep the timeout reasonable. Standard streams (stdout/stderr) are captured and returned."
+            :prompt-snippet "Execute bash commands"
+            :prompt-guidelines []
+            :parameters {:type "object"
+                         :properties {:command {:type "string" :description "Bash command to execute"}
+                                      :timeout {:type "number" :description "Timeout in seconds (optional)"}}
+                         :required ["command"]}
+            :execute bash/execute}
    ;; grep, find, ls — disabled
    })
 
 ;; ─── Tool schema helpers ────────────────────────────────────────────────────
 
 (defn tool->anthropic-schema
-  "Convert a Tool record to Anthropic tool schema format."
+  "Convert a tool map to Anthropic tool schema format."
   [tool]
   {:name (:name tool)
    :description (:description tool)
    :input_schema (:parameters tool)})
 
 (defn tool->openai-schema
-  "Convert a Tool record to OpenAI tool schema format."
+  "Convert a tool map to OpenAI tool schema format."
   [tool]
   {:type "function"
    :function {:name (:name tool)

@@ -3,7 +3,7 @@
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
-            [kmet.app.tools.protocol :as proto]))
+            [kmet.app.tools.util :as util]))
 
 (defn execute
   "Find files matching a pattern."
@@ -11,7 +11,7 @@
   (try
     (let [dir (if path (io/file path) (io/file "."))
           results (volatile! [])]
-      (doseq [file (proto/safe-file-seq dir)]
+      (doseq [file (util/safe-file-seq dir)]
         (let [name (fs/file-name file)]
           (when (or (re-find (re-pattern pattern) name)
                     (re-find (re-pattern pattern) (str file)))

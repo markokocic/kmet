@@ -3,7 +3,7 @@
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
-            [kmet.app.tools.protocol :as proto]))
+            [kmet.app.tools.util :as util]))
 
 (defn execute
   "Search file contents with a pattern."
@@ -17,7 +17,7 @@
           (doseq [[idx line] (map-indexed vector (line-seq rdr))]
             (when (re-find (re-pattern pattern) line)
               (vswap! results conj (str (fs/file-name f) ":" (inc idx) ": " line)))))
-        (doseq [file (proto/safe-file-seq f)]
+        (doseq [file (util/safe-file-seq f)]
           (try
             (with-open [rdr (io/reader (str file))]
               (doseq [[idx line] (map-indexed vector (line-seq rdr))]
