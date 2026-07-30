@@ -13,6 +13,8 @@
             [kmet.agent.loop :as agent]
             [kmet.agent.session :as session]
             [kmet.agent.tools :as tools]
+            [kmet.agent.keybindings :as app-kb]
+            [kmet.tui.keybindings :as tui-kb]
             [kmet.config :as cfg]
             [kmet.skills :as skills]
             [kmet.debug :as debug]
@@ -438,6 +440,13 @@ Use the available tools to read, write, edit files, and execute commands.
 Be precise and concise in your responses.")
         system-prompt (skills/build-system-prompt base-prompt)
 
+        ;; Initialize keybindings (global singleton for key-hint + input handling)
+        (let [kmgr (app-kb/make-agent-keybindings-manager)]
+          (tui-kb/set-global-keybindings! kmgr)
+          (app-kb/set-key-hint-theme-fns!
+            #(th/dim %)
+            #(th/fg (cfg/get-theme config) :muted %)))
+
         ;; Components (define before agent state so on-event can reference them)
         hdr (text/make-text "" 1 0)
         sp1 (spacer/make-spacer 1)
@@ -570,11 +579,15 @@ Be precise and concise in your responses.")
       (ui/footer-set-status! ftr (fmt-status-str cs))
 
       ;; Pi-style info message on top
-      (ui/chat-history-set-info-msg! ch
-        {:label "kmet"
-         :content (str "Welcome to kmet — minimal coding agent.\n"
-                       "Type a message, /help for commands, or use:\n"
-                       "  " (th/dim "Ctrl+O") " — toggle tool output  " (th/dim "Ctrl+T") " — toggle thinking blocks")})
+      (let [kmgr (tui-kb/get-global-keybindings)
+            expand-key (or (tui-kb/key-text kmgr "app.tools.expand") "Ctrl+O")
+            thinking-key (or (tui-kb/key-text kmgr "app.thinking.toggle") "Ctrl+T")]
+        (ui/chat-history-set-info-msg! ch
+          {:label "kmet"
+           :content (str "Welcome to kmet — minimal coding agent.\n"
+                         "Type a message, /help for commands, or use:\n"
+                         "  " (th/dim expand-key) " — toggle tool output  "
+                         (th/dim thinking-key) " — toggle thinking blocks")}))
 
       ;; Welcome message
       (ui/chat-history-add-message! ch

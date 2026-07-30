@@ -46,7 +46,7 @@ Legend:
 | **renderResult collapsed** | Last 5 **visual** lines (width-aware via `truncateToVisualLines`), leading blank line, truncated hint | Last 5 **visual** lines via `truncate-to-visual-lines`, leading blank line, hint truncated via `truncate-to-width` | ✅ |
 | **renderResult duration** | `\n${muted("Elapsed X.Xs"/"Took X.Xs")}` — in-text newline | Blank line + muted text child | ✅ |
 | **renderResult truncation warnings** | `[Truncated: ...]` and `[Full output: ...]` when output was truncated server-side | Same via `:truncation` metadata | ✅ |
-| **renderResult keybinding hints** | `keyHint("app.tools.expand", "to expand")` renders clickable keybinding badge | Plain text `"to expand"` | ❌ kmet has no keybinding hint system |
+| **renderResult keybinding hints** | `keyHint("app.tools.expand", "to expand")` renders clickable keybinding badge | `key-hint` via keybindings manager with dim/muted styling | ✅ |
 | **Footer stripping** | Strips `[Showing...Full output:...]` by matching `\n\n[` + `fullOutputPath` | Moot — replaced by proper truncation metadata | ✅ |
 
 ---
@@ -73,8 +73,10 @@ Legend:
 These require new libraries or significant refactoring to implement:
 
 ### Keybinding hints
-Pi has `keyHint("app.tools.expand", "to expand")` which renders a styled keybinding badge
-(e.g., `[ctrl+e] to expand`) in the truncation hint. kmet has no equivalent UI system.
+Implemented via `kmet.tui.keybindings` (KeybindingsManager) and `kmet.agent.keybindings`
+(app-level extensions with `app.tools.expand` etc.). The `app-kb/key-hint` function formats
+styled keybinding hints using the resolved keybinding from the manager. Input handling in
+`core.clj` now uses keybinding IDs instead of hardcoded key checks.
 
 ### Image rendering
 Pi's `Image` component supports kitty terminal image protocol with:
@@ -104,4 +106,4 @@ This would require adding kitty protocol support to kmet's JLine3-based terminal
 | Item | Effort | Status |
 |---|---|---|
 | Kitty protocol image support | Large | ❌ |
-| Keybinding hint system | Large | ❌ |
+| Keybinding hint system | Large | ✅ |

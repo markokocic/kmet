@@ -12,7 +12,8 @@
             [kmet.tui.components.container :as container]
             [clojure.string :as str]
             [clojure.java.io :as io]
-            [babashka.fs :as fs]))
+            [babashka.fs :as fs]
+            [kmet.agent.keybindings :as app-kb]))
 
 ;; ─── Edit diff preview ─────────────────────────────────────────────────────
 ;; Compute a preview of an edit without actually modifying the file.
@@ -240,11 +241,11 @@
                                        (when (pos? skipped)
                                          (container/container-add-child c
                                            (text/make-text
-                                             (theme/fg theme :muted
-                                               (utils/truncate-to-width
-                                                 (str "... (" skipped " earlier lines, to expand)")
-                                                 (max 1 (- width 4))
-                                                 "..."))
+                                             (utils/truncate-to-width
+                                               (str "... (" skipped " earlier lines, "
+                                                    (app-kb/key-hint "app.tools.expand" "to expand") ")")
+                                               (max 1 (- width 4))
+                                               "...")
                                              0 0)))
                                        (doseq [sline styled-lines]
                                          (container/container-add-child c (text/make-text sline 0 0)))))))
