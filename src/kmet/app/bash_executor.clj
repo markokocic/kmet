@@ -129,76 +129,152 @@
 (defn execute-bash
   [{:keys [command cwd env on-chunk signal timeout spawn-hook
            operations shell-path command-prefix max-lines max-bytes]
-    :or {cwd (System/getProperty "user.dir") max-lines 2000 max-bytes (* 50 1024)}}]
-  (let [resolved-cmd (if command-prefix (str command-prefix "\n" command) command)
-        ops (or operations (create-default-ops :shell-path shell-path))
-        raw-chunks (atom []) tail-buf (atom []) tail-bytes (atom 0)
-        total-decoded-bytes (atom 0) tail-line-boundary (atom true)
-        tmp-path (atom nil) tmp-stream (atom nil) sig-watcher (atom nil)
-        handle-text (fn [text]
-                      (let [b (count text)]
-                        (swap! total-decoded-bytes + b) (swap! tail-buf conj text)
-                        (swap! tail-bytes + b)
-                        (when (> @tail-bytes MAX-ROLLING-BYTES)
-                          (loop [] (when (and (> (count @tail-buf) 1) (> @tail-bytes MAX-ROLLING-BYTES))
-                                     (let [r (first @tail-buf)]
-                                       (swap! tail-buf subvec 1) (swap! tail-bytes - (count r))
-                                       (when (not (str/ends-with? r "\n"))
-                                         (reset! tail-line-boundary false)))
-                                     (recur))))
-                        (when on-chunk (try (on-chunk text) (catch Exception e (debug/log "cb: " e))))))
-        handle-bytes (fn [buf off len]
-                       (if (or @tmp-stream @tmp-path (> @total-decoded-bytes max-bytes))
-                         (do (when (nil? @tmp-path)
-                               (let [p (create-temp-file) os (java.io.FileOutputStream. p)]
-                                 (reset! tmp-path p) (reset! tmp-stream os)
-                                 (doseq [[d s e] @raw-chunks] (.write os d s (- e s)))
-                                 (.write os buf off len) (.flush os)))
-                             (when @tmp-stream (.write @tmp-stream buf off len) (.flush @tmp-stream)))
-                         (let [c (java.util.Arrays/copyOfRange buf off (+ off len))]
-                           (swap! raw-chunks conj [c 0 (alength c)])))
-                       (let [t (String. buf off len "UTF-8") s (sanitize-output t)]
-                         (when (seq s) (handle-text s))))
-        finalize (fn []
-                   (when-let [w @sig-watcher] (future-cancel w) (reset! sig-watcher nil))
-                   (when @tmp-stream (try (.close @tmp-stream) (catch Exception _ nil))
-                     (reset! tmp-stream nil))
-                   (let [raw (apply str @tail-buf)
-                         clean (if @tail-line-boundary raw
-                                 (let [nl (str/index-of raw "\n")]
-                                   (if nl (subs raw (inc nl)) raw)))
-                         {:keys [content truncated]} (truncate-tail clean :max-lines max-lines :max-bytes max-bytes)]
-                     (when (and truncated (nil? @tmp-path))
-                       (let [p (create-temp-file)] (reset! tmp-path p) (spit p clean)))
-                     {:output content :exit-code nil :cancelled false
-                      :truncated truncated :full-output-path @tmp-path}))]
+    :or {cwd (System/getProperty "user.dir")
+         max-lines DEFAULT-MAX-LINES
+         max-bytes DEFAULT-MAX-BYTES}}]
+  (let [;; Resolve command with prefix (pi: commandPrefix)
+        resolved-command (if command-prefix
+                           (str command-prefix "\n" command)
+                           command)
+        ;; Use provided operations or default (pi: BashOperations)
+        exec-ops (or operations (create-default-ops :shell-path shell-path))
+
+        raw-chunks (atom [])
+        tail-buf (atom [])
+        tail-bytes (atom 0)
+        total-decoded-bytes (atom 0)
+        tail-starts-at-line-boundary (atom true)
+        temp-file-path (atom nil)
+        temp-file-stream (atom nil)
+        signal-watcher (atom nil)
+
+        handle-text
+        (fn [text]
+          (let [bytes (count text)]
+            (swap! total-decoded-bytes + bytes)
+            (swap! tail-buf conj text)
+            (swap! tail-bytes + bytes)
+            (when (> @tail-bytes MAX-ROLLING-BYTES)
+              (loop []
+                (when (and (> (count @tail-buf) 1)
+                           (> @tail-bytes MAX-ROLLING-BYTES))
+                  (let [removed (first @tail-buf)]
+                    (swap! tail-buf subvec 1)
+                    (swap! tail-bytes - (count removed))
+                    (when (not (str/ends-with? removed "\n"))
+                      (reset! tail-starts-at-line-boundary false)))
+                  (recur))))
+            (when on-chunk
+              (try (on-chunk text)
+                   (catch Exception e
+                     (debug/log "bash chunk callback: " e))))))
+
+        handle-raw-bytes
+        (fn [raw-bytes offset len]
+          (if (or @temp-file-stream @temp-file-path
+                  (> @total-decoded-bytes max-bytes))
+            (do
+              (when (nil? @temp-file-path)
+                (let [path (create-temp-file)
+                      output-stream (java.io.FileOutputStream. path)]
+                  (reset! temp-file-path path)
+                  (reset! temp-file-stream output-stream)
+                  (doseq [[data start end] @raw-chunks]
+                    (.write output-stream data start (- end start)))
+                  (.write output-stream raw-bytes offset len)
+                  (.flush output-stream)))
+              (when @temp-file-stream
+                (.write @temp-file-stream raw-bytes offset len)
+                (.flush @temp-file-stream)))
+            (let [copy (java.util.Arrays/copyOfRange raw-bytes offset (+ offset len))]
+              (swap! raw-chunks conj [copy 0 (alength copy)])))
+          (let [decoded (String. raw-bytes offset len "UTF-8")
+                clean (sanitize-output decoded)]
+            (when (seq clean)
+              (handle-text clean))))
+
+        finalize
+        (fn []
+          (when-let [watcher @signal-watcher]
+            (future-cancel watcher)
+            (reset! signal-watcher nil))
+          (when @temp-file-stream
+            (try (.close @temp-file-stream) (catch Exception _ nil))
+            (reset! temp-file-stream nil))
+          (let [raw-output (apply str @tail-buf)
+                clean-output (if @tail-starts-at-line-boundary
+                               raw-output
+                               (let [first-newline (str/index-of raw-output "\n")]
+                                 (if first-newline
+                                   (subs raw-output (inc first-newline))
+                                   raw-output)))
+                {:keys [content truncated]} (truncate-tail clean-output
+                                               :max-lines max-lines
+                                               :max-bytes max-bytes)]
+            (when (and truncated (nil? @temp-file-path))
+              (let [path (create-temp-file)]
+                (reset! temp-file-path path)
+                (spit path clean-output)))
+            {:output content
+             :exit-code nil
+             :cancelled false
+             :truncated truncated
+             :full-output-path @temp-file-path}))]
+
     (try
-      (let [base (into {} (System/getenv)) merged (if env (merge base env) base)
+      (let [base-env (into {} (System/getenv))
+            merged-env (if env (merge base-env env) base-env)
             {:keys [command cwd env]}
-            (if spawn-hook (spawn-hook {:command resolved-cmd :cwd cwd :env merged})
-                {:command resolved-cmd :cwd cwd :env merged})
-            ops-result (ops {:command command :cwd cwd :on-data handle-bytes
-                             :signal signal :timeout timeout :env env})
+            (if spawn-hook
+              (spawn-hook {:command resolved-command :cwd cwd :env merged-env})
+              {:command resolved-command :cwd cwd :env merged-env})
+            ops-result (exec-ops
+                         {:command command
+                          :cwd cwd
+                          :on-data handle-raw-bytes
+                          :signal signal
+                          :timeout timeout
+                          :env env})
             exit-code (:exit-code ops-result)]
-        (loop [lb @tail-bytes dl (+ (System/currentTimeMillis) 100)]
-          (when (< (System/currentTimeMillis) dl)
-            (let [cb @tail-bytes]
-              (if (> cb lb) (recur cb (+ (System/currentTimeMillis) 100))
-                  (do (Thread/sleep 10) (recur lb dl))))))
+        ;; Grace polling for pending stream data after operations complete
+        (loop [last-bytes @tail-bytes
+               deadline (+ (System/currentTimeMillis) 100)]
+          (when (< (System/currentTimeMillis) deadline)
+            (let [current-bytes @tail-bytes]
+              (if (> current-bytes last-bytes)
+                (recur current-bytes (+ (System/currentTimeMillis) 100))
+                (do (Thread/sleep 10)
+                    (recur last-bytes deadline))))))
         (assoc (finalize) :exit-code exit-code))
+
       (catch Exception e
-        (debug/log "bash err: " e) (when-let [w @sig-watcher] (future-cancel w))
-        (let [raw (apply str @tail-buf)
-              clean (if @tail-line-boundary raw
-                      (let [nl (str/index-of raw "\n")] (if nl (subs raw (inc nl)) raw)))
-              _ (when (and (nil? @tmp-path) (> (count clean) max-bytes))
-                  (let [p (create-temp-file)] (reset! tmp-path p) (spit p clean)))
-              {:keys [content truncated]} (truncate-tail clean :max-lines max-lines :max-bytes max-bytes)]
-          (cond (and signal @signal)
-                {:output content :exit-code nil :cancelled true :truncated truncated :full-output-path @tmp-path}
-                (str/includes? (str (.getMessage e)) "timeout")
-                {:output (str content "\n\nTimed out after " (or timeout "?") "s")
-                 :exit-code nil :cancelled false :truncated truncated :full-output-path @tmp-path}
-                :else
-                {:output (str content "\n\nError: " (.getMessage e))
-                 :exit-code nil :cancelled false :truncated truncated :full-output-path @tmp-path}))))))
+        (debug/log "bash execute error: " e)
+        (when-let [watcher @signal-watcher]
+          (future-cancel watcher))
+        (let [raw-output (apply str @tail-buf)
+              clean-output (if @tail-starts-at-line-boundary
+                             raw-output
+                             (let [first-newline (str/index-of raw-output "\n")]
+                               (if first-newline
+                                 (subs raw-output (inc first-newline))
+                                 raw-output)))
+              _ (when (and (nil? @temp-file-path)
+                           (> (count clean-output) max-bytes))
+                  (let [path (create-temp-file)]
+                    (reset! temp-file-path path)
+                    (spit path clean-output)))
+              {:keys [content truncated]} (truncate-tail clean-output
+                                             :max-lines max-lines
+                                             :max-bytes max-bytes)]
+          (cond
+            (and signal @signal)
+            {:output content :exit-code nil :cancelled true
+             :truncated truncated :full-output-path @temp-file-path}
+            (str/includes? (str (.getMessage e)) "timeout")
+            {:output (str content "\n\nCommand timed out after " (or timeout "?") "s")
+             :exit-code nil :cancelled false
+             :truncated truncated :full-output-path @temp-file-path}
+            :else
+            {:output (str content "\n\nError: " (.getMessage e))
+             :exit-code nil :cancelled false
+             :truncated truncated :full-output-path @temp-file-path}))))))
