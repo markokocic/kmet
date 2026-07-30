@@ -1,6 +1,8 @@
 (ns kmet.agent.ui.assistant-message
   "AssistantMessageComponent component — Pi's AssistantMessageComponent.
-   Has consistent pad-y=1 vertical spacing matching other message components.
+   Top pad-y=1 only (Pi-style Spacer(1) at top when content present).
+   No bottom padding — next component provides its own top spacing.
+   Spacer between thinking and text blocks when text follows thinking.
    Optimized for streaming: text/thinking wrapping/parsing happens eagerly
    in append calls (on the LLM thread) so the render function returns
    pre-rendered lines instantly.
