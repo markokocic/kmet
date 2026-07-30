@@ -86,6 +86,11 @@ Pi passes a `ToolRenderContext` to `renderCall`/`renderResult` with `state`,
 kmet uses positional args `(name args theme width)`. Functionally equivalent
 for built-in tools but limits extension potential.
 
+### toolCallId not tracked (⚠️ Low)
+Pi stores a `toolCallId` on each `ToolExecutionComponent` for correlating
+tool calls across agent turns and extensions. kmet doesn't track this.
+Not needed for current rendering functionality.
+
 ---
 
 ## 4. Minor cosmetic differences
@@ -105,3 +110,4 @@ for built-in tools but limits extension potential.
 |---|---|---|
 | Image rendering wired into tool result pipeline | Medium | ⚠️ |
 | Render context object | Low | ⚠️ |
+| toolCallId tracking | Low | ⚠️ |
