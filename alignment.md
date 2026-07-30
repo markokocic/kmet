@@ -3,9 +3,616 @@
 Analysis of gaps between kmet's agent loop and pi's agent loop architecture,
 with implementation guidance for each gap.
 
+---
+
+# Editor Alignment: pi vs kmet
+
+Analysis of gaps between kmet's multi-line text editor (`kmet.tui.components.editor`)
+and pi's Editor (`@earendil-works/pi-tui` `components/editor.ts`), covering
+autocomplete, navigation, editing, layout, and extensibility.
+
 ## Architecture Overview
 
-### pi (TypeScript, 3 layers)
+### pi (TypeScript, layered)
+
+| Layer | File | Role |
+|-------|------|------|
+| **Editor** | `packages/tui/src/components/editor.ts` (2352 lines) | Core multi-line editor: word-wrap, cursor, scrolling, undo, kill-ring, paste markers, autocomplete integration |
+| **Autocomplete** | `packages/tui/src/autocomplete.ts` (500+ lines) | `CombinedAutocompleteProvider` — slash commands, file paths (`@`), fuzzy filtering, `fd` integration, argument completion |
+| **Fuzzy** | `packages/tui/src/fuzzy.ts` | Scoring: word-boundary bonuses, consecutive match rewards, camelCase/alpha-numeric swapping |
+| **SelectList** | `packages/tui/src/components/select-list.ts` | Dropdown menu with primary+secondary columns, scroll indicators, keyboard navigation |
+| **EditorComponent** | `packages/tui/src/editor-component.ts` | Interface: `getText`, `setText`, `handleInput`, `setAutocompleteProvider`, `onSubmit`, `onChange`, `addToHistory`, `insertTextAtCursor`, `getExpandedText` |
+| **CustomEditor** | `packages/coding-agent/src/modes/interactive/components/custom-editor.ts` | Extends Editor with `onAction()` system: app-level actions (model select, external editor, clipboard paste, session mgmt) |
+| **Slash commands** | `packages/coding-agent/src/core/slash-commands.ts` | 20 builtin commands with descriptions and argument hints |
+| **Word navigation** | `packages/tui/src/word-navigation.ts` | Pure functions — `findWordBackward`, `findWordForward` with paste-marker awareness |
+| **Kill ring** | `packages/tui/src/kill-ring.ts` | Ring buffer with accumulate (prepend/append), rotate, peek |
+| **Undo stack** | `packages/tui/src/undo-stack.ts` | Generic stack with `structuredClone` |
+
+### kmet (Clojure/Babashka, flat)
+
+| Component | File | Role |
+|-----------|------|------|
+| **Editor** | `src/kmet/tui/components/editor.clj` (~960 lines) | Multi-line editor: word-wrap, cursor, scrolling, undo+redo, kill-ring, basic paste markers, autocomplete provider slot |
+| **Input** | `src/kmet/tui/components/input.clj` | Single-line input: horizontal scrolling, kill-ring, undo |
+| **Editing primitives** | `src/kmet/tui/components/editing.clj` | Grapheme clusters (pure Clojure), kill-ring, word boundaries |
+| **Utils** | `src/kmet/tui/utils.clj` | visible-width, CURSOR-MARKER, ANSI helpers |
+| **SelectList** | `src/kmet/tui/components/select_list.clj` | Exists separately (used for session picker) but **not integrated with editor** |
+| **Core** | `src/kmet/core.clj` | Wires editor submit handler, provides tab fn via `editor-set-on-tab!` |
+
+---
+
+## Gap 1: Autocomplete System
+
+**Severity: 🔴 Critical**
+
+### pi Implementation
+
+Editor integrates with `CombinedAutocompleteProvider` via a clean interface:
+
+```typescript
+interface AutocompleteProvider {
+  triggerCharacters?: string[];
+  getSuggestions(lines, cursorLine, cursorCol, { signal, force }): Promise<AutocompleteSuggestions | null>;
+  applyCompletion(lines, cursorLine, cursorCol, item, prefix): { lines, cursorLine, cursorCol };
+  shouldTriggerFileCompletion?(lines, cursorLine, cursorCol): boolean;
+}
+```
+
+The provider handles three completion domains:
+
+**1. Slash commands** — builtins (20 commands from `slash-commands.ts`), skills, extensions, prompt templates. Fuzzy-matched via `fuzzyFilter`. Rendered in a `SelectList` with primary column (name) and secondary column (description/argument hint).
+
+**2. File path completion** (`@` prefix or Tab trigger) — Two approaches:
+   - **`fd`-based fuzzy search**: async, respects `.gitignore`, full-path matching, recusive, returns top-20 scored results. Used when typing `@` before a path.
+   - **Directory listing**: synchronous `readdirSync` for Tab completion at explicit directory boundaries (`./`, `../`, `~/`, `/`). Directories sorted first, alphabetical within.
+   - Supports **quoted paths** (`@"path with spaces"`).
+   - **Home directory expansion** (`~/` → expanded path).
+
+**3. Argument completion** — after a slash command name and space, `getArgumentCompletions()` on the command object returns context-specific items (e.g., `/model <Tab>` lists available models).
+
+**Auto-trigger logic** in `insertCharacter()`:
+- `/` at start of message → trigger
+- `@`, `#` or other trigger characters at token boundary → trigger with debounce
+- Letters within slash command context → trigger
+- Letters matching trigger pattern → trigger with debounce (20ms for `@` paths)
+
+**Debounce and cancellation**:
+```typescript
+ATTACHMENT_AUTOCOMPLETE_DEBOUNCE_MS = 20;
+// ^ only for @-prefix matching (expensive fd calls)
+// Tab/force triggers skip debounce
+```
+- `AbortController` cancels in-flight requests
+- Request serialization via `autocompleteRequestTask` chain
+- Stale snapshot detection: if text/cursor changed since request, ignore result
+- Cancel on: escape, cursor movement, text change, blur
+
+**Keyboard navigation** within autocomplete dropdown:
+- Up/Down arrows move selection (wrapping)
+- Enter/Tab confirms selected item
+- Escape cancels
+- Tab with single result auto-completes immediately without showing dropdown
+
+### kmet Current State
+
+```clojure
+;; editor.clj line 593
+(defn- handle-tab [editor]
+  (if-let [ap @(:autocomplete-provider editor)]
+    (let [state @(:state-atom editor)
+          lines (:lines state)
+          cl (:cursor-line state) cc (:cursor-col state)
+          line (or (nth lines cl) "")
+          before-cursor (subs line 0 cc)
+          word-start (or (last (keep-indexed #(when (re-find #"[\s/]" (str %2)) %1) before-cursor))
+                         -1)
+          partial (subs before-cursor (inc word-start))
+          result (ap partial (editor-get-text editor))]
+      (when result
+        (insert-character editor result)))
+    ;; Default tab: insert 4 spaces
+    (insert-character editor "    ")))
+```
+
+Key limitations:
+
+1. **No autocomplete dropdown UI** — `SelectList` exists but is never used by the editor. The provider returns a string that is immediately inserted at cursor — no selection, no preview, no cancellation.
+
+2. **No `CombinedAutocompleteProvider`** — The provider atom expects a function `(fn prefix current-text → string-or-nil)`. No protocol, no `getSuggestions`/`applyCompletion` separation, no structured items with descriptions.
+
+3. **No slash command autocomplete** — Even if a provider is wired, there's no builtin command registry, no skill commands, no extension commands. The `core.clj` `handle-command` dispatches manually on `/quit`, `/help`, `/model`, `/new`, `/resume`, `/tree`, `/theme` — no way to discover these from the editor.
+
+4. **No file path completion** — No `@` prefix handler, no `fd` integration, no `readdirSync` equivalent. Tab in a non-slash context just inserts 4 spaces.
+
+5. **No argument completion** — After typing `/model `, Tab has no way to propose provider:model values.
+
+6. **No fuzzy matching** — The provider is called with the exact partial prefix; no scoring or ranking.
+
+7. **No abort/cancellation** — No debounce, no abort controller, no stale-snapshot check. Every keystroke invokes the provider synchronously.
+
+8. **No auto-trigger** — Only fires on explicit Tab press. No automatic popup on `/`, `@`, or letters within a command.
+
+### Required Work
+
+1. **Define `AutocompleteProvider` protocol** with `get-suggestions` and `apply-completion` methods, matching pi's interface
+2. **Port `CombinedAutocompleteProvider`** with slash command registry, file path completion, argument completion
+3. **Port `fuzzyFilter`** — fuzzy matching with word-boundary bonuses, consecutive match rewards, alpha-numeric swapping
+4. **Build slash command registry** — builtins from `core.clj`, extendable by skills and extensions
+5. **Build file path completion** — `babashka.fs` for directory listing, optional `fd` integration for recursive search, `@` prefix for file attachment, `~` expansion, quoted path support
+6. **Integrate `SelectList` into editor render** — when autocomplete state is active, render SelectList below the editor in `render()`
+7. **Wire keyboard navigation** — Up/Down/Enter/Escape when autocomplete is active
+8. **Add auto-trigger logic** — `/` at line start, `@` at token boundary, letters in slash command, with optional debounce for file-system operations
+9. **Add abort/debounce** — atom-based request tracking, cancellation on cursor movement/text change
+10. **Wire in `core.clj`** — on startup, call `editor-set-autocomplete-provider!` with a `CombinedAutocompleteProvider` that has builtin commands and current-working-directory file completion
+
+---
+
+## Gap 2: Autocomplete UI (SelectList in Editor)
+
+**Severity: 🔴 Critical**
+
+### pi Implementation
+
+The Editor's `render()` method appends the autocomplete SelectList after the editor content:
+
+```typescript
+// editor.ts render()
+if (this.autocompleteState && this.autocompleteList) {
+  const autocompleteResult = this.autocompleteList.render(contentWidth);
+  for (const line of autocompleteResult) {
+    const lineWidth = visibleWidth(line);
+    const linePadding = " ".repeat(Math.max(0, contentWidth - lineWidth));
+    result.push(`${leftPadding}${line}${linePadding}${rightPadding}`);
+  }
+}
+```
+
+The SelectList renders:
+- A primary column with the item label (truncated to `maxPrimaryColumnWidth`, default 32)
+- A secondary column with description (truncated to remaining width, minimum 10 chars)
+- Selection indicator: `→` for selected, `  ` for unselected
+- Selected items are styled via `selectedText` theme function
+- Description uses `description` theme function
+- Scroll indicator: `(N/M)` at bottom when items exceed visible count
+- Items are rendered starting from `selectedIndex - floor(maxVisible/2)` for centered scrolling
+
+### kmet Current State
+
+The `SelectList` component exists at `kmet.tui.components.select-list` and has feature parity with pi's version (primary/secondary columns, scroll indicators, wrapping navigation). However, it is **never used by the Editor**. The Editor has no autocomplete rendering at all.
+
+### Required Work
+
+1. Add `autocomplete-list`, `autocomplete-state`, `autocomplete-prefix` atoms to Editor record
+2. In Editor's `render()`, after rendering the bottom border, check if autocomplete is active and call `protocols/render autocomplete-list content-width`
+3. Append the rendered lines with proper padding
+4. In `handle-input`, when autocomplete is active, intercept Up/Down/Enter/Tab/Escape and delegate to SelectList or apply completion
+5. Style autocomplete lines using theme (selected prefix, selected text, description colors)
+6. Layer autocomplete **below** the editor border (not overlaying content) — pi places it after the bottom border
+
+---
+
+## Gap 3: Editor Action / Extension System
+
+**Severity: 🔴 Critical**
+
+### pi Implementation
+
+`CustomEditor` extends `Editor` and adds an action system:
+
+```typescript
+class CustomEditor extends Editor {
+  actionHandlers: Map<AppKeybinding, () => void> = new Map();
+  onEscape?: () => void;
+  onCtrlD?: () => void;
+  onPasteImage?: () => void;
+  onExtensionShortcut?: (data: string) => boolean;
+
+  onAction(action: AppKeybinding, handler: () => void): void { ... }
+
+  handleInput(data: string): void {
+    if (this.onExtensionShortcut?.(data)) return;
+    if (this.keybindings.matches(data, "app.clipboard.pasteImage")) { ... }
+    if (this.keybindings.matches(data, "app.interrupt")) { if (!this.isShowingAutocomplete()) { ... } }
+    for (const [action, handler] of this.actionHandlers) {
+      if (this.keybindings.matches(data, action)) { handler(); return; }
+    }
+    super.handleInput(data);
+  }
+}
+```
+
+Registered actions include:
+- `app.interrupt` — escape/cancel
+- `app.exit` — Ctrl+D quit
+- `app.model.select` — show model selector
+- `app.model.cycleForward` / `app.model.cycleBackward` — cycle models
+- `app.tools.expand` — toggle tool output
+- `app.thinking.toggle` — toggle thinking blocks
+- `app.editor.external` — open external editor
+- `app.message.copy` — copy last message
+- `app.message.followUp` — dequeue/steer
+- `app.session.new`, `app.session.tree`, `app.session.fork`, `app.session.resume` — session management
+
+Additionally, an `EditorComponent` interface provides a clean abstraction so extensions can provide custom editor implementations:
+
+```typescript
+interface EditorComponent extends Component {
+  getText(): string;
+  setText(text: string): void;
+  handleInput(data: string): void;
+  onSubmit?: (text: string) => void;
+  onChange?: (text: string) => void;
+  addToHistory?(text: string): void;
+  insertTextAtCursor?(text: string): void;
+  getExpandedText?(): string;
+  setAutocompleteProvider?(provider: AutocompleteProvider): void;
+  borderColor?: (str: string) => string;
+  setPaddingX?(padding: number): void;
+  setAutocompleteMaxVisible?(maxVisible: number): void;
+}
+```
+
+### kmet Current State
+
+Editor is a plain `defrecord` implementing `IComponent`. All app-level keybindings are handled externally in `core.clj`'s global input listener, not through the editor itself. There is no action registration mechanism. The editor's `autocomplete-provider` is a simple function atom with no protocol.
+
+### Required Work
+
+1. Add `:on-action` callback mechanism to Editor (or an `actions` dispatch map)
+2. Wire app actions from `core.clj`'s keybinding handler through the editor's action system
+3. Add `:on-escape`, `:on-external-editor` hooks to Editor
+4. Consider adding `EditorComponent` protocol for extension-provided editors
+5. Move app-level keybinding dispatch (Ctrl+C, Ctrl+L, app.interrupt, app.clear) into the editor's `handle-input` via action handlers, keeping only truly global keys at the TUI level
+
+---
+
+## Gap 4: External Editor Integration
+
+**Severity: 🟡 Important**
+
+### pi Implementation
+
+`interactive-mode.ts` has a full external editor flow:
+
+```typescript
+async handleOpenExternalEditor(): Promise<void> {
+  const content = this.editor.getExpandedText();  // paste markers expanded
+  const tmpFile = path.join(tmpdir(), `pi-editor-${randomUUID()}.md`);
+  fs.writeFileSync(tmpFile, content);
+  const editor = process.env.EDITOR || "vi";
+  spawnSync(editor, [tmpFile], { stdio: "inherit" });
+  const newContent = fs.readFileSync(tmpFile, "utf-8");
+  this.editor.setText(newContent);
+  this.ui.requestRender();
+}
+```
+
+Key details:
+- Uses `getExpandedText()` to expand paste markers before editing
+- Writes to temp file in system tmpdir
+- Spawns `$EDITOR` (or `vi`) with `inherit` stdio
+- On return, reads file and calls `setText()`
+- Cleans up temp file
+- Requires TUI to stop rendering while external editor is active (terminal mode switch)
+
+### kmet Current State
+
+No external editor integration. No `get-expanded-text` function (paste markers can't be expanded). No temp file creation / `$EDITOR` spawning.
+
+### Required Work
+
+1. Add `editor-get-expanded-text` function that replaces paste markers with stored content
+2. In `core.clj`, bind a keybinding (e.g., Ctrl+E) to external editor flow:
+   - Suspend TUI rendering
+   - Write expanded content to temp file
+   - Spawn `$EDITOR` via `babashka.process`
+   - Read file back
+   - Call `editor-set-text!`
+   - Resume TUI rendering
+3. Handle cleanup of temp files
+
+---
+
+## Gap 5: Paste Markers — Atomic Segments
+
+**Severity: 🟡 Important**
+
+### pi Implementation
+
+Pi uses `segmentWithMarkers()` to wrap `Intl.Segmenter` and merge paste markers into single atomic segments:
+
+```typescript
+function segmentWithMarkers(text, baseSegmenter, validIds): Iterable<Intl.SegmentData> {
+  // Find all [paste #N ...] markers with valid IDs
+  // Merge all graphemes within a marker into one segment
+  // Return merged segments
+}
+```
+
+This ensures:
+- Cursor never lands in the middle of a `[paste #1 +123 lines]` marker
+- Backspace deletes the entire marker at once
+- Word-wrap doesn't break inside a marker
+- Word movement treats the marker as one unit
+
+Used in `segment()` method which is the single entry point for all grapheme segmentation:
+
+```typescript
+private segment(text, mode): Iterable<Intl.SegmentData> {
+  return segmentWithMarkers(text, mode === "word" ? wordSegmenter : graphemeSegmenter, this.validPasteIds());
+}
+```
+
+### kmet Current State
+
+Paste markers are stored (`paste-store`) but segmentation is handled by `edit/grapheme-segments` which has no knowledge of markers. Cursor can land inside a marker, backspace deletes one character at a time within it, and word-wrap can break across marker boundaries.
+
+### Required Work
+
+1. Add `segment-with-markers` function in `editing.clj` that takes text, base-segmenter function, and valid paste IDs
+2. It should find all `[paste #N ...]` markers with valid IDs and merge their grapheme segments into single atomic units
+3. Replace direct calls to `grapheme-segments` in Editor with a `segment` helper that wraps markers
+4. Apply to: cursor movement (left/right), backspace, forward-delete, and word-wrap
+
+---
+
+## Gap 6: Undo Coalescing (Fish-Style)
+
+**Severity: 🟡 Important**
+
+### pi Implementation
+
+Pi uses fish-style undo coalescing where consecutive word characters merge into one undo unit, while spaces create boundaries:
+
+```typescript
+private insertCharacter(char: string, skipUndoCoalescing?: boolean): void {
+  if (!skipUndoCoalescing) {
+    if (isWhitespaceChar(char) || this.lastAction !== "type-word") {
+      this.pushUndoSnapshot();
+    }
+    this.lastAction = "type-word";
+  }
+  // ... insert char
+}
+```
+
+This means:
+- Typing "hello" pushes one undo snapshot for all 5 chars
+- A space creates a boundary — typing space pushes a snapshot before space
+- Then typing "world" pushes no additional snapshot until space or non-word char
+- Undo removes the whole word, then each space separately
+
+### kmet Current State
+
+```clojure
+(defn- insert-character [editor char]
+  (when (or (re-find #"^\s" char) (not= @(:last-action editor) :type-word))
+    (push-undo-state editor))
+  (reset! (:last-action editor) :type-word))
+```
+
+kmet has the same coalescing logic, so this is **already implemented**. However, pi's handler also supports `skipUndoCoalescing` for atomic operations like paste — kmet's `insert-character` always coalesces, which means large pastes that go through `insert-text-at-cursor-internal` may produce inefficient undo granularity.
+
+### Required Work
+
+1. Add `skip-undo-coalescing` parameter to kmet's `insert-character`
+2. Call with `skip-undo-coalescing = true` from `handle-paste` and `add-new-line`
+
+---
+
+## Gap 7: Extended Paste Features
+
+**Severity: 🟡 Important**
+
+### pi Implementation
+
+Pi's paste handling includes several refinements beyond basic bracketed paste:
+
+**CSI-u control byte decoding** — Some terminals (e.g., tmux popups with CSI-u mode) encode control bytes inside bracketed paste as `ESC [ <codepoint> ; 5 u` sequences. Pi decodes these back to literal control bytes before processing:
+
+```typescript
+const decodedText = pastedText.replace(/\x1b\[(\d+);5u/g, (match, code) => {
+  const cp = Number(code);
+  if (cp >= 97 && cp <= 122) return String.fromCharCode(cp - 96);
+  if (cp >= 65 && cp <= 90) return String.fromCharCode(cp - 64);
+  return match;
+});
+```
+
+**Smart path spacing** — If pasting a file path (starting with `/`, `~`, or `.`) and the char before cursor is a word character, prepend a space:
+
+```typescript
+if (/^[/~.]/.test(filteredText)) {
+  const charBeforeCursor = ...;
+  if (charBeforeCursor && /\w/.test(charBeforeCursor)) {
+    filteredText = ` ${filteredText}`;
+  }
+}
+```
+
+**Paste markers** — Large pastes (>10 lines or >1000 chars) are stored and replaced with `[paste #N +N lines]` or `[paste #N NNNN chars]` markers. On delete of a marker, the paste registry is cleaned up and remaining IDs are renumbered.
+
+### kmet Current State
+
+Basic paste markers exist (store content, insert marker). Missing: CSI-u decode, smart path spacing, paste marker renumbering on delete.
+
+### Required Work
+
+1. Add CSI-u control byte decoding for bracketed paste
+2. Add smart path spacing heuristic
+3. Add paste marker renumbering when a marker is deleted (shift higher IDs down)
+
+---
+
+## Gap 8: History Draft Preservation
+
+**Severity: 🟡 Important**
+
+### pi Implementation
+
+When entering history browsing mode (up arrow), pi captures the current editor state as a draft:
+
+```typescript
+private navigateHistory(direction: 1 | -1): void {
+  if (this.historyIndex === -1 && newIndex >= 0) {
+    this.pushUndoSnapshot();
+    this.historyDraft = structuredClone(this.state);
+  }
+  // ...
+  if (this.historyIndex === -1) {
+    // Restore draft
+    const draft = this.historyDraft;
+    this.historyDraft = null;
+    if (draft) {
+      this.state = draft;
+      // ...
+    } else {
+      this.setTextInternal("");
+    }
+  }
+}
+```
+
+This ensures that pressing Up then Down returns to exactly the typed state, even if there were multiple lines and cursor positioning. The draft is also pushed onto the undo stack so `Ctrl+Z` can restore it.
+
+### kmet Current State
+
+```clojure
+(defn- history-backward [editor]
+  (let [h @(:history editor) idx @(:history-idx editor)]
+    (if (or (neg? idx) (empty? h)) nil
+      (let [next-idx (max -1 (dec idx))
+            entry (nth h idx)]
+        (reset! (:history-idx editor) next-idx)
+        (history-set-state! editor entry) ...))))
+```
+
+kmet does not capture the current editor state before entering history mode. If you type something, press Up (history), then Down to return — the typed text is **lost** and replaced with empty editor.
+
+### Required Work
+
+1. Before switching to a history entry, save current editor state in a `history-draft` atom
+2. When returning to `history-idx = -1`, restore the draft instead of setting empty text
+3. Push draft onto undo stack so it can be recovered
+
+---
+
+## Gap 9: Dynamic Editor Height
+
+**Severity: 🟢 Minor**
+
+### pi Implementation
+
+```typescript
+const terminalRows = this.tui.terminal.rows;
+const maxVisibleLines = Math.max(5, Math.floor(terminalRows * 0.3));
+```
+
+Editor height is **dynamic**: 30% of terminal height, min 5 lines. Adapts to terminal resize automatically since `render()` recalculates on every call.
+
+### kmet Current State
+
+```clojure
+(defn- get-editor-height [editor]
+  (or @(:height-atom editor) 12))
+```
+
+Fixed default of 12 lines. Configurable via `:height` option, but never dynamically recalculated from terminal size.
+
+### Required Work
+
+1. In `render()`, compute height from `(tui/terminal-rows)` * 0.3, clamped to [5, ...]
+2. The editor needs access to the terminal (currently `make-editor` doesn't receive a TUI reference — add one, or add a `terminal-rows-atom` that the TUI updates on resize)
+3. Remove `height-atom` or keep it as a fallback
+
+---
+
+## Gap 10: Slash Command Registry
+
+**Severity: 🔴 Critical**
+
+### pi Implementation
+
+20 builtin slash commands defined in `slash-commands.ts` with names, descriptions, and argument hints:
+
+```typescript
+export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
+  { name: "settings", description: "Open settings menu" },
+  { name: "model", description: "Select model", argumentHint: "<provider/model>" },
+  { name: "export", description: "Export session" },
+  { name: "import", description: "Import session" },
+  // ... 16 more
+];
+```
+
+Commands are registered into the `CombinedAutocompleteProvider` alongside skill commands and extension commands. Discovery is automatic — typing `/` shows all available commands.
+
+### kmet Current State
+
+Commands handled in a manual `case` dispatch in `handle-command`:
+
+```clojure
+(case cmd
+  "quit" ...
+  "help" ...
+  "model" ...
+  "new" ...)
+```
+
+There is no command registry. Skills can't register commands. Extensions can't register commands. No way to discover available commands from the UI.
+
+### Required Work
+
+1. Define a slash command registry (vector of `{:name :description :argument-hint :handler}` maps)
+2. Register builtin commands at startup
+3. Allow skills and extensions to register commands via `register-command!`
+4. Wire registry into the `CombinedAutocompleteProvider`
+5. Keep `handle-command` dispatch but derive it from registry
+
+---
+
+## Summary: Feature Comparison Table
+
+| Feature | pi | kmet | Priority |
+|---------|----|------|----------|
+| **Slash command autocomplete (dropdown)** | ✅ CombinedAutocompleteProvider + SelectList | ❌ No dropdown | 🔴 Critical |
+| **File path completion (@)** | ✅ fd + readdirSync, fuzzy, quotes | ❌ Not implemented | 🔴 Critical |
+| **Fuzzy matching** | ✅ fuzzyFilter with scoring | ❌ Not implemented | 🔴 Critical |
+| **Argument completion** | ✅ getArgumentCompletions | ❌ Not implemented | 🔴 Critical |
+| **Auto-trigger autocomplete** | ✅ On /, @, letters in command | ❌ Tab-only | 🔴 Critical |
+| **Autocomplete abort/debounce** | ✅ AbortController, 20ms debounce | ❌ Synchronous, no cancel | 🔴 Critical |
+| **Autocomplete UI (SelectList)** | ✅ Rendered below editor border | ❌ Not used in editor | 🔴 Critical |
+| **Editor action system** | ✅ CustomEditor.onAction() | ❌ No action system | 🔴 Critical |
+| **EditorComponent interface** | ✅ Clean protocol for extensions | ❌ No protocol | 🔴 Critical |
+| **External editor** | ✅ $EDITOR with paste expansion | ❌ Not implemented | 🟡 Important |
+| **Paste-marker atomic segments** | ✅ segmentWithMarkers | ❌ Not implemented | 🟡 Important |
+| **Paste marker renumbering** | ✅ On delete, shift IDs | ❌ Not implemented | 🟡 Important |
+| **CSI-u paste decode** | ✅ Decode control bytes in paste | ❌ Not implemented | 🟡 Important |
+| **History draft preservation** | ✅ Draft saved on history browse | ❌ Lost on return | 🟡 Important |
+| **Dynamic editor height** | ✅ 30% of terminal, min 5 | ❌ Fixed 12 lines | 🟢 Minor |
+| **Slash command registry** | ✅ 20 builtins + extensions | ❌ Manual case dispatch | 🔴 Critical |
+| **Undo coalescing (fish-style)** | ✅ Word chars merge, spaces boundary | ✅ Same logic | ✅ Already done |
+| **Redo** | ❌ Not implemented | ✅ Ctrl+Z redo | ✅ kmet ahead |
+| **Kill line** | ❌ Not implemented | ✅ Ctrl+W kill line | ✅ kmet ahead |
+| **Grapheme-aware movement** | ✅ Intl.Segmenter | ✅ Pure Clojure | ✅ Already done |
+| **Word boundaries** | ✅ Intl.Segmenter word mode | ✅ Regex-based | ✅ Already done |
+| **Sticky column (vertical)** | ✅ Decision table | ✅ Basic | ✅ Already done |
+| **Character jump (f/t)** | ✅ Multi-line search | ✅ Basic | ✅ Already done |
+| **Page up/down** | ✅ Cursor moves by page | ✅ Same | ✅ Already done |
+| **Kill ring** | ✅ Accumulate, rotate, yank-pop | ✅ Same | ✅ Already done |
+| **Bracketed paste** | ✅ Full support | ✅ Basic | ✅ Already done |
+| **Scroll indicators** | ✅ ↑ N more / ↓ N more | ✅ Same | ✅ Already done |
+| **Cursor marker for IME** | ✅ CURSOR_MARKER | ✅ Same | ✅ Already done |
+| **Padding** | ✅ Configurable paddingX | ✅ Same | ✅ Already done |
+
+---
+
+# Agent Loop Alignment: pi vs kmet
+
+Analysis of gaps between kmet's agent loop and pi's agent loop architecture,
+with implementation guidance for each gap.
+
+## Architecture Overview
 
 | Layer | Package | File | Role |
 |-------|---------|------|------|
