@@ -120,3 +120,13 @@ Legend:
 | **`tail-starts-at-line-boundary` flag now used** | Tracks whether rolling tail starts at a line boundary after trimming. `finalize` reads it: if false, skips the partial first line by finding the first `\n` and slicing from there. | ✅ |
 | **Stderr grace period** | Both stdout and stderr futures are tracked. Grace polling loop waits for both to complete (or grace to expire), with 100ms re-armed on new data. | ✅ |
 | **Spinner text set in constructor** | `spinner-set-text!` called once in `make-bash-execution` with the cancel keybinding resolved at construction time. No longer set on every render. | ✅ |
+
+## 7. Missing API surface (not in pi)
+
+| Feature | pi | kmet | Status |
+|---|---|---|---|
+| **`BashOperations` pluggable backend** | Interface for replacing execution (SSH, containers, etc.) | `:operations` parameter on `execute-bash`. `create-default-ops` factory mirrors `createLocalBashOperations`. Custom ops receive `{:keys [command cwd on-data signal timeout env]}` and call `on-data` with raw byte arrays. | ✅ |
+| **`commandPrefix`** | Prepended to every command (e.g., `source ~/.profile`) | `:command-prefix` parameter on `execute-bash`. Prepended with `\n` separator. | ✅ |
+| **`shellPath`** | Explicit shell path from user settings | `:shell-path` parameter on `execute-bash` and `create-default-ops`. Overrides automatic resolution. | ✅ |
+| **`exposeSessionEnvironment` flag** | Controls whether `PI_*` env vars are injected (default: true) | `!` commands always inject (matching pi's default). Tool caller controls via `:env` parameter — no separate flag needed. | ✅ (equivalent) |
+| **`truncateHead`** | `truncateHead(content)` — keeps first N lines/bytes for file reads | `bash-exec/truncate-head` — same interface, includes `:first-line-exceeds-limit` for edge cases. | ✅ |
