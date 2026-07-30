@@ -7,6 +7,7 @@
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.container :as container]
+            [kmet.tui.components.spacer :as spacer]
             [kmet.agent.ui.user-message :as um]
             [kmet.agent.ui.assistant-message :as am]
             [kmet.agent.ui.tool-execution :as te]
@@ -92,10 +93,17 @@
   "Add a message to the chat history.
    Creates the appropriate component (UserMessageComponent, AssistantMessageComponent,
    ToolExecutionComponent, or CustomMessageComponent) and adds it to the container.
+   Pi-style: adds a Spacer(1) before user messages when the container is non-empty.
    Auto-scrolls to bottom. Returns the created component (or nil)."
   [ch msg]
   (let [comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch))]
     (when comp
+      ;; Pi-style: add Spacer(1) before user messages when container is non-empty
+      (when (and (= :user (:role msg))
+                 (seq @(:children-atom ch)))
+        (let [s (spacer/make-spacer 1)]
+          (container/container-add-child (:container ch) s)
+          (swap! (:children-atom ch) conj s)))
       (container/container-add-child (:container ch) comp)
       (swap! (:children-atom ch) conj comp))
     comp))
@@ -107,13 +115,22 @@
     (chat-history-add-message! ch m)))
 
 (defn chat-history-remove-last!
-  "Remove the last message from history."
+  "Remove the last message from history.
+   Also removes any preceding Spacer(1) added for user messages."
   [ch]
   (let [children @(:children-atom ch)]
     (when (seq children)
       (let [last-child (last children)]
         (container/container-remove-child (:container ch) last-child)
-        (swap! (:children-atom ch) pop)))))
+        (swap! (:children-atom ch) pop)
+        ;; If the new last child doesn't satisfy IComponentKind, it's a
+        ;; Spacer(1) added before a user message — remove it too.
+        (let [remaining @(:children-atom ch)]
+          (when (and (seq remaining)
+                     (not (satisfies? protocols/IComponentKind (last remaining))))
+            (let [spacer (last remaining)]
+              (container/container-remove-child (:container ch) spacer)
+              (swap! (:children-atom ch) pop))))))))
 
 ;; ─── Streaming ────────────────────────────────────────────────────────────
 

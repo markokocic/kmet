@@ -8,21 +8,26 @@
             [kmet.tui.components.box :as box]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.container :as container]
+            [kmet.tui.components.spacer :as spacer]
             [kmet.tui.macros :refer [with-cache]]))
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
-(defrecord CustomMessageComponent [box            ;; Box wrapping the content
-                                   inner-container ;; Container holding label + content Text children
+(defrecord CustomMessageComponent [spacer          ;; Spacer(1) for top vertical gap (Pi-style)
+                                   box             ;; Box wrapping the content
+                                   inner-container  ;; Container holding label + content Text children
                                    label-atom
                                    content-atom
                                    theme-atom
                                    output-pad-atom]
   protocols/IComponent
   (render [this width]
-    (protocols/render @box width))
+    (let [spacer-lines (protocols/render @spacer width)
+          box-lines (protocols/render @box width)]
+      (into [] (concat spacer-lines box-lines))))
   (handle-input [_this _data] nil)
   (invalidate [this]
+    (protocols/invalidate @spacer)
     (protocols/invalidate @box)))
 
 ;; ─── IComponentKind ─────────────────────────────────────────────────────────
@@ -68,7 +73,7 @@
 
 (defn custom-message-set-output-pad! [comp n]
   (reset! (:output-pad-atom comp) n)
-  ;; Rebuild box with new padding
+  ;; Rebuild box with new padding, keep spacer
   (let [theme @(:theme-atom comp)
         inner-container (container/make-container)
         b (box/make-box n 1 #(theme/bg theme :custom-message-bg %))]
@@ -83,9 +88,11 @@
   [& {:keys [label content theme output-pad]
       :or {content "" theme theme/dark-theme output-pad 1}}]
   (let [inner-container (container/make-container)
+        s (spacer/make-spacer 1)
         b (box/make-box output-pad 1 nil)]
     (box/box-add-child b inner-container)
-    (let [comp (map->CustomMessageComponent {:box (atom b)
+    (let [comp (map->CustomMessageComponent {:spacer (atom s)
+                                              :box (atom b)
                                               :inner-container (atom inner-container)
                                               :label-atom (atom label)
                                               :content-atom (atom content)

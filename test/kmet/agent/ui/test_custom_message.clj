@@ -69,8 +69,9 @@
   (testing "renders with custom-message-bg background"
     (let [c (cm/make-custom-message :label "info" :content "test")]
       (let [lines (core/render c 40)]
-        (is (every? #(re-find #"\u001b\[48" %) lines)
-            "All lines should have background ANSI codes")))))
+        ;; First line is Spacer(1) — no background. Remaining lines (from Box) have bg.
+        (is (every? #(re-find #"\u001b\[48" %) (rest lines))
+            "Box lines should have background ANSI codes")))))
 
 (deftest test-long-content-wraps
   (testing "long content wraps to fit width"
