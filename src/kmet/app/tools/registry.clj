@@ -39,6 +39,7 @@
               :label "Edit file"
               :description "Make precise file edits with exact text replacement. When changing multiple separate locations in one file, use one edit call with multiple entries."
               :prompt-snippet "Make precise file edits with exact text replacement"
+              :render-shell :self
               :prompt-guidelines ["Use edit for precise changes (edits[].oldText must match exactly)"
                                   "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls"]
               :parameters (tool/->json-schema
