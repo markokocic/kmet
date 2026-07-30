@@ -231,6 +231,34 @@
                    (catch Exception e
                      (debug/log "bash chunk callback: " e))))))
 
+        ;; Pi: streaming UTF-8 decoder (TextDecoder with {stream: true})
+        utf8-decoder
+        (let [cs (java.nio.charset.Charset/forName "UTF-8")
+              d (.newDecoder cs)]
+          (.onMalformedInput d java.nio.charset.CodingErrorAction/REPLACE)
+          (.onUnmappableCharacter d java.nio.charset.CodingErrorAction/REPLACE)
+          d)
+
+        decode-chunk
+        (fn [raw-bytes offset len end-of-input?]
+          (let [in-buf (java.nio.ByteBuffer/wrap raw-bytes offset len)
+                ;; Allocate generous output buffer (UTF-8 max 4 bytes/char → len * 2 is safe)
+                out-buf (java.nio.CharBuffer/allocate (max 64 (* len 2)))
+                _ (.decode utf8-decoder in-buf out-buf end-of-input?)
+                pos (.position out-buf)]
+            (when (pos? pos)
+              (String. (.array out-buf) 0 pos))))
+
+        finish-utf8
+        (fn []
+          (let [out-buf (java.nio.CharBuffer/allocate 64)
+                _ (.decode utf8-decoder
+                    (java.nio.ByteBuffer/wrap (byte-array 0)) out-buf true)
+                _ (.flush utf8-decoder out-buf)
+                pos (.position out-buf)]
+            (when (pos? pos)
+              (String. (.array out-buf) 0 pos))))
+
         handle-raw-bytes
         (fn [raw-bytes offset len]
           (if (or @temp-file-stream @temp-file-path
@@ -250,10 +278,11 @@
                 (.flush @temp-file-stream)))
             (let [copy (java.util.Arrays/copyOfRange raw-bytes offset (+ offset len))]
               (swap! raw-chunks conj [copy 0 (alength copy)])))
-          (let [decoded (String. raw-bytes offset len "UTF-8")
-                clean (sanitize-output decoded)]
-            (when (seq clean)
-              (handle-text clean))))
+          ;; Pi: streaming decode — handles multi-byte sequences split across chunks
+          (when-let [decoded (decode-chunk raw-bytes offset len false)]
+            (let [clean (sanitize-output decoded)]
+              (when (seq clean)
+                (handle-text clean)))))
 
         finalize
         (fn []
@@ -263,6 +292,11 @@
           (when @temp-file-stream
             (try (.close @temp-file-stream) (catch Exception _ nil))
             (reset! temp-file-stream nil))
+          ;; Pi: flush remaining bytes from streaming decoder (end-of-input)
+          (when-let [flushed (finish-utf8)]
+            (let [clean (sanitize-output flushed)]
+              (when (seq clean)
+                (handle-text clean))))
           (let [raw-output (apply str @tail-buf)
                 clean-output (if @tail-starts-at-line-boundary
                                raw-output
