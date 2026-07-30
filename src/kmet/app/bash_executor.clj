@@ -12,13 +12,23 @@
 (def TEMP-FILE-PREFIX "kmet-bash-")
 (def TEMP-FILE-SUFFIX ".log")
 
+(def ^:private windows-os?
+  (str/starts-with? (System/getProperty "os.name") "Windows"))
+
 (defn kill-process-tree! [pid]
-  (try
-    @(proc/process ["kill" "-9" (str "-" pid)] {:out :inherit :err :inherit})
-    (catch Exception _e
-      (try
-        @(proc/process ["kill" "-9" (str pid)] {:out :inherit :err :inherit})
-        (catch Exception _e2 nil)))))
+  (if windows-os?
+    ;; Windows: use taskkill to kill process tree
+    (try
+      @(proc/process ["taskkill" "/F" "/T" "/PID" (str pid)]
+        {:out :inherit :err :inherit})
+      (catch Exception _e nil))
+    ;; Unix: kill the full process group (negative PID)
+    (try
+      @(proc/process ["kill" "-9" (str "-" pid)] {:out :inherit :err :inherit})
+      (catch Exception _e
+        (try
+          @(proc/process ["kill" "-9" (str pid)] {:out :inherit :err :inherit})
+          (catch Exception _e2 nil))))))
 
 (defonce ^:private tracked-pids (atom #{}))
 (defn track-pid! [pid] (swap! tracked-pids conj pid))
@@ -89,21 +99,39 @@
   (let [tmp (java.io.File/createTempFile TEMP-FILE-PREFIX TEMP-FILE-SUFFIX)]
     (.deleteOnExit tmp) (str (fs/canonicalize tmp))))
 
+(defn- find-bash-on-path []
+  (try
+    (let [cmd (if windows-os?
+               ["cmd.exe" "/c" "where bash.exe"]
+               ["sh" "-c" "command -v bash"])
+          p (proc/process cmd {:out :pipe :err :inherit})
+          _ @p
+          output (str/trim (slurp (:out p)))]
+      (when (seq output) output))
+    (catch Exception _ nil)))
+
 (defn- resolve-shell []
   (or (when (fs/exists? "/bin/bash") "/bin/bash")
       (when (fs/exists? "/usr/bin/bash") "/usr/bin/bash")
-      (try (let [p (proc/process ["sh" "-c" "command -v bash"] {:out :pipe :err :inherit})
-                 _ @p output (str/trim (slurp (:out p)))]
-             (when (seq output) output))
-           (catch Exception _ nil))
-      "sh"))
+      (find-bash-on-path)
+      (when windows-os?
+        (or (let [pf (System/getenv "ProgramFiles")
+                  path (str pf "\\Git\\bin\\bash.exe")]
+              (when (fs/exists? path) path))
+            (let [pf (System/getenv "ProgramFiles(x86)")
+                  path (str pf "\\Git\\bin\\bash.exe")]
+              (when (fs/exists? path) path))))
+      (if windows-os? "cmd.exe" "sh")))
 
 (defn create-default-ops [& {:keys [shell-path]}]
   (let [shell (or shell-path (resolve-shell))]
     (fn [{:keys [command cwd on-data signal timeout env]}]
       (let [_ (when-not (fs/exists? cwd)
                 (throw (ex-info (str "Working dir not found: " cwd) {:cwd cwd})))
-            shell-args [shell "-c" command]
+            ;; Pi: getShellConfig resolves shell + args per platform
+            shell-args (if (str/includes? shell "cmd")
+                         [shell "/c" command]
+                         [shell "-c" command])
             proc-opts {:dir cwd :err :pipe :out :pipe :env env}
             proc-opts (if timeout (assoc proc-opts :timeout (* timeout 1000)) proc-opts)
             p (proc/process shell-args proc-opts)

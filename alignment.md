@@ -86,18 +86,17 @@ Legend:
 | **Temp file content** | Raw `Buffer` bytes written to `createWriteStream` (raw `fs.WriteStream`) | `byte-array` chunks read from `InputStream`, written to `FileOutputStream` before any decoding. Exact original binary preserved. | ✅ |
 | **Temp file naming** | `randomBytes(8).toString("hex")` → `/tmp/pi-bash-{id}.log` | `File/createTempFile` → `/tmp/kmet-bash-{random}{suffix}.log` | ✅ (equivalent) |
 | **Truncation result detail** | Returns `truncatedBy: "lines" | "bytes" | null` and `lastLinePartial: bool` | Returns `truncated-by: :lines | :bytes | nil` — matching pi | ✅ |
-| **Shell resolution** | `getShellConfig()`: user shellPath, Win Git Bash search, `which bash`, /bin/bash, fallback sh | `/bin/bash` → `which bash` → `sh`, matching pi's Unix resolution order | ✅ for Unix; ❌ for Windows |
 | **Session env injection** | Injects `PI_SESSION_ID`, `PI_PROVIDER`, `PI_MODEL`, `PI_REASONING_LEVEL` into bash env | Same: built from current session + agent state, passed as `:env` to executor | ✅ |
 | **Spawn hook** | `BashSpawnHook` — extensions can rewrite command/cwd/env before execution | `:spawn-hook` parameter on `execute-bash`, wired from core.clj's handler | ✅ |
 | **Detached child tracking** | Global `Set` of PIDs, cleaned up on process shutdown via `killTrackedDetachedChildren()` | `tracked-pids` atom with `track-pid!`/`untrack-pid!`, `kill-tracked-children!` called on shutdown | ✅ |
 | **`waitForChildProcess`** | Event-driven: `exit` listener + `data` event re-arms 100ms grace timer | Polling after `deref p`: checks `future-done?` on the raw-byte reader + re-arms 100ms grace on each new decoded byte | ✅ (same 100ms grace semantics) |
-| **`killProcessTree`** | `process.kill(-pid, "SIGKILL")` on Unix, `taskkill /T` on Windows — kills full process group | `kill -9 -<pid>` via `proc/process` — kills full process group, falls back to single PID | ✅ |
+| **`killProcessTree`** | `process.kill(-pid, "SIGKILL")` on Unix, `taskkill /T` on Windows — kills full process group | `kill -9 -<pid>` on Unix, `taskkill /F /T /PID` on Windows | ✅ |
 | **Error display** | `showError()` — adds spacer + raw `Text` to chat container | `ui/show-error!` — same: spacer + `Text` with `:error` color | ✅ |
 | **Warning display** | `showWarning()` — adds spacer + raw `Text` to chat container | `ui/show-warning!` — same: spacer + `Text` with `:warning` color | ✅ |
 | **Concurrent bash guard** | Check in `handleSubmit`, shows warning in UI | Same: check in `handle-bash-command`, calls `ui/show-warning!` | ✅ |
 | **Pending area during streaming** | Dedicated `pendingMessagesContainer` between chat and footer | `pending-bash-container` Container placed between chat-history and status-indicator | ✅ |
 | **Extension hooks** | `user_bash` event → extensions can intercept | `skills/emit-event! {:type :user-bash ...}` + `:spawn-hook` parameter | ✅ |
-| **Shell resolution** | Cross-platform: WSL, Git Bash, `which bash`, fallback `sh` | Unix-only: `/bin/bash` → `which bash` → `sh` | ✅ for Unix; ❌ for Windows |
+| **Shell resolution** | Cross-platform: WSL, Git Bash, `where bash.exe`, `which bash`, fallback `sh` | Cross-platform: `/bin/bash` → `/usr/bin/bash` → `command -v bash` / `where bash.exe` → Git Bash paths → `sh` / `cmd.exe`. Shell args: `-c` for bash, `/c` for cmd.exe. | ✅ |
 
 ## 5. Minor cosmetic differences
 
