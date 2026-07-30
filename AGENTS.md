@@ -30,7 +30,17 @@ src/kmet/
 │   ├── loop.clj        — Agent conversation loop
 │   ├── llm.clj         — LLM API calls
 │   ├── session.clj     — Session persistence
-│   ├── tools.clj       — Tool registry
+│   ├── tools.clj       — Tool public API (re-exports from tools/)
+│   ├── tools/          — Tool implementations (one file per tool)
+│   │   ├── protocol.clj   — Tool record, param helpers, constants
+│   │   ├── read.clj       — read tool (+ image detection)
+│   │   ├── write.clj      — write tool
+│   │   ├── edit.clj       — edit tool
+│   │   ├── bash.clj       — bash tool
+│   │   ├── grep.clj       — grep tool (disabled)
+│   │   ├── find.clj       — find tool (disabled)
+│   │   ├── ls.clj         — ls tool (disabled)
+│   │   └── registry.clj   — tool map, schema conversion, registration, execution
 │   ├── ui.clj          — Re-exports for app UI components
 │   └── ui/             — App-specific TUI components (Pi's coding-agent layer)
 │       ├── chat_history.clj

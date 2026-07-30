@@ -1,0 +1,38 @@
+(ns kmet.agent.tools.grep
+  "Grep tool implementation — search file contents with a pattern."
+  (:require [clojure.string :as str]
+            [clojure.java.io :as io]
+            [babashka.fs :as fs]
+            [kmet.agent.tools.protocol :as proto]))
+
+(defn execute
+  "Search file contents with a pattern."
+  [{:keys [pattern path]}]
+  (try
+    (let [f (if path (io/file path) (io/file "."))
+          results (volatile! [])
+          skipped (volatile! [])]
+      (if (fs/regular-file? f)
+        (with-open [rdr (io/reader f)]
+          (doseq [[idx line] (map-indexed vector (line-seq rdr))]
+            (when (re-find (re-pattern pattern) line)
+              (vswap! results conj (str (fs/file-name f) ":" (inc idx) ": " line)))))
+        (doseq [file (proto/safe-file-seq f)]
+          (try
+            (with-open [rdr (io/reader (str file))]
+              (doseq [[idx line] (map-indexed vector (line-seq rdr))]
+                (when (re-find (re-pattern pattern) line)
+                  (vswap! results conj (str file ":" (inc idx) ": " line)))))
+            (catch Exception e
+              (vswap! skipped conj (str file))))))
+      (let [r @results
+            sk @skipped]
+        (if (and (empty? r) (empty? sk))
+          {:content (str "No matches for \"" pattern "\"")}
+          (let [base (str/join "\n" (take 100 r))
+                sk-msg (when (seq sk)
+                         (str "\n\n[Skipped " (count sk) " unreadable files]"))]
+            {:content (str base (or sk-msg ""))
+             :truncated (> (count r) 100)}))))
+    (catch Exception e
+      {:content (str "Error searching: " (.getMessage e)) :is-error true})))

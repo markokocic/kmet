@@ -136,12 +136,12 @@
 ;; ─── Custom tool registration ─────────────────────────────────────────────
 
 (t/deftest test-tools-register-custom
-  (let [custom (tools/map->Tool
-                 {:name "custom"
-                  :label "Custom"
-                  :description "A custom tool"
-                  :parameters {:type "object" :properties {} :required []}
-                  :execute (fn [_] {:content "done"})})]
+  (let [custom (tools/make-tool
+                 :name "custom"
+                 :label "Custom"
+                 :description "A custom tool"
+                 :parameters {:type "object" :properties {} :required []}
+                 :execute (fn [_] {:content "done"}))]
     (tools/register-tool! custom)
     (t/is (contains? (tools/get-all-tools) "custom"))
     (let [result (tools/execute-tool "custom" {})]
