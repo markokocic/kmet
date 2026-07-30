@@ -270,7 +270,7 @@
         viewport-top (atom 0)
         show-hardware-cursor? (= (System/getenv "PI_HARDWARE_CURSOR") "1")]
     (terminal/hide-cursor! started)
-    (terminal/write-output started "\u001b[2J\u001b[H")
+    ;; Pi: no clear-screen on start — preserves prior terminal output above the TUI
     (reset! (:running? tui) true)
     (reset! (:stopped? tui) false)
     (start-input-reader tui)
@@ -424,6 +424,16 @@
         (recur)))
       (finally
         (reset! (:running? tui) false)
+        ;; Pi: position cursor at end of content so shell prompt appears below,
+        ;; and user can scroll up to review the session
+        (let [prev-lines @(:previous-lines tui)]
+          (when (seq prev-lines)
+            (let [target-row (count prev-lines)  ;; row past last content line
+                  row-delta (- target-row @hardware-cursor-row)]
+              (terminal/write-output started " ")
+              (when (pos? row-delta)
+                (terminal/write-output started (str "\u001b[" row-delta "B")))
+              (terminal/write-output started "\r\n"))))
         (terminal/show-cursor! started)
         (terminal/stop! started)))))
 
