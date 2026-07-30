@@ -25,11 +25,15 @@
 ## File layout
 ```
 src/kmet/
-├── core.clj            — CLI entry, arg parsing
-├── agent/
-│   ├── loop.clj        — Agent conversation loop
+├── core.clj            — CLI entry, arg parsing, main layout
+├── config.clj          — Configuration loading
+├── debug.clj           — Debug/error logging
+├── app/                — App-level business logic (renamed from agent/)
 │   ├── llm.clj         — LLM API calls
+│   ├── loop.clj        — Agent conversation loop
 │   ├── session.clj     — Session persistence
+│   ├── skills.clj      — Skills & extensions system
+│   ├── keybindings.clj — App keybindings
 │   ├── tools.clj       — Tool public API (re-exports from tools/)
 │   ├── tools/          — Tool implementations (one file per tool)
 │   │   ├── protocol.clj   — Tool record, param helpers, constants
@@ -48,6 +52,7 @@ src/kmet/
 │       ├── assistant_message.clj
 │       ├── tool_execution.clj
 │       ├── custom_message.clj
+│       ├── status_indicator.clj
 │       └── footer.clj
 ├── tui/                — Generic TUI library (Pi's @earendil-works/pi-tui)
 │   ├── core.clj        — TUI class, render loop, overlays
@@ -70,9 +75,9 @@ src/kmet/
 ```
 
 ### Layer boundaries
-- **`kmet.tui.*`** — generic. No dependency on agent, LLM, or session concepts.
-- **`kmet.agent.ui.*`** — app-specific. Builds on `kmet.tui.*`; imports `with-cache` from `kmet.tui.macros`.
-- **`kmet.agent.*`** (non-ui) — business logic. Never imports `kmet.tui.*` or `kmet.agent.ui.*`.
+- **`kmet.tui.*`** — generic. No dependency on app, LLM, or session concepts.
+- **`kmet.app.ui.*`** — app-specific. Builds on `kmet.tui.*`; imports `with-cache` from `kmet.tui.macros`.
+- **`kmet.app.*`** (non-ui) — business logic. Never imports `kmet.tui.*` or `kmet.app.ui.*`.
 
 ### ANSI escape codes
 - **Never use raw ANSI escape codes (`\u001b[...`) outside `src/kmet/tui/`.**

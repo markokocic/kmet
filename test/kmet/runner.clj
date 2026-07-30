@@ -2,13 +2,13 @@
   (:require [clojure.test :as t]
             [kmet.test-utils]
             [kmet.test-keys]
-            [kmet.test-session]
-            [kmet.test-tools]
-            [kmet.test-llm]
-            [kmet.test-loop]
+            [kmet.app.test-session]
+            [kmet.app.test-tools]
+            [kmet.app.test-llm]
+            [kmet.app.test-loop]
             [kmet.test-theme]
             [kmet.test-config]
-            [kmet.test-skills]
+            [kmet.app.test-skills]
             [kmet.test-editing]
             [kmet.tui.components.test-text]
             [kmet.tui.components.test-spacer]
@@ -20,19 +20,19 @@
             [kmet.tui.components.test-settings-list]
             [kmet.tui.components.test-markdown]
             [kmet.tui.test-terminal-image]
-            [kmet.agent.ui.test-chat-history]
-            [kmet.agent.ui.test-user-message]
-            [kmet.agent.ui.test-assistant-message]
-            [kmet.agent.ui.test-tool-execution]
-            [kmet.agent.ui.test-custom-message]
-            [kmet.agent.ui.test-footer]))
+            [kmet.app.ui.test-chat-history]
+            [kmet.app.ui.test-user-message]
+            [kmet.app.ui.test-assistant-message]
+            [kmet.app.ui.test-tool-execution]
+            [kmet.app.ui.test-custom-message]
+            [kmet.app.ui.test-footer]))
 
 (defn -main [& _args]
   (let [namespaces '[kmet.test-utils kmet.test-keys
-                     kmet.test-session kmet.test-tools
-                     kmet.test-llm kmet.test-loop
+                     kmet.app.test-session kmet.app.test-tools
+                     kmet.app.test-llm kmet.app.test-loop
                      kmet.test-theme kmet.test-config
-                     kmet.test-skills
+                     kmet.app.test-skills
                      kmet.test-editing
                      kmet.tui.components.test-text
                      kmet.tui.components.test-spacer
@@ -44,12 +44,12 @@
                      kmet.tui.components.test-settings-list
                      kmet.tui.components.test-markdown
                      kmet.tui.test-terminal-image
-                     kmet.agent.ui.test-chat-history
-                     kmet.agent.ui.test-user-message
-                     kmet.agent.ui.test-assistant-message
-                     kmet.agent.ui.test-tool-execution
-                     kmet.agent.ui.test-custom-message
-                     kmet.agent.ui.test-footer]
+                     kmet.app.ui.test-chat-history
+                     kmet.app.ui.test-user-message
+                     kmet.app.ui.test-assistant-message
+                     kmet.app.ui.test-tool-execution
+                     kmet.app.ui.test-custom-message
+                     kmet.app.ui.test-footer]
         results (apply t/run-tests namespaces)]
     (println "\\nResults:" (:pass results) "passed," (:fail results) "failed," (:error results) "errors")
     (System/exit (if (pos? (+ (:fail results) (:error results))) 1 0))))
