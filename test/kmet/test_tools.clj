@@ -1,6 +1,5 @@
 (ns kmet.test-tools
   (:require [clojure.test :as t]
-            [clojure.java.io :as io]
             [kmet.agent.tools :as tools]))
 
 ;; ─── Tool registry ─────────────────────────────────────────────────────────
@@ -108,8 +107,27 @@
   (let [result (tools/execute-tool "bash" {:command "ls /nonexistent-path-xyz"})]
     (t/is (:is-error result))))
 
+(t/deftest test-tool-bash-exit-code
+  (let [result (tools/execute-tool "bash" {:command "exit 42"})]
+    (t/is (:is-error result) "Non-zero exit should be error")))
 
+(t/deftest test-tool-bash-large-stderr
+  (let [result (tools/execute-tool "bash"
+                {:command "for i in $(seq 1 200); do echo err$i >&2; done; echo ok"})]
+    (t/is (not (:is-error result)) "Large stderr should not deadlock")
+    (t/is (.contains (:content result) "ok"))))
 
+(t/deftest test-tool-bash-large-stdout
+  (let [result (tools/execute-tool "bash"
+                {:command "for i in $(seq 1 200); do echo out$i; done; echo done"})]
+    (t/is (not (:is-error result)) "Large stdout should not deadlock")
+    (t/is (.contains (:content result) "done"))))
+
+(t/deftest test-tool-bash-stdout-and-stderr-merged
+  (let [result (tools/execute-tool "bash" {:command "echo hello; echo world >&2"})]
+    (t/is (not (:is-error result)))
+    (t/is (.contains (:content result) "hello"))
+    (t/is (.contains (:content result) "world"))))
 
 ;; ─── Unknown tool ─────────────────────────────────────────────────────────
 
@@ -156,10 +174,14 @@
   (let [result (tools/execute-tool "read" {:path "target/test-tools-binary.bin"})]
     (t/is (string? (:content result)))))
 
-;; ─── Regression: bash default timeout ────────────────────────────────────
+;; ─── Tool schema: no internal :optional leak ────────────────────────────
 
-(t/deftest test-tool-bash-default-timeout
-  (let [result (tools/execute-tool "bash" {:command "echo default-timeout-test"})]
-    (t/is (not (:is-error result)))
-    (t/is (.contains (:content result) "default-timeout-test"))))
+(t/deftest test-tool-schema-no-optional
+  (doseq [tool-name ["read" "write" "edit" "bash"]]
+    (let [tool (tools/get-tool tool-name)
+          params (:parameters tool)
+          props (:properties params)]
+      (doseq [[k v] props]
+        (t/is (not (contains? v :optional))
+          (str "Property " k " of " tool-name " should not have :optional"))))))
 

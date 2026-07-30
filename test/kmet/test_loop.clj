@@ -157,4 +157,33 @@
       (t/is (pos? (count @errors)) "Error callback called")
       (t/is (.contains (first @errors) "No API key") "Error message is about API key"))))
 
+(t/deftest test-loop-signal-clean-after-turn
+  (let [agent (loop/make-agent-state)
+        done (promise)]
+    (loop/run-agent-turn agent
+      {:message "hi"
+       :on-text (fn [_])
+       :on-done (fn [_] (deliver done true))
+       :on-error (fn [_] (deliver done true))})
+    (deref done 2000 :timeout)
+    (t/is (false? @(:signal agent)) "Signal should be false after turn ends")))
+
+(t/deftest test-loop-status-after-error
+  (let [agent (loop/make-agent-state)]
+    (reset! (:status agent) :idle)
+    (loop/run-agent-turn agent
+      {:message "hi"
+       :on-error (fn [_])})
+    (Thread/sleep 200)
+    (t/is (= :idle @(:status agent)) "Status should be idle after error turn")
+    (t/is (false? @(:signal agent)) "Signal should be false after error turn")))
+
+(t/deftest test-loop-multiple-cancel
+  (let [agent (loop/make-agent-state)]
+    (loop/cancel-turn agent)
+    (t/is (true? @(:signal agent)) "cancel-turn sets signal to true")
+    ;; calling cancel-turn again is idempotent
+    (loop/cancel-turn agent)
+    (t/is (true? @(:signal agent)) "Signal remains true after second cancel")))
+
 

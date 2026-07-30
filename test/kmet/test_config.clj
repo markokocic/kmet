@@ -89,3 +89,54 @@
           merged (merge base user project)]
       (t/is (= "light" (:theme merged)))
       (t/is (= :anthropic (:provider merged))))))
+
+;; ─── Provider config ───────────────────────────────────────────────────────
+
+(t/deftest test-get-provider-config-known
+  (let [c (cfg/get-provider-config :openai)]
+    (t/is (map? c))
+    (t/is (= :openai (:api-type c)))
+    (t/is (some? (:base-url c)))))
+
+(t/deftest test-get-provider-config-unknown
+  (let [c (cfg/get-provider-config :nonexistent)]
+    (t/is (some? c))
+    (t/is (= :nonexistent (:api-type c)))
+    (t/is (nil? (:base-url c)))))
+
+(t/deftest test-get-provider-base-url
+  (t/is (some? (cfg/get-provider-base-url :openai)))
+  (t/is (nil? (cfg/get-provider-base-url :nonexistent))))
+
+(t/deftest test-get-provider-api-type
+  (t/is (= :openai (cfg/get-provider-api-type :openai)))
+  (t/is (= :anthropic (cfg/get-provider-api-type :anthropic))))
+
+;; ─── API key ───────────────────────────────────────────────────────────────
+
+(t/deftest test-get-api-key-returns-string-or-nil
+  ;; get-api-key returns a string (if key available) or nil
+  (let [key (cfg/get-api-key :openai)]
+    (t/is (or (nil? key) (string? key)))))
+
+(t/deftest test-get-api-key-unknown-provider
+  (t/is (nil? (cfg/get-api-key :nonexistent))))
+
+;; ─── load-auth ─────────────────────────────────────────────────────────────
+
+(t/deftest test-load-auth-returns-map
+  ;; load-auth should return a map (possibly empty if no auth file)
+  (let [auth (cfg/load-auth)]
+    (t/is (map? auth))))
+
+;; ─── get-theme ─────────────────────────────────────────────────────────────
+
+(t/deftest test-get-theme
+  (let [t (cfg/get-theme cfg/default-config)]
+    (t/is (some? t))
+    (t/is (= "dark" (:name t)))))
+
+(t/deftest test-get-theme-light-config
+  (let [c (assoc cfg/default-config :theme "light")
+        t (cfg/get-theme c)]
+    (t/is (= "light" (:name t)))))

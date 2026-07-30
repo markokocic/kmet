@@ -76,12 +76,18 @@
 (t/deftest test-get-skill-not-found
   (t/is (nil? (skills/get-skill "nonexistent"))))
 
-(t/deftest test-build-system-prompt-no-skills-is-base
-  (t/testing "build-system-prompt returns base when no skills match filter"
+(t/deftest test-build-system-prompt
+  (t/testing "build-system-prompt starts with base prompt and appends skills"
     (let [result (skills/build-system-prompt "Base prompt")]
-      ;; At this point other tests may have registered skills, but the
-      ;; function still works — it appends skills after the base.
       (t/is (.startsWith result "Base prompt")))))
+
+(t/deftest test-get-skills-returns-list
+  (let [name "test-gs"
+        content "# GS"]
+    (skills/register-skill! name content)
+    (let [all (skills/get-skills)]
+      (t/is (sequential? all))
+      (t/is (some #(= name (:name %)) all)))))
 
 (t/deftest test-load-skills-from-dir-non-existent
   (t/testing "Loading from non-existent dir should not throw"

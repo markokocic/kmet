@@ -91,6 +91,21 @@
   (let [session (s/create-session test-dir)]
     (t/is (nil? (s/fork-session session "nonexistent")))))
 
+(t/deftest test-session-get-tree
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content [{:type :text :text "q1"}]})
+    (s/append-entry session {:role :assistant :content [{:type :text :text "a1"}]})
+    (s/append-entry session {:role :user :content [{:type :text :text "q2"}]})
+    (let [tree (s/get-tree session)]
+      (t/is (vector? tree))
+      (t/is (pos? (count tree)))
+      (t/is (= :user (:role (first tree)))
+        "Root is the first entry (user)")
+      (t/is (= 1 (count (:children (first tree))))
+        "Root has one child")
+      (t/is (= :assistant (:role (first (:children (first tree)))))
+        "First child is assistant"))))
+
 (t/deftest test-session-compact
   (let [session (s/create-session test-dir)]
     (dotimes [i 10]
