@@ -50,7 +50,6 @@
 ;; CustomMessageComponent
 (def make-custom-message custom-message/make-custom-message)
 (def custom-message-set-content! custom-message/custom-message-set-content!)
-
 ;; BashExecutionComponent
 (def make-bash-execution bash-execution/make-bash-execution)
 (def bash-execution-set-expanded! bash-execution/bash-execution-set-expanded!)
@@ -100,16 +99,18 @@
   "Display an error message in the chat history.
    Pi: showError — adds spacer + Text with error color to chatContainer."
   [chat msg]
-  (let [ch (:container chat)]
+  (let [ch (:container chat)
+        t @(:theme-atom chat)]
     (container/container-add-child ch (spacer/make-spacer 1))
     (container/container-add-child ch
-      (text/make-text (theme/fg theme/dark-theme :error (str "Error: " msg)) 1 0))))
+      (text/make-text (theme/fg t :error (str "Error: " msg)) 1 0))))
 
 (defn show-warning!
   "Display a warning message in the chat history.
    Pi: showWarning — adds spacer + Text with warning color to chatContainer."
   [chat msg]
-  (let [ch (:container chat)]
+  (let [ch (:container chat)
+        t @(:theme-atom chat)]
     (container/container-add-child ch (spacer/make-spacer 1))
     (container/container-add-child ch
-      (text/make-text (theme/fg theme/dark-theme :warning msg) 1 0))))
+      (text/make-text (theme/fg t :warning msg) 1 0))))
