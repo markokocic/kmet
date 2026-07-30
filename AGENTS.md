@@ -6,7 +6,7 @@
 - **Entry**: `bb run` — runs `kmet.core/-main`
 - **nREPL**: `bb nrepl` — starts nREPL server on port 1667 for interactive development (blocks). Connect your editor/tool to `localhost:1667`.
   To stop: evaluate `(System/exit 0)` via nREPL (or `fuser -k 1667/tcp` from another terminal).
-- **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`; JLine3 bundled externally.
+- **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`; JLine **4.3.1** bundled with Babashka (see babashka `deps.edn`: `org.jline/jline-terminal`, `org.jline/jline-reader`).
 
 ### API Preferences (avoid Java interop)
 - **`babashka.fs`** over `java.io.File` for all file operations
