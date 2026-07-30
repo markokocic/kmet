@@ -151,6 +151,23 @@
           fork)))))
 
 
+;; ─── Bash result recording ─────────────────────────────────────────────────
+
+(defn record-bash-result!
+  "Record the result of a !/!! bash command in the session.
+   When exclude-from-context? is true, the output is not included in
+   the conversation history visible to the LLM (matching pi's !! behavior)."
+  [session command result exclude-from-context?]
+  (let [entry {:role :bash
+               :command command
+               :output (:output result "")
+               :exit-code (:exit-code result)
+               :cancelled (:cancelled result false)
+               :exclude-from-context? exclude-from-context?
+               :truncated (:truncated result false)
+               :full-output-path (:full-output-path result)}]
+    (append-entry session entry)))
+
 ;; ─── Convenience ───────────────────────────────────────────────────────────
 
 (defn list-sessions

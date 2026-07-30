@@ -11,7 +11,8 @@
             [kmet.app.ui.user-message :as um]
             [kmet.app.ui.assistant-message :as am]
             [kmet.app.ui.tool-execution :as te]
-            [kmet.app.ui.custom-message :as cm]))
+            [kmet.app.ui.custom-message :as cm]
+            [kmet.app.ui.bash-execution :as be]))
 
 ;; ─── Info component at top ─────────────────────────────────────────────────
 
@@ -83,6 +84,7 @@
             :theme theme
             :output-pad output-pad
             :expanded? false)
+    :bash (:component msg)  ;; Already-constructed BashExecutionComponent
     :info (cm/make-custom-message :label (:label msg)
                                   :content (:content msg "")
                                   :theme theme
@@ -232,13 +234,19 @@
       (and (map? child) (contains? child :text-atom) (not (contains? child :thinking-text-atom))) :user
       (and (map? child) (contains? child :label-atom) (contains? child :content-atom)
            (not (contains? child :name-atom))) :custom
+      (and (map? child) (contains? child :command-atom) (contains? child :status-atom)) :bash
       :else nil)))
 
 (defn- toggle-expanded!
-  "Toggle the expanded state of a tool component."
+  "Toggle the expanded state of a tool or bash component."
   [child]
-  (let [current @(:expanded-atom child)]
-    (te/tool-execution-set-expanded! child (not current))))
+  (let [kind (kind-of child)]
+    (case kind
+      :tool (let [current @(:expanded-atom child)]
+              (te/tool-execution-set-expanded! child (not current)))
+      :bash (let [current @(:expanded-atom child)]
+              (be/bash-execution-set-expanded! child (not current)))
+      nil)))
 
 (defn- toggle-hide-thinking!
   "Toggle the thinking-hidden state of an assistant component."

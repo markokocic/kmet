@@ -8,7 +8,12 @@
             [kmet.app.ui.custom-message :as custom-message]
             [kmet.app.ui.footer :as footer]
             [kmet.app.ui.chat-history :as chat-history]
-            [kmet.app.ui.status-indicator :as status-indicator]))
+            [kmet.app.ui.status-indicator :as status-indicator]
+            [kmet.app.ui.bash-execution :as bash-execution]
+            [kmet.tui.theme :as theme]
+            [kmet.tui.components.spacer :as spacer]
+            [kmet.tui.components.text :as text]
+            [kmet.tui.components.container :as container]))
 
 ;; UserMessageComponent
 (def make-user-message user-message/make-user-message)
@@ -46,6 +51,14 @@
 (def make-custom-message custom-message/make-custom-message)
 (def custom-message-set-content! custom-message/custom-message-set-content!)
 
+;; BashExecutionComponent
+(def make-bash-execution bash-execution/make-bash-execution)
+(def bash-execution-set-expanded! bash-execution/bash-execution-set-expanded!)
+(def bash-execution-append-output! bash-execution/bash-execution-append-output!)
+(def bash-execution-set-complete! bash-execution/bash-execution-set-complete!)
+(def bash-execution-get-output bash-execution/bash-execution-get-output)
+(def bash-execution-get-command bash-execution/bash-execution-get-command)
+
 ;; Footer
 (def make-footer footer/make-footer)
 (def footer-set-status! footer/footer-set-status!)
@@ -80,3 +93,23 @@
 (def chat-history-get-tool-expanded chat-history/chat-history-get-tool-expanded)
 (def chat-history-get-thinking-hidden chat-history/chat-history-get-thinking-hidden)
 (def chat-history-set-output-pad! chat-history/chat-history-set-output-pad!)
+
+;; ─── General UI helpers (pi: showError / showWarning) ─────────────────────
+
+(defn show-error!
+  "Display an error message in the chat history.
+   Pi: showError — adds spacer + Text with error color to chatContainer."
+  [chat msg]
+  (let [ch (:container chat)]
+    (container/container-add-child ch (spacer/make-spacer 1))
+    (container/container-add-child ch
+      (text/make-text (theme/fg theme/dark-theme :error (str "Error: " msg)) 1 0))))
+
+(defn show-warning!
+  "Display a warning message in the chat history.
+   Pi: showWarning — adds spacer + Text with warning color to chatContainer."
+  [chat msg]
+  (let [ch (:container chat)]
+    (container/container-add-child ch (spacer/make-spacer 1))
+    (container/container-add-child ch
+      (text/make-text (theme/fg theme/dark-theme :warning msg) 1 0))))

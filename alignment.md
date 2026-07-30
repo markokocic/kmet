@@ -64,10 +64,47 @@ Legend:
 | **Hide empty components** | `hideComponent = true` when no content and no images | Returns `[]` when both call-comp and result-comp are nil | ✅ |
 | **Image support** | Full kitty protocol via `Image` component, PNG conversion | `terminal-image` + `ImageComponent` with Kitty encoding, dimension parsing, fallback, async PNG conversion via python3+PIL | ✅ |
 
-## 3. Minor cosmetic differences
+---
+
+## 4. User bash commands (`!` / `!!`)
+
+| Aspect | Pi | kmet | Status |
+|---|---|---|---|
+| **Input detection** | `text.startsWith("!")` in handleSubmit, `!!` → excludeFromContext | `str/starts-with? trimmed "!"` in handle-submit, `!!` → exclude-from-context? | ✅ |
+| **Component** | `BashExecutionComponent` extends `Container` — bordered box, `$ command` header, rolling output, loader, status | `BashExecutionComponent` defrecord implementing `IComponent` — same bordered layout | ✅ |
+| **Output display** | Lines accumulated in array, collapsed by default (20 visual lines), expand/collapse | Lines accumulated in atom vector, collapsed by default (20 lines), expand/collapse | ✅ |
+| **Incomplete line continuation** | `appendOutput` appends first chunk of new data to last line (incomplete line continuation) | `bash-execution-append-output!` — same logic: appends to last line then adds rest | ✅ |
+| **Visual line truncation** | `truncateToVisualLines(styledInput, PREVIEW_LINES, width)` — width-aware word wrapping | `u/truncate-to-visual-lines` — same | ✅ |
+| **Context truncation before display** | Applies `truncateTail(fullOutput, 2000/50KB)` before rendering — display only shows context-relevant tail | `bash-exec/truncate-tail` applied to output before building display lines | ✅ |
+| **Loader animation** | Pi's `Loader` component — animated braille spinner with `Running... (Esc to cancel)` text | `Spinner` component — braille spinner with `Running... (key to cancel)` text, starts active | ✅ |
+| **Duration display** | Shows `Elapsed X.Xs` during execution, `Took X.Xs` after completion | Same: `Elapsed X.Xs` / `Took X.Xs` in muted color in status line | ✅ |
+| **Bordered frame** | `DynamicBorder` component (capped corners, theme-aware) | Manually drawn `┌─┐`/`└─┘` lines | ✅ (visual equivalent) |
+| **Border color key** | `bashMode` for `!`, `dim` for `!!` | `:bash-mode` for `!`, `:dim` for `!!` | ✅ |
+| **Status info** | `(cancelled)` in warning, `(exit N)` in error | Same | ✅ |
+| **Expand keybinding** | `keyHint("app.tools.expand", "to expand")` → `Ctrl+O` badge | `app-kb/key-hint` → same keybinding text | ✅ |
+| **Output accumulator detail** | `OutputAccumulator` class: tracks `totalRawBytes` + `totalDecodedBytes` separately, `completedLines` vs `hasOpenLine` for accurate line counting, `tailStartsAtLineBoundary` for clean snapshots | Raw byte chunks read from `InputStream`, copied on storage. `tail-buf` tracks decoded text for display. `tail-starts-at-line-boundary` flag updated on trim. | ✅ |
+| **Temp file content** | Raw `Buffer` bytes written to `createWriteStream` (raw `fs.WriteStream`) | `byte-array` chunks read from `InputStream`, written to `FileOutputStream` before any decoding. Exact original binary preserved. | ✅ |
+| **Temp file naming** | `randomBytes(8).toString("hex")` → `/tmp/pi-bash-{id}.log` | `File/createTempFile` → `/tmp/kmet-bash-{random}{suffix}.log` | ✅ (equivalent) |
+| **Truncation result detail** | Returns `truncatedBy: "lines" | "bytes" | null` and `lastLinePartial: bool` | Returns `truncated-by: :lines | :bytes | nil` — matching pi | ✅ |
+| **Shell resolution** | `getShellConfig()`: user shellPath, Win Git Bash search, `which bash`, /bin/bash, fallback sh | `/bin/bash` → `which bash` → `sh`, matching pi's Unix resolution order | ✅ for Unix; ❌ for Windows |
+| **Session env injection** | Injects `PI_SESSION_ID`, `PI_PROVIDER`, `PI_MODEL`, `PI_REASONING_LEVEL` into bash env | Same: built from current session + agent state, passed as `:env` to executor | ✅ |
+| **Spawn hook** | `BashSpawnHook` — extensions can rewrite command/cwd/env before execution | `:spawn-hook` parameter on `execute-bash`, wired from core.clj's handler | ✅ |
+| **Detached child tracking** | Global `Set` of PIDs, cleaned up on process shutdown via `killTrackedDetachedChildren()` | `tracked-pids` atom with `track-pid!`/`untrack-pid!`, `kill-tracked-children!` called on shutdown | ✅ |
+| **`waitForChildProcess`** | Event-driven: `exit` listener + `data` event re-arms 100ms grace timer | Polling after `deref p`: checks `future-done?` on the raw-byte reader + re-arms 100ms grace on each new decoded byte | ✅ (same 100ms grace semantics) |
+| **`killProcessTree`** | `process.kill(-pid, "SIGKILL")` on Unix, `taskkill /T` on Windows — kills full process group | `kill -9 -<pid>` via `proc/process` — kills full process group, falls back to single PID | ✅ |
+| **Error display** | `showError()` — adds spacer + raw `Text` to chat container | `ui/show-error!` — same: spacer + `Text` with `:error` color | ✅ |
+| **Warning display** | `showWarning()` — adds spacer + raw `Text` to chat container | `ui/show-warning!` — same: spacer + `Text` with `:warning` color | ✅ |
+| **Concurrent bash guard** | Check in `handleSubmit`, shows warning in UI | Same: check in `handle-bash-command`, calls `ui/show-warning!` | ✅ |
+| **Pending area during streaming** | Dedicated `pendingMessagesContainer` between chat and footer | `pending-bash-container` Container placed between chat-history and status-indicator | ✅ |
+| **Extension hooks** | `user_bash` event → extensions can intercept | `skills/emit-event! {:type :user-bash ...}` + `:spawn-hook` parameter | ✅ |
+| **Shell resolution** | Cross-platform: WSL, Git Bash, `which bash`, fallback `sh` | Unix-only: `/bin/bash` → `which bash` → `sh` | ✅ for Unix; ❌ for Windows |
+
+## 5. Minor cosmetic differences
 
 | Detail | Pi | kmet | Impact |
 |---|---|---|---|
+| Spinner color setup | Set once in Loader constructor | Set once in `make-bash-execution` via `:spinner-color-fn`/`:message-color-fn` | ✅ |
+| Unused variable `content-width` | N/A | Removed in cleanup | ✅ |
 | Collapsed hint truncation | `truncateToWidth(hint, width, "...")` ensures hint fits | `truncate-to-width` applied | ✅ |
 | `renderShell: "self"` component bg | Edit tool's Box sets own bg (`getEditHeaderBg`) | Box with `tool-success-bg`/`tool-error-bg` | ✅ |
 | Footer stripping logic | Matches `\n\n[` + `fullOutputPath` | Moot — replaced by proper metadata | ✅ |

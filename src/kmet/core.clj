@@ -8,6 +8,7 @@
             [kmet.tui.components.text :as text]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.editor :as editor]
+            [kmet.tui.components.container :as container]
             [kmet.app.ui :as ui]
             [kmet.tui.components.select-list :as select-list]
             [kmet.app.loop :as agent]
@@ -19,7 +20,9 @@
             [kmet.app.skills :as skills]
             [kmet.debug :as debug]
             [clojure.string :as str]
-            [babashka.fs :as fs]))
+            [babashka.fs :as fs]
+            [kmet.app.bash-executor :as bash-exec]
+            [kmet.app.ui.bash-execution :as be]))
 
 (declare resume-session show-session-tree)
 
@@ -60,7 +63,11 @@
                       session
                       running-turn?
                       config
-                      pending-tool-comp])
+                      pending-tool-comp
+                      bash-running?
+                      bash-signal
+                      pending-bash-components
+                      pending-bash-container])
 
 ;; ─── Formatting helpers ────────────────────────────────────────────────────
 
@@ -68,13 +75,16 @@
   (str (name provider) ":" model))
 
 (defn- fmt-status-str [cs]
-  (let [status (name (agent/get-status (:agent-state cs)))]
-    (case status
-      "idle" (th/dim "idle")
-      "thinking" (th/fg th/dark-theme :warning "● thinking")
-      "executing" (th/fg th/dark-theme :warning "● executing")
-      "error" (th/fg th/dark-theme :error "● error")
-      (th/dim status))))
+  (let [bash-running @(:bash-running? cs)
+        status (name (agent/get-status (:agent-state cs)))]
+    (if bash-running
+      (th/fg th/dark-theme :bash-mode "$ bash")
+      (case status
+        "idle" (th/dim "idle")
+        "thinking" (th/fg th/dark-theme :warning "● thinking")
+        "executing" (th/fg th/dark-theme :warning "● executing")
+        "error" (th/fg th/dark-theme :error "● error")
+        (th/dim status)))))
 
 (defn- fmt-header [cs]
   (let [provider @(:provider (:agent-state cs))
@@ -373,16 +383,141 @@
 
 ;; ─── Submit handler ────────────────────────────────────────────────────────
 
+(defn- handle-bash-command
+  "Execute a ! or !! bash command.
+   !! → exclude-from-context (output not sent to LLM)
+   !  → normal execution (output goes to LLM context)
+   Pi: handleBashCommand() in interactive-mode.ts"
+  [cs command exclude-from-context?]
+  (debug/log "bash command: " command " (exclude-context: " exclude-from-context? ")")
+  
+  (if @(:bash-running? cs)
+    (do
+      (debug/log "bash: already running, ignoring")
+      (ui/show-warning! (:chat-history cs)
+        "A bash command is already running. Press Escape to cancel it first."))
+    (do
+      (reset! (:bash-signal cs) false)
+      (reset! (:bash-running? cs) true)
+      
+      ;; Create the UI component
+      (let [bash-comp (be/make-bash-execution
+                        :command command
+                        :exclude-from-context? exclude-from-context?)
+            
+            ;; ── Build session env (pi: resolveSpawnContext) ─────────────
+            ag (:agent-state cs)
+            session-env
+            (let [m (transient {})]
+              (when-let [sess (:session cs)]
+                (assoc! m "PI_SESSION_ID" (:id sess)))
+              (assoc! m "PI_PROVIDER" (name @(:provider ag)))
+              (assoc! m "PI_MODEL" @(:model ag))
+              (when-let [tl @(:thinking ag)]
+                (when-not (= tl :off)
+                  (assoc! m "PI_REASONING_LEVEL" (name tl))))
+              (persistent! m))
+            
+            ;; ── Emit user-bash event for extensions (pi: emitUserBash) ──
+            _ (skills/emit-event!
+                {:type :user-bash
+                 :command command
+                 :exclude-from-context? exclude-from-context?
+                 :cwd (System/getProperty "user.dir")})
+            
+            ;; ── Spawn hook (pi: BashSpawnHook) — extensions can modify command ──
+            spawn-hook nil]
+        
+        ;; Add to chat (or pending container if agent is streaming)
+        ;; Pi: pendingMessagesContainer sits between chat and footer
+        (if @(:running-turn? cs)
+          (do
+            (container/container-add-child (:pending-bash-container cs) bash-comp)
+            (swap! (:pending-bash-components cs) conj bash-comp))
+          (ui/chat-history-add-message! (:chat-history cs)
+            {:role :bash :command command
+             :component bash-comp}))
+        
+        (update-header-footer! cs)
+        (tui/tui-request-render (:tui cs))
+        
+        ;; Execute in background
+        (future
+          (try
+            (let [result (bash-exec/execute-bash
+                           {:command command
+                            :cwd (System/getProperty "user.dir")
+                            :env session-env
+                            :on-chunk (fn [chunk]
+                                        (be/bash-execution-append-output! bash-comp chunk)
+                                        (tui/tui-request-render (:tui cs)))
+                            :signal (:bash-signal cs)
+                            :spawn-hook spawn-hook
+                            :timeout 300})
+                  {:keys [output exit-code cancelled truncated full-output-path]} result]
+              (debug/log "bash done: exit=" exit-code " cancelled=" cancelled " truncated=" truncated)
+              
+              ;; Mark complete on component
+              (be/bash-execution-set-complete! bash-comp exit-code cancelled
+                :truncation (when truncated
+                              {:total-lines (count (str/split-lines output))
+                               :shown-lines (count (take-last 20 (str/split-lines output)))
+                               :full-output-path full-output-path})
+                :full-output-path full-output-path)
+              
+              ;; Record in session
+              (when-let [sess (:session cs)]
+                (session/record-bash-result! sess command result exclude-from-context?))
+              
+              ;; Move pending bash from pending container to chat (pi: pendingMessagesContainer)
+              (when @(:running-turn? cs)
+                (let [pending (:pending-bash-components cs)]
+                  (when (seq @pending)
+                    (doseq [comp @pending]
+                      (container/container-remove-child (:pending-bash-container cs) comp)
+                      (ui/chat-history-add-message! (:chat-history cs)
+                        {:role :bash :command command :component comp}))
+                    (reset! pending []))))
+              
+              (reset! (:bash-running? cs) false)
+              (update-header-footer! cs)
+              (tui/tui-request-render (:tui cs)))
+            
+            (catch Exception e
+              (let [err-msg (or (.getMessage e) "Unknown error")]
+                (debug/log "bash command error: " e)
+                (be/bash-execution-set-complete! bash-comp nil false)
+                (ui/show-error! (:chat-history cs) err-msg)
+                (reset! (:bash-running? cs) false)
+                (update-header-footer! cs)
+                (tui/tui-request-render (:tui cs))))))))))
+
 (defn- handle-submit [cs text]
   (let [trimmed (str/trim text)]
     (when (seq trimmed)
-      (if (str/starts-with? trimmed "/")
-        ;; Command
+      (cond
+        ;; Slash command
+        (str/starts-with? trimmed "/")
         (let [space (str/index-of trimmed " ")
               cmd (if (nil? space) (subs trimmed 1) (subs trimmed 1 space))
               args (if (nil? space) "" (str/trim (subs trimmed (inc space))))]
           (handle-command cs cmd args))
+        
+        ;; Bash command (! or !!)
+        (str/starts-with? trimmed "!")
+        (let [exclude-from-context? (str/starts-with? trimmed "!!")
+              command (str/trim (subs trimmed (if exclude-from-context? 2 1)))]
+          (when (seq command)
+            (if @(:bash-running? cs)
+              (ui/chat-history-add-message! (:chat-history cs)
+                {:role :assistant :content "A bash command is already running. Cancel it first."})
+              (do
+                (editor/editor-push-history! (:editor cs) trimmed)
+                (editor/editor-set-text! (:editor cs) "")
+                (handle-bash-command cs command exclude-from-context?)))))
+        
         ;; Regular message — agent loop handles session persistence
+        :else
         (when-not @(:running-turn? cs)
           (reset! (:running-turn? cs) true)
           (ui/status-indicator-start! (:status-indicator cs))
@@ -402,7 +537,13 @@
              :on-error #(on-agent-error cs %)}))))))
 
 (defn- handle-cancel [cs]
-  "Cancel the current agent turn."
+  "Cancel the current agent turn or bash command."
+  (when @(:bash-running? cs)
+    (debug/log "bash command cancelled by user")
+    (reset! (:bash-signal cs) true)
+    (reset! (:bash-running? cs) false)
+    (update-header-footer! cs)
+    (tui/tui-request-render (:tui cs)))
   (when @(:running-turn? cs)
     (debug/log "agent turn cancelled by user")
     (stop-anim-timer! cs)
@@ -519,7 +660,11 @@ Be precise and concise in your responses.")
                             :session session
                             :running-turn? (atom false)
                             :config config
-                            :pending-tool-comp pending-tool-comp})]
+                            :pending-tool-comp pending-tool-comp
+                            :bash-running? (atom false)
+                            :bash-signal (atom false)
+                            :pending-bash-components (atom [])
+                            :pending-bash-container (container/make-container)})]
 
     ;; Focus editor
     (tui/tui-set-focus t ed)
@@ -528,10 +673,12 @@ Be precise and concise in your responses.")
     (let [si (ui/make-status-indicator :theme (cfg/get-theme config))
           cs (assoc cs :status-indicator si)]
 
-      ;; Add components (status indicator between chat history and editor spacer)
+      ;; Add components (pending bash container between chat and status indicator)
+      ;; Pi: pendingMessagesContainer sits between chatContainer and footer
       (tui/tui-add-child t hdr)
       (tui/tui-add-child t sp1)
       (tui/tui-add-child t ch)
+      (tui/tui-add-child t (:pending-bash-container cs))
       (tui/tui-add-child t si)
       (tui/tui-add-child t sp2)
       (tui/tui-add-child t ed)
@@ -762,9 +909,11 @@ Be precise and concise in your responses.")
           (reset! tui-ref (:tui cs))
           (when (:resume opts) (resume-session cs ensure-session-dir))
           (tui/tui-start (:tui cs))
+          (bash-exec/kill-tracked-children!)
           (println "kmet session ended."))
         (catch Exception e
         ;; Restore terminal if TUI was started
+          (bash-exec/kill-tracked-children!)
           (when-let [t @tui-ref]
             (try (tui/tui-stop t) (catch Exception _)))
           (debug/log-error "unhandled exception: " e)
