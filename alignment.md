@@ -68,21 +68,23 @@ Legend:
 
 ---
 
-## 3. Infrastructure gaps
+## 3. Remaining gaps
 
-These require new libraries or significant refactoring to implement:
+### Image rendering not wired into tool result pipeline (⚠️ Partial)
+The `terminal-image` protocol layer and `ImageComponent` exist but are not yet
+integrated into `ToolExecutionComponent`. Pi's `updateResult()` iterates over
+result content blocks looking for `"image"` type entries and creates `Image`
+components with spacers. kmet needs the same:
+- Tool results need to carry structured content blocks (text + images) instead
+  of a flat string
+- `ToolExecutionComponent.render` needs to detect image blocks, create
+  `ImageComponent` children, and clean them up on replacement
 
-### Keybinding hints
-Implemented via `kmet.tui.keybindings` (KeybindingsManager) and `kmet.agent.keybindings`
-(app-level extensions with `app.tools.expand` etc.). The `app-kb/key-hint` function formats
-styled keybinding hints using the resolved keybinding from the manager. Input handling in
-`core.clj` now uses keybinding IDs instead of hardcoded key checks.
-
-### Image rendering
-Implemented via `kmet.tui.terminal-image` (Kitty encoding, dimension parsing,
-cell-size calculation, capability detection) and `kmet.tui.components.image`
-(ImageComponent with IComponent protocol). Conversion via `scripts/convert_to_png.py`
-using python3+PIL when available. Fallback text for terminals without image protocol.
+### Render context object (⚠️ Architectural)
+Pi passes a `ToolRenderContext` to `renderCall`/`renderResult` with `state`,
+`invalidate`, `executionStarted`, `expanded`, `showImages`, `cwd`, etc.
+kmet uses positional args `(name args theme width)`. Functionally equivalent
+for built-in tools but limits extension potential.
 
 ---
 
@@ -99,5 +101,7 @@ using python3+PIL when available. Fallback text for terminals without image prot
 
 ## Summary of work needed
 
-**All gaps resolved.** Full behavioral parity with Pi's ToolExecutionComponent.
-| Keybinding hint system | Large | ✅ |
+| Item | Effort | Status |
+|---|---|---|
+| Image rendering wired into tool result pipeline | Medium | ⚠️ |
+| Render context object | Low | ⚠️ |
