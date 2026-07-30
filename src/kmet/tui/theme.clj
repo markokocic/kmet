@@ -125,6 +125,7 @@
   (str (get (:bg-colors theme) color-key BG-RST) text BG-RST))
 
 (defn bold [text] (str "\u001b[1m" text "\u001b[22m"))
+(defn dim [text] (str "\u001b[2m" text "\u001b[22m"))
 (defn italic [text] (str "\u001b[3m" text "\u001b[23m"))
 (defn underline [text] (str "\u001b[4m" text "\u001b[24m"))
 (defn inverse [text] (str "\u001b[7m" text "\u001b[27m"))

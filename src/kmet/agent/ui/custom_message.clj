@@ -10,9 +10,6 @@
             [kmet.tui.components.container :as container]
             [kmet.tui.macros :refer [with-cache]]))
 
-(def ^:private BLD "\u001b[1m")
-(def ^:private RST "\u001b[0m")
-
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
 (defrecord CustomMessageComponent [box            ;; Box wrapping the content
@@ -45,7 +42,7 @@
         container @(:inner-container comp)]
     (container/container-clear container)
     (when (seq label)
-      (let [label-str (str BLD (theme/fg theme :custom-message-label (str "[" label "]")) RST)]
+      (let [label-str (theme/fg theme :custom-message-label (theme/bold (str "[" label "]")))]
         (container/container-add-child container
           (text/make-text label-str 0 0))))
     (when (seq content)

@@ -44,7 +44,7 @@
   "Return a cursor indicator line or nil."
   [left-pad theme finalized has-content]
   (when (and (not finalized) has-content)
-    (str left-pad "\u001b[1m" (theme/fg theme :muted "▍") "\u001b[0m")))
+    (str left-pad (theme/bold (theme/fg theme :muted "▍")))))
 
 (defn- working-indicator-line
   "Render the animated working indicator via the Spinner component.

@@ -2,22 +2,20 @@
   "FooterComponent — Pi's FooterComponent."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
+            [kmet.tui.theme :as theme]
             [kmet.tui.macros :refer [with-cache]]))
 
-(def ^:private DIM "\u001b[2m")
-(def ^:private RST "\u001b[0m")
-(def ^:private CYN "\u001b[36m")
-
-(defrecord FooterComponent [status-text-atom n-msgs-atom cache-atom]
+(defrecord FooterComponent [status-text-atom n-msgs-atom theme-atom cache-atom]
   protocols/IComponent
   (render [this width]
-    (let [status-text @status-text-atom
+    (let [th @theme-atom
+          status-text @status-text-atom
           n-msgs @n-msgs-atom]
-      (with-cache this width {:status-text status-text :n-msgs n-msgs}
+      (with-cache this width {:status-text status-text :n-msgs n-msgs :theme th}
         (fn []
-          (let [sep (str DIM (apply str (repeat width "─")) RST)
-                left (str CYN "kmet" RST "  " (when (seq status-text) (str status-text " ")))
-                right (str DIM "msgs:" n-msgs RST)
+          (let [sep (theme/dim (apply str (repeat width "─")))
+                left (str (theme/fg th :accent "kmet") "  " (when (seq status-text) (str status-text " ")))
+                right (theme/dim (str "msgs:" n-msgs))
                 left-w (u/visible-width left)
                 right-w (u/visible-width right)
                 pad (max 1 (- width left-w right-w))
@@ -31,9 +29,11 @@
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-footer
-  [& {:keys [status n-msgs] :or {status "" n-msgs 0}}]
+  [& {:keys [status n-msgs theme]
+      :or {status "" n-msgs 0 theme theme/dark-theme}}]
   (map->FooterComponent {:status-text-atom (atom status)
                 :n-msgs-atom (atom n-msgs)
+                :theme-atom (atom theme)
                 :cache-atom (atom nil)}))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────

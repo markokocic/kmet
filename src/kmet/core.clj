@@ -4,6 +4,7 @@
   (:require [kmet.tui.core :as tui]
             [kmet.tui.terminal :as term]
             [kmet.tui.keys :as keys]
+            [kmet.tui.theme :as theme]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.editor :as editor]
@@ -20,29 +21,9 @@
 
 (declare resume-session show-session-tree)
 
-;; ─── ANSI ──────────────────────────────────────────────────────────────────
-
-(def ^:private RST "\u001b[0m")
-(def ^:private BLD "\u001b[1m")
-(def ^:private DIM "\u001b[2m")
-(def ^:private RED "\u001b[31m")
-(def ^:private GRN "\u001b[32m")
-(def ^:private YLW "\u001b[33m")
-(def ^:private CYN "\u001b[36m")
-
 ;; ─── Global config ref ────────────────────────────────────────────────────
 
 (defonce ^:private global-config (atom nil))
-
-;; ─── Theme shortcuts ─────────────────────────────────────────────────────
-
-(def ^:private RST "\u001b[0m")
-(def ^:private BLD "\u001b[1m")
-(def ^:private DIM "\u001b[2m")
-(def ^:private RED "\u001b[31m")
-(def ^:private GRN "\u001b[32m")
-(def ^:private YLW "\u001b[33m")
-(def ^:private CYN "\u001b[36m")
 
 ;; ─── Session helpers ───────────────────────────────────────────────────────
 
@@ -85,11 +66,11 @@
 (defn- fmt-status-str [cs]
   (let [status (name (agent/get-status (:agent-state cs)))]
     (case status
-      "idle" (str DIM "idle" RST)
-      "thinking" (str YLW "● thinking" RST)
-      "executing" (str YLW "● executing" RST)
-      "error" (str RED "● error" RST)
-      (str DIM status RST))))
+      "idle" (theme/dim "idle")
+      "thinking" (theme/fg theme :warning "● thinking")
+      "executing" (theme/fg theme :warning "● executing")
+      "error" (theme/fg theme :error "● error")
+      (theme/dim status))))
 
 (defn- fmt-header [cs]
   (let [provider @(:provider (:agent-state cs))
@@ -98,24 +79,11 @@
         sess-id (some-> (:session cs) :id (subs 0 8) (str "..."))
         cwd (System/getProperty "user.dir")
         short-cwd (if (> (count cwd) 30) (str "..." (subs cwd (- (count cwd) 27))) cwd)]
-    (str BLD CYN " kmet" RST " "
-         DIM (fmt-model provider model) RST
-         " │ " DIM "session:" RST " " (or sess-id "none")
+    (str (theme/bold (theme/fg theme :accent " kmet")) " "
+         (theme/dim (fmt-model provider model))
+         " │ " (theme/dim "session:") " " (or sess-id "none")
          " │ " (fmt-status-str cs)
-         " │ " DIM short-cwd RST)))
-
-(defn- fmt-footer-str [cs]
-  (let [n-msgs (count (ui/chat-history-get-messages (:chat-history cs)))
-        expanded? (ui/chat-history-get-tool-expanded (:chat-history cs))
-        thinking-hidden? (ui/chat-history-get-thinking-hidden (:chat-history cs))
-        toggles (str (when expanded? (str CYN " O" RST))
-                     (when thinking-hidden? (str YLW " T" RST)))
-        cmds (str DIM "/quit" RST " " DIM "/help" RST " "
-                   DIM "/model" RST " " DIM "/new" RST " "
-                   DIM "/resume" RST)]
-    (str "msgs:" n-msgs
-         toggles
-         " │ " cmds)))
+         " │ " (theme/dim short-cwd))))
 
 (defn- update-header-footer! [cs]
   (text/text-set! (:header-text cs) (fmt-header cs))
@@ -387,7 +355,7 @@
         (do (ui/chat-history-finalize-streaming! ch)
             (ui/chat-history-finalize-thinking! ch))))
     (ui/chat-history-add-message! (:chat-history cs)
-      {:role :assistant :content (str RED "Error: " error-msg RST)})
+      {:role :assistant :content (theme/fg theme :error (str "Error: " error-msg))})
     (reset! (:running-turn? cs) false)
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
@@ -439,7 +407,7 @@
           (do (ui/chat-history-remove-last! ch) (reset! (:streaming-atom ch) nil))
           (do (ui/chat-history-finalize-streaming! ch) (ui/chat-history-finalize-thinking! ch)))))
     (ui/chat-history-add-message! (:chat-history cs)
-      {:role :assistant :content (str DIM "(cancelled)" RST)})
+      {:role :assistant :content (theme/dim "(cancelled)")})
     (reset! (:running-turn? cs) false)
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))))
@@ -494,9 +462,9 @@ Be precise and concise in your responses.")
                          (skills/emit-event! evt)))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 2
-            :border-fn (fn [c] (str DIM c RST)))
+            :border-fn (fn [c] (theme/dim c)))
         sp3 (spacer/make-spacer 1)
-        ftr (ui/make-footer :status "" :n-msgs 0)
+        ftr (ui/make-footer :status "" :n-msgs 0 :theme (cfg/get-theme config))
 
         ;; Core state
         cs (map->CoreState {:tui t
@@ -538,9 +506,7 @@ Be precise and concise in your responses.")
           (tui/tui-stop t)
 
           (keys/matches-key? data (keys/ctrl "l"))
-          (do (let [w (.writer (.terminal jline-term))]
-                (.write w "\u001b[2J\u001b[H")
-                (.flush w))
+          (do (term/clear-screen! (:terminal t))
               (tui/tui-request-render t))
 
           (keys/matches-key? data "escape")
@@ -577,12 +543,12 @@ Be precise and concise in your responses.")
       {:label "kmet"
        :content (str "Welcome to kmet — minimal coding agent.\n"
                      "Type a message, /help for commands, or use:\n"
-                     "  " DIM "Ctrl+O" RST " — toggle tool output  " DIM "Ctrl+T" RST " — toggle thinking blocks")})
+                     "  " (theme/dim "Ctrl+O") " — toggle tool output  " (theme/dim "Ctrl+T") " — toggle thinking blocks")})
 
     ;; Welcome message
     (ui/chat-history-add-message! ch
       {:role :assistant
-       :content (str "Welcome to " BLD "kmet" RST
+       :content (str "Welcome to " (theme/bold "kmet")
                      " — minimal coding agent.\n"
                      "Type your message or /help for commands.")})
 

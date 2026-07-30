@@ -64,6 +64,14 @@ src/kmet/
 - **`kmet.agent.ui.*`** — app-specific. Builds on `kmet.tui.*`; imports `with-cache` from `kmet.tui.macros`.
 - **`kmet.agent.*`** (non-ui) — business logic. Never imports `kmet.tui.*` or `kmet.agent.ui.*`.
 
+### ANSI escape codes
+- **Never use raw ANSI escape codes (`\u001b[...`) outside `src/kmet/tui/`.**
+  All terminal styling goes through `kmet.tui.theme` functions (`theme/fg`, `theme/bg`,
+  `theme/bold`, `theme/dim`, `theme/italic`, etc.) which use attribute-specific resets
+  (`\u001b[22m` for bold/dim, `\u001b[23m` for italic, `\u001b[39m` for fg, `\u001b[49m` for bg)
+  instead of catch-all `\u001b[0m`, so nested styles (e.g. bold inside a `theme/fg` wrapper)
+  compose correctly without losing attributes.
+
 ## Testing
 - **Framework**: `clojure.test`
 - **Layout**: `test/kmet/` mirrors `src/kmet/`
