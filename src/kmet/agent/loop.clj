@@ -60,11 +60,12 @@ Be precise and concise in your responses."}}]
       (seq tool-calls) (assoc :tool-calls tool-calls))))
 
 (defn- tool-result-message [tc-id _tc-name result]
-  {:role :tool
-   :content [{:type :tool_result
-              :tool_use_id tc-id
-              :content (:content result)}]
-   :is-error (:is-error result false)})
+  (cond-> {:role :tool
+           :content [{:type :tool_result
+                      :tool_use_id tc-id
+                      :content (:content result)}]
+           :is-error (:is-error result false)}
+    (:images result) (assoc :images (:images result))))
 
 ;; ─── Tool call accumulator ─────────────────────────────────────────────────
 

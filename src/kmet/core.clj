@@ -441,7 +441,7 @@ Be precise and concise in your responses.")
         system-prompt (skills/build-system-prompt base-prompt)
 
         ;; Initialize keybindings (global singleton for key-hint + input handling)
-        (let [kmgr (app-kb/make-agent-keybindings-manager)]
+        _ (let [kmgr (app-kb/make-agent-keybindings-manager)]
           (tui-kb/set-global-keybindings! kmgr)
           (app-kb/set-key-hint-theme-fns!
             #(th/dim %)
@@ -475,6 +475,12 @@ Be precise and concise in your responses.")
                                ;; Wire invalidate → TUI re-render
                                (ui/tool-execution-set-request-render-fn! comp
                                  #(tui/tui-request-render t))
+                               ;; Store tool call ID for correlation
+                               (ui/tool-execution-set-tool-call-id! comp (:id evt))
+                               ;; Args are complete when received (kmet: no streaming args)
+                               (ui/tool-execution-set-args-complete! comp)
+                               ;; Mark execution started so pending bg + timer activate now
+                               (ui/tool-execution-mark-execution-started! comp)
                                (reset! pending-tool-comp comp))
                              (tui/tui-request-render t))
                            :tool-progress
@@ -597,7 +603,7 @@ Be precise and concise in your responses.")
                        " — minimal coding agent.\n"
                        "Type your message or /help for commands.")})
 
-      cs)))
+      cs))))
 
 ;; ─── Non-interactive mode (--print) ────────────────────────────────────────
 

@@ -64,29 +64,74 @@ Legend:
 | **`invalidate()`** | Calls `this.invalidate()` + `this.ui.requestRender()` — both clears cache and triggers TUI re-render | Calls `protocols/invalidate @box` + `request-render-fn` callback | ✅ |
 | **`renderShell: "self"`** | edit tool uses it; call/render components draw their own Box with preview-dependent background | edit tool uses it; preview Box with `tool-success-bg`/`tool-error-bg` background | ✅ |
 | **Hide empty components** | `hideComponent = true` when no content and no images | Returns `[]` when both call-comp and result-comp are nil | ✅ |
-| **Image support** | Full kitty protocol via `Image` component, PNG conversion | `terminal-image` + `ImageComponent` with Kitty encoding, dimension parsing, fallback, conversion via python3+PIL | ✅ |
+| **Image support** | Full kitty protocol via `Image` component, PNG conversion | `terminal-image` + `ImageComponent` with Kitty encoding, dimension parsing, fallback, async PNG conversion via python3+PIL | ✅ |
 
 ---
 
 ## 3. Remaining gaps
 
-### Image content blocks from tools (⚠️ Low)
-kmet's `tool-execution-set-images!` accepts image blocks and renders them
-as `ImageComponent` children. The full pipeline is wired: tool → result →
-event handler → `image-comps-atom` → render. No built-in tool currently
-produces image blocks, but the infrastructure handles them. Custom tools
-can return `:images [{:data base64 :mime-type "..."}]` in their result.
+### Image content blocks from tools (✅ Resolved)
+kmet's `tool-execution-set-images!` accepts image blocks, stores raw image
+data in `image-data-atom`, and builds `ImageComponent` children at render
+time from that data. The full pipeline is wired: tool → result →
+event handler → `image-data-atom` → render.
 
-### Render context object (⚠️ Architectural)
-Pi passes a `ToolRenderContext` to `renderCall`/`renderResult` with `state`,
-`invalidate`, `executionStarted`, `expanded`, `showImages`, `cwd`, etc.
-kmet uses positional args `(name args theme width)`. Functionally equivalent
-for built-in tools but limits extension potential.
+The `read` tool now detects image files by extension (png, jpg, jpeg, gif,
+webp, bmp) and returns both a text description and an `:images` vector
+containing the base64-encoded data and MIME type. The `tool-result-message`
+function in the agent loop passes `:images` through to the event, and the
+`tool-execution-set-images!` handler renders them.
 
-### toolCallId not tracked (⚠️ Low)
+**Async image format conversion (✅ Resolved).** Pi calls `maybeConvertImagesForKitty()`
+which asynchronously converts non-PNG images (JPEG, GIF, WebP) to PNG for
+terminals that only support PNG via the Kitty protocol. kmet now does the same:
+`tool-execution-set-images!` checks terminal capabilities and fires a `future`
+to call `convert-to-png` for each non-PNG image. When conversion completes,
+the `converted-images-atom` is updated and the component invalidates, causing
+a re-render with the converted PNG data.
+
+### Render context object (✅ Resolved)
+Both kmet and Pi now pass a full `ToolRenderContext` map to `renderCall`/`renderResult`:
+- `:args`
+- `:tool-call-id`
+- `:invalidate` (calls `protocols/invalidate` + `request-render-fn`)
+- `:last-component` (previously-returned component from the same renderer)
+- `:state` (value from `renderer-state-atom` — persists across renders)
+- `:cwd` (from `cwd-atom`, defaults to `user.dir`)
+- `:execution-started` (truthy when `started-at-atom` is set)
+- `:args-complete` (from `args-complete-atom`)
+- `:is-partial` (true when `ended-at-atom` is nil)
+- `:expanded`
+- `:show-images` (always true)
+- `:is-error` (from `is-error-atom`)
+
+The context is built via `tool-execution-context` private helper and passed
+as the last argument to both `renderCall` and `renderResult`. Built-in
+renderers accept and ignore it (`_context` or `& _`).
+
+### toolCallId tracking (✅ Resolved)
 Pi stores a `toolCallId` on each `ToolExecutionComponent` for correlating
-tool calls across agent turns and extensions. kmet doesn't track this.
-Not needed for current rendering functionality.
+tool calls across agent turns and extensions. kmet now tracks this
+via `:tool-call-id-atom` on the defrecord, set from `(:id evt)` in the
+`:tool-start` handler, with `tool-execution-set-tool-call-id!` and
+`tool-execution-get-tool-call-id` accessors. No invalidation needed
+since the ID does not affect rendering.
+
+### `argsComplete` / `setArgsComplete()` (✅ Resolved)
+Both kmet and Pi now track whether tool arguments have been fully received.
+kmet stores this in `args-complete-atom` on the defrecord, with
+`tool-execution-set-args-complete!` to set it. In `:tool-start` (where args
+arrive as a complete map), it's set to true immediately. The render context
+includes `:args-complete`. No invalidation is needed since the value doesn't
+affect rendering.
+
+### `executionStarted` timing (✅ Resolved)
+kmet now calls `tool-execution-mark-execution-started!` in the `:tool-start`
+event handler, which sets `started-at-atom` immediately. This activates the
+pending background (`:tool-pending-bg`) and elapsed timer from tool start
+rather than waiting for first `set-content!` (in `:tool-result`). The
+`set-content!` function still has the guard — it won't overwrite an already-set
+`started-at-atom`. Matches Pi's `markExecutionStarted()` behavior.
 
 ---
 
@@ -99,12 +144,13 @@ Not needed for current rendering functionality.
 | Footer stripping logic | Matches `\n\n[` + `fullOutputPath` | Moot — replaced by proper metadata | ✅ |
 | Error content truncation | Shows all error lines joined with `\n` | All error lines joined with `\n` | ✅ |
 
----
-
 ## Summary of work needed
 
 | Item | Effort | Status |
 |---|---|---|
-| Image content blocks from tools | Low | ⚠️ |
-| Render context object | Low | ⚠️ |
-| toolCallId tracking | Low | ⚠️ |
+| Image content blocks from tools (read tool supports images) | Low | ✅ |
+| `executionStarted` timing | Low | ✅ |
+| toolCallId tracking | Low | ✅ |
+| Render context object | Low | ✅ |
+| `argsComplete` / `setArgsComplete()` | Low | ✅ |
+| Async image format conversion | Low | ✅ |

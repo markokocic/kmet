@@ -36,6 +36,10 @@
 (def tool-execution-set-render-result-fn! tool-execution/tool-execution-set-render-result-fn!)
 (def tool-execution-set-truncation! tool-execution/tool-execution-set-truncation!)
 (def tool-execution-set-images! tool-execution/tool-execution-set-images!)
+(def tool-execution-set-tool-call-id! tool-execution/tool-execution-set-tool-call-id!)
+(def tool-execution-get-tool-call-id tool-execution/tool-execution-get-tool-call-id)
+(def tool-execution-set-args-complete! tool-execution/tool-execution-set-args-complete!)
+(def tool-execution-mark-execution-started! tool-execution/tool-execution-mark-execution-started!)
 (def tool-execution-set-request-render-fn! tool-execution/tool-execution-set-request-render-fn!)
 
 ;; CustomMessageComponent

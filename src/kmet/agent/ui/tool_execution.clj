@@ -74,12 +74,12 @@
       {:success? false :error (str "Error previewing edit: " (.getMessage e))})))
 
 ;; ─── Built-in tool renderers ──────────────────────────────────────────────
-;; Each render-call takes (name args theme width) → IComponent or nil.
-;; Each render-result takes (content is-error theme width expanded? started-at ended-at) → IComponent or nil.
-;; Returning nil from render-result means "show nothing" (no separator, no result).
+;; Each render-call takes (name args theme width context) → IComponent or nil.
+;; Each render-result takes (content is-error theme width expanded? started-at ended-at truncation context) → IComponent or nil.
+;; context is a ToolRenderContext map (see tool-execution-context). Built-in renderers ignore it.
 
 (def ^:private builtin-renderers
-  {"read"  {:render-call (fn [name args theme width]
+  {"read"  {:render-call (fn [name args theme width _context]
                            (let [path (:path args)
                                  offset (:offset args)
                                  limit (:limit args)
@@ -115,7 +115,7 @@
                                        (theme/fg theme :muted (str "... " more " more lines"))
                                        0 0)))
                                  c)))}
-   "write" {:render-call (fn [name args theme width]
+   "write" {:render-call (fn [name args theme width _context]
                            (let [path (:path args)
                                  content (:content args)
                                  lines (str/split-lines (or content ""))
@@ -149,7 +149,7 @@
                              (when is-error
                                (let [lines (str/split-lines content)] (text/make-text (theme/fg theme :error (str/join "\n" lines)) 0 0))))}
    "edit"  {:render-shell :self
-            :render-call (fn [name args theme width]
+            :render-call (fn [name args theme width _context]
                            (let [path (:path args)
                                  old-text (:old-text args)
                                  new-text (:new-text args)
@@ -207,7 +207,7 @@
                                    (theme/fg theme :error (str/join "\n" lines))
                                    0 0))))}
 
-   "bash"  {:render-call (fn [name args theme width]
+   "bash"  {:render-call (fn [name args theme width _context]
                            (let [cmd (:command args)
                                  timeout (:timeout args)
                                  cmd-str (if (nil? cmd)
@@ -221,7 +221,7 @@
                                (str (theme/fg theme :tool-title (theme/bold (str "$ " cmd-str)))
                                     timeout-suffix)
                                0 0)))
-            :render-result (fn [content is-error theme width expanded? started-at ended-at truncation]
+            :render-result (fn [content is-error theme width expanded? started-at ended-at truncation _context]
                              (let [c (container/make-container)
                                    BASH-PREVIEW-LINES 5]
                                (when (seq content)
@@ -283,14 +283,35 @@
 
 (defn- default-render-call
   "Default render-call: show tool name bolded in tool-title color."
-  [name _args theme _width]
+  [name _args theme _width & [_context]]
   (text/make-text (theme/fg theme :tool-title (theme/bold name)) 0 0))
 
 (defn- default-render-result
   "Default render-result: show raw content in tool-output color.
-   Accepts extra timing args for compatibility."
+   Accepts extra args for compatibility."
   [content _is-error theme _width _expanded? & _]
   (text/make-text (theme/fg theme :tool-output content) 0 0))
+
+;; ─── Render context helper ─────────────────────────────────────────────────
+
+(defn- tool-execution-context
+  "Build a ToolRenderContext map for the given component and last-component."
+  [comp last-comp]
+  {:args @(:args-atom comp)
+   :tool-call-id @(:tool-call-id-atom comp)
+   :invalidate (fn []
+                 (protocols/invalidate comp)
+                 (when-let [cb @(:request-render-fn-atom comp)]
+                   (cb)))
+   :last-component last-comp
+   :state @(:renderer-state-atom comp)
+   :cwd @(:cwd-atom comp)
+   :execution-started (some? @(:started-at-atom comp))
+   :args-complete @(:args-complete-atom comp)
+   :is-partial (nil? @(:ended-at-atom comp))
+   :expanded @(:expanded-atom comp)
+   :show-images true
+   :is-error @(:is-error-atom comp)})
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 ;; Pi matching: ToolExecutionComponent manages its own timing.
@@ -301,9 +322,15 @@
                                    theme-atom output-pad-atom expanded-atom
                                    custom-render-call-atom custom-render-result-atom
                                    started-at-atom ended-at-atom timer-active-atom
-                                   truncation-atom
+                                   truncation-atom tool-call-id-atom
+                                   args-complete-atom
+                                   image-data-atom       ;; vector of {:data str :mime-type str}
+                                   converted-images-atom ;; atom of {idx -> {:base64 str :mime-type "image/png" :width-px int :height-px int}}
+                                   last-call-component-atom   ;; component from previous render-call
+                                   last-result-component-atom ;; component from previous render-result
+                                   renderer-state-atom        ;; persistent state for custom renderers
                                    request-render-fn-atom  ;; nil or (fn) to trigger TUI re-render
-                                   image-comps-atom  ;; vector of ImageComponent
+                                   cwd-atom                ;; current working directory
                                    box             ;; outer Box (padding + bg)
                                    inner-container] ;; Container for call/result children
   protocols/IComponent
@@ -328,11 +355,17 @@
               render-shell (or (:render-shell builtin) :default)
               container @inner-container
               content-width (max 1 (- width (* 2 output-pad)))
-              call-comp (render-call-fn name args theme content-width)
+              call-context (tool-execution-context this @last-call-component-atom)
+              call-comp (render-call-fn name args theme content-width call-context)
+              _ (reset! last-call-component-atom call-comp)
               truncation @truncation-atom
-              result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation)]
+              result-context (tool-execution-context this @last-result-component-atom)
+              result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation result-context)
+              _ (reset! last-result-component-atom result-comp)
+              image-data @image-data-atom
+              converted @converted-images-atom]
       ;; Pi: hide component when no call/render content and no images
-      (if (and (nil? call-comp) (nil? result-comp) (not (seq @image-comps-atom)))
+      (if (and (nil? call-comp) (nil? result-comp) (not (seq image-data)))
         []
         (do
           ;; Schedule periodic re-render while tool is running (Pi: setInterval equivalent)
@@ -346,10 +379,16 @@
           (container/container-add-child container call-comp)
           (when result-comp
             (container/container-add-child container result-comp))
-          ;; Render image components after result (Pi: spacer + ImageComponent)
-          (doseq [img-comp @image-comps-atom]
-            (container/container-add-child container (spacer/make-spacer 1))
-            (container/container-add-child container img-comp))
+          ;; Build image components from raw data + conversions (Pi: spacer + ImageComponent)
+          (doseq [[i img] (map-indexed vector image-data)]
+            (let [converted (get converted i)
+                  img-data (if converted (:base64 converted) (:data img))
+                  img-mime (if converted (:mime-type converted) (:mime-type img))]
+              (container/container-add-child container (spacer/make-spacer 1))
+              (container/container-add-child container
+                (ic/make-image img-data img-mime
+                  {:fallback-color (fn [s] (theme/fg theme :tool-output s))}
+                  :max-width-cells 60))))
           ;; Pi: render-shell :self skips outer Box (tool renders its own framing)
           (if (= :self render-shell)
             (let [content-lines (protocols/render container width)]
@@ -382,9 +421,10 @@
 ;; Pi: component manages timing internally — no started-at/ended-at passed in.
 
 (defn make-tool-execution
-  [& {:keys [name args content is-error theme output-pad expanded? render-call-fn render-result-fn truncation]
+  [& {:keys [name args content is-error theme output-pad expanded? render-call-fn render-result-fn truncation cwd]
       :or {name "" args {} content "" is-error false theme theme/dark-theme
-           output-pad 1 expanded? false truncation nil}}]
+           output-pad 1 expanded? false truncation nil
+           cwd (or (System/getProperty "user.dir") ".")}}]
   (let [inner-container (container/make-container)
         bg-key (if is-error :tool-error-bg :tool-success-bg)
         b (box/make-box output-pad 1 #(theme/bg theme bg-key %))]
@@ -400,10 +440,17 @@
                          :ended-at-atom (atom nil)
                          :timer-active-atom (atom false)
                          :truncation-atom (atom truncation)
-                         :request-render-fn-atom (atom nil)
-                         :image-comps-atom (atom [])
+                         :tool-call-id-atom (atom nil)
+                         :args-complete-atom (atom false)
                          :custom-render-call-atom (atom render-call-fn)
                          :custom-render-result-atom (atom render-result-fn)
+                         :image-data-atom (atom [])
+                         :converted-images-atom (atom {})
+                         :last-call-component-atom (atom nil)
+                         :last-result-component-atom (atom nil)
+                         :renderer-state-atom (atom {})
+                         :request-render-fn-atom (atom nil)
+                         :cwd-atom (atom cwd)
                          :box (atom b)
                          :inner-container (atom inner-container)})))
 
@@ -442,19 +489,52 @@
   (reset! (:truncation-atom comp) truncation)
   (protocols/invalidate comp))
 
+(defn tool-execution-set-tool-call-id! [comp id]
+  (reset! (:tool-call-id-atom comp) id))
+
+(defn tool-execution-mark-execution-started!
+  "Mark that tool execution has started (Pi: markExecutionStarted()).
+   Sets started-at timestamp so pending background and timer activate
+   from tool start rather than waiting for first content delivery."
+  [comp]
+  (when (nil? @(:started-at-atom comp))
+    (reset! (:started-at-atom comp) (System/currentTimeMillis)))
+  (protocols/invalidate comp))
+
+(defn tool-execution-get-tool-call-id [comp]
+  @(:tool-call-id-atom comp))
+
+(defn tool-execution-set-args-complete!
+  "Mark that all tool arguments have been received.
+   Pi: setArgsComplete() — affects render context :args-complete."
+  [comp]
+  (reset! (:args-complete-atom comp) true))
+
 (defn tool-execution-set-images!
   "Set image content blocks for this tool execution.
    images — vector of {:data str :mime-type str}
-   Each image block creates an ImageComponent rendered after the result."
+   Stores raw image data; ImageComponents are built at render time.
+   For non-PNG images in kitty-capable terminals, triggers async conversion to PNG."
   [comp images]
-  (let [theme @(:theme-atom comp)]
-    (reset! (:image-comps-atom comp)
-      (mapv (fn [img]
-              (ic/make-image (:data img) (:mime-type img)
-                {:fallback-color (fn [s] (theme/fg theme :tool-output s))}
-                :max-width-cells 60))
-            images)))
-  (protocols/invalidate comp))
+  (let [image-data (mapv (fn [img] {:data (:data img) :mime-type (:mime-type img)}) images)]
+    (reset! (:image-data-atom comp) image-data)
+    (reset! (:converted-images-atom comp) {})
+    ;; Async conversion for non-PNG images in kitty terminals
+    (let [caps (timg/get-capabilities)]
+      (when (= :kitty (:images caps))
+        (doseq [[i img] (map-indexed vector images)]
+          (when (and (:data img) (:mime-type img) (not= (:mime-type img) "image/png"))
+            (future
+              (when-let [converted (timg/convert-to-png (:data img) (:mime-type img))]
+                (let [converted' @(:converted-images-atom comp)]
+                  (reset! (:converted-images-atom comp)
+                    (assoc converted' i
+                      {:base64 (:base64 converted)
+                       :mime-type "image/png"
+                       :width-px (:width-px converted)
+                       :height-px (:height-px converted)})))
+                (protocols/invalidate comp)))))))
+    (protocols/invalidate comp)))
 
 (defn tool-execution-set-request-render-fn! [comp f]
   "Set a callback function to be called on every invalidate (e.g. to trigger TUI re-render)."
