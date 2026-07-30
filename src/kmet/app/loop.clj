@@ -4,7 +4,7 @@
   (:require [clojure.string :as str]
             [cheshire.core :as json]
             [kmet.app.llm :as llm]
-            [kmet.app.tools :as tools]
+            [kmet.app.tools.core :as tools]
             [kmet.app.session :as session]
             [kmet.config :as cfg]))
 

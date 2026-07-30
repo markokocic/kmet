@@ -1,4 +1,4 @@
-(ns kmet.app.tools
+(ns kmet.app.tools.core
   "Tool system public API — Tool record, registry, and execution.
    Re-exports from kmet.app.tools.tool and kmet.app.tools.registry."
   (:require [kmet.app.tools.tool :as tool]

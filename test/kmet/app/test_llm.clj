@@ -1,7 +1,7 @@
 (ns kmet.app.test-llm
   (:require [clojure.test :as t]
             [kmet.app.llm :as llm]
-            [kmet.app.tools :as tools]))
+            [kmet.app.tools.core :as tools]))
 
 ;; ─── Module loads ─────────────────────────────────────────────────────────
 

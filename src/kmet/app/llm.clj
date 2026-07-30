@@ -4,7 +4,7 @@
             [clojure.string :as str]
             [clojure.java.io :as io]
             [cheshire.core :as json]
-            [kmet.app.tools :as tools]))
+            [kmet.app.tools.core :as tools]))
 
 ;; ─── Configuration ─────────────────────────────────────────────────────────
 

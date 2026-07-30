@@ -13,7 +13,7 @@
             [kmet.tui.components.select-list :as select-list]
             [kmet.app.loop :as agent]
             [kmet.app.session :as session]
-            [kmet.app.tools :as tools]
+            [kmet.app.tools.core :as tools]
             [kmet.app.keybindings :as app-kb]
             [kmet.tui.keybindings :as tui-kb]
             [kmet.config :as cfg]
