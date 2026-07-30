@@ -327,32 +327,36 @@
               call-comp (render-call-fn name args theme content-width)
               truncation @truncation-atom
               result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation)]
-      ;; Schedule periodic re-render while tool is running (Pi: setInterval equivalent)
-      (when (and started-at (not ended-at) (compare-and-set! timer-active-atom false true))
-        (future
-          (Thread/sleep 1000)
-          (reset! timer-active-atom false)
-          (protocols/invalidate this)))
-      ;; Build inner container
-      (container/container-clear container)
-      (container/container-add-child container call-comp)
-      (when result-comp
-        (container/container-add-child container result-comp))
-      ;; Pi: render-shell :self skips outer Box (tool renders its own framing)
-      (if (= :self render-shell)
-        (let [content-lines (protocols/render container width)]
-          (if (seq content-lines)
-            (into [""] content-lines)
-            []))
-        (let [bg-key (cond
-                       (and started-at (not ended-at)) :tool-pending-bg
-                       is-error :tool-error-bg
-                       :else :tool-success-bg)
-              _ (box/box-set-bg-fn @box #(theme/bg theme bg-key %))
-              box-lines (protocols/render @box width)]
-          (if (seq box-lines)
-            (into [""] box-lines)
-            []))))))
+      ;; Pi: hide component when no call/render content and no images
+      (if (and (nil? call-comp) (nil? result-comp))
+        []
+        (do
+          ;; Schedule periodic re-render while tool is running (Pi: setInterval equivalent)
+          (when (and started-at (not ended-at) (compare-and-set! timer-active-atom false true))
+            (future
+              (Thread/sleep 1000)
+              (reset! timer-active-atom false)
+              (protocols/invalidate this)))
+          ;; Build inner container
+          (container/container-clear container)
+          (container/container-add-child container call-comp)
+          (when result-comp
+            (container/container-add-child container result-comp))
+          ;; Pi: render-shell :self skips outer Box (tool renders its own framing)
+          (if (= :self render-shell)
+            (let [content-lines (protocols/render container width)]
+              (if (seq content-lines)
+                (into [""] content-lines)
+                []))
+            (let [bg-key (cond
+                           (and started-at (not ended-at)) :tool-pending-bg
+                           is-error :tool-error-bg
+                           :else :tool-success-bg)
+                  _ (box/box-set-bg-fn @box #(theme/bg theme bg-key %))
+                  box-lines (protocols/render @box width)]
+              (if (seq box-lines)
+                (into [""] box-lines)
+                []))))))))
   (handle-input [_this _data] nil)
   (invalidate [this]
     (protocols/invalidate @box)

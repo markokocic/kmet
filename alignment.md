@@ -61,9 +61,9 @@ Legend:
 | **Background error** | `toolErrorBg` | `:tool-error-bg` | ✅ |
 | **Background success** | `toolSuccessBg` | `:tool-success-bg` | ✅ |
 | **Interval timer** | `setInterval(() => c.invalidate(), 1000)` in bash renderResult | `future(Thread/sleep 1000; invalidate)` with `timer-active-atom` guard in render fn | ✅ |
-| **`invalidate()`** | Calls `this.invalidate()` + `this.ui.requestRender()` — both clears cache and triggers TUI re-render | Calls `protocols/invalidate @box` — only clears Box cache | ⚠️ Relies on animation timer for `tui-request-render` |
+| **`invalidate()`** | Calls `this.invalidate()` + `this.ui.requestRender()` — both clears cache and triggers TUI re-render | Calls `protocols/invalidate @box` + `request-render-fn` callback | ✅ |
 | **`renderShell: "self"`** | edit tool uses it; call/render components draw their own Box with preview-dependent background | edit tool uses it; preview Box with `tool-success-bg`/`tool-error-bg` background | ✅ |
-| **Hide empty components** | `hideComponent = true` when no content and no images | Always renders (no hide) | ⚠️ Empty tool components still take up space |
+| **Hide empty components** | `hideComponent = true` when no content and no images | Returns `[]` when both call-comp and result-comp are nil | ✅ |
 | **Image support** | Full kitty protocol via `Image` component, PNG conversion | Not supported | ❌ kmet TUI has no image protocol support |
 
 ---
