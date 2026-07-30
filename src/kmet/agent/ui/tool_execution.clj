@@ -13,7 +13,10 @@
             [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
-            [kmet.agent.keybindings :as app-kb]))
+            [kmet.agent.keybindings :as app-kb]
+            [kmet.tui.components.spacer :as spacer]
+            [kmet.tui.components.image :as ic]
+            [kmet.tui.terminal-image :as timg]))
 
 ;; ─── Edit diff preview ─────────────────────────────────────────────────────
 ;; Compute a preview of an edit without actually modifying the file.
@@ -300,6 +303,7 @@
                                    started-at-atom ended-at-atom timer-active-atom
                                    truncation-atom
                                    request-render-fn-atom  ;; nil or (fn) to trigger TUI re-render
+                                   image-comps-atom  ;; vector of ImageComponent
                                    box             ;; outer Box (padding + bg)
                                    inner-container] ;; Container for call/result children
   protocols/IComponent
@@ -328,7 +332,7 @@
               truncation @truncation-atom
               result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation)]
       ;; Pi: hide component when no call/render content and no images
-      (if (and (nil? call-comp) (nil? result-comp))
+      (if (and (nil? call-comp) (nil? result-comp) (not (seq @image-comps-atom)))
         []
         (do
           ;; Schedule periodic re-render while tool is running (Pi: setInterval equivalent)
@@ -342,6 +346,10 @@
           (container/container-add-child container call-comp)
           (when result-comp
             (container/container-add-child container result-comp))
+          ;; Render image components after result (Pi: spacer + ImageComponent)
+          (doseq [img-comp @image-comps-atom]
+            (container/container-add-child container (spacer/make-spacer 1))
+            (container/container-add-child container img-comp))
           ;; Pi: render-shell :self skips outer Box (tool renders its own framing)
           (if (= :self render-shell)
             (let [content-lines (protocols/render container width)]
@@ -393,6 +401,7 @@
                          :timer-active-atom (atom false)
                          :truncation-atom (atom truncation)
                          :request-render-fn-atom (atom nil)
+                         :image-comps-atom (atom [])
                          :custom-render-call-atom (atom render-call-fn)
                          :custom-render-result-atom (atom render-result-fn)
                          :box (atom b)
@@ -431,6 +440,20 @@
 
 (defn tool-execution-set-truncation! [comp truncation]
   (reset! (:truncation-atom comp) truncation)
+  (protocols/invalidate comp))
+
+(defn tool-execution-set-images!
+  "Set image content blocks for this tool execution.
+   images — vector of {:data str :mime-type str}
+   Each image block creates an ImageComponent rendered after the result."
+  [comp images]
+  (let [theme @(:theme-atom comp)]
+    (reset! (:image-comps-atom comp)
+      (mapv (fn [img]
+              (ic/make-image (:data img) (:mime-type img)
+                {:fallback-color (fn [s] (theme/fg theme :tool-output s))}
+                :max-width-cells 60))
+            images)))
   (protocols/invalidate comp))
 
 (defn tool-execution-set-request-render-fn! [comp f]

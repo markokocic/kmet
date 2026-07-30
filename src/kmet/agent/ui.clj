@@ -35,6 +35,7 @@
 (def tool-execution-set-render-call-fn! tool-execution/tool-execution-set-render-call-fn!)
 (def tool-execution-set-render-result-fn! tool-execution/tool-execution-set-render-result-fn!)
 (def tool-execution-set-truncation! tool-execution/tool-execution-set-truncation!)
+(def tool-execution-set-images! tool-execution/tool-execution-set-images!)
 (def tool-execution-set-request-render-fn! tool-execution/tool-execution-set-request-render-fn!)
 
 ;; CustomMessageComponent

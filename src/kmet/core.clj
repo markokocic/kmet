@@ -488,6 +488,8 @@ Be precise and concise in your responses.")
                                (ui/tool-execution-set-error! comp (:is-error result false))
                                (when-let [truncation (:truncation result)]
                                  (ui/tool-execution-set-truncation! comp truncation))
+                               (when-let [images (:images result)]
+                                 (ui/tool-execution-set-images! comp images))
                                (reset! pending-tool-comp nil)
                                (tui/tui-request-render t)))
                            nil)
