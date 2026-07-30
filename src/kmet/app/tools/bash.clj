@@ -2,8 +2,7 @@
   "Bash tool implementation — delegates to kmet.app.bash-executor for execution.
    Pi: bash tool wraps createLocalBashOperations, same engine as ! commands."
   (:require [clojure.string :as str]
-            [kmet.app.bash-executor :as bash-exec]
-            [kmet.app.tools.protocol :as proto]))
+            [kmet.app.bash-executor :as bash-exec]))
 
 (defn execute
   "Execute a bash command via the shared bash executor.

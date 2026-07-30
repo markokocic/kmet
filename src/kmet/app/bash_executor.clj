@@ -270,15 +270,22 @@
           (when @temp-file-stream
             (try (.close @temp-file-stream) (catch Exception _ nil))
             (reset! temp-file-stream nil))
-          (let [full-output (apply str @tail-buf)
-                {:keys [content truncated]} (truncate-tail full-output
+          (let [;; Pi: if tail doesn't start at a line boundary, skip the partial first line
+                raw-output (apply str @tail-buf)
+                clean-output (if @tail-starts-at-line-boundary
+                               raw-output
+                               (let [first-nl (str/index-of raw-output "\n")]
+                                 (if first-nl
+                                   (subs raw-output (inc first-nl))
+                                   raw-output)))
+                {:keys [content truncated]} (truncate-tail clean-output
                                                :max-lines max-lines
                                                :max-bytes max-bytes)]
             ;; Pi: if no temp file was opened during streaming but output is truncated
             (when (and truncated (nil? @temp-file-path))
               (let [path (create-temp-file)]
                 (reset! temp-file-path path)
-                (spit path full-output)))
+                (spit path clean-output)))
             {:output content
              :exit-code nil
              :cancelled false
@@ -323,15 +330,16 @@
               (try
                 (read-stream out-stream)
                 (catch Exception e
-                  (debug/log "bash stdout stream: " e))))]
+                  (debug/log "bash stdout stream: " e))))
 
-        ;; Read stderr in a separate future (pi: same raw byte pipeline)
-        (when-let [err-stream (:err p)]
-          (future
-            (try
-              (read-stream err-stream)
-              (catch Exception e
-                (debug/log "bash stderr stream: " e)))))
+            ;; Pi: read stderr in a separate future (same raw byte pipeline)
+            stderr-future
+            (when-let [err-stream (:err p)]
+              (future
+                (try
+                  (read-stream err-stream)
+                  (catch Exception e
+                    (debug/log "bash stderr stream: " e)))))]
 
         ;; Watch for cancellation signal — kill process group when triggered
         ;; Pi: AbortSignal listener kills process tree
@@ -357,14 +365,16 @@
           (let [grace-ms 100]
             (loop [last-bytes @tail-bytes
                    deadline (+ (System/currentTimeMillis) grace-ms)]
-              (when (and (not (future-done? stdout-future))
-                         (< (System/currentTimeMillis) deadline))
-                ;; Re-arm grace timer if new data arrived (pi: onData re-arms timer)
-                (let [current-bytes @tail-bytes]
-                  (recur (max last-bytes current-bytes)
-                         (if (> current-bytes last-bytes)
-                           (+ (System/currentTimeMillis) grace-ms)
-                           deadline))))))
+              (let [stdout-done (future-done? stdout-future)
+                    stderr-done (or (nil? stderr-future) (future-done? stderr-future))]
+                (when (and (not (and stdout-done stderr-done))
+                           (< (System/currentTimeMillis) deadline))
+                  ;; Re-arm grace timer if new data arrived (pi: onData re-arms timer)
+                  (let [current-bytes @tail-bytes]
+                    (recur (max last-bytes current-bytes)
+                           (if (> current-bytes last-bytes)
+                             (+ (System/currentTimeMillis) grace-ms)
+                             deadline)))))))
           ;; Untrack PID
           (when pid (untrack-pid! pid))
           (let [finalized (finalize)]
@@ -376,7 +386,14 @@
         (when-let [w @signal-watcher] (future-cancel w))
         ;; Untrack PID if we got one
         (when-let [pid @process-pid] (untrack-pid! pid))
-        (let [full-output (apply str @tail-buf)
+        (let [raw-output (apply str @tail-buf)
+              ;; Pi: apply tail-starts-at-line-boundary fix (same as finalize)
+              full-output (if @tail-starts-at-line-boundary
+                            raw-output
+                            (let [first-nl (str/index-of raw-output "\n")]
+                              (if first-nl
+                                (subs raw-output (inc first-nl))
+                                raw-output)))
               _ (when (and (nil? @temp-file-path)
                            (> (count full-output) max-bytes))
                   (let [path (create-temp-file)]

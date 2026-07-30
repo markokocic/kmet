@@ -112,11 +112,11 @@ Legend:
 
 
 
+
 ## 6. Code quality notes
 
-| Issue | Detail | Impact |
+| Issue | Detail | Status |
 |---|---|---|
-| **`tail-starts-at-line-boundary` flag set but never read** | Tracks whether rolling tail starts at a line boundary after trimming (pi: used in `getSnapshotText()` to skip partial first lines). Flag is set but no code reads it. | ⚠️ Low — raw byte chunks end with `\n`, but after trim the first chunk could be mid-line if the OS split a chunk mid-stream. Snapshot could show partial line at top. |
-| **Stderr grace period missing** | Only stdout gets a 100ms grace timer after process exit. Stderr reader future is fire-and-forget. | ⚠️ Low — stderr finishes with stdout in practice. Detached descendant writing only to stderr could lose data. |
-| **Spinner text set on every render** | `spinner/spinner-set-text!` called on every render when `:running`, text never changes. | 🟡 Cosmetic — harmless, could move to constructor. |
-| **Line count off-by-one on trailing newline** | `(count (str/split-lines output))` returns N+1 when output ends with `\n` (empty trailing string). Affects truncation metadata. | 🟡 Cosmetic — metadata shows one extra line, doesn't affect content or truncation. |
+| **`tail-starts-at-line-boundary` flag now used** | Tracks whether rolling tail starts at a line boundary after trimming. `finalize` reads it: if false, skips the partial first line by finding the first `\n` and slicing from there. | ✅ |
+| **Stderr grace period** | Both stdout and stderr futures are tracked. Grace polling loop waits for both to complete (or grace to expire), with 100ms re-armed on new data. | ✅ |
+| **Spinner text set in constructor** | `spinner-set-text!` called once in `make-bash-execution` with the cancel keybinding resolved at construction time. No longer set on every render. | ✅ |

@@ -94,12 +94,8 @@
 
             ;; ── Loader or status ───────────────────────────────────────
             (if (= status :running)
-              ;; Animated spinner with cancel hint (pi: Loader with keyText("tui.select.cancel"))
-              ;; Spinner color functions are set once in make-bash-execution
-              (let [cancel-key (or (tui-kb/key-text (tui-kb/get-global-keybindings) "app.interrupt") "Esc")
-                    sp @spinner-comp]
-                (spinner/spinner-set-text! sp (str "Running... (" cancel-key " to cancel)"))
-                (container/container-add-child content-container sp))
+              ;; Spinner text and colors are set once in make-bash-execution
+              (container/container-add-child content-container @spinner-comp)
               (do
                 ;; Status line: hidden lines hint + exit status + truncation + duration
                 (let [status-parts (atom [])]
@@ -171,9 +167,10 @@
       :or {command "" exclude-from-context? false}}]
   (let [content-container (container/make-container)
         color-key (if exclude-from-context? :dim :bash-mode)
-        ;; Create animated spinner with color functions set once (pi: Loader constructor)
+        cancel-key (or (tui-kb/key-text (tui-kb/get-global-keybindings) "app.interrupt") "Esc")
+        ;; Create animated spinner with text and colors set once (pi: Loader constructor)
         sp (spinner/make-spinner
-             :text "Running..."
+             :text (str "Running... (" cancel-key " to cancel)")
              :active true
              :prefix ""
              :spinner-color-fn (fn [s] (theme/fg theme/dark-theme color-key s))
