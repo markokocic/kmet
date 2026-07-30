@@ -96,7 +96,8 @@ Legend:
 | **Concurrent bash guard** | Check in `handleSubmit`, shows warning in UI | Same: check in `handle-bash-command`, calls `ui/show-warning!` | ✅ |
 | **Pending area during streaming** | Dedicated `pendingMessagesContainer` between chat and footer | `pending-bash-container` Container placed between chat-history and status-indicator | ✅ |
 | **Extension hooks** | `user_bash` event → extensions can intercept | `skills/emit-event! {:type :user-bash ...}` + `:spawn-hook` parameter | ✅ |
-| **Shell resolution** | Cross-platform: WSL, Git Bash, `where bash.exe`, `which bash`, fallback `sh` | Cross-platform: `/bin/bash` → `/usr/bin/bash` → `command -v bash` / `where bash.exe` → Git Bash paths → `sh` / `cmd.exe`. Shell args: `-c` for bash, `/c` for cmd.exe. | ✅ |
+| **Shell resolution** | Cross-platform: WSL (`-s` stdin), Git Bash, `where bash.exe`, `which bash`, fallback `sh` | Cross-platform: WSL detection (`windows\system32\bash.exe` → `-s` stdin), Git Bash paths, `where`/`command -v`, `cmd.exe`/`sh`. Matches pi's full resolution order + WSL. | ✅ |
+| **Output sanitization** | `sanitizeBinaryOutput()` — strips control chars + Unicode format (U+FFF9-U+FFFB) | `sanitize-output` — same: strips control chars + format characters via updated regex range | ✅ |
 
 ## 5. Minor cosmetic differences
 

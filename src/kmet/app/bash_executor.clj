@@ -40,11 +40,15 @@
 
 (def ^:private ANSI-PATTERN #"\u001b\[[0-9;]*[a-zA-Z]")
 (defn- strip-ansi [s] (str/replace s ANSI-PATTERN ""))
-(defn- sanitize-output [s]
+(defn- sanitize-output
+  "Pi: sanitizeBinaryOutput() — strips control chars (except \\t \\n \\r)
+   and Unicode format characters (U+FFF9-U+FFFB)."
+  [s]
   (-> s strip-ansi
       (str/replace #"\r\n" "\n")
       (str/replace #"\r" "\n")
-      (str/replace #"[^\t\n\r\u0020-\uFFFF]" "")))
+      ;; Pi: filter out control chars + Unicode format characters
+      (str/replace #"[^\t\n\r\u0020-\uFFF8\uFFFC-\uFFFF]" "")))
 
 (defn truncate-head [content & {:keys [max-lines max-bytes]
                                 :or {max-lines 2000 max-bytes (* 50 1024)}}]
@@ -106,8 +110,13 @@
                ["sh" "-c" "command -v bash"])
           p (proc/process cmd {:out :pipe :err :inherit})
           _ @p
-          output (str/trim (slurp (:out p)))]
-      (when (seq output) output))
+          output (str/trim (slurp (:out p)))
+          ;; Pi: where can return non-existent paths on Windows — verify the file exists
+          first-match (first (str/split-lines output))]
+      (when (and first-match
+                 (or (not windows-os?) (fs/exists? first-match))
+                 (seq (str/trim first-match)))
+        (str/trim first-match)))
     (catch Exception _ nil)))
 
 (defn- resolve-shell []
@@ -115,26 +124,39 @@
       (when (fs/exists? "/usr/bin/bash") "/usr/bin/bash")
       (find-bash-on-path)
       (when windows-os?
-        (or (let [pf (System/getenv "ProgramFiles")
-                  path (str pf "\\Git\\bin\\bash.exe")]
-              (when (fs/exists? path) path))
-            (let [pf (System/getenv "ProgramFiles(x86)")
-                  path (str pf "\\Git\\bin\\bash.exe")]
-              (when (fs/exists? path) path))))
+        (or (some (fn [env-var]
+                    (when-let [pf (System/getenv env-var)]
+                      (let [path (str pf "\\Git\\bin\\bash.exe")]
+                        (when (fs/exists? path) path))))
+                  ["ProgramFiles" "ProgramFiles(x86)"])))
       (if windows-os? "cmd.exe" "sh")))
 
 (defn create-default-ops [& {:keys [shell-path]}]
+  ;; Pi: throw early if custom shellPath is specified but not found
+  (when (and shell-path (not (fs/exists? shell-path)))
+    (throw (ex-info (str "Custom shell path not found: " shell-path)
+             {:shell-path shell-path})))
   (let [shell (or shell-path (resolve-shell))]
     (fn [{:keys [command cwd on-data signal timeout env]}]
       (let [_ (when-not (fs/exists? cwd)
-                (throw (ex-info (str "Working dir not found: " cwd) {:cwd cwd})))
+                (throw (ex-info (str "Working directory does not exist: " cwd) {:cwd cwd})))
             ;; Pi: getShellConfig resolves shell + args per platform
-            shell-args (if (str/includes? shell "cmd")
-                         [shell "/c" command]
-                         [shell "-c" command])
-            proc-opts {:dir cwd :err :pipe :out :pipe :env env}
+            use-stdin? (and windows-os?
+                           (re-find #"(?i)windows\\system32\\bash\.exe"
+                             (str/replace shell "/" "\\")))
+            shell-args (cond
+                         (str/includes? shell "cmd") [shell "/c" command]
+                         use-stdin? [shell "-s"]
+                         :else [shell "-c" command])
+            proc-opts {:dir cwd :err :pipe :out :pipe :env env
+                       ;; Pi: stdin pipe when using -s transport
+                       :in (if use-stdin? :pipe :inherit)}
             proc-opts (if timeout (assoc proc-opts :timeout (* timeout 1000)) proc-opts)
             p (proc/process shell-args proc-opts)
+            ;; Pi: write command to stdin for WSL -s transport
+            _ (when (and use-stdin? (:in p))
+                (try (spit (:in p) command) (catch Exception _ nil))
+                (try (.close (:in p)) (catch Exception _ nil)))
             pid (try (-> p :proc .pid) (catch Exception _ nil))
             _ (when pid (track-pid! pid))
             read-stream (fn [stream]
