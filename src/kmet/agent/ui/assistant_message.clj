@@ -69,11 +69,11 @@
           thinking-lines (if width-changed?
                            (render-thinking-to-width thinking cw left-pad theme hide?)
                            @rendered-thinking-lines-atom)]
-      ;; Streaming with no content yet — render nothing. The working indicator
-      ;; is a separate StatusIndicator in a dedicated layout layer (Pi-style).
-      (if (and (not finalized) text-empty? thinking-empty?)
+      ;; Pi-style: no visible content (streaming or finalized empty) → render nothing.
+      ;; The working indicator is a separate StatusIndicator between chat and editor.
+      (if (and text-empty? thinking-empty?)
         []
-        ;; Normal: render with cache + pad-y=1
+        ;; Normal: render with cache + top pad-y=1 only (Pi-style Spacer(1) equivalent)
         (with-cache this width
           {:theme theme :output-pad output-pad :hide? hide? :finalized finalized
            :text (count text) :thinking (count thinking)}
@@ -88,9 +88,10 @@
                                        (when thinking-text-spacer? [empty])
                                        text-lines
                                        (when cursor [cursor])))]
+              ;; Pi-style: top padding only (Spacer(1) equivalent).
+              ;; No bottom padding — next component provides its own top spacing.
               (vec (concat (repeat pad-y empty)
-                           content
-                           (repeat pad-y empty)))))))))
+                           content))))))))
   (handle-input [_this _data] nil)
   (invalidate [this]
     (reset! (:cache-atom this) nil)))

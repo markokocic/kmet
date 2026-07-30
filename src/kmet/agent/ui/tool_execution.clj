@@ -172,8 +172,11 @@
       (container/container-add-child container call-comp)
       (container/container-add-child container sep)
       (container/container-add-child container result-comp)
-      ;; Render through Box
-      (protocols/render @box width)))
+      ;; Pi-style: Spacer(1) before the Box (top spacer, plain empty line)
+      (let [box-lines (protocols/render @box width)]
+        (if (seq box-lines)
+          (into [""] box-lines)
+          []))))
   (handle-input [_this _data] nil)
   (invalidate [this]
     (protocols/invalidate @box)))
