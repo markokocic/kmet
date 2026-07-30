@@ -4,7 +4,7 @@
   (:require [kmet.tui.core :as tui]
             [kmet.tui.terminal :as term]
             [kmet.tui.keys :as keys]
-            [kmet.tui.theme :as theme]
+            [kmet.tui.theme :as th]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.editor :as editor]
@@ -66,11 +66,11 @@
 (defn- fmt-status-str [cs]
   (let [status (name (agent/get-status (:agent-state cs)))]
     (case status
-      "idle" (theme/dim "idle")
-      "thinking" (theme/fg theme :warning "● thinking")
-      "executing" (theme/fg theme :warning "● executing")
-      "error" (theme/fg theme :error "● error")
-      (theme/dim status))))
+      "idle" (th/dim "idle")
+      "thinking" (th/fg th/dark-theme :warning "● thinking")
+      "executing" (th/fg th/dark-theme :warning "● executing")
+      "error" (th/fg th/dark-theme :error "● error")
+      (th/dim status))))
 
 (defn- fmt-header [cs]
   (let [provider @(:provider (:agent-state cs))
@@ -79,11 +79,11 @@
         sess-id (some-> (:session cs) :id (subs 0 8) (str "..."))
         cwd (System/getProperty "user.dir")
         short-cwd (if (> (count cwd) 30) (str "..." (subs cwd (- (count cwd) 27))) cwd)]
-    (str (theme/bold (theme/fg theme :accent " kmet")) " "
-         (theme/dim (fmt-model provider model))
-         " │ " (theme/dim "session:") " " (or sess-id "none")
+    (str (th/bold (th/fg th/dark-theme :accent " kmet")) " "
+         (th/dim (fmt-model provider model))
+         " │ " (th/dim "session:") " " (or sess-id "none")
          " │ " (fmt-status-str cs)
-         " │ " (theme/dim short-cwd))))
+         " │ " (th/dim short-cwd))))
 
 (defn- update-header-footer! [cs]
   (text/text-set! (:header-text cs) (fmt-header cs))
@@ -355,7 +355,7 @@
         (do (ui/chat-history-finalize-streaming! ch)
             (ui/chat-history-finalize-thinking! ch))))
     (ui/chat-history-add-message! (:chat-history cs)
-      {:role :assistant :content (theme/fg theme :error (str "Error: " error-msg))})
+      {:role :assistant :content (th/fg th/dark-theme :error (str "Error: " error-msg))})
     (reset! (:running-turn? cs) false)
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
@@ -407,7 +407,7 @@
           (do (ui/chat-history-remove-last! ch) (reset! (:streaming-atom ch) nil))
           (do (ui/chat-history-finalize-streaming! ch) (ui/chat-history-finalize-thinking! ch)))))
     (ui/chat-history-add-message! (:chat-history cs)
-      {:role :assistant :content (theme/dim "(cancelled)")})
+      {:role :assistant :content (th/dim "(cancelled)")})
     (reset! (:running-turn? cs) false)
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))))
@@ -462,7 +462,7 @@ Be precise and concise in your responses.")
                          (skills/emit-event! evt)))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 2
-            :border-fn (fn [c] (theme/dim c)))
+            :border-fn (fn [c] (th/dim c)))
         sp3 (spacer/make-spacer 1)
         ftr (ui/make-footer :status "" :n-msgs 0 :theme (cfg/get-theme config))
 
@@ -543,12 +543,12 @@ Be precise and concise in your responses.")
       {:label "kmet"
        :content (str "Welcome to kmet — minimal coding agent.\n"
                      "Type a message, /help for commands, or use:\n"
-                     "  " (theme/dim "Ctrl+O") " — toggle tool output  " (theme/dim "Ctrl+T") " — toggle thinking blocks")})
+                     "  " (th/dim "Ctrl+O") " — toggle tool output  " (th/dim "Ctrl+T") " — toggle thinking blocks")})
 
     ;; Welcome message
     (ui/chat-history-add-message! ch
       {:role :assistant
-       :content (str "Welcome to " (theme/bold "kmet")
+       :content (str "Welcome to " (th/bold "kmet")
                      " — minimal coding agent.\n"
                      "Type your message or /help for commands.")})
 
