@@ -64,7 +64,7 @@ Legend:
 | **`invalidate()`** | Calls `this.invalidate()` + `this.ui.requestRender()` — both clears cache and triggers TUI re-render | Calls `protocols/invalidate @box` + `request-render-fn` callback | ✅ |
 | **`renderShell: "self"`** | edit tool uses it; call/render components draw their own Box with preview-dependent background | edit tool uses it; preview Box with `tool-success-bg`/`tool-error-bg` background | ✅ |
 | **Hide empty components** | `hideComponent = true` when no content and no images | Returns `[]` when both call-comp and result-comp are nil | ✅ |
-| **Image support** | Full kitty protocol via `Image` component, PNG conversion | Not supported | ❌ kmet TUI has no image protocol support |
+| **Image support** | Full kitty protocol via `Image` component, PNG conversion | `terminal-image` + `ImageComponent` with Kitty encoding, dimension parsing, fallback, conversion via python3+PIL | ✅ |
 
 ---
 
@@ -79,13 +79,10 @@ styled keybinding hints using the resolved keybinding from the manager. Input ha
 `core.clj` now uses keybinding IDs instead of hardcoded key checks.
 
 ### Image rendering
-Pi's `Image` component supports kitty terminal image protocol with:
-- `allocateImageId` / `renderImage` for kitty sequences
-- PNG conversion for non-PNG images
-- `imageFallback` for terminals without image support
-- Width/height calculation from cell dimensions
-
-This would require adding kitty protocol support to kmet's JLine 4.x terminal layer.
+Implemented via `kmet.tui.terminal-image` (Kitty encoding, dimension parsing,
+cell-size calculation, capability detection) and `kmet.tui.components.image`
+(ImageComponent with IComponent protocol). Conversion via `scripts/convert_to_png.py`
+using python3+PIL when available. Fallback text for terminals without image protocol.
 
 ---
 
@@ -102,8 +99,5 @@ This would require adding kitty protocol support to kmet's JLine 4.x terminal la
 
 ## Summary of work needed
 
-### Remaining
-| Item | Effort | Status |
-|---|---|---|
-| Kitty protocol image support | Large | ❌ |
+**All gaps resolved.** Full behavioral parity with Pi's ToolExecutionComponent.
 | Keybinding hint system | Large | ✅ |
