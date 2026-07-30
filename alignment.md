@@ -85,7 +85,7 @@ Pi's `Image` component supports kitty terminal image protocol with:
 - `imageFallback` for terminals without image support
 - Width/height calculation from cell dimensions
 
-This would require adding kitty protocol support to kmet's JLine3-based terminal layer.
+This would require adding kitty protocol support to kmet's JLine 4.x terminal layer.
 
 ---
 

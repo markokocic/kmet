@@ -23,7 +23,7 @@ with the agent having access to filesystem tools (read, write, edit, bash, grep,
 
 ## Prerequisites
 
-- [Babashka](https://babashka.org/) ≥ 1.12.215 (bundles JLine3)
+- [Babashka](https://babashka.org/) ≥ 1.12.215 (bundles JLine 4.3.1)
 - API keys: `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` environment variables
 
 ## Usage
@@ -87,7 +87,7 @@ src/kmet/
 ├── demo.clj              — Standalone editor demo
 ├── tui/
 │   ├── core.clj          — TUI framework (components, overlays, rendering)
-│   ├── terminal.clj      — JLine3 terminal wrapper
+│   ├── terminal.clj      — JLine 4.x terminal wrapper
 │   ├── keys.clj          — Keyboard input handling
 │   ├── utils.clj         — Text width, wrapping, ANSI helpers
 │   ├── protocols.clj     — IComponent, IFocusable protocols

@@ -1,6 +1,7 @@
 (ns kmet.tui.terminal
-  "JLine3-based terminal wrapper.
-   Port of @earendil-works/pi-tui ProcessTerminal.")
+  "JLine 4.x terminal wrapper (Babashka bundles JLine 4.3.1).
+   Port of @earendil-works/pi-tui ProcessTerminal.
+   API is backward-compatible with JLine 3; implementation uses FFM/JNI.")
 
 (import '(org.jline.terminal TerminalBuilder Terminal)
         '(java.io Writer))

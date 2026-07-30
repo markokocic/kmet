@@ -41,7 +41,7 @@ src/kmet/
 │       └── footer.clj
 ├── tui/                — Generic TUI library (Pi's @earendil-works/pi-tui)
 │   ├── core.clj        — TUI class, render loop, overlays
-│   ├── terminal.clj    — JLine3 wrapper
+│   ├── terminal.clj    — JLine 4.x wrapper
 │   ├── keys.clj        — key parsing/matching
 │   ├── protocols.clj   — IComponent, IFocusable, IComponentKind
 │   ├── utils.clj       — text width, wrapping, ANSI helpers
