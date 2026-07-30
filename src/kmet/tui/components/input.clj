@@ -6,10 +6,7 @@
             [kmet.tui.utils :as u]
             [kmet.tui.components.editing :as edit]))
 
-;; ─── Cursor marker ─────────────────────────────────────────────────────────
-;; Zero-width APC sequence emitted at cursor position for IME positioning.
-;; TUI finds this marker and positions the hardware cursor there.
-(def ^:const CURSOR-MARKER "\u001b_pi:c\u0007")
+
 
 ;; ─── Grapheme helpers and kill ring ──────────────────────────────────────
 ;; Imported from kmet.tui.components.editing
@@ -165,7 +162,7 @@
         before (subs value 0 cursor)
         after (subs value (min (count value) (+ cursor char-len)))]
     (str before
-         (when focused? CURSOR-MARKER)
+         (when focused? u/CURSOR-MARKER)
          "\u001b[7m" at-char "\u001b[27m"
          after)))
 

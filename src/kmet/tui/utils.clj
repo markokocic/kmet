@@ -1,6 +1,11 @@
 (ns kmet.tui.utils
   "Text width calculation and wrapping utilities.")
 
+;; ─── Cursor marker ────────────────────────────────────────────────────────
+;; Zero-width APC sequence emitted at cursor position for IME positioning.
+;; TUI finds this marker and positions the hardware cursor there.
+(def ^:const CURSOR-MARKER "\u001b_km:c\u0007")
+
 ;; ─── Width calculation ─────────────────────────────────────────────────────
 
 (def ^:const CJK-START 0x2E80)

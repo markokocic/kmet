@@ -410,12 +410,12 @@
             session-env
             (let [m (transient {})]
               (when-let [sess (:session cs)]
-                (assoc! m "PI_SESSION_ID" (:id sess)))
-              (assoc! m "PI_PROVIDER" (name @(:provider ag)))
-              (assoc! m "PI_MODEL" @(:model ag))
+                (assoc! m "KMET_SESSION_ID" (:id sess)))
+              (assoc! m "KMET_PROVIDER" (name @(:provider ag)))
+              (assoc! m "KMET_MODEL" @(:model ag))
               (when-let [tl @(:thinking ag)]
                 (when-not (= tl :off)
-                  (assoc! m "PI_REASONING_LEVEL" (name tl))))
+                  (assoc! m "KMET_REASONING_LEVEL" (name tl))))
               (persistent! m))
             
             ;; ── Emit user-bash event for extensions (pi: emitUserBash) ──

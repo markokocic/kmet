@@ -38,11 +38,7 @@
 
 (defrecord Overlay [component x y width height focused?])
 
-;; ═══════════════════════════════════════════════════════════════════════════
-;; Cursor marker
-;; ═══════════════════════════════════════════════════════════════════════════
 
-(def ^:const CURSOR-MARKER "\u001b_pi:c\u0007")
 
 (defn- extract-cursor-position
   "Find CURSOR-MARKER in rendered lines (viewport only), strip it from output,
@@ -54,9 +50,9 @@
     (loop [i (dec (count lines))]
       (if (>= i viewport-top)
         (let [line (nth lines i)]
-          (if-let [marker-idx (clojure.string/index-of line CURSOR-MARKER)]
+          (if-let [marker-idx (clojure.string/index-of line utils/CURSOR-MARKER)]
             (let [before (subs line 0 marker-idx)
-                  after (subs line (+ marker-idx (count CURSOR-MARKER)))
+                  after (subs line (+ marker-idx (count utils/CURSOR-MARKER)))
                   col (utils/visible-width before)
                   new-line (str before after)
                   new-lines (assoc lines i new-line)]
@@ -268,7 +264,7 @@
         started (terminal/start! term (fn [_] nil) (fn [] (tui-request-render tui)))
         hardware-cursor-row (atom 0)
         viewport-top (atom 0)
-        show-hardware-cursor? (= (System/getenv "PI_HARDWARE_CURSOR") "1")]
+        show-hardware-cursor? (= (System/getenv "KMET_HARDWARE_CURSOR") "1")]
     (terminal/hide-cursor! started)
     ;; Pi: no clear-screen on start — preserves prior terminal output above the TUI
     (reset! (:running? tui) true)

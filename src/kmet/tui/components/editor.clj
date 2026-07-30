@@ -9,8 +9,7 @@
             [kmet.tui.utils :as u]
             [kmet.tui.components.editing :as edit]))
 
-;; ─── Cursor marker ─────────────────────────────────────────────────────────
-(def ^:const CURSOR-MARKER "\u001b_pi:c\u0007")
+
 
 ;; ─── Grapheme helpers ─────────────────────────────────────────────────────
 ;; Imported from kmet.tui.components.editing (grapheme-left, grapheme-right,
@@ -723,7 +722,7 @@
                                 (min (count display-text) (+ vl-cursor-col (count at-cursor))))
                     cursor-at-end? (empty? after)
                     display-with-cursor (str before
-                                             (when @focused? CURSOR-MARKER)
+                                             (when @focused? u/CURSOR-MARKER)
                                              "\u001b[7m" (if cursor-at-end? " " at-cursor) "\u001b[0m"
                                              after)
                     effective-width (if cursor-at-end?
