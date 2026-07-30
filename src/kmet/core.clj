@@ -539,38 +539,37 @@ Be precise and concise in your responses.")
             (tui/tui-request-render t))))
 
       ;; Global input listeners
-      (tui/tui-add-input-listener t
-        (fn [data]
-          (cond
-            (keys/matches-key? data (keys/ctrl "z"))
-            (tui/tui-stop t)
+      (let [kmgr (tui-kb/get-global-keybindings)]
+        (tui/tui-add-input-listener t
+          (fn [data]
+            (cond
+              (tui-kb/matches-key kmgr data "app.exit")
+              (tui/tui-stop t)
 
-            (keys/matches-key? data (keys/ctrl "l"))
-            (do (term/clear-screen! (:terminal t))
-                (tui/tui-request-render t))
+              (keys/matches-key? data (keys/ctrl "l"))
+              (do (term/clear-screen! (:terminal t))
+                  (tui/tui-request-render t))
 
-            (keys/matches-key? data "escape")
-            (when (and @(:running-turn? cs)
-                       (not (tui/tui-has-overlay? t)))
-              (handle-cancel cs))
+              (tui-kb/matches-key kmgr data "app.interrupt")
+              (when (and @(:running-turn? cs)
+                         (not (tui/tui-has-overlay? t)))
+                (handle-cancel cs))
 
-            (keys/matches-key? data (keys/ctrl "c"))
-            (if @(:running-turn? cs)
-              (handle-cancel cs)
-              (do (editor/editor-set-text! ed "")
-                  (tui/tui-request-render t)))
+              (tui-kb/matches-key kmgr data "app.clear")
+              (if @(:running-turn? cs)
+                (handle-cancel cs)
+                (do (editor/editor-set-text! ed "")
+                    (tui/tui-request-render t)))
 
-            ;; Pi-style: Ctrl+O toggles tool output expansion
-            (keys/matches-key? data (keys/ctrl "o"))
-            (do (ui/chat-history-toggle-tool-expanded! ch)
-                (update-header-footer! cs)
-                (tui/tui-request-render t))
+              (tui-kb/matches-key kmgr data "app.tools.expand")
+              (do (ui/chat-history-toggle-tool-expanded! ch)
+                  (update-header-footer! cs)
+                  (tui/tui-request-render t))
 
-            ;; Pi-style: Ctrl+T toggles thinking block visibility
-            (keys/matches-key? data (keys/ctrl "t"))
-            (do (ui/chat-history-toggle-thinking-hidden! ch)
-                (update-header-footer! cs)
-                (tui/tui-request-render t))
+              (tui-kb/matches-key kmgr data "app.thinking.toggle")
+              (do (ui/chat-history-toggle-thinking-hidden! ch)
+                  (update-header-footer! cs)
+                  (tui/tui-request-render t))
 
             :else nil)))
 
