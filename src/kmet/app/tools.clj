@@ -1,11 +1,26 @@
 (ns kmet.app.tools
-  "Tool definitions and execution for the LLM agent.
-   Port of @earendil-works/pi-agent tool system.
-   Public API: re-exports from kmet.app.tools.registry.
-   Tool record lives in registry; this ns provides make-tool convenience."
-  (:require [kmet.app.tools.registry :as registry]))
+  "Tool system public API — Tool record, registry, and execution.
+   Re-exports from kmet.app.tools.tool and kmet.app.tools.registry."
+  (:require [kmet.app.tools.tool :as tool]
+            [kmet.app.tools.registry :as registry]))
 
-;; Re-export public API from registry
+;; ─── From tool.clj (Tool record + helpers) ──────────────────────────────────
+
+(def map->Tool tool/map->Tool)
+(def param tool/param)
+(def ->json-schema tool/->json-schema)
+
+(defn make-tool
+  "Create a Tool record."
+  [& {:keys [name label description prompt-snippet prompt-guidelines parameters execute render-call render-result]}]
+  (tool/map->Tool
+    {:name name :label label :description description
+     :prompt-snippet prompt-snippet :prompt-guidelines prompt-guidelines
+     :parameters parameters :execute execute
+     :render-call render-call :render-result render-result}))
+
+;; ─── From registry.clj (registry + execution) ───────────────────────────────
+
 (def get-all-tools registry/get-all-tools)
 (def execute-tool registry/execute-tool)
 (def tool->openai-schema registry/tool->openai-schema)
@@ -13,13 +28,3 @@
 (def register-tool! registry/register-tool!)
 (def unregister-tool! registry/unregister-tool!)
 (def get-tool registry/get-tool)
-
-;; Re-export Tool record constructor for external use
-(defn make-tool
-  "Create a Tool record. See registry/Tool for fields."
-  [& {:keys [name label description prompt-snippet prompt-guidelines parameters execute render-call render-result]}]
-  (registry/map->Tool
-    {:name name :label label :description description
-     :prompt-snippet prompt-snippet :prompt-guidelines prompt-guidelines
-     :parameters parameters :execute execute
-     :render-call render-call :render-result render-result}))
