@@ -12,6 +12,18 @@
 (def TEMP-FILE-PREFIX "kmet-bash-")
 (def TEMP-FILE-SUFFIX ".log")
 
+;; ─── Format utilities (pi: formatSize) ──────────────────────────────────────
+
+(defn format-size
+  "Format bytes as human-readable size (pi: formatSize).
+   Returns strings like '50B', '12.5KB', '1.5MB'."
+  [bytes]
+  (let [b (int bytes)]
+    (cond
+      (< b 1024) (str b "B")
+      (< b (* 1024 1024)) (str (format "%.1f" (float (/ b 1024))) "KB")
+      :else (str (format "%.1f" (float (/ b 1024 1024))) "MB"))))
+
 (def ^:private windows-os?
   (str/starts-with? (System/getProperty "os.name") "Windows"))
 

@@ -14,6 +14,7 @@
             [clojure.java.io :as io]
             [babashka.fs :as fs]
             [kmet.app.keybindings :as app-kb]
+            [kmet.app.bash-executor :as bash-exec]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.image :as ic]
             [kmet.tui.terminal-image :as timg]))
@@ -252,20 +253,20 @@
                                              0 0)))
                                        (doseq [sline styled-lines]
                                          (container/container-add-child c (text/make-text sline 0 0)))))))
-                               ;; Show truncation warnings (server-side truncation metadata)
+                               ;; Show truncation warnings (pi: with formatSize for byte counts)
                                (when truncation
-                                 (let [{:keys [total-lines shown-lines full-output-path]} truncation]
+                                 (let [{:keys [total-lines shown-lines truncated-by max-bytes
+                                              full-output-path]} truncation
+                                       size-str (when max-bytes
+                                                  (bash-exec/format-size max-bytes))
+                                       warn (if (= truncated-by :bytes)
+                                              (str "[Truncated: " shown-lines " lines shown ("
+                                                   size-str " limit). Full output: " full-output-path "]")
+                                              (str "[Truncated: showing " shown-lines " of " total-lines
+                                                   " lines. Full output: " full-output-path "]"))]
                                    (container/container-add-child c (text/make-text "" 0 0))
                                    (container/container-add-child c
-                                     (text/make-text
-                                       (theme/fg theme :warning
-                                         (str "[Truncated: showing " shown-lines " of " total-lines " lines]"))
-                                       0 0))
-                                   (container/container-add-child c
-                                     (text/make-text
-                                       (theme/fg theme :warning
-                                         (str "[Full output: " full-output-path "]"))
-                                       0 0))))
+                                     (text/make-text (theme/fg theme :warning warn) 0 0))))
                                ;; Pi: duration managed internally by component, with leading blank line
                                (when started-at
                                  (let [now (or ended-at (System/currentTimeMillis))

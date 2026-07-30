@@ -25,11 +25,19 @@
                         (str output "\n\nCommand exited with code " exit-code)
                         output)]
           (if truncated
-            {:content content
-             :is-error is-error
-             :truncation {:total-lines (count (str/split-lines output))
-                          :shown-lines bash-exec/DEFAULT-MAX-LINES
-                          :full-output-path full-output-path}}
+            ;; Re-run truncate-tail to get rich metadata (truncated-by, byte counts)
+            (let [rich (bash-exec/truncate-tail output
+                         :max-lines bash-exec/DEFAULT-MAX-LINES
+                         :max-bytes bash-exec/DEFAULT-MAX-BYTES)]
+              {:content content
+               :is-error is-error
+               :truncation {:total-lines (:total-lines rich)
+                            :total-bytes (:total-bytes rich)
+                            :shown-lines (:output-lines rich)
+                            :truncated-by (:truncated-by rich)
+                            :max-bytes (:max-bytes rich)
+                            :max-lines (:max-lines rich)
+                            :full-output-path full-output-path}})
             {:content content
              :is-error is-error}))))
     (catch Exception e
