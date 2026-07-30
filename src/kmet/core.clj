@@ -462,8 +462,11 @@ Be precise and concise in your responses.")
                                       :content ""
                                       :is-error false}]
                              (ui/chat-history-finalize-streaming! ch)
-                             (reset! pending-tool-comp
-                               (ui/chat-history-add-message! ch msg))
+                             (let [comp (ui/chat-history-add-message! ch msg)]
+                               ;; Wire invalidate → TUI re-render
+                               (ui/tool-execution-set-request-render-fn! comp
+                                 #(tui/tui-request-render t))
+                               (reset! pending-tool-comp comp))
                              (tui/tui-request-render t))
                            :tool-progress
                            ;; Pi: periodic ping updates elapsed timer via component's render
@@ -474,6 +477,8 @@ Be precise and concise in your responses.")
                              (let [result (:result evt)]
                                (ui/tool-execution-set-content! comp (:content result))
                                (ui/tool-execution-set-error! comp (:is-error result false))
+                               (when-let [truncation (:truncation result)]
+                                 (ui/tool-execution-set-truncation! comp truncation))
                                (reset! pending-tool-comp nil)
                                (tui/tui-request-render t)))
                            nil)

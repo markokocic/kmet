@@ -7,6 +7,13 @@
             [babashka.fs :as fs]
             [babashka.process :as proc]))
 
+;; ─── Constants ────────────────────────────────────────────────────────────
+
+;; Max output lines before bash output is truncated server-side.
+(def MAX-BASH-OUTPUT-LINES 500)
+(def TMP-PREFIX "kmet-bash-")
+(def TMP-SUFFIX ".txt")
+
 ;; ─── Safe file traversal ──────────────────────────────────────────────────
 
 (def ^:private max-traverse-files 10000)
@@ -101,7 +108,10 @@
       {:content (str "Error editing " path ": " (.getMessage e)) :is-error true})))
 
 (defn- tool-bash
-  "Execute a bash command with optional timeout."
+  "Execute a bash command with optional timeout.
+   Returns {:content str :is-error bool :truncation map?}.
+   When output exceeds MAX-BASH-OUTPUT-LINES, the content is truncated
+   and the full output is saved to a temp file referenced in :truncation."
   [{:keys [command timeout]}]
   (try
     (let [timeout-ms (* (or timeout 30) 1000)
@@ -112,10 +122,27 @@
         (do (proc/destroy p)
             {:content (str "Command timed out after " (or timeout 30) "s")
              :is-error true})
-        {:content (str (:out result)
-                       (when (seq (:err result))
-                         (str "\n" (:err result))))
-         :is-error (not= (:exit result) 0)}))
+        (let [full-output (str (:out result)
+                               (when (seq (:err result))
+                                 (str "\n" (:err result))))
+              lines (str/split-lines full-output)
+              total-lines (count lines)
+              is-error (not= (:exit result) 0)]
+          (if (<= total-lines MAX-BASH-OUTPUT-LINES)
+            {:content full-output
+             :is-error is-error}
+            ;; Truncate and save full output to temp file
+            (let [tmp-file (java.io.File/createTempFile TMP-PREFIX TMP-SUFFIX)
+                  tmp-path (str tmp-file)
+                  shown-lines (take MAX-BASH-OUTPUT-LINES lines)
+                  truncated-content (str/join "\n" shown-lines)]
+              (.deleteOnExit tmp-file)
+              (spit tmp-path full-output)
+              {:content truncated-content
+               :is-error is-error
+               :truncation {:total-lines total-lines
+                            :shown-lines MAX-BASH-OUTPUT-LINES
+                            :full-output-path tmp-path}})))))
     (catch Exception e
       {:content (str "Error executing command: " (.getMessage e)) :is-error true})))
 

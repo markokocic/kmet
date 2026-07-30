@@ -188,3 +188,21 @@
                 (apply str result)
                 (recur (+ i nchars) (+ col w) (conj result char-str)))
               (recur (+ i nchars) (+ col w) result))))))))
+
+;; ─── Visual line truncation ────────────────────────────────────────────────
+
+(defn truncate-to-visual-lines
+  "Truncate text to the last max-lines visual lines at the given width.
+   Uses wrap-text-with-ansi to resolve word-wrapped lines, then takes
+   the last max-lines. Lines are returned as a vector of strings.
+   This is width-aware — important for long single-line commands or
+   narrow terminals where a single string-line may wrap to multiple
+   visual lines."
+  [text max-lines width]
+  (if (or (empty? text) (<= max-lines 0) (<= width 0))
+    []
+    (let [visual-lines (wrap-text-with-ansi text width)
+          n (count visual-lines)]
+      (if (<= n max-lines)
+        visual-lines
+        (vec (take-last max-lines visual-lines))))))
