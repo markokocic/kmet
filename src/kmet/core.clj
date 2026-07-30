@@ -57,7 +57,8 @@
                       status-indicator
                       session
                       running-turn?
-                      config])
+                      config
+                      pending-tool-comp])
 
 ;; ─── Formatting helpers ────────────────────────────────────────────────────
 
@@ -441,6 +442,7 @@ Be precise and concise in your responses.")
         hdr (text/make-text "" 1 0)
         sp1 (spacer/make-spacer 1)
         ch (ui/make-chat-history :theme (cfg/get-theme config))
+        pending-tool-comp (atom nil)  ;; Pi: component ref for in-place updates
 
         ;; Agent state
         ag (agent/make-agent-state
@@ -451,18 +453,30 @@ Be precise and concise in your responses.")
              :compact-threshold (:compact-threshold config)
              :thinking (:thinking config :off)
              :on-event (fn [evt]
-                         ;; Render tool results in chat history
-                         (when (= :tool-result (:type evt))
-                           (let [result (:result evt)
-                                 msg {:role :tool
+                         (case (:type evt)
+                           :tool-start
+                           ;; Pi: create pending component once, update in place
+                           (let [msg {:role :tool
                                       :name (:name evt)
                                       :args (:args evt {})
-                                      :content (:content result)
-                                      :is-error (:is-error result false)}]
-                             ;; Finalize any current streaming before showing tool result
+                                      :content ""
+                                      :is-error false}]
                              (ui/chat-history-finalize-streaming! ch)
-                             (ui/chat-history-add-message! ch msg)
-                             (tui/tui-request-render t)))
+                             (reset! pending-tool-comp
+                               (ui/chat-history-add-message! ch msg))
+                             (tui/tui-request-render t))
+                           :tool-progress
+                           ;; Pi: periodic ping updates elapsed timer via component's render
+                           (tui/tui-request-render t)
+                           :tool-result
+                           ;; Pi: update the existing component in place
+                           (when-let [comp @pending-tool-comp]
+                             (let [result (:result evt)]
+                               (ui/tool-execution-set-content! comp (:content result))
+                               (ui/tool-execution-set-error! comp (:is-error result false))
+                               (reset! pending-tool-comp nil)
+                               (tui/tui-request-render t)))
+                           nil)
                          ;; Forward events to extension system
                          (skills/emit-event! evt)))
         sp2 (spacer/make-spacer 1)
@@ -482,7 +496,8 @@ Be precise and concise in your responses.")
                             :status-indicator nil
                             :session session
                             :running-turn? (atom false)
-                            :config config})]
+                            :config config
+                            :pending-tool-comp pending-tool-comp})]
 
     ;; Focus editor
     (tui/tui-set-focus t ed)

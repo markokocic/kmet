@@ -92,12 +92,13 @@
   "Add a message to the chat history.
    Creates the appropriate component (UserMessageComponent, AssistantMessageComponent,
    ToolExecutionComponent, or CustomMessageComponent) and adds it to the container.
-   Auto-scrolls to bottom."
+   Auto-scrolls to bottom. Returns the created component (or nil)."
   [ch msg]
   (let [comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch))]
     (when comp
       (container/container-add-child (:container ch) comp)
-      (swap! (:children-atom ch) conj comp))))
+      (swap! (:children-atom ch) conj comp))
+    comp))
 
 (defn chat-history-add-messages!
   "Add multiple messages at once."

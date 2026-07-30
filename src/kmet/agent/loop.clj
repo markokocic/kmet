@@ -200,9 +200,20 @@ Be precise and concise in your responses."}}]
                           (emit agent {:type :status :status :executing
                                        :tool-calls tool-calls})
 
-                          ;; Execute each tool
+                          ;; Execute each tool (async with in-place component updates)
                           (doseq [tc tool-calls]
-                            (let [result (tools/execute-tool (:name tc) (:arguments tc))
+                            (let [_ (emit agent {:type :tool-start
+                                                 :id (:id tc)
+                                                 :name (:name tc)
+                                                 :args (:arguments tc)})
+                                  f (future (tools/execute-tool (:name tc) (:arguments tc)))
+                                  result (loop []
+                                           (let [v (deref f 200 :pending)]
+                                             (if (= :pending v)
+                                               (do
+                                                 (emit agent {:type :tool-progress})
+                                                 (recur))
+                                               v)))
                                   result-msg (tool-result-message (:id tc) (:name tc) result)]
                               (swap! (:messages agent) conj result-msg)
                               (when (:session agent)
