@@ -656,6 +656,10 @@ Be precise and concise in your responses.")
                            ;; Clear partial streaming text so the retried stream starts fresh
                            (ui/chat-history-clear-streaming! ch)
                            (tui/tui-request-render t)
+                           :context-replaced
+                           ;; Rebuild the chat history to mirror the replaced context
+                           (ui/chat-history-rebuild! ch (:messages evt))
+                           (tui/tui-request-render t)
                            nil)))
         _ (when (seq (:models config))
             ;; Scoped model list for cycle-model! (pi: _scopedModels)

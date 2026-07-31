@@ -187,3 +187,25 @@
       (is (= "first" (:content (first (ch/chat-history-get-messages ch))))))))
 
 
+
+(deftest test-rebuild
+  (testing "rebuild replaces all messages and preserves the info banner"
+    (let [ch (ch/make-chat-history)
+          _ (ch/chat-history-set-info-msg! ch {:label "banner" :content "info text"})]
+      (ch/chat-history-add-message! ch {:role :user :content "old 1"})
+      (ch/chat-history-add-message! ch {:role :assistant :content "old 2"})
+      (ch/chat-history-rebuild! ch [{:role :user :content "new 1"}
+                                    {:role :assistant :content "new 2"}])
+      ;; old messages gone, new ones present
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"new 1" %) lines) "new user message rendered")
+        (is (some #(re-find #"new 2" %) lines) "new assistant message rendered")
+        (is (not-any? #(re-find #"old 1|old 2" %) lines) "old messages removed")
+        (is (some #(re-find #"info text" %) lines) "info banner preserved"))))
+
+  (testing "rebuild with no info banner"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-add-message! ch {:role :user :content "old"})
+      (ch/chat-history-rebuild! ch [{:role :user :content "only"}])
+      (is (= [{:role :user :content "only"}]
+             (ch/chat-history-get-messages ch))))))

@@ -1176,3 +1176,17 @@
             "session entry mirrors the replacement message")
       (finally
         (fs/delete-tree dir)))))
+
+(t/deftest test-loop-context-replaced-event
+  (let [events (atom [])
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
+    (loop/set-prepare-next-turn! agent
+      (fn [_] {:context [{:role :user :content [{:type :text :text "replacement"}]}]}))
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message (stub-llm-tool-then-text (atom 0))
+                  tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (let [evs (filter #(= :context-replaced (:type %)) @events)]
+      (t/is (seq evs) ":context-replaced emitted on context replacement")
+      (t/is (= "replacement" (get-in (last evs) [:messages 0 :content 0 :text]))
+            "event carries the new conversation"))))

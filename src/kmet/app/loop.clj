@@ -697,7 +697,8 @@ Be precise and concise in your responses."}}]
         true))))
 
 (defn- replace-context!
-  "Replace the in-memory conversation and rebuild the session file to match
+  "Replace the in-memory conversation, rebuild the session file to match, and
+   emit :context-replaced so the UI can mirror the new context
    (pi: prepareNextTurnWithContext context replacement)."
   [agent messages]
   (let [msgs (vec messages)]
@@ -708,7 +709,8 @@ Be precise and concise in your responses."}}]
       (reset! (:entries sess) [])
       (reset! (:leaf-id sess) nil)
       (doseq [m msgs]
-        (session/append-entry sess m)))))
+        (session/append-entry sess m)))
+    (emit agent {:type :context-replaced :messages msgs})))
 
 (defn- apply-next-turn-update!
   "Apply a prepare-next-turn update map to the agent state.

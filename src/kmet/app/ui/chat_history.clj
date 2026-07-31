@@ -304,6 +304,20 @@
   (reset! (:info-comp-atom ch) nil)
   (reset! (:streaming-atom ch) nil))
 
+(defn chat-history-rebuild!
+  "Rebuild the chat history from a new message vector (context replacement).
+   Clears existing messages and streaming state, preserves the top info banner."
+  [ch msgs]
+  (let [info @(:info-comp-atom ch)
+        info-msg (when info
+                   {:label @(:label-atom info)
+                    :content @(:content-atom info)})]
+    (chat-history-clear! ch)
+    (doseq [m msgs]
+      (chat-history-add-message! ch m))
+    (when info-msg
+      (chat-history-set-info-msg! ch info-msg))))
+
 (defn- child->msg
   "Convert a component child back to a message map."
   [child]

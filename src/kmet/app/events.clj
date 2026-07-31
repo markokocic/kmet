@@ -75,6 +75,10 @@
    "Model was changed (pi: model_select).
     Payload: :model, :previous-model, :source (:set | :cycle)."
 
+   :context-replaced
+   "Fired when prepareNextTurn replaces the conversation context.
+    Payload: :messages — the new conversation messages."
+
    :auto-retry-start
    "Fired before a retry attempt's backoff sleep when a transient LLM error
     is detected (pi: auto_retry_start).
