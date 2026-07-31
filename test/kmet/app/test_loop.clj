@@ -1084,3 +1084,44 @@
                       (when-let [on-done (:on-done opts)] (on-done :stop))
                       :done))]
       @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])}))))
+
+(t/deftest test-loop-token-threshold-compaction
+  (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
+        sess (session/create-session (str dir))
+        agent (loop/make-agent-state
+                :session sess
+                :compact-token-threshold 10
+                :compact-threshold 1000)]
+    (try
+      (doseq [i (range 10)]
+        (let [m {:role :user
+                 :content [{:type :text :text
+                            (str "This is message body number " i
+                                 " with plenty of words so the estimated token count "
+                                 "easily exceeds the small test threshold.")}]}]
+          (swap! (:messages agent) conj m)
+          (session/append-entry sess m)))
+      (t/is (true? (loop/maybe-compact! agent))
+            "token estimate above threshold triggers compaction")
+      (t/is (< (count @(:entries sess)) 10) "session entries reduced")
+      (t/is (< (count @(:messages agent)) 10) "in-memory context aligned with session")
+      (t/is (= (count @(:messages agent)) (count @(:entries sess)))
+            "messages and session entry counts match after compaction")
+      (finally
+        (fs/delete-tree dir)))))
+
+(t/deftest test-loop-compact-no-op-reports-false
+  (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
+        sess (session/create-session (str dir))
+        agent (loop/make-agent-state :session sess :compact-threshold 1000)]
+    (try
+      (doseq [i (range 3)]
+        (let [m {:role :user :content [{:type :text :text (str "msg " i)}]}]
+          (swap! (:messages agent) conj m)
+          (session/append-entry sess m)))
+      (t/is (false? (loop/maybe-compact! agent))
+            "below threshold → no compaction")
+      (t/is (= 3 (count @(:entries sess))))
+      (t/is (= 3 (count @(:messages agent))) "context untouched when no compaction")
+      (finally
+        (fs/delete-tree dir)))))

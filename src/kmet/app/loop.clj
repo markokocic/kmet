@@ -339,8 +339,8 @@ Be precise and concise in your responses."}}]
 
 (defn- await-all-tool-results!
   "Poll all pending tool futures concurrently, emitting progress pings, until
-   every future completes. Returns a map tool-call-id → result in completion
-   order."
+   every future completes. Returns a map tool-call-id → result in approximate
+   completion order (newest completions discovered per 200ms poll batch)."
   [agent futures]
   (let [results (atom {})]
     (loop []
@@ -630,12 +630,18 @@ Be precise and concise in your responses."}}]
 ;; ─── Agent run ─────────────────────────────────────────────────────────────
 
 (defn- estimate-tokens
-  "Rough token estimate from message content (approx 4 chars/token)."
+  "Rough token estimate from message content (approx 4 chars/token).
+   Counts string content directly, or the :text of content blocks."
   [messages]
   (let [chars (reduce + 0
                 (for [m messages
                       :let [c (or (:content m) "")]]
-                  (if (string? c) (count c) (count (str c)))))]
+                  (if (string? c)
+                    (count c)
+                    (reduce + 0
+                      (for [b c
+                            :when (= :text (:type b))]
+                        (count (or (:text b) "")))))))]
     (quot chars 4)))
 
 (defn- truncate-context!
@@ -646,22 +652,24 @@ Be precise and concise in your responses."}}]
 
 (defn- compact-session!
   "Compact the session and align the in-memory context. Returns true if a
-   compaction happened, false if there is no session."
+   compaction actually reduced the session, false otherwise."
   [agent max-entries]
   (if-let [sess (:session agent)]
     (let [n (count @(:entries sess))
           _ (session/compact! sess max-entries)
           new-n (count @(:entries sess))]
-      (truncate-context! agent new-n)
-      (binding [*out* *err*]
-        (println "Compacted session:" n "→" new-n "entries"))
-      true)
+      (when (< new-n n)
+        (truncate-context! agent new-n)
+        (binding [*out* *err*]
+          (println "Compacted session:" n "→" new-n "entries")))
+      (< new-n n))
     false))
 
 (defn- maybe-compact!
   "Proactively compact if the session exceeds the entry-count threshold, or
    if the estimated token count exceeds :compact-token-threshold (when set).
-   Returns true if a compaction happened."
+   Token-triggered compaction halves the current entry count. Returns true
+   if a compaction happened."
   [agent]
   (let [threshold (:compact-threshold agent)
         token-threshold (:compact-token-threshold agent)]
@@ -672,8 +680,9 @@ Be precise and concise in your responses."}}]
       (compact-session! agent (quot threshold 2))
 
       (and token-threshold
+           (:session agent)
            (>= (estimate-tokens @(:messages agent)) token-threshold))
-      (compact-session! agent (max 4 (or threshold 8)))
+      (compact-session! agent (quot (count @(:entries (:session agent))) 2))
 
       :else false)))
 
