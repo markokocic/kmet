@@ -10,7 +10,9 @@
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as u]
-            [kmet.tui.components.editing :as edit]))
+            [kmet.tui.components.editing :as edit]
+            [kmet.tui.components.select-list :as select-list]
+            [kmet.tui.autocomplete :as ac]))
 
 
 
@@ -348,6 +350,211 @@
             :lines lines
             :cursor-col (min (:cursor-col st) (count (get lines cl "")))))))))
 
+;; ─── Autocomplete
+;; Port of pi editor.ts autocomplete integration (synchronous — no debounce
+;; or abort machinery needed since every request computes fresh from the
+;; current editor state):
+;; - Tab triggers completion (slash command name or file path)
+;; - "/" at message start, trigger chars (@/#) at token boundaries, and
+;;   letters within those contexts auto-trigger the dropdown
+;; - The dropdown is a SelectList rendered below the editor border
+
+(def ^:private default-trigger-chars ["@" "#"])
+
+(defn- provider-trigger-chars
+  [editor]
+  (distinct (concat default-trigger-chars
+                    (if-let [ap @(:autocomplete-provider editor)]
+                      (vec (ac/get-trigger-characters ap))
+                      []))))
+
+(defn- trigger-pattern
+  "Regex matching text-before-cursor that is in a symbol-trigger context
+   (e.g. \"@foo\" at line start or after whitespace)."
+  [editor]
+  (let [escaped (->> (provider-trigger-chars editor)
+                     (map #(clojure.string/replace % #"[\\^$.*+?()\[\]{}|-]" "\\$&"))
+                     (clojure.string/join ""))]
+    (re-pattern (str "(?:^|[\\s])[" escaped "][^\\s]*$"))))
+
+(defn- is-at-start-of-message?
+  [editor]
+  (let [state @(:state-atom editor)
+        line (or (nth (:lines state) (:cursor-line state)) "")
+        trimmed (clojure.string/trim (subs line 0 (:cursor-col state)))]
+    (or (empty? trimmed) (= trimmed "/"))))
+
+(defn- is-in-slash-command-context?
+  [editor]
+  (let [state @(:state-atom editor)
+        line (or (nth (:lines state) (:cursor-line state)) "")
+        before (subs line 0 (:cursor-col state))]
+    (clojure.string/starts-with? (clojure.string/triml before) "/")))
+
+(defn- cancel-autocomplete
+  [editor]
+  (reset! (:autocomplete-state editor) nil)
+  (reset! (:autocomplete-list editor) nil)
+  (reset! (:autocomplete-prefix editor) ""))
+
+(defn- get-best-autocomplete-match-index
+  "Index of the item whose value exactly equals prefix, else the first
+   item whose value starts with prefix, else -1 (pi:
+   getBestAutocompleteMatchIndex)."
+  [items prefix]
+  (loop [i 0 first-prefix-idx -1]
+    (if (>= i (count items))
+      first-prefix-idx
+      (let [v (or (:value (nth items i)) "")]
+        (cond
+          (= v prefix) i
+          (and (= first-prefix-idx -1) (clojure.string/starts-with? v prefix))
+          (recur (inc i) i)
+          :else (recur (inc i) first-prefix-idx))))))
+
+(defn- apply-autocomplete-suggestions
+  "Show the dropdown for the given suggestions (pi:
+   applyAutocompleteSuggestions)."
+  [editor suggestions state-kw]
+  (let [items (mapv (fn [it]
+                      {:label (:label it)
+                       :value (:value it)
+                       :description (:description it)})
+                    (:items suggestions))
+        sl (select-list/make-select-list items
+             :height @(:autocomplete-max-visible editor)
+             :theme @(:autocomplete-theme editor))]
+    (when-let [idx (get-best-autocomplete-match-index items (:prefix suggestions))]
+      (when (>= idx 0)
+        (reset! (:selected-idx-atom sl) idx)))
+    (reset! (:autocomplete-prefix editor) (:prefix suggestions))
+    (reset! (:autocomplete-list editor) sl)
+    (reset! (:autocomplete-state editor) state-kw)))
+
+(defn- set-editor-state!
+  "Replace the editor state (lines + cursor) from an apply-completion
+   result, pushing an undo snapshot first (pi: pushUndoSnapshot + apply)."
+  [editor result]
+  (push-undo-state editor)
+  (reset! (:redo-stack editor) [])
+  (reset! (:last-action editor) nil)
+  (reset! (:state-atom editor)
+    (map->EditorState {:lines (:lines result)
+                       :cursor-line (:cursor-line result)
+                       :cursor-col (:cursor-col result)})))
+
+(defn- apply-selected-completion!
+  "Apply the currently selected dropdown item to the editor (pi: Tab/Enter
+   in autocomplete mode)."
+  [editor]
+  (when-let [sl @(:autocomplete-list editor)]
+    (when-let [item (select-list/select-list-get-selected sl)]
+      (when-let [ap @(:autocomplete-provider editor)]
+        (let [state @(:state-atom editor)
+              result (ac/apply-completion ap (:lines state) (:cursor-line state)
+                                          (:cursor-col state) item
+                                          @(:autocomplete-prefix editor))]
+          (set-editor-state! editor result)
+          (cancel-autocomplete editor)
+          (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))))
+
+(defn- request-autocomplete
+  "Query the provider and show/update the dropdown (sync port of pi's
+   requestAutocomplete/startAutocompleteRequest). force? mirrors Tab file
+   completion; explicit-tab? + force? + single match applies immediately."
+  [editor {:keys [force explicit-tab]}]
+  (let [ap @(:autocomplete-provider editor)]
+    (when ap
+      (let [state @(:state-atom editor)
+            lines (:lines state) cl (:cursor-line state) cc (:cursor-col state)]
+        (if (and force (not (ac/should-trigger-file-completion ap lines cl cc)))
+          nil
+          (let [suggestions (ac/get-suggestions ap lines cl cc {:force (boolean force)})]
+            (if (or (nil? suggestions) (empty? (:items suggestions)))
+              (cancel-autocomplete editor)
+              (if (and force explicit-tab (= 1 (count (:items suggestions))))
+                (let [state2 @(:state-atom editor)
+                      result (ac/apply-completion ap (:lines state2) (:cursor-line state2)
+                                                  (:cursor-col state2)
+                                                  (first (:items suggestions))
+                                                  (:prefix suggestions))]
+                  (set-editor-state! editor result)
+                  (cancel-autocomplete editor)
+                  (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))
+                (apply-autocomplete-suggestions editor suggestions
+                                                (if force :force :regular))))))))))
+
+(defn- refresh-autocomplete
+  "Keep an open dropdown in sync after cursor movement (pi:
+   updateAutocomplete on cursor moves)."
+  [editor]
+  (when @(:autocomplete-state editor)
+    (request-autocomplete editor {:force (= @(:autocomplete-state editor) :force)
+                                  :explicit-tab false})))
+
+(defn- retrigger-autocomplete
+  "After backspace/delete: refresh the dropdown if open, otherwise re-open
+   it when the text before the cursor is in a completable context (pi:
+   updateAutocomplete / tryTriggerAutocomplete)."
+  [editor]
+  (if @(:autocomplete-state editor)
+    (refresh-autocomplete editor)
+    (let [state @(:state-atom editor)
+          line (or (nth (:lines state) (:cursor-line state)) "")
+          before (subs line 0 (:cursor-col state))]
+      (when (or (is-in-slash-command-context? editor)
+                (re-find (trigger-pattern editor) before))
+        (request-autocomplete editor {:force false :explicit-tab false})))))
+
+(defn- maybe-trigger-autocomplete
+  "After a character insert, auto-trigger or refresh the dropdown (pi:
+   tryTriggerAutocomplete / updateAutocomplete)."
+  [editor char]
+  (let [state @(:state-atom editor)
+        lines (:lines state) cl (:cursor-line state) cc (:cursor-col state)
+        line (or (nth lines cl) "")
+        before (subs line 0 cc)]
+    (if @(:autocomplete-state editor)
+      (request-autocomplete editor {:force (= @(:autocomplete-state editor) :force)
+                                    :explicit-tab false})
+      (cond
+        (and (= char "/") (is-at-start-of-message? editor))
+        (request-autocomplete editor {:force false :explicit-tab false})
+
+        (contains? (set (provider-trigger-chars editor)) char)
+        (let [char-before (when (>= (count before) 2)
+                            (subs before (- (count before) 2) (dec (count before))))]
+          (when (or (= (count before) 1)
+                    (and char-before (re-find #"[\s\t]" char-before)))
+            (request-autocomplete editor {:force false :explicit-tab false})))
+
+        (re-find #"[a-zA-Z0-9.\-_]" char)
+        (when (or (is-in-slash-command-context? editor)
+                  (re-find (trigger-pattern editor) before))
+          (request-autocomplete editor {:force false :explicit-tab false}))))))
+
+(declare insert-character)
+
+(defn- handle-tab [editor]
+  (if @(:autocomplete-state editor)
+    ;; Dropdown visible — apply the selected item
+    (do (apply-selected-completion! editor) nil)
+    (if-let [ap @(:autocomplete-provider editor)]
+      (let [state @(:state-atom editor)
+            lines (:lines state) cl (:cursor-line state) cc (:cursor-col state)
+            line (or (nth lines cl) "")
+            before (subs line 0 cc)]
+        (if (and (is-in-slash-command-context? editor)
+                 (not (clojure.string/includes? (clojure.string/triml before) " ")))
+          ;; Slash command name completion
+          (do (request-autocomplete editor {:force false :explicit-tab true}) nil)
+          ;; File completion (provider may decline)
+          (if (ac/should-trigger-file-completion ap lines cl cc)
+            (do (request-autocomplete editor {:force true :explicit-tab true}) nil)
+            nil)))
+      ;; No provider — legacy 4-space indent
+      (insert-character editor "    "))))
+
 ;; ─── Line editing actions
 
 (defn- insert-character [editor char & {:keys [skip-undo-coalescing]}]
@@ -364,7 +571,9 @@
     (swap! (:state-atom editor) assoc
       :lines (assoc lines cl (str (subs line 0 cc) char (subs line cc)))
       :cursor-col (+ cc (count char)))
-    (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
+    (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))
+    (when-not skip-undo-coalescing
+      (maybe-trigger-autocomplete editor char))))
 
 (defn- handle-backspace [editor]
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state) cc (:cursor-col state)]
@@ -383,7 +592,8 @@
                                 [(str prev-line cur-line)] (subvec lines (inc cl))))
             :cursor-line (dec cl) :cursor-col (count prev-line)))))
     (after-destructive-edit! editor)
-    (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
+    (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))
+    (retrigger-autocomplete editor)))
 
 (defn- handle-forward-delete [editor]
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
@@ -401,9 +611,11 @@
             :lines (vec (concat (subvec lines 0 (inc cl))
                                 [(str line next-line)] (subvec lines (+ cl 2))))))))
     (after-destructive-edit! editor)
-    (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
+    (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))
+    (retrigger-autocomplete editor)))
 
 (defn- add-new-line [editor]
+  (cancel-autocomplete editor)
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
         cc (:cursor-col state) line (or (nth lines cl) "")]
     (push-undo-state editor)
@@ -565,6 +777,7 @@
 ;; ─── Paste markers
 
 (defn- handle-paste [editor text]
+  (cancel-autocomplete editor)
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
         cc (:cursor-col state)
         prev-char (when (pos? cc) (subs (nth lines cl "") (dec cc) cc))
@@ -723,24 +936,6 @@
     (swap! (:history editor) conj text)
     (reset! (:history-idx editor) -1)))
 
-;; ─── Autocomplete
-
-(defn- handle-tab [editor]
-  (if-let [ap @(:autocomplete-provider editor)]
-    (let [state @(:state-atom editor)
-          lines (:lines state)
-          cl (:cursor-line state) cc (:cursor-col state)
-          line (or (nth lines cl) "")
-          before-cursor (subs line 0 cc)
-          word-start (or (last (keep-indexed #(when (re-find #"[\s/]" (str %2)) %1) before-cursor))
-                         -1)
-          partial (subs before-cursor (inc word-start))
-          result (ap partial (editor-get-text editor))]
-      (when result
-        (insert-character editor result)))
-    ;; Default tab: insert 4 spaces
-    (insert-character editor "    ")))
-
 ;; ─── Height helper
 ;; Dynamic height (pi): 30% of terminal rows, min 5. Used when a
 ;; :terminal-rows source is provided; otherwise :height is the fallback.
@@ -815,7 +1010,9 @@
                    jump-mode
                    history history-idx history-draft
                    terminal-rows-atom
-                   autocomplete-provider]
+                   autocomplete-provider autocomplete-state
+                   autocomplete-list autocomplete-prefix
+                   autocomplete-max-visible autocomplete-theme]
   protocols/IComponent
 
   (render [this width]
@@ -885,6 +1082,13 @@
             (vswap! result conj (str "─── ↓ " remaining " more "
                                       (apply str (repeat (max 0 (- width 12)) "─"))))
             (vswap! result conj (apply str (repeat width bdr)))))
+        ;; Autocomplete dropdown below the border (pi: SelectList in render)
+        (when (and @(:autocomplete-state this) @(:autocomplete-list this))
+          (doseq [line (protocols/render @(:autocomplete-list this) content-width)]
+            (let [lw (u/visible-width line)
+                  line-padding (apply str (repeat (max 0 (- content-width lw)) \space))]
+              (vswap! result conj
+                (str left-pad line line-padding right-pad)))))
         @result)))
 
   (handle-input [this data]
@@ -918,6 +1122,34 @@
                   (reset! paste-state :idle)
                   (reset! paste-buffer "")))
               nil)
+
+          ;; Autocomplete dropdown — intercept only dropdown keys; other
+          ;; input falls through to normal editing (which refreshes it)
+          (and @(:autocomplete-state this) @(:autocomplete-list this)
+               (or (keys/matches-key? data "escape")
+                   (or (keys/matches-key? data "up") (keys/matches-key? data (keys/ctrl "p"))
+                       (keys/matches-key? data "down") (keys/matches-key? data (keys/ctrl "n")))
+                   (or (keys/matches-key? data "tab") (keys/matches-key? data (keys/ctrl "i")))
+                   (and (keys/matches-key? data "enter") (not @disable-submit))))
+          (let [sl @(:autocomplete-list this)
+                prefix @(:autocomplete-prefix this)]
+            (cond
+              (keys/matches-key? data "escape")
+              (do (cancel-autocomplete this) nil)
+
+              (or (keys/matches-key? data "up") (keys/matches-key? data (keys/ctrl "p"))
+                  (keys/matches-key? data "down") (keys/matches-key? data (keys/ctrl "n")))
+              (do (protocols/handle-input sl data) nil)
+
+              (or (keys/matches-key? data "tab") (keys/matches-key? data (keys/ctrl "i")))
+              (do (apply-selected-completion! this) nil)
+
+              (and (keys/matches-key? data "enter") (not @disable-submit))
+              (do (apply-selected-completion! this)
+                  (when (clojure.string/starts-with? prefix "/")
+                    (when-let [cb @on-submit]
+                      (cb (clojure.string/join "\n" (:lines @(:state-atom this))))))
+                  nil)))
 
           (and (keys/matches-key? data "enter") (not @disable-submit))
           (do (when-let [cb @on-submit] (cb (clojure.string/join "\n" lines))) nil)
@@ -1009,17 +1241,20 @@
 
           (or (keys/matches-key? data "left")
               (keys/matches-key? data (keys/ctrl "b")))
-          (do (move-cursor-horizontal this -1) nil)
+          (do (move-cursor-horizontal this -1)
+              (refresh-autocomplete this) nil)
 
           (or (keys/matches-key? data "right")
               (keys/matches-key? data (keys/ctrl "f")))
-          (do (move-cursor-horizontal this 1) nil)
+          (do (move-cursor-horizontal this 1)
+              (refresh-autocomplete this) nil)
 
           (or (keys/matches-key? data "home")
               (keys/matches-key? data (keys/ctrl "a")))
           (do (swap! state-atom assoc :cursor-col 0)
               (reset! preferred-col-atom nil)
-              (reset! last-action nil) nil)
+              (reset! last-action nil)
+              (refresh-autocomplete this) nil)
 
           (or (keys/matches-key? data "end")
               (keys/matches-key? data (keys/ctrl "e")))
@@ -1027,23 +1262,27 @@
                 (swap! state-atom assoc :cursor-col (count line))
                 (reset! preferred-col-atom nil)
                 (reset! last-action nil))
-              nil)
+              (refresh-autocomplete this) nil)
 
           (or (keys/matches-key? data (keys/alt "left"))
               (keys/matches-key? data (keys/ctrl "left"))
               (keys/matches-key? data (keys/alt "b")))
-          (do (move-cursor-word-left this) nil)
+          (do (move-cursor-word-left this)
+              (refresh-autocomplete this) nil)
 
           (or (keys/matches-key? data (keys/alt "right"))
               (keys/matches-key? data (keys/ctrl "right"))
               (keys/matches-key? data (keys/alt "f")))
-          (do (move-cursor-word-right this) nil)
+          (do (move-cursor-word-right this)
+              (refresh-autocomplete this) nil)
 
           (keys/matches-key? data "pageUp")
-          (do (page-scroll this -1) nil)
+          (do (page-scroll this -1)
+              (refresh-autocomplete this) nil)
 
           (keys/matches-key? data "pageDown")
-          (do (page-scroll this 1) nil)
+          (do (page-scroll this 1)
+              (refresh-autocomplete this) nil)
 
           :else
           (let [has-ctrl? (some #(let [c (int %)]
@@ -1090,9 +1329,15 @@
                 :history-idx (atom -1)
                 :history-draft (atom nil)
                 :terminal-rows-atom (atom terminal-rows)
-                :autocomplete-provider (atom nil)}))
+                :autocomplete-provider (atom nil)
+                :autocomplete-state (atom nil)
+                :autocomplete-list (atom nil)
+                :autocomplete-prefix (atom "")
+                :autocomplete-max-visible (atom 5)
+                :autocomplete-theme (atom select-list/default-theme)}))
 
 (defn editor-set-text! [editor text]
+  (cancel-autocomplete editor)
   (reset! (:state-atom editor) (make-editor-state text))
   (reset! (:scroll-offset-atom editor) 0)
   (reset! (:preferred-col-atom editor) nil)
@@ -1111,8 +1356,29 @@
 (defn editor-set-on-change! [editor f]
   (reset! (:on-change editor) f))
 
+(defn editor-set-autocomplete-provider!
+  "Set the autocomplete provider (an AutocompleteProvider object)."
+  [editor provider]
+  (cancel-autocomplete editor)
+  (reset! (:autocomplete-provider editor) provider))
+
+(defn editor-set-autocomplete-max-visible!
+  "Set the maximum dropdown height in lines (default 5)."
+  [editor n]
+  (reset! (:autocomplete-max-visible editor) n))
+
+(defn editor-set-autocomplete-theme!
+  "Set the SelectList theme used for the dropdown."
+  [editor theme]
+  (reset! (:autocomplete-theme editor) theme))
+
 (defn editor-set-on-tab! [editor f]
-  (reset! (:autocomplete-provider editor) f))
+  (editor-set-autocomplete-provider! editor f))
+
+(defn editor-autocomplete-active?
+  "True when the autocomplete dropdown is currently showing."
+  [editor]
+  (boolean @(:autocomplete-state editor)))
 
 (defn editor-get-history [editor]
   @(:history editor))

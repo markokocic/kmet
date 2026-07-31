@@ -18,6 +18,8 @@
             [kmet.tui.keybindings :as tui-kb]
             [kmet.config :as cfg]
             [kmet.app.skills :as skills]
+            [kmet.app.commands :as commands]
+            [kmet.tui.autocomplete :as ac]
             [kmet.debug :as debug]
             [clojure.string :as str]
             [babashka.fs :as fs]
@@ -106,82 +108,115 @@
 
 ;; ─── Command handling ──────────────────────────────────────────────────────
 
+(defn- help-text
+  "Help message derived from the live command registry."
+  []
+  (let [cmd-lines
+        (mapv (fn [c]
+                (let [name (:name c)
+                      hint (:argument-hint c)
+                      usage (if hint (str " /" name " " hint) (str " /" name))
+                      desc (:description c "")]
+                  (str "  " usage
+                       (apply str (repeat (max 1 (- 32 (count usage))) " "))
+                       desc)))
+              (commands/get-commands))]
+    (str "Available commands:\n"
+         (clojure.string/join "\n" cmd-lines)
+         "\n\nShortcuts:\n"
+         "  Enter      — Submit message\n"
+         "  Escape     — Cancel current turn\n"
+         "  Ctrl+Z     — Quit\n"
+         "  Ctrl+C     — Cancel / clear editor\n"
+         "  Ctrl+L     — Clear terminal\n"
+         "  Up/Down    — Scroll chat history")))
+
+(defn- register-builtin-commands!
+  "Register kmet's builtin slash commands. Handlers receive [cs args];
+   argument completions feed the editor autocomplete dropdown."
+  [config]
+  (commands/register-command!
+    {:name "quit"
+     :description "Exit kmet"
+     :handler (fn [cs _]
+                (debug/log "/quit command")
+                (tui/tui-stop (:tui cs)))})
+  (commands/register-command!
+    {:name "help"
+     :description "Show available commands and shortcuts"
+     :handler (fn [cs _]
+                (ui/chat-history-add-message! (:chat-history cs)
+                  {:role :assistant :content (help-text)}))})
+  (commands/register-command!
+    {:name "model"
+     :description "Switch model"
+     :argument-hint "<provider:model>"
+     :get-argument-completions
+     (fn [_]
+       (mapv (fn [m] {:value m :label m})
+             (or (:models config) [(:model config)])))
+     :handler (fn [cs args]
+                (if (seq args)
+                  (let [parts (str/split args #":" 2)
+                        provider (keyword (or (first parts) "openai"))
+                        model (or (second parts) (:model (:config cs)))]
+                    (agent/set-provider! (:agent-state cs) provider)
+                    (agent/set-model! (:agent-state cs) model)
+                    (ui/chat-history-add-message! (:chat-history cs)
+                      {:role :assistant :content (str "Switched to " (fmt-model provider model))}))
+                  (ui/chat-history-add-message! (:chat-history cs)
+                    {:role :assistant :content
+                     (str "Current model: " (fmt-model @(:provider (:agent-state cs))
+                                                       @(:model (:agent-state cs)))
+                          "\nUsage: /model <provider:model>")})))})
+  (commands/register-command!
+    {:name "new"
+     :description "Start a new session"
+     :handler (fn [cs _]
+                (let [new-session (session/create-session (ensure-session-dir))]
+                  (debug/log "new session created: " (:id new-session))
+                  (ui/chat-history-clear! (:chat-history cs))
+                  (reset! (:session cs) new-session)
+                  (let [old-ag (:agent-state cs)
+                        new-ag (assoc old-ag :session new-session)]
+                    (reset! (:agent-state cs) new-ag))
+                  (ui/chat-history-add-message! (:chat-history cs)
+                    {:role :assistant :content "Started a new session."})))})
+  (commands/register-command!
+    {:name "resume"
+     :description "Browse past sessions"
+     :handler (fn [cs _]
+                (debug/log "/resume command")
+                (resume-session cs ensure-session-dir))})
+  (commands/register-command!
+    {:name "tree"
+     :description "Browse session entry tree"
+     :handler (fn [cs _]
+                (show-session-tree cs))})
+  (commands/register-command!
+    {:name "theme"
+     :description "Switch theme"
+     :argument-hint "<name>"
+     :get-argument-completions
+     (fn [_]
+       (mapv (fn [t] {:value t :label t}) ["dark" "light"]))
+     :handler (fn [cs args]
+                (if (seq args)
+                  (ui/chat-history-add-message! (:chat-history cs)
+                    {:role :assistant
+                     :content (str "Theme switching not yet implemented. "
+                                   "Available themes: dark, light. "
+                                   "Current theme: " (cfg/get-theme-name (:config cs)))})
+                  (ui/chat-history-add-message! (:chat-history cs)
+                    {:role :assistant
+                     :content (str "Current theme: " (cfg/get-theme-name (:config cs))
+                                   "\nUsage: /theme <name>")})))}))
+
 (defn- handle-command
-  "Handle slash commands. Returns nil."
+  "Handle slash commands via the command registry. Returns nil."
   [cs cmd args]
-  (case cmd
-    "quit"
-    (do (debug/log "/quit command")
-        (tui/tui-stop (:tui cs)))
-
-    "help"
-    (let [help-text (str
-                     "Available commands:\n"
-                     "  /quit   — Exit kmet\n"
-                     "  /help   — Show this help\n"
-                     "  /model <provider:model> — Switch model\n"
-                     "  /new    — Start a new session\n"
-                     "  /resume — Browse past sessions\n"
-                     "  /tree   — Browse session entry tree\n"
-                     "  /theme <name> — Switch theme\n"
-                     "\n"
-                     "Shortcuts:\n"
-                     "  Enter      — Submit message\n"
-                     "  Escape     — Cancel current turn\n"
-                     "  Ctrl+Z     — Quit\n"
-                     "  Ctrl+C     — Cancel / clear editor\n"
-                     "  Ctrl+L     — Clear terminal\n"
-                     "  Up/Down    — Scroll chat history")]
-      (ui/chat-history-add-message! (:chat-history cs)
-        {:role :assistant :content help-text}))
-
-    "model"
-    (if (seq args)
-      (let [parts (str/split args #":" 2)
-            provider (keyword (or (first parts) "openai"))
-            model (or (second parts) (:model (:config cs)))]
-        (agent/set-provider! (:agent-state cs) provider)
-        (agent/set-model! (:agent-state cs) model)
-        (ui/chat-history-add-message! (:chat-history cs)
-          {:role :assistant :content (str "Switched to " (fmt-model provider model))}))
-      (ui/chat-history-add-message! (:chat-history cs)
-        {:role :assistant :content
-         (str "Current model: " (fmt-model @(:provider (:agent-state cs))
-                                            @(:model (:agent-state cs)))
-              "\nUsage: /model <provider:model>")}))
-
-    "new"
-    (let [new-session (session/create-session (ensure-session-dir))]
-      (debug/log "new session created: " (:id new-session))
-      (ui/chat-history-clear! (:chat-history cs))
-      ;; Update both CoreState and AgentState session references
-      (reset! (:session cs) new-session)
-      (let [old-ag (:agent-state cs)
-            new-ag (assoc old-ag :session new-session)]
-        (reset! (:agent-state cs) new-ag))
-      (ui/chat-history-add-message! (:chat-history cs)
-        {:role :assistant :content "Started a new session."}))
-
-    "resume"
-    (do (debug/log "/resume command")
-        (resume-session cs ensure-session-dir))
-
-    "tree"
-    (show-session-tree cs)
-
-    "theme"
-    (if (seq args)
-      (ui/chat-history-add-message! (:chat-history cs)
-        {:role :assistant
-         :content (str "Theme switching not yet implemented. "
-                       "Available themes: dark, light. "
-                       "Current theme: " (cfg/get-theme-name (:config cs)))})
-      (ui/chat-history-add-message! (:chat-history cs)
-        {:role :assistant
-         :content (str "Current theme: " (cfg/get-theme-name (:config cs))
-                       "\nUsage: /theme <name>")}))
-
-    ;; Unknown command
+  (if-let [c (commands/find-command cmd)]
+    ((:handler c) cs args)
     (ui/chat-history-add-message! (:chat-history cs)
       {:role :assistant
        :content (str "Unknown command: /" cmd ". Type /help for available commands.")}))
@@ -692,6 +727,16 @@ Be precise and concise in your responses.")
     ;; Focus editor
     (tui/tui-set-focus t ed)
 
+    ;; Register builtin slash commands (autocomplete dropdown + dispatch)
+    (register-builtin-commands! config)
+
+    ;; Autocomplete provider: slash commands + file paths
+    (editor/editor-set-autocomplete-provider! ed
+      (ac/make-combined-provider
+        :commands-fn #(commands/get-commands)
+        :base-path (System/getProperty "user.dir")))
+    (editor/editor-set-autocomplete-theme! ed (th/get-select-list-theme (cfg/get-theme config)))
+
     ;; Status indicator (Pi-style: separate layer between chat and editor)
     (let [si (ui/make-status-indicator :theme (cfg/get-theme config))
           cs (assoc cs :status-indicator si)]
@@ -730,7 +775,8 @@ Be precise and concise in your responses.")
 
               (tui-kb/matches-key kmgr data "app.interrupt")
               (when (and @(:running-turn? cs)
-                         (not (tui/tui-has-overlay? t)))
+                         (not (tui/tui-has-overlay? t))
+                         (not (editor/editor-autocomplete-active? ed)))
                 (handle-cancel cs))
 
               (tui-kb/matches-key kmgr data "app.clear")

@@ -9,7 +9,10 @@
             [kmet.test-theme]
             [kmet.test-config]
             [kmet.app.test-skills]
+            [kmet.app.test-commands]
             [kmet.test-editing]
+            [kmet.tui.test-fuzzy]
+            [kmet.tui.test-autocomplete]
             [kmet.tui.components.test-text]
             [kmet.tui.components.test-spacer]
             [kmet.tui.components.test-container]
@@ -33,7 +36,10 @@
                      kmet.app.test-llm kmet.app.test-loop
                      kmet.test-theme kmet.test-config
                      kmet.app.test-skills
+                     kmet.app.test-commands
                      kmet.test-editing
+                     kmet.tui.test-fuzzy
+                     kmet.tui.test-autocomplete
                      kmet.tui.components.test-text
                      kmet.tui.components.test-spacer
                      kmet.tui.components.test-container

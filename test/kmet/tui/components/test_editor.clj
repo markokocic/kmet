@@ -1,7 +1,10 @@
 (ns kmet.tui.components.test-editor
   (:require [clojure.test :as t]
             [kmet.tui.core :as core]
-            [kmet.tui.components.editor :as editor]))
+            [kmet.tui.components.editor :as editor]
+            [kmet.tui.autocomplete :as ac]
+            [kmet.tui.components.select-list :as select-list]
+            [babashka.fs :as fs]))
 
 ;; Raw key sequences matching what parse-key expects
 (def ^:const K-LEFT "\u001b[D")
@@ -10,6 +13,7 @@
 (def ^:const K-DOWN "\u001b[B")
 (def ^:const K-DEL "\u001b[3~")
 (def ^:const K-BS "\u007f")
+(def ^:const K-TAB "\t")
 (def ^:const K-ENTER "\r")
 (def ^:const K-ESC "\u001b")
 (def ^:const K-ALT-LEFT "\u001bb")
@@ -489,3 +493,125 @@
     (t/is (= #{1 2} (set (keys @(:paste-store e)))) "undo restores the original store")
     (t/is (= big1 (editor/editor-get-paste e 1)))
     (t/is (= big2 (editor/editor-get-paste e 2)))))
+
+;; ─── Autocomplete ──────────────────────────────────────────────────────────
+
+(def ^:private ac-test-dir (str (or (System/getenv "TMPDIR")
+                                    (System/getProperty "user.home"))
+                                "/kmet-editor-ac-test"))
+
+(defn- with-ac-files
+  [f]
+  (babashka.fs/delete-tree ac-test-dir)
+  (babashka.fs/create-dirs ac-test-dir)
+  (spit (str ac-test-dir "/alpha.txt") "a")
+  (spit (str ac-test-dir "/beta.txt") "b")
+  (try
+    (f)
+    (finally
+      (babashka.fs/delete-tree ac-test-dir))))
+
+(def ^:private ac-commands
+  [{:name "model" :description "Switch model" :argument-hint "<provider:model>"}
+   {:name "theme" :description "Switch theme"}
+   {:name "new" :description "Start a new session"}])
+
+(defn- make-ac-editor
+  []
+  (let [e (editor/make-editor)]
+    (core/editor-set-autocomplete-provider! e
+      (ac/make-combined-provider
+        :commands-fn (constantly ac-commands)
+        :base-path ac-test-dir))
+    e))
+
+(t/deftest test-autocomplete-tab-without-provider-inserts-spaces
+  (let [e (editor/make-editor)]
+    (core/handle-input e K-TAB)
+    (t/is (= "    " (editor/editor-get-text e)))))
+
+(t/deftest test-autocomplete-slash-opens-dropdown
+  (let [e (make-ac-editor)]
+    (core/handle-input e "/")
+    (t/is (= :regular @(:autocomplete-state e)))
+    (t/is (some? @(:autocomplete-list e)))
+    (t/is (= "/" @(:autocomplete-prefix e)))
+    (t/is (= "/" (editor/editor-get-text e)) "dropdown does not insert extra text")))
+
+(t/deftest test-autocomplete-plain-text-no-dropdown
+  (let [e (make-ac-editor)]
+    (doseq [c "hello"] (core/handle-input e (str c)))
+    (t/is (nil? @(:autocomplete-state e)))
+    (t/is (= "hello" (editor/editor-get-text e)))))
+
+(t/deftest test-autocomplete-letters-filter-dropdown
+  (let [e (make-ac-editor)]
+    (doseq [c "/th"] (core/handle-input e (str c)))
+    (t/is (= :regular @(:autocomplete-state e)))
+    (let [sl @(:autocomplete-list e)]
+      (t/is (= "theme" (:value (select-list/select-list-get-selected sl)))
+            "selection resolves from filtered items"))))
+
+(t/deftest test-autocomplete-tab-applies-selection
+  (let [e (make-ac-editor)]
+    (doseq [c "/mo"] (core/handle-input e (str c)))
+    (core/handle-input e K-TAB)
+    (t/is (= "/model " (editor/editor-get-text e)))
+    (t/is (nil? @(:autocomplete-state e)) "dropdown closes after apply")))
+
+(t/deftest test-autocomplete-enter-applies-and-submits-slash
+  (let [e (make-ac-editor)
+        submitted (atom nil)]
+    (core/editor-set-on-submit! e #(reset! submitted %))
+    (doseq [c "/mo"] (core/handle-input e (str c)))
+    (core/handle-input e K-ENTER)
+    (t/is (= "/model " @submitted) "slash completion applies then submits")
+    (t/is (nil? @(:autocomplete-state e)))))
+
+(t/deftest test-autocomplete-escape-cancels
+  (let [e (make-ac-editor)
+        submitted (atom :none)]
+    (core/editor-set-on-submit! e #(reset! submitted %))
+    (core/handle-input e "/")
+    (core/handle-input e K-ESC)
+    (t/is (nil? @(:autocomplete-state e)))
+    (t/is (= :none @submitted) "escape does not submit")))
+
+(t/deftest test-autocomplete-at-trigger-file-completion
+  (with-ac-files
+    (fn []
+      (let [e (make-ac-editor)]
+        (core/handle-input e "@")
+        (t/is (= :regular @(:autocomplete-state e)))
+        (core/handle-input e "b")
+        (t/is (= :regular @(:autocomplete-state e)))
+        (core/handle-input e K-TAB)
+        (t/is (= "@beta.txt " (editor/editor-get-text e)))))))
+
+(t/deftest test-autocomplete-tab-file-completion-single-match-applies
+  (with-ac-files
+    (fn []
+      (let [e (make-ac-editor)]
+        (doseq [c "alp"] (core/handle-input e (str c)))
+        (core/handle-input e K-TAB)
+        (t/is (= "alpha.txt" (editor/editor-get-text e))
+              "single file match applies immediately")
+        (t/is (nil? @(:autocomplete-state e)))))))
+
+(t/deftest test-autocomplete-up-down-navigates
+  (let [e (make-ac-editor)]
+    (core/handle-input e "/")
+    (let [sl @(:autocomplete-list e)]
+      (t/is (= 0 @(:selected-idx-atom sl)))
+      (core/handle-input e K-DOWN)
+      (t/is (= 1 @(:selected-idx-atom sl)))
+      (core/handle-input e K-UP)
+      (t/is (= 0 @(:selected-idx-atom sl))))))
+
+(t/deftest test-autocomplete-set-text-cancels
+  (let [e (make-ac-editor)]
+    (core/handle-input e "/")
+    (t/is (= :regular @(:autocomplete-state e)))
+    (core/editor-set-text! e "clear")
+    (t/is (nil? @(:autocomplete-state e)))
+    (t/is (= "clear" (editor/editor-get-text e)))))

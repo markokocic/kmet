@@ -112,8 +112,8 @@
                     padded (str truncated
                                (apply str (repeat (max 0 (- width (u/visible-width truncated))) \space)))]
                 (vswap! lines conj padded))))
-          ;; Scroll indicator
-          (when (< n (+ scroll-offset height))
+          ;; Scroll indicator — only when items overflow the visible area
+          (when (> n (+ scroll-offset height))
             (when (pos? n)
               (let [info (str "Showing " (count visible) " of " n " items")
                     scroll-line ((:scroll-info theme) info)]
