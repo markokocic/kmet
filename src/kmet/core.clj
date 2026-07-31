@@ -652,6 +652,10 @@ Be precise and concise in your responses.")
                                  (ui/tool-execution-set-images! comp images))
                                (reset! pending-tool-comp nil)
                                (tui/tui-request-render t)))
+                           :auto-retry-start
+                           ;; Clear partial streaming text so the retried stream starts fresh
+                           (ui/chat-history-clear-streaming! ch)
+                           (tui/tui-request-render t)
                            nil)))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 2

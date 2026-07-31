@@ -193,6 +193,14 @@
     (am/assistant-message-get-text comp)
     ""))
 
+(defn chat-history-clear-streaming!
+  "Clear text and thinking from the current streaming component.
+   Used on auto-retry so a retried stream starts from a blank slate."
+  [ch]
+  (when-let [comp @(:streaming-atom ch)]
+    (am/assistant-message-set-text! comp "")
+    (am/assistant-message-set-thinking! comp "")))
+
 ;; ─── Info message ─────────────────────────────────────────────────────────
 
 (defn- container-prepend-child

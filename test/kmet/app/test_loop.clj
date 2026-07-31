@@ -545,3 +545,277 @@
           (t/is (empty? @errors) "no error callback on cancel")
           (t/is (zero? @dones) "no done callback on cancel")
           (t/is (= :idle @(:status agent)) "status idle after cancel"))))))
+
+;; ─── Retry classification ─────────────────────────────────────────────────
+
+(t/deftest test-loop-retryable-error?
+  (t/is (loop/retryable-error? "rate limit exceeded"))
+  (t/is (loop/retryable-error? "429 Too Many Requests"))
+  (t/is (loop/retryable-error? "503 service unavailable"))
+  (t/is (loop/retryable-error? "Internal Server Error"))
+  (t/is (loop/retryable-error? "connection refused"))
+  (t/is (loop/retryable-error? "ECONNRESET: socket hang up"))
+  (t/is (loop/retryable-error? "Request timed out"))
+  (t/is (loop/retryable-error? "Provider returned error: upstream connect"))
+  (t/is (not (loop/retryable-error? "insufficient_quota")))
+  (t/is (not (loop/retryable-error? "Monthly usage limit reached")))
+  (t/is (not (loop/retryable-error? "GoUsageLimitError")))
+  (t/is (not (loop/retryable-error? "Invalid API key provided")))
+  (t/is (not (loop/retryable-error? nil)))
+  (t/is (not (loop/retryable-error? ""))))
+
+(t/deftest test-loop-context-overflow?
+  (t/is (loop/context-overflow? "prompt is too long: 213462 tokens > 200000 maximum"))
+  (t/is (loop/context-overflow? "This model's maximum context length is 128000 tokens"))
+  (t/is (loop/context-overflow? "Your input exceeds the context window of this model"))
+  (t/is (loop/context-overflow? "context_length_exceeded"))
+  (t/is (loop/context-overflow? "exceeded model token limit: 100000 (requested: 200000)"))
+  (t/is (not (loop/context-overflow? "rate limit exceeded")))
+  (t/is (not (loop/context-overflow? "Throttling error: Too many tokens, please wait")))
+  (t/is (not (loop/context-overflow? nil))))
+
+;; ─── Tool hooks (before/after tool-call) ─────────────────────────────────
+
+(defn- stub-llm-tool-then-text
+  "send-message stub: first call streams one tool call, subsequent calls a plain text reply."
+  [call-count]
+  (fn [opts]
+    (future
+      (if (= 1 (swap! call-count inc))
+        (do (when-let [on-tc (:on-tool-call opts)]
+              (on-tc {:id "tc1" :name "bash" :arguments "{}" :index 0}))
+            (when-let [on-done (:on-done opts)]
+              (on-done :tool-calls)))
+        (do (when-let [on-text (:on-text opts)]
+              (on-text "ok"))
+            (when-let [on-done (:on-done opts)]
+              (on-done :stop))))
+      :done)))
+
+(t/deftest test-loop-before-tool-call-blocks
+  (let [events (atom [])
+        executed (atom false)
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
+    (loop/set-before-tool-call! agent
+      (fn [_] {:block true :reason "Permission denied"}))
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message (stub-llm-tool-then-text (atom 0))
+                  tools/execute-tool (fn [_ _] (reset! executed true)
+                                       {:content "should not run" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (t/is (false? @executed) "blocked tool must not execute")
+    (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
+      (t/is (= "tc1" (:tool-call-id end)))
+      (t/is (true? (:is-error end)) "blocked tool result is an error")
+      (t/is (= "Permission denied" (:content (:result end)))))))
+
+(t/deftest test-loop-before-tool-call-hook-throws
+  (let [events (atom [])
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
+    (loop/set-before-tool-call! agent
+      (fn [_] (throw (ex-info "hook boom" {}))))
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message (stub-llm-tool-then-text (atom 0))
+                  tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
+      (t/is (true? (:is-error end)))
+      (t/is (.contains (:content (:result end)) "before-tool-call hook error")))))
+
+(t/deftest test-loop-after-tool-call-rewrites
+  (let [events (atom [])
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
+    (loop/set-after-tool-call! agent
+      (fn [{:keys [result]}]
+        {:content (str (:content result) " [sanitized]")}))
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message (stub-llm-tool-then-text (atom 0))
+                  tools/execute-tool (fn [_ _] {:content "secret-key=abc" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
+      (t/is (= "secret-key=abc [sanitized]" (:content (:result end))))
+      (t/is (false? (:is-error end)) "rewrite preserves is-error unless overridden"))))
+
+(t/deftest test-loop-after-tool-call-sets-error
+  (let [events (atom [])
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
+    (loop/set-after-tool-call! agent
+      (fn [{:keys [result]}]
+        {:content (:content result) :is-error true}))
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message (stub-llm-tool-then-text (atom 0))
+                  tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
+      (t/is (true? (:is-error end)) "after hook can mark a result as error"))))
+
+(t/deftest test-loop-after-tool-call-hook-throws
+  (let [events (atom [])
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
+    (loop/set-after-tool-call! agent
+      (fn [_] (throw (ex-info "hook boom" {}))))
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message (stub-llm-tool-then-text (atom 0))
+                  tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
+      (t/is (true? (:is-error end)))
+      (t/is (.contains (:content (:result end)) "after-tool-call hook error")))))
+
+;; ─── Auto-retry ───────────────────────────────────────────────────────────
+
+(t/deftest test-loop-auto-retry-succeeds
+  (let [events (atom [])
+        call-count (atom 0)
+        agent (loop/make-agent-state
+                :on-event (fn [e] (swap! events conj e))
+                :max-retries 2
+                :base-delay-ms 1)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (case (swap! call-count inc)
+                        1 (when-let [on-error (:on-error opts)]
+                            (on-error "upstream connect error"))
+                        2 (when-let [on-error (:on-error opts)]
+                            (on-error "502 Bad Gateway"))
+                        (do (when-let [on-text (:on-text opts)]
+                              (on-text "recovered"))
+                            (when-let [on-done (:on-done opts)]
+                              (on-done :stop))))
+                      :done))]
+      @(loop/run-agent-turn agent {:message "hi" :on-done (fn [_]) :on-error (fn [_])}))
+    (let [starts (filter #(= :auto-retry-start (:type %)) @events)
+          ends (filter #(= :auto-retry-end (:type %)) @events)]
+      (t/is (= 2 (count starts)) "one retry start per transient failure")
+      (t/is (= 1 (:attempt (first starts))))
+      (t/is (= 2 (:attempt (second starts))))
+      (t/is (= 2 (:max-attempts (first starts))))
+      (t/is (pos? (:delay-ms (first starts))) "backoff delay reported")
+      (t/is (= 1 (count ends)))
+      (t/is (true? (:success (first ends))))
+      (t/is (= 2 (:attempt (first ends)))))
+    (t/is (= :idle (loop/get-status agent)))
+    ;; The retried stream's text is the final assistant message
+    (t/is (some #(and (= :message-end (:type %))
+                      (= "recovered" (get-in % [:message :content 0 :text])))
+                @events))))
+
+(t/deftest test-loop-auto-retry-exhausted
+  (let [events (atom [])
+        errors (atom [])
+        agent (loop/make-agent-state
+                :on-event (fn [e] (swap! events conj e))
+                :max-retries 1
+                :base-delay-ms 1)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (when-let [on-error (:on-error opts)]
+                        (on-error "503 service unavailable"))
+                      :done))]
+      @(loop/run-agent-turn agent {:message "hi" :on-error (fn [e] (swap! errors conj e))}))
+    (t/is (= 1 (count @errors)) "only the terminal error surfaces via on-error")
+    (let [ends (filter #(= :auto-retry-end (:type %)) @events)]
+      (t/is (= 1 (count ends)))
+      (t/is (false? (:success (first ends))))
+      (t/is (= 1 (:attempt (first ends))))
+      (t/is (= "503 service unavailable" (:final-error (first ends)))))
+    (t/is (= :error (loop/get-status agent)))
+    (t/is (some #(= :error (:type %)) @events) "terminal :error event emitted")))
+
+(t/deftest test-loop-no-retry-on-quota-error
+  (let [events (atom [])
+        errors (atom [])
+        agent (loop/make-agent-state
+                :on-event (fn [e] (swap! events conj e))
+                :max-retries 3
+                :base-delay-ms 1)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (when-let [on-error (:on-error opts)]
+                        (on-error "insufficient_quota"))
+                      :done))]
+      @(loop/run-agent-turn agent {:message "hi" :on-error (fn [e] (swap! errors conj e))}))
+    (t/is (= 1 (count @errors)) "quota errors are never retried")
+    (t/is (not-any? #(= :auto-retry-start (:type %)) @events))))
+
+(t/deftest test-loop-no-retry-on-context-overflow
+  (let [events (atom [])
+        agent (loop/make-agent-state
+                :on-event (fn [e] (swap! events conj e))
+                :max-retries 3
+                :base-delay-ms 1)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (when-let [on-error (:on-error opts)]
+                        (on-error "prompt is too long: 213462 tokens > 200000 maximum"))
+                      :done))]
+      @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])}))
+    (t/is (not-any? #(= :auto-retry-start (:type %)) @events)
+          "overflow is not retried (compaction handles it)")))
+
+(t/deftest test-loop-retry-cancel-during-backoff
+  (let [events (atom [])
+        agent (loop/make-agent-state
+                :on-event (fn [e] (swap! events conj e))
+                :max-retries 3
+                :base-delay-ms 5000)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (when-let [on-error (:on-error opts)]
+                        (on-error "connection lost"))
+                      :done))]
+      (let [fut (loop/run-agent-turn agent {:message "hi" :on-error (fn [_])})]
+        (Thread/sleep 200)
+        (loop/cancel-turn agent)
+        @fut))
+    (let [ends (filter #(= :auto-retry-end (:type %)) @events)]
+      (t/is (= 1 (count ends)))
+      (t/is (false? (:success (first ends))))
+      (t/is (= "Retry cancelled" (:final-error (first ends)))))
+    (t/is (= :idle (loop/get-status agent)) "run settles idle after cancel during backoff")))
+
+(t/deftest test-loop-retry-resets-count-on-success-then-error
+  (let [events (atom [])
+        call-count (atom 0)
+        agent (loop/make-agent-state
+                :on-event (fn [e] (swap! events conj e))
+                :max-retries 1
+                :base-delay-ms 500)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (case (swap! call-count inc)
+                        1 (when-let [on-error (:on-error opts)]
+                            (on-error "timeout"))
+                        2 (do (when-let [on-text (:on-text opts)]
+                                (on-text "first success"))
+                            (when-let [on-done (:on-done opts)]
+                              (on-done :stop)))
+                        3 (when-let [on-error (:on-error opts)]
+                            (on-error "503 service unavailable"))
+                        (when-let [on-error (:on-error opts)]
+                          (on-error "503 service unavailable")))
+                      :done))]
+      ;; Turn 1 fails once, retries after 500ms backoff, succeeds.
+      ;; Queue a follow-up during the backoff so the run continues into turn 2.
+      (let [fut (loop/run-agent-turn agent {:message "hi" :on-error (fn [_])})]
+        (Thread/sleep 100)
+        (loop/follow-up! agent "second")
+        @fut))
+    (let [ends (filter #(= :auto-retry-end (:type %)) @events)]
+      ;; First turn: retry succeeded (1 end, success). Second turn: 503 is
+      ;; retryable but budget is fresh — one more retry → exhausted.
+      (t/is (= 2 (count ends)))
+      (t/is (true? (:success (first ends))))
+      (t/is (false? (:success (second ends)))))))

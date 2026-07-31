@@ -13,8 +13,20 @@
    :one-at-a-time takes one. Applied per queue.
 
    Emits lifecycle events (see kmet.app.events) to the :on-event callback
-   (UI) and to kmet.app.skills/emit-event! (extension system)."
+   (UI) and to kmet.app.skills/emit-event! (extension system).
+
+   Auto-retry (pi: agent-session auto-retry): transient LLM errors are retried
+   with exponential backoff (base-delay-ms * 2^(attempt-1)), up to max-retries.
+   Quota/billing errors and context overflow are never retried. Retry emits
+   :auto-retry-start / :auto-retry-end events; cancellation during backoff
+   aborts the run quietly.
+
+   Tool hooks (pi: beforeToolCall / afterToolCall): registered via
+   set-before-tool-call! / set-after-tool-call!. The before hook can block
+   execution ({:block true :reason ...}); the after hook can rewrite the
+   result (:content / :is-error)."
   (:require [cheshire.core :as json]
+            [clojure.string :as str]
             [kmet.app.llm :as llm]
             [kmet.app.tools.core :as tools]
             [kmet.app.session :as session]
@@ -39,17 +51,26 @@
                        follow-up     ;; atom of vector of queued follow-up messages
                        steering-mode ;; :all | :one-at-a-time (drain mode)
                        follow-up-mode ;; :all | :one-at-a-time (drain mode)
-                       active-call]) ;; atom of in-flight LLM promise (for cancel)
+                       active-call      ;; atom of in-flight LLM promise (for cancel)
+                       max-retries      ;; int: max auto-retry attempts on transient LLM errors (pi default 3)
+                       base-delay-ms    ;; int: exponential backoff base in ms (pi default 2000)
+                       retry-count      ;; atom of int: retries performed for the in-flight LLM call
+                       before-tool-call ;; atom of (fn [ctx]) → {:block true :reason} | nil
+                       after-tool-call]) ;; atom of (fn [ctx]) → override map | nil
 
 (defn make-agent-state
   "Create a new agent state.
    opts: :model, :provider, :system, :session, :on-event, :compact-threshold,
-         :thinking, :base-url, :api-type, :steering-mode, :follow-up-mode"
-  [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type steering-mode follow-up-mode]
+         :thinking, :base-url, :api-type, :steering-mode, :follow-up-mode,
+         :max-retries (default 3), :base-delay-ms (default 2000),
+         :before-tool-call, :after-tool-call"
+  [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call]
       :or {provider :openai
            thinking :off
            steering-mode :all
            follow-up-mode :all
+           max-retries 3
+           base-delay-ms 2000
            system "You are kmet, a minimal coding agent. Help the user with their tasks.
 Use the available tools to read, write, edit files, and execute commands.
 Be precise and concise in your responses."}}]
@@ -69,7 +90,12 @@ Be precise and concise in your responses."}}]
                     :follow-up (atom [])
                     :steering-mode steering-mode
                     :follow-up-mode follow-up-mode
-                    :active-call (atom nil)}))
+                    :active-call (atom nil)
+                    :max-retries max-retries
+                    :base-delay-ms base-delay-ms
+                    :retry-count (atom 0)
+                    :before-tool-call (atom before-tool-call)
+                    :after-tool-call (atom after-tool-call)}))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -97,6 +123,124 @@ Be precise and concise in your responses."}}]
                       :content (:content result)}]
            :is-error (:is-error result false)}
     (:images result) (assoc :images (:images result))))
+
+;; ─── Error classification (auto-retry) ─────────────────────────────────────
+
+(def ^:private non-retryable-error-regex
+  "Combined regex for quota/billing/account-limit error messages — never retried.
+   Mirrors pi's NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN
+   (packages/ai/src/utils/retry.ts)."
+  (re-pattern (str "(?i)"
+                   (str/join "|"
+                             ["GoUsageLimitError"
+                              "FreeUsageLimitError"
+                              "Monthly usage limit reached"
+                              "available balance"
+                              "insufficient_quota"
+                              "out of budget"
+                              "quota exceeded"
+                              "billing"]))))
+
+(def ^:private retryable-error-regex
+  "Combined regex for transient provider/transport error messages — retryable.
+   Mirrors pi's RETRYABLE_PROVIDER_ERROR_PATTERN (packages/ai/src/utils/retry.ts)."
+  (re-pattern (str "(?i)"
+                   (str/join "|"
+                             ["overloaded"
+                              "rate.?limit"
+                              "too many requests"
+                              "429" "500" "502" "503" "504" "524"
+                              "service.?unavailable"
+                              "server.?error"
+                              "internal.?error"
+                              "provider.?returned.?error"
+                              "network.?error"
+                              "connection.?error"
+                              "connection.?refused"
+                              "connection.?lost"
+                              "other side closed"
+                              "fetch failed"
+                              "getaddrinfo"
+                              "ENOTFOUND"
+                              "EAI_AGAIN"
+                              "upstream.?connect"
+                              "reset before headers"
+                              "socket hang up"
+                              "socket connection was closed"
+                              "timed? out"
+                              "timeout"
+                              "terminated"
+                              "websocket.?closed"
+                              "websocket.?error"
+                              "ended without"
+                              "stream ended before message_stop"
+                              "stream ended before a terminal response event"
+                              "http2 request did not get a response"
+                              "retry delay"
+                              "you can retry your request"
+                              "try your request again"
+                              "please retry your request"
+                              "ResourceExhausted"]))))
+
+(def ^:private overflow-error-regex
+  "Combined regex for context-window overflow error messages.
+   Mirrors pi's OVERFLOW_PATTERNS (packages/ai/src/utils/overflow.ts)."
+  (re-pattern (str "(?i)"
+                   (str/join "|"
+                             ["prompt is too long"
+                              "request_too_large"
+                              "input is too long for requested model"
+                              "exceeds the context window"
+                              "exceeds (?:the )?(?:model'?s )?maximum context length(?: of [\\d,]+ tokens?|\\s*\\([\\d,]+\\))"
+                              "input token count.*exceeds the maximum"
+                              "maximum prompt length is \\d+"
+                              "reduce the length of the messages"
+                              "maximum context length is \\d+ tokens"
+                              "exceeds (?:the )?maximum allowed input length of [\\d,]+ tokens?"
+                              "input \\(\\d+ tokens\\) is longer than the model'?s context length \\(\\d+ tokens\\)"
+                              "exceeds the limit of \\d+"
+                              "exceeds the available context size"
+                              "greater than the context length"
+                              "context window exceeds limit"
+                              "exceeded model token limit"
+                              "too large for model with \\d+ maximum context length"
+                              "prompt has [\\d,]+ tokens?, but the configured context size is [\\d,]+ tokens?"
+                              "model_context_window_exceeded"
+                              "prompt too long; exceeded (?:max )?context length"
+                              "range of input length should be"
+                              "context[_ ]length[_ ]exceeded"
+                              "too many tokens"
+                              "token limit exceeded"
+                              "^4(?:00|13)\\s*(?:status code)?\\s*\\(no body\\)"]))))
+
+(def ^:private non-overflow-error-regex
+  "Combined regex for errors that look like overflow but are actually throttling
+   (e.g. Bedrock 'Throttling error: Too many tokens'). Mirrors pi's
+   NON_OVERFLOW_PATTERNS."
+  (re-pattern (str "(?i)"
+                   (str/join "|"
+                             ["^(Throttling error|Service unavailable):"
+                              "rate limit"
+                              "too many requests"]))))
+
+(defn retryable-error?
+  "True if an error message looks like a transient provider/transport failure
+   worth retrying (rate limit, 5xx, connection loss, timeout, ...).
+   Quota/billing/account-limit errors are never retried.
+   Mirrors pi's isRetryableAssistantError."
+  [error-message]
+  (and (string? error-message)
+       (not (re-find non-retryable-error-regex error-message))
+       (re-find retryable-error-regex error-message)))
+
+(defn context-overflow?
+  "True if an error message indicates a context-window overflow. Overflow is
+   NOT auto-retried (it needs compaction) — mirrors pi's isContextOverflow
+   error-message case."
+  [error-message]
+  (and (string? error-message)
+       (not (re-find non-overflow-error-regex error-message))
+       (re-find overflow-error-regex error-message)))
 
 ;; ─── Queue helpers ─────────────────────────────────────────────────────────
 
@@ -135,35 +279,88 @@ Be precise and concise in your responses."}}]
     (emit agent {:type :message-end :message assistant-msg})
     assistant-msg))
 
+(defn- run-tool-call
+  "Execute one tool call, polling every 200ms for progress pings.
+   Returns the result map {:content ... :is-error ...}."
+  [agent tc-id tc-name tc-args]
+  (let [f (future (tools/execute-tool tc-name tc-args))]
+    (loop []
+      (let [v (deref f 200 :pending)]
+        (if (= :pending v)
+          (do (emit agent {:type :tool-execution-update :tool-call-id tc-id})
+              (recur))
+          v)))))
+
+(defn- before-tool-hook-result
+  "Run the before-tool-call hook if registered (pi: beforeToolCall).
+   Returns {:block true :reason ...} to block execution, or nil to allow.
+   A throwing hook blocks with the error message as reason."
+  [agent tc-id tc-name tc-args assistant-msg]
+  (when-let [hook @(:before-tool-call agent)]
+    (try
+      (hook {:assistant-message assistant-msg
+             :tool-call-id tc-id
+             :tool-name tc-name
+             :args tc-args})
+      (catch Exception e
+        {:block true
+         :reason (str "before-tool-call hook error: " (.getMessage e))}))))
+
+(defn- after-tool-hook-result
+  "Run the after-tool-call hook if registered (pi: afterToolCall), merging any
+   returned :content / :is-error overrides into the result. A throwing hook
+   turns the result into an error."
+  [agent tc-id tc-name tc-args result assistant-msg]
+  (if-let [hook @(:after-tool-call agent)]
+    (try
+      (let [hook-result (hook {:assistant-message assistant-msg
+                               :tool-call-id tc-id
+                               :tool-name tc-name
+                               :args tc-args
+                               :result result
+                               :is-error (:is-error result false)})]
+        (if hook-result
+          (cond-> result
+            (:content hook-result) (assoc :content (:content hook-result))
+            (contains? hook-result :is-error) (assoc :is-error (:is-error hook-result)))
+          result))
+      (catch Exception e
+        {:content (str "after-tool-call hook error: " (.getMessage e))
+         :is-error true}))
+    result))
+
 (defn- execute-tool-calls!
   "Execute tool calls sequentially, emitting execution events and appending
-   results to context and session. Returns the vector of result maps."
-  [agent tool-calls]
+   results to context and session. Runs before-tool-call/after-tool-call hooks
+   when registered (see set-before-tool-call! / set-after-tool-call!).
+   Returns the vector of result maps."
+  [agent tool-calls assistant-msg]
   (let [tool-results (atom [])]
     (doseq [tc tool-calls]
-      (emit agent {:type :tool-execution-start
-                   :tool-call-id (:id tc)
-                   :tool-name (:name tc)
-                   :args (:arguments tc)})
-      (let [f (future (tools/execute-tool (:name tc) (:arguments tc)))
-            result (loop []
-                     (let [v (deref f 200 :pending)]
-                       (if (= :pending v)
-                         (do (emit agent {:type :tool-execution-update
-                                          :tool-call-id (:id tc)})
-                             (recur))
-                         v)))
-            result-msg (tool-result-message (:id tc) (:name tc) result)]
-        (swap! (:messages agent) conj result-msg)
-        (when (:session agent)
-          (session/append-entry (:session agent) result-msg))
-        (swap! tool-results conj result)
-        (emit agent {:type :tool-execution-end
-                     :tool-call-id (:id tc)
-                     :tool-name (:name tc)
-                     :args (:arguments tc)
-                     :result result
-                     :is-error (:is-error result false)})))
+      (let [tc-id (:id tc)
+            tc-name (:name tc)
+            tc-args (:arguments tc)]
+        (emit agent {:type :tool-execution-start
+                     :tool-call-id tc-id
+                     :tool-name tc-name
+                     :args tc-args})
+        (let [before (before-tool-hook-result agent tc-id tc-name tc-args assistant-msg)
+              result (if (:block before)
+                       {:content (or (:reason before) "Tool execution was blocked")
+                        :is-error true}
+                       (run-tool-call agent tc-id tc-name tc-args))
+              result (after-tool-hook-result agent tc-id tc-name tc-args result assistant-msg)
+              result-msg (tool-result-message tc-id tc-name result)]
+          (swap! (:messages agent) conj result-msg)
+          (when (:session agent)
+            (session/append-entry (:session agent) result-msg))
+          (swap! tool-results conj result)
+          (emit agent {:type :tool-execution-end
+                       :tool-call-id tc-id
+                       :tool-name tc-name
+                       :args tc-args
+                       :result result
+                       :is-error (:is-error result false)}))))
     @tool-results))
 
 ;; ─── Tool call accumulator ─────────────────────────────────────────────────
@@ -293,6 +490,20 @@ Be precise and concise in your responses."}}]
 
 ;; ─── Agent run ─────────────────────────────────────────────────────────────
 
+(defn- backoff-sleep!
+  "Sleep delay-ms in 100ms increments, aborting early if the cancel signal is
+   set. Returns true if the full delay elapsed, false if cancelled."
+  [agent delay-ms]
+  (let [end-ms (+ (System/currentTimeMillis) delay-ms)]
+    (loop []
+      (if @(:signal agent)
+        false
+        (let [remaining (- end-ms (System/currentTimeMillis))]
+          (if (<= remaining 0)
+            true
+            (do (Thread/sleep (min 100 remaining))
+                (recur))))))))
+
 (defn run-agent-turn
   "Run the agent loop until it settles.
    agent    — AgentState record
@@ -394,32 +605,76 @@ Be precise and concise in your responses."}}]
                                                 (agent-end "LLM call timed out after 120s")
                                                 {:aborted true})
                                             (if (:error result)
-                                              (do (when on-error (on-error (:error result)))
-                                                  (reset! (:status agent) :error)
-                                                  (emit agent {:type :error :message (:error result)})
-                                                  (agent-end (:error result))
-                                                  {:aborted true})
-                                              (let [text (:text result)
-                                                    tool-calls (:tool-calls result)]
-                                                (if (seq tool-calls)
-                                                  ;; Execute tool calls
-                                                  (let [assistant-msg (add-assistant-message! agent text tool-calls)]
-                                                    (reset! (:status agent) :executing)
-                                                    (emit agent {:type :status :status :executing
-                                                                 :tool-calls tool-calls})
-                                                    (let [tool-results (execute-tool-calls! agent tool-calls)]
-                                                      (reset! (:status agent) :thinking)
-                                                      (emit agent {:type :status :status :thinking})
+                                              (let [err (:error result)
+                                                    max-retries (:max-retries agent)]
+                                                (if (and (<= (inc @(:retry-count agent)) max-retries)
+                                                         (not (context-overflow? err))
+                                                         (retryable-error? err))
+                                                  ;; Auto-retry with exponential backoff (pi: _prepareRetry)
+                                                  (let [attempt (inc @(:retry-count agent))
+                                                        delay-ms (* (:base-delay-ms agent)
+                                                                    (long (Math/pow 2 (dec attempt))))]
+                                                    (reset! (:retry-count agent) attempt)
+                                                    (emit agent {:type :auto-retry-start
+                                                                 :attempt attempt
+                                                                 :max-attempts max-retries
+                                                                 :delay-ms delay-ms
+                                                                 :error-message err})
+                                                    (if (backoff-sleep! agent delay-ms)
+                                                      ;; Same turn, same context — no new user message
+                                                      (recur t prev-tool-calls must-run)
+                                                      ;; Cancelled during backoff
+                                                      (do (emit agent {:type :auto-retry-end
+                                                                       :success false
+                                                                       :attempt attempt
+                                                                       :final-error "Retry cancelled"})
+                                                          (reset! (:retry-count agent) 0)
+                                                          (reset! (:status agent) :idle)
+                                                          (emit agent {:type :status :status :idle})
+                                                          (emit agent {:type :agent-end
+                                                                       :messages (subvec @(:messages agent) msg-count-before)})
+                                                          {:aborted true})))
+                                                  ;; Terminal error (non-retryable or retries exhausted)
+                                                  (do (when (pos? @(:retry-count agent))
+                                                        (let [n @(:retry-count agent)]
+                                                          (emit agent {:type :auto-retry-end
+                                                                       :success false
+                                                                       :attempt n
+                                                                       :final-error err})
+                                                          (reset! (:retry-count agent) 0)))
+                                                      (when on-error (on-error err))
+                                                      (reset! (:status agent) :error)
+                                                      (emit agent {:type :error :message err})
+                                                      (agent-end err)
+                                                      {:aborted true})))
+                                              (let [retried @(:retry-count agent)]
+                                                ;; A retried LLM call succeeded — reset the budget
+                                                (when (pos? retried)
+                                                  (reset! (:retry-count agent) 0)
+                                                  (emit agent {:type :auto-retry-end
+                                                               :success true
+                                                               :attempt retried}))
+                                                (let [text (:text result)
+                                                      tool-calls (:tool-calls result)]
+                                                  (if (seq tool-calls)
+                                                    ;; Execute tool calls
+                                                    (let [assistant-msg (add-assistant-message! agent text tool-calls)]
+                                                      (reset! (:status agent) :executing)
+                                                      (emit agent {:type :status :status :executing
+                                                                   :tool-calls tool-calls})
+                                                      (let [tool-results (execute-tool-calls! agent tool-calls assistant-msg)]
+                                                        (reset! (:status agent) :thinking)
+                                                        (emit agent {:type :status :status :thinking})
+                                                        (emit agent {:type :turn-end
+                                                                     :message assistant-msg
+                                                                     :tool-results tool-results})
+                                                        (recur (inc t) tool-calls false)))
+                                                    ;; Final response
+                                                    (let [assistant-msg (add-assistant-message! agent text nil)]
                                                       (emit agent {:type :turn-end
                                                                    :message assistant-msg
-                                                                   :tool-results tool-results})
-                                                      (recur (inc t) tool-calls false)))
-                                                  ;; Final response
-                                                  (let [assistant-msg (add-assistant-message! agent text nil)]
-                                                    (emit agent {:type :turn-end
-                                                                 :message assistant-msg
-                                                                 :tool-results []})
-                                                    (recur (inc t) [] false))))))))))))]
+                                                                   :tool-results []})
+                                                      (recur (inc t) [] false)))))))))))))]
                     (if (:aborted inner)
                       nil ;; aborted (error or cancel) — exit without follow-ups
                       (let [turn' (:settled inner)]
@@ -465,6 +720,21 @@ Be precise and concise in your responses."}}]
 
 (defn set-system-prompt! [agent prompt]
   (reset! (:system agent) prompt))
+
+(defn set-before-tool-call!
+  "Register a before-tool-call hook (pi: beforeToolCall).
+   Hook: (fn [{:keys [assistant-message tool-call-id tool-name args]}])
+   Return {:block true :reason \"...\"} to prevent execution, or nil to allow."
+  [agent hook]
+  (reset! (:before-tool-call agent) hook))
+
+(defn set-after-tool-call!
+  "Register an after-tool-call hook (pi: afterToolCall).
+   Hook: (fn [{:keys [assistant-message tool-call-id tool-name args result is-error]}])
+   Return a map with :content and/or :is-error to rewrite the result, or nil
+   to keep it unchanged."
+  [agent hook]
+  (reset! (:after-tool-call agent) hook))
 
 (defn set-model! [agent model]
   (reset! (:model agent) model))

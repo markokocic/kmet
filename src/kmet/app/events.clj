@@ -66,22 +66,24 @@
    "Fired when the user runs a bash command (!/!!).
     Payload: :command, :exclude-from-context?, :cwd."
 
-   ;; ─── Reserved for future phases ───────────────────────────────────────
+   ;; ─── Queue events (emitted by loop.clj) ──────────────────────────────
    :queue-update
    "Fired when steering/follow-up queues change.
     Payload: :steering, :follow-up."
 
+   ;; ─── Reserved for future phases ───────────────────────────────────────
    :model-select
    "Model was changed. Reserved for Phase 3.
     Payload: :model, :previous-model, :source."
 
    :auto-retry-start
-   "Retry about to begin. Reserved for Phase 2.
-    Payload: :attempt."
+   "Fired before a retry attempt's backoff sleep when a transient LLM error
+    is detected (pi: auto_retry_start).
+    Payload: :attempt, :max-attempts, :delay-ms, :error-message."
 
    :auto-retry-end
-   "Retry finished. Reserved for Phase 2.
-    Payload: :success, :attempt, :final-error."
+   "Fired when retries finish — success, exhausted, or cancelled.
+    Payload: :success, :attempt, :final-error (on failure)."
 
    :agent-settled
    "Agent is fully idle. Reserved."})
