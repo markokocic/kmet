@@ -518,23 +518,36 @@
         
         ;; Regular message — agent loop handles session persistence
         :else
-        (when-not @(:running-turn? cs)
-          (reset! (:running-turn? cs) true)
-          (ui/status-indicator-start! (:status-indicator cs))
-          (start-anim-timer! cs)
-          (debug/log "user submitted: " trimmed)
-          (ui/chat-history-add-message! (:chat-history cs)
-            {:role :user :content trimmed})
-          ;; Create streaming placeholder for incoming LLM response.
-          (ui/chat-history-start-streaming! (:chat-history cs))
-          (update-header-footer! cs)
-          (tui/tui-request-render (:tui cs))
-          (agent/run-agent-turn (:agent-state cs)
-            {:message trimmed
-             :on-text #(on-agent-text cs %)
-             :on-thinking #(on-agent-thinking cs %)
-             :on-done (fn [_] (on-agent-done cs))
-             :on-error #(on-agent-error cs %)}))))))
+        (if @(:running-turn? cs)
+          ;; Agent running: steer the current run (pi: steeringQueue).
+          ;; Finalize the in-progress assistant message first so the steered
+          ;; message lands below it; the next turn streams into a new message.
+          (do
+            (debug/log "user steered: " trimmed)
+            (ui/chat-history-finalize-streaming! (:chat-history cs))
+            (ui/chat-history-finalize-thinking! (:chat-history cs))
+            (ui/chat-history-add-message! (:chat-history cs)
+              {:role :user :content trimmed})
+            (agent/steer! (:agent-state cs) trimmed)
+            (update-header-footer! cs)
+            (tui/tui-request-render (:tui cs)))
+          (do
+            (reset! (:running-turn? cs) true)
+            (ui/status-indicator-start! (:status-indicator cs))
+            (start-anim-timer! cs)
+            (debug/log "user submitted: " trimmed)
+            (ui/chat-history-add-message! (:chat-history cs)
+              {:role :user :content trimmed})
+            ;; Create streaming placeholder for incoming LLM response.
+            (ui/chat-history-start-streaming! (:chat-history cs))
+            (update-header-footer! cs)
+            (tui/tui-request-render (:tui cs))
+            (agent/run-agent-turn (:agent-state cs)
+              {:message trimmed
+               :on-text #(on-agent-text cs %)
+               :on-thinking #(on-agent-thinking cs %)
+               :on-done (fn [_] (on-agent-done cs))
+               :on-error #(on-agent-error cs %)})))))))
 
 (defn- handle-cancel [cs]
   "Cancel the current agent turn or bash command."
@@ -604,7 +617,7 @@ Be precise and concise in your responses.")
              :thinking (:thinking config :off)
              :on-event (fn [evt]
                          (case (:type evt)
-                           :tool-start
+                           :tool-execution-start
                            ;; Pi: create pending component once, update in place
                            (let [msg {:role :tool
                                       :name (:name evt)
@@ -617,17 +630,17 @@ Be precise and concise in your responses.")
                                (ui/tool-execution-set-request-render-fn! comp
                                  #(tui/tui-request-render t))
                                ;; Store tool call ID for correlation
-                               (ui/tool-execution-set-tool-call-id! comp (:id evt))
+                               (ui/tool-execution-set-tool-call-id! comp (:tool-call-id evt))
                                ;; Args are complete when received (kmet: no streaming args)
                                (ui/tool-execution-set-args-complete! comp)
                                ;; Mark execution started so pending bg + timer activate now
                                (ui/tool-execution-mark-execution-started! comp)
                                (reset! pending-tool-comp comp))
                              (tui/tui-request-render t))
-                           :tool-progress
+                           :tool-execution-update
                            ;; Pi: periodic ping updates elapsed timer via component's render
                            (tui/tui-request-render t)
-                           :tool-result
+                           :tool-execution-end
                            ;; Pi: update the existing component in place
                            (when-let [comp @pending-tool-comp]
                              (let [result (:result evt)]
@@ -639,9 +652,7 @@ Be precise and concise in your responses.")
                                  (ui/tool-execution-set-images! comp images))
                                (reset! pending-tool-comp nil)
                                (tui/tui-request-render t)))
-                           nil)
-                         ;; Forward events to extension system
-                         (skills/emit-event! evt)))
+                           nil)))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 2
             :border-fn (fn [c] (th/dim c)))

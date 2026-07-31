@@ -14,7 +14,9 @@
 
 (defn on-event
   "Register a callback for an event type.
-   event-type — keyword :session-start, :tool-call, :tool-result, :message-start, :status
+   event-type — keyword from kmet.app.events/event-types
+                (e.g. :agent-start, :turn-start, :message-update,
+                 :tool-execution-start, :user-bash, :status)
    callback   — (fn [event-map])
    Returns a deregister function."
   [event-type callback]

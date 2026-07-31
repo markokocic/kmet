@@ -1,11 +1,24 @@
 (ns kmet.app.loop
   "Agent conversation loop — orchestrates user input, LLM calls, and tool execution.
-   State machine: IDLE → THINKING → EXECUTING → THINKING → ... → IDLE"
-  (:require [clojure.string :as str]
-            [cheshire.core :as json]
+   State machine: IDLE → THINKING → EXECUTING → THINKING → ... → IDLE
+
+   Queues (pi: steeringQueue / followUpQueue):
+     :steering  — user messages injected mid-run. Polled between turns (after
+                   tool results, before the next LLM call). Use steer!.
+     :follow-up — user messages processed after the current run settles.
+                   Polled when the inner loop drains; the run continues with
+                   them. Use follow-up!.
+   :steering-mode / :follow-up-mode (:all default) control how many queued
+   messages are drained per poll cycle: :all takes everything,
+   :one-at-a-time takes one. Applied per queue.
+
+   Emits lifecycle events (see kmet.app.events) to the :on-event callback
+   (UI) and to kmet.app.skills/emit-event! (extension system)."
+  (:require [cheshire.core :as json]
             [kmet.app.llm :as llm]
             [kmet.app.tools.core :as tools]
             [kmet.app.session :as session]
+            [kmet.app.skills :as skills]
             [kmet.config :as cfg]))
 
 ;; ─── Agent state ───────────────────────────────────────────────────────────
@@ -21,14 +34,22 @@
                        thinking      ;; :off :low :medium :high :max
                        on-event      ;; callback for state updates
                        base-url      ;; custom base URL (for OpenAI-compatible providers)
-                       api-type])    ;; :openai or :anthropic
+                       api-type      ;; :openai or :anthropic
+                       steering      ;; atom of vector of queued steer messages
+                       follow-up     ;; atom of vector of queued follow-up messages
+                       steering-mode ;; :all | :one-at-a-time (drain mode)
+                       follow-up-mode ;; :all | :one-at-a-time (drain mode)
+                       active-call]) ;; atom of in-flight LLM promise (for cancel)
 
 (defn make-agent-state
   "Create a new agent state.
-   opts: :model, :provider, :system, :session, :on-event, :compact-threshold, :thinking, :base-url, :api-type"
-  [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type]
+   opts: :model, :provider, :system, :session, :on-event, :compact-threshold,
+         :thinking, :base-url, :api-type, :steering-mode, :follow-up-mode"
+  [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type steering-mode follow-up-mode]
       :or {provider :openai
            thinking :off
+           steering-mode :all
+           follow-up-mode :all
            system "You are kmet, a minimal coding agent. Help the user with their tasks.
 Use the available tools to read, write, edit files, and execute commands.
 Be precise and concise in your responses."}}]
@@ -43,13 +64,23 @@ Be precise and concise in your responses."}}]
                     :thinking (atom thinking)
                     :on-event on-event
                     :base-url base-url
-                    :api-type api-type}))
+                    :api-type api-type
+                    :steering (atom [])
+                    :follow-up (atom [])
+                    :steering-mode steering-mode
+                    :follow-up-mode follow-up-mode
+                    :active-call (atom nil)}))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
-(defn- emit [agent event]
+(defn- emit
+  "Route an event to the UI callback (:on-event) and the extension system
+   (skills/emit-event!). Extension listeners run inside emit-event!, which
+   catches per-listener exceptions so a broken extension can't kill the loop."
+  [agent event]
   (when-let [cb (:on-event agent)]
-    (cb event)))
+    (cb event))
+  (skills/emit-event! event))
 
 (defn- user-message [text]
   {:role :user :content [{:type :text :text text}]})
@@ -66,6 +97,74 @@ Be precise and concise in your responses."}}]
                       :content (:content result)}]
            :is-error (:is-error result false)}
     (:images result) (assoc :images (:images result))))
+
+;; ─── Queue helpers ─────────────────────────────────────────────────────────
+
+(defn- drain-queue!
+  "Atomically remove and return queued messages.
+   mode :all drains everything; :one-at-a-time drains at most one."
+  [queue-atom mode]
+  (loop []
+    (let [v @queue-atom]
+      (if (empty? v)
+        []
+        (let [taken (if (= mode :all) v (subvec v 0 1))
+              rest-v (if (= mode :all) [] (subvec v 1))]
+          (if (compare-and-set! queue-atom v rest-v)
+            taken
+            (recur)))))))
+
+(defn- add-user-message!
+  "Add a user message to context and session, emitting :message-start."
+  [agent text]
+  (let [user-msg (user-message text)]
+    (swap! (:messages agent) conj user-msg)
+    (when (:session agent)
+      (session/append-entry (:session agent)
+        {:role :user :content (:content user-msg)}))
+    (emit agent {:type :message-start :message user-msg})))
+
+(defn- add-assistant-message!
+  "Add a final assistant message to context and session, emitting
+   :message-end. Returns the message."
+  [agent text tool-calls]
+  (let [assistant-msg (assistant-message text tool-calls)]
+    (swap! (:messages agent) conj assistant-msg)
+    (when (:session agent)
+      (session/append-entry (:session agent) assistant-msg))
+    (emit agent {:type :message-end :message assistant-msg})
+    assistant-msg))
+
+(defn- execute-tool-calls!
+  "Execute tool calls sequentially, emitting execution events and appending
+   results to context and session. Returns the vector of result maps."
+  [agent tool-calls]
+  (let [tool-results (atom [])]
+    (doseq [tc tool-calls]
+      (emit agent {:type :tool-execution-start
+                   :tool-call-id (:id tc)
+                   :tool-name (:name tc)
+                   :args (:arguments tc)})
+      (let [f (future (tools/execute-tool (:name tc) (:arguments tc)))
+            result (loop []
+                     (let [v (deref f 200 :pending)]
+                       (if (= :pending v)
+                         (do (emit agent {:type :tool-execution-update
+                                          :tool-call-id (:id tc)})
+                             (recur))
+                         v)))
+            result-msg (tool-result-message (:id tc) (:name tc) result)]
+        (swap! (:messages agent) conj result-msg)
+        (when (:session agent)
+          (session/append-entry (:session agent) result-msg))
+        (swap! tool-results conj result)
+        (emit agent {:type :tool-execution-end
+                     :tool-call-id (:id tc)
+                     :tool-name (:name tc)
+                     :args (:arguments tc)
+                     :result result
+                     :is-error (:is-error result false)})))
+    @tool-results))
 
 ;; ─── Tool call accumulator ─────────────────────────────────────────────────
 
@@ -96,6 +195,7 @@ Be precise and concise in your responses."}}]
    Calls on-text for text deltas during streaming."
   [agent api-key text-buf on-text on-thinking]
   (let [done-promise (promise)
+        thinking-buf (atom "")
         [tc-add tc-flush] (make-tc-accumulator)
         provider @(:provider agent)
         system @(:system agent)
@@ -103,6 +203,9 @@ Be precise and concise in your responses."}}]
                    (into [{:role :system :content [{:type :text :text system}]}]
                          @(:messages agent))
                    @(:messages agent))]
+    ;; Assistant message lifecycle: streaming begins
+    (emit agent {:type :message-start
+                 :message {:role :assistant :content []}})
     (llm/send-message
       {:provider provider
        :api-type (or (:api-type agent) (cfg/get-provider-api-type provider))
@@ -115,9 +218,25 @@ Be precise and concise in your responses."}}]
        :thinking @(:thinking agent)
        :on-text (fn [t]
                   (swap! text-buf str t)
-                  (when on-text (on-text t)))
-       :on-thinking on-thinking
-       :on-tool-call (fn [tc] (tc-add tc))
+                  (when on-text (on-text t))
+                  (emit agent {:type :message-update
+                               :message {:role :assistant
+                                         :content [{:type :text :text @text-buf}]}
+                               :delta {:type :text :content t}}))
+       :on-thinking (fn [t]
+                      (swap! thinking-buf str t)
+                      (when on-thinking (on-thinking t))
+                      (emit agent {:type :message-update
+                                   :message {:role :assistant
+                                             :content []
+                                             :thinking @thinking-buf}
+                                   :delta {:type :thinking :content t}}))
+       :on-tool-call (fn [tc]
+                       (tc-add tc)
+                       (emit agent {:type :message-update
+                                    :message {:role :assistant :content []}
+                                    :delta (assoc (select-keys tc [:id :name :arguments :index])
+                                                  :type :tool-call)}))
        :on-done (fn [reason]
                   (let [tool-calls (tc-flush)]
                     (deliver done-promise
@@ -128,18 +247,74 @@ Be precise and concise in your responses."}}]
                    (deliver done-promise {:error e}))})
     done-promise))
 
-;; ─── Agent turn ────────────────────────────────────────────────────────────
+;; ─── Queues ────────────────────────────────────────────────────────────────
+
+(defn steer!
+  "Queue a user message for mid-turn injection.
+   The agent loop polls the steering queue between turns (after tool results,
+   before the next LLM call) and injects queued messages into the context."
+  [agent text]
+  (swap! (:steering agent) conj text)
+  (emit agent {:type :queue-update
+               :steering @(:steering agent)
+               :follow-up @(:follow-up agent)})
+  nil)
+
+(defn follow-up!
+  "Queue a user message to be processed after the current run settles.
+   The outer loop drains the follow-up queue when the inner loop finishes and
+   continues the run with the queued messages."
+  [agent text]
+  (swap! (:follow-up agent) conj text)
+  (emit agent {:type :queue-update
+               :steering @(:steering agent)
+               :follow-up @(:follow-up agent)})
+  nil)
+
+(defn clear-queues!
+  "Drop all pending steering and follow-up messages."
+  [agent]
+  (reset! (:steering agent) [])
+  (reset! (:follow-up agent) [])
+  (emit agent {:type :queue-update :steering [] :follow-up []})
+  nil)
+
+(defn queued-messages
+  "Return {:steering [...] :follow-up [...]} of currently queued messages."
+  [agent]
+  {:steering @(:steering agent)
+   :follow-up @(:follow-up agent)})
+
+(defn has-queued-messages?
+  "True if either queue has pending messages."
+  [agent]
+  (or (seq @(:steering agent))
+      (seq @(:follow-up agent))))
+
+;; ─── Agent run ─────────────────────────────────────────────────────────────
 
 (defn run-agent-turn
-  "Run a single turn of the agent loop.
+  "Run the agent loop until it settles.
    agent    — AgentState record
    opts:
-     :message  — user message string (required)
+     :message  — optional initial user message string
      :on-text  — (fn [text-delta]) streaming text callback
      :on-done  — (fn [response-text]) final response callback
      :on-error — (fn [error]) error callback
 
-   Returns: future that completes when the turn is done."
+   Loop structure (mirrors pi):
+     outer: drain follow-up queue → continue inner
+     inner: LLM call → tool execution → drain steering queue → repeat
+            until no tool calls, no steering messages, and at least one
+            turn has run.
+
+   Cancellation: cancel-turn sets the signal and delivers {:cancelled true}
+   to the in-flight LLM promise (active-call); the loop exits quietly
+   (no on-error, no on-done).
+
+   Emits lifecycle events (see kmet.app.events) to the UI callback and the
+   extension system via emit.
+   Returns: future that completes when the agent run is done."
   [agent {:keys [message on-text on-thinking on-done on-error]}]
   (reset! (:signal agent) false)
   (let [provider @(:provider agent)
@@ -151,93 +326,117 @@ Be precise and concise in your responses."}}]
           (future))
       (future
         (try
-          ;; Add user message to history
-          (let [user-msg (user-message message)]
-            (swap! (:messages agent) conj user-msg)
-            (when (:session agent)
-              (session/append-entry (:session agent)
-                {:role :user :content (:content user-msg)})))
+          (let [msg-count-before (count @(:messages agent))]
+            ;; Initial user message
+            (when message
+              (add-user-message! agent message))
 
-          ;; Auto-compact session if needed
-          (when-let [sess (:session agent)]
-            (when-let [threshold (:compact-threshold agent)]
-              (let [n-entries (count @(:entries sess))]
-                (when (>= n-entries threshold)
-                  (session/compact! sess (quot threshold 2))
-                  (binding [*out* *err*]
-                    (println "Compacted session:" n-entries "→" (count @(:entries sess)) "entries"))))))
+            ;; Auto-compact session if needed
+            (when-let [sess (:session agent)]
+              (when-let [threshold (:compact-threshold agent)]
+                (let [n-entries (count @(:entries sess))]
+                  (when (>= n-entries threshold)
+                    (session/compact! sess (quot threshold 2))
+                    (binding [*out* *err*]
+                      (println "Compacted session:" n-entries "→" (count @(:entries sess)) "entries"))))))
 
-          ;; State: thinking
-          (reset! (:status agent) :thinking)
-          (emit agent {:type :status :status :thinking})
+            ;; Agent lifecycle: start
+            (emit agent {:type :agent-start})
+            (reset! (:status agent) :thinking)
+            (emit agent {:type :status :status :thinking})
 
-          ;; Main loop: LLM → tools → LLM → ... → done
-          (let [text-buf (atom "")
-                max-turns 20]
-            (loop [turn 0]
-              (if (>= turn max-turns)
-                (do (when on-error (on-error "Max turn limit reached"))
-                    (reset! (:status agent) :error))
-                (let [promise (do (reset! text-buf "") (call-llm agent api-key text-buf on-text on-thinking))
-                      result (deref promise 120000 :timeout)]
-                  (if (= :timeout result)
-                    (do (reset! (:signal agent) true)
-                        (when on-error (on-error "LLM call timed out after 120s"))
-                        (reset! (:status agent) :error))
-                    (if (:error result)
-                    (do (when on-error (on-error (:error result)))
-                        (reset! (:status agent) :error))
-                    (let [text (:text result)
-                          tool-calls (:tool-calls result)]
-                      (if (seq tool-calls)
-                        ;; Execute tool calls
-                        (let [assistant-msg (assistant-message text tool-calls)]
-                          (swap! (:messages agent) conj assistant-msg)
-                          (when (:session agent)
-                            (session/append-entry (:session agent) assistant-msg))
-
-                          ;; State: executing
-                          (reset! (:status agent) :executing)
-                          (emit agent {:type :status :status :executing
-                                       :tool-calls tool-calls})
-
-                          ;; Execute each tool (async with in-place component updates)
-                          (doseq [tc tool-calls]
-                            (let [_ (emit agent {:type :tool-start
-                                                 :id (:id tc)
-                                                 :name (:name tc)
-                                                 :args (:arguments tc)})
-                                  f (future (tools/execute-tool (:name tc) (:arguments tc)))
-                                  result (loop []
-                                           (let [v (deref f 200 :pending)]
-                                             (if (= :pending v)
-                                               (do
-                                                 (emit agent {:type :tool-progress})
-                                                 (recur))
-                                               v)))
-                                  result-msg (tool-result-message (:id tc) (:name tc) result)]
-                              (swap! (:messages agent) conj result-msg)
-                              (when (:session agent)
-                                (session/append-entry (:session agent) result-msg))
-                              (emit agent {:type :tool-result
-                                           :id (:id tc)
-                                           :name (:name tc)
-                                           :args (:arguments tc)
-                                           :result result})))
-
-                          ;; State: thinking again, continue loop
-                          (reset! (:status agent) :thinking)
-                          (emit agent {:type :status :status :thinking})
-                          (recur (inc turn)))
-
-                        ;; Final response
-                        (let [assistant-msg (assistant-message text nil)]
-                          (swap! (:messages agent) conj assistant-msg)
-                          (when (:session agent)
-                            (session/append-entry (:session agent) assistant-msg))
-                          (reset! (:status agent) :idle)
-                          (emit agent {:type :status :status :idle})
-                          (when on-done (on-done @text-buf)))))))))))
+            (let [text-buf (atom "")
+                  max-turns 20
+                  agent-end (fn [error]
+                              (emit agent {:type :agent-end
+                                           :messages (subvec @(:messages agent) msg-count-before)
+                                           :error error}))]
+              ;; Outer loop: follow-up
+              (loop [turn 0]
+                (if (>= turn max-turns)
+                  (do (when on-error (on-error "Max turn limit reached"))
+                      (reset! (:status agent) :error)
+                      (emit agent {:type :error :message "Max turn limit reached"})
+                      (agent-end "Max turn limit reached"))
+                  ;; Inner loop: LLM → tools → steer → ... → settle
+                  (let [inner (loop [t turn prev-tool-calls [] must-run true]
+                                (if (or (>= t max-turns)
+                                        @(:signal agent)
+                                        (and (not must-run)
+                                             (empty? prev-tool-calls)
+                                             (empty? @(:steering agent))))
+                                  (if @(:signal agent)
+                                    (do (reset! (:status agent) :idle)
+                                        (emit agent {:type :status :status :idle})
+                                        (emit agent {:type :agent-end
+                                                     :messages (subvec @(:messages agent) msg-count-before)})
+                                        {:aborted true}) ;; cancelled — exit quietly
+                                    {:settled t})
+                                  (let [steer-msgs (drain-queue! (:steering agent)
+                                                                  (:steering-mode agent))]
+                                    (doseq [m steer-msgs]
+                                      (add-user-message! agent m))
+                                    (emit agent {:type :turn-start :turn-index t})
+                                    (let [promise (do (reset! text-buf "")
+                                                      (call-llm agent api-key text-buf on-text on-thinking))]
+                                      (reset! (:active-call agent) promise)
+                                      (let [result (deref promise 120000 :timeout)]
+                                        (reset! (:active-call agent) nil)
+                                        (if (:cancelled result)
+                                          (do (emit agent {:type :agent-end
+                                                           :messages (subvec @(:messages agent) msg-count-before)})
+                                              {:aborted true})
+                                          (if (= :timeout result)
+                                            (do (reset! (:signal agent) true)
+                                                (when on-error (on-error "LLM call timed out after 120s"))
+                                                (reset! (:status agent) :error)
+                                                (emit agent {:type :error :message "LLM call timed out after 120s"})
+                                                (agent-end "LLM call timed out after 120s")
+                                                {:aborted true})
+                                            (if (:error result)
+                                              (do (when on-error (on-error (:error result)))
+                                                  (reset! (:status agent) :error)
+                                                  (emit agent {:type :error :message (:error result)})
+                                                  (agent-end (:error result))
+                                                  {:aborted true})
+                                              (let [text (:text result)
+                                                    tool-calls (:tool-calls result)]
+                                                (if (seq tool-calls)
+                                                  ;; Execute tool calls
+                                                  (let [assistant-msg (add-assistant-message! agent text tool-calls)]
+                                                    (reset! (:status agent) :executing)
+                                                    (emit agent {:type :status :status :executing
+                                                                 :tool-calls tool-calls})
+                                                    (let [tool-results (execute-tool-calls! agent tool-calls)]
+                                                      (reset! (:status agent) :thinking)
+                                                      (emit agent {:type :status :status :thinking})
+                                                      (emit agent {:type :turn-end
+                                                                   :message assistant-msg
+                                                                   :tool-results tool-results})
+                                                      (recur (inc t) tool-calls false)))
+                                                  ;; Final response
+                                                  (let [assistant-msg (add-assistant-message! agent text nil)]
+                                                    (emit agent {:type :turn-end
+                                                                 :message assistant-msg
+                                                                 :tool-results []})
+                                                    (recur (inc t) [] false))))))))))))]
+                    (if (:aborted inner)
+                      nil ;; aborted (error or cancel) — exit without follow-ups
+                      (let [turn' (:settled inner)]
+                        ;; Outer: poll follow-up queue
+                        (let [follow-ups (drain-queue! (:follow-up agent)
+                                                        (:follow-up-mode agent))]
+                          (if (seq follow-ups)
+                            (do (doseq [m follow-ups]
+                                  (add-user-message! agent m))
+                                (reset! (:status agent) :thinking)
+                                (emit agent {:type :status :status :thinking})
+                                (recur turn'))
+                            (do (reset! (:status agent) :idle)
+                                (emit agent {:type :status :status :idle})
+                                (emit agent {:type :agent-end
+                                             :messages (subvec @(:messages agent) msg-count-before)})
+                                (when on-done (on-done @text-buf))))))))))))
 
           (catch Exception e
             (reset! (:status agent) :error)
@@ -246,8 +445,15 @@ Be precise and concise in your responses."}}]
 
 ;; ─── Cancellation ──────────────────────────────────────────────────────────
 
-(defn cancel-turn [agent]
+(defn cancel-turn
+  "Cancel the current agent run: signal the LLM stream, drop queued messages,
+   release the in-flight LLM call, return status to :idle."
+  [agent]
   (reset! (:signal agent) true)
+  (clear-queues! agent)
+  (when-let [p @(:active-call agent)]
+    (when-not (realized? p)
+      (deliver p {:cancelled true})))
   (reset! (:status agent) :idle)
   (emit agent {:type :status :status :idle})
   nil)
