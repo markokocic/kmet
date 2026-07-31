@@ -118,11 +118,12 @@
 
 (t/deftest test-loop-run-agent-turn-no-api-key
   (let [agent (loop/make-agent-state)
-        errors (atom [])]
+        errors (atom [])
+        done (promise)]
     (loop/run-agent-turn agent
       {:message "hello"
-       :on-error (fn [e] (swap! errors conj e))})
-    (Thread/sleep 100)
+       :on-error (fn [e] (swap! errors conj e) (deliver done true))})
+    (t/is (true? (deref done 2000 :timeout)) "error callback fires")
     (t/is (pos? (count @errors)))
     (t/is (.contains (first @errors) "No API key"))))
 
@@ -392,7 +393,7 @@
     (t/is (empty? @(:follow-up agent)) "cancel drops follow-up messages")
     (t/is (= :idle @(:status agent)))))
 
-(t/deftest ^:slow test-loop-steer-injects-mid-run
+(t/deftest test-loop-steer-injects-mid-run
   (let [calls (atom 0)
         agent (loop/make-agent-state)]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
@@ -722,7 +723,7 @@
     (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
       (t/is (true? (:is-error end)) "after hook can mark a result as error"))))
 
-(t/deftest ^:slow test-loop-after-tool-call-hook-throws
+(t/deftest test-loop-after-tool-call-hook-throws
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (loop/set-after-tool-call! agent

@@ -385,7 +385,9 @@ Be precise and concise in your responses."}}]
 (defn- await-all-tool-results!
   "Poll all pending tool futures concurrently, emitting progress pings, until
    every future completes. Returns a map tool-call-id → result in approximate
-   completion order (newest completions discovered per 200ms poll batch)."
+   completion order (newest completions discovered per 200ms poll batch).
+   Each cycle blocks on the next pending future (max 200ms) instead of a
+   fixed sleep, so fast tools finish without artificial delay."
   [agent futures]
   (let [results (atom {})]
     (loop []
@@ -398,8 +400,11 @@ Be precise and concise in your responses."}}]
               (doseq [[tc-id _] remaining]
                 (when-not (contains? @results tc-id)
                   (emit agent {:type :tool-execution-update :tool-call-id tc-id})))
-              (when (some (fn [[_ f]] (= :pending (deref f 0 :pending))) remaining)
-                (Thread/sleep 200))
+              (when-let [[_ f] (first (filter (fn [[_ f]] (= :pending (deref f 0 :pending)))
+                                              remaining))]
+                ;; Block until this future completes; the 200ms timeout only
+                ;; paces the progress pings for long-running tools.
+                (deref f 200 :pending))
               (recur)))))))
 
 (defn- before-tool-hook-result
