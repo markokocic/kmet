@@ -696,9 +696,24 @@ Be precise and concise in your responses."}}]
         (compact-session! agent (max 4 (quot threshold 2)))
         true))))
 
+(defn- replace-context!
+  "Replace the in-memory conversation and rebuild the session file to match
+   (pi: prepareNextTurnWithContext context replacement)."
+  [agent messages]
+  (let [msgs (vec messages)]
+    (reset! (:messages agent) msgs)
+    (when-let [sess (:session agent)]
+      ;; Rebuild the session as a fresh linear branch mirroring the new context
+      (spit (:file sess) "")
+      (reset! (:entries sess) [])
+      (reset! (:leaf-id sess) nil)
+      (doseq [m msgs]
+        (session/append-entry sess m)))))
+
 (defn- apply-next-turn-update!
   "Apply a prepare-next-turn update map to the agent state.
-   Supported keys: :model, :system, :thinking, :system-prompt-override, :context."
+   Supported keys: :model, :system, :thinking, :system-prompt-override, :context
+   (:context replaces the conversation and rebuilds the session to match)."
   [agent update]
   (when update
     (when-let [m (:model update)]
@@ -710,7 +725,7 @@ Be precise and concise in your responses."}}]
     (when-let [th (:thinking update)] (reset! (:thinking agent) th))
     (when-let [o (:system-prompt-override update)]
       (reset! (:system-prompt-override agent) o))
-    (when-let [c (:context update)] (reset! (:messages agent) c))))
+    (when-let [c (:context update)] (replace-context! agent c))))
 
 (defn- after-turn!
   "Run post-turn hooks in pi order: prepareNextTurn then shouldStopAfterTurn.
@@ -728,6 +743,14 @@ Be precise and concise in your responses."}}]
           :message assistant-msg
           :tool-results tool-results
           :messages @(:messages agent)}))))
+
+(defn- resolve-api-key
+  "Resolve the API key for the agent's provider, preferring the dynamic
+   get-api-key hook (pi: config.getApiKey, resolved per LLM call)."
+  [agent]
+  (if-let [kf @(:get-api-key agent)]
+    (kf @(:provider agent))
+    (cfg/get-api-key @(:provider agent))))
 
 (defn- backoff-sleep!
   "Sleep delay-ms in 100ms increments, aborting early if the cancel signal is
@@ -768,9 +791,7 @@ Be precise and concise in your responses."}}]
   [agent {:keys [message on-text on-thinking on-done on-error]}]
   (reset! (:signal agent) false)
   (let [provider @(:provider agent)
-        api-key (if-let [kf @(:get-api-key agent)]
-                  (kf provider)
-                  (cfg/get-api-key provider))]
+        api-key (resolve-api-key agent)]
     (if (nil? api-key)
       (do (when on-error
             (on-error (str "No API key for " (name provider)
@@ -827,7 +848,7 @@ Be precise and concise in your responses."}}]
                                       (add-user-message! agent m))
                                     (emit agent {:type :turn-start :turn-index t})
                                     (let [promise (do (reset! text-buf "")
-                                                      (call-llm agent api-key text-buf on-text on-thinking))]
+                                                      (call-llm agent (resolve-api-key agent) text-buf on-text on-thinking))]
                                       (reset! (:active-call agent) promise)
                                       (let [result (deref promise 120000 :timeout)]
                                         (reset! (:active-call agent) nil)
@@ -1061,7 +1082,8 @@ Be precise and concise in your responses."}}]
 
 (defn set-get-api-key!
   "Register a dynamic API key resolver (pi: config.getApiKey).
-   Hook: (fn [provider]) → key string — preferred over cfg/get-api-key."
+   Hook: (fn [provider]) → key string — resolved before each LLM call,
+   preferred over cfg/get-api-key."
   [agent hook]
   (reset! (:get-api-key agent) hook))
 

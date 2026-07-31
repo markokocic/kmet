@@ -1125,3 +1125,54 @@
       (t/is (= 3 (count @(:messages agent))) "context untouched when no compaction")
       (finally
         (fs/delete-tree dir)))))
+
+(t/deftest test-loop-get-api-key-resolved-per-call
+  (let [keys-seen (atom [])
+        llm-keys (atom [])
+        calls (atom 0)
+        agent (loop/make-agent-state)]
+    (loop/set-get-api-key! agent
+      (fn [_] (swap! keys-seen conj (str "key-" (count @keys-seen)))))
+    (with-redefs [cfg/get-api-key (fn [_] "cfg-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (swap! llm-keys conj (:api-key opts))
+                      (if (= 1 (swap! calls inc))
+                        (do (when-let [on-tc (:on-tool-call opts)]
+                              (on-tc {:id "tc1" :name "bash" :arguments "{}" :index 0}))
+                            (when-let [on-done (:on-done opts)]
+                              (on-done :tool-calls)))
+                        (do (when-let [on-text (:on-text opts)]
+                              (on-text "ok"))
+                            (when-let [on-done (:on-done opts)]
+                              (on-done :stop))))
+                      :done))
+                  tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (t/is (= 2 (count @llm-keys)) "two LLM calls in the run")
+    (t/is (apply not= @llm-keys)
+          "each LLM call gets a freshly resolved key")
+    (t/is (>= (count @keys-seen) 3)
+          "hook also resolves at run start for the nil check")))
+
+(t/deftest test-loop-prepare-next-turn-context-replaces-session
+  (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
+        sess (session/create-session (str dir))
+        agent (loop/make-agent-state :session sess)]
+    (try
+      (loop/set-prepare-next-turn! agent
+        (fn [_] {:context [{:role :user :content [{:type :text :text "replacement"}]}]}))
+      (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                    llm/send-message (stub-llm-tool-then-text (atom 0))
+                    tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+        @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+      (t/is (= [{:role :user :content [{:type :text :text "replacement"}]}]
+               (loop/get-context agent))
+            "prepare-next-turn :context replaces the conversation")
+      (t/is (= 1 (count @(:entries sess)))
+            "session rebuilt to match the replaced context")
+      (t/is (= "replacement" (get-in (first @(:entries sess)) [:content 0 :text]))
+            "session entry mirrors the replacement message")
+      (finally
+        (fs/delete-tree dir)))))
