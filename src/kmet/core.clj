@@ -131,6 +131,25 @@
          "  Ctrl+L     — Clear terminal\n"
          "  Up/Down    — Scroll chat history")))
 
+(defn- tools-text
+  "Text listing all available tools with their parameters."
+  []
+  (let [tool-list (sort-by :name (vals (tools/get-all-tools)))
+        tool-lines
+        (mapv (fn [t]
+                (let [required (set (:required (:parameters t)))
+                      param-lines
+                      (mapv (fn [[pname p]]
+                              (let [req (if (contains? required (name pname)) " (required)" "")]
+                                (str "    " (name pname) " (" (:type p) ")" req " — " (:description p))))
+                            (:properties (:parameters t)))]
+                  (str "  " (:name t) " — " (:description t)
+                       (when (seq param-lines)
+                         (str "\n" (str/join "\n" param-lines))))))
+              tool-list)]
+    (str "Available tools (" (count tool-list) "):\n"
+         (str/join "\n" tool-lines))))
+
 (defn- register-builtin-commands!
   "Register kmet's builtin slash commands. Handlers receive [cs args];
    argument completions feed the editor autocomplete dropdown."
@@ -147,6 +166,12 @@
      :handler (fn [cs _]
                 (ui/chat-history-add-message! (:chat-history cs)
                   {:role :assistant :content (help-text)}))})
+  (commands/register-command!
+    {:name "tools"
+     :description "List available tools with parameters"
+     :handler (fn [cs _]
+                (ui/chat-history-add-message! (:chat-history cs)
+                  {:role :assistant :content (tools-text)}))})
   (commands/register-command!
     {:name "model"
      :description "Switch model"

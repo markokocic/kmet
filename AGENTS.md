@@ -22,6 +22,9 @@
 - **State**: atoms for mutable state (component children, input listeners, render flags)
 - **Private vars**: use `defn-` / `def-` for implementation details not part of public API
 
+## Editing
+- When an `edit` call fails because of unbalanced parens, try the `clojure_paren_repair` tool first; if that doesn't help, split the change into smaller focused edits.
+
 ## File layout
 ```
 src/kmet/
