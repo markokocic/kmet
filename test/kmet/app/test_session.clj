@@ -13,6 +13,13 @@
     (fs/delete-tree test-dir)
     (f)))
 
+(defn- silent-stderr
+  "Run f with stderr redirected — suppresses the expected warning
+   output from deliberately corrupt test session files."
+  [f]
+  (binding [*err* (java.io.StringWriter.)]
+    (f)))
+
 (t/deftest test-session-create
   (let [session (s/create-session test-dir)]
     (t/is (string? (:id session)))
@@ -139,7 +146,7 @@
     (spit file "{:id \"1\" :role :user :content \"hello\"}\n")
     (spit file "{:bad \"entry\"\n" :append true)  ;; unclosed map → parse error
     (spit file "{:id \"3\" :role :assistant :content \"world\"}\n" :append true)
-    (let [loaded (s/load-session file)
+    (let [loaded (silent-stderr #(s/load-session file))
           entries @(:entries loaded)]
       (t/is (= 2 (count entries)) "Should skip corrupt entry, keep both valid ones")
       (t/is (= "1" (:id (first entries))))
@@ -156,7 +163,7 @@
     (spit file "{:id \"3\" :role :user :content \"b\"}\n" :append true)
     (spit file "{{:id \"4\"}\n" :append true)     ;; double brace → parse error
     (spit file "{:id \"5\" :role :assistant :content \"c\"}\n" :append true)
-    (let [loaded (s/load-session file)
+    (let [loaded (silent-stderr #(s/load-session file))
           entries @(:entries loaded)]
       (t/is (= 3 (count entries)) "Should skip all corrupt entries, keep all valid ones")
       (t/is (= "1" (:id (nth entries 0))))
@@ -168,7 +175,7 @@
         file (:file session)]
     (spit file "{{{{{{\n")
     (spit file "[invalid}^&*\n" :append true)
-    (let [loaded (s/load-session file)
+    (let [loaded (silent-stderr #(s/load-session file))
           entries @(:entries loaded)]
       (t/is (empty? entries) "Should return empty entries when all lines are corrupt"))))
 

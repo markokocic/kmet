@@ -51,5 +51,5 @@
                      kmet.app.ui.test-custom-message
                      kmet.app.ui.test-footer]
         results (apply t/run-tests namespaces)]
-    (println "\\nResults:" (:pass results) "passed," (:fail results) "failed," (:error results) "errors")
+    (println "\nResults:" (:pass results) "passed," (:fail results) "failed," (:error results) "errors")
     (System/exit (if (pos? (+ (:fail results) (:error results))) 1 0))))

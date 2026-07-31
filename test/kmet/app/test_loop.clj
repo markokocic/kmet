@@ -1059,7 +1059,8 @@
                               (when-let [on-done (:on-done opts)]
                                 (on-done :stop))))
                         :done))]
-        @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])}))
+        (binding [*err* (java.io.StringWriter.)]
+          @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])})))
       (t/is (= 2 @call-count) "overflow triggers one compaction then a retry")
       (t/is (< (count @(:entries sess)) 12) "session was compacted")
       (t/is (some #(and (= :message-end (:type %))
@@ -1101,7 +1102,8 @@
                                  "easily exceeds the small test threshold.")}]}]
           (swap! (:messages agent) conj m)
           (session/append-entry sess m)))
-      (t/is (true? (loop/maybe-compact! agent))
+      (t/is (true? (binding [*err* (java.io.StringWriter.)]
+                     (loop/maybe-compact! agent)))
             "token estimate above threshold triggers compaction")
       (t/is (< (count @(:entries sess)) 10) "session entries reduced")
       (t/is (< (count @(:messages agent)) 10) "in-memory context aligned with session")

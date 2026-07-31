@@ -58,7 +58,9 @@
     (skills/clear-event-listeners!)
     (skills/on-event :err-test (fn [_] (throw (Exception. "boom"))))
     (skills/on-event :err-test (fn [e] (swap! log conj (:data e))))
-    (skills/emit-event! {:type :err-test :data "ok"})
+    ;; The throwing listener prints a warning to stderr — suppress it.
+    (binding [*err* (java.io.StringWriter.)]
+      (skills/emit-event! {:type :err-test :data "ok"}))
     (t/is (= 1 (count @log)))
     (t/is (= "ok" (first @log)))))
 
@@ -117,4 +119,6 @@
     (io/make-parents f)
     (spit f "(println \"extension loaded\")")
     (t/testing "Loading should not throw"
-      (t/is (nil? (skills/load-extensions-from-dir tmp-dir))))))
+      ;; The fixture extension prints "extension loaded" to stdout.
+      (t/is (nil? (binding [*out* (java.io.StringWriter.)]
+                    (skills/load-extensions-from-dir tmp-dir)))))))

@@ -123,7 +123,7 @@
       (doseq [f (fs/list-dir d)]
         (when (str/ends-with? (fs/file-name f) ".clj")
           (try
-            (let [code (slurp f)]
+            (let [code (slurp (str f))]
               (load-string code)
               (swap! extensions conj
                 {:name (fs/file-name f) :file (str (fs/canonicalize f))}))
