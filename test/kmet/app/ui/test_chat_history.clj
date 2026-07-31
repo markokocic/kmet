@@ -209,3 +209,48 @@
       (ch/chat-history-rebuild! ch [{:role :user :content "only"}])
       (is (= [{:role :user :content "only"}]
              (ch/chat-history-get-messages ch))))))
+
+(deftest test-insert-before-streaming
+  (testing "injected :info message lands above the streaming placeholder"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-add-message! ch {:role :user :content "hi"})
+      (ch/chat-history-start-streaming! ch)
+      (ch/chat-history-append-streaming-text! ch "response")
+      (ch/chat-history-insert-before-streaming! ch
+        {:role :info :label "ext" :content "injected note"})
+      (let [msgs (ch/chat-history-get-messages ch)]
+        (is (= 3 (count msgs)))
+        (is (= :user (:role (nth msgs 0))))
+        (is (= :info (:role (nth msgs 1))) "info box sits above the response")
+        (is (= :assistant (:role (nth msgs 2))))))))
+
+(deftest test-insert-before-streaming-appends-when-no-streaming
+  (testing "falls back to appending when no streaming placeholder exists"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-add-message! ch {:role :user :content "hi"})
+      (ch/chat-history-insert-before-streaming! ch
+        {:role :info :label "ext" :content "note"})
+      (let [msgs (ch/chat-history-get-messages ch)]
+        (is (= 2 (count msgs)))
+        (is (= :info (:role (nth msgs 1))))))))
+
+(deftest test-user-message-block-content
+  (testing "block-vector user content renders as plain text, not a literal vector"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-add-message! ch
+        {:role :user :content [{:type :text :text "hi there"}]})
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"hi there" %) lines))
+        (is (not-any? #(re-find #"\{:type" %) lines)
+            "raw block vector must not render")))))
+
+(deftest test-user-message-image-placeholder
+  (testing "image blocks render as [image mime-type] placeholders"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-add-message! ch
+        {:role :user
+         :content [{:type :text :text "see:"}
+                   {:type :image :data "AA" :mime-type "image/png"}]})
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"see:" %) lines))
+        (is (some #(re-find #"\[image image/png\]" %) lines))))))

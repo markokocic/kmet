@@ -216,7 +216,7 @@ Events are emitted ad-hoc from `core.clj` (`:tool-start`, `:tool-progress`, `:to
 4. Add `before-tool-call` and `after-tool-call` hook atoms on `AgentState`
 5. Wire `skills/emit-event!` for every event type, not just tool execution
 6. Support extension return values (e.g., `after-tool-call` can modify result)
-7. Consider adding `input` and `before-agent-start` hooks that can transform/modify the user message before processing
+7. ✅ `input` and `before-agent-start` hooks — `skills/apply-input-hooks` runs at the interactive input path (`core.clj handle-submit`; `:handled`/`:transform`/`:pass`, plus `:images` attachments); `skills/apply-before-agent-start-hooks` runs in `run-agent-turn` after the user message (can set `:system-prompt` override and inject `:message` into context; `:info`-role messages are display-only)
 
 ---
 
@@ -643,9 +643,8 @@ Simple key resolution at turn start. No OAuth support. No model cycling.
 ### Required Work
 
 1. Add `:get-api-key` callback to `llm/send-message` for dynamic key resolution
-2. Support OAuth-style auth flows (may be out of scope for babashka)
-3. Add `set-model!`, `cycle-model!` functions to AgentState
-4. Add scoped model lists for cycling
+2. Add `set-model!`, `cycle-model!` functions to AgentState
+3. Add scoped model lists for cycling
 
 ---
 

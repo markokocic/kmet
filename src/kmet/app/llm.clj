@@ -97,6 +97,41 @@
                             (= (:type b) "text"))]
               (:text b))))
 
+(defn- image-block?
+  "True if a content block is an image block (kmet canonical
+   {:type :image :data base64 :mime-type str}, matching pi's read tool
+   {type: \"image\", data, mimeType} format)."
+  [b]
+  (or (= (:type b) :image) (= (:type b) "image")))
+
+(defn- openai-content
+  "Convert kmet content blocks to OpenAI content. Returns the plain text
+   string when there are no image blocks (backward compat); with image blocks
+   returns an array of text/image_url blocks (OpenAI vision format)."
+  [content]
+  (if (some image-block? content)
+    (into []
+          (for [b content]
+            (if (image-block? b)
+              {:type "image_url"
+               :image_url {:url (str "data:" (:mime-type b) ";base64," (:data b))}}
+              {:type "text" :text (or (:text b) "")})))
+    (content-text content)))
+
+(defn- tool-result-content
+  "OpenAI tool result content: the text from the tool_result block, plus
+   image_url blocks for any :images on the message (pi: the read tool returns
+   image blocks inside the tool result content for vision models)."
+  [m]
+  (let [text (-> m :content first :content)
+        images (:images m)]
+    (if (seq images)
+      (into [{:type "text" :text (or text "")}]
+            (for [i images]
+              {:type "image_url"
+               :image_url {:url (str "data:" (:mime-type i) ";base64," (:data i))}}))
+      text)))
+
 (defn- openai-messages [messages]
   (mapv (fn [m]
           (let [role (name (:role m))]
@@ -104,7 +139,7 @@
               "tool"
               {:role "tool"
                :tool_call_id (-> m :content first :tool_use_id)
-               :content (-> m :content first :content)}
+               :content (tool-result-content m)}
               "assistant"
               (let [text (content-text (:content m))]
                 (cond-> {:role "assistant" :content text}
@@ -118,7 +153,7 @@
                                                      (:arguments tc))}})
                           (:tool-calls m)))))
               {:role role
-               :content (content-text (:content m))})))
+               :content (openai-content (:content m))})))
         messages))
 
 (defn- openai-messages-with-reasoning
@@ -132,7 +167,7 @@
                       "tool"
                       {:role "tool"
                        :tool_call_id (-> m :content first :tool_use_id)
-                       :content (-> m :content first :content)}
+                       :content (tool-result-content m)}
                       "assistant"
                       (let [text (content-text (:content m))
                             has-tc (seq (:tool-calls m))
@@ -149,7 +184,7 @@
                         ;; opencode-go requires reasoning_content on assistant messages
                         (assoc msg :reasoning_content ""))
                       {:role role
-                       :content (content-text (:content m))})]
+                       :content (openai-content (:content m))})]
             msg))
         messages))
 
@@ -164,10 +199,43 @@
                               (= (:type b) "text"))]
                 (:text b)))))
 
+(defn- anthropic-content
+  "Convert kmet content blocks to Anthropic content. Returns the plain text
+   string when there are no image blocks (backward compat); with image blocks
+   returns an array of text/image blocks (Anthropic vision format)."
+  [content]
+  (if (some image-block? content)
+    (into []
+          (for [b content]
+            (if (image-block? b)
+              {:type "image"
+               :source {:type "base64"
+                        :media_type (:mime-type b)
+                        :data (:data b)}}
+              {:type "text" :text (or (:text b) "")})))
+    (anthropic-content-text content)))
+
+(defn- anthropic-tool-result-content
+  "Anthropic tool result content: the text from the tool_result block, plus
+   image blocks for any :images on the message."
+  [m]
+  (let [text (-> m :content first :content)
+        images (:images m)]
+    (if (seq images)
+      (into [{:type "text" :text (or text "")}]
+            (for [i images]
+              {:type "image"
+               :source {:type "base64"
+                        :media_type (:mime-type i)
+                        :data (:data i)}}))
+      text)))
+
 (defn- anthropic-messages [messages]
   (mapv (fn [m]
           (let [role (name (:role m))
-                content (anthropic-content-text (:content m))]
+                content (if (= role "tool")
+                          (anthropic-tool-result-content m)
+                          (anthropic-content (:content m)))]
             (cond-> {:role role :content content}
               (and (= role "assistant") (:tool-calls m))
               (assoc :content

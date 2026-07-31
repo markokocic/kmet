@@ -16,4 +16,8 @@
 (defn container-add-child [c child] (swap! (:children c) conj child))
 (defn container-remove-child [c child]
   (swap! (:children c) (fn [v] (vec (remove #(identical? % child) v)))))
+(defn container-set-children!
+  "Replace all children at once (used for ordered insertion)."
+  [c children]
+  (reset! (:children c) (vec children)))
 (defn container-clear [c] (reset! (:children c) []))

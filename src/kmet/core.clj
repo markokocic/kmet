@@ -580,38 +580,50 @@
                 (editor/editor-set-text! (:editor cs) "")
                 (handle-bash-command cs command exclude-from-context?)))))
         
-        ;; Regular message — agent loop handles session persistence
+        ;; Regular message — agent loop handles session persistence.
+        ;; Input hooks (pi: input extension event) run first: a hook can
+        ;; consume the input ({:action :handled}) or rewrite it
+        ;; ({:action :transform :text ...}); :streaming-behavior tells hooks
+        ;; whether the agent is running (input will be steered). Slash and
+        ;; bash commands are native UI features and bypass the hooks.
         :else
-        (if @(:running-turn? cs)
-          ;; Agent running: steer the current run (pi: steeringQueue).
-          ;; Finalize the in-progress assistant message first so the steered
-          ;; message lands below it; the next turn streams into a new message.
-          (do
-            (debug/log "user steered: " trimmed)
-            (ui/chat-history-finalize-streaming! (:chat-history cs))
-            (ui/chat-history-finalize-thinking! (:chat-history cs))
-            (ui/chat-history-add-message! (:chat-history cs)
-              {:role :user :content trimmed})
-            (agent/steer! (:agent-state cs) trimmed)
-            (update-header-footer! cs)
-            (tui/tui-request-render (:tui cs)))
-          (do
-            (reset! (:running-turn? cs) true)
-            (ui/status-indicator-start! (:status-indicator cs))
-            (start-anim-timer! cs)
-            (debug/log "user submitted: " trimmed)
-            (ui/chat-history-add-message! (:chat-history cs)
-              {:role :user :content trimmed})
-            ;; Create streaming placeholder for incoming LLM response.
-            (ui/chat-history-start-streaming! (:chat-history cs))
-            (update-header-footer! cs)
-            (tui/tui-request-render (:tui cs))
-            (agent/run-agent-turn (:agent-state cs)
-              {:message trimmed
-               :on-text #(on-agent-text cs %)
-               :on-thinking #(on-agent-thinking cs %)
-               :on-done (fn [_] (on-agent-done cs))
-               :on-error #(on-agent-error cs %)})))))))
+        (let [streaming? @(:running-turn? cs)
+              input (skills/apply-input-hooks trimmed :interactive
+                       {:streaming-behavior (when streaming? :steer)})]
+          (if (= :handled (:action input))
+            ;; Extension consumed the input — no agent run, nothing displayed
+            (debug/log "input handled by extension: " trimmed)
+            (let [text (if (contains? input :text) (:text input) trimmed)]
+              (if streaming?
+                ;; Agent running: steer the current run (pi: steeringQueue).
+                ;; Finalize the in-progress assistant message first so the steered
+                ;; message lands below it; the next turn streams into a new message.
+                (do
+                  (debug/log "user steered: " text)
+                  (ui/chat-history-finalize-streaming! (:chat-history cs))
+                  (ui/chat-history-finalize-thinking! (:chat-history cs))
+                  (ui/chat-history-add-message! (:chat-history cs)
+                    {:role :user :content text})
+                  (agent/steer! (:agent-state cs) text)
+                  (update-header-footer! cs)
+                  (tui/tui-request-render (:tui cs)))
+                (do
+                  (reset! (:running-turn? cs) true)
+                  (ui/status-indicator-start! (:status-indicator cs))
+                  (start-anim-timer! cs)
+                  (debug/log "user submitted: " text)
+                  (ui/chat-history-add-message! (:chat-history cs)
+                    {:role :user :content text})
+                  ;; Create streaming placeholder for incoming LLM response.
+                  (ui/chat-history-start-streaming! (:chat-history cs))
+                  (update-header-footer! cs)
+                  (tui/tui-request-render (:tui cs))
+                  (agent/run-agent-turn (:agent-state cs)
+                    {:message text
+                     :on-text #(on-agent-text cs %)
+                     :on-thinking #(on-agent-thinking cs %)
+                     :on-done (fn [_] (on-agent-done cs))
+                     :on-error #(on-agent-error cs %)}))))))))))
 
 (defn- handle-cancel [cs]
   "Cancel the current agent turn or bash command."
@@ -779,6 +791,23 @@ Be precise and concise in your responses.")
                            ;; Rebuild the chat history to mirror the replaced context
                            (ui/chat-history-rebuild! ch (:messages evt))
                            (tui/tui-request-render t)
+                           :message-start
+                           ;; before-agent-start injected messages (role :info)
+                           ;; display as labeled info boxes above the incoming
+                           ;; response; user/assistant message-starts are
+                           ;; already mirrored by the UI. Content is normalized
+                           ;; from text blocks to a string for the info box.
+                           (when (= :info (:role (:message evt)))
+                             (let [m (:message evt)
+                                   text (if (string? (:content m))
+                                          (:content m)
+                                          (str/join
+                                            (for [b (:content m)
+                                                  :when (= :text (:type b))]
+                                              (:text b))))]
+                               (ui/chat-history-insert-before-streaming! ch
+                                 (assoc m :content text))
+                               (tui/tui-request-render t)))
                            nil)))
         _ (when (seq (:models config))
             ;; Scoped model list for cycle-model! (pi: _scopedModels)

@@ -3,7 +3,8 @@
    (UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent, CustomMessageComponent) as children.
    This is the Pi architecture: a flat Container with separate component
    classes per message role, not a monolithic renderer."
-  (:require [kmet.tui.protocols :as protocols]
+  (:require [clojure.string :as str]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.container :as container]
@@ -63,14 +64,33 @@
 
 ;; ─── Adding messages ──────────────────────────────────────────────────────
 
+(defn- content->display-text
+  "Convert message content (string or block vector) to a display string.
+   Text blocks are joined; image blocks render as [image <mime-type>]
+   placeholders (pi renders image thumbnails)."
+  [content]
+  (cond
+    (string? content) content
+    (nil? content) ""
+    :else
+    (str/join "\n"
+      (for [b content]
+        (cond
+          (or (= (:type b) :image) (= (:type b) "image"))
+          (str "[image " (or (:mime-type b) "?") "]")
+          :else
+          (or (:text b) ""))))))
+
 (defn- make-component-for-msg
   "Create the appropriate component for a message map.
    For tool messages, looks up render functions from the tool registry."
   [msg theme output-pad]
   (case (:role msg)
-    :user (um/make-user-message :text (:content msg "") :theme theme :output-pad output-pad)
+    :user (um/make-user-message
+            :text (content->display-text (:content msg ""))
+            :theme theme :output-pad output-pad)
     :assistant (am/make-assistant-message
-                 :text (:content msg "")
+                 :text (content->display-text (:content msg ""))
                  :thinking (:thinking msg "")
                  :theme theme
                  :output-pad output-pad
@@ -115,6 +135,25 @@
   [ch msgs]
   (doseq [m msgs]
     (chat-history-add-message! ch m)))
+
+(defn chat-history-insert-before-streaming!
+  "Insert a message component immediately before the current streaming
+   placeholder (used for before-agent-start injected messages, which are
+   input context that belongs above the assistant response). Falls back to
+   appending when no streaming placeholder exists."
+  [ch msg]
+  (let [comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch))
+        streaming @(:streaming-atom ch)]
+    (when comp
+      (let [children @(:children-atom ch)
+            idx (if streaming
+                  (or (first (keep-indexed (fn [i c] (when (identical? c streaming) i)) children))
+                      (count children))
+                  (count children))
+            new-children (vec (concat (subvec children 0 idx) [comp] (subvec children idx)))]
+        (container/container-set-children! (:container ch) new-children)
+        (reset! (:children-atom ch) new-children)))
+    comp))
 
 (defn chat-history-remove-last!
   "Remove the last message from history.

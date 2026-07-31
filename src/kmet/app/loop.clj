@@ -41,7 +41,25 @@
 
    Model management (pi: setModel / cycleModel): set-models! sets the scoped
    model list; cycle-model! moves through it emitting :model-select.
-   set-get-api-key! registers a dynamic API key resolver."
+   set-get-api-key! registers a dynamic API key resolver.
+
+   Input hooks (pi: input extension event): applied at the interactive input
+   path (core.clj handle-submit) via skills/apply-input-hooks — extensions
+   can consume ({:action :handled}) or rewrite ({:action :transform :text ...})
+   user input before the agent runs.
+
+   before-agent-start hooks (pi: before_agent_start extension event): applied
+   by run-agent-turn after the user message is added, before the first LLM
+   call. Extensions can override the system prompt for the run
+   ({:system-prompt s}) and inject context messages ({:message m}); injected
+   messages default to role :info — display-only (rendered in the UI, excluded
+   from the LLM context). Other roles pass through to the provider.
+
+   Image attachments (pi: prompt(text, images)): run-agent-turn accepts
+   :images — a vector of {:type :image :data base64 :mime-type str} blocks
+   attached to the initial user message; they flow to the provider as OpenAI
+   image_url / Anthropic image blocks. Input hooks receive and can transform
+   :images (skills/apply-input-hooks)."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [kmet.app.llm :as llm]
@@ -144,8 +162,14 @@ Be precise and concise in your responses."}}]
     (cb event))
   (skills/emit-event! event))
 
-(defn- user-message [text]
-  {:role :user :content [{:type :text :text text}]})
+(defn- user-message
+  "Build a user message map. text — string; images — optional vector of
+   {:type :image :data base64 :mime-type str} blocks appended after the
+   text block (pi: user message content with image attachments)."
+  [text & [images]]
+  {:role :user
+   :content (into [{:type :text :text text}]
+                  (or images []))})
 
 (defn- assistant-message [text tool-calls]
   (let [content (if (seq text) [{:type :text :text text}] [])]
@@ -295,9 +319,10 @@ Be precise and concise in your responses."}}]
             (recur)))))))
 
 (defn- add-user-message!
-  "Add a user message to context and session, emitting :message-start."
-  [agent text]
-  (let [user-msg (user-message text)]
+  "Add a user message to context and session, emitting :message-start.
+   images — optional vector of image content blocks (pi: image attachments)."
+  [agent text & [images]]
+  (let [user-msg (user-message text images)]
     (swap! (:messages agent) conj user-msg)
     (when (:session agent)
       (session/append-entry (:session agent)
@@ -314,6 +339,25 @@ Be precise and concise in your responses."}}]
       (session/append-entry (:session agent) assistant-msg))
     (emit agent {:type :message-end :message assistant-msg})
     assistant-msg))
+
+(defn- add-custom-message!
+  "Add a before-agent-start injected message to context and session, emitting
+   :message-start. Role defaults to :info (display-only — rendered in the UI,
+   excluded from the LLM context); other roles pass through to the provider.
+   String :content is normalized to a text block so the message matches the
+   canonical kmet message format (session persistence and resume display)."
+  [agent m]
+  (let [content (:content m)
+        content (cond
+                  (string? content) [{:type :text :text content}]
+                  (nil? content) []
+                  :else content)
+        msg (cond-> (assoc m :content content)
+              (not (contains? m :role)) (assoc :role :info))]
+    (swap! (:messages agent) conj msg)
+    (when (:session agent)
+      (session/append-entry (:session agent) msg))
+    (emit agent {:type :message-start :message msg})))
 
 (defn- tool-execution-mode
   "Execution mode for a tool name: :sequential or :parallel.
@@ -535,6 +579,9 @@ Be precise and concise in your responses."}}]
         messages (if-let [tf @(:transform-context agent)]
                    (tf @(:messages agent))
                    @(:messages agent))
+        ;; Display-only :info messages (injected by before-agent-start hooks)
+        ;; never reach the provider — they exist for the UI/session only.
+        messages (into [] (remove #(= :info (:role %))) messages)
         messages (if system
                    (into [{:role :system :content [{:type :text :text system}]}]
                          (vec messages))
@@ -773,6 +820,9 @@ Be precise and concise in your responses."}}]
    agent    — AgentState record
    opts:
      :message  — optional initial user message string
+     :images   — optional vector of image content blocks
+                 ({:type :image :data base64 :mime-type str}) attached to
+                 the initial user message (pi: image attachments)
      :on-text  — (fn [text-delta]) streaming text callback
      :on-done  — (fn [response-text]) final response callback
      :on-error — (fn [error]) error callback
@@ -790,7 +840,7 @@ Be precise and concise in your responses."}}]
    Emits lifecycle events (see kmet.app.events) to the UI callback and the
    extension system via emit.
    Returns: future that completes when the agent run is done."
-  [agent {:keys [message on-text on-thinking on-done on-error]}]
+  [agent {:keys [message images on-text on-thinking on-done on-error]}]
   (reset! (:signal agent) false)
   (let [provider @(:provider agent)
         api-key (resolve-api-key agent)]
@@ -807,7 +857,17 @@ Be precise and concise in your responses."}}]
             (reset! (:overflow-recovered agent) false)
             ;; Initial user message
             (when message
-              (add-user-message! agent message))
+              (add-user-message! agent message images))
+
+            ;; before-agent-start hooks (pi: emitBeforeAgentStart) — extensions
+            ;; can override the system prompt for this run and inject context
+            ;; messages; runs once per submission, after the user message.
+            (let [bas (skills/apply-before-agent-start-hooks
+                        message @(:system agent))]
+              (when (:system-prompt bas)
+                (reset! (:system-prompt-override agent) (:system-prompt bas)))
+              (doseq [m (:messages bas)]
+                (add-custom-message! agent m)))
 
             ;; Proactive auto-compact before the run (entry count + token estimate)
             (maybe-compact! agent)

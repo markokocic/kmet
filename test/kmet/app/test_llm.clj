@@ -77,3 +77,53 @@
 (t/deftest test-llm-provider-keywords
   (t/is (= :openai (-> {:provider :openai} :provider)))
   (t/is (= :anthropic (-> {:provider :anthropic} :provider))))
+
+;; ─── Image block conversion ───────────────────────────────────────────────
+
+(t/deftest test-llm-openai-image-conversion
+  (let [msgs [{:role :user
+               :content [{:type :text :text "look"}
+                         {:type :image :data "AA" :mime-type "image/png"}]}]
+        converted (@#'llm/openai-messages msgs)]
+    (t/is (= [{:type "text" :text "look"}
+              {:type "image_url"
+               :image_url {:url "data:image/png;base64,AA"}}]
+             (:content (first converted)))
+          "image blocks convert to OpenAI image_url blocks")))
+
+(t/deftest test-llm-anthropic-image-conversion
+  (let [msgs [{:role :user
+               :content [{:type :text :text "look"}
+                         {:type :image :data "AA" :mime-type "image/png"}]}]
+        converted (@#'llm/anthropic-messages msgs)]
+    (t/is (= [{:type "text" :text "look"}
+              {:type "image"
+               :source {:type "base64" :media_type "image/png" :data "AA"}}]
+             (:content (first converted)))
+          "image blocks convert to Anthropic image blocks")))
+
+(t/deftest test-llm-tool-result-images-conversion
+  (let [msgs [{:role :tool
+               :content [{:type :tool_result :tool_use_id "t1" :content "saw it"}]
+               :images [{:data "AA" :mime-type "image/png"}]}]
+        openai (@#'llm/openai-messages msgs)
+        anthropic (@#'llm/anthropic-messages msgs)]
+    (t/is (= [{:type "text" :text "saw it"}
+              {:type "image_url"
+               :image_url {:url "data:image/png;base64,AA"}}]
+             (:content (first openai)))
+          "tool-result :images convert to OpenAI image_url blocks")
+    (t/is (= [{:type "text" :text "saw it"}
+              {:type "image"
+               :source {:type "base64" :media_type "image/png" :data "AA"}}]
+             (:content (first anthropic)))
+          "tool-result :images convert to Anthropic image blocks")))
+
+(t/deftest test-llm-no-images-backward-compat
+  (let [msgs [{:role :user :content [{:type :text :text "hi"}]}]
+        openai (@#'llm/openai-messages msgs)
+        anthropic (@#'llm/anthropic-messages msgs)]
+    (t/is (= "hi" (:content (first openai)))
+          "text-only messages keep string content for OpenAI")
+    (t/is (= "hi" (:content (first anthropic)))
+          "text-only messages keep string content for Anthropic")))

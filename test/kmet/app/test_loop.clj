@@ -1,5 +1,6 @@
 (ns kmet.app.test-loop
   (:require [clojure.test :as t]
+            [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.app.llm :as llm]
             [kmet.app.tools.core :as tools]
@@ -279,7 +280,76 @@
         (t/is (some #(and (= :user (:role %)) (= "run tool" (get-in % [:content 0 :text])))
                     (:messages ae))
               "agent-end :messages includes the user message")
-        (t/is (= :idle @(:status agent)) "Agent status should be idle after tool turn")))))
+        (t/is (= :idle @(:status agent)) "Agent status should be idle after tool turn")))
+
+;; ─── before-agent-start hooks ─────────────────────────────────────────────
+
+(t/deftest test-loop-before-agent-start-hooks
+  (let [events (atom [])
+        sent (atom nil)
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
+    (skills/clear-before-agent-start-hooks!)
+    (skills/register-before-agent-start-hook!
+      (fn [_]
+        {:system-prompt "EXTRA SYSTEM PROMPT"
+         :message {:role :info :label "ext" :content "injected note"}}))
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (reset! sent opts)
+                    (future
+                      (when-let [on-done (:on-done opts)]
+                        (on-done :stop))
+                      :done))]
+      ;; deref inside with-redefs keeps the rebinding until the turn completes
+      @(loop/run-agent-turn agent
+         {:message "hi"
+          :on-done (fn [_])
+          :on-error (fn [_])}))
+    (skills/clear-before-agent-start-hooks!)
+    (t/is (str/includes? (get-in @sent [:messages 0 :content 0 :text])
+                         "EXTRA SYSTEM PROMPT")
+          "before-agent-start system prompt override reaches the LLM call")
+    (t/is (some #(and (= :message-start (:type %))
+                      (= :info (:role (:message %))))
+                @events)
+          ":message-start is emitted for the injected message")
+    (t/is (= 1 (count (filter #(= :info (:role %)) @(:messages agent))))
+          "injected :info message stays in context")
+    (t/is (= [{:type :text :text "injected note"}]
+             (:content (first (filter #(= :info (:role %)) @(:messages agent)))))
+          "string content is normalized to text blocks")
+    (t/is (not-any? #(= :info (:role %)) (:messages @sent))
+          "display-only :info messages are excluded from the LLM context")))))
+
+;; ─── User message images ──────────────────────────────────────────────────
+
+(t/deftest test-loop-user-message-images
+  (let [sent (atom nil)
+        agent (loop/make-agent-state)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (reset! sent opts)
+                    (future
+                      (when-let [on-done (:on-done opts)]
+                        (on-done :stop))
+                      :done))]
+      @(loop/run-agent-turn agent
+         {:message "look at this"
+          :images [{:type :image :data "AA" :mime-type "image/png"}]
+          :on-done (fn [_])
+          :on-error (fn [_])}))
+    (let [user-msg (first (filter #(= :user (:role %)) @(:messages agent)))]
+      (t/is (= [{:type :text :text "look at this"}
+                {:type :image :data "AA" :mime-type "image/png"}]
+               (:content user-msg))
+            "user message carries text + image blocks"))
+    (let [llm-user (first (filter #(= :user (:role %)) (:messages @sent)))]
+      (t/is (= [{:type :text :text "look at this"}
+                {:type :image :data "AA" :mime-type "image/png"}]
+               (:content llm-user))
+            "image blocks reach the LLM call in kmet message format"))))
 
 
 
