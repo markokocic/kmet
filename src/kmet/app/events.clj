@@ -71,10 +71,9 @@
    "Fired when steering/follow-up queues change.
     Payload: :steering, :follow-up."
 
-   ;; ─── Reserved for future phases ───────────────────────────────────────
    :model-select
-   "Model was changed. Reserved for Phase 3.
-    Payload: :model, :previous-model, :source."
+   "Model was changed (pi: model_select).
+    Payload: :model, :previous-model, :source (:set | :cycle)."
 
    :auto-retry-start
    "Fired before a retry attempt's backoff sleep when a transient LLM error
@@ -85,6 +84,7 @@
    "Fired when retries finish — success, exhausted, or cancelled.
     Payload: :success, :attempt, :final-error (on failure)."
 
+   ;; ─── Reserved for future phases ───────────────────────────────────────
    :agent-settled
    "Agent is fully idle. Reserved."})
 

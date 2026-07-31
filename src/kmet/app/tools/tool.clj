@@ -4,7 +4,8 @@
 
 (defrecord Tool [name label description prompt-snippet prompt-guidelines
                  parameters execute render-call render-result
-                 constrained-sampling render-shell prepare-arguments])
+                 constrained-sampling render-shell prepare-arguments
+                 execution-mode])
 
 (defn param
   "Define a tool parameter for JSON schema generation."

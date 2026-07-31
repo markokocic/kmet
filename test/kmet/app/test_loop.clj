@@ -1,8 +1,10 @@
 (ns kmet.app.test-loop
   (:require [clojure.test :as t]
+            [babashka.fs :as fs]
             [kmet.app.llm :as llm]
             [kmet.app.tools.core :as tools]
             [kmet.app.skills :as skills]
+            [kmet.app.session :as session]
             [kmet.app.loop :as loop]
             [kmet.config :as cfg]))
 
@@ -819,3 +821,266 @@
       (t/is (= 2 (count ends)))
       (t/is (true? (:success (first ends))))
       (t/is (false? (:success (second ends)))))))
+
+;; ─── Phase 3: model management ───────────────────────────────────────────
+
+(t/deftest test-loop-make-agent-state-phase3-opts
+  (let [agent (loop/make-agent-state)]
+    (t/is (instance? clojure.lang.Atom (:system-prompt-override agent)))
+    (t/is (instance? clojure.lang.Atom (:transform-context agent)))
+    (t/is (instance? clojure.lang.Atom (:prepare-next-turn agent)))
+    (t/is (instance? clojure.lang.Atom (:should-stop-after-turn agent)))
+    (t/is (instance? clojure.lang.Atom (:get-api-key agent)))
+    (t/is (= [] @(:models agent)))
+    (t/is (false? @(:overflow-recovered agent)))
+    (t/is (nil? (:compact-token-threshold agent)))
+    (t/is (= 3 (:max-retries agent)) "pi default maxRetries")))
+
+(t/deftest test-loop-cycle-model
+  (let [events (atom [])
+        agent (loop/make-agent-state
+                :model "a" :models ["a" "b" "c"]
+                :on-event (fn [e] (swap! events conj e)))]
+    (t/is (= "b" (loop/cycle-model! agent 1)))
+    (t/is (= "c" (loop/cycle-model! agent 1)))
+    (t/is (= "a" (loop/cycle-model! agent 1)) "wraps around at the end")
+    (t/is (= "c" (loop/cycle-model! agent -1)) "cycles backward")
+    (t/is (= "b" (loop/cycle-model! agent -1)))
+    (let [ev (last @events)]
+      (t/is (= :model-select (:type ev)) "cycle emits :model-select")
+      (t/is (= :cycle (:source ev)))
+      (t/is (= "b" (:model ev)))
+      (t/is (= "c" (:previous-model ev))))))
+
+(t/deftest test-loop-cycle-model-no-models
+  (let [agent (loop/make-agent-state :model "a")]
+    (t/is (nil? (loop/cycle-model! agent 1)) "no scoped models → nil")))
+
+(t/deftest test-loop-set-model-emits-model-select
+  (let [events (atom [])
+        agent (loop/make-agent-state :model "a" :on-event (fn [e] (swap! events conj e)))]
+    (loop/set-model! agent "b")
+    (let [ev (last @events)]
+      (t/is (= :model-select (:type ev)))
+      (t/is (= "b" (:model ev)))
+      (t/is (= "a" (:previous-model ev)))
+      (t/is (= :set (:source ev))))
+    ;; setting the same model is a no-op (no event)
+    (loop/set-model! agent "b")
+    (t/is (= 1 (count (filter #(= :model-select (:type %)) @events))))))
+
+;; ─── Phase 3: transform-context ──────────────────────────────────────────
+
+(t/deftest test-loop-transform-context
+  (let [seen (atom nil)
+        agent (loop/make-agent-state)]
+    (loop/set-transform-context! agent
+      (fn [messages]
+        (reset! seen messages)
+        (conj messages {:role :user :content [{:type :text :text "injected"}]})))
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (let [msgs (:messages opts)]
+                        (t/is (= :system (:role (first msgs))) "system prompt prepended after transform")
+                        (t/is (some #(= "injected" (get-in % [:content 0 :text])) (rest msgs))
+                              "transformed message visible to the LLM"))
+                      (when-let [on-text (:on-text opts)] (on-text "ok"))
+                      (when-let [on-done (:on-done opts)] (on-done :stop))
+                      :done))]
+      @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])}))
+    (t/is (some #(= "hi" (get-in % [:content 0 :text])) @seen)
+          "hook receives the original conversation (no system prompt)")
+    (t/is (not-any? #(= :system (:role %)) @seen)
+          "transform-context sees only conversation messages")))
+
+;; ─── Phase 3: system prompt override ─────────────────────────────────────
+
+(t/deftest test-loop-system-prompt-override
+  (let [override-msgs (atom [])
+        holder (atom nil)
+        ;; The extension sets the override on :agent-start (pi: before_agent_start)
+        agent (loop/make-agent-state
+                :system "base prompt"
+                :on-event (fn [evt]
+                            (when (= :agent-start (:type evt))
+                              (loop/set-system-prompt-override! @holder "override prompt"))))]
+    (reset! holder agent)
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (swap! override-msgs conj (get-in opts [:messages 0 :content 0 :text]))
+                      (when-let [on-text (:on-text opts)] (on-text "ok"))
+                      (when-let [on-done (:on-done opts)] (on-done :stop))
+                      :done))]
+      @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])}))
+    (t/is (= ["override prompt"] @override-msgs)
+          "override preferred over base system prompt")
+    (t/is (= "override prompt" @(:system-prompt-override agent))
+          "override persists for the duration of the run")
+    ;; Next run resets the override at start (pi: prompt() resets per run)
+    (loop/set-system-prompt-override! agent "override prompt")
+    (loop/set-system-prompt-override! agent nil)
+    (t/is (nil? @(:system-prompt-override agent)))))
+
+;; ─── Phase 3: prepareNextTurn / shouldStopAfterTurn ──────────────────────
+
+(t/deftest test-loop-prepare-next-turn-updates-state
+  (let [agent (loop/make-agent-state :model "model-a" :thinking :off)]
+    (loop/set-prepare-next-turn! agent
+      (fn [_] {:model "model-b" :thinking :high :system-prompt-override "custom"}))
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message (stub-llm-tool-then-text (atom 0))
+                  tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (t/is (= "model-b" @(:model agent)) "prepare-next-turn swaps the model")
+    (t/is (= :high @(:thinking agent)) "prepare-next-turn updates thinking level")
+    (t/is (= "custom" @(:system-prompt-override agent))
+          "prepare-next-turn sets the system prompt override for later turns")))
+
+(t/deftest test-loop-should-stop-after-turn
+  (let [calls (atom 0)
+        agent (loop/make-agent-state)]
+    (loop/set-should-stop-after-turn! agent (fn [_] true))
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (swap! calls inc)
+                      (when-let [on-tc (:on-tool-call opts)]
+                        (on-tc {:id "tc1" :name "bash" :arguments "{}" :index 0}))
+                      (when-let [on-done (:on-done opts)]
+                        (on-done :tool-calls))
+                      :done))]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (t/is (= 1 @calls) "loop stops after the first turn")
+    (t/is (= :idle (loop/get-status agent)))))
+
+;; ─── Phase 3: parallel tool execution ────────────────────────────────────
+
+(defn- stub-llm-two-tool-calls-then-text
+  "send-message stub: first call streams two tool calls, subsequent calls a plain reply."
+  [call-count]
+  (fn [opts]
+    (future
+      (if (= 1 (swap! call-count inc))
+        (do (when-let [on-tc (:on-tool-call opts)]
+              (on-tc {:id "tc1" :name "bash" :arguments "{}" :index 0})
+              (on-tc {:id "tc2" :name "bash" :arguments "{}" :index 1}))
+            (when-let [on-done (:on-done opts)]
+              (on-done :tool-calls)))
+        (do (when-let [on-text (:on-text opts)]
+              (on-text "ok"))
+            (when-let [on-done (:on-done opts)]
+              (on-done :stop))))
+      :done)))
+
+(t/deftest test-loop-parallel-tool-execution
+  (let [events (atom [])
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message (stub-llm-two-tool-calls-then-text (atom 0))
+                  tools/execute-tool
+                  (fn [_ _]
+                    (Thread/sleep 400)
+                    {:content "ok" :is-error false})]
+      (let [start (System/currentTimeMillis)]
+        @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])})
+        (t/is (< (- (System/currentTimeMillis) start) 700)
+              "two 400ms tools run concurrently in well under 700ms")))
+    (t/is (= 2 (count (filter #(= :tool-execution-start (:type %)) @events))))
+    (t/is (= 2 (count (filter #(= :tool-execution-end (:type %)) @events))))
+    (let [te (first (filter #(= :turn-end (:type %)) @events))]
+      (t/is (= 2 (count (:tool-results te))) "turn-end carries both results"))
+    (t/is (= 2 (count (filter #(= :tool (:role %)) (loop/get-context agent))))
+          "both tool results appended to context")))
+
+(t/deftest test-loop-sequential-tool-execution
+  (let [seq-calls (atom 0)
+        agent (loop/make-agent-state)]
+    (tools/register-tool!
+      (tools/make-tool :name "seq-tool" :label "Seq"
+                       :description "sequential test tool"
+                       :parameters {:x (tools/param :x :string "x")}
+                       :execute (fn [_] {:content "seq" :is-error false})
+                       :execution-mode :sequential))
+    (try
+      (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                    llm/send-message
+                    (fn [opts]
+                      (future
+                        (if (= 1 (swap! seq-calls inc))
+                          (do (when-let [on-tc (:on-tool-call opts)]
+                                (on-tc {:id "t1" :name "seq-tool" :arguments "{}" :index 0})
+                                (on-tc {:id "t2" :name "seq-tool" :arguments "{}" :index 1}))
+                              (when-let [on-done (:on-done opts)]
+                                (on-done :tool-calls)))
+                          (do (when-let [on-text (:on-text opts)]
+                                (on-text "ok"))
+                              (when-let [on-done (:on-done opts)]
+                                (on-done :stop))))
+                        :done))
+                    tools/execute-tool
+                    (fn [_ _]
+                      (Thread/sleep 400)
+                      {:content "seq" :is-error false})]
+        (let [start (System/currentTimeMillis)]
+          @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])})
+          (t/is (>= (- (System/currentTimeMillis) start) 700)
+                "a :sequential tool forces the whole batch sequential (~800ms for 2×400ms)")))
+      (finally
+        (tools/unregister-tool! "seq-tool")))))
+
+;; ─── Phase 3: compaction ─────────────────────────────────────────────────
+
+(t/deftest test-loop-overflow-compact-retry
+  (let [events (atom [])
+        call-count (atom 0)
+        dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
+        sess (session/create-session (str dir))
+        agent (loop/make-agent-state
+                :on-event (fn [e] (swap! events conj e))
+                :session sess
+                :compact-threshold 10)]
+    (try
+      (dotimes [i 12]
+        (session/append-entry sess {:role :user :content [{:type :text :text (str "msg " i)}]}))
+      (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                    llm/send-message
+                    (fn [opts]
+                      (future
+                        (case (swap! call-count inc)
+                          1 (when-let [on-error (:on-error opts)]
+                              (on-error "prompt is too long: 500000 tokens > 200000 maximum"))
+                          (do (when-let [on-text (:on-text opts)]
+                                (on-text "recovered"))
+                              (when-let [on-done (:on-done opts)]
+                                (on-done :stop))))
+                        :done))]
+        @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])}))
+      (t/is (= 2 @call-count) "overflow triggers one compaction then a retry")
+      (t/is (< (count @(:entries sess)) 12) "session was compacted")
+      (t/is (some #(and (= :message-end (:type %))
+                        (= "recovered" (get-in % [:message :content 0 :text])))
+                  @events)
+            "retried call succeeds after compaction")
+      (finally
+        (fs/delete-tree dir)))))
+
+;; ─── Phase 3: dynamic API key ────────────────────────────────────────────
+
+(t/deftest test-loop-get-api-key-hook
+  (let [agent (loop/make-agent-state)]
+    (loop/set-get-api-key! agent (fn [_] "hook-key"))
+    (with-redefs [cfg/get-api-key (fn [_] "cfg-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (t/is (= "hook-key" (:api-key opts))
+                            "dynamic get-api-key hook preferred over cfg")
+                      (when-let [on-text (:on-text opts)] (on-text "ok"))
+                      (when-let [on-done (:on-done opts)] (on-done :stop))
+                      :done))]
+      @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])}))))

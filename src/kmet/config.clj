@@ -17,6 +17,7 @@
    :session-dir "~/.local/share/kmet/sessions"
    :max-session-entries 500
    :compact-threshold 400
+   :models []
    :system-prompt nil
    :thinking :off
    :extensions-dir "~/.config/kmet/extensions"

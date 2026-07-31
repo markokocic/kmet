@@ -657,6 +657,9 @@ Be precise and concise in your responses.")
                            (ui/chat-history-clear-streaming! ch)
                            (tui/tui-request-render t)
                            nil)))
+        _ (when (seq (:models config))
+            ;; Scoped model list for cycle-model! (pi: _scopedModels)
+            (agent/set-models! ag (:models config)))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 2
             :border-fn (fn [c] (th/dim c)))
@@ -786,6 +789,8 @@ Be precise and concise in your responses.")
              :model resolved-model
              :provider resolved-provider
              :system system-prompt)
+        _ (when (seq (:models config))
+            (agent/set-models! ag (:models config)))
         result-promise (promise)]
     (agent/run-agent-turn ag
       {:message (str/join " " messages)

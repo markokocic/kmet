@@ -15,7 +15,7 @@ Work proceeds in the following order:
 3. **Phase 2 — Resilience** (Agent Gaps 4, 10): auto-retry, before/after
    tool-call hooks. ✅ done
 4. **Phase 3 — Polish** (Agent Gaps 5–9, 11, 12): parallel tools, context
-   transforms, per-turn config, compaction, system prompt override.
+   transforms, per-turn config, compaction, system prompt override. ✅ done
 5. **Phase 4 — Editor quick wins** (Editor Gaps 5–9): history drafts,
    dynamic height, paste-marker atomic segments, CSI-u decode + renumbering.
 6. **Phase 5 — Autocomplete** (Editor Gaps 1, 2, 10): provider protocol,
