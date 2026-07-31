@@ -898,14 +898,20 @@ Be precise and concise in your responses.")
                     (tui/tui-request-render t)))))))
       (editor/editor-set-on-action! ed "app.tools.expand"
         (fn []
-          (ui/chat-history-toggle-tool-expanded! ch)
-          (update-header-footer! cs)
-          (tui/tui-request-render t)))
+          ;; pi: showStatus feedback on toggle
+          (let [expanded? (ui/chat-history-toggle-tool-expanded! ch)]
+            (ui/chat-history-show-status! ch
+              (str "Tool output: " (if expanded? "expanded" "collapsed")))
+            (update-header-footer! cs)
+            (tui/tui-request-render t))))
       (editor/editor-set-on-action! ed "app.thinking.toggle"
         (fn []
-          (ui/chat-history-toggle-thinking-hidden! ch)
-          (update-header-footer! cs)
-          (tui/tui-request-render t)))
+          ;; pi: showStatus feedback on toggle
+          (let [hidden? (ui/chat-history-toggle-thinking-hidden! ch)]
+            (ui/chat-history-show-status! ch
+              (str "Thinking blocks: " (if hidden? "hidden" "visible")))
+            (update-header-footer! cs)
+            (tui/tui-request-render t))))
       (editor/editor-set-on-action! ed "app.editor.external"
         (fn [] (handle-external-editor cs)))
 
@@ -923,23 +929,32 @@ Be precise and concise in your responses.")
       (text/text-set! hdr (fmt-header cs))
       (ui/footer-set-status! ftr (fmt-status-str cs))
 
-      ;; Pi-style info message on top
+      ;; Pi-style info message on top (expandable with ctrl+o, pi: builtInHeader)
       (let [kmgr (tui-kb/get-global-keybindings)
             expand-key (or (tui-kb/key-text kmgr "app.tools.expand") "Ctrl+O")
-            thinking-key (or (tui-kb/key-text kmgr "app.thinking.toggle") "Ctrl+T")]
+            thinking-key (or (tui-kb/key-text kmgr "app.thinking.toggle") "Ctrl+T")
+            compact (str "Welcome to " (th/bold "kmet") " — minimal coding agent.\n"
+                         (th/dim (str "Press " expand-key " to show full startup help.")))
+            full (str "Welcome to " (th/bold "kmet") " — minimal coding agent.\n\n"
+                      "Shortcuts:\n"
+                      "  " (th/dim "Enter") "      — submit message\n"
+                      "  " (th/dim "Escape") "     — cancel current turn / bash\n"
+                      "  " (th/dim "Ctrl+C") "     — clear editor (twice to quit)\n"
+                      "  " (th/dim "Ctrl+D") "     — exit when editor is empty\n"
+                      "  " (th/dim "Ctrl+G") "     — open external editor\n"
+                      "  " (th/dim expand-key) "     — toggle tool output\n"
+                      "  " (th/dim thinking-key) "     — toggle thinking blocks\n"
+                      "  " (th/dim "Ctrl+P") "     — cycle to next model\n"
+                      "  " (th/dim "Ctrl+L") "     — clear terminal\n"
+                      "  " (th/dim "Alt+Enter") "   — queue follow-up message\n"
+                      "  " (th/dim "/") " — commands   " (th/dim "!") " — bash   "
+                      "  " (th/dim "!!") " — bash (no context)\n\n"
+                      (th/dim "Type a message, or use /help for all commands."))]
         (ui/chat-history-set-info-msg! ch
           {:label "kmet"
-           :content (str "Welcome to kmet — minimal coding agent.\n"
-                         "Type a message, /help for commands, or use:\n"
-                         "  " (th/dim expand-key) " — toggle tool output  "
-                         (th/dim thinking-key) " — toggle thinking blocks")}))
-
-      ;; Welcome message
-      (ui/chat-history-add-message! ch
-        {:role :assistant
-         :content (str "Welcome to " (th/bold "kmet")
-                       " — minimal coding agent.\n"
-                       "Type your message or /help for commands.")})
+           :content compact
+           :collapsed-content compact
+           :expanded-content full}))
 
       cs)))
 

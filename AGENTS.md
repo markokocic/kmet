@@ -129,7 +129,8 @@ src/kmet/
 - Log format: `[ISO_TIMESTAMP] [ERROR: ]message\n`
 
 ## Docstrings
-- Required on all public vars, protocol methods, and `defrecord` types
+- No trivial docstrings — a docstring must add information beyond the name (intent, contract, args/return, side effects, exceptions). Skip it when the name is self-explanatory.
+- Where behavior isn't obvious, document: public vars, protocol methods, and `defrecord` types
 - Optional on private vars — use when the intent isn't obvious from the name
 
 ## Instruction hierarchy

@@ -9,6 +9,7 @@
             [kmet.tui.theme :as theme]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.spacer :as spacer]
+            [kmet.tui.components.text :as text]
             [kmet.app.ui.user-message :as um]
             [kmet.app.ui.assistant-message :as am]
             [kmet.app.ui.tool-execution :as te]
@@ -18,13 +19,22 @@
 ;; ─── Info component at top ─────────────────────────────────────────────────
 
 (defn- make-info-msg
-  "Create a CustomMessageComponent for the top info banner."
+  "Create a CustomMessageComponent for the top info banner.
+   Supports :collapsed-content / :expanded-content variants (pi: ExpandableText)
+   and an :expanded? flag to restore a previously expanded banner."
   [msg theme output-pad]
   (when msg
-    (cm/make-custom-message :label (:label msg)
-                            :content (:content msg "")
-                            :theme theme
-                            :output-pad output-pad)))
+    (let [comp (cm/make-custom-message :label (:label msg)
+                                       :content (:content msg "")
+                                       :theme theme
+                                       :output-pad output-pad)]
+      (when (and (some? (:collapsed-content msg))
+                 (some? (:expanded-content msg)))
+        (cm/custom-message-set-collapsible-content! comp
+          (:collapsed-content msg) (:expanded-content msg))
+        (when (:expanded? msg)
+          (cm/custom-message-set-expanded! comp true)))
+      comp)))
 
 ;; ─── ChatHistoryComponent record — wraps a Container ───────────────────────────────
 
@@ -33,7 +43,10 @@
                         theme-atom
                         output-pad-atom
                         streaming-atom  ;; atom of AssistantMessageComponent or nil (current streaming)
-                        children-atom]  ;; atom of vec (parallel to container children for iteration)
+                        children-atom   ;; atom of vec (parallel to container children for iteration)
+                        status-line-atom  ;; atom of StatusLine (bottom status message) or nil
+                        tools-expanded-atom   ;; flag: tool output expanded (pi: toolOutputExpanded)
+                        thinking-hidden-atom] ;; flag: thinking blocks hidden (pi: hideThinkingBlock)
   protocols/IComponent
 
   (render [this width]
@@ -60,7 +73,10 @@
                        :theme-atom (atom theme)
                        :output-pad-atom (atom output-pad)
                        :streaming-atom (atom nil)
-                       :children-atom (atom [])})))
+                       :children-atom (atom [])
+                       :status-line-atom (atom nil)
+                       :tools-expanded-atom (atom false)
+                       :thinking-hidden-atom (atom false)})))
 
 ;; ─── Adding messages ──────────────────────────────────────────────────────
 
@@ -83,8 +99,10 @@
 
 (defn- make-component-for-msg
   "Create the appropriate component for a message map.
-   For tool messages, looks up render functions from the tool registry."
-  [msg theme output-pad]
+   For tool messages, looks up render functions from the tool registry.
+   Assistant messages inherit the current thinking-hidden flag and tool
+   components the current expansion flag (pi: hideThinkingBlock / toolOutputExpanded)."
+  [msg theme output-pad tools-expanded? thinking-hidden?]
   (case (:role msg)
     :user (um/make-user-message
             :text (content->display-text (:content msg ""))
@@ -94,7 +112,7 @@
                  :thinking (:thinking msg "")
                  :theme theme
                  :output-pad output-pad
-                 :hide-thinking? false
+                 :hide-thinking? thinking-hidden?
                  :finalized? true)
     :tool (te/make-tool-execution
             :name (:name msg "")
@@ -103,7 +121,7 @@
             :is-error (:is-error msg false)
             :theme theme
             :output-pad output-pad
-            :expanded? false)
+            :expanded? tools-expanded?)
     :bash (:component msg)  ;; Already-constructed BashExecutionComponent
     :info (cm/make-custom-message :label (:label msg)
                                   :content (:content msg "")
@@ -118,7 +136,8 @@
    Pi-style: adds a Spacer(1) before user messages when the container is non-empty.
    Auto-scrolls to bottom. Returns the created component (or nil)."
   [ch msg]
-  (let [comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch))]
+  (let [comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch)
+                                     @(:tools-expanded-atom ch) @(:thinking-hidden-atom ch))]
     (when comp
       ;; Pi-style: add Spacer(1) before user messages when container is non-empty
       (when (and (= :user (:role msg))
@@ -142,7 +161,8 @@
    input context that belongs above the assistant response). Falls back to
    appending when no streaming placeholder exists."
   [ch msg]
-  (let [comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch))
+  (let [comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch)
+                                     @(:tools-expanded-atom ch) @(:thinking-hidden-atom ch))
         streaming @(:streaming-atom ch)]
     (when comp
       (let [children @(:children-atom ch)
@@ -157,34 +177,43 @@
 
 (defn chat-history-remove-last!
   "Remove the last message from history.
+   A trailing status line is not a message, so it is removed first.
    Also removes any preceding Spacer(1) added for user messages."
   [ch]
   (let [children @(:children-atom ch)]
     (when (seq children)
-      (let [last-child (last children)]
-        (container/container-remove-child (:container ch) last-child)
+      ;; Remove a trailing status line so the real last message is popped
+      (when (identical? (last children) @(:status-line-atom ch))
+        (container/container-remove-child (:container ch) @(:status-line-atom ch))
         (swap! (:children-atom ch) pop)
-        ;; If the new last child doesn't satisfy IComponentKind, it's a
-        ;; Spacer(1) added before a user message — remove it too.
-        (let [remaining @(:children-atom ch)]
-          (when (and (seq remaining)
-                     (not (satisfies? protocols/IComponentKind (last remaining))))
-            (let [spacer (last remaining)]
-              (container/container-remove-child (:container ch) spacer)
-              (swap! (:children-atom ch) pop))))))))
+        (reset! (:status-line-atom ch) nil))
+      (let [children @(:children-atom ch)]
+        (when (seq children)
+          (let [last-child (last children)]
+            (container/container-remove-child (:container ch) last-child)
+            (swap! (:children-atom ch) pop)
+            ;; If the new last child doesn't satisfy IComponentKind, it's a
+            ;; Spacer(1) added before a user message — remove it too.
+            (let [remaining @(:children-atom ch)]
+              (when (and (seq remaining)
+                         (not (satisfies? protocols/IComponentKind (last remaining))))
+                (let [spacer (last remaining)]
+                  (container/container-remove-child (:container ch) spacer)
+                  (swap! (:children-atom ch) pop))))))))))
 
 ;; ─── Streaming ────────────────────────────────────────────────────────────
 
 (defn chat-history-start-streaming!
   "Start a new streaming assistant message.
    Creates the component, adds it to the container, and returns it
-   so the caller can call append-text!/append-thinking!/finalize! on it."
+   so the caller can call append-text!/append-thinking!/finalize! on it.
+   Inherits the current thinking-hidden flag (pi: hideThinkingBlock)."
   [ch]
   (let [comp (am/make-assistant-message
                :text "" :thinking ""
                :theme @(:theme-atom ch)
                :output-pad @(:output-pad-atom ch)
-               :hide-thinking? false
+               :hide-thinking? @(:thinking-hidden-atom ch)
                :finalized? false)]
     (container/container-add-child (:container ch) comp)
     (swap! (:children-atom ch) conj comp)
@@ -250,14 +279,18 @@
 (defn chat-history-set-info-msg!
   "Set or clear the info message at the top.
    Pass {:label \"...\" :content \"...\"} or nil to clear.
-   The info message is a CustomMessageComponent component at index 0."
+   The info message is a CustomMessageComponent component at index 0.
+   Keeps children-atom parallel with the container children so kind-based
+   dispatch (theme, toggles, persistence) sees the banner."
   [ch msg]
   (when-let [old @(:info-comp-atom ch)]
-    (container/container-remove-child (:container ch) old))
+    (container/container-remove-child (:container ch) old)
+    (swap! (:children-atom ch) (fn [v] (vec (remove #(identical? % old) v)))))
   (if msg
     (let [comp (make-info-msg msg @(:theme-atom ch) @(:output-pad-atom ch))]
       (when comp
         (container-prepend-child (:container ch) comp)
+        (swap! (:children-atom ch) (fn [v] (into [comp] v)))
         (reset! (:info-comp-atom ch) comp)))
     (reset! (:info-comp-atom ch) nil)))
 
@@ -269,69 +302,93 @@
 ;; ─── Toggles ─────────────────────────────────────────────────────────────
 
 (defn- kind-of
-  "Get the component kind via IComponentKind protocol, falling back to key-based
-   heuristics for components that don't implement the protocol."
+  "Get the component kind via the IComponentKind protocol.
+   Every chat child implements it (user/assistant/tool/bash/custom/status)."
   [child]
-  (if (satisfies? protocols/IComponentKind child)
-    (protocols/component-kind child)
-    ;; Fallback for components that don't implement the protocol yet
-    (cond
-      (and (map? child) (contains? child :name-atom) (contains? child :expanded-atom)) :tool
-      (and (map? child) (contains? child :thinking-text-atom) (contains? child :hide-thinking-atom)) :assistant
-      (and (map? child) (contains? child :text-atom) (not (contains? child :thinking-text-atom))) :user
-      (and (map? child) (contains? child :label-atom) (contains? child :content-atom)
-           (not (contains? child :name-atom))) :custom
-      (and (map? child) (contains? child :command-atom) (contains? child :status-atom)) :bash
-      :else nil)))
+  (when (satisfies? protocols/IComponentKind child)
+    (protocols/component-kind child)))
 
-(defn- toggle-expanded!
-  "Toggle the expanded state of a tool or bash component."
-  [child]
-  (let [kind (kind-of child)]
-    (case kind
-      :tool (let [current @(:expanded-atom child)]
-              (te/tool-execution-set-expanded! child (not current)))
-      :bash (let [current @(:expanded-atom child)]
-              (be/bash-execution-set-expanded! child (not current)))
-      nil)))
-
-(defn- toggle-hide-thinking!
-  "Toggle the thinking-hidden state of an assistant component."
-  [child]
-  (let [current @(:hide-thinking-atom child)]
-    (am/assistant-message-set-hide-thinking! child (not current))))
+(defn- set-hide-thinking!
+  "Set the thinking-hidden state of an assistant component."
+  [child hidden?]
+  (am/assistant-message-set-hide-thinking! child hidden?))
 
 (defn chat-history-toggle-tool-expanded!
-  "Toggle tool output expansion on all ToolExecutionComponent children."
+  "Toggle tool output expansion on all ToolExecutionComponent children.
+   Tracks a single expansion flag (pi: toolOutputExpanded) applied to tools,
+   bash executions, and the collapsible info/help banner; new tool components
+   inherit the flag. Returns the new expansion state."
   [ch]
-  (doseq [child @(:children-atom ch)]
-    (when (= (kind-of child) :tool)
-      (toggle-expanded! child))))
+  (let [expanded? (not @(:tools-expanded-atom ch))]
+    (reset! (:tools-expanded-atom ch) expanded?)
+    (doseq [child @(:children-atom ch)]
+      (case (kind-of child)
+        :tool (te/tool-execution-set-expanded! child expanded?)
+        :bash (be/bash-execution-set-expanded! child expanded?)
+        nil))
+    ;; pi: startup info banner is expandable with ctrl+o
+    (when-let [info @(:info-comp-atom ch)]
+      (when (cm/custom-message-collapsible? info)
+        (cm/custom-message-set-expanded! info expanded?)))
+    expanded?))
 
 (defn chat-history-get-tool-expanded
-  "Check if tools are expanded. Returns false if no ToolExecutionComponent children."
+  "Check if tool output is expanded (the tracked expansion flag)."
   [ch]
-  (boolean
-    (some (fn [child]
-            (when (= (kind-of child) :tool)
-              @(:expanded-atom child)))
-          @(:children-atom ch))))
+  @(:tools-expanded-atom ch))
 
 (defn chat-history-toggle-thinking-hidden!
-  "Toggle thinking block visibility on all AssistantMessageComponent children."
+  "Toggle thinking block visibility on all AssistantMessageComponent children.
+   Tracks a single flag (pi: hideThinkingBlock) applied to existing messages;
+   new assistant messages inherit it. Returns the new hidden state."
   [ch]
-  (doseq [child @(:children-atom ch)]
-    (when (= (kind-of child) :assistant)
-      (toggle-hide-thinking! child))))
+  (let [hidden? (not @(:thinking-hidden-atom ch))]
+    (reset! (:thinking-hidden-atom ch) hidden?)
+    (doseq [child @(:children-atom ch)]
+      (when (= (kind-of child) :assistant)
+        (set-hide-thinking! child hidden?)))
+    hidden?))
 
 (defn chat-history-get-thinking-hidden
-  "Check if thinking is hidden. Returns false if no AssistantMessageComponent children."
+  "Check if thinking blocks are hidden (the tracked hidden flag)."
   [ch]
-  (boolean
-    (some (fn [child]
-            (when (= (kind-of child) :assistant)
-              @(:hide-thinking-atom child)))
-          @(:children-atom ch))))
+  @(:thinking-hidden-atom ch))
+
+;; ─── Status message (pi: showStatus) ────────────────────────────────────────
+
+;; StatusLine — bottom-of-chat status line: a dim text under a Spacer(1).
+;; Implements IComponentKind with kind nil so kind-based dispatch (toggles,
+;; message persistence, theme application) skips it.
+(defrecord StatusLine [spacer-atom text-atom]
+  protocols/IComponent
+  (render [this width]
+    (into [] (concat (protocols/render @spacer-atom width)
+                     (protocols/render @text-atom width))))
+  (handle-input [_this _data] nil)
+  (invalidate [this]
+    (protocols/invalidate @spacer-atom)
+    (protocols/invalidate @text-atom)))
+
+(extend-type StatusLine
+  protocols/IComponentKind
+  (component-kind [_] nil))
+
+(defn chat-history-show-status!
+  "Show a dim status message at the bottom of the chat (pi: showStatus).
+   When the last child is already the previous status line, its text is
+   updated in place instead of appending, so repeated toggles don't
+   accumulate status lines."
+  [ch message]
+  (let [children @(:children-atom ch)
+        last-child (when (seq children) (peek children))]
+    (if (identical? last-child @(:status-line-atom ch))
+      (text/text-set! @(:text-atom @(:status-line-atom ch)) (theme/dim message))
+      (let [line (map->StatusLine {:spacer-atom (atom (spacer/make-spacer 1))
+                                   :text-atom (atom (text/make-text (theme/dim message) 1 0))})]
+        (container/container-add-child (:container ch) line)
+        (swap! (:children-atom ch) conj line)
+        (reset! (:status-line-atom ch) line))))
+  nil)
 
 ;; ─── Misc ─────────────────────────────────────────────────────────────────
 
@@ -341,7 +398,8 @@
   (container/container-clear (:container ch))
   (reset! (:children-atom ch) [])
   (reset! (:info-comp-atom ch) nil)
-  (reset! (:streaming-atom ch) nil))
+  (reset! (:streaming-atom ch) nil)
+  (reset! (:status-line-atom ch) nil))
 
 (defn chat-history-rebuild!
   "Rebuild the chat history from a new message vector (context replacement).
@@ -349,8 +407,12 @@
   [ch msgs]
   (let [info @(:info-comp-atom ch)
         info-msg (when info
-                   {:label @(:label-atom info)
-                    :content @(:content-atom info)})]
+                   (cond-> {:label @(:label-atom info)
+                            :content @(:content-atom info)}
+                     (cm/custom-message-collapsible? info)
+                     (assoc :collapsed-content @(:collapsed-content-atom info)
+                            :expanded-content @(:expanded-content-atom info)
+                            :expanded? (cm/custom-message-get-expanded info))))]
     (chat-history-clear! ch)
     (doseq [m msgs]
       (chat-history-add-message! ch m))

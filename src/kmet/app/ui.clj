@@ -50,6 +50,10 @@
 ;; CustomMessageComponent
 (def make-custom-message custom-message/make-custom-message)
 (def custom-message-set-content! custom-message/custom-message-set-content!)
+(def custom-message-set-collapsible-content! custom-message/custom-message-set-collapsible-content!)
+(def custom-message-collapsible? custom-message/custom-message-collapsible?)
+(def custom-message-set-expanded! custom-message/custom-message-set-expanded!)
+(def custom-message-get-expanded custom-message/custom-message-get-expanded)
 ;; BashExecutionComponent
 (def make-bash-execution bash-execution/make-bash-execution)
 (def bash-execution-set-expanded! bash-execution/bash-execution-set-expanded!)
@@ -94,6 +98,7 @@
 (def chat-history-toggle-thinking-hidden! chat-history/chat-history-toggle-thinking-hidden!)
 (def chat-history-get-tool-expanded chat-history/chat-history-get-tool-expanded)
 (def chat-history-get-thinking-hidden chat-history/chat-history-get-thinking-hidden)
+(def chat-history-show-status! chat-history/chat-history-show-status!)
 (def chat-history-set-output-pad! chat-history/chat-history-set-output-pad!)
 
 ;; ─── General UI helpers (pi: showError / showWarning) ─────────────────────

@@ -1,6 +1,7 @@
 (ns kmet.app.ui.test-chat-history
   (:require [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
+            [kmet.tui.theme :as theme]
             [kmet.app.ui.chat-history :as ch]))
 
 (defn- strip-ansi [s]
@@ -254,3 +255,128 @@
       (let [lines (plain-lines ch 40)]
         (is (some #(re-find #"see:" %) lines))
         (is (some #(re-find #"\[image image/png\]" %) lines))))))
+
+(deftest test-show-status
+  (testing "status line renders and is not persisted as a message"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-add-message! ch {:role :user :content "hello"})
+      (ch/chat-history-show-status! ch "Tool output: expanded")
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"Tool output: expanded" %) lines)
+            "status text should render"))
+      (is (= [:user] (mapv :role (ch/chat-history-get-messages ch)))
+          "status must not appear in persisted messages")
+      (is (= ["hello"] (mapv :content (ch/chat-history-get-messages ch)))))))
+
+(deftest test-show-status-updates-in-place
+  (testing "repeated status updates replace the line instead of appending"
+    (let [ch (ch/make-chat-history)
+          _ (ch/chat-history-add-message! ch {:role :user :content "hi"})]
+      (ch/chat-history-show-status! ch "Tool output: expanded")
+      (ch/chat-history-show-status! ch "Tool output: collapsed")
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"Tool output: collapsed" %) lines))
+        (is (not-any? #(re-find #"Tool output: expanded" %) lines)
+            "old status text should be replaced, not accumulated")))))
+
+(deftest test-info-collapsible
+  (testing "collapsible info banner toggles with the tool-expand action"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-set-info-msg! ch
+        {:label "kmet" :content "plain"
+         :collapsed-content "Press ctrl+o to expand"
+         :expanded-content "Full help here"})
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"Press ctrl\+o to expand" %) lines)
+            "collapsed content shown by default")
+        (is (not-any? #(re-find #"Full help here" %) lines)))
+      (ch/chat-history-toggle-tool-expanded! ch)
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"Full help here" %) lines)
+            "expanded content after toggle")
+        (is (not-any? #(re-find #"Press ctrl\+o to expand" %) lines))))))
+
+(deftest test-info-non-collapsible-untouched
+  (testing "non-collapsible info banner is left untouched by the toggle"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-set-info-msg! ch {:label "kmet" :content "static text"})
+      (ch/chat-history-toggle-tool-expanded! ch)
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"static text" %) lines))))))
+
+(deftest test-rebuild-preserves-collapsible-info
+  (testing "rebuild keeps collapsible variants and expanded state"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-set-info-msg! ch
+        {:label "kmet" :content "plain"
+         :collapsed-content "Collapsed banner"
+         :expanded-content "Expanded banner"})
+      (ch/chat-history-toggle-tool-expanded! ch)  ;; expand
+      (ch/chat-history-rebuild! ch [{:role :user :content "new"}])
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"Expanded banner" %) lines)
+            "expanded state preserved across rebuild"))
+      (ch/chat-history-toggle-tool-expanded! ch)  ;; collapse
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"Collapsed banner" %) lines)
+            "collapsible variants preserved across rebuild")))))
+
+(deftest test-flag-toggle-no-content
+  (testing "toggles flip the tracked flags even with no matching components"
+    (let [ch (ch/make-chat-history)]
+      (is (false? (ch/chat-history-get-tool-expanded ch)))
+      (ch/chat-history-toggle-tool-expanded! ch)
+      (is (true? (ch/chat-history-get-tool-expanded ch)) "flag flips without tools")
+      (ch/chat-history-toggle-tool-expanded! ch)
+      (is (false? (ch/chat-history-get-tool-expanded ch)))
+      (ch/chat-history-toggle-thinking-hidden! ch)
+      (is (true? (ch/chat-history-get-thinking-hidden ch)) "flag flips without messages"))))
+
+(deftest test-new-messages-inherit-flags
+  (testing "new tool components inherit the expansion flag"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-add-message! ch {:role :tool :name "ls" :content "files"})
+      (is (false? (ch/chat-history-get-tool-expanded ch)))
+      (ch/chat-history-toggle-tool-expanded! ch)
+      ;; a NEW tool added after the toggle is expanded too
+      (ch/chat-history-add-message! ch {:role :tool :name "ls" :content "more"})
+      (let [tools (filter #(contains? % :expanded-atom) @(:children-atom ch))]
+        (is (= 2 (count tools)))
+        (is (every? #(true? @(:expanded-atom %)) tools)
+            "all tools — old and new — are expanded"))))
+  (testing "new assistant messages inherit the thinking-hidden flag"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-add-message! ch
+        {:role :assistant :content "a" :thinking "t"})
+      (ch/chat-history-toggle-thinking-hidden! ch)
+      (ch/chat-history-add-message! ch
+        {:role :assistant :content "b" :thinking "t2"})
+      (let [assistants (filter #(contains? % :hide-thinking-atom) @(:children-atom ch))]
+        (is (= 2 (count assistants)))
+        (is (every? #(true? @(:hide-thinking-atom %)) assistants)
+            "all assistant messages — old and new — have thinking hidden")))))
+
+(deftest test-remove-last-skips-status
+  (testing "remove-last pops the trailing status line first, then the message"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-add-message! ch {:role :user :content "msg"})
+      (ch/chat-history-show-status! ch "Tool output: expanded")
+      (ch/chat-history-remove-last! ch)
+      (is (= [] (ch/chat-history-get-messages ch))
+          "the message is removed, not the status line")
+      (is (nil? @(:status-line-atom ch)) "status line is dropped with it"))))
+
+(deftest test-info-banner-in-children
+  (testing "the info banner is a chat child: themed, persisted as :info, survives remove-last"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-set-info-msg! ch {:label "kmet" :content "banner"})
+      (is (= 1 (count @(:children-atom ch))) "banner is in children-atom")
+      (is (= 1 (count @(:children (:container ch)))) "container children stay parallel")
+      ;; theme + output-pad must reach the banner without errors
+      (ch/chat-history-set-theme! ch theme/dark-theme)
+      (ch/chat-history-set-output-pad! ch 2)
+      (ch/chat-history-add-message! ch {:role :user :content "hi"})
+      (is (= [:info :user] (mapv :role (ch/chat-history-get-messages ch))))
+      (ch/chat-history-remove-last! ch)
+      (is (= [:info] (mapv :role (ch/chat-history-get-messages ch)))
+          "remove-last removes the message, not the banner"))))
