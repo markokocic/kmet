@@ -95,8 +95,8 @@
 ;; ─── Image line detection ────────────────────────────────────────────────
 
 (defn is-image-line [line]
-  (or (.startsWith line kitty-prefix)
-      (.startsWith line "\u001b]1337;File=")
+  (or (str/starts-with? line kitty-prefix)
+      (str/starts-with? line "\u001b]1337;File=")
       (str/includes? line kitty-prefix)
       (str/includes? line "\u001b]1337;File=")))
 

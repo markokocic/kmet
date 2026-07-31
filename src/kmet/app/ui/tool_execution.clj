@@ -72,7 +72,7 @@
                :num-additions num-new
                :num-removals num-old})))))
     (catch Exception e
-      {:success? false :error (str "Error previewing edit: " (.getMessage e))})))
+      {:success? false :error (str "Error previewing edit: " (ex-message e))})))
 
 ;; ─── Built-in tool renderers ──────────────────────────────────────────────
 ;; Each render-call takes (name args theme width context) → IComponent or nil.

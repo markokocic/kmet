@@ -47,7 +47,7 @@
                 (try (edn/read-string trimmed)
                      (catch Exception ex
                        (binding [*out* *err*]
-                         (println "Warning: Skipping invalid entry in" path ":" (.getMessage ex)))
+                         (println "Warning: Skipping invalid entry in" path ":" (ex-message ex)))
                        nil)))))))
         leaf-id (some-> entries last :id)]
     (map->Session {:file (str (fs/canonicalize file))

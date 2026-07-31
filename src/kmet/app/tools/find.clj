@@ -22,4 +22,4 @@
           {:content (str/join "\n" (take 200 r))
            :truncated (> (count r) 200)})))
     (catch Exception e
-      {:content (str "Error finding: " (.getMessage e)) :is-error true})))
+      {:content (str "Error finding: " (ex-message e)) :is-error true})))

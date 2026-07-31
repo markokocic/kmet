@@ -31,7 +31,7 @@
                    :content content}))
               (catch Exception e
                 (binding [*out* *err*]
-                  (println "Warning: Failed to load skill" (fs/file-name f) ":" (.getMessage e)))))))
+                  (println "Warning: Failed to load skill" (fs/file-name f) ":" (ex-message e)))))))
         (swap! skills into @loaded)))))
 
 (defn register-skill!

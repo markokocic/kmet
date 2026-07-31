@@ -1,5 +1,6 @@
 (ns kmet.app.test-session
   (:require [clojure.test :as t]
+            [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
             [kmet.app.session :as s]))
@@ -87,7 +88,7 @@
     (t/is (sequential? files))
     (t/is (>= (count files) 2))
     (doseq [f files]
-      (t/is (.endsWith f ".ednl")))))
+      (t/is (str/ends-with? f ".ednl")))))
 
 (t/deftest test-session-list-sessions-nonexistent-dir
   (let [files (s/list-sessions "nonexistent-dir")]

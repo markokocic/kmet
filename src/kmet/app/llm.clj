@@ -50,7 +50,7 @@
           {:type :thinking :content (get delta :reasoning_content)}
           :else {:type :delta :chunk chunk}))
       (catch Exception e
-        {:type :error :message (str "Parse error: " (.getMessage e))}))))
+        {:type :error :message (str "Parse error: " (ex-message e))}))))
 
 ;; ─── Anthropic event parsing ───────────────────────────────────────────────
 
@@ -260,7 +260,7 @@
               (let [event (parse-openai-event data)]
                 (handler event)))))))
     (catch Exception e
-      (handler {:type :error :message (str "Stream error: " (.getMessage e))}))))
+      (handler {:type :error :message (str "Stream error: " (ex-message e))}))))
 
 (defn- process-anthropic-stream [response handler signal]
   (try
@@ -280,7 +280,7 @@
                       (recur nil ""))
                   :else (recur event-name buf))))))))
     (catch Exception e
-      (handler {:type :error :message (str "Stream error: " (.getMessage e))}))))
+      (handler {:type :error :message (str "Stream error: " (ex-message e))}))))
 
 ;; ─── OpenAI request ────────────────────────────────────────────────────────
 
@@ -321,7 +321,7 @@
                 nil))
             signal))
         (catch Exception e
-          (when on-error (on-error (.getMessage e))))))))
+          (when on-error (on-error (ex-message e))))))))
 
 ;; ─── Anthropic request ─────────────────────────────────────────────────────
 
@@ -366,7 +366,7 @@
                 nil))
             signal))
         (catch Exception e
-          (when on-error (on-error (.getMessage e))))))))
+          (when on-error (on-error (ex-message e))))))))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 

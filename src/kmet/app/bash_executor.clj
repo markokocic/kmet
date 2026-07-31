@@ -366,11 +366,11 @@
             (and signal @signal)
             {:output content :exit-code nil :cancelled true
              :truncated truncated :full-output-path @temp-file-path}
-            (str/includes? (str (.getMessage e)) "timeout")
+            (str/includes? (str (ex-message e)) "timeout")
             {:output (str content "\n\nCommand timed out after " (or timeout "?") "s")
              :exit-code nil :cancelled false
              :truncated truncated :full-output-path @temp-file-path}
             :else
-            {:output (str content "\n\nError: " (.getMessage e))
+            {:output (str content "\n\nError: " (ex-message e))
              :exit-code nil :cancelled false
              :truncated truncated :full-output-path @temp-file-path}))))))

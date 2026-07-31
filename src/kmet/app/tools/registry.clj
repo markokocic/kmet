@@ -111,6 +111,6 @@
     (try
       ((:execute tool) args)
       (catch Exception e
-        {:content (str "Error executing " tool-name ": " (.getMessage e))
+        {:content (str "Error executing " tool-name ": " (ex-message e))
          :is-error true}))
     {:content (str "Unknown tool: " tool-name) :is-error true}))

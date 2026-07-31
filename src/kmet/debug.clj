@@ -24,7 +24,7 @@
         pw (java.io.PrintWriter. sw)]
     (.printStackTrace e pw)
     (.flush pw)
-    (str (.getName (class e)) ": " (.getMessage e) "\n" (.toString sw))))
+    (str (.getName (class e)) ": " (ex-message e) "\n" (.toString sw))))
 
 (defn log
   "Write a timestamped line to debug.log if logging is enabled.

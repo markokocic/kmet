@@ -1,5 +1,6 @@
 (ns kmet.test-theme
   (:require [clojure.test :as t]
+            [clojure.string :as str]
             [clojure.java.io :as io]
             [kmet.tui.theme :as theme]))
 
@@ -146,5 +147,5 @@
   ;; Cleanup
   (let [d (io/file "target")]
     (doseq [f (file-seq d)]
-      (when (.endsWith (.getName f) ".edn")
+      (when (str/ends-with? (.getName f) ".edn")
         (.delete f)))))

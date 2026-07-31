@@ -12,4 +12,4 @@
       (spit f content)
       {:content (str "Written " (count content) " bytes to " path)})
     (catch Exception e
-      {:content (str "Error writing to " path ": " (.getMessage e)) :is-error true})))
+      {:content (str "Error writing to " path ": " (ex-message e)) :is-error true})))

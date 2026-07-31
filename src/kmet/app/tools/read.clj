@@ -59,4 +59,4 @@
                            (when (pos? offset)
                              (str "\n\n[showing " (count selected) " of " total " lines]")))}))))
     (catch Exception e
-      {:content (str "Error reading " path ": " (.getMessage e)) :is-error true})))
+      {:content (str "Error reading " path ": " (ex-message e)) :is-error true})))

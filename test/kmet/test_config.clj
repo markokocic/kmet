@@ -1,5 +1,6 @@
 (ns kmet.test-config
   (:require [clojure.test :as t]
+            [clojure.string :as str]
             [kmet.config :as cfg]))
 
 ;; ─── Defaults ──────────────────────────────────────────────────────────────
@@ -28,8 +29,8 @@
 (t/deftest test-expand-path-with-tilde
   (let [home (System/getProperty "user.home")
         expanded (cfg/expand-path "~/.config/kmet/settings.edn")]
-    (t/is (.startsWith expanded home))
-    (t/is (.endsWith expanded "/.config/kmet/settings.edn"))))
+    (t/is (str/starts-with? expanded home))
+    (t/is (str/ends-with? expanded "/.config/kmet/settings.edn"))))
 
 (t/deftest test-expand-path-relative
   (t/is (= ".kmet/settings.edn" (cfg/expand-path ".kmet/settings.edn"))))
@@ -68,8 +69,8 @@
   (let [home (System/getProperty "user.home")
         c (assoc cfg/default-config :session-dir "~/.local/share/kmet/sessions")
         dir (cfg/get-session-dir c)]
-    (t/is (.startsWith dir home))
-    (t/is (.endsWith dir "/.local/share/kmet/sessions"))))
+    (t/is (str/starts-with? dir home))
+    (t/is (str/ends-with? dir "/.local/share/kmet/sessions"))))
 
 (t/deftest test-get-theme-name
   (let [c (assoc cfg/default-config :theme "light")]

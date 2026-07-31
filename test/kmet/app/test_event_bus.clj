@@ -1,5 +1,6 @@
 (ns kmet.app.test-event-bus
   (:require [clojure.test :as t]
+            [clojure.string :as str]
             [kmet.app.event-bus :as event-bus]))
 
 ;; ─── Event vocabulary ─────────────────────────────────────────────────────
@@ -40,7 +41,7 @@
     (event-bus/on-event :multi (fn [e] (swap! log conj (str "b:" (:val e)))))
     (event-bus/emit-event! {:type :multi :val 42})
     (t/is (= 2 (count @log)))
-    (t/is (.contains (first @log) "42"))))
+    (t/is (str/includes? (first @log) "42"))))
 
 (t/deftest test-event-no-listeners
   (t/testing "Emitting with no listeners should not throw"

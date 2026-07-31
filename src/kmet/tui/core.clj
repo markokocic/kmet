@@ -252,7 +252,7 @@
                        (catch Exception e
                          (when (and @(:running? tui)
                                     (identical? reader @(:current-reader tui)))
-                           (binding [*out* *err*] (println "input:" (.getMessage e)))))))))]
+                           (binding [*out* *err*] (println "input:" (ex-message e)))))))))]
       (reset! (:input-reader tui) f))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════

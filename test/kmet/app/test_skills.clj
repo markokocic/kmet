@@ -1,5 +1,6 @@
 (ns kmet.app.test-skills
   (:require [clojure.test :as t]
+            [clojure.string :as str]
             [clojure.java.io :as io]
             [kmet.app.skills :as skills]))
 
@@ -20,7 +21,7 @@
 (t/deftest test-build-system-prompt
   (t/testing "build-system-prompt starts with base prompt and appends skills"
     (let [result (skills/build-system-prompt "Base prompt")]
-      (t/is (.startsWith result "Base prompt")))))
+      (t/is (str/starts-with? result "Base prompt")))))
 
 (t/deftest test-get-skills-returns-list
   (let [name "test-gs"
@@ -44,4 +45,4 @@
     (let [loaded (skills/get-skill "test")]
       (t/is (some? loaded))
       (t/is (= "test" (:name loaded)))
-      (t/is (.contains (:content loaded) "Test Skill")))))
+      (t/is (str/includes? (:content loaded) "Test Skill")))))

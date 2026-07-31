@@ -123,6 +123,6 @@
         (catch Exception e
           (debug/log-error "unhandled exception: " e)
           (binding [*out* *err*]
-            (println "Error:" (.getMessage e))
+            (println "Error:" (ex-message e))
             (.printStackTrace e))
           (System/exit 1))))))

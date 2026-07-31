@@ -166,7 +166,7 @@
   "True if s is a valid prefix of a CSI sequence (ESC [ ... final byte)."
   [s]
   (and (str/starts-with? s "\u001b[")
-       (let [payload (.substring s 2)]
+       (let [payload (subs s 2)]
          (or (empty? payload)
              (and (not (re-find #"[\x40-\x7e]$" payload))
                   (not (re-find #"[\x00-\x1f]" payload)))))))

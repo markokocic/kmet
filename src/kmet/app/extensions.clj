@@ -73,7 +73,7 @@
                               :images current-images})
                        (catch Exception e
                          (binding [*out* *err*]
-                           (println "Warning: input hook error:" (.getMessage e)))
+                           (println "Warning: input hook error:" (ex-message e)))
                          nil))]
           (cond
             (= :handled (:action result)) {:action :handled}
@@ -100,7 +100,7 @@
                      (hook {:prompt prompt :system-prompt current-prompt})
                      (catch Exception e
                        (binding [*out* *err*]
-                         (println "Warning: before-agent-start hook error:" (.getMessage e)))
+                         (println "Warning: before-agent-start hook error:" (ex-message e)))
                        nil))]
         (recur (next hooks)
                (if (and result (contains? result :system-prompt))
@@ -141,4 +141,4 @@
                 {:name (fs/file-name f) :file (str (fs/canonicalize f))}))
             (catch Exception e
               (binding [*out* *err*]
-                (println "Warning: Failed to load extension" (fs/file-name f) ":" (.getMessage e))))))))))
+                (println "Warning: Failed to load extension" (fs/file-name f) ":" (ex-message e))))))))))

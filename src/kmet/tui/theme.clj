@@ -433,7 +433,7 @@
         (register-theme! theme))
       (catch Exception e
         (binding [*out* *err*]
-          (println "Warning: Failed to load theme" (fs/file-name path) ":" (.getMessage e)))))))
+          (println "Warning: Failed to load theme" (fs/file-name path) ":" (ex-message e)))))))
 
 (defn load-themes-from-dir
   "Load all .edn theme files from a directory."

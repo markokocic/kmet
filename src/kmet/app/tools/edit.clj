@@ -21,4 +21,4 @@
               (spit f result)
               {:content (str "Replaced " replaced " chars with " new-len " chars in " path)})))))
     (catch Exception e
-      {:content (str "Error editing " path ": " (.getMessage e)) :is-error true})))
+      {:content (str "Error editing " path ": " (ex-message e)) :is-error true})))

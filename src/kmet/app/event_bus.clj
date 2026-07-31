@@ -111,7 +111,7 @@
    callback   — (fn [event-map])
    Returns a deregister function."
   [event-type callback]
-  (let [id (java.util.UUID/randomUUID)]
+  (let [id (random-uuid)]
     (swap! event-listeners update event-type assoc id callback)
     (fn [] (swap! event-listeners update event-type dissoc id))))
 
@@ -133,7 +133,7 @@
           (cb event)
           (catch Exception e
             (binding [*out* *err*]
-              (println "Warning: extension event handler error:" (.getMessage e)))))))))
+              (println "Warning: extension event handler error:" (ex-message e)))))))))
 
 (defn get-event-types
   "List all registered event types."

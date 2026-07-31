@@ -415,7 +415,7 @@ Be precise and concise in your responses."}}]
              :args tc-args})
       (catch Exception e
         {:block true
-         :reason (str "before-tool-call hook error: " (.getMessage e))}))))
+         :reason (str "before-tool-call hook error: " (ex-message e))}))))
 
 (defn- after-tool-hook-result
   "Run the after-tool-call hook if registered (pi: afterToolCall), merging any
@@ -436,7 +436,7 @@ Be precise and concise in your responses."}}]
             (contains? hook-result :is-error) (assoc :is-error (:is-error hook-result)))
           result))
       (catch Exception e
-        {:content (str "after-tool-call hook error: " (.getMessage e))
+        {:content (str "after-tool-call hook error: " (ex-message e))
          :is-error true}))
     result))
 
@@ -1040,8 +1040,8 @@ Be precise and concise in your responses."}}]
 
           (catch Exception e
             (reset! (:status agent) :error)
-            (emit agent {:type :error :message (.getMessage e)})
-            (when on-error (on-error (.getMessage e)))))))))
+            (emit agent {:type :error :message (ex-message e)})
+            (when on-error (on-error (ex-message e)))))))))
 
 ;; ─── Cancellation ──────────────────────────────────────────────────────────
 

@@ -24,4 +24,4 @@
                            sorted))]
           {:content (str "Contents of " (str (fs/canonicalize dir)) ":\n" result)})))
     (catch Exception e
-      {:content (str "Error listing: " (.getMessage e)) :is-error true})))
+      {:content (str "Error listing: " (ex-message e)) :is-error true})))

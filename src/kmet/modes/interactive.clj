@@ -394,7 +394,7 @@
     (tui/tui-request-render (:tui cs))
     (catch Exception e
       (debug/log "on-agent-text callback: " e)
-      (binding [*out* *err*] (println "on-agent-text error:" (.getMessage e) (.getClass e))))))
+      (binding [*out* *err*] (println "on-agent-text error:" (ex-message e) (.getClass e))))))
 
 (defn- on-agent-thinking [cs text]
   "Called for each thinking/reasoning delta from the LLM during streaming."
@@ -403,7 +403,7 @@
     (tui/tui-request-render (:tui cs))
     (catch Exception e
       (debug/log "on-agent-thinking callback: " e)
-      (binding [*out* *err*] (println "on-agent-thinking error:" (.getMessage e) (.getClass e))))))
+      (binding [*out* *err*] (println "on-agent-thinking error:" (ex-message e) (.getClass e))))))
 
 (defn- on-agent-done [cs]
   "Called when the LLM turn completes.
@@ -420,7 +420,7 @@
     (debug/log "agent turn completed")
     (catch Exception e
       (debug/log "on-agent-done callback: " e)
-      (binding [*out* *err*] (println "on-agent-done error:" (.getMessage e) (.getClass e))))))
+      (binding [*out* *err*] (println "on-agent-done error:" (ex-message e) (.getClass e))))))
 
 (defn- on-agent-error [cs error-msg]
   "Called when an error occurs during the agent turn."
@@ -446,7 +446,7 @@
     (debug/log "agent turn error: " error-msg)
     (catch Exception e
       (debug/log "on-agent-error callback: " e)
-      (binding [*out* *err*] (println "on-agent-error error:" (.getMessage e) (.getClass e))))))
+      (binding [*out* *err*] (println "on-agent-error error:" (ex-message e) (.getClass e))))))
 
 ;; ─── Submit handler ────────────────────────────────────────────────────────
 
@@ -551,7 +551,7 @@
               (tui/tui-request-render (:tui cs)))
             
             (catch Exception e
-              (let [err-msg (or (.getMessage e) "Unknown error")]
+              (let [err-msg (or (ex-message e) "Unknown error")]
                 (debug/log "bash command error: " e)
                 (be/bash-execution-set-complete! bash-comp nil false)
                 (ui/show-error! (:chat-history cs) err-msg)
@@ -691,7 +691,7 @@
                        (ui/chat-history-add-message! (:chat-history cs)
                          {:role :assistant
                           :content (str "External editor failed to start: "
-                                        (.getMessage e))})
+                                        (ex-message e))})
                        :error))]
         (when (= result :ok)
           (let [new-content (try (slurp tmp-file) (catch Exception _ nil))]

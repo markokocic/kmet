@@ -35,4 +35,4 @@
             {:content (str base (or sk-msg ""))
              :truncated (> (count r) 100)}))))
     (catch Exception e
-      {:content (str "Error searching: " (.getMessage e)) :is-error true})))
+      {:content (str "Error searching: " (ex-message e)) :is-error true})))

@@ -17,8 +17,8 @@
 (deftest test-encode-kitty
   (testing "Kitty encoding with all params"
     (let [encoded (img/encode-kitty test-png :columns 10 :rows 10 :image-id 42)]
-      (is (.startsWith encoded "\u001b_G"))
-      (is (.endsWith encoded "\u001b\\"))
+      (is (str/starts-with? encoded "\u001b_G"))
+      (is (str/ends-with? encoded "\u001b\\"))
       (is (str/includes? encoded "c=10"))
       (is (str/includes? encoded "r=10"))
       (is (str/includes? encoded "i=42"))))

@@ -1,5 +1,6 @@
 (ns kmet.tui.components.test-editor
   (:require [clojure.test :as t]
+            [clojure.string :as str]
             [kmet.tui.core :as core]
             [kmet.tui.components.editor :as editor]
             [kmet.tui.autocomplete :as ac]
@@ -230,8 +231,8 @@
     (doseq [c "hello"] (core/handle-input e (str c)))
     (let [lines (core/render e 20)]
       (t/is (pos? (count lines)))
-      (t/is (.startsWith (first lines) "───"))
-      (t/is (.endsWith (last lines) "───")))))
+      (t/is (str/starts-with? (first lines) "───"))
+      (t/is (str/ends-with? (last lines) "───")))))
 
 (t/deftest test-editor-render-empty
   (let [e (editor/make-editor :height 3)]
@@ -253,8 +254,8 @@
   (let [e (editor/make-editor :height 3 :border-fn (fn [_] "="))]
     (doseq [c "hi"] (core/handle-input e (str c)))
     (let [lines (core/render e 10)]
-      (t/is (.startsWith (first lines) "=="))
-      (t/is (.endsWith (last lines) "==")))))
+      (t/is (str/starts-with? (first lines) "=="))
+      (t/is (str/ends-with? (last lines) "==")))))
 
 ;; ─── Edge cases ──────────────────────────────────────────────────────────
 

@@ -41,7 +41,7 @@
             {:content content
              :is-error is-error}))))
     (catch Exception e
-      (let [msg (.getMessage e)]
+      (let [msg (ex-message e)]
         (if (str/includes? msg "timeout")
           {:content (str "Command timed out after " (or timeout "?") "s") :is-error true}
           {:content (str "Error: " msg) :is-error true})))))
