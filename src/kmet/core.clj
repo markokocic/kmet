@@ -666,6 +666,7 @@ Be precise and concise in your responses.")
             (agent/set-models! ag (:models config)))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 2
+            :terminal-rows (fn [] (term/rows (:terminal t)))
             :border-fn (fn [c] (th/dim c)))
         sp3 (spacer/make-spacer 1)
         ftr (ui/make-footer :status "" :n-msgs 0 :theme (cfg/get-theme config))

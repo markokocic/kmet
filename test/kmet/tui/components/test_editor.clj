@@ -5,6 +5,9 @@
 
 ;; Raw key sequences matching what parse-key expects
 (def ^:const K-LEFT "\u001b[D")
+(def ^:const K-RIGHT "\u001b[C")
+(def ^:const K-UP "\u001b[A")
+(def ^:const K-DOWN "\u001b[B")
 (def ^:const K-DEL "\u001b[3~")
 (def ^:const K-BS "\u007f")
 (def ^:const K-ENTER "\r")
@@ -308,3 +311,181 @@
     (t/is (= "" (editor/editor-get-text e)) "Kill line removes all text")
     (core/handle-input e (ctrl 25))  ;; ctrl+y = yank
     (t/is (= "hello" (editor/editor-get-text e)) "Yank restores killed text")))
+
+;; ─── Paste ────────────────────────────────────────────────────────────────
+
+(t/deftest test-editor-paste-small
+  (let [e (editor/make-editor)]
+    (core/handle-input e (str "\u001b[200~" "hello world" "\u001b[201~"))
+    (t/is (= "hello world" (editor/editor-get-text e)))
+    (t/is (= :idle @(:paste-state e)) "paste state returns to idle")
+    ;; Cursor lands after the pasted text, so typing continues after it
+    (let [{:keys [cursor-col]} @(:state-atom e)]
+      (t/is (= (count "hello world") cursor-col))))
+  (let [e (editor/make-editor)]
+    ;; Paste into the middle of an existing line
+    (doseq [c "abc"] (core/handle-input e (str c)))
+    (core/handle-input e (ctrl 2))  ;; ctrl+b = left
+    (core/handle-input e (str "\u001b[200~" "XY" "\u001b[201~"))
+    (t/is (= "abXYc" (editor/editor-get-text e)))
+    (t/is (= 4 (:cursor-col @(:state-atom e))) "cursor after the pasted text")))
+
+(t/deftest test-editor-paste-multi-line-streamed
+  ;; \r (enter) mid-paste must be buffered, not trigger submit/newline
+  (let [e (editor/make-editor)
+        submitted (atom false)]
+    (editor/editor-set-on-submit! e (fn [_] (reset! submitted true)))
+    (core/handle-input e "\u001b[200~")
+    (core/handle-input e "line1\r\n")
+    (core/handle-input e "line2\u001b[201~")
+    (t/is (= "line1\nline2" (editor/editor-get-text e)))
+    (t/is (not @submitted))))
+
+(t/deftest test-editor-paste-marker-created
+  (let [e (editor/make-editor)
+        big (clojure.string/join "\n" (repeat 15 "line"))]
+    (core/handle-input e (str "\u001b[200~" big "\u001b[201~"))
+    (t/is (clojure.string/includes? (editor/editor-get-text e) "[paste #1 +15 lines"))
+    (t/is (= 1 (count @(:paste-store e))))
+    (t/is (= big (editor/editor-get-paste e 1)))))
+
+(t/deftest test-editor-paste-marker-atomic-backspace
+  (let [e (editor/make-editor)
+        big (clojure.string/join "\n" (repeat 15 "line"))]
+    (core/handle-input e (str "\u001b[200~" big "\u001b[201~"))
+    ;; Cursor sits at end of the marker — one backspace removes it entirely
+    (core/handle-input e K-BS)
+    (t/is (= "" (editor/editor-get-text e)))
+    (t/is (empty? @(:paste-store e)))))
+
+(t/deftest test-editor-paste-marker-atomic-cursor
+  (let [e (editor/make-editor)
+        big (clojure.string/join "\n" (repeat 15 "line"))]
+    (core/handle-input e (str "\u001b[200~" big "\u001b[201~"))
+    (let [marker (editor/editor-get-text e)]
+      (core/handle-input e (ctrl 1))  ;; ctrl+a = home
+      (core/handle-input e K-RIGHT)   ;; right arrow skips the whole marker
+      (t/is (= (count marker) (:cursor-col @(:state-atom e))))
+      ;; left arrow from end also skips the whole marker
+      (core/handle-input e K-LEFT)
+      (t/is (= 0 (:cursor-col @(:state-atom e)))))))
+
+(t/deftest test-editor-paste-renumbering
+  (let [e (editor/make-editor)
+        big1 (clojure.string/join "\n" (repeat 15 "one"))
+        big2 (clojure.string/join "\n" (repeat 15 "two"))
+        big3 (clojure.string/join "\n" (repeat 15 "three"))]
+    (core/handle-input e (str "\u001b[200~" big1 "\u001b[201~"))
+    (core/handle-input e (str "\u001b[200~" big2 "\u001b[201~"))
+    (core/handle-input e (str "\u001b[200~" big3 "\u001b[201~"))
+    (t/is (= #{1 2 3} (set (keys @(:paste-store e)))))
+    ;; Delete the first marker with forward-delete
+    (core/handle-input e (ctrl 1))  ;; ctrl+a = home
+    (core/handle-input e K-DEL)
+    (let [text (editor/editor-get-text e)]
+      (t/is (= "[paste #1 +15 lines — ctrl+o to expand][paste #2 +15 lines — ctrl+o to expand]"
+               text)
+            "remaining markers renumbered to close the gap")
+      (t/is (= #{1 2} (set (keys @(:paste-store e)))))
+      (t/is (= big2 (editor/editor-get-paste e 1)))
+      (t/is (= big3 (editor/editor-get-paste e 2))))))
+
+(t/deftest test-editor-paste-csi-u
+  (let [e (editor/make-editor)]
+    (core/handle-input e (str "\u001b[200~" "abc\u001b[97;5u" "def" "\u001b[201~"))
+    (t/is (= "abc\u0001def" (editor/editor-get-text e)))))
+
+(t/deftest test-editor-paste-smart-path-spacing
+  (let [e (editor/make-editor)]
+    (doseq [c "cd"] (core/handle-input e (str c)))
+    (core/handle-input e (str "\u001b[200~" "/tmp/x" "\u001b[201~"))
+    (t/is (= "cd /tmp/x" (editor/editor-get-text e))))
+  (let [e (editor/make-editor)]
+    (doseq [c "cd "] (core/handle-input e (str c)))
+    (core/handle-input e (str "\u001b[200~" "/tmp/x" "\u001b[201~"))
+    (t/is (= "cd /tmp/x" (editor/editor-get-text e)) "no double space after existing space")))
+
+;; ─── History draft ────────────────────────────────────────────────────────
+
+(t/deftest test-editor-history-draft
+  (let [e (editor/make-editor)]
+    (editor/editor-push-history! e "hello")
+    (editor/editor-push-history! e "world")
+    (doseq [c "draft"] (core/handle-input e (str c)))
+    (t/is (= "draft" (editor/editor-get-text e)))
+    (core/handle-input e (ctrl 16))  ;; ctrl+p = history-backward
+    (t/is (= "world" (editor/editor-get-text e)))
+    (core/handle-input e (ctrl 14))  ;; ctrl+n = history-forward
+    (t/is (= "draft" (editor/editor-get-text e)) "typed draft restored after round-trip")
+    ;; Browsing again, Ctrl+Z mid-browse returns to the draft
+    (core/handle-input e (ctrl 16))
+    (core/handle-input e (ctrl 16))  ;; one entry deeper
+    (t/is (= "hello" (editor/editor-get-text e)))
+    (core/handle-input e (ctrl 31))  ;; ctrl+- = undo → back to draft
+    (t/is (= "draft" (editor/editor-get-text e)) "Ctrl+Z while browsing restores the draft")))
+
+(t/deftest test-editor-history-draft-empty-history
+  (let [e (editor/make-editor)]
+    (doseq [c "draft"] (core/handle-input e (str c)))
+    (core/handle-input e (ctrl 16))
+    (t/is (= "draft" (editor/editor-get-text e)) "no history, no change")))
+
+;; ─── Dynamic height ───────────────────────────────────────────────────────
+
+(t/deftest test-editor-dynamic-height
+  (let [text (clojure.string/join "\n" (repeat 30 "line"))]
+    (let [e (editor/make-editor :terminal-rows (fn [] 40))]
+      (editor/editor-set-text! e text)
+      (t/is (= 14 (count (core/render e 40))) "40 rows → 30% = 12 visible + 2 borders"))
+    (let [e (editor/make-editor :terminal-rows (fn [] 8))]
+      (editor/editor-set-text! e text)
+      (t/is (= 7 (count (core/render e 40))) "8 rows → min 5 visible + 2 borders"))
+    (let [e (editor/make-editor :height 6)]
+      (editor/editor-set-text! e text)
+      (t/is (= 8 (count (core/render e 40))) "fixed :height fallback 6 + 2 borders"))))
+
+(t/deftest test-editor-terminal-rows-setter
+  (let [e (editor/make-editor)]
+    (editor/editor-set-terminal-rows! e (fn [] 30))
+    (t/is (= 30 ((deref (:terminal-rows-atom e)))))
+    (editor/editor-set-terminal-rows! e nil)
+    (t/is (nil? @(:terminal-rows-atom e)))))
+
+(t/deftest test-editor-render-marker-atomic-wrap
+  ;; Word-wrap must not break inside a paste marker, even when the marker
+  ;; is wider than the wrap width (marker overflows to its own chunk)
+  (let [e (editor/make-editor)
+        big (clojure.string/join "\n" (repeat 30 "line"))]
+    ;; Create the marker the real way (paste populates the store)
+    (core/handle-input e (str "\u001b[200~" big "\u001b[201~"))
+    (core/handle-input e (ctrl 1))  ;; ctrl+a = home
+    (doseq [c "aaa bbb ccc "] (core/handle-input e (str c)))
+    (let [m "[paste #1 +30 lines — ctrl+o to expand]"
+          text (editor/editor-get-text e)
+          lines (core/render e 30)]
+      (t/is (clojure.string/includes? text m) "text contains the whole marker")
+      (t/is (some #(clojure.string/includes? % m) lines)
+            "marker appears whole on one visual line")
+      (t/is (not-any? #(and (clojure.string/includes? % "[paste #")
+                            (not (clojure.string/includes? % m)))
+                      lines)
+            "no partial marker fragments"))))
+
+(t/deftest test-editor-undo-restores-paste-store
+  (let [e (editor/make-editor)
+        big1 (clojure.string/join "\n" (repeat 15 "one"))
+        big2 (clojure.string/join "\n" (repeat 15 "two"))]
+    (core/handle-input e (str "\u001b[200~" big1 "\u001b[201~"))
+    (core/handle-input e (str "\u001b[200~" big2 "\u001b[201~"))
+    ;; Delete the first marker → #2 renumbered to #1, store {1: big2}
+    (core/handle-input e (ctrl 1))
+    (core/handle-input e K-DEL)
+    (t/is (= "[paste #1 +15 lines — ctrl+o to expand]" (editor/editor-get-text e)))
+    (t/is (= #{1} (set (keys @(:paste-store e)))))
+    ;; Undo restores both markers AND the original store entries
+    (core/handle-input e (ctrl 31))
+    (t/is (= "[paste #1 +15 lines — ctrl+o to expand][paste #2 +15 lines — ctrl+o to expand]"
+             (editor/editor-get-text e)))
+    (t/is (= #{1 2} (set (keys @(:paste-store e)))) "undo restores the original store")
+    (t/is (= big1 (editor/editor-get-paste e 1)))
+    (t/is (= big2 (editor/editor-get-paste e 2)))))

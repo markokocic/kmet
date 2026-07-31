@@ -1,6 +1,7 @@
 (ns kmet.tui.components.editing
   "Shared editing primitives for input and editor components.
-   Grapheme cluster navigation, kill ring, and undo stack.")
+   Grapheme cluster navigation, paste marker handling, kill ring, and undo
+   stack.")
 
 ;; ─── Grapheme helpers ──────────────────────────────────────────────────────
 ;;
@@ -330,6 +331,127 @@
   "Return a vector of {:text str :start idx} for each grapheme cluster in s."
   [s]
   (grapheme-segments-impl s))
+
+;; ─── Paste marker helpers ──────────────────────────────────────────────────
+;; Paste markers ([paste #N ...]) are stored in the editor's paste store and
+;; replaced with a short marker. These helpers treat a marker as a single
+;; atomic unit: cursor movement, deletion, and word-wrap never break inside
+;; one.
+
+(def ^:private paste-marker-prefix
+  "Literal prefix of a paste marker: [paste #"
+  "[paste #")
+
+(defn find-paste-markers-in-line
+  "Find paste markers in a single line of text.
+   Returns a vector of {:id int :start int :end int} in order of appearance.
+   :end is the index just past the closing bracket."
+  [line]
+  (loop [offset 0, found []]
+    (if-let [idx (clojure.string/index-of line paste-marker-prefix offset)]
+      (if-let [end-idx (clojure.string/index-of line "]" (+ idx 1))]
+        (let [id-str (re-find #"\d+" (subs line (+ idx (count paste-marker-prefix))))]
+          (if id-str
+            (recur (inc end-idx)
+                   (conj found {:id (parse-long id-str) :start idx :end (inc end-idx)}))
+            (recur (inc end-idx) found)))
+        found)
+      found)))
+
+(defn segment-with-markers
+  "Return grapheme segments of s (via base-segmenter), merging each complete
+   paste marker (whose id is in valid-ids) into a single atomic segment.
+   Mirrors pi's segmentWithMarkers (tui/src/components/editor.ts)."
+  [s base-segmenter valid-ids]
+  (let [ranges (->> (find-paste-markers-in-line s)
+                    (filter #(contains? valid-ids (:id %)))
+                    (mapv (juxt :start :end)))
+        n (count ranges)]
+    (if (zero? n)
+      (base-segmenter s)
+      (loop [segs (vec (base-segmenter s))
+             out []
+             pending nil          ;; {:text str :start int}
+             pending-range -1     ;; index of the range pending belongs to
+             rng-idx 0]           ;; current range cursor (monotonic)
+        (if (empty? segs)
+          (if pending (conj out pending) out)
+          (let [pos (:start (first segs))
+                ;; Advance past ranges that end at or before this segment
+                rng-idx (loop [i rng-idx]
+                          (if (and (< i n) (>= pos (second (nth ranges i))))
+                            (recur (inc i))
+                            i))
+                in-marker? (and (< rng-idx n)
+                                (>= pos (first (nth ranges rng-idx)))
+                                (< pos (second (nth ranges rng-idx))))]
+            (cond
+              ;; Inside a marker, continuing the current one
+              (and in-marker? pending (= pending-range rng-idx))
+              (recur (subvec segs 1) out
+                     (update pending :text str (:text (first segs)))
+                     pending-range rng-idx)
+
+              ;; Inside a (new) marker — flush pending, start a new one
+              in-marker?
+              (recur (subvec segs 1)
+                     (if pending (conj out pending) out)
+                     {:text (:text (first segs)) :start pos}
+                     rng-idx rng-idx)
+
+              ;; Outside markers — flush pending and emit the segment
+              :else
+              (recur (subvec segs 1)
+                     (if pending (conj (conj out pending) (first segs)) (conj out (first segs)))
+                     nil -1 rng-idx))))))))
+
+(defn paste-marker?
+  "True if s starts with a paste marker ([paste #...)."
+  [s]
+  (clojure.string/starts-with? s "[paste #"))
+
+(defn renumber-paste-markers-in-line
+  "Rewrite paste markers in line according to id->new (old-id → new-id).
+   Markers whose id is not in the map are left unchanged."
+  [line id->new]
+  (let [markers (find-paste-markers-in-line line)]
+    (if (empty? markers)
+      line
+      (loop [markers markers, out "", cursor 0]
+        (if (empty? markers)
+          (str out (subs line cursor))
+          (let [{:keys [id start end]} (first markers)
+                old-text (subs line start end)
+                new-id (get id->new id)
+                new-text (if new-id
+                           (clojure.string/replace old-text (str "#" id) (str "#" new-id))
+                           old-text)]
+            (recur (rest markers) (str out (subs line cursor start) new-text) end)))))))
+
+(defn decode-csi-u
+  "Decode CSI-u encoded control bytes (ESC [ <codepoint> ; 5 u) back to
+   literal control characters. Lowercase a-z → ctrl+letter, uppercase A-Z →
+   ctrl+shift+letter. Mirrors pi's paste handling (editor.ts)."
+  [text]
+  (clojure.string/replace text #"\u001b\[(\d+);5u"
+    (fn [[match code-str]]
+      (let [cp (parse-long code-str)]
+        (cond
+          (and (>= cp 97) (<= cp 122)) (str (char (- cp 96)))
+          (and (>= cp 65) (<= cp 90)) (str (char (- cp 64)))
+          :else match)))))
+
+(defn smart-path-spacing
+  "If text starts with a path marker (/ ~ .) and prev-char is a word character,
+   prepend a space so the pasted path doesn't merge with the preceding word.
+   Mirrors pi's smart path spacing in paste handling."
+  [text prev-char]
+  (if (and (seq text)
+           (re-find #"^[/~.]" text)
+           prev-char
+           (re-find #"\w" (str prev-char)))
+    (str " " text)
+    text))
 
 ;; ─── Kill ring ─────────────────────────────────────────────────────────────
 

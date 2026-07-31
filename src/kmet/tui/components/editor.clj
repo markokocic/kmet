@@ -3,7 +3,10 @@
    Port of @earendil-works/pi-tui Editor.
    Phase 2b.1 — Core Editor: multi-line editing, word-wrap, cursor movement,
    vertical scrolling, border, basic editing (typing, backspace, delete,
-   enter newline, submit)."
+   enter newline, submit).
+   Phase 4 — Editor quick wins: paste-marker atomic segments, CSI-u paste
+   decode, smart path spacing, paste marker renumbering, history draft
+   preservation, dynamic editor height."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as u]
@@ -20,14 +23,16 @@
 (defrecord TextChunk [text start-index end-index])
 
 (defn- word-wrap-line
-  "Split a single logical line into word-wrapped visual chunks."
-  [line max-width]
+  "Split a single logical line into word-wrapped visual chunks.
+   Paste markers (ids in valid-paste-ids) are treated as atomic segments
+   so wrapping never breaks inside a marker."
+  [line max-width valid-paste-ids]
   (if (or (nil? line) (<= max-width 0))
     [(map->TextChunk {:text (or line "") :start-index 0 :end-index (count (or line ""))})]
     (let [line-width (u/visible-width line)]
       (if (<= line-width max-width)
         [(map->TextChunk {:text line :start-index 0 :end-index (count line)})]
-        (let [segments (edit/grapheme-segments line)
+        (let [segments (edit/segment-with-markers line edit/grapheme-segments valid-paste-ids)
               n (count segments)
               result (volatile! [])
               cw (volatile! 0)    ;; current line width
@@ -41,17 +46,33 @@
                     char-idx (:start seg)
                     is-ws (boolean (re-find #"^\s" (:text seg)))]
                 (if (> gwidth max-width)
-                  ;; Atomic segment wider than max-width: recurse
-                  (let [sub-chunks (word-wrap-line (:text seg) max-width)]
-                    (doseq [sc (butlast sub-chunks)]
-                      (vswap! result conj
-                        (map->TextChunk {:text (:text sc)
-                                         :start-index (+ char-idx (:start-index sc))
-                                         :end-index (+ char-idx (:end-index sc))})))
-                    (let [last-sc (last sub-chunks)]
-                      (vreset! cs (+ char-idx (:start-index last-sc)))
-                      (vreset! cw (u/visible-width (:text last-sc)))
-                      (vreset! woi -1) (vreset! wow 0)))
+                  ;; Segment wider than the wrap width
+                  (if (edit/paste-marker? (:text seg))
+                    ;; Paste markers are atomic — overflow to their own chunk
+                    ;; instead of breaking inside the marker
+                    (do (when (< @cs char-idx)
+                          (vswap! result conj
+                            (map->TextChunk {:text (subs line @cs char-idx)
+                                             :start-index @cs
+                                             :end-index char-idx})))
+                        (vswap! result conj
+                          (map->TextChunk {:text (:text seg)
+                                           :start-index char-idx
+                                           :end-index (+ char-idx (count (:text seg)))}))
+                        (vreset! cs (+ char-idx (count (:text seg))))
+                        (vreset! cw gwidth)
+                        (vreset! woi -1) (vreset! wow 0))
+                    ;; Other atomic segment wider than max-width: recurse
+                    (let [sub-chunks (word-wrap-line (:text seg) max-width valid-paste-ids)]
+                      (doseq [sc (butlast sub-chunks)]
+                        (vswap! result conj
+                          (map->TextChunk {:text (:text sc)
+                                           :start-index (+ char-idx (:start-index sc))
+                                           :end-index (+ char-idx (:end-index sc))})))
+                      (let [last-sc (last sub-chunks)]
+                        (vreset! cs (+ char-idx (:start-index last-sc)))
+                        (vreset! cw (u/visible-width (:text last-sc)))
+                        (vreset! woi -1) (vreset! wow 0))))
                   ;; Normal-width grapheme
                   (do
                     ;; Overflow check
@@ -65,11 +86,12 @@
                                              :end-index (:start opp-seg)}))
                           (vreset! cs (:start opp-seg))
                           (vreset! cw @wow))
-                        (when (< @cs char-idx)
-                          (vswap! result conj
-                            (map->TextChunk {:text (subs line @cs char-idx)
-                                             :start-index @cs
-                                             :end-index char-idx}))
+                        (do
+                          (when (< @cs char-idx)
+                            (vswap! result conj
+                              (map->TextChunk {:text (subs line @cs char-idx)
+                                               :start-index @cs
+                                               :end-index char-idx})))
                           (vreset! cs char-idx)
                           (vreset! cw 0)))
                       (vreset! woi -1) (vreset! wow 0))
@@ -93,7 +115,7 @@
 
 (defn- build-visual-line-map
   "Build a vector of VisualLineInfo from logical lines and content width."
-  [lines width]
+  [lines width valid-paste-ids]
   (if (or (empty? lines) (and (= (count lines) 1) (empty? (first lines))))
     [(map->VisualLineInfo {:logical-line 0 :start-col 0 :length 0 :text ""})]
     (vec (mapcat
@@ -107,7 +129,7 @@
                                         :start-col (:start-index %)
                                         :length (count (:text %))
                                         :text (:text %)})
-                 (word-wrap-line line width)))))
+                 (word-wrap-line line width valid-paste-ids)))))
       (range (count lines))))))
 
 (defn- find-visual-line-at
@@ -153,9 +175,13 @@
 
 ;; ─── Undo/redo stacks
 
-(defn- snapshot-state [state-atom]
-  (let [s @state-atom]
-    {:lines (:lines s) :cursor-line (:cursor-line s) :cursor-col (:cursor-col s)}))
+(defn- snapshot-state
+  "Capture the editor state (lines, cursor) plus the paste store so undo
+   and history drafts restore markers consistently."
+  [editor]
+  (let [s @(:state-atom editor)]
+    {:lines (:lines s) :cursor-line (:cursor-line s) :cursor-col (:cursor-col s)
+     :paste-store @(:paste-store editor)}))
 
 (defn- undo-push [stack-atom snapshot]
   (swap! stack-atom conj snapshot))
@@ -168,26 +194,28 @@
         snapshot))))
 
 (defn- push-undo-state [editor]
-  (undo-push (:undo-stack editor) (snapshot-state (:state-atom editor))))
+  (undo-push (:undo-stack editor) (snapshot-state editor)))
 
 (defn- handle-undo [editor]
   (when-let [snapshot (undo-pop (:undo-stack editor))]
-    (undo-push (:redo-stack editor) (snapshot-state (:state-atom editor)))
+    (undo-push (:redo-stack editor) (snapshot-state editor))
     (reset! (:state-atom editor)
       (map->EditorState {:lines (:lines snapshot)
                          :cursor-line (:cursor-line snapshot)
                          :cursor-col (:cursor-col snapshot)}))
+    (reset! (:paste-store editor) (:paste-store snapshot))
     (reset! (:preferred-col-atom editor) nil)
     (reset! (:last-action editor) nil)
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
 
 (defn- handle-redo [editor]
   (when-let [snapshot (undo-pop (:redo-stack editor))]
-    (undo-push (:undo-stack editor) (snapshot-state (:state-atom editor)))
+    (undo-push (:undo-stack editor) (snapshot-state editor))
     (reset! (:state-atom editor)
       (map->EditorState {:lines (:lines snapshot)
                          :cursor-line (:cursor-line snapshot)
                          :cursor-col (:cursor-col snapshot)}))
+    (reset! (:paste-store editor) (:paste-store snapshot))
     (reset! (:preferred-col-atom editor) nil)
     (reset! (:last-action editor) nil)
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
@@ -254,14 +282,84 @@
                     [cl (+ start (max 1 non-ws))])))))
           (if (< cl (dec total)) [(inc cl) 0] [cl cc])))))))
 
+;; ─── Marker-aware segmentation & paste store sync ────────────────────────
+;; Paste markers ([paste #N ...]) act as atomic units for cursor movement,
+;; deletion, and word-wrap. When a marker is deleted the paste store is
+;; cleaned up and remaining markers are renumbered (pi: paste marker
+;; renumbering).
+
+(defn- valid-paste-ids
+  "Set of paste marker ids currently present in the paste store."
+  [editor]
+  (set (keys @(:paste-store editor))))
+
+(defn- segment
+  "Grapheme segments of text, with paste markers treated as atomic units."
+  [editor text]
+  (edit/segment-with-markers text edit/grapheme-segments (valid-paste-ids editor)))
+
+(defn- segment-left
+  "Move one (marker-aware) grapheme segment left within text."
+  [editor text pos]
+  (if (<= pos 0)
+    0
+    (:start (last (segment editor (subs text 0 pos))))))
+
+(defn- segment-right
+  "Move one (marker-aware) grapheme segment right within text."
+  [editor text pos]
+  (let [n (count text)]
+    (if (>= pos n)
+      n
+      (let [segs (segment editor (subs text pos))]
+        (if (seq segs)
+          (+ pos (count (:text (first segs))))
+          n)))))
+
+(defn- sync-paste-store!
+  "Sync paste-store with the markers present in lines:
+   - drops entries whose marker was deleted,
+   - renumbers remaining markers to close gaps (store keys and marker text),
+   - resets the paste counter so future markers stay sequential.
+   Returns the (possibly rewritten) lines."
+  [editor lines]
+  (let [store @(:paste-store editor)
+        markers (vec (mapcat edit/find-paste-markers-in-line lines))
+        live-ids (mapv :id (filter #(contains? store (:id %)) markers))
+        new-ids (mapv inc (range (count live-ids)))
+        id->new (zipmap live-ids new-ids)]
+    (reset! (:paste-store editor)
+      (into {} (map (fn [id] [(id->new id) (get store id)]) live-ids)))
+    (reset! (:paste-counter editor) (count live-ids))
+    (if (= live-ids new-ids)
+      lines
+      (mapv #(edit/renumber-paste-markers-in-line % id->new) lines))))
+
+(defn- after-destructive-edit!
+  "Run after any edit that may have removed text: drop stale paste store
+   entries, renumber remaining markers, and clamp the cursor to the line."
+  [editor]
+  (when (seq @(:paste-store editor))
+    (swap! (:state-atom editor)
+      (fn [st]
+        (let [lines (sync-paste-store! editor (:lines st))
+              cl (:cursor-line st)]
+          (assoc st
+            :lines lines
+            :cursor-col (min (:cursor-col st) (count (get lines cl "")))))))))
+
 ;; ─── Line editing actions
 
-(defn- insert-character [editor char]
+(defn- insert-character [editor char & {:keys [skip-undo-coalescing]}]
+  "Insert a character. With :skip-undo-coalescing true (pi:
+   skipUndoCoalescing) the undo stack and last-action are left untouched,
+   for programmatic inserts that manage their own snapshot."
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
         cc (:cursor-col state) line (or (nth lines cl) "")]
-    (when (or (re-find #"^\s" char) (not= @(:last-action editor) :type-word))
-      (push-undo-state editor))
-    (reset! (:last-action editor) :type-word)
+    (when-not skip-undo-coalescing
+      (when (or (re-find #"^\s" char) (not= @(:last-action editor) :type-word))
+        (push-undo-state editor))
+      (reset! (:last-action editor) :type-word))
     (reset! (:redo-stack editor) [])
     (swap! (:state-atom editor) assoc
       :lines (assoc lines cl (str (subs line 0 cc) char (subs line cc)))
@@ -274,7 +372,7 @@
     (reset! (:last-action editor) nil)
     (reset! (:redo-stack editor) [])
     (if (> cc 0)
-      (let [line (or (nth lines cl) "") glen (edit/grapheme-left line cc)]
+      (let [line (or (nth lines cl) "") glen (segment-left editor line cc)]
         (swap! (:state-atom editor) assoc
           :lines (assoc lines cl (str (subs line 0 glen) (subs line cc)))
           :cursor-col glen))
@@ -284,6 +382,7 @@
             :lines (vec (concat (subvec lines 0 (dec cl))
                                 [(str prev-line cur-line)] (subvec lines (inc cl))))
             :cursor-line (dec cl) :cursor-col (count prev-line)))))
+    (after-destructive-edit! editor)
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
 
 (defn- handle-forward-delete [editor]
@@ -293,7 +392,7 @@
     (reset! (:last-action editor) nil)
     (reset! (:redo-stack editor) [])
     (if (< cc (count line))
-      (let [nxt (edit/grapheme-right line cc)]
+      (let [nxt (segment-right editor line cc)]
         (swap! (:state-atom editor) assoc
           :lines (assoc lines cl (str (subs line 0 cc) (subs line nxt)))))
       (when (< cl (dec (count lines)))
@@ -301,6 +400,7 @@
           (swap! (:state-atom editor) assoc
             :lines (vec (concat (subvec lines 0 (inc cl))
                                 [(str line next-line)] (subvec lines (+ cl 2))))))))
+    (after-destructive-edit! editor)
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
 
 (defn- add-new-line [editor]
@@ -327,7 +427,8 @@
         (reset! (:last-action editor) :kill)
         (reset! (:redo-stack editor) [])
         (swap! (:state-atom editor) assoc
-          :lines (assoc lines cl (subs line cc)) :cursor-col 0))
+          :lines (assoc lines cl (subs line cc)) :cursor-col 0)
+        (after-destructive-edit! editor))
       (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
 
 (defn- handle-kill-to-line-end [editor]
@@ -341,7 +442,8 @@
         (reset! (:last-action editor) :kill)
         (reset! (:redo-stack editor) [])
         (swap! (:state-atom editor) assoc
-          :lines (assoc lines cl (subs line 0 cc))))
+          :lines (assoc lines cl (subs line 0 cc)))
+        (after-destructive-edit! editor))
       (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
 
 (defn- handle-delete-word-backward [editor]
@@ -363,7 +465,8 @@
                           (vec (concat (subvec lines 0 new-line)
                                        [(str (subs (nth lines new-line) 0 new-col) (subs (nth lines cl) cc))]
                                        (subvec lines (inc cl)))))]
-          (swap! (:state-atom editor) assoc :lines new-lines :cursor-line new-line :cursor-col new-col)))
+          (swap! (:state-atom editor) assoc :lines new-lines :cursor-line new-line :cursor-col new-col))
+        (after-destructive-edit! editor))
       (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
 
 (defn- handle-delete-word-forward [editor]
@@ -386,6 +489,7 @@
                                          [(str (subs (nth lines cl) 0 cc) (subs (nth lines tline) tcol))]
                                          (subvec lines (inc tline)))))]
             (swap! (:state-atom editor) assoc :lines new-lines)))
+        (after-destructive-edit! editor)
         (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))
 
 (defn- handle-kill-line [editor]
@@ -400,7 +504,8 @@
                         :accumulate (= @(:last-action editor) :kill))
         (reset! (:last-action editor) :kill)
         (reset! (:redo-stack editor) [])
-        (swap! (:state-atom editor) assoc :lines new-lines :cursor-line new-cl :cursor-col 0))
+        (swap! (:state-atom editor) assoc :lines new-lines :cursor-line new-cl :cursor-col 0)
+        (after-destructive-edit! editor))
       (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
 
 ;; ─── Yank helpers
@@ -461,7 +566,10 @@
 
 (defn- handle-paste [editor text]
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
-        cc (:cursor-col state) paste-lines (clojure.string/split-lines text)
+        cc (:cursor-col state)
+        prev-char (when (pos? cc) (subs (nth lines cl "") (dec cc) cc))
+        text (edit/smart-path-spacing text prev-char)
+        paste-lines (clojure.string/split-lines text)
         line-count (count paste-lines)]
     (push-undo-state editor)
     (reset! (:last-action editor) nil)
@@ -470,16 +578,21 @@
       (let [first-line (first paste-lines) rest-lines (rest paste-lines)
             cur-line (nth lines cl "")
             new-cur-line (str (subs cur-line 0 cc) first-line (subs cur-line cc))
+            remaining (subs cur-line cc)
             new-lines (if (empty? rest-lines)
                         (assoc lines cl new-cur-line)
                         (vec (concat (subvec lines 0 cl)
                                      [(str (subs cur-line 0 cc) first-line)]
                                      (mapv (fn [l] l) rest-lines)
-                                     [(subs cur-line cc)]
+                                     (when (seq remaining) [remaining])
                                      (subvec lines (inc cl)))))]
-        (swap! (:state-atom editor) assoc
-          :lines new-lines :cursor-line (+ cl (count rest-lines))
-          :cursor-col (count (or (last rest-lines) ""))))
+        (if (empty? rest-lines)
+          ;; Single-line paste — cursor lands after the pasted text
+          (swap! (:state-atom editor) assoc
+            :lines new-lines :cursor-col (+ cc (count first-line)))
+          (swap! (:state-atom editor) assoc
+            :lines new-lines :cursor-line (+ cl (count rest-lines))
+            :cursor-col (count (last rest-lines)))))
       (let [n (swap! (:paste-counter editor) inc)
             marker (str "[paste #" n " +" line-count " lines — ctrl+o to expand]")
             cur-line (nth lines cl "")
@@ -546,42 +659,64 @@
   (reset! (:last-action editor) nil)
   (reset! (:jump-mode editor) nil))
 
+(defn- history-restore-draft!
+  "Restore the editor state captured when history browsing began (pi:
+   historyDraft), or clear to empty if no draft was captured."
+  [editor]
+  (if-let [draft @(:history-draft editor)]
+    (do (reset! (:state-atom editor) (map->EditorState draft))
+        (reset! (:paste-store editor) (:paste-store draft))
+        (reset! (:scroll-offset-atom editor) 0)
+        (reset! (:preferred-col-atom editor) nil)
+        (reset! (:last-action editor) nil)
+        (reset! (:jump-mode editor) nil)
+        (reset! (:history-draft editor) nil))
+    (history-set-state! editor "")))
+
 (defn- history-backward [editor]
   (let [h @(:history editor)
+        n (count h)
         idx @(:history-idx editor)]
-    (if (or (neg? idx) (empty? h))
-      nil
-      (let [next-idx (max -1 (dec idx))
-            entry (nth h idx)]
-        (reset! (:history-idx editor) next-idx)
-        (history-set-state! editor entry)
-        ;; Move cursor to end
-        (let [lines (:lines @(:state-atom editor))]
-          (swap! (:state-atom editor) assoc
-            :cursor-line (max 0 (dec (count lines)))
-            :cursor-col (count (last lines))))
+    (when (pos? n)
+      (let [entering? (neg? idx)
+            new-idx (if entering? (dec n) (max -1 (dec idx)))]
+        (when entering?
+          ;; Entering history mode — capture the current editor state so
+          ;; Up then Down returns to it exactly (pi: historyDraft)
+          (reset! (:history-draft editor) (snapshot-state editor)))
+        (reset! (:history-idx editor) new-idx)
+        (if (neg? new-idx)
+          ;; Browsed past the first entry — back to the draft
+          (history-restore-draft! editor)
+          (do (history-set-state! editor (nth h new-idx))
+              ;; history-set-state! clears the undo stack, so the draft goes
+              ;; back on top of it — Ctrl+Z while browsing returns to the draft
+              (when-let [draft @(:history-draft editor)]
+                (undo-push (:undo-stack editor) draft))
+              (let [lines (:lines @(:state-atom editor))]
+                (swap! (:state-atom editor) assoc
+                  :cursor-line (max 0 (dec (count lines)))
+                  :cursor-col (count (last lines))))))
         (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))
 
 (defn- history-forward [editor]
   (let [h @(:history editor)
-        idx @(:history-idx editor)
-        n (count h)]
-    (if (or (neg? idx) (zero? n))
-      nil
-      (let [next-idx (inc idx)]
-        (if (< next-idx n)
-          (let [entry (nth h next-idx)]
-            (reset! (:history-idx editor) next-idx)
-            (history-set-state! editor entry)
-            (let [lines (:lines @(:state-atom editor))]
-              (swap! (:state-atom editor) assoc
-                :cursor-line (max 0 (dec (count lines)))
-                :cursor-col (count (last lines))))
-            (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))
-          (do
-            (reset! (:history-idx editor) -1)
-            (history-set-state! editor "")
-            (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))))
+        n (count h)
+        idx @(:history-idx editor)]
+    (when (and (pos? n) (not (neg? idx)))
+      (let [new-idx (if (>= idx (dec n)) -1 (inc idx))]
+        (reset! (:history-idx editor) new-idx)
+        (if (neg? new-idx)
+          ;; Past the newest entry — restore the draft
+          (history-restore-draft! editor)
+          (do (history-set-state! editor (nth h new-idx))
+              (when-let [draft @(:history-draft editor)]
+                (undo-push (:undo-stack editor) draft))
+              (let [lines (:lines @(:state-atom editor))]
+                (swap! (:state-atom editor) assoc
+                  :cursor-line (max 0 (dec (count lines)))
+                  :cursor-col (count (last lines))))))
+        (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))
 
 (defn editor-push-history! [editor text]
   (when (and (seq text) (not= text (peek @(:history editor))))
@@ -607,9 +742,16 @@
     (insert-character editor "    ")))
 
 ;; ─── Height helper
+;; Dynamic height (pi): 30% of terminal rows, min 5. Used when a
+;; :terminal-rows source is provided; otherwise :height is the fallback.
 
 (defn- get-editor-height [editor]
-  (or @(:height-atom editor) 12))
+  (if-let [rows-fn @(:terminal-rows-atom editor)]
+    (let [rows (rows-fn)]
+      (if (and rows (pos? rows))
+        (max 5 (quot (* rows 3) 10))
+        (or @(:height-atom editor) 12)))
+    (or @(:height-atom editor) 12)))
 
 ;; ─── Internal helpers (cursor movement)
 (defn- move-cursor-horizontal [editor dir]
@@ -621,14 +763,14 @@
     (reset! (:preferred-col-atom editor) nil)
     (if (neg? dir)
       (if (> cc 0)
-        (swap! (:state-atom editor) assoc :cursor-col (edit/grapheme-left line cc))
+        (swap! (:state-atom editor) assoc :cursor-col (segment-left editor line cc))
         (when (> cl 0)
           (let [prev-line (or (nth lines (dec cl)) "")]
             (swap! (:state-atom editor) assoc
               :cursor-line (dec cl)
               :cursor-col (count prev-line)))))
       (if (< cc (count line))
-        (swap! (:state-atom editor) assoc :cursor-col (edit/grapheme-right line cc))
+        (swap! (:state-atom editor) assoc :cursor-col (segment-right editor line cc))
         (when (< cl (dec (count lines)))
           (swap! (:state-atom editor) assoc
             :cursor-line (inc cl)
@@ -640,7 +782,7 @@
         cl (:cursor-line state)
         cc (:cursor-col state)
         width @(:last-width-atom editor)
-        visual-lines (build-visual-line-map lines width)
+        visual-lines (build-visual-line-map lines width (valid-paste-ids editor))
         current-idx (find-current-visual-line visual-lines cl cc)
         target-idx (+ current-idx dir)]
     (when (and (>= target-idx 0) (< target-idx (count visual-lines)))
@@ -658,7 +800,7 @@
 (defn- page-scroll [editor dir]
   (let [width @(:last-width-atom editor)
         lines (:lines @(:state-atom editor))
-        visual-lines (build-visual-line-map lines width)
+        visual-lines (build-visual-line-map lines width (valid-paste-ids editor))
         page-size (max 1 (dec (get-editor-height editor)))]
     (dotimes [_ page-size]
       (move-cursor-vertical editor dir))))
@@ -671,7 +813,8 @@
                    undo-stack redo-stack kill-ring last-action
                    paste-buffer paste-state paste-store paste-counter
                    jump-mode
-                   history history-idx
+                   history history-idx history-draft
+                   terminal-rows-atom
                    autocomplete-provider]
   protocols/IComponent
 
@@ -686,7 +829,7 @@
           lines (:lines state)
           cursor-line (:cursor-line state)
           cursor-col (:cursor-col state)
-          visual-lines (build-visual-line-map lines layout-width)
+          visual-lines (build-visual-line-map lines layout-width (valid-paste-ids this))
           max-visible (get-editor-height this)
           cursor-visual-idx (find-current-visual-line visual-lines cursor-line cursor-col)
           scroll-offset @scroll-offset-atom
@@ -753,6 +896,29 @@
       (let [state @state-atom
             lines (:lines state)]
         (cond
+          ;; Paste handling takes precedence over key dispatch so streamed
+          ;; bracketed-paste content (including \r, escape, and CSI-u encoded
+          ;; control bytes) is buffered literally instead of triggering actions.
+          (clojure.string/includes? data "\u001b[200~")
+          (do (reset! paste-state :buffering)
+              (reset! paste-buffer "")
+              (let [remaining (clojure.string/replace data "\u001b[200~" "")]
+                (when (seq remaining)
+                  (protocols/handle-input this remaining)))
+              nil)
+
+          (= @paste-state :buffering)
+          (do (swap! paste-buffer str data)
+              (let [buf @paste-buffer
+                    end-idx (clojure.string/index-of buf "\u001b[201~")]
+                (when (and end-idx (>= end-idx 0))
+                  (let [paste-text (subs buf 0 end-idx)]
+                    (handle-paste this (edit/decode-csi-u paste-text)))
+                  ;; Only leave buffering once the end marker arrives
+                  (reset! paste-state :idle)
+                  (reset! paste-buffer "")))
+              nil)
+
           (and (keys/matches-key? data "enter") (not @disable-submit))
           (do (when-let [cb @on-submit] (cb (clojure.string/join "\n" lines))) nil)
 
@@ -879,25 +1045,6 @@
           (keys/matches-key? data "pageDown")
           (do (page-scroll this 1) nil)
 
-          (clojure.string/includes? data "\u001b[200~")
-          (do (reset! paste-state :buffering)
-              (reset! paste-buffer "")
-              (let [remaining (clojure.string/replace data "\u001b[200~" "")]
-                (when (seq remaining)
-                  (protocols/handle-input this remaining)))
-              nil)
-
-          (= @paste-state :buffering)
-          (do (swap! paste-buffer str data)
-              (let [buf @paste-buffer
-                    end-idx (clojure.string/index-of buf "\u001b[201~")]
-                (when (>= end-idx 0)
-                  (let [paste-text (subs buf 0 end-idx)]
-                    (handle-paste this paste-text)))
-                (reset! paste-state :idle)
-                (reset! paste-buffer ""))
-              nil)
-
           :else
           (let [has-ctrl? (some #(let [c (int %)]
                                    (or (< c 32) (== c 127)
@@ -913,10 +1060,12 @@
 (defn make-editor
   "Create a new Editor component.
    Options key-value pairs:
-     :height  — number of visible lines (default 12)
+     :height  — number of visible lines, fallback when no :terminal-rows (default 12)
      :padding-x — horizontal padding (default 0)
-     :border-fn — function to style border chars"
-  [& {:keys [height padding-x border-fn] :or {height 12 padding-x 0}}]
+     :border-fn — function to style border chars
+     :terminal-rows — (fn [] int) returning terminal rows for dynamic height
+                      (30% of rows, min 5 lines; pi behavior)"
+  [& {:keys [height padding-x border-fn terminal-rows] :or {height 12 padding-x 0}}]
   (map->Editor {:state-atom (atom (make-editor-state))
                 :scroll-offset-atom (atom 0)
                 :preferred-col-atom (atom nil)
@@ -939,6 +1088,8 @@
                 :jump-mode (atom nil)
                 :history (atom [])
                 :history-idx (atom -1)
+                :history-draft (atom nil)
+                :terminal-rows-atom (atom terminal-rows)
                 :autocomplete-provider (atom nil)}))
 
 (defn editor-set-text! [editor text]
@@ -949,7 +1100,10 @@
   (reset! (:redo-stack editor) [])
   (reset! (:last-action editor) nil)
   (reset! (:jump-mode editor) nil)
-  (reset! (:history-idx editor) -1))
+  (reset! (:history-idx editor) -1)
+  (reset! (:history-draft editor) nil)
+  ;; Reconcile the paste store with the new text (e.g. cleared after submit)
+  (sync-paste-store! editor (:lines @(:state-atom editor))))
 
 (defn editor-set-on-submit! [editor f]
   (reset! (:on-submit editor) f))
@@ -965,13 +1119,20 @@
 
 (defn editor-set-history! [editor history]
   (reset! (:history editor) (vec history))
-  (reset! (:history-idx editor) -1))
+  (reset! (:history-idx editor) -1)
+  (reset! (:history-draft editor) nil))
 
 (defn editor-get-paste [editor id]
   (get @(:paste-store editor) id))
 
 (defn editor-set-height! [editor h]
   (reset! (:height-atom editor) h))
+
+(defn editor-set-terminal-rows!
+  "Set the terminal rows source (fn returning row count) used for dynamic
+   height. Pass nil to revert to the fixed :height fallback."
+  [editor f]
+  (reset! (:terminal-rows-atom editor) f))
 
 (defn editor-get-text-length [editor]
   (count (editor-get-text editor)))

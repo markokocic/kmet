@@ -505,6 +505,7 @@
 (def editor-set-history! editor/editor-set-history!)
 (def editor-get-paste editor/editor-get-paste)
 (def editor-set-height! editor/editor-set-height!)
+(def editor-set-terminal-rows! editor/editor-set-terminal-rows!)
 (def editor-get-text-length editor/editor-get-text-length)
 
 ;; SelectList

@@ -193,3 +193,75 @@
     ;; After 3 rotations, back to original order ["a" "b" "c"]
     (t/is (= "c" (edit/kill-ring-peek kr)))
     (t/is (= 3 (edit/kill-ring-length kr)))))
+
+;; ─── Paste marker helpers ────────────────────────────────────────────────
+
+(t/deftest test-find-paste-markers-in-line
+  (t/is (= [] (edit/find-paste-markers-in-line "")))
+  (t/is (= [] (edit/find-paste-markers-in-line "no markers here")))
+  (let [line "abc [paste #3 +10 lines — ctrl+o to expand] xyz"
+        m (first (edit/find-paste-markers-in-line line))]
+    (t/is (= 3 (:id m)))
+    (t/is (= 4 (:start m)))
+    (t/is (= "]" (subs line (dec (:end m)) (:end m))) "end is just past the closing bracket"))
+  (let [line "a[paste #1 +1 lines — ctrl+o to expand]b[paste #2 +5 lines — ctrl+o to expand]c"
+        [m1 m2] (edit/find-paste-markers-in-line line)]
+    (t/is (= [1 2] [(:id m1) (:id m2)]))
+    (t/is (< (:end m1) (:start m2)) "markers don't overlap")
+    (t/is (= "b" (subs line (:end m1) (:start m2))))))
+
+(t/deftest test-segment-with-markers
+  (let [marker "[paste #1 +10 lines — ctrl+o to expand]"]
+    ;; Marker merged into a single atomic segment
+    (let [segs (edit/segment-with-markers (str "ab" marker "cd") edit/grapheme-segments #{1})]
+      (t/is (= 5 (count segs)))
+      (t/is (= "a" (:text (nth segs 0))))
+      (t/is (= "b" (:text (nth segs 1))))
+      (t/is (= marker (:text (nth segs 2))) "marker is one atomic segment")
+      (t/is (= "c" (:text (nth segs 3))))
+      (t/is (= "d" (:text (nth segs 4)))))
+    ;; Adjacent markers stay separate atomic segments
+    (let [segs (edit/segment-with-markers (str marker marker) edit/grapheme-segments #{1})]
+      (t/is (= 2 (count segs)))
+      (t/is (= marker (:text (nth segs 0))))
+      (t/is (= marker (:text (nth segs 1)))))
+    ;; Unknown marker id is NOT merged
+    (let [segs (edit/segment-with-markers (str "ab" marker) edit/grapheme-segments #{})]
+      (t/is (> (count segs) 2)))
+    ;; Marker at start
+    (let [segs (edit/segment-with-markers (str marker "x") edit/grapheme-segments #{1})]
+      (t/is (= 2 (count segs)))
+      (t/is (= marker (:text (first segs)))))))
+
+(t/deftest test-renumber-paste-markers-in-line
+  (let [line "x[paste #3 +5 lines — ctrl+o to expand]y"
+        m3 "[paste #3 +5 lines — ctrl+o to expand]"
+        m2 "[paste #2 +5 lines — ctrl+o to expand]"]
+    (t/is (= (str "x" m2 "y") (edit/renumber-paste-markers-in-line line {3 2})))
+    (t/is (= line (edit/renumber-paste-markers-in-line line {1 9})) "unknown id unchanged")
+    (let [two "a[paste #2 +1 lines — ctrl+o to expand]b[paste #4 +2 lines — ctrl+o to expand]c"
+          expected "a[paste #1 +1 lines — ctrl+o to expand]b[paste #2 +2 lines — ctrl+o to expand]c"]
+      (t/is (= expected (edit/renumber-paste-markers-in-line two {2 1, 4 2}))))))
+
+;; ─── Paste text processing ───────────────────────────────────────────────
+
+(t/deftest test-decode-csi-u
+  (t/is (= "\u0001" (edit/decode-csi-u "\u001b[97;5u")) "a → ctrl+a")
+  (t/is (= "\u0001" (edit/decode-csi-u "\u001b[65;5u")) "A → ctrl+shift+a")
+  (t/is (= "ab\u0001cd" (edit/decode-csi-u "ab\u001b[97;5ucd")))
+  (t/is (= "\u001b[200;5u" (edit/decode-csi-u "\u001b[200;5u")) "non-letter cp left as-is")
+  (t/is (= "plain text" (edit/decode-csi-u "plain text"))))
+
+(t/deftest test-smart-path-spacing
+  (t/is (= " /tmp/x" (edit/smart-path-spacing "/tmp/x" "o")))
+  (t/is (= "/tmp/x" (edit/smart-path-spacing "/tmp/x" " ")))
+  (t/is (= "/tmp/x" (edit/smart-path-spacing "/tmp/x" nil)))
+  (t/is (= " ~/x" (edit/smart-path-spacing "~/x" "a")))
+  (t/is (= " ./x" (edit/smart-path-spacing "./x" "b")))
+  (t/is (= "word" (edit/smart-path-spacing "word" "a")) "non-path start unchanged")
+  (t/is (= "x" (edit/smart-path-spacing "x" "a"))))
+
+(t/deftest test-paste-marker-predicate
+  (t/is (edit/paste-marker? "[paste #1 +3 lines — ctrl+o to expand]"))
+  (t/is (not (edit/paste-marker? "hello")))
+  (t/is (not (edit/paste-marker? ""))))

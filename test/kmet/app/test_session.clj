@@ -1,9 +1,17 @@
 (ns kmet.app.test-session
   (:require [clojure.test :as t]
             [clojure.java.io :as io]
+            [babashka.fs :as fs]
             [kmet.app.session :as s]))
 
 (def test-dir "target/test-sessions")
+
+;; The list-sessions test asserts per file, so a stale dir would make the
+;; assertion count grow across runs — start each run from a clean dir.
+(t/use-fixtures :once
+  (fn [f]
+    (fs/delete-tree test-dir)
+    (f)))
 
 (t/deftest test-session-create
   (let [session (s/create-session test-dir)]
