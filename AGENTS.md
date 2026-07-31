@@ -98,7 +98,7 @@ src/kmet/
 - **Run**: `bb test` — fast suites only (excludes the slow timing/process suites).
   Use **`bb test-ext`** to run the full suite including the slow outliers
   (`kmet.app.test-loop`, `kmet.app.test-tools`) — run this during final
-  validation before commit. The runner prints per-suite timings at the end.
+  validation before commit.
 
 ## Platform
 - **Target**: cross-platform (any system with Babashka and a terminal)

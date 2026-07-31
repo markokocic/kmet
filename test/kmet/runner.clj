@@ -67,34 +67,11 @@
   (vec (concat fast-namespaces
                '[kmet.app.test-tools kmet.app.test-loop])))
 
-(defn- make-timing-report
-  "Wrap the default clojure.test report fn to record per-namespace elapsed
-   times (begin-test-ns/end-test-ns events) while passing everything through."
-  [orig-report ns-times start-times]
-  (fn [m]
-    (case (:type m)
-      :begin-test-ns (swap! start-times assoc (:ns m) (System/currentTimeMillis))
-      :end-test-ns (swap! ns-times assoc (:ns m)
-                          (- (System/currentTimeMillis) (get @start-times (:ns m))))
-      nil)
-    (orig-report m)))
-
-(defn- print-suite-timings
-  "Print per-namespace test times, slowest first."
-  [ns-times]
-  (println "\nSuite timings:")
-  (doseq [[ns ms] (->> @ns-times (sort-by val >))]
-    (println (format "  %8d ms  %s" ms (str ns)))))
-
 (defn -main
   "Run the test suites. Optional mode arg: \"ext\" runs the full suite
    (including slow outliers); anything else runs the fast suites only."
   [& [mode]]
   (let [namespaces (if (= mode "ext") ext-namespaces fast-namespaces)
-        ns-times (atom {})
-        start-times (atom {})
-        results (with-redefs [t/report (make-timing-report t/report ns-times start-times)]
-                   (apply t/run-tests namespaces))]
-    (print-suite-timings ns-times)
+        results (apply t/run-tests namespaces)]
     (println "\nResults:" (:pass results) "passed," (:fail results) "failed," (:error results) "errors")
     (System/exit (if (pos? (+ (:fail results) (:error results))) 1 0))))
