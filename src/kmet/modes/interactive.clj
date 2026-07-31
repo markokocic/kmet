@@ -432,8 +432,8 @@
     (let [ch (:chat-history cs)
           streaming @(:streaming-atom ch)]
       (if (and streaming
-               (empty? @(:text-atom streaming))
-               (empty? @(:thinking-text-atom streaming)))
+               (empty? @(:text-atom (:component streaming)))
+               (empty? @(:thinking-text-atom (:component streaming))))
         (do (ui/chat-history-remove-last! ch)
             (reset! (:streaming-atom ch) nil))
         (do (ui/chat-history-finalize-streaming! ch)
@@ -644,7 +644,8 @@
     ;; Remove empty streaming placeholder if present
     (let [ch (:chat-history cs)]
       (when-let [s @(:streaming-atom ch)]
-        (if (and (empty? @(:text-atom s)) (empty? @(:thinking-text-atom s)))
+        (if (and (empty? @(:text-atom (:component s)))
+                 (empty? @(:thinking-text-atom (:component s))))
           (do (ui/chat-history-remove-last! ch) (reset! (:streaming-atom ch) nil))
           (do (ui/chat-history-finalize-streaming! ch) (ui/chat-history-finalize-thinking! ch)))))
     (ui/chat-history-add-message! (:chat-history cs)

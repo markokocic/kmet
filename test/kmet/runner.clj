@@ -32,6 +32,7 @@
             [kmet.tui.components.test-select-list]
             [kmet.tui.components.test-settings-list]
             [kmet.tui.components.test-markdown]
+            [kmet.tui.components.test-track]
             [kmet.tui.test-terminal-image]
             [kmet.app.ui.test-chat-history]
             [kmet.app.ui.test-user-message]
@@ -66,6 +67,7 @@
     kmet.tui.components.test-select-list
     kmet.tui.components.test-settings-list
     kmet.tui.components.test-markdown
+    kmet.tui.components.test-track
     kmet.tui.test-terminal-image
     kmet.app.ui.test-chat-history
     kmet.app.ui.test-user-message

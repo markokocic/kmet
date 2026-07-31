@@ -12,6 +12,7 @@
             [kmet.app.bash-executor :as bash-exec]
             [kmet.app.keybindings :as app-kb]
             [kmet.tui.keybindings :as tui-kb]
+            [kmet.tui.macros :refer [track!]]
             [clojure.string :as str]))
 
 ;; ─── Preview line limit ────────────────────────────────────────────────────
@@ -54,10 +55,8 @@
                                    exclude-from-context-atom] ;; boolean (!! vs !)
   protocols/IComponent
   (render [this width]
-    (let [cached @cache-atom]
-      (if (and cached (= (:width cached) width))
-        (:lines cached)
-        (let [command @command-atom
+    (track! this width
+      (let [command @command-atom
               raw-output-lines @output-lines-atom
               status @status-atom
               exit-code @exit-code-atom
@@ -150,7 +149,7 @@
             ;; ── Spacer at bottom ──────────────────────────────────────
             (container/container-add-child content-container (spacer/make-spacer 1))
 
-            ;; ── Cache and return bordered display ──────────────────────
+            ;; ── Return bordered display ────────────────────────────────
             (let [top-border (str (border-color "┌") (apply str (repeat (- width 2) "─")) (border-color "┐"))
                   bottom-border (str (border-color "└") (apply str (repeat (- width 2) "─")) (border-color "┘"))
                   content-lines (protocols/render content-container (- width 2))
@@ -158,8 +157,7 @@
                                       (map #(str (border-color "│") % (border-color "│")))
                                       content-lines)
                                 bottom-border)]
-              (reset! cache-atom {:width width :lines result})
-              result))))))
+              result)))))
 
   (handle-input [_this data] nil)
 
@@ -205,8 +203,7 @@
 (defn bash-execution-set-expanded!
   "Toggle between collapsed preview and full output."
   [comp expanded?]
-  (reset! (:expanded-atom comp) expanded?)
-  (protocols/invalidate comp))
+  (reset! (:expanded-atom comp) expanded?))
 
 (defn bash-execution-append-output!
   "Append a chunk of output text. Handles incomplete line continuation
@@ -224,8 +221,7 @@
             merged (str (last current) (first new-lines))
             updated (into (conj base merged) (rest new-lines))]
         (reset! (:output-lines-atom comp) updated))
-      (reset! (:output-lines-atom comp) (into current new-lines))))
-  (protocols/invalidate comp))
+      (reset! (:output-lines-atom comp) (into current new-lines)))))
 
 (defn bash-execution-set-complete!
   "Mark the bash command as complete.
@@ -249,8 +245,7 @@
     (reset! (:full-output-path-atom comp) full-output-path))
   ;; Stop the spinner
   (when-let [sp @(:spinner-comp comp)]
-    (spinner/spinner-stop! sp))
-  (protocols/invalidate comp))
+    (spinner/spinner-stop! sp)))
 
 (defn bash-execution-get-output
   "Get the raw accumulated output string."

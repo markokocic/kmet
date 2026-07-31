@@ -1,0 +1,119 @@
+(ns kmet.tui.components.test-track
+  "Tests for the reactive track! cache: setters need no manual invalidate,
+   cache hits return the same object, and width changes bust the cache."
+  (:require [clojure.test :as t]
+            [kmet.tui.core :as core]
+            [kmet.tui.components.text :as text]
+            [kmet.tui.components.markdown :as md]
+            [kmet.tui.components.select-list :as sl]
+            [kmet.tui.components.settings-list :as settings]
+            [kmet.app.ui.footer :as footer]))
+
+(t/deftest test-set!-auto-invalidates
+  ;; text-set! no longer calls invalidate — the watch must do it
+  (let [c (text/make-text "a" 0 0)]
+    (core/render c 5)
+    (text/text-set! c "b")
+    (let [lines (core/render c 5)]
+      (t/is (.contains (first lines) "b")))))
+
+(t/deftest test-cache-hit-returns-same-object
+  (let [c (text/make-text "hi" 0 0)
+        r1 (core/render c 10)
+        r2 (core/render c 10)]
+    (t/is (identical? r1 r2))))
+
+(t/deftest test-width-change-busts-cache
+  (let [c (text/make-text "hello world foo" 0 0)]
+    (t/is (= 1 (count (core/render c 20))))
+    (t/is (> (count (core/render c 6)) 1))))
+
+(t/deftest test-multiple-tracked-atoms
+  ;; changing any tracked atom (theme or text) must invalidate
+  (let [c (text/make-text "a" 0 0)]
+    (core/render c 5)
+    (text/text-set! c "b")
+    (t/is (.contains (first (core/render c 5)) "b"))
+    (text/text-set! c "c")
+    (t/is (.contains (first (core/render c 5)) "c"))))
+
+(t/deftest test-markdown-set!-auto-invalidates
+  (let [c (md/make-markdown "# hi")]
+    (core/render c 20)
+    (md/markdown-set-text! c "# bye")
+    (t/is (some #(.contains % "bye") (core/render c 20)))))
+
+(t/deftest test-markdown-append!-auto-invalidates
+  (let [c (md/make-markdown "a")]
+    (core/render c 20)
+    (md/markdown-append! c "b")
+    (let [out (clojure.string/join "\n" (core/render c 20))]
+      (t/is (.contains out "a"))
+      (t/is (.contains out "b")))))
+
+(t/deftest test-manual-invalidate-still-works
+  ;; protocol invalidate remains a working manual override
+  (let [c (text/make-text "a" 0 0)]
+    (core/render c 5)
+    (core/invalidate c)
+    (t/is (.contains (first (core/render c 5)) "a"))))
+
+;; ─── select-list / settings-list navigation (latent staleness fixes) ────────
+
+(t/deftest test-select-list-navigation-re-renders
+  ;; selection change must invalidate the cache — the selected item shows
+  ;; the inverse-video marker after navigating (was stale without manual invalidate)
+  (let [s (sl/make-select-list [{:label "apple"} {:label "banana"}])]
+    (core/render s 20)
+    (core/handle-input s "\u001b[B") ;; down
+    (let [banana-line (nth (core/render s 20) 2)]
+      (t/is (.contains banana-line "\u001b[7m")))))
+
+(t/deftest test-settings-list-navigation-re-renders
+  ;; regression: navigation never re-rendered (cache omitted selected-idx) —
+  ;; the selected value highlight must move from Alpha to Beta
+  (let [s (settings/make-settings-list [{:id :a :label "Alpha" :value "x"}
+                                        {:id :b :label "Beta" :value "y"}])]
+    (let [before (vec (core/render s 30))]
+      (core/handle-input s "\u001b[B") ;; down
+      (t/is (not= before (vec (core/render s 30)))))))
+
+(t/deftest test-settings-list-focus-shows-cursor
+  ;; regression: focusing never re-rendered (focused? omitted from cache key)
+  (let [s (settings/make-settings-list [{:id :a :label "Alpha" :value "x"}])]
+    (core/render s 30)
+    (core/set-focused! s true)
+    (let [line (second (core/render s 30))]
+      (t/is (.contains line "→")))))
+
+(t/deftest test-cache-verifies-values-even-without-watch
+  ;; Simulates the watch-registration race: a value changed after the watch
+  ;; was removed never fires a notification — the value re-verification on
+  ;; cache hit must catch it anyway.
+  (let [c (text/make-text "a" 0 0)
+        tracker-key (keyword (str "track!" (System/identityHashCode c)))]
+    (core/render c 5)
+    (remove-watch (:text-atom c) tracker-key)
+    (text/text-set! c "b") ;; no watch → no invalidation
+    (let [lines (core/render c 5)]
+      (t/is (.contains (first lines) "b")))))
+
+(t/deftest test-equal-value-reset-keeps-cache
+  ;; equal-value reset! must not invalidate — the cached result stays valid
+  (let [c (text/make-text "hi" 0 0)
+        r1 (core/render c 10)]
+    (text/text-set! c "hi") ;; same value → watch fires but must skip
+    (t/is (identical? r1 (core/render c 10)) "cache survives equal-value reset"))
+  ;; a genuinely different value still invalidates
+  (let [c (text/make-text "hi" 0 0)]
+    (core/render c 10)
+    (text/text-set! c "bye")
+    (let [lines (core/render c 10)]
+      (t/is (.contains (first lines) "bye")))))
+
+(t/deftest test-footer-reactive
+  (let [f (footer/make-footer)]
+    (core/render f 40)
+    (footer/footer-set-status! f "working...")
+    (let [line (second (core/render f 40))]
+      (t/is (.contains line "working...")))))

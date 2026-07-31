@@ -3,7 +3,8 @@
    Port of @earendil-works/pi-tui SelectList."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
-            [kmet.tui.utils :as u]))
+            [kmet.tui.utils :as u]
+            [kmet.tui.macros :refer [track!]]))
 
 ;; ─── Default theme ──────────────────────────────────────────────────────────
 ;; Matches pi's SelectListTheme interface.
@@ -58,72 +59,66 @@
   protocols/IComponent
 
   (render [this width]
-    (let [items @items-atom
-          filter-str @filter-atom
-          theme @theme-atom
-          height @height-atom
-          cache @cache-atom]
-      (if (and cache (= (:width cache) width) (= (:items cache) items)
-               (= (:filter cache) filter-str) (= (:theme cache) theme))
-        (:lines cache)
-        (let [filtered (if (empty? filter-str)
-                         items
-                         (vec (->> items
-                                   (clojure.core/filter #(fuzzy-match? filter-str (:label %)))
-                                   (sort-by #(- (score-match filter-str (:label %)))))))
-              n (count filtered)
-              selected (min @selected-idx-atom (max 0 (dec n)))
-              _ (reset! selected-idx-atom selected)
-              ;; Adjust scroll offset
-              scroll-offset @scroll-offset-atom
-              new-offset (cond
-                           (< selected scroll-offset) selected
-                           (>= selected (+ scroll-offset height))
-                           (- selected height -1)
-                           :else scroll-offset)
-              _ (reset! scroll-offset-atom (max 0 (min new-offset (max 0 (- n height)))))
-              visible (subvec filtered scroll-offset
-                              (min (+ scroll-offset height) n))
-              lines (volatile! [])]
-          ;; Header
+    (track! this width
+      (let [items @items-atom
+            filter-str @filter-atom
+            theme @theme-atom
+            height @height-atom
+            filtered (if (empty? filter-str)
+                       items
+                       (vec (->> items
+                                 (clojure.core/filter #(fuzzy-match? filter-str (:label %)))
+                                 (sort-by #(- (score-match filter-str (:label %)))))))
+            n (count filtered)
+            selected (min @selected-idx-atom (max 0 (dec n)))
+            _ (reset! selected-idx-atom selected)
+            ;; Adjust scroll offset
+            scroll-offset @scroll-offset-atom
+            new-offset (cond
+                         (< selected scroll-offset) selected
+                         (>= selected (+ scroll-offset height))
+                         (- selected height -1)
+                         :else scroll-offset)
+            _ (reset! scroll-offset-atom (max 0 (min new-offset (max 0 (- n height)))))
+            visible (subvec filtered scroll-offset
+                            (min (+ scroll-offset height) n))
+            lines (volatile! [])]
+        ;; Header
+        (vswap! lines conj
+          (str " \u001b[1m"
+               (if (empty? filter-str) "Select:" (str "Filter: " filter-str))
+               "\u001b[0m"))
+        ;; Items
+        (if (empty? filtered)
           (vswap! lines conj
-            (str " \u001b[1m"
-                 (if (empty? filter-str) "Select:" (str "Filter: " filter-str))
-                 "\u001b[0m"))
-          ;; Items
-          (if (empty? filtered)
-            (vswap! lines conj
-              (str "  " ((:no-match theme) (str "No matches for \"" filter "\""))))
-            (doseq [[idx item] (map-indexed vector visible)]
-              (let [global-idx (+ idx scroll-offset)
-                    prefix ((if (= global-idx selected)
-                              (:selected-prefix theme) (fn [s] s)) "▸ ")
-                    label ((:selected-text theme) (:label item))
-                    desc (when (:description item)
-                           (let [d ((:description theme) (:description item))]
-                             (str "  " d)))
-                    line-width (- width 2)
-                    truncated (u/truncate-to-width
-                                (str prefix (if (= global-idx selected)
-                                              (str "\u001b[7m" label "\u001b[27m")
-                                              label)
-                                     (or desc ""))
-                                line-width)
-                    padded (str truncated
-                               (apply str (repeat (max 0 (- width (u/visible-width truncated))) \space)))]
-                (vswap! lines conj padded))))
-          ;; Scroll indicator — only when items overflow the visible area
-          (when (> n (+ scroll-offset height))
-            (when (pos? n)
-              (let [info (str "Showing " (count visible) " of " n " items")
-                    scroll-line ((:scroll-info theme) info)]
-                (vswap! lines conj
-                  (str scroll-line
-                       (apply str (repeat (max 0 (- width (u/visible-width scroll-line))) \space)))))))
-          (let [result @lines]
-            (reset! cache-atom {:width width :items items :filter filter
-                                :theme theme :lines result})
-            result)))))
+            (str "  " ((:no-match theme) (str "No matches for \"" filter-str "\""))))
+          (doseq [[idx item] (map-indexed vector visible)]
+            (let [global-idx (+ idx scroll-offset)
+                  prefix ((if (= global-idx selected)
+                            (:selected-prefix theme) (fn [s] s)) "▸ ")
+                  label ((:selected-text theme) (:label item))
+                  desc (when (:description item)
+                         (let [d ((:description theme) (:description item))]
+                           (str "  " d)))
+                  line-width (- width 2)
+                  truncated (u/truncate-to-width
+                              (str prefix (if (= global-idx selected)
+                                            (str "\u001b[7m" label "\u001b[27m")
+                                            label)
+                                   (or desc ""))
+                              line-width)
+                  padded (str truncated
+                             (apply str (repeat (max 0 (- width (u/visible-width truncated))) \space)))]
+              (vswap! lines conj padded))))
+        ;; Scroll indicator — only when items overflow the visible area
+        (when (> n (+ scroll-offset height))
+          (when (pos? n)
+            (let [info (str "Showing " (count visible) " of " n " items")
+                  scroll-line ((:scroll-info theme) info)]
+              (vswap! lines conj
+                (str scroll-line
+                     (apply str (repeat (max 0 (- width (u/visible-width scroll-line))) \space)))))))
+        @lines)))
 
   (handle-input [this data]
     (let [items @items-atom
@@ -222,8 +217,7 @@
   (reset! (:items-atom sl) items)
   (reset! (:selected-idx-atom sl) 0)
   (reset! (:filter-atom sl) "")
-  (reset! (:scroll-offset-atom sl) 0)
-  (protocols/invalidate sl))
+  (reset! (:scroll-offset-atom sl) 0))
 
 (defn select-list-get-selected [sl]
   (let [items @(:items-atom sl)
@@ -236,8 +230,7 @@
       (nth filtered idx))))
 
 (defn select-list-set-theme! [sl theme]
-  (reset! (:theme-atom sl) theme)
-  (protocols/invalidate sl))
+  (reset! (:theme-atom sl) theme))
 
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────
 

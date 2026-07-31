@@ -8,8 +8,7 @@
             [kmet.tui.components.box :as box]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.container :as container]
-            [kmet.tui.components.spacer :as spacer]
-            [kmet.tui.macros :refer [with-cache]]))
+            [kmet.tui.components.spacer :as spacer]))
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
@@ -67,8 +66,7 @@
     (when (seq content)
       (let [colored (theme/fg theme :custom-message-text content)]
         (container/container-add-child container
-          (text/make-text colored 0 0))))
-    (protocols/invalidate @(:box comp))))
+          (text/make-text colored 0 0))))))
 
 ;; ─── Public API (defined before make- to avoid forward ref) ──────────────
 

@@ -340,7 +340,9 @@
       (ch/chat-history-toggle-tool-expanded! ch)
       ;; a NEW tool added after the toggle is expanded too
       (ch/chat-history-add-message! ch {:role :tool :name "ls" :content "more"})
-      (let [tools (filter #(contains? % :expanded-atom) @(:children-atom ch))]
+      (let [tools (keep (fn [m] (when (contains? (:component m) :expanded-atom)
+                                  (:component m)))
+                        @(:messages-atom ch))]
         (is (= 2 (count tools)))
         (is (every? #(true? @(:expanded-atom %)) tools)
             "all tools — old and new — are expanded"))))
@@ -351,7 +353,9 @@
       (ch/chat-history-toggle-thinking-hidden! ch)
       (ch/chat-history-add-message! ch
         {:role :assistant :content "b" :thinking "t2"})
-      (let [assistants (filter #(contains? % :hide-thinking-atom) @(:children-atom ch))]
+      (let [assistants (keep (fn [m] (when (contains? (:component m) :hide-thinking-atom)
+                                       (:component m)))
+                             @(:messages-atom ch))]
         (is (= 2 (count assistants)))
         (is (every? #(true? @(:hide-thinking-atom %)) assistants)
             "all assistant messages — old and new — have thinking hidden")))))
@@ -367,11 +371,10 @@
       (is (nil? @(:status-line-atom ch)) "status line is dropped with it"))))
 
 (deftest test-info-banner-in-children
-  (testing "the info banner is a chat child: themed, persisted as :info, survives remove-last"
+  (testing "the info banner is a chat message: themed, persisted as :info, survives remove-last"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-set-info-msg! ch {:label "kmet" :content "banner"})
-      (is (= 1 (count @(:children-atom ch))) "banner is in children-atom")
-      (is (= 1 (count @(:children (:container ch)))) "container children stay parallel")
+      (is (some? @(:info-comp-atom ch)) "banner component exists")
       ;; theme + output-pad must reach the banner without errors
       (ch/chat-history-set-theme! ch theme/dark-theme)
       (ch/chat-history-set-output-pad! ch 2)

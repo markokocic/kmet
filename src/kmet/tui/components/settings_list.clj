@@ -3,7 +3,8 @@
    Port of @earendil-works/pi-tui SettingsList."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
-            [kmet.tui.utils :as u]))
+            [kmet.tui.utils :as u]
+            [kmet.tui.macros :refer [track!]]))
 
 ;; ─── Theme ──────────────────────────────────────────────────────────────────
 
@@ -27,60 +28,54 @@
   protocols/IComponent
 
   (render [this width]
-    (let [items @items-atom
-          flt @filter-atom
-          selected @selected-idx-atom
-          theme @theme-atom
-          cache @cache-atom]
-      (if (and cache (= (:width cache) width) (= (:items cache) items)
-               (= (:filter cache) flt) (= (:theme cache) theme))
-        (:lines cache)
-        (let [filtered (if (empty? flt)
-                         items
-                         (->> items
-                              (filter #(let [label (:label %)]
-                                        (clojure.string/includes?
-                                          (clojure.string/lower-case label)
-                                          (clojure.string/lower-case flt))))))
-              n (count filtered)
-              selected (min selected (max 0 (dec n)))
-              _ (reset! selected-idx-atom selected)
-              lines (volatile! [])]
-          ;; Header
+    (track! this width
+      (let [items @items-atom
+            flt @filter-atom
+            selected @selected-idx-atom
+            theme @theme-atom
+            filtered (if (empty? flt)
+                       items
+                       (->> items
+                            (filter #(let [label (:label %)]
+                                      (clojure.string/includes?
+                                        (clojure.string/lower-case label)
+                                        (clojure.string/lower-case flt))))))
+            n (count filtered)
+            selected (min selected (max 0 (dec n)))
+            _ (reset! selected-idx-atom selected)
+            lines (volatile! [])]
+        ;; Header
+        (vswap! lines conj
+          (str " \u001b[1mSettings"
+               (if (empty? flt) "" (str " (filter: " flt ")"))
+               "\u001b[0m"))
+        ;; Items
+        (doseq [[idx item] (map-indexed vector filtered)]
+          (let [is-selected (= idx selected)
+                label ((:label theme) (:label item) is-selected)
+                current (or (:value item) "")
+                possible (:values item)
+                is-cycling (and is-selected possible (> (count possible) 1))
+                value-str (cond
+                            is-cycling
+                            (str " < "
+                                 (clojure.string/join " | " (map #(if (= % current)
+                                                                    ((:value theme) (pr-str %) true)
+                                                                    ((:value theme) (pr-str %) false))
+                                                                  possible))
+                                 " > ")
+                            :else (str "  " ((:value theme) (pr-str current) is-selected)))
+                cursor (if (and is-selected @focused?) (:cursor theme) "  ")
+                line-str (str cursor label value-str)
+                truncated (u/truncate-to-width line-str (- width 1))
+                padded (str truncated
+                           (apply str (repeat (max 0 (- width (u/visible-width truncated))) \space)))]
+            (vswap! lines conj padded)))
+        (when (zero? n)
           (vswap! lines conj
-            (str " \u001b[1mSettings"
-                 (if (empty? flt) "" (str " (filter: " flt ")"))
-                 "\u001b[0m"))
-          ;; Items
-          (doseq [[idx item] (map-indexed vector filtered)]
-            (let [is-selected (= idx selected)
-                  label ((:label theme) (:label item) is-selected)
-                  current (or (:value item) "")
-                  possible (:values item)
-                  is-cycling (and is-selected possible (> (count possible) 1))
-                  value-str (cond
-                              is-cycling
-                              (str " < "
-                                   (clojure.string/join " | " (map #(if (= % current)
-                                                                      ((:value theme) (pr-str %) true)
-                                                                      ((:value theme) (pr-str %) false))
-                                                                    possible))
-                                   " > ")
-                              :else (str "  " ((:value theme) (pr-str current) is-selected)))
-                  cursor (if (and is-selected @focused?) (:cursor theme) "  ")
-                  line-str (str cursor label value-str)
-                  truncated (u/truncate-to-width line-str (- width 1))
-                  padded (str truncated
-                             (apply str (repeat (max 0 (- width (u/visible-width truncated))) \space)))]
-              (vswap! lines conj padded)))
-          (when (zero? n)
-            (vswap! lines conj
-              (str "  \u001b[2mNo matching settings\u001b[0m"
-                   (apply str (repeat (max 0 (- width 35)) \space)))))
-          (let [result @lines]
-            (reset! cache-atom {:width width :items items :filter flt
-                                :theme theme :lines result})
-            result)))))
+            (str "  \u001b[2mNo matching settings\u001b[0m"
+                 (apply str (repeat (max 0 (- width 35)) \space)))))
+        @lines)))
 
   (handle-input [this data]
     (let [items @items-atom
@@ -125,8 +120,7 @@
                     (when-let [cb @on-change-atom]
                       (cb (:id item) new-val))
                     (swap! items-atom update-in
-                      [(.indexOf items item) :value] (constantly new-val))
-                    (reset! cache-atom nil)))))
+                      [(.indexOf items item) :value] (constantly new-val))))))
             nil)
 
         ;; Previous value (left)
@@ -143,8 +137,7 @@
                     (when-let [cb @on-change-atom]
                       (cb (:id item) new-val))
                     (swap! items-atom update-in
-                      [(.indexOf items item) :value] (constantly new-val))
-                    (reset! cache-atom nil)))))
+                      [(.indexOf items item) :value] (constantly new-val))))))
             nil)
 
         ;; Backspace — remove filter char
@@ -200,8 +193,7 @@
               (if (= (:id item) id)
                 (assoc item :value value)
                 item))
-            items)))
-  (protocols/invalidate sl))
+            items))))
 
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────
 

@@ -43,6 +43,7 @@ src/kmet/
 │   ├── skills.clj      — Skills loading + system prompt
 │   ├── extensions.clj  — Extension loading, input/before-agent-start hooks
 │   ├── event_bus.clj   — Event vocabulary + extension event bus
+│   ├── commands.clj    — Slash command registry (builtins, skills, extensions)
 │   ├── keybindings.clj — App keybindings
 │   ├── tools/          — Tool implementations (one file per tool)
 │   │   ├── core.clj    — Tool public API (re-exports from tool.clj/registry.clj)
@@ -54,6 +55,7 @@ src/kmet/
 │   │   ├── grep.clj    — grep tool (disabled)
 │   │   ├── find.clj    — find tool (disabled)
 │   │   ├── ls.clj      — ls tool (disabled)
+│   │   ├── util.clj    — Shared tool utilities (safe file traversal)
 │   │   └── registry.clj — tool registry, registration, execution
 │   ├── ui.clj          — Re-exports for app UI components
 │   └── ui/             — App-specific TUI components (Pi's coding-agent layer)
@@ -69,10 +71,14 @@ src/kmet/
 │   ├── core.clj        — TUI class, render loop, overlays
 │   ├── terminal.clj    — JLine 4.x wrapper
 │   ├── keys.clj        — key parsing/matching
+│   ├── keybindings.clj — TUI keybindings
+│   ├── fuzzy.clj       — fuzzy matching (select-list filter)
+│   ├── autocomplete.clj — editor autocomplete
 │   ├── protocols.clj   — IComponent, IFocusable, IComponentKind
 │   ├── utils.clj       — text width, wrapping, ANSI helpers
 │   ├── theme.clj       — Theme system (fg/bg colors)
-│   ├── macros.clj      — with-cache helper
+│   ├── terminal_image.clj — Kitty protocol image rendering
+│   ├── macros.clj      — track! reactive cache (deref tracking)
 │   └── components/
 │       ├── container.clj
 │       ├── box.clj
@@ -81,14 +87,17 @@ src/kmet/
 │       ├── markdown.clj
 │       ├── input.clj
 │       ├── editor.clj
+│       ├── editing.clj
 │       ├── select_list.clj
-│       └── settings_list.clj
+│       ├── settings_list.clj
+│       ├── spinner.clj
+│       └── image.clj
 ```
 
 ### Layer boundaries
 - **`kmet.tui.*`** — generic. No dependency on app, LLM, or session concepts.
 - **`kmet.modes.*`** — entry modes. Depends on `kmet.app.*`, `kmet.tui.*`, `kmet.config`.
-- **`kmet.app.ui.*`** — app-specific. Builds on `kmet.tui.*`; imports `with-cache` from `kmet.tui.macros`.
+- **`kmet.app.ui.*`** — app-specific. Builds on `kmet.tui.*`; imports `track!` from `kmet.tui.macros`.
 - **`kmet.app.*`** (non-ui) — business logic. Never imports `kmet.tui.*` or `kmet.app.ui.*`.
 - **`kmet.core`** — entry only: args + dispatch. Never contains app logic.
 
@@ -148,10 +157,24 @@ Each message type has its own `defrecord` implementing `IComponent`:
 - `AssistantMessage` — assistant text + thinking (italic + `thinking-text` color)
 - `ToolExecution` — tool call/result in `Box` with status background
 - `CustomMessage` — info/custom messages in `Box` with `custom-message-bg`
-- `ChatHistory` — thin `Container` wrapper that composes per-role components
+- `ChatHistory` — data-driven: holds plain message maps in one `messages-atom`
+  (each carrying its `:component`); render derives the tree, persistence reads
+  the atom directly (no component reverse-engineering)
 
 Type dispatch uses `IComponentKind` protocol (`component-kind` returning `:user`,
-`:assistant`, `:tool`, `:custom`). Render cache managed by `kmet.tui.macros/with-cache`.
+`:assistant`, `:tool`, `:custom`).
+
+### Reactive render cache (track!)
+- Wrap a component's render body with `(track! this width ...)`. Every `@atom`
+  read is recorded; when any of them changes, the cache invalidates
+  automatically — setters become plain `reset!`/`swap!` with no manual
+  `(protocols/invalidate comp)` call. Requires a `:cache-atom` (or legacy
+  `:cache`) field on the record.
+- Do NOT use track! when the cache depends on computed child output (Box),
+  when rendering is time-animated (spinner), or for deliberately uncached
+  input widgets (input, editor). `tool_execution` keeps manual invalidate —
+  its invalidate is a re-render signal (fires `request-render-fn`), not cache
+  boilerplate.
 
 ## Reference
 - Consult `~/src/cvstree/pi/` for implementation patterns before building new features — e.g., study its TUI component model before adding new components, or its diff rendering approach before implementing a diff view.

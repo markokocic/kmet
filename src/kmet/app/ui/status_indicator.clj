@@ -51,21 +51,18 @@
   "Activate the status indicator — shows the animated working spinner."
   [indicator]
   (spinner/spinner-start! (:spinner indicator))
-  (reset! (:active-atom indicator) true)
-  (protocols/invalidate indicator))
+  (reset! (:active-atom indicator) true))
 
 (defn status-indicator-stop!
   "Deactivate the status indicator — hides the spinner."
   [indicator]
   (spinner/spinner-stop! (:spinner indicator))
-  (reset! (:active-atom indicator) false)
-  (protocols/invalidate indicator))
+  (reset! (:active-atom indicator) false))
 
 (defn status-indicator-set-text!
   "Set the message text displayed next to the spinner."
   [indicator text]
-  (spinner/spinner-set-text! (:spinner indicator) text)
-  (protocols/invalidate indicator))
+  (spinner/spinner-set-text! (:spinner indicator) text))
 
 (defn status-indicator-set-theme!
   "Update the theme colors on the underlying spinner."
@@ -73,5 +70,4 @@
   (spinner/spinner-set-spinner-color-fn! (:spinner indicator)
     #(theme/fg theme :accent %))
   (spinner/spinner-set-message-color-fn! (:spinner indicator)
-    #(theme/fg theme :dim %))
-  (protocols/invalidate indicator))
+    #(theme/fg theme :dim %)))

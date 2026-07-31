@@ -13,7 +13,7 @@
 (def ^:private RST "\u001b[0m")
 
 (defrecord Spinner [active-atom text-atom start-atom frames-atom interval-ms-atom
-                    prefix-atom spinner-color-fn-atom message-color-fn-atom cache-atom]
+                    prefix-atom spinner-color-fn-atom message-color-fn-atom]
   protocols/IComponent
   (render [this width]
     (if-not @active-atom
@@ -28,8 +28,7 @@
             line (str prefix (spinner-fn frame) " " (msg-fn @text-atom))]
         [(u/truncate-to-width line width)])))
   (handle-input [_this _data] nil)
-  (invalidate [this]
-    (reset! (:cache-atom this) nil)))
+  (invalidate [_this] nil))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
@@ -52,8 +51,7 @@
                  :interval-ms-atom (atom interval-ms)
                  :prefix-atom (atom prefix)
                  :spinner-color-fn-atom (atom spinner-color-fn)
-                 :message-color-fn-atom (atom message-color-fn)
-                 :cache-atom (atom nil)}))
+                 :message-color-fn-atom (atom message-color-fn)}))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 

@@ -7,8 +7,7 @@
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.box :as box]
-            [kmet.tui.components.text :as text]
-            [kmet.tui.macros :refer [with-cache]]))
+            [kmet.tui.components.text :as text]))
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
@@ -54,8 +53,7 @@
         b (box/make-box n 1 #(theme/bg theme :user-message-bg %))]
     (box/box-add-child b t)
     (reset! (:box comp) b)
-    (reset! (:text-comp comp) t)
-    (protocols/invalidate comp)))
+    (reset! (:text-comp comp) t)))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 

@@ -3,7 +3,8 @@
    Port of @earendil-works/pi-tui Markdown.
    Minimal CommonMark renderer for terminal display."
   (:require [kmet.tui.protocols :as protocols]
-            [kmet.tui.utils :as u]))
+            [kmet.tui.utils :as u]
+            [kmet.tui.macros :refer [track!]]))
 
 ;; ─── Theme ──────────────────────────────────────────────────────────────────
 ;; Matches pi's MarkdownTheme interface.
@@ -110,22 +111,20 @@
 ;; ─── Markdown component ───────────────────────────────────────────────────
 
 (defrecord Markdown [text-atom theme-atom padding-x-atom
-                     cache-atom width-atom]
+                     cache-atom]
   protocols/IComponent
 
   (render [this width]
-    (let [text @text-atom
-          theme @theme-atom
-          padding-x @padding-x-atom
-          cached @cache-atom]
-      (if (and cached (= (:width cached) width) (= (:text cached) text))
-        (:lines cached)
-        (let [content-width (max 1 (- width (* 2 padding-x)))
-              left-pad (apply str (repeat padding-x \space))
-              lines (clojure.string/split-lines text)
-              result (volatile! [])
-              in-code-block (volatile! false)
-              code-lang (volatile! "")]
+    (track! this width
+      (let [text @text-atom
+            theme @theme-atom
+            padding-x @padding-x-atom
+            content-width (max 1 (- width (* 2 padding-x)))
+            left-pad (apply str (repeat padding-x \space))
+            lines (clojure.string/split-lines text)
+            result (volatile! [])
+            in-code-block (volatile! false)
+            code-lang (volatile! "")]
           (doseq [line lines]
             (let [trimmed (clojure.string/trim line)]
               (cond
@@ -218,8 +217,7 @@
                                           (apply str (repeat (max 0 (- content-width wl-width)) \space)))]
                           (vswap! result conj padded)))))))))
           (let [result-lines @result]
-            (reset! cache-atom {:width width :text text :lines result-lines})
-            result-lines)))))
+            result-lines))))
 
   (handle-input [this data] nil)
 
@@ -237,25 +235,19 @@
     (map->Markdown {:text-atom (atom text)
                     :theme-atom (atom t)
                     :padding-x-atom (atom padding-x)
-                    :cache-atom (atom nil)
-                    :width-atom (atom 80)})))
+                    :cache-atom (atom nil)})))
 
 (defn markdown-set-text! [md text]
-  (reset! (:text-atom md) text)
-  (protocols/invalidate md))
+  (reset! (:text-atom md) text))
 
 (defn markdown-append! [md text]
-  (let [current @(:text-atom md)]
-    (reset! (:text-atom md) (str current "\n" text))
-    (protocols/invalidate md)))
+  (swap! (:text-atom md) #(str % "\n" text)))
 
 (defn markdown-set-theme! [md theme]
-  (reset! (:theme-atom md) theme)
-  (protocols/invalidate md))
+  (reset! (:theme-atom md) theme))
 
 (defn markdown-set-padding-x! [md n]
-  (reset! (:padding-x-atom md) n)
-  (protocols/invalidate md))
+  (reset! (:padding-x-atom md) n))
 
 (defn markdown-get-text [md]
   @(:text-atom md))

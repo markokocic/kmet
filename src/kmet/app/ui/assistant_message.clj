@@ -12,7 +12,7 @@
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.markdown :as md]
-            [kmet.tui.macros :refer [with-cache]]))
+            [kmet.tui.macros :refer [track!]]))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -52,48 +52,45 @@
                              cache-atom]
   protocols/IComponent
   (render [this width]
-    (let [theme @theme-atom
-          output-pad @output-pad-atom
-          hide? @hide-thinking-atom
-          finalized @finalized-atom
-          pad-x output-pad
-          cw (max 1 (- width (* 2 pad-x)))
-          left-pad (apply str (repeat pad-x \space))
-          prev-width @last-render-width-atom
-          text (let [t @text-atom] (when (seq t) t))
-          thinking (let [t @thinking-text-atom] (when (seq t) t))
-          text-empty? (nil? text)
-          thinking-empty? (nil? thinking)
-          width-changed? (and prev-width (not= prev-width width))
-          text-lines (if width-changed?
-                       (wrap-text-to-width text cw left-pad theme)
-                       @rendered-text-lines-atom)
-          thinking-lines (if width-changed?
-                           (render-thinking-to-width thinking cw left-pad theme hide?)
-                           @rendered-thinking-lines-atom)]
-      ;; Pi-style: no visible content (streaming or finalized empty) → render nothing.
-      ;; The working indicator is a separate StatusIndicator between chat and editor.
-      (if (and text-empty? thinking-empty?)
-        []
-        ;; Normal: render with cache + top pad-y=1 only (Pi-style Spacer(1) equivalent)
-        (with-cache this width
-          {:theme theme :output-pad output-pad :hide? hide? :finalized finalized
-           :text (count text) :thinking (count thinking)}
-          (fn []
-            (let [cursor (cursor-line left-pad theme finalized
-                            (or (seq thinking) (seq text)))
-                  pad-y 1
-                  empty (apply str (repeat width \space))
-                  ;; Pi-style: spacer between thinking and text blocks when text follows
-                  thinking-text-spacer? (and (seq thinking) (seq text))
-                  content (vec (concat thinking-lines
-                                       (when thinking-text-spacer? [empty])
-                                       text-lines
-                                       (when cursor [cursor])))]
-              ;; Pi-style: top padding only (Spacer(1) equivalent).
-              ;; No bottom padding — next component provides its own top spacing.
-              (vec (concat (repeat pad-y empty)
-                           content))))))))
+    (track! this width
+      (let [theme @theme-atom
+            output-pad @output-pad-atom
+            hide? @hide-thinking-atom
+            finalized @finalized-atom
+            pad-x output-pad
+            cw (max 1 (- width (* 2 pad-x)))
+            left-pad (apply str (repeat pad-x \space))
+            prev-width @last-render-width-atom
+            text (let [t @text-atom] (when (seq t) t))
+            thinking (let [t @thinking-text-atom] (when (seq t) t))
+            text-empty? (nil? text)
+            thinking-empty? (nil? thinking)
+            width-changed? (and prev-width (not= prev-width width))
+            text-lines (if width-changed?
+                         (wrap-text-to-width text cw left-pad theme)
+                         @rendered-text-lines-atom)
+            thinking-lines (if width-changed?
+                             (render-thinking-to-width thinking cw left-pad theme hide?)
+                             @rendered-thinking-lines-atom)]
+        ;; Pi-style: no visible content (streaming or finalized empty) → render nothing.
+        ;; The working indicator is a separate StatusIndicator between chat and editor.
+        (if (and text-empty? thinking-empty?)
+          []
+          ;; Normal: render with reactive cache + top pad-y=1 only (Pi-style Spacer(1) equivalent)
+          (let [cursor (cursor-line left-pad theme finalized
+                          (or (seq thinking) (seq text)))
+                pad-y 1
+                empty (apply str (repeat width \space))
+                ;; Pi-style: spacer between thinking and text blocks when text follows
+                thinking-text-spacer? (and (seq thinking) (seq text))
+                content (vec (concat thinking-lines
+                                     (when thinking-text-spacer? [empty])
+                                     text-lines
+                                     (when cursor [cursor])))]
+            ;; Pi-style: top padding only (Spacer(1) equivalent).
+            ;; No bottom padding — next component provides its own top spacing.
+            (vec (concat (repeat pad-y empty)
+                         content)))))))
   (handle-input [_this _data] nil)
   (invalidate [this]
     (reset! (:cache-atom this) nil)))
@@ -147,46 +144,39 @@
 
 (defn assistant-message-set-text! [comp text]
   (reset! (:text-atom comp) text)
-  (reflow-all! comp (or @(:last-render-width-atom comp) 80))
-  (protocols/invalidate comp))
+  (reflow-all! comp (or @(:last-render-width-atom comp) 80)))
 
 (defn assistant-message-append-text! [comp text]
   (swap! (:text-atom comp) str text)
   (when-let [w @(:last-render-width-atom comp)]
-    (reflow-all! comp w))
-  (protocols/invalidate comp))
+    (reflow-all! comp w)))
 
 (defn assistant-message-set-thinking! [comp text]
   (reset! (:thinking-text-atom comp) text)
-  (reflow-all! comp (or @(:last-render-width-atom comp) 80))
-  (protocols/invalidate comp))
+  (reflow-all! comp (or @(:last-render-width-atom comp) 80)))
 
 (defn assistant-message-append-thinking! [comp text]
   (swap! (:thinking-text-atom comp) str text)
   (when-let [w @(:last-render-width-atom comp)]
-    (reflow-all! comp w))
-  (protocols/invalidate comp))
+    (reflow-all! comp w)))
 
 (defn assistant-message-finalize! [comp]
-  (reset! (:finalized-atom comp) true) (protocols/invalidate comp))
+  (reset! (:finalized-atom comp) true))
 
 (defn assistant-message-set-hide-thinking! [comp hide?]
   (reset! (:hide-thinking-atom comp) hide?)
   (when-let [w @(:last-render-width-atom comp)]
-    (reflow-all! comp w))
-  (protocols/invalidate comp))
+    (reflow-all! comp w)))
 
 (defn assistant-message-set-theme! [comp theme]
   (reset! (:theme-atom comp) theme)
   (when-let [w @(:last-render-width-atom comp)]
-    (reflow-all! comp w))
-  (protocols/invalidate comp))
+    (reflow-all! comp w)))
 
 (defn assistant-message-set-output-pad! [comp n]
   (reset! (:output-pad-atom comp) n)
   (when-let [w @(:last-render-width-atom comp)]
-    (reflow-all! comp w))
-  (protocols/invalidate comp))
+    (reflow-all! comp w)))
 
 (defn assistant-message-get-text [comp] @(:text-atom comp))
 (defn assistant-message-get-thinking [comp] @(:thinking-text-atom comp))
