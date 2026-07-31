@@ -9,13 +9,13 @@ Work proceeds in the following order:
 
 1. **Phase 0 — Event foundation** (Agent Gaps 2, 3): event vocabulary
    (`kmet.app.events`), structured lifecycle events from `run-agent-turn`,
-   extension routing via `skills/emit-event!`. ✅ done
+   extension routing via `skills/emit-event!`.
 2. **Phase 1 — State machine** (Agent Gap 1): steering/follow-up queues,
-   inner/outer loop restructure. ✅ done
+   inner/outer loop restructure.
 3. **Phase 2 — Resilience** (Agent Gaps 4, 10): auto-retry, before/after
-   tool-call hooks. ✅ done
+   tool-call hooks.
 4. **Phase 3 — Polish** (Agent Gaps 5–9, 11, 12): parallel tools, context
-   transforms, per-turn config, compaction, system prompt override. ✅ done
+   transforms, per-turn config, compaction, system prompt override.
 5. **Phase 4 — Editor quick wins** (Editor Gaps 5–9): history drafts,
    dynamic height, paste-marker atomic segments, CSI-u decode + renumbering.
 6. **Phase 5 — Autocomplete** (Editor Gaps 1, 2, 10): provider protocol,
