@@ -12,8 +12,8 @@
    messages are drained per poll cycle: :all takes everything,
    :one-at-a-time takes one. Applied per queue.
 
-   Emits lifecycle events (see kmet.app.events) to the :on-event callback
-   (UI) and to kmet.app.skills/emit-event! (extension system).
+   Emits lifecycle events (see kmet.app.event-bus) to the :on-event callback
+   (UI) and to kmet.app.event-bus/emit-event! (extension system).
 
    Auto-retry (pi: agent-session auto-retry): transient LLM errors are retried
    with exponential backoff (base-delay-ms * 2^(attempt-1)), up to max-retries.
@@ -44,9 +44,9 @@
    set-get-api-key! registers a dynamic API key resolver.
 
    Input hooks (pi: input extension event): applied at the interactive input
-   path (core.clj handle-submit) via skills/apply-input-hooks — extensions
-   can consume ({:action :handled}) or rewrite ({:action :transform :text ...})
-   user input before the agent runs.
+   path (modes.interactive handle-submit) via extensions/apply-input-hooks —
+   extensions can consume ({:action :handled}) or rewrite
+   ({:action :transform :text ...}) user input before the agent runs.
 
    before-agent-start hooks (pi: before_agent_start extension event): applied
    by run-agent-turn after the user message is added, before the first LLM
@@ -59,13 +59,14 @@
    :images — a vector of {:type :image :data base64 :mime-type str} blocks
    attached to the initial user message; they flow to the provider as OpenAI
    image_url / Anthropic image blocks. Input hooks receive and can transform
-   :images (skills/apply-input-hooks)."
+   :images (extensions/apply-input-hooks)."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [kmet.app.llm :as llm]
             [kmet.app.tools.core :as tools]
             [kmet.app.session :as session]
-            [kmet.app.skills :as skills]
+            [kmet.app.extensions :as extensions]
+            [kmet.app.event-bus :as event-bus]
             [kmet.config :as cfg]))
 
 ;; ─── Agent state ───────────────────────────────────────────────────────────
@@ -155,12 +156,12 @@ Be precise and concise in your responses."}}]
 
 (defn- emit
   "Route an event to the UI callback (:on-event) and the extension system
-   (skills/emit-event!). Extension listeners run inside emit-event!, which
+   (event-bus/emit-event!). Extension listeners run inside emit-event!, which
    catches per-listener exceptions so a broken extension can't kill the loop."
   [agent event]
   (when-let [cb (:on-event agent)]
     (cb event))
-  (skills/emit-event! event))
+  (event-bus/emit-event! event))
 
 (defn- user-message
   "Build a user message map. text — string; images — optional vector of
@@ -837,7 +838,7 @@ Be precise and concise in your responses."}}]
    to the in-flight LLM promise (active-call); the loop exits quietly
    (no on-error, no on-done).
 
-   Emits lifecycle events (see kmet.app.events) to the UI callback and the
+   Emits lifecycle events (see kmet.app.event-bus) to the UI callback and the
    extension system via emit.
    Returns: future that completes when the agent run is done."
   [agent {:keys [message images on-text on-thinking on-done on-error]}]
@@ -862,7 +863,7 @@ Be precise and concise in your responses."}}]
             ;; before-agent-start hooks (pi: emitBeforeAgentStart) — extensions
             ;; can override the system prompt for this run and inject context
             ;; messages; runs once per submission, after the user message.
-            (let [bas (skills/apply-before-agent-start-hooks
+            (let [bas (extensions/apply-before-agent-start-hooks
                         message @(:system agent))]
               (when (:system-prompt bas)
                 (reset! (:system-prompt-override agent) (:system-prompt bas)))

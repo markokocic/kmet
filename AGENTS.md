@@ -28,27 +28,33 @@
 ## File layout
 ```
 src/kmet/
-├── core.clj            — CLI entry, arg parsing, main layout
+├── core.clj            — CLI entry, arg parsing, mode dispatch (pi: cli.js)
 ├── config.clj          — Configuration loading
 ├── debug.clj           — Debug/error logging
-├── app/                — App-level business logic
+├── modes/              — Entry modes (pi: dist/modes/)
+│   ├── interactive.clj — Interactive TUI: layout, CoreState, submit/cancel,
+│   │                     bash commands, external editor, session browsing
+│   └── print.clj       — Print mode: send message, print response, exit
+├── app/                — App-level business logic (pi: dist/core/)
 │   ├── bash_executor.clj — Bash command execution (raw byte streaming, truncation, temp file)
 │   ├── llm.clj         — LLM API calls
 │   ├── loop.clj        — Agent conversation loop
 │   ├── session.clj     — Session persistence
-│   ├── skills.clj      — Skills & extensions system
+│   ├── skills.clj      — Skills loading + system prompt
+│   ├── extensions.clj  — Extension loading, input/before-agent-start hooks
+│   ├── event_bus.clj   — Event vocabulary + extension event bus
 │   ├── keybindings.clj — App keybindings
-│   ├── tools.clj       — Tool public API (re-exports from tools/)
 │   ├── tools/          — Tool implementations (one file per tool)
-│   │   ├── protocol.clj   — Tool record, param helpers, constants
-│   │   ├── read.clj       — read tool (+ image detection)
-│   │   ├── write.clj      — write tool
-│   │   ├── edit.clj       — edit tool
-│   │   ├── bash.clj       — bash tool
-│   │   ├── grep.clj       — grep tool (disabled)
-│   │   ├── find.clj       — find tool (disabled)
-│   │   ├── ls.clj         — ls tool (disabled)
-│   │   └── registry.clj   — tool map, schema conversion, registration, execution
+│   │   ├── core.clj    — Tool public API (re-exports from tool.clj/registry.clj)
+│   │   ├── tool.clj    — Tool record, param helpers, schema conversion
+│   │   ├── read.clj    — read tool (+ image detection)
+│   │   ├── write.clj   — write tool
+│   │   ├── edit.clj    — edit tool
+│   │   ├── bash.clj    — bash tool
+│   │   ├── grep.clj    — grep tool (disabled)
+│   │   ├── find.clj    — find tool (disabled)
+│   │   ├── ls.clj      — ls tool (disabled)
+│   │   └── registry.clj — tool registry, registration, execution
 │   ├── ui.clj          — Re-exports for app UI components
 │   └── ui/             — App-specific TUI components (Pi's coding-agent layer)
 │       ├── bash_execution.clj  — BashExecutionComponent (!/!! TUI display)
@@ -81,8 +87,10 @@ src/kmet/
 
 ### Layer boundaries
 - **`kmet.tui.*`** — generic. No dependency on app, LLM, or session concepts.
+- **`kmet.modes.*`** — entry modes. Depends on `kmet.app.*`, `kmet.tui.*`, `kmet.config`.
 - **`kmet.app.ui.*`** — app-specific. Builds on `kmet.tui.*`; imports `with-cache` from `kmet.tui.macros`.
 - **`kmet.app.*`** (non-ui) — business logic. Never imports `kmet.tui.*` or `kmet.app.ui.*`.
+- **`kmet.core`** — entry only: args + dispatch. Never contains app logic.
 
 ### ANSI escape codes
 - **Never use raw ANSI escape codes (`\u001b[...`) outside `src/kmet/tui/`.**
@@ -95,10 +103,12 @@ src/kmet/
 ## Testing
 - **Framework**: `clojure.test`
 - **Layout**: `test/kmet/` mirrors `src/kmet/`
-- **Run**: `bb test` — fast suites only (excludes the slow timing/process suites).
-  Use **`bb test-ext`** to run the full suite including the slow outliers
-  (`kmet.app.test-loop`, `kmet.app.test-tools`) — run this during final
-  validation before commit.
+- **Run**: `bb test` — all tests except those marked `^:slow`.
+  Use **`bb test-ext`** to run only the `^:slow` tests (timing/process
+  suites: real backoff sleeps, parallel tool timing, bash tool process
+  spawns). Mark slow tests with `^:slow` on the deftest; selection happens
+  per test var in `kmet.runner`. Run `bb test-ext` during final validation
+  before commit.
 
 ## Platform
 - **Target**: cross-platform (any system with Babashka and a terminal)

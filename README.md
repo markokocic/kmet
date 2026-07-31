@@ -136,7 +136,8 @@ Create EDN theme files in `~/.config/kmet/themes/`. See `examples/themes/` for f
 
 ```sh
 bb demo    # Standalone editor demo
-bb test    # Run tests (278 tests, 1042 assertions)
+bb test    # Run fast test suites (excludes ^:slow tests)
+bb test-ext # Run only the slow (^:slow) test suites
 bb help    # Show task help
 ```
 

@@ -5,11 +5,11 @@
            :requires ([kmet.core :as core])
            :task (apply core/-main *command-line-args*)
            :override-builtin true}
-  test    {:doc "Run fast test suites (excludes slow timing/process suites)"
+  test    {:doc "Run fast test suites (excludes ^:slow tests)"
            :requires ([kmet.runner :as runner])
            :task (runner/-main)
            :override-builtin true}
-  test-ext {:doc "Run ALL test suites including slow outliers (final validation before commit)"
+  test-ext {:doc "Run ONLY the slow (^:slow) test suites (final validation before commit)"
            :requires ([kmet.runner :as runner])
            :task (runner/-main "ext")
            :override-builtin true}
@@ -24,5 +24,5 @@
            :task (println "All source namespaces compile successfully.")
            :override-builtin true}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run       Interactive TUI (--help for options)\n  nrepl     Start nREPL server\n  test      Run fast test suites\n  test-ext  Run all suites incl. slow outliers (pre-commit validation)\n  check     Verify compilation")
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run       Interactive TUI (--help for options)\n  nrepl     Start nREPL server\n  test      Run fast test suites (excludes ^:slow tests)\n  test-ext  Run ONLY slow (^:slow) test suites (pre-commit validation)\n  check     Verify compilation")
            :override-builtin true}}}

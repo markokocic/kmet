@@ -98,32 +98,32 @@
 
 ;; ─── Tool bash ────────────────────────────────────────────────────────────
 
-(t/deftest test-tool-bash
+(t/deftest ^:slow test-tool-bash
   (let [result (tools/execute-tool "bash" {:command "echo hello bash"})]
     (t/is (not (:is-error result)))
     (t/is (.contains (:content result) "hello bash"))))
 
-(t/deftest test-tool-bash-error
+(t/deftest ^:slow test-tool-bash-error
   (let [result (tools/execute-tool "bash" {:command "ls /nonexistent-path-xyz"})]
     (t/is (:is-error result))))
 
-(t/deftest test-tool-bash-exit-code
+(t/deftest ^:slow test-tool-bash-exit-code
   (let [result (tools/execute-tool "bash" {:command "exit 42"})]
     (t/is (:is-error result) "Non-zero exit should be error")))
 
-(t/deftest test-tool-bash-large-stderr
+(t/deftest ^:slow test-tool-bash-large-stderr
   (let [result (tools/execute-tool "bash"
                 {:command "for i in $(seq 1 200); do echo err$i >&2; done; echo ok"})]
     (t/is (not (:is-error result)) "Large stderr should not deadlock")
     (t/is (.contains (:content result) "ok"))))
 
-(t/deftest test-tool-bash-large-stdout
+(t/deftest ^:slow test-tool-bash-large-stdout
   (let [result (tools/execute-tool "bash"
                 {:command "for i in $(seq 1 200); do echo out$i; done; echo done"})]
     (t/is (not (:is-error result)) "Large stdout should not deadlock")
     (t/is (.contains (:content result) "done"))))
 
-(t/deftest test-tool-bash-stdout-and-stderr-merged
+(t/deftest ^:slow test-tool-bash-stdout-and-stderr-merged
   (let [result (tools/execute-tool "bash" {:command "echo hello; echo world >&2"})]
     (t/is (not (:is-error result)))
     (t/is (.contains (:content result) "hello"))

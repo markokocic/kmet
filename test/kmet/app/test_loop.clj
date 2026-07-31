@@ -4,7 +4,8 @@
             [babashka.fs :as fs]
             [kmet.app.llm :as llm]
             [kmet.app.tools.core :as tools]
-            [kmet.app.skills :as skills]
+            [kmet.app.extensions :as extensions]
+            [kmet.app.event-bus :as event-bus]
             [kmet.app.session :as session]
             [kmet.app.loop :as loop]
             [kmet.config :as cfg]))
@@ -149,7 +150,7 @@
 
 ;; ─── Regression: run-agent-turn signals cleanup ─────────────────────────
 
-(t/deftest test-loop-run-agent-turn-resets-signal
+(t/deftest ^:slow test-loop-run-agent-turn-resets-signal
   (let [agent (loop/make-agent-state)]
     (reset! (:signal agent) true)
     (reset! (:status agent) :thinking)
@@ -175,7 +176,7 @@
     (deref done 2000 :timeout)
     (t/is (false? @(:signal agent)) "Signal should be false after turn ends")))
 
-(t/deftest test-loop-status-after-error
+(t/deftest ^:slow test-loop-status-after-error
   (let [agent (loop/make-agent-state)]
     (reset! (:status agent) :idle)
     (loop/run-agent-turn agent
@@ -197,7 +198,7 @@
 
 (t/deftest test-loop-events-routed-to-extension-system
   (let [received (atom [])
-        dereg (skills/on-event :status (fn [e] (swap! received conj e)))
+        dereg (event-bus/on-event :status (fn [e] (swap! received conj e)))
         agent (loop/make-agent-state :on-event (fn [_]))]
     (loop/cancel-turn agent)
     (dereg)
@@ -237,7 +238,7 @@
         (t/is (= "hello" (:content (:delta mu))) "delta content should carry the text")))
     (t/is (false? @(:signal agent)) "Signal should be false after turn")))
 
-(t/deftest test-loop-tool-execution-events
+(t/deftest ^:slow test-loop-tool-execution-events
   (let [events (atom [])
         call-count (atom 0)
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
@@ -280,7 +281,7 @@
         (t/is (some #(and (= :user (:role %)) (= "run tool" (get-in % [:content 0 :text])))
                     (:messages ae))
               "agent-end :messages includes the user message")
-        (t/is (= :idle @(:status agent)) "Agent status should be idle after tool turn")))
+        (t/is (= :idle @(:status agent)) "Agent status should be idle after tool turn")))))
 
 ;; ─── before-agent-start hooks ─────────────────────────────────────────────
 
@@ -288,8 +289,8 @@
   (let [events (atom [])
         sent (atom nil)
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
-    (skills/clear-before-agent-start-hooks!)
-    (skills/register-before-agent-start-hook!
+    (extensions/clear-before-agent-start-hooks!)
+    (extensions/register-before-agent-start-hook!
       (fn [_]
         {:system-prompt "EXTRA SYSTEM PROMPT"
          :message {:role :info :label "ext" :content "injected note"}}))
@@ -306,7 +307,7 @@
          {:message "hi"
           :on-done (fn [_])
           :on-error (fn [_])}))
-    (skills/clear-before-agent-start-hooks!)
+    (extensions/clear-before-agent-start-hooks!)
     (t/is (str/includes? (get-in @sent [:messages 0 :content 0 :text])
                          "EXTRA SYSTEM PROMPT")
           "before-agent-start system prompt override reaches the LLM call")
@@ -320,7 +321,7 @@
              (:content (first (filter #(= :info (:role %)) @(:messages agent)))))
           "string content is normalized to text blocks")
     (t/is (not-any? #(= :info (:role %)) (:messages @sent))
-          "display-only :info messages are excluded from the LLM context")))))
+          "display-only :info messages are excluded from the LLM context")))
 
 ;; ─── User message images ──────────────────────────────────────────────────
 
@@ -391,7 +392,7 @@
     (t/is (empty? @(:follow-up agent)) "cancel drops follow-up messages")
     (t/is (= :idle @(:status agent)))))
 
-(t/deftest test-loop-steer-injects-mid-run
+(t/deftest ^:slow test-loop-steer-injects-mid-run
   (let [calls (atom 0)
         agent (loop/make-agent-state)]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
@@ -583,7 +584,7 @@
       (t/is (some #(and (= :agent-end (:type %)) (= "boom" (:error %))) @events)
             ":agent-end carries the error"))))
 
-(t/deftest test-loop-cancel-during-tool-execution
+(t/deftest ^:slow test-loop-cancel-during-tool-execution
   (let [errors (atom [])
         dones (atom 0)
         agent (loop/make-agent-state)]
@@ -721,7 +722,7 @@
     (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
       (t/is (true? (:is-error end)) "after hook can mark a result as error"))))
 
-(t/deftest test-loop-after-tool-call-hook-throws
+(t/deftest ^:slow test-loop-after-tool-call-hook-throws
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (loop/set-after-tool-call! agent
@@ -833,7 +834,7 @@
     (t/is (not-any? #(= :auto-retry-start (:type %)) @events)
           "overflow is not retried (compaction handles it)")))
 
-(t/deftest test-loop-retry-cancel-during-backoff
+(t/deftest ^:slow test-loop-retry-cancel-during-backoff
   (let [events (atom [])
         agent (loop/make-agent-state
                 :on-event (fn [e] (swap! events conj e))
@@ -856,7 +857,7 @@
       (t/is (= "Retry cancelled" (:final-error (first ends)))))
     (t/is (= :idle (loop/get-status agent)) "run settles idle after cancel during backoff")))
 
-(t/deftest test-loop-retry-resets-count-on-success-then-error
+(t/deftest ^:slow test-loop-retry-resets-count-on-success-then-error
   (let [events (atom [])
         call-count (atom 0)
         agent (loop/make-agent-state
@@ -1010,7 +1011,7 @@
     (t/is (= "custom" @(:system-prompt-override agent))
           "prepare-next-turn sets the system prompt override for later turns")))
 
-(t/deftest test-loop-should-stop-after-turn
+(t/deftest ^:slow test-loop-should-stop-after-turn
   (let [calls (atom 0)
         agent (loop/make-agent-state)]
     (loop/set-should-stop-after-turn! agent (fn [_] true))
@@ -1047,7 +1048,7 @@
               (on-done :stop))))
       :done)))
 
-(t/deftest test-loop-parallel-tool-execution
+(t/deftest ^:slow test-loop-parallel-tool-execution
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
@@ -1067,7 +1068,7 @@
     (t/is (= 2 (count (filter #(= :tool (:role %)) (loop/get-context agent))))
           "both tool results appended to context")))
 
-(t/deftest test-loop-sequential-tool-execution
+(t/deftest ^:slow test-loop-sequential-tool-execution
   (let [seq-calls (atom 0)
         agent (loop/make-agent-state)]
     (tools/register-tool!

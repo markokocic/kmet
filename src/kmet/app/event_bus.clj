@@ -1,12 +1,12 @@
-(ns kmet.app.events
-  "Agent loop event vocabulary.
+(ns kmet.app.event-bus
+  "Agent loop event vocabulary + extension event bus.
 
    Defines the canonical set of event types emitted by the agent loop
    (kmet.app.loop/run-agent-turn) and routed to the UI (:on-event callback)
-   and the extension system (kmet.app.skills/emit-event!).
+   and the extension system (emit-event!).
 
    Mirrors pi's extension event types — see alignment.md, Appendix: Event
-   Type Vocabulary.")
+   Type Vocabulary — and pi's core/event-bus.js.")
 
 (def event-types
   "Map of event type keyword → description. The canonical vocabulary.
@@ -61,7 +61,7 @@
    "Unhandled error inside the agent loop.
     Payload: :message."
 
-   ;; ─── App-level events (emitted by core.clj, not the loop) ────────────
+   ;; ─── App-level events (emitted by the interactive mode, not the loop) ──
    :user-bash
    "Fired when the user runs a bash command (!/!!).
     Payload: :command, :exclude-from-context?, :cwd."
@@ -96,3 +96,46 @@
   "True if the keyword is part of the documented vocabulary."
   [type]
   (contains? event-types type))
+
+;; ─── Extension event bus ──────────────────────────────────────────────────
+;; Global listener registry. Extensions register callbacks with on-event;
+;; the agent loop and app routes events through emit-event!.
+
+(defonce ^:private event-listeners (atom {}))
+
+(defn on-event
+  "Register a callback for an event type.
+   event-type — keyword from kmet.app.event-bus/event-types
+                (e.g. :agent-start, :turn-start, :message-update,
+                 :tool-execution-start, :user-bash, :status)
+   callback   — (fn [event-map])
+   Returns a deregister function."
+  [event-type callback]
+  (let [id (java.util.UUID/randomUUID)]
+    (swap! event-listeners update event-type assoc id callback)
+    (fn [] (swap! event-listeners update event-type dissoc id))))
+
+(defn clear-event-listeners!
+  "Remove all event listeners (for testing)."
+  []
+  (reset! event-listeners {}))
+
+(defn emit-event!
+  "Emit an event to all registered listeners.
+   event — map with :type keyword and any additional data.
+   Runs all callbacks in a doseq (synchronous)."
+  [event]
+  (let [type (:type event)
+        listeners (get @event-listeners type)]
+    (when listeners
+      (doseq [[_ cb] listeners]
+        (try
+          (cb event)
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "Warning: extension event handler error:" (.getMessage e)))))))))
+
+(defn get-event-types
+  "List all registered event types."
+  []
+  (keys @event-listeners))
