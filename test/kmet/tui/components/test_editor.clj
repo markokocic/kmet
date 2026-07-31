@@ -4,6 +4,7 @@
             [kmet.tui.components.editor :as editor]
             [kmet.tui.autocomplete :as ac]
             [kmet.tui.components.select-list :as select-list]
+            [kmet.app.keybindings :as app-kb]
             [babashka.fs :as fs]))
 
 ;; Raw key sequences matching what parse-key expects
@@ -615,3 +616,146 @@
     (core/editor-set-text! e "clear")
     (t/is (nil? @(:autocomplete-state e)))
     (t/is (= "clear" (editor/editor-get-text e)))))
+
+;; ─── App actions (pi: CustomEditor) ────────────────────────────────────────
+
+(defn- make-action-editor
+  "Editor wired with the app-level KeybindingsManager so app action IDs
+   (app.interrupt, app.exit, app.tools.expand, ...) resolve to keys."
+  []
+  (editor/make-editor
+    :keybindings (app-kb/make-agent-keybindings-manager)))
+
+(t/deftest test-editor-action-register
+  (let [e (editor/make-editor)
+        called (atom 0)]
+    (editor/editor-set-on-action! e "app.clear" (fn [] (swap! called inc)))
+    (t/is (= 1 (count @(:action-handlers e))))
+    (t/is (fn? (get @(:action-handlers e) "app.clear")))
+    ;; Replace
+    (editor/editor-set-on-action! e "app.clear" (fn [] (swap! called inc 2)))
+    (t/is (= 1 (count @(:action-handlers e))))
+    (editor/editor-set-on-action! e "app.clear" nil)
+    (t/is (empty? @(:action-handlers e)))))
+
+(t/deftest test-editor-action-other-action-fires
+  ;; ctrl+o (app.tools.expand) dispatches the registered handler
+  (let [e (make-action-editor)
+        fired (atom nil)]
+    (editor/editor-set-on-action! e "app.tools.expand" (fn [] (reset! fired true)))
+    (core/handle-input e (ctrl 15))  ;; ctrl+o
+    (t/is @fired)
+    (t/is (= "" (editor/editor-get-text e)) "action does not insert text")))
+
+(t/deftest test-editor-action-ctrl-d-exit-when-empty
+  (let [e (make-action-editor)
+        exited (atom 0)]
+    (editor/editor-set-on-action! e "app.exit" (fn [] (swap! exited inc)))
+    (core/handle-input e (ctrl 4))  ;; ctrl+d on empty editor → exit
+    (t/is (= 1 @exited))))
+
+(t/deftest test-editor-action-ctrl-d-deletes-when-not-empty
+  ;; pi: app.exit only fires when the editor is empty; otherwise ctrl+d
+  ;; falls through to delete-char-forward
+  (let [e (make-action-editor)
+        exited (atom 0)]
+    (editor/editor-set-on-action! e "app.exit" (fn [] (swap! exited inc)))
+    (doseq [c "hi"] (core/handle-input e (str c)))
+    (core/handle-input e (ctrl 1))  ;; home
+    (core/handle-input e (ctrl 4))  ;; ctrl+d → forward delete
+    (t/is (zero? @exited))
+    (t/is (= "i" (editor/editor-get-text e)))))
+
+(t/deftest test-editor-action-escape-interrupt
+  (let [e (make-action-editor)
+        cancelled (atom 0)]
+    (editor/editor-set-on-action! e "app.interrupt" (fn [] (swap! cancelled inc)))
+    (core/handle-input e K-ESC)
+    (t/is (= 1 @cancelled))
+    (t/is (= "" (editor/editor-get-text e)))))
+
+(t/deftest test-editor-action-escape-cancels-dropdown-first
+  ;; pi: escape with the autocomplete dropdown open cancels the dropdown,
+  ;; it does not trigger app.interrupt
+  (let [e (make-action-editor)
+        cancelled (atom 0)]
+    (core/editor-set-autocomplete-provider! e
+      (ac/make-combined-provider
+        :commands-fn (constantly ac-commands)
+        :base-path ac-test-dir))
+    (editor/editor-set-on-action! e "app.interrupt" (fn [] (swap! cancelled inc)))
+    (core/handle-input e "/")
+    (t/is (= :regular @(:autocomplete-state e)))
+    (core/handle-input e K-ESC)
+    (t/is (zero? @cancelled) "escape closes the dropdown, not the action")
+    (t/is (nil? @(:autocomplete-state e)))))
+
+(t/deftest test-editor-action-typing-unaffected
+  (let [e (make-action-editor)]
+    (editor/editor-set-on-action! e "app.tools.expand" (fn []))
+    (editor/editor-set-on-action! e "app.thinking.toggle" (fn []))
+    (doseq [c "hello"] (core/handle-input e (str c)))
+    (t/is (= "hello" (editor/editor-get-text e)))
+    (core/handle-input e K-ENTER)  ;; submit still works with actions registered
+    (t/is (= "hello" (editor/editor-get-text e)))))
+
+;; ─── Expanded text (pi: Editor.getExpandedText) ───────────────────────────
+
+(t/deftest test-editor-get-expanded-text
+  (let [e (editor/make-editor)
+        big1 (clojure.string/join "\n" (repeat 15 "one"))
+        big2 (clojure.string/join "\n" (repeat 15 "two"))]
+    (core/handle-input e (str "\u001b[200~" big1 "\u001b[201~"))
+    (core/handle-input e (str "\u001b[200~" big2 "\u001b[201~"))
+    (t/is (clojure.string/includes? (editor/editor-get-text e) "[paste #1"))
+    (t/is (= (str big1 big2) (editor/editor-get-expanded-text e))
+          "all paste markers expanded to their stored content")))
+
+(t/deftest test-editor-get-expanded-text-no-markers
+  (let [e (editor/make-editor)]
+    (doseq [c "hello"] (core/handle-input e (str c)))
+    (t/is (= "hello" (editor/editor-get-expanded-text e))))
+
+  ;; Literal marker text with no store entry stays as-is
+  (let [e (editor/make-editor)]
+    (doseq [c "[paste #9 +5 lines]"] (core/handle-input e (str c)))
+    (t/is (= "[paste #9 +5 lines]" (editor/editor-get-expanded-text e)))))
+
+;; ─── setText undo snapshot (pi: Editor.setText pushes undo snapshot) ───────
+
+(t/deftest test-editor-set-text-undoable
+  ;; programmatic setText is undoable back to the previous content (pi parity)
+  (let [e (editor/make-editor)]
+    (doseq [c "hello"] (core/handle-input e (str c)))
+    (editor/editor-set-text! e "world")
+    (t/is (= "world" (editor/editor-get-text e)))
+    (core/handle-input e (ctrl 31))  ;; ctrl+- = undo
+    (t/is (= "hello" (editor/editor-get-text e)) "undo restores pre-setText content")
+    (core/handle-input e (ctrl 31))  ;; undo again → initial empty state
+    (t/is (= "" (editor/editor-get-text e)))))
+
+(t/deftest test-editor-set-text-undo-redo
+  (let [e (editor/make-editor)]
+    (doseq [c "ab"] (core/handle-input e (str c)))
+    (editor/editor-set-text! e "xy")
+    (core/handle-input e (ctrl 31))  ;; undo → "ab"
+    (t/is (= "ab" (editor/editor-get-text e)))
+    (core/handle-input e (ctrl 26))  ;; ctrl+z = redo → "xy"
+    (t/is (= "xy" (editor/editor-get-text e)))))
+
+(t/deftest test-editor-set-text-same-content-no-undo
+  ;; setting identical content must not push a spurious undo snapshot
+  (let [e (editor/make-editor)]
+    (doseq [c "hi"] (core/handle-input e (str c)))
+    (editor/editor-set-text! e "hi")
+    (core/handle-input e (ctrl 31))  ;; undo → empty (only the typing snapshot)
+    (t/is (= "" (editor/editor-get-text e)))))
+
+(t/deftest test-editor-set-text-empty-undoable
+  ;; submit-clear (setText "") is undoable (pi parity)
+  (let [e (editor/make-editor)]
+    (doseq [c "msg"] (core/handle-input e (str c)))
+    (editor/editor-set-text! e "")
+    (t/is (= "" (editor/editor-get-text e)))
+    (core/handle-input e (ctrl 31))
+    (t/is (= "msg" (editor/editor-get-text e)) "cleared text restored by undo")))

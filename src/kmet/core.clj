@@ -23,6 +23,7 @@
             [kmet.debug :as debug]
             [clojure.string :as str]
             [babashka.fs :as fs]
+            [babashka.process :as proc]
             [kmet.app.bash-executor :as bash-exec]
             [kmet.app.ui.bash-execution :as be]))
 
@@ -125,9 +126,12 @@
          (clojure.string/join "\n" cmd-lines)
          "\n\nShortcuts:\n"
          "  Enter      — Submit message\n"
-         "  Escape     — Cancel current turn\n"
-         "  Ctrl+Z     — Quit\n"
-         "  Ctrl+C     — Cancel / clear editor\n"
+         "  Escape     — Cancel current turn / bash\n"
+         "  Ctrl+C     — Clear editor (press twice to quit)\n"
+         "  Ctrl+D     — Quit (when editor is empty)\n"
+         "  Ctrl+G     — Open external editor\n"
+         "  Ctrl+O     — Toggle tool output\n"
+         "  Ctrl+T     — Toggle thinking blocks\n"
          "  Ctrl+L     — Clear terminal\n"
          "  Up/Down    — Scroll chat history")))
 
@@ -634,6 +638,61 @@
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))))
 
+;; ─── External editor (pi: handleOpenExternalEditor) ────────────────────────
+
+(defn- handle-external-editor
+  "Open the current editor content in $EDITOR (default vi).
+   Suspends the TUI (terminal restored to normal mode, input reader paused),
+   spawns the external editor on a temp file with inherited stdio, reads the
+   result back into the editor, then resumes the TUI. pi: handleOpenExternalEditor
+   in interactive-mode.ts."
+  [cs]
+  (let [ed (:editor cs)
+        content (editor/editor-get-expanded-text ed)
+        tmp-dir (or (System/getenv "TMPDIR")
+                    (System/getProperty "java.io.tmpdir")
+                    "/tmp")
+        _ (fs/create-dirs tmp-dir)
+        tmp-file (str (fs/create-temp-file
+                        {:prefix "kmet-editor-" :suffix ".md" :dir tmp-dir}))]
+    ;; suspend is inside the try so the finally always resumes the TUI
+    (try
+      (tui/tui-suspend! (:tui cs))
+      (spit tmp-file content)
+      ;; pi: external editor command — config > VISUAL > EDITOR > nano
+      (let [editor-cmd (or (System/getenv "VISUAL")
+                           (System/getenv "EDITOR")
+                           "nano")
+            parts (str/split editor-cmd #"\s+")
+            _ (println "Launching external editor: " editor-cmd)
+            _ (println "kmet will resume when the editor exits.")
+            result (try
+                     (let [p (proc/process (concat parts [tmp-file])
+                                           {:out :inherit :err :inherit :in :inherit})
+                           exit-code (:exit @p)]
+                       (if (zero? exit-code) :ok :cancelled))
+                     (catch Exception e
+                       (debug/log "external editor error: " e)
+                       (ui/chat-history-add-message! (:chat-history cs)
+                         {:role :assistant
+                          :content (str "External editor failed to start: "
+                                        (.getMessage e))})
+                       :error))]
+        (when (= result :ok)
+          (let [new-content (try (slurp tmp-file) (catch Exception _ nil))]
+            (when (and new-content (not= new-content content))
+              ;; pi: strip a single trailing newline added by editors
+              (let [new-content (if (and (seq new-content)
+                                         (str/ends-with? new-content "\n"))
+                                  (subs new-content 0 (dec (count new-content)))
+                                  new-content)]
+                (editor/editor-set-text! ed new-content)
+                (debug/log "external editor content: " (pr-str new-content)))))))
+      (finally
+        (try (fs/delete-if-exists tmp-file) (catch Exception _ nil))
+        (tui/tui-resume! (:tui cs))))
+    nil))
+
 ;; ─── Layout setup ──────────────────────────────────────────────────────────
 
 (defn- build-layout
@@ -726,7 +785,7 @@ Be precise and concise in your responses.")
             (agent/set-models! ag (:models config)))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 2
-            :terminal-rows (fn [] (term/rows (:terminal t)))
+            :terminal-rows (fn [] (term/rows @(:terminal t)))
             :border-fn (fn [c] (th/dim c)))
         sp3 (spacer/make-spacer 1)
         ftr (ui/make-footer :status "" :n-msgs 0 :theme (cfg/get-theme config))
@@ -786,40 +845,46 @@ Be precise and concise in your responses.")
             (editor/editor-set-text! ed "")
             (tui/tui-request-render t))))
 
-      ;; Global input listeners
-      (let [kmgr (tui-kb/get-global-keybindings)]
-        (tui/tui-add-input-listener t
-          (fn [data]
-            (cond
-              (tui-kb/matches-key kmgr data "app.exit")
-              (tui/tui-stop t)
+      ;; Editor actions (pi: CustomEditor.onAction) — app keybindings dispatched
+      ;; through the editor's action system, which also checks the autocomplete
+      ;; dropdown state (e.g. escape closes the dropdown instead of cancelling)
+      (editor/editor-set-on-action! ed "app.interrupt"
+        ;; pi: onEscape — abort the running agent turn or bash command
+        (fn [] (handle-cancel cs)))
+      (editor/editor-set-on-action! ed "app.exit"
+        (fn [] (tui/tui-stop t)))
+      ;; pi: handleCtrlC — single ctrl+c clears the editor, double within
+      ;; 500ms quits
+      (let [last-ctrl-c (atom 0)]
+        (editor/editor-set-on-action! ed "app.clear"
+          (fn []
+            (let [now (System/currentTimeMillis)]
+              (if (< (- now @last-ctrl-c) 500)
+                (tui/tui-stop t)
+                (do (reset! last-ctrl-c now)
+                    (editor/editor-set-text! ed "")
+                    (tui/tui-request-render t)))))))
+      (editor/editor-set-on-action! ed "app.tools.expand"
+        (fn []
+          (ui/chat-history-toggle-tool-expanded! ch)
+          (update-header-footer! cs)
+          (tui/tui-request-render t)))
+      (editor/editor-set-on-action! ed "app.thinking.toggle"
+        (fn []
+          (ui/chat-history-toggle-thinking-hidden! ch)
+          (update-header-footer! cs)
+          (tui/tui-request-render t)))
+      (editor/editor-set-on-action! ed "app.editor.external"
+        (fn [] (handle-external-editor cs)))
 
-              (keys/matches-key? data (keys/ctrl "l"))
-              (do (term/clear-screen! (:terminal t))
-                  (tui/tui-request-render t))
-
-              (tui-kb/matches-key kmgr data "app.interrupt")
-              (when (and @(:running-turn? cs)
-                         (not (tui/tui-has-overlay? t))
-                         (not (editor/editor-autocomplete-active? ed)))
-                (handle-cancel cs))
-
-              (tui-kb/matches-key kmgr data "app.clear")
-              (if @(:running-turn? cs)
-                (handle-cancel cs)
-                (do (editor/editor-set-text! ed "")
-                    (tui/tui-request-render t)))
-
-              (tui-kb/matches-key kmgr data "app.tools.expand")
-              (do (ui/chat-history-toggle-tool-expanded! ch)
-                  (update-header-footer! cs)
-                  (tui/tui-request-render t))
-
-              (tui-kb/matches-key kmgr data "app.thinking.toggle")
-              (do (ui/chat-history-toggle-thinking-hidden! ch)
-                  (update-header-footer! cs)
-                  (tui/tui-request-render t))
-
+      ;; Global input listeners — only truly global keys stay here (pi: keep
+      ;; app actions in the editor; the TUI keeps only global keys)
+      (tui/tui-add-input-listener t
+        (fn [data]
+          (cond
+            (keys/matches-key? data (keys/ctrl "l"))
+            (do (term/clear-screen! @(:terminal t))
+                (tui/tui-request-render t))
             :else nil)))
 
       ;; Initialize header/footer
@@ -844,7 +909,7 @@ Be precise and concise in your responses.")
                        " — minimal coding agent.\n"
                        "Type your message or /help for commands.")})
 
-      cs))))
+      cs)))
 
 ;; ─── Non-interactive mode (--print) ────────────────────────────────────────
 

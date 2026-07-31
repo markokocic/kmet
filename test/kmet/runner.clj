@@ -28,6 +28,7 @@
             [kmet.app.ui.test-assistant-message]
             [kmet.app.ui.test-tool-execution]
             [kmet.app.ui.test-custom-message]
+            [kmet.app.ui.test-bash-execution]
             [kmet.app.ui.test-footer]))
 
 (defn -main [& _args]
@@ -55,6 +56,7 @@
                      kmet.app.ui.test-assistant-message
                      kmet.app.ui.test-tool-execution
                      kmet.app.ui.test-custom-message
+                     kmet.app.ui.test-bash-execution
                      kmet.app.ui.test-footer]
         results (apply t/run-tests namespaces)]
     (println "\nResults:" (:pass results) "passed," (:fail results) "failed," (:error results) "errors")

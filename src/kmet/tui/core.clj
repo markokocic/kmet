@@ -74,10 +74,11 @@
 (defrecord TUI [terminal components focused-component
                 input-listeners previous-lines
                 previous-width render-requested?
-                running? stopped? overlays])
+                running? stopped? overlays
+                render-loop input-reader current-reader])
 
 (defn create-tui [terminal]
-  (map->TUI {:terminal terminal
+  (map->TUI {:terminal (atom terminal)
              :components (atom [])
              :focused-component (atom nil)
              :input-listeners (atom [])
@@ -86,7 +87,10 @@
              :render-requested? (atom false)
              :running? (atom false)
              :stopped? (atom false)
-             :overlays (atom [])}))
+             :overlays (atom [])
+             :render-loop (atom nil)
+             :input-reader (atom nil)
+             :current-reader (atom nil)}))
 
 (defn tui-add-child [tui c] (swap! (:components tui) conj c))
 (defn tui-remove-child [tui c]
@@ -232,18 +236,24 @@
         (dispatch-input! tui first-char)))))
 
 (defn- start-input-reader [tui]
-  (let [jline (.terminal (:terminal tui))]
-    (future
-      (let [reader (.reader jline)
-            buf (atom "")]
-        (while (and @(:running? tui) (not @(:stopped? tui)))
-          (try (let [ch (.read reader)]
-                 (when (>= ch 0)
-                   (swap! buf str (char ch))
-                   (process-input-buffer! tui reader buf)))
-               (catch Exception e
-                 (when @(:running? tui)
-                   (binding [*out* *err*] (println "input:" (.getMessage e)))))))))))
+  (let [jline (.terminal @(:terminal tui))
+        reader (.reader jline)]
+    ;; Track the current reader so a stale reader (from a suspended TUI
+    ;; session) exits as soon as a fresh reader is installed by resume.
+    (reset! (:current-reader tui) reader)
+    (let [f (future
+              (let [buf (atom "")]
+                (while (and @(:running? tui) (not @(:stopped? tui))
+                            (identical? reader @(:current-reader tui)))
+                  (try (let [ch (.read reader)]
+                         (when (>= ch 0)
+                           (swap! buf str (char ch))
+                           (process-input-buffer! tui reader buf)))
+                       (catch Exception e
+                         (when (and @(:running? tui)
+                                    (identical? reader @(:current-reader tui)))
+                           (binding [*out* *err*] (println "input:" (.getMessage e)))))))))]
+      (reset! (:input-reader tui) f))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Start / Stop
@@ -256,20 +266,20 @@
   (reset! (:stopped? tui) true)
   (reset! (:running? tui) false))
 
-(defn tui-start
-  "Start TUI render loop. Blocks the calling thread."
+(defn- run-render-loop!
+  "Start the terminal (raw mode) and run the render loop until the TUI is
+   suspended (tui-suspend!) or stopped (tui-stop). Restores and closes the
+   terminal on exit; tui-resume! creates a fresh one."
   [tui]
-  (let [term (:terminal tui)
-        jline (.terminal term)
-        started (terminal/start! term (fn [_] nil) (fn [] (tui-request-render tui)))
+  (let [started (terminal/start! @(:terminal tui)
+                                 (fn [_] nil)
+                                 (fn [] (tui-request-render tui)))
+        jline (.terminal started)
         hardware-cursor-row (atom 0)
         viewport-top (atom 0)
         show-hardware-cursor? (= (System/getenv "KMET_HARDWARE_CURSOR") "1")]
     (terminal/hide-cursor! started)
     ;; Pi: no clear-screen on start — preserves prior terminal output above the TUI
-    (reset! (:running? tui) true)
-    (reset! (:stopped? tui) false)
-    (start-input-reader tui)
     (tui-request-render tui)
     (try
       (loop []
@@ -420,18 +430,78 @@
         (recur)))
       (finally
         (reset! (:running? tui) false)
-        ;; Pi: position cursor at end of content so shell prompt appears below,
-        ;; and user can scroll up to review the session
-        (let [prev-lines @(:previous-lines tui)]
-          (when (seq prev-lines)
-            (let [target-row (count prev-lines)  ;; row past last content line
-                  row-delta (- target-row @hardware-cursor-row)]
-              (terminal/write-output started " ")
-              (when (pos? row-delta)
-                (terminal/write-output started (str "\u001b[" row-delta "B")))
-              (terminal/write-output started "\r\n"))))
+        ;; Pi: on final stop position the cursor at end of content so the
+        ;; shell prompt appears below and the user can scroll up to review
+        ;; the session. On suspend the position is left untouched for the
+        ;; external program that takes over the terminal.
+        (when @(:stopped? tui)
+          (let [prev-lines @(:previous-lines tui)]
+            (when (seq prev-lines)
+              (let [target-row (count prev-lines)  ;; row past last content line
+                    row-delta (- target-row @hardware-cursor-row)]
+                (terminal/write-output started " ")
+                (when (pos? row-delta)
+                  (terminal/write-output started (str "\u001b[" row-delta "B")))
+                (terminal/write-output started "\r\n")))))
         (terminal/show-cursor! started)
         (terminal/stop! started)))))
+
+;; ─── Suspend / Resume ──────────────────────────────────────────────────────
+
+(defn tui-start
+  "Start the TUI: enter raw mode, start the input reader and render loop.
+   Blocks the calling thread until tui-stop is called."
+  [tui]
+  (reset! (:running? tui) true)
+  (reset! (:stopped? tui) false)
+  (start-input-reader tui)
+  (reset! (:render-loop tui) (future (run-render-loop! tui)))
+  (tui-request-render tui)
+  ;; Block until a final stop is requested
+  (loop []
+    (when-not @(:stopped? tui)
+      (Thread/sleep 50)
+      (recur)))
+  ;; Final stop: join both loops (the render loop's finally restores the
+  ;; terminal; closing it unblocks the input reader so it exits too)
+  (reset! (:running? tui) false)
+  (when-let [f @(:render-loop tui)]
+    (deref f 3000 nil))
+  (reset! (:render-loop tui) nil)
+  (when-let [f @(:input-reader tui)]
+    (deref f 3000 nil))
+  (reset! (:input-reader tui) nil)
+  nil)
+
+(defn tui-suspend!
+  "Suspend the TUI: stop the render loop and input reader, restore the
+   terminal to its normal (non-raw) state, and close it so a spawned
+   external program (e.g. $EDITOR) has exclusive access to the terminal.
+   Call tui-resume! to restart. May be called from the input reader thread
+   (the thread that drives the external program afterwards)."
+  [tui]
+  (reset! (:running? tui) false)
+  ;; The render loop's finally restores and closes the terminal, which also
+  ;; unblocks any blocked input read. Wait for it to finish.
+  (when-let [f @(:render-loop tui)]
+    (deref f 3000 nil))
+  (reset! (:render-loop tui) nil)
+  nil)
+
+(defn tui-resume!
+  "Restart the TUI after tui-suspend!: create a fresh terminal, re-enter raw
+   mode, and restart the render loop and input reader. Forces a full redraw."
+  [tui]
+  (reset! (:terminal tui) (terminal/create-terminal))
+  (reset! (:running? tui) true)
+  (reset! (:stopped? tui) false)
+  ;; Empty previous-lines forces a full redraw on the fresh terminal
+  (reset! (:previous-lines tui) [])
+  (reset! (:previous-width tui) 0)
+  (start-input-reader tui)
+  (reset! (:render-loop tui) (future (run-render-loop! tui)))
+  (tui-request-render tui)
+  nil)
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Re-exports — convenience aliases for all public symbols.
@@ -499,6 +569,8 @@
 (def editor-get-text editor/editor-get-text)
 (def editor-set-on-submit! editor/editor-set-on-submit!)
 (def editor-set-on-change! editor/editor-set-on-change!)
+(def editor-set-on-action! editor/editor-set-on-action!)
+(def editor-get-expanded-text editor/editor-get-expanded-text)
 (def editor-set-on-tab! editor/editor-set-on-tab!)
 (def editor-set-autocomplete-provider! editor/editor-set-autocomplete-provider!)
 (def editor-set-autocomplete-max-visible! editor/editor-set-autocomplete-max-visible!)

@@ -6,9 +6,13 @@
    enter newline, submit).
    Phase 4 — Editor quick wins: paste-marker atomic segments, CSI-u paste
    decode, smart path spacing, paste marker renumbering, history draft
-   preservation, dynamic editor height."
+   preservation, dynamic editor height.
+   Phase 6 — App actions (pi: CustomEditor): registered action handlers
+   dispatched from handle-input (editor-set-on-action!), and expanded-text
+   support for the external editor flow (editor-get-expanded-text)."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
+            [kmet.tui.keybindings :as kb]
             [kmet.tui.utils :as u]
             [kmet.tui.components.editing :as edit]
             [kmet.tui.components.select-list :as select-list]
@@ -1000,6 +1004,43 @@
     (dotimes [_ page-size]
       (move-cursor-vertical editor dir))))
 
+;; ─── App actions (pi: CustomEditor.handleInput) ───────────────────────────
+;; Registered action handlers (via editor-set-on-action!) are matched against
+;; the keybindings manager (the app-level KeybindingsManager in kmet.core) and
+;; take precedence over editor-internal key handling.
+
+(defn- dispatch-app-action!
+  "Try to dispatch data to a registered app action handler. Returns true if a
+   handler matched and ran, false otherwise. Mirrors pi's CustomEditor:
+   - app.interrupt (escape) only fires when the autocomplete dropdown is not
+     showing (the dropdown intercepts escape first)
+   - app.exit (ctrl+d) only fires when the editor is empty (otherwise the key
+     deletes the char forward)
+   - all other registered actions are matched via the keybindings manager"
+  [editor data]
+  (let [kmgr (or @(:keybindings editor) (kb/get-global-keybindings))
+        handlers @(:action-handlers editor)
+        text (clojure.string/join "\n" (:lines @(:state-atom editor)))]
+    (cond
+      (and (get handlers "app.interrupt")
+           (kb/matches-key kmgr data "app.interrupt")
+           (not @(:autocomplete-state editor)))
+      (do ((get handlers "app.interrupt")) true)
+
+      (and (get handlers "app.exit")
+           (kb/matches-key kmgr data "app.exit")
+           (empty? text))
+      (do ((get handlers "app.exit")) true)
+
+      :else
+      (loop [ids (seq (remove #(contains? #{"app.interrupt" "app.exit"} %)
+                              (keys handlers)))]
+        (if-let [action-id (first ids)]
+          (if (kb/matches-key kmgr data action-id)
+            (do ((get handlers action-id)) true)
+            (recur (next ids)))
+          false)))))
+
 ;; ─── Editor component ──────────────────────────────────────────────────────
 
 (defrecord Editor [state-atom scroll-offset-atom preferred-col-atom
@@ -1012,7 +1053,8 @@
                    terminal-rows-atom
                    autocomplete-provider autocomplete-state
                    autocomplete-list autocomplete-prefix
-                   autocomplete-max-visible autocomplete-theme]
+                   autocomplete-max-visible autocomplete-theme
+                   action-handlers keybindings]
   protocols/IComponent
 
   (render [this width]
@@ -1150,6 +1192,13 @@
                     (when-let [cb @on-submit]
                       (cb (clojure.string/join "\n" (:lines @(:state-atom this))))))
                   nil)))
+
+          ;; App actions (pi: CustomEditor.handleInput) — registered action
+          ;; handlers take precedence over editor-internal key handling. Paste
+          ;; buffering and the autocomplete dropdown are intercepted above, so
+          ;; they keep priority.
+          (dispatch-app-action! this data)
+          nil
 
           (and (keys/matches-key? data "enter") (not @disable-submit))
           (do (when-let [cb @on-submit] (cb (clojure.string/join "\n" lines))) nil)
@@ -1302,9 +1351,12 @@
      :height  — number of visible lines, fallback when no :terminal-rows (default 12)
      :padding-x — horizontal padding (default 0)
      :border-fn — function to style border chars
+     :keybindings — KeybindingsManager used to match app action handlers
+                    (default: the global keybindings manager)
      :terminal-rows — (fn [] int) returning terminal rows for dynamic height
                       (30% of rows, min 5 lines; pi behavior)"
-  [& {:keys [height padding-x border-fn terminal-rows] :or {height 12 padding-x 0}}]
+  [& {:keys [height padding-x border-fn keybindings terminal-rows]
+      :or {height 12 padding-x 0}}]
   (map->Editor {:state-atom (atom (make-editor-state))
                 :scroll-offset-atom (atom 0)
                 :preferred-col-atom (atom nil)
@@ -1334,21 +1386,27 @@
                 :autocomplete-list (atom nil)
                 :autocomplete-prefix (atom "")
                 :autocomplete-max-visible (atom 5)
-                :autocomplete-theme (atom select-list/default-theme)}))
+                :autocomplete-theme (atom select-list/default-theme)
+                :action-handlers (atom {})
+                :keybindings (atom keybindings)}))
 
 (defn editor-set-text! [editor text]
   (cancel-autocomplete editor)
-  (reset! (:state-atom editor) (make-editor-state text))
-  (reset! (:scroll-offset-atom editor) 0)
-  (reset! (:preferred-col-atom editor) nil)
-  (reset! (:undo-stack editor) [])
-  (reset! (:redo-stack editor) [])
-  (reset! (:last-action editor) nil)
-  (reset! (:jump-mode editor) nil)
-  (reset! (:history-idx editor) -1)
-  (reset! (:history-draft editor) nil)
-  ;; Reconcile the paste store with the new text (e.g. cleared after submit)
-  (sync-paste-store! editor (:lines @(:state-atom editor))))
+  (let [old-text (editor-get-text editor)]
+    ;; pi: push an undo snapshot when the content differs so programmatic
+    ;; changes (submit-clear, external editor, app.clear) are undoable
+    (when (not= old-text text)
+      (push-undo-state editor))
+    (reset! (:state-atom editor) (make-editor-state text))
+    (reset! (:scroll-offset-atom editor) 0)
+    (reset! (:preferred-col-atom editor) nil)
+    (reset! (:redo-stack editor) [])
+    (reset! (:last-action editor) nil)
+    (reset! (:jump-mode editor) nil)
+    (reset! (:history-idx editor) -1)
+    (reset! (:history-draft editor) nil)
+    ;; Reconcile the paste store with the new text (e.g. cleared after submit)
+    (sync-paste-store! editor (:lines @(:state-atom editor)))))
 
 (defn editor-set-on-submit! [editor f]
   (reset! (:on-submit editor) f))
@@ -1374,6 +1432,31 @@
 
 (defn editor-set-on-tab! [editor f]
   (editor-set-autocomplete-provider! editor f))
+
+(defn editor-set-on-action!
+  "Register (or replace) an app action handler on the editor
+   (pi: CustomEditor.onAction). The handler is a zero-arg fn called from
+   handle-input when the keybindings manager matches the action's key chord;
+   pass nil to unregister. Action IDs are keybinding IDs such as
+   \"app.interrupt\", \"app.exit\", or \"app.editor.external\"."
+  [editor action-id handler]
+  (if handler
+    (swap! (:action-handlers editor) assoc action-id handler)
+    (swap! (:action-handlers editor) dissoc action-id))
+  nil)
+
+(defn editor-get-expanded-text
+  "Get the editor text with paste markers expanded to their stored content
+   (pi: Editor.getExpandedText — used by the external editor flow)."
+  [editor]
+  (reduce-kv (fn [result id content]
+               (if content
+                 (clojure.string/replace result
+                   (re-pattern (str "\\[paste #" id "[^\\]]*\\]"))
+                   content)
+                 result))
+             (editor-get-text editor)
+             @(:paste-store editor)))
 
 (defn editor-autocomplete-active?
   "True when the autocomplete dropdown is currently showing."

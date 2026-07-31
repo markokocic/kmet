@@ -17,6 +17,26 @@
 ;; ─── Preview line limit ────────────────────────────────────────────────────
 (def ^:private PREVIEW-LINES 20)
 
+;; ─── Collapsed preview child ───────────────────────────────────────────────
+;; Renders the last PREVIEW-LINES output lines, each truncated to the content
+;; width, plus a "… N more lines (ctrl+o to expand)" hint.
+
+(defrecord BashPreview [preview-text hidden-line-count pad]
+  protocols/IComponent
+  (render [_this w]
+    (let [visual-lines (u/truncate-to-visual-lines preview-text PREVIEW-LINES w)
+          hint (when (pos? hidden-line-count)
+                 (u/truncate-to-width
+                   (str (theme/fg theme/dark-theme :muted
+                        (str "... " hidden-line-count " more lines ("))
+                        (app-kb/key-hint "app.tools.expand" "to expand")
+                        (theme/fg theme/dark-theme :muted ")"))
+                   w "..."))
+          lines (if hint (conj visual-lines hint) visual-lines)]
+      (mapv #(str (apply str (repeat pad " ")) %) lines)))
+  (handle-input [_this _data] nil)
+  (invalidate [_this] nil))
+
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
 (defrecord BashExecutionComponent [command-atom      ;; string
@@ -79,18 +99,7 @@
                 (let [styled-preview (mapv #(theme/fg theme/dark-theme :muted %) preview-logical-lines)
                       preview-text (str "\n" (str/join "\n" styled-preview))]
                   (container/container-add-child content-container
-                    {:render (fn [w]
-                               (let [visual-lines (u/truncate-to-visual-lines preview-text PREVIEW-LINES w)
-                                     hint (when (pos? hidden-line-count)
-                                            (u/truncate-to-width
-                                              (str (theme/fg theme/dark-theme :muted
-                                                   (str "... " hidden-line-count " more lines ("))
-                                                   (app-kb/key-hint "app.tools.expand" "to expand")
-                                                   (theme/fg theme/dark-theme :muted ")"))
-                                              w "..."))
-                                     lines (if hint (conj visual-lines hint) visual-lines)]
-                                 (mapv #(str (apply str (repeat content-pad " ")) %) lines)))
-                     :invalidate (fn [])}))))
+                    (->BashPreview preview-text hidden-line-count content-pad)))))
 
             ;; ── Loader or status ───────────────────────────────────────
             (if (= status :running)
@@ -145,9 +154,10 @@
             (let [top-border (str (border-color "┌") (apply str (repeat (- width 2) "─")) (border-color "┐"))
                   bottom-border (str (border-color "└") (apply str (repeat (- width 2) "─")) (border-color "┘"))
                   content-lines (protocols/render content-container (- width 2))
-                  result (into [top-border]
-                               (mapv #(str (border-color "│") % (border-color "│")) content-lines)
-                               [bottom-border])]
+                  result (conj (into [top-border]
+                                      (map #(str (border-color "│") % (border-color "│")))
+                                      content-lines)
+                                bottom-border)]
               (reset! cache-atom {:width width :lines result})
               result))))))
 
