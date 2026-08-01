@@ -1,22 +1,56 @@
 (ns kmet.app.tools.bash
   "Bash tool implementation — delegates to kmet.app.bash-executor for execution.
-   Pi: bash tool wraps createLocalBashOperations, same engine as ! commands."
+   Pi: bash tool wraps createLocalBashOperations, same engine as ! commands.
+   Streams live output via an optional on-update callback (pi: onUpdate)."
   (:require [clojure.string :as str]
             [kmet.app.bash-executor :as bash-exec]))
 
+(def ^:private update-throttle-ms 100)  ;; pi: BASH_UPDATE_THROTTLE_MS
+(def ^:private max-live-bytes (* 50 1024))  ;; pi: DEFAULT_MAX_BYTES
+
+(defn- byte-length
+  "UTF-8 byte length (pi: Buffer.byteLength)."
+  [s]
+  (alength (.getBytes ^String s "UTF-8")))
+
 (defn execute
   "Execute a bash command via the shared bash executor.
+   on-update — optional (fn [partial]) receiving {:content str :is-partial true}
+   snapshots of the live output, throttled (pi: bash onUpdate).
    Returns {:content str :is-error bool :truncation map?}
    matching the expected tool result format."
-  [{:keys [command timeout]}]
-  (try
-    (let [result (bash-exec/execute-bash
-                   {:command command
-                    :cwd (or (System/getProperty "user.dir") ".")
-                    :timeout timeout  ;; nil = no timeout (pi: optional, no default)
-                    :on-chunk nil  ;; no streaming for LLM tool calls
-                    :max-lines bash-exec/DEFAULT-MAX-LINES
-                    :max-bytes bash-exec/DEFAULT-MAX-BYTES})
+  [{:keys [command timeout]} & [on-update]]
+  (let [live-chunks (atom [])  ;; whole decoded chunks — no mid-string truncation
+        live-bytes (atom 0)
+        last-update (atom 0)
+        trim-live! (fn []
+                     ;; Pi: OutputAccumulator rolling tail — drop leading chunks
+                     ;; until the live buffer fits in max-live-bytes
+                     (loop []
+                       (when (and (> @live-bytes max-live-bytes) (seq @live-chunks))
+                         (let [c (first @live-chunks)]
+                           (swap! live-chunks subvec 1)
+                           (swap! live-bytes - (byte-length c))
+                           (recur)))))
+        send-update (fn []
+                      (when (and on-update (pos? @live-bytes))
+                        (let [now (System/currentTimeMillis)]
+                          (when (>= (- now @last-update) update-throttle-ms)
+                            (reset! last-update now)
+                            (on-update {:content (apply str @live-chunks)
+                                        :is-partial true})))))]
+    (try
+      (let [result (bash-exec/execute-bash
+                     {:command command
+                      :cwd (or (System/getProperty "user.dir") ".")
+                      :timeout timeout  ;; nil = no timeout (pi: optional, no default)
+                      :on-chunk (fn [chunk]
+                                  (swap! live-chunks conj chunk)
+                                  (swap! live-bytes + (byte-length chunk))
+                                  (trim-live!)
+                                  (send-update))
+                      :max-lines bash-exec/DEFAULT-MAX-LINES
+                      :max-bytes bash-exec/DEFAULT-MAX-BYTES})
           {:keys [output exit-code cancelled truncated truncation full-output-path timed-out]} result]
       ;; Pi: [Showing lines X-Y of Z. Full output: path] footer for the LLM
       ;; (stripped from the TUI display by the bash render-result, which
@@ -69,4 +103,4 @@
       (let [msg (ex-message e)]
         (if (str/includes? msg "timeout")
           {:content (str "Command timed out after " (or timeout "?") " seconds") :is-error true}
-          {:content (str "Error: " msg) :is-error true})))))
+          {:content (str "Error: " msg) :is-error true}))))))

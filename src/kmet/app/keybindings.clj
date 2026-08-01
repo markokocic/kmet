@@ -2,7 +2,8 @@
   "App-level keybindings — extends TUI keybindings with agent-specific actions.
    Port of @earendil-works/pi-coding-agent KeybindingsManager.
    Keybinding IDs like \"app.tools.expand\" are used by key-hint in tool renderers."
-  (:require [kmet.tui.keybindings :as kb]))
+  (:require [clojure.string :as str]
+            [kmet.tui.keybindings :as kb]))
 
 ;; ─── App keybinding definitions ──────────────────────────────────────────
 ;; Extends the TUI definitions with agent-specific actions.
@@ -52,6 +53,11 @@
   [dim-fn muted-fn]
   (reset! theme-fns-atom {:dim dim-fn :muted muted-fn}))
 
+(defn key-text
+  "Pi: keyText — all resolved key chords for an id joined with '/', or \"\"."
+  [id]
+  (or (kb/key-text (kb/get-global-keybindings) id) ""))
+
 (defn key-hint
   "Convenience wrapper: renders a keybinding hint using the app's theme.
    kmgr — KeybindingsManager (or nil for global)
@@ -62,9 +68,9 @@
      (if (and dim muted)
        (kb/key-hint (kb/get-global-keybindings) id desc dim muted)
        ;; Fallback: plain text
-       (str (or (kb/key-text (kb/get-global-keybindings) id) "") " " desc))))
+       (str (key-text id) " " desc))))
   ([kmgr id desc]
    (let [{:keys [dim muted]} @theme-fns-atom]
      (if (and dim muted)
        (kb/key-hint kmgr id desc dim muted)
-       (str (or (kb/key-text kmgr id) "") " " desc)))))
+       (str (str/join "/" (kb/get-keys kmgr id)) " " desc)))))

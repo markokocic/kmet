@@ -1,5 +1,6 @@
 (ns kmet.app.ui.test-tool-execution
   (:require [clojure.test :as t :refer [deftest is testing]]
+            [clojure.string :as str]
             [kmet.tui.core :as core]
             [kmet.app.ui.tool-execution :as te]))
 
@@ -81,6 +82,9 @@
   (let [c (te/make-tool-execution :name name :args args :content (or content "")
                                   :is-error (boolean is-error) :expanded? expanded?
                                   :truncation truncation)]
+    ;; Pi: interactive mode calls setArgsComplete right after creating the
+    ;; component (kmet interactive.clj tool-execution-start handler)
+    (te/tool-execution-set-args-complete! c)
     (mapv strip-ansi (core/render c 60))))
 
 (deftest test-read-render-call-range
@@ -151,9 +155,9 @@
     (let [plain (render-tool :name "edit"
                              :args {:path "target/test-tools-edit-render.txt"
                                     :old-text "zzz" :new-text "x"}
-                             :content "Could not find old-text in target/test-tools-edit-render.txt"
+                             :content "Could not find the exact text in target/test-tools-edit-render.txt. The old text must match exactly including all whitespace and newlines."
                              :is-error true)]
-      (is (= 1 (count (filter #(re-find #"Could not find old-text" %) plain)))))))
+      (is (= 1 (count (filter #(re-find #"Could not find the exact text" %) plain)))))))
 
 (deftest test-bash-render-call
   (testing "bash call shows $ command"
@@ -168,3 +172,152 @@
       (let [plain (mapv strip-ansi (core/render c 60))]
         (is (some #(re-find #"out1" %) plain))
         (is (some #(re-find #"Took" %) plain))))))
+
+;; ─── Pi parity: cached edit preview, compact read, tabs, expanded ─────────
+
+(deftest test-edit-result-diff-corrects-preview
+  (testing "edit result with a different applied diff corrects the cached preview (pi resultDiff fallback)"
+    (let [f "target/test-tools-edit-resultdiff.txt"]
+      (spit f "alpha\nbeta\ngamma")
+      (let [c (te/make-tool-execution
+                :name "edit"
+                :args {:path f :old-text "beta" :new-text "BETA"})]
+        (te/tool-execution-set-args-complete! c)
+        ;; preview computed against the original file
+        (let [plain (mapv strip-ansi (core/render c 60))]
+          (is (some #(re-find #"\+2 BETA" %) plain)))
+        ;; file changed between preview and apply — the tool applied a diff
+        ;; that differs from the previewed one
+        (spit f "alpha\nbeta\ngamma\ndelta")
+        (te/tool-execution-set-content! c
+          "Successfully replaced 1 block(s) in target/test-tools-edit-resultdiff.txt.")
+        (te/tool-execution-set-error! c false)
+        (te/tool-execution-set-details! c
+          {:diff (str " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma\n 4 delta")})
+        ;; this pass still shows the stale preview; the result corrects the cache
+        (let [plain (mapv strip-ansi (core/render c 60))]
+          (is (some #(re-find #"\+2 BETA" %) plain)))
+        ;; next render shows the actual applied diff
+        (let [plain (mapv strip-ansi (core/render c 60))]
+          (is (some #(re-find #" 4 delta" %) plain))
+          (is (not-any? #(re-find #"Could not find old-text" %) plain)))))))
+
+(deftest test-edit-replayed-result-diff
+  (testing "replayed edit result (args incomplete, pi restore) shows the applied diff via details"
+    (spit "target/test-tools-edit-replay.txt" "alpha\nBETA\ngamma")
+    (let [c (te/make-tool-execution
+              :name "edit"
+              :args {:path "target/test-tools-edit-replay.txt"
+                     :old-text "beta" :new-text "BETA"}
+              :content "Successfully replaced 1 block(s) in target/test-tools-edit-replay.txt."
+              :details {:diff (str " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma")})]
+      (te/tool-execution-set-error! c false)
+      ;; first pass: render-result corrects the preview from details
+      (core/render c 60)
+      ;; second pass: the call box shows the applied diff
+      (let [plain (mapv strip-ansi (core/render c 60))]
+        (is (some #(re-find #"\+2 BETA" %) plain))
+        (is (some #(re-find #" 1 alpha" %) plain))))))
+
+(deftest test-edit-result-diff-matching-preview-kept
+  (testing "edit result matching the preview leaves the call box unchanged (no re-preview)"
+    (spit "target/test-tools-edit-match.txt" "alpha\nbeta\ngamma")
+    (let [c (te/make-tool-execution
+              :name "edit"
+              :args {:path "target/test-tools-edit-match.txt"
+                     :old-text "beta" :new-text "BETA"})]
+      (te/tool-execution-set-args-complete! c)
+      (let [before (mapv strip-ansi (core/render c 60))]
+        (te/tool-execution-set-content! c
+          "Successfully replaced 1 block(s) in target/test-tools-edit-match.txt.")
+        (te/tool-execution-set-error! c false)
+        (te/tool-execution-set-details! c
+          {:diff (str " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma")})
+        (let [after (mapv strip-ansi (core/render c 60))
+              after2 (mapv strip-ansi (core/render c 60))]
+          ;; identical diff: no correction, no stale-file error
+          (is (= before after2))
+          (is (not-any? #(re-find #"Could not find old-text" %) after2)))))))
+
+(deftest test-edit-preview-cached-after-edit
+  (testing "edit call keeps the original preview after the file was edited (pi caches per args)"
+    (let [f "target/test-tools-edit-cache.txt"]
+      (spit f "alpha\nbeta\ngamma")
+      (let [c (te/make-tool-execution
+                :name "edit"
+                :args {:path f :old-text "beta" :new-text "BETA"})]
+        (te/tool-execution-set-args-complete! c)
+        ;; First render: preview succeeds against the original file
+        (let [plain (mapv strip-ansi (core/render c 60))]
+          (is (some #(re-find #"-2 beta" %) plain))
+          (is (some #(re-find #"\+2 BETA" %) plain)))
+        ;; Simulate the edit actually being applied
+        (spit f "alpha\nBETA\ngamma")
+        ;; Re-render must NOT re-derive the preview from the now-edited file
+        ;; (that would fail to find old-text and flip the box to error)
+        (let [plain (mapv strip-ansi (core/render c 60))]
+          (is (some #(re-find #"-2 beta" %) plain))
+          (is (some #(re-find #"\+2 BETA" %) plain))
+          (is (not-any? #(re-find #"Could not find old-text" %) plain)))))))
+
+(deftest test-edit-render-pending-when-args-incomplete
+  (testing "edit call shows pending box (no diff) until args are complete (pi argsComplete)"
+    (spit "target/test-tools-edit-pending.txt" "alpha")
+    (let [c (te/make-tool-execution
+              :name "edit"
+              :args {:path "target/test-tools-edit-pending.txt"
+                     :old-text "alpha" :new-text "ALPHA"})]
+      ;; args-complete is false here — no preview yet
+      (let [plain (mapv strip-ansi (core/render c 60))]
+        (is (some #(re-find #"edit" %) plain))
+        (is (not-any? #(re-find #"\+1 ALPHA" %) plain))))))
+
+(deftest test-read-compact-skill
+  (testing "SKILL.md reads render as [skill] label + expand hint (pi getCompactReadClassification)"
+    (let [plain (render-tool :name "read"
+                             :args {:path "/home/user/.pi/skills/demo-skill/SKILL.md"})]
+      (is (some #(re-find #"\[skill\] demo-skill" %) plain))
+      (is (some #(re-find #"to expand" %) plain)))))
+
+(deftest test-read-compact-resource
+  (testing "AGENTS.md reads render as 'read resource' label (pi)"
+    (let [plain (render-tool :name "read" :args {:path "AGENTS.md"})]
+      (is (some #(re-find #"read resource AGENTS\.md" %) plain)))))
+
+(deftest test-read-compact-hidden-when-expanded
+  (testing "compact read classification is skipped when expanded (pi)"
+    (let [plain (render-tool :name "read" :expanded? true
+                             :args {:path "/home/user/.pi/skills/demo-skill/SKILL.md"})]
+      (is (not-any? #(re-find #"\[skill\]" %) plain))
+      (is (some #(re-find #"read /home/user/\.pi/skills/demo-skill/SKILL\.md" %) plain)))))
+
+(deftest test-read-render-file-path-key
+  (testing "read call accepts file_path arg key (pi: str(args?.file_path ?? args?.path))"
+    (let [plain (render-tool :name "read" :args {:file_path "src/a.clj"})]
+      (is (some #(re-find #"read src/a\.clj" %) plain)))))
+
+(deftest test-read-render-tabs-replaced
+  (testing "read result replaces tabs with 3 spaces (pi replaceTabs)"
+    (let [plain (render-tool :name "read" :args {:path "src/a.clj"}
+                             :content "a\tb" :expanded? true)]
+      (is (some #(re-find #"a   b" %) plain))
+      (is (not-any? #(re-find #"a\tb" %) plain)))))
+
+(deftest test-read-render-error-lines
+  (testing "read error result shows lines (toolOutput; error conveyed by bg)"
+    (let [plain (render-tool :name "read" :args {:path "missing.clj"}
+                             :content "File not found: missing.clj" :is-error true)]
+      (is (some #(re-find #"File not found: missing\.clj" %) plain)))))
+
+(deftest test-write-render-expanded
+  (testing "write call shows all lines when expanded (pi maxLines = expanded ? all : 10)"
+    (let [content (str/join "\n" (map #(str "line" %) (range 1 13)))
+          collapsed (render-tool :name "write"
+                                 :args {:path "src/a.clj" :content content})]
+      (is (some #(re-find #"line1" %) collapsed))
+      (is (some #(re-find #"more lines, 12 total" %) collapsed))
+      (is (not-any? #(re-find #"line12" %) collapsed))
+      (let [expanded (render-tool :name "write" :expanded? true
+                                  :args {:path "src/a.clj" :content content})]
+        (is (some #(re-find #"line12" %) expanded))
+        (is (not-any? #(re-find #"more lines" %) expanded))))))

@@ -98,6 +98,77 @@
                                            :old-text "x" :new-text "y"})]
     (t/is (:is-error result))))
 
+(t/deftest test-tool-edit-crlf-preserved
+  (t/testing "CRLF files match with LF old-text, keep CRLF, diff has no \r (pi normalizeToLF + restoreLineEndings)"
+    (spit "target/test-tools-edit-crlf.txt" "alpha\r\nbeta\r\ngamma")
+    (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit-crlf.txt"
+                                             :edits [{:old-text "beta" :new-text "BETA"}]})]
+      (t/is (not (:is-error result)))
+      (t/is (= "alpha\r\nBETA\r\ngamma" (slurp "target/test-tools-edit-crlf.txt")))
+      (t/is (not (clojure.string/includes? (get-in result [:details :diff]) "\r"))))))
+
+(t/deftest test-tool-edit-bom-preserved
+  (t/testing "UTF-8 BOM is stripped for matching and restored on write (pi stripBom)"
+    (spit "target/test-tools-edit-bom.txt" "\uFEFFline1\nline2")
+    (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit-bom.txt"
+                                             :edits [{:old-text "line2" :new-text "LINE2"}]})]
+      (t/is (not (:is-error result)))
+      (t/is (= "\uFEFFline1\nLINE2" (slurp "target/test-tools-edit-bom.txt"))))))
+
+(t/deftest test-tool-edit-fuzzy-match
+  (t/testing "trailing whitespace differences match fuzzily (pi normalizeForFuzzyMatch)"
+    (spit "target/test-tools-edit-fuzzy.txt" "alpha\nbeta  \ngamma")
+    (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit-fuzzy.txt"
+                                             :edits [{:old-text "beta \t" :new-text "BETA"}]})]
+      (t/is (not (:is-error result)))
+      ;; Pi: the changed line is rewritten from the normalized base (trailing
+      ;; whitespace stripped); unchanged lines keep their original bytes
+      (t/is (= "alpha\nBETA\ngamma" (slurp "target/test-tools-edit-fuzzy.txt"))))))
+
+(t/deftest test-tool-edit-duplicate-error
+  (t/testing "ambiguous old-text reports occurrence count (pi getDuplicateError)"
+    (spit "target/test-tools-edit-dup.txt" "x\nx")
+    (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit-dup.txt"
+                                             :edits [{:old-text "x" :new-text "X"}]})]
+      (t/is (:is-error result))
+      (t/is (clojure.string/includes? (:content result) "Found 2 occurrences")))))
+
+(t/deftest test-tool-edit-no-change-error
+  (t/testing "identical replacement reports no-change (pi getNoChangeError)"
+    (spit "target/test-tools-edit-nc.txt" "alpha")
+    (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit-nc.txt"
+                                             :edits [{:old-text "alpha" :new-text "alpha"}]})]
+      (t/is (:is-error result))
+      (t/is (clojure.string/includes? (:content result) "No changes made")))))
+
+(t/deftest test-tool-edit-overlap-error
+  (t/testing "overlapping edits are rejected (pi overlap check)"
+    (spit "target/test-tools-edit-ov.txt" "abcdef")
+    (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit-ov.txt"
+                                             :edits [{:old-text "abcd" :new-text "X"}
+                                                     {:old-text "cdef" :new-text "Y"}]})]
+      (t/is (:is-error result))
+      (t/is (clojure.string/includes? (:content result) "overlap")))))
+
+(t/deftest test-tool-edit-empty-oldtext-error
+  (t/testing "empty old-text is rejected (pi getEmptyOldTextError)"
+    (spit "target/test-tools-edit-empty.txt" "alpha")
+    (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit-empty.txt"
+                                             :edits [{:old-text "" :new-text "x"}]})]
+      (t/is (:is-error result))
+      (t/is (clojure.string/includes? (:content result) "oldText must not be empty")))))
+
+(t/deftest ^:slow test-tool-bash-streams
+  (t/testing "bash tool streams partial output via on-update (pi onUpdate)"
+    (let [updates (atom [])]
+      (let [result (tools/execute-tool "bash" {:command "echo first; sleep 0.3; echo second"}
+                                       (fn [partial]
+                                         (swap! updates conj (:content partial))))]
+        (t/is (not (:is-error result)))
+        (t/is (seq @updates))
+        (t/is (some #(clojure.string/includes? % "first") @updates))
+        (t/is (clojure.string/includes? (:content result) "second"))))))
+
 ;; ─── Tool bash ────────────────────────────────────────────────────────────
 
 (t/deftest ^:slow test-tool-bash

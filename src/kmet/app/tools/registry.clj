@@ -59,7 +59,8 @@
              :prompt-guidelines []
              :params {:command {:type :string :description "Bash command to execute"}
                       :timeout {:type :number :description "Timeout in seconds (optional)" :optional? true}}
-             :execute bash/execute)}
+             :execute bash/execute
+             :streams? true)}
    ;; grep, find, ls — disabled
    )
 
@@ -108,11 +109,15 @@
 
 (defn execute-tool
   "Execute a tool by name with given arguments.
+   on-update — optional (fn [partial]) streaming callback; passed to the
+   tool's execute when it declares :streams? (e.g. bash live output).
    Returns {:content str :is-error bool}."
-  [tool-name args]
+  [tool-name args & [on-update]]
   (if-let [tool (get-tool tool-name)]
     (try
-      ((:execute tool) args)
+      (if (and on-update (:streams? tool))
+        ((:execute tool) args on-update)
+        ((:execute tool) args))
       (catch Exception e
         {:content (str "Error executing " tool-name ": " (ex-message e))
          :is-error true}))

@@ -297,7 +297,8 @@
                                       (when (= role :tool)
                                         {:name (or (:name e) "tool")
                                          :is-error (:is-error e false)
-                                         :truncation (:truncation e)})))))
+                                         :truncation (:truncation e)
+                                         :details (:details e)})))))
                               (ui/chat-history-add-message! (:chat-history cs)
                                 {:role :assistant
                                  :content (str "Resumed session " short-id ".")})
@@ -779,8 +780,12 @@ Be precise and concise in your responses.")
                                (reset! pending-tool-comp comp))
                              (tui/tui-request-render t))
                            :tool-execution-update
-                           ;; Pi: periodic ping updates elapsed timer via component's render
-                           (tui/tui-request-render t)
+                           ;; Pi: live partial content from streaming tools (bash),
+                           ;; plus periodic pings that update the elapsed timer
+                           (do (when-let [comp @pending-tool-comp]
+                                 (when-let [content (:content evt)]
+                                   (ui/tool-execution-set-content! comp content)))
+                               (tui/tui-request-render t))
                            :tool-execution-end
                            ;; Pi: update the existing component in place
                            (when-let [comp @pending-tool-comp]
@@ -789,6 +794,8 @@ Be precise and concise in your responses.")
                                (ui/tool-execution-set-error! comp (:is-error result false))
                                (when-let [truncation (:truncation result)]
                                  (ui/tool-execution-set-truncation! comp truncation))
+                               (when-let [details (:details result)]
+                                 (ui/tool-execution-set-details! comp details))
                                (when-let [images (:images result)]
                                  (ui/tool-execution-set-images! comp images))
                                (reset! pending-tool-comp nil)

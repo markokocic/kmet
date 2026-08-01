@@ -260,7 +260,7 @@
                       :done))
                   tools/execute-tool
                   ;; Slow enough that the 200ms poll observes :pending at least once
-                  (fn [_ _] (Thread/sleep 250) {:content "ok" :is-error false})]
+                  (fn [_ _ _] (Thread/sleep 250) {:content "ok" :is-error false})]
       ;; deref inside with-redefs keeps the rebinding until the turn completes
       @(loop/run-agent-turn agent
          {:message "run tool"
@@ -414,7 +414,7 @@
                               (on-done :stop))))
                       :done))
                   tools/execute-tool
-                  (fn [_ _]
+                  (fn [_ _ _]
                     (loop/steer! agent "steered")
                     {:content "ok" :is-error false})]
       ;; deref inside with-redefs keeps the rebinding until the run completes
@@ -449,7 +449,7 @@
                               (on-done :stop))))
                       :done))
                   tools/execute-tool
-                  (fn [_ _]
+                  (fn [_ _ _]
                     (loop/follow-up! agent "followup")
                     {:content "ok" :is-error false})]
       @(loop/run-agent-turn agent
@@ -486,7 +486,7 @@
                               (on-done :stop))))
                       :done))
                   tools/execute-tool
-                  (fn [_ _]
+                  (fn [_ _ _]
                     (loop/steer! agent "s1")
                     (loop/steer! agent "s2")
                     {:content "ok" :is-error false})]
@@ -525,7 +525,7 @@
                               (on-done :stop))))
                       :done))
                   tools/execute-tool
-                  (fn [_ _]
+                  (fn [_ _ _]
                     (loop/follow-up! agent "f1")
                     (loop/follow-up! agent "f2")
                     {:content "ok" :is-error false})]
@@ -599,7 +599,7 @@
                         (on-done :tool-calls))
                       :done))
                   tools/execute-tool
-                  (fn [_ _]
+                  (fn [_ _ _]
                     (Thread/sleep 2000)
                     {:content "ok" :is-error false})]
       (let [fut (loop/run-agent-turn agent
@@ -674,7 +674,7 @@
       (fn [_] {:block true :reason "Permission denied"}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
-                  tools/execute-tool (fn [_ _] (reset! executed true)
+                  tools/execute-tool (fn [_ _ _] (reset! executed true)
                                        {:content "should not run" :is-error false})]
       @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
     (t/is (false? @executed) "blocked tool must not execute")
@@ -690,7 +690,7 @@
       (fn [_] (throw (ex-info "hook boom" {}))))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
-                  tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+                  tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
       @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
     (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
       (t/is (true? (:is-error end)))
@@ -704,7 +704,7 @@
         {:content (str (:content result) " [sanitized]")}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
-                  tools/execute-tool (fn [_ _] {:content "secret-key=abc" :is-error false})]
+                  tools/execute-tool (fn [_ _ _] {:content "secret-key=abc" :is-error false})]
       @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
     (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
       (t/is (= "secret-key=abc [sanitized]" (:content (:result end))))
@@ -718,7 +718,7 @@
         {:content (:content result) :is-error true}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
-                  tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+                  tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
       @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
     (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
       (t/is (true? (:is-error end)) "after hook can mark a result as error"))))
@@ -730,7 +730,7 @@
       (fn [_] (throw (ex-info "hook boom" {}))))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
-                  tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+                  tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
       @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
     (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
       (t/is (true? (:is-error end)))
@@ -1005,7 +1005,7 @@
       (fn [_] {:model "model-b" :thinking :high :system-prompt-override "custom"}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
-                  tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+                  tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
       @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
     (t/is (= "model-b" @(:model agent)) "prepare-next-turn swaps the model")
     (t/is (= :high @(:thinking agent)) "prepare-next-turn updates thinking level")
@@ -1055,7 +1055,7 @@
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-two-tool-calls-then-text (atom 0))
                   tools/execute-tool
-                  (fn [_ _]
+                  (fn [_ _ _]
                     (Thread/sleep 400)
                     {:content "ok" :is-error false})]
       (let [start (System/currentTimeMillis)]
@@ -1095,7 +1095,7 @@
                                 (on-done :stop))))
                         :done))
                     tools/execute-tool
-                    (fn [_ _]
+                    (fn [_ _ _]
                       (Thread/sleep 400)
                       {:content "seq" :is-error false})]
         (let [start (System/currentTimeMillis)]
@@ -1222,7 +1222,7 @@
                             (when-let [on-done (:on-done opts)]
                               (on-done :stop))))
                       :done))
-                  tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+                  tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
       @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
     (t/is (= 2 (count @llm-keys)) "two LLM calls in the run")
     (t/is (apply not= @llm-keys)
@@ -1239,7 +1239,7 @@
         (fn [_] {:context [{:role :user :content [{:type :text :text "replacement"}]}]}))
       (with-redefs [cfg/get-api-key (fn [_] "test-key")
                     llm/send-message (stub-llm-tool-then-text (atom 0))
-                    tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+                    tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
         @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
       (t/is (= [{:role :user :content [{:type :text :text "replacement"}]}]
                (loop/get-context agent))
@@ -1258,7 +1258,7 @@
       (fn [_] {:context [{:role :user :content [{:type :text :text "replacement"}]}]}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
-                  tools/execute-tool (fn [_ _] {:content "ok" :is-error false})]
+                  tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
       @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
     (let [evs (filter #(= :context-replaced (:type %)) @events)]
       (t/is (seq evs) ":context-replaced emitted on context replacement")

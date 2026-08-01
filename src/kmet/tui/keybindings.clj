@@ -2,7 +2,8 @@
   "KeybindingsManager — port of @earendil-works/pi-tui KeybindingsManager.
    Maps keybinding IDs (e.g. \"tui.editor.cursorUp\") to resolved key chords
    (e.g. [\"up\"]), with support for user overrides and conflict detection."
-  (:require [kmet.tui.keys :as keys]))
+  (:require [clojure.string :as str]
+            [kmet.tui.keys :as keys]))
 
 ;; ─── Default TUI keybinding definitions ──────────────────────────────────
 ;; Each entry: {:default-keys [key-id ...] :description str}
@@ -162,10 +163,12 @@
 ;; kmet.tui.theme (dim, muted). We accept them as args to avoid circular deps.
 
 (defn key-text
-  "Get the display text for a keybinding ID (first resolved key chord).
-   Returns nil if no keys are bound."
+  "Pi: keyText — display text for a keybinding ID: all resolved key chords
+   joined with '/'. Returns nil when nothing is bound."
   [kmgr keybinding-id]
-  (first (get-keys kmgr keybinding-id)))
+  (let [chords (get-keys kmgr keybinding-id)]
+    (when (seq chords)
+      (str/join "/" chords))))
 
 (defn key-hint
   "Format a keybinding hint string.

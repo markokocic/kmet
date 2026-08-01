@@ -136,6 +136,7 @@
                        :content (:content msg "")
                        :is-error (:is-error msg false)
                        :truncation (:truncation msg)
+                       :details (:details msg)
                        :theme theme
                        :output-pad output-pad
                        :expanded? tools-expanded?)]

@@ -184,7 +184,8 @@ Be precise and concise in your responses."}}]
                       :content (:content result)}]
            :is-error (:is-error result false)}
     (:images result) (assoc :images (:images result))
-    (:truncation result) (assoc :truncation (:truncation result))))
+    (:truncation result) (assoc :truncation (:truncation result))
+    (:details result) (assoc :details (:details result))))
 
 ;; ─── Error classification (auto-retry) ─────────────────────────────────────
 
@@ -446,6 +447,18 @@ Be precise and concise in your responses."}}]
          :is-error true}))
     result))
 
+(defn- tool-on-update
+  "Streaming callback for a tool execution (pi: tool onUpdate) — emits
+   :tool-execution-update with partial content so the UI can show live
+   output (e.g. bash) while the tool is still running."
+  [agent tc-id]
+  (fn [partial]
+    (when-let [content (:content partial)]
+      (emit agent {:type :tool-execution-update
+                   :tool-call-id tc-id
+                   :content content
+                   :is-partial true}))))
+
 (defn- execute-tool-calls-parallel!
   "Execute tool calls concurrently (pi: executeToolCallsParallel).
    Preparation (start events + before hooks) is sequential; execution is
@@ -469,7 +482,9 @@ Be precise and concise in your responses."}}]
                        tool-calls)
         pending (filterv #(not (contains? % :kmet/blocked)) prepared)
         futures (into {} (map (fn [tc]
-                                [(:id tc) (future (tools/execute-tool (:name tc) (:arguments tc)))])
+                                [(:id tc)
+                                 (future (tools/execute-tool (:name tc) (:arguments tc)
+                                                             (tool-on-update agent (:id tc))))])
                               pending))
         raw-results (await-all-tool-results! agent futures)
         finalized (into {}
@@ -523,7 +538,9 @@ Be precise and concise in your responses."}}]
               result (if (:block before)
                        {:content (or (:reason before) "Tool execution was blocked")
                         :is-error true}
-                       (run-tool-call! agent tc-id (future (tools/execute-tool tc-name tc-args))))
+                       (run-tool-call! agent tc-id
+                         (future (tools/execute-tool tc-name tc-args
+                                                     (tool-on-update agent tc-id)))))
               result (after-tool-hook-result agent tc-id tc-name tc-args result assistant-msg)
               result-msg (tool-result-message tc-id tc-name result)]
           (swap! (:messages agent) conj result-msg)

@@ -4,7 +4,7 @@
 (defrecord Tool [name label description prompt-snippet prompt-guidelines
                  parameters execute render-call render-result
                  constrained-sampling render-shell prepare-arguments
-                 execution-mode])
+                 execution-mode streams?])
 
 (defn param
   "Define a tool parameter for JSON schema generation."
@@ -42,7 +42,7 @@
   [& {:keys [name label description prompt-snippet prompt-guidelines
              params parameters execute render-call render-result
              constrained-sampling render-shell prepare-arguments
-             execution-mode]}]
+             execution-mode streams?]}]
   (map->Tool
     {:name name :label label :description description
      :prompt-snippet prompt-snippet :prompt-guidelines prompt-guidelines
@@ -52,5 +52,6 @@
      :constrained-sampling constrained-sampling
      :render-shell render-shell
      :prepare-arguments prepare-arguments
-     :execution-mode execution-mode}))
+     :execution-mode execution-mode
+     :streams? streams?}))
 

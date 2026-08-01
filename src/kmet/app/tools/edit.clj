@@ -2,11 +2,14 @@
   "Edit tool implementation — precise text replacement in files.
    Accepts :edits (vector of maps, pi's oldText/newText or kebab-case),
    a JSON-string edits arg, or the legacy top-level old-text/new-text pair.
-   Pi: edit.ts — prepareEditArguments + validateEditInput."
+   Pi: edit.ts — prepareEditArguments + validateEditInput.
+   Returns the applied diff in :details.diff (pi: EditToolDetails.diff) so the
+   TUI can correct its preview when the file changed between preview and apply."
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
-            [cheshire.core :as json]))
+            [cheshire.core :as json]
+            [kmet.app.tools.edit-diff :as edit-diff]))
 
 (defn- normalize-edits
   "Pi: prepareEditArguments — normalize the args into {:edits [...]}.
@@ -29,8 +32,11 @@
       legacy (update :edits (fnil conj []) legacy))))
 
 (defn execute
-  "Precise text replacement in a file.
-   Each edit's old-text is matched against the current content."
+  "Precise text replacement in a file (pi: edit.ts execute).
+   Strips BOM, normalizes line endings, matches with exact-then-fuzzy
+   semantics (pi: applyEditsToNormalizedContent — not-found, duplicate,
+   overlap and no-change conditions), restores the original line endings,
+   and returns the applied diff in :details.diff."
   [{:keys [path] :as args}]
   (let [{:keys [edits]} (normalize-edits args)]
     (if (or (nil? edits) (empty? edits))
@@ -42,18 +48,22 @@
           (if-not (fs/exists? f)
             {:content (str "File not found: " path) :is-error true}
             (let [content (slurp f)
-                  applied (loop [current content
-                                 remaining edits]
-                            (if (empty? remaining)
-                              {:ok? true :content current}
-                              (let [{:keys [old-text new-text]} (first remaining)]
-                                (if (str/includes? current old-text)
-                                  (recur (str/replace-first current old-text new-text) (rest remaining))
-                                  {:ok? false :error (str "Could not find old-text in " path)}))))]
-              (if-not (:ok? applied)
-                {:content (:error applied) :is-error true}
-                (let [result (:content applied)]
-                  (spit f result)
-                  {:content (str "Successfully replaced " (count edits) " block(s) in " path ".")})))))
+                  {:keys [bom text]} (edit-diff/strip-bom content)
+                  original-ending (edit-diff/detect-line-ending text)
+                  normalized (edit-diff/normalize-to-lf text)
+                  {:keys [new-content]}
+                  (edit-diff/apply-edits-to-normalized-content normalized edits path)
+                  final (str bom (edit-diff/restore-line-endings new-content original-ending))
+                  {:keys [diff]} (edit-diff/format-diff-lines
+                                   (str/split-lines normalized)
+                                   (str/split-lines new-content))]
+              (spit f final)
+              {:content (str "Successfully replaced " (count edits) " block(s) in " path ".")
+               ;; Pi: EditToolDetails.diff — the actually-applied diff, used by
+               ;; the TUI render-result to correct a stale preview
+               :details {:diff diff}})))
         (catch Exception e
-          {:content (str "Error editing " path ": " (ex-message e)) :is-error true})))))
+          (if (= :edit-error (:type (ex-data e)))
+            ;; Pi: edit matching errors surface with their own message
+            {:content (ex-message e) :is-error true}
+            {:content (str "Error editing " path ": " (ex-message e)) :is-error true}))))))
