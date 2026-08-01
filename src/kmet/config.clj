@@ -37,6 +37,46 @@
       (str (System/getProperty "user.home") (subs s 1))
       s)))
 
+;; ─── Deep merge & scope-relative paths ─────────────────────────────────────
+
+(def ^:private path-keys
+  "Config keys whose values are filesystem paths. Resolved relative to their
+   scope dir (pi: paths in ~/.pi/agent/settings.json resolve relative to
+   ~/.pi/agent; in .pi/settings.json relative to .pi)."
+  #{:session-dir :extensions-dir :skills-dir :themes-dir})
+
+(defn deep-merge
+  "Recursively merge maps: nested maps merge key-by-key, non-map values from
+   later maps win. Vectors/lists are replaced, not merged (pi: 'Nested
+   objects are merged' — only objects merge)."
+  [& maps]
+  (reduce (fn [acc m]
+            (if (map? m)
+              (merge-with (fn [a b] (if (and (map? a) (map? b)) (deep-merge a b) b)) acc m)
+              acc))
+          {} maps))
+
+(defn- resolve-path
+  "Resolve a path value relative to its scope dir. ~ and absolute paths pass
+   through unchanged."
+  [base-dir path]
+  (let [s (str path)]
+    (cond
+      (str/starts-with? s "~") (expand-path s)
+      (fs/absolute? s) s
+      :else (str (fs/path base-dir s)))))
+
+(defn- resolve-scope-paths
+  "Resolve path values in a config map relative to base-dir; other values
+   pass through. nil config → {}."
+  [config base-dir]
+  (reduce-kv (fn [acc k v]
+               (assoc acc k (if (and (contains? path-keys k) (string? v))
+                              (resolve-path base-dir v)
+                              v)))
+             {}
+             (or config {})))
+
 ;; ─── Config loading ────────────────────────────────────────────────────────
 
 (defn- load-edn-file
@@ -98,18 +138,26 @@
 
 (defn load-config
   "Load and merge configuration from user and project directories.
-   Returns merged map with defaults for any missing keys."
+   Path values are resolved per scope before merging (global paths relative
+   to ~/.config/kmet, project paths relative to .kmet), then deep-merged:
+   defaults < user < project, with nested maps merged key-by-key (pi: project
+   settings override global, nested objects merge).
+   Returns merged map."
   [& {:keys [no-env?]}]
   (let [user-config (load-edn-file "~/.config/kmet/settings.edn")
         project-config (load-edn-file ".kmet/settings.edn")
         _ (load-auth)
+        global-dir (expand-path "~/.config/kmet")
+        project-dir (str (fs/absolutize ".kmet"))
         env-provider (when-not no-env?
                        (or (some-> (System/getenv "KMET_PROVIDER") keyword)
                            (when (System/getenv "OPENAI_API_KEY") :openai)
                            (when (System/getenv "ANTHROPIC_API_KEY") :anthropic)
                            (when (get-api-key :opencode-go) :opencode-go)))
         env-model (System/getenv "KMET_MODEL")
-        base (merge default-config user-config project-config)
+        base (deep-merge (resolve-scope-paths default-config global-dir)
+                         (resolve-scope-paths user-config global-dir)
+                         (resolve-scope-paths project-config project-dir))
         with-env (cond-> base
                    env-provider (assoc :provider env-provider)
                    env-model (assoc :model env-model))]

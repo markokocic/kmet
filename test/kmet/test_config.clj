@@ -82,14 +82,51 @@
 
 ;; ─── Configuration merging ────────────────────────────────────────────────
 
-(t/deftest test-config-merging
-  (t/testing "User config overrides defaults, project overrides user"
-    (let [base {:theme "dark" :provider :openai}
-          user {:theme "light"}
-          project {:provider :anthropic}
-          merged (merge base user project)]
-      (t/is (= "light" (:theme merged)))
-      (t/is (= :anthropic (:provider merged))))))
+(t/deftest test-deep-merge
+  (t/testing "nested maps merge key-by-key (pi: project overrides global, objects merge)"
+    (let [base {:theme "dark"
+                :providers {:openai {:model "gpt-4o" :base-url "u"}
+                            :anthropic {:model "claude"}}}
+          user {:providers {:openai {:model "gpt-4o-mini"}}}
+          merged (cfg/deep-merge base user)]
+      (t/is (= "dark" (:theme merged)))
+      (t/is (= "gpt-4o-mini" (get-in merged [:providers :openai :model])))
+      (t/is (= "u" (get-in merged [:providers :openai :base-url])))
+      (t/is (= "claude" (get-in merged [:providers :anthropic :model])))))
+  (t/testing "non-map values: later wins; vectors replaced, not merged"
+    (let [merged (cfg/deep-merge {:a 1 :v [1 2]} {:a 2 :v [3]})]
+      (t/is (= 2 (:a merged)))
+      (t/is (= [3] (:v merged)))))
+  (t/testing "scalar vs map conflict: later value wins without crashing"
+    (t/is (= {:a {:x 2}} (cfg/deep-merge {:a 1} {:a {:x 2}})))
+    (t/is (= {:a 1} (cfg/deep-merge {:a {:x 2}} {:a 1}))))
+  (t/testing "pi settings.md example: compaction partial override"
+    (let [global {:compaction {:enabled true :reserveTokens 16384}}
+          project {:compaction {:reserveTokens 8192}}
+          merged (cfg/deep-merge global project)]
+      (t/is (= true (get-in merged [:compaction :enabled])))
+      (t/is (= 8192 (get-in merged [:compaction :reserveTokens]))))))
+
+;; ─── Scope-relative path resolution ────────────────────────────────────────
+
+(t/deftest test-scope-path-resolution
+  (let [resolve-paths @#'cfg/resolve-scope-paths
+        home (System/getProperty "user.home")]
+    (t/testing "relative paths resolve against their scope dir"
+      (let [global (resolve-paths {:session-dir "sessions" :model "x"} "/g/base")
+            project (resolve-paths {:extensions-dir ".kmet/ext"} "/p/base")]
+        (t/is (= "/g/base/sessions" (:session-dir global)))
+        (t/is (= "x" (:model global)))
+        (t/is (= "/p/base/.kmet/ext" (:extensions-dir project)))))
+    (t/testing "tilde and absolute paths pass through"
+      (let [res (resolve-paths {:session-dir "~/.local/share/kmet/sessions"
+                                :skills-dir "/abs/skills"} "/base")]
+        (t/is (str/starts-with? (:session-dir res) home))
+        (t/is (= "/abs/skills" (:skills-dir res)))))
+    (t/testing "non-string values and nil config pass through"
+      (t/is (= {} (resolve-paths nil "/base")))
+      (t/is (= {:model "x"} (resolve-paths {:model "x"} "/base")))
+      (t/is (= {:session-dir nil} (resolve-paths {:session-dir nil} "/base"))))))
 
 ;; ─── Provider config ───────────────────────────────────────────────────────
 
