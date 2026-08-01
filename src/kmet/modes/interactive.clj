@@ -245,6 +245,46 @@
                      :content (str "Current theme: " (cfg/get-theme-name (:config cs))
                                    "\nUsage: /theme <name>")})))}))
 
+(defn- command-not-implemented
+  "In-chat reply for pi slash commands kmet does not implement yet."
+  [cs name]
+  (ui/chat-history-add-message! (:chat-history cs)
+    {:role :assistant
+     :content (str "Command /" name " is not implemented in kmet yet.")}))
+
+(defn- register-not-implemented-commands!
+  "Register pi's builtin slash commands that kmet does not implement yet,
+   all bound to the command-not-implemented handler. Keeps the command list
+   in sync with pi (packages/coding-agent/src/core/slash-commands.ts) so
+   /help and autocomplete show the full surface."
+  []
+  (doseq [{:keys [name description argument-hint]}
+          [{:name "settings" :description "Open settings menu"}
+           {:name "scoped-models" :description "Enable/disable models for Ctrl+P cycling"}
+           {:name "export" :description "Export session (HTML default, or specify path: .html/.jsonl)"
+            :argument-hint "<path>"}
+           {:name "import" :description "Import and resume a session from a JSONL file"}
+           {:name "share" :description "Share session as a secret GitHub gist"}
+           {:name "copy" :description "Copy last agent message to clipboard"}
+           {:name "name" :description "Set session display name"}
+           {:name "session" :description "Show session info and stats"}
+           {:name "changelog" :description "Show changelog entries"}
+           {:name "hotkeys" :description "Show all keyboard shortcuts"}
+           {:name "fork" :description "Create a new fork from a previous user message"}
+           {:name "clone" :description "Duplicate the current session at the current position"}
+           {:name "trust" :description "Save project trust decision for future sessions"}
+           {:name "login" :description "Configure provider authentication"
+            :argument-hint "<provider>"}
+           {:name "logout" :description "Remove provider authentication"}
+           {:name "compact" :description "Manually compact the session context"}
+           {:name "reload" :description "Reload keybindings, extensions, skills, prompts, themes, and context files"}]]
+    (commands/register-command!
+      {:name name
+       :description description
+       :argument-hint argument-hint
+       :handler (fn [cs _]
+                  (command-not-implemented cs name))})))
+
 (defn- handle-command
   "Handle slash commands via the command registry. Returns nil."
   [cs cmd args]
@@ -875,6 +915,7 @@ Be precise and concise in your responses.")
 
     ;; Register builtin slash commands (autocomplete dropdown + dispatch)
     (register-builtin-commands! config)
+    (register-not-implemented-commands!)
 
     ;; Autocomplete provider: slash commands + file paths
     (editor/editor-set-autocomplete-provider! ed
