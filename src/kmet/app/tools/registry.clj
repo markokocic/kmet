@@ -17,7 +17,7 @@
              :prompt-snippet "Read file contents"
              :prompt-guidelines ["Use read to examine files instead of cat or sed"]
              :params {:path   {:type :string :description "File path to read (relative or absolute)"}
-                      :offset {:type :number :description "Line number to start reading from (0-indexed)" :optional? true}
+                      :offset {:type :number :description "Line number to start reading from (1-indexed)" :optional? true}
                       :limit  {:type :number :description "Maximum number of lines to read" :optional? true}}
              :execute read/execute)
    "write" (tool/make-tool
@@ -37,9 +37,19 @@
              :prompt-guidelines ["Use edit for precise changes (edits[].oldText must match exactly)"
                                  "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls"]
              :render-shell :self
-             :params {:path     {:type :string :description "File path to edit"}
-                      :old-text {:type :string :description "Exact text to find and replace — must match exactly including whitespace"}
-                      :new-text {:type :string :description "Replacement text"}}
+             ;; Pi: editSchema — edits is an array of {oldText, newText}
+             :parameters {:type "object"
+                          :properties {"path" {:type "string"
+                                               :description "Path to the file to edit (relative or absolute)"}
+                                       "edits" {:type "array"
+                                                :items {:type "object"
+                                                        :properties {"oldText" {:type "string"
+                                                                                :description "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."}
+                                                                     "newText" {:type "string"
+                                                                                :description "Replacement text for this targeted edit."}}
+                                                        :required ["oldText" "newText"]}
+                                                :description "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead."}}
+                          :required ["path" "edits"]}
              :execute edit/execute)
    "bash"  (tool/make-tool
              :name "bash"

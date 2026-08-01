@@ -18,62 +18,243 @@
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.image :as ic]
             [kmet.tui.terminal-image :as timg]
-            [kmet.tui.macros :refer [defsetter defgetter defcomponent]]))
+            [kmet.tui.macros :refer [defsetter defgetter defcomponent]]
+            [cheshire.core :as json]))
 
-;; ─── Edit diff preview ─────────────────────────────────────────────────────
-;; Compute a preview of an edit without actually modifying the file.
-;; Reads the file, tries the replacement, and returns a diff-like structure.
+;; ─── Shared render helpers (pi: render-utils.ts) ────────────────────────────
 
-;; Number of context lines to show before/after the edit region.
-(def preview-context-lines 3)
+(defn- tool-path-str
+  "Pi: str() — string passes through, missing → \"\", non-string → null."
+  [raw-path]
+  (if (string? raw-path) raw-path (if (nil? raw-path) "" nil)))
+
+(defn- render-tool-path
+  "Pi: renderToolPath — accent path; '...' toolOutput when empty;
+   '[invalid arg]' error when the arg is not a string."
+  [raw-path theme]
+  (let [s (tool-path-str raw-path)]
+    (if (nil? s)
+      (theme/fg theme :error "[invalid arg]")
+      (if (empty? s)
+        (theme/fg theme :tool-output "...")
+        (theme/fg theme :accent s)))))
+
+(defn- trim-trailing-empty-lines
+  "Pi: trimTrailingEmptyLines — drop empty lines at the end of a vector."
+  [lines]
+  (let [n (count lines)]
+    (loop [end n]
+      (if (and (pos? end) (= "" (nth lines (dec end))))
+        (recur (dec end))
+        (subvec lines 0 end)))))
+
+;; ─── Edit diff preview (pi: computeEditsDiff + renderDiff) ─────────────────
+;; Applies edits in memory and produces pi-format line-numbered diff lines:
+;;   " 123 content" context, "-123 content" removed, "+123 content" added,
+;;   " ..." skip markers. Single-line -/+ pairs get word-level intra-line
+;;   inverse highlighting (pi: diffWords + renderIntraLineDiff).
+
+(def diff-context-lines 4)  ;; pi: contextLines = 4
+
+(defn- diff-region
+  "Trim the common prefix/suffix from old/new line vectors.
+   Returns {:start int :old-changed [...] :new-changed [...]} (0-indexed start)."
+  [old-lines new-lines]
+  (let [n (count old-lines) m (count new-lines)
+        p (loop [i 0]
+            (if (and (< i n) (< i m) (= (nth old-lines i) (nth new-lines i)))
+              (recur (inc i)) i))
+        s (loop [k 0]
+            (if (and (>= (- n 1 k) p) (>= (- m 1 k) p)
+                     (= (nth old-lines (- n 1 k)) (nth new-lines (- m 1 k))))
+              (recur (inc k)) k))]
+    {:start p
+     :old-changed (subvec old-lines p (- n s))
+     :new-changed (subvec new-lines p (- m s))}))
+
+(defn- format-diff-lines
+  "Generate pi-style numbered diff lines from full old/new line vectors.
+   Returns {:diff-lines [str] :num-additions int :num-removals int}."
+  [old-lines new-lines]
+  (let [n (count old-lines) m (count new-lines)
+        {:keys [start old-changed new-changed]} (diff-region old-lines new-lines)
+        old-n (count old-changed) new-n (count new-changed)
+        width (count (str (max n m)))
+        pad (fn [num] (let [s (str num)] (str (apply str (repeat (- width (count s)) \space)) s)))
+        skip-marker (str " " (apply str (repeat width \space)) " ...")
+        out (atom [])
+        ctx-start (max 0 (- start diff-context-lines))
+        before-lines (subvec old-lines ctx-start start)]
+    ;; Pi: skip marker only when leading context was clipped
+    (when (pos? ctx-start)
+      (swap! out conj skip-marker))
+    (doseq [[i line] (map-indexed vector before-lines)]
+      (swap! out conj (str " " (pad (+ ctx-start i 1)) " " line)))
+    (doseq [[i line] (map-indexed vector old-changed)]
+      (swap! out conj (str "-" (pad (+ start i 1)) " " line)))
+    (doseq [[i line] (map-indexed vector new-changed)]
+      (swap! out conj (str "+" (pad (+ start i 1)) " " line)))
+    (let [after-start (+ start old-n)
+          after-end (min n (+ after-start diff-context-lines))]
+      (doseq [[i line] (map-indexed vector (subvec old-lines after-start after-end))]
+        (swap! out conj (str " " (pad (+ after-start i 1)) " " line)))
+      (when (< after-end n)
+        (swap! out conj skip-marker)))
+    {:diff-lines @out
+     :num-additions new-n
+     :num-removals old-n}))
 
 (defn- compute-edit-preview
-  "Try to apply an edit in memory and return diff information.
-   Args: path, old-text, new-text
-   Returns: {:success? bool :diff-lines [[:context|:remove|:add str] ...] :error str?}
-   When old-text is not found, returns {:success? false :error ...}."
-  [path old-text new-text]
+  "Try to apply edits in memory and return a pi-format diff.
+   Args: path, edits — vector of {:old-text str :new-text str}
+   Returns {:success? bool :diff-lines [\"+123 content\" ...]
+            :num-additions int :num-removals int :error str?}"
+  [path edits]
   (try
     (let [f (io/file path)]
       (if-not (fs/exists? f)
         {:success? false :error (str "File not found: " path)}
         (let [content (slurp f)
-              idx (str/index-of content old-text)]
-          (if (nil? idx)
-            {:success? false :error (str "Could not find old-text in " path)}
-            (let [content-lines (str/split-lines content)
-                  ;; Find which line old-text starts on
-                  before-old (subs content 0 idx)
-                  start-line (count (str/split-lines before-old))
-                  old-lines (str/split-lines old-text)
-                  new-lines (str/split-lines new-text)
-                  num-old (count old-lines)
-                  num-new (count new-lines)
-                  end-line (+ start-line num-old -1)
-                  ;; Context window
-                  ctx-start (max 0 (- start-line preview-context-lines))
-                  ctx-end (min (count content-lines) (+ end-line preview-context-lines 1))
-                  ;; Build diff lines
-                  diff-lines (atom [])]
-              ;; Lines before the edit (context)
-              (doseq [i (range ctx-start start-line)]
-                (swap! diff-lines conj [:context (nth content-lines i)]))
-              ;; Removed lines
-              (doseq [line old-lines]
-                (swap! diff-lines conj [:remove line]))
-              ;; Added lines
-              (doseq [line new-lines]
-                (swap! diff-lines conj [:add line]))
-              ;; Lines after the edit (context)
-              (when (< (dec end-line) (dec ctx-end))
-                (doseq [i (range (inc end-line) ctx-end)]
-                  (swap! diff-lines conj [:context (nth content-lines i)])))
+              applied (loop [current content
+                             remaining edits]
+                        (if (empty? remaining)
+                          {:ok? true :content current}
+                          (let [{:keys [old-text new-text]} (first remaining)]
+                            (if (str/includes? current old-text)
+                              (recur (str/replace-first current old-text new-text) (rest remaining))
+                              {:ok? false :error (str "Could not find old-text in " path)}))))]
+          (if-not (:ok? applied)
+            {:success? false :error (:error applied)}
+            (let [{:keys [diff-lines num-additions num-removals]}
+                  (format-diff-lines (str/split-lines content)
+                                     (str/split-lines (:content applied)))]
               {:success? true
-               :diff-lines @diff-lines
-               :num-additions num-new
-               :num-removals num-old})))))
+               :diff-lines diff-lines
+               :num-additions num-additions
+               :num-removals num-removals})))))
     (catch Exception e
       {:success? false :error (str "Error previewing edit: " (ex-message e))})))
+
+(defn- edit-preview
+  "Compute the edit preview, failing on missing/empty edits (pi: validateEditInput)."
+  [path edits]
+  (if (or (nil? edits) (empty? edits))
+    {:success? false :error "Edit tool input is invalid. edits must contain at least one replacement."}
+    (compute-edit-preview path edits)))
+
+(defn- normalize-edit-args
+  "Pi: prepareEditArguments — normalize edit tool args into a vector of
+   {:old-text :new-text}. Handles: edits as a JSON string (array), camelCase
+   oldText/newText keys, and the legacy top-level old-text/new-text pair
+   (appended, matching the tool's normalize-edits)."
+  [args]
+  (let [parsed (cond
+                 (string? (:edits args)) (try (let [p (json/parse-string (:edits args) true)]
+                                                (when (sequential? p) p))
+                                              (catch Exception _ nil))
+                 (sequential? (:edits args)) (:edits args)
+                 :else nil)
+        kebab (mapv (fn [e] {:old-text (or (:old-text e) (:oldText e))
+                             :new-text (or (:new-text e) (:newText e))})
+                    parsed)
+        legacy (when (and (or (string? (:old-text args)) (string? (:oldText args)))
+                          (or (string? (:new-text args)) (string? (:newText args))))
+                 {:old-text (or (:old-text args) (:oldText args))
+                  :new-text (or (:new-text args) (:newText args))})]
+    (cond-> (seq kebab)
+      legacy (conj legacy))))
+(defn- word-diff
+  "Pi: renderIntraLineDiff — word-level diff of two strings.
+   Common leading/trailing tokens stay plain; the changed middle gets
+   inverse styling. The first changed part's leading whitespace stays
+   unstyled. O(n) prefix/suffix trimming (pi uses diffWords LCS, which is
+   quadratic and too slow for very long lines). Returns
+   {:removed-line :added-line}."
+  [old-s new-s]
+  (let [old-tokens (vec (re-seq #"\s+|\S+" old-s))
+        new-tokens (vec (re-seq #"\s+|\S+" new-s))
+        n (count old-tokens) m (count new-tokens)
+        p (loop [i 0]
+            (if (and (< i n) (< i m) (= (nth old-tokens i) (nth new-tokens i)))
+              (recur (inc i)) i))
+        s (loop [k 0]
+            (if (and (>= (- n 1 k) p) (>= (- m 1 k) p)
+                     (= (nth old-tokens (- n 1 k)) (nth new-tokens (- m 1 k))))
+              (recur (inc k)) k))
+        old-mid (subvec old-tokens p (- n s))
+        new-mid (subvec new-tokens p (- m s))]
+    (if (and (empty? old-mid) (empty? new-mid))
+      {:removed-line old-s :added-line new-s}
+      (let [removed (StringBuilder.)
+            added (StringBuilder.)
+            old-ws (when (seq old-mid) (re-find #"^\s" (first old-mid)))
+            new-ws (when (seq new-mid) (re-find #"^\s" (first new-mid)))
+            emit (fn [sb tokens]
+                   (doseq [t tokens] (.append sb (theme/inverse t))))]
+        (doseq [t (subvec old-tokens 0 p)] (.append removed t))
+        (doseq [t (subvec new-tokens 0 p)] (.append added t))
+        (when old-ws (.append removed (first old-mid)))
+        (when new-ws (.append added (first new-mid)))
+        (emit removed (if old-ws (subvec old-mid 1) old-mid))
+        (emit added (if new-ws (subvec new-mid 1) new-mid))
+        (doseq [t (subvec old-tokens (- n s))] (.append removed t))
+        (doseq [t (subvec new-tokens (- m s))] (.append added t))
+        {:removed-line (str removed) :added-line (str added)}))))
+(defn- style-change-pair
+  "Style a consecutive -/+ run, applying word-level intra-line diff to
+   single pairs (pi: renderDiff). Returns a vector of styled strings."
+  [removed added tabs theme]
+  (if (and (= 1 (count removed)) (= 1 (count added)))
+    (let [{:keys [removed-line added-line]}
+          (word-diff (tabs (:content (first removed)))
+                     (tabs (:content (first added))))]
+      [(theme/fg theme :tool-diff-removed
+         (str "-" (:line-num (first removed)) " " removed-line))
+       (theme/fg theme :tool-diff-added
+         (str "+" (:line-num (first added)) " " added-line))])
+    (into []
+          (concat
+            (mapv #(theme/fg theme :tool-diff-removed
+                     (str "-" (:line-num %) " " (tabs (:content %)))) removed)
+            (mapv #(theme/fg theme :tool-diff-added
+                     (str "+" (:line-num %) " " (tabs (:content %)))) added)))))
+
+(defn- render-diff-lines
+  "Style pi-format diff lines; single -/+ pairs get intra-line inverse
+   highlighting. Returns a vector of styled strings (pi: renderDiff)."
+  [diff-lines theme]
+  (let [n (count diff-lines)
+        parse (fn [line]
+                (when-let [m (re-find #"^([ +-])(\s*\d*)\s(.*)$" line)]
+                  {:prefix (nth m 1) :line-num (nth m 2) :content (nth m 3)}))
+        tabs (fn [s] (str/replace s "\t" "   "))]
+    (loop [i 0 acc []]
+      (if (>= i n)
+        acc
+        (let [p (parse (nth diff-lines i))]
+          (if (and p (= "-" (:prefix p)))
+            (let [removed (loop [j i acc []]
+                            (if-let [q (and (< j n) (parse (nth diff-lines j)))]
+                              (if (= "-" (:prefix q))
+                                (recur (inc j) (conj acc q))
+                                acc)
+                              acc))
+                  rn (count removed)
+                  added (loop [j (+ i rn) acc []]
+                          (if-let [q (and (< j n) (parse (nth diff-lines j)))]
+                            (if (= "+" (:prefix q))
+                              (recur (inc j) (conj acc q))
+                              acc)
+                            acc))
+                  next-i (+ i rn (count added))
+                  styled (style-change-pair removed added tabs theme)]
+              (recur next-i (into acc styled)))
+            (recur (inc i)
+                   (conj acc
+                         (theme/fg theme :tool-diff-context
+                           (if p
+                             (str " " (:line-num p) " " (tabs (:content p)))
+                             (nth diff-lines i)))))))))))
 
 ;; ─── Built-in tool renderers ──────────────────────────────────────────────
 ;; Each render-call takes (name args theme width context) → IComponent or nil.
@@ -82,7 +263,7 @@
 
 (def ^:private builtin-renderers
   {"read"  {:render-call (fn [name args theme width _context]
-                           (let [path (:path args)
+                           (let [raw-path (:file-path args (:path args))
                                  offset (:offset args)
                                  limit (:limit args)
                                  range-str (when (or offset limit)
@@ -92,123 +273,128 @@
                                                          (str ":" start-line (when end-line (str "-" end-line))))))]
                              (text/make-text
                                (str (theme/fg theme :tool-title (theme/bold "read "))
-                                    (theme/fg theme :accent path)
+                                    (render-tool-path raw-path theme)
                                     range-str)
                                0 0)))
-            :render-result (fn [content is-error theme width expanded? & _]
+            :render-result (fn [content is-error theme width expanded? _started-at _ended-at truncation _context]
                              (if (and (not expanded?) (not is-error))
                                nil
-                               (let [lines (str/split-lines content)
+                               (let [c (container/make-container)
+                                     lines (trim-trailing-empty-lines (str/split-lines content))
                                      n (count lines)
                                      max-lines (if expanded? n 10)
                                      show (take max-lines lines)
-                                     more (- n max-lines)
-                                     c (container/make-container)]
-                                 (doseq [line show]
-                                   (container/container-add-child c
-                                     (text/make-text
-                                       (if is-error
-                                         (theme/fg theme :error line)
-                                         (theme/fg theme :tool-output line))
-                                       0 0)))
-                                 (when (pos? more)
-                                   (container/container-add-child c
-                                     (text/make-text
-                                       (theme/fg theme :muted (str "... " more " more lines"))
-                                       0 0)))
+                                     more (- n max-lines)]
+                                 (when (seq lines)
+                                   (container/container-add-child c (text/make-text "" 0 0))
+                                   (doseq [line show]
+                                     (container/container-add-child c
+                                       (text/make-text
+                                         (if is-error
+                                           (theme/fg theme :error line)
+                                           (theme/fg theme :tool-output line))
+                                         0 0)))
+                                   (when (pos? more)
+                                     (container/container-add-child c
+                                       (text/make-text
+                                         (utils/truncate-to-width
+                                           (str (theme/fg theme :muted (str "... (" more " more lines,"))
+                                                " "
+                                                (app-kb/key-hint "app.tools.expand" "to expand")
+                                                (theme/fg theme :muted ")"))
+                                           width "...")
+                                         0 0)))
+                                   ;; Pi: truncation warnings (first line / lines / bytes)
+                                   (when truncation
+                                     (let [{:keys [first-line-exceeds-limit truncated-by output-lines total-lines max-lines max-bytes]} truncation
+                                           warn (cond
+                                                  first-line-exceeds-limit
+                                                  (str "[First line exceeds " (bash-exec/format-size (or max-bytes bash-exec/DEFAULT-MAX-BYTES)) " limit]")
+                                                  (= truncated-by :lines)
+                                                  (str "[Truncated: showing " output-lines " of " total-lines " lines ("
+                                                       (or max-lines bash-exec/DEFAULT-MAX-LINES) " line limit)]")
+                                                  (= truncated-by :bytes)
+                                                  (str "[Truncated: " output-lines " lines shown ("
+                                                       (bash-exec/format-size (or max-bytes bash-exec/DEFAULT-MAX-BYTES)) " limit)]")
+                                                  :else nil)]
+                                       (when warn
+                                         (container/container-add-child c (text/make-text "" 0 0))
+                                         (container/container-add-child c
+                                           (text/make-text (theme/fg theme :warning warn) 0 0))))))
                                  c)))}
    "write" {:render-call (fn [name args theme width _context]
-                           (let [path (:path args)
+                           (let [raw-path (:file-path args (:path args))
                                  content (:content args)
-                                 lines (str/split-lines (or content ""))
-                                 line-count (count lines)
-                                 preview-lines (take 10 lines)
-                                 preview-count (count preview-lines)
                                  c (container/make-container)]
-                             ;; Header
                              (container/container-add-child c
                                (text/make-text
                                  (str (theme/fg theme :tool-title (theme/bold "write "))
-                                      (theme/fg theme :accent path)
-                                      (theme/fg theme :dim (str " (" line-count " lines)")))
+                                      (render-tool-path raw-path theme))
                                  0 0))
-                             ;; Content preview in a muted Box (Pi: syntax-highlighted preview)
-                             (let [preview-box (box/make-box 1 0
-                                                 #(theme/bg theme :border-muted %))]
-                               (doseq [line preview-lines]
-                                 (box/box-add-child preview-box
-                                   (text/make-text
-                                     (str "  " (theme/fg theme :tool-output line))
-                                     0 0)))
-                               (when (< preview-count line-count)
-                                 (box/box-add-child preview-box
-                                   (text/make-text
-                                     (theme/fg theme :muted (str "  ... " (- line-count preview-count) " more lines"))
-                                     0 0)))
-                               (container/container-add-child c preview-box))
+                             (if (nil? (tool-path-str content))
+                               ;; Pi: invalid content arg
+                               (container/container-add-child c
+                                 (text/make-text
+                                   (str "\n\n" (theme/fg theme :error "[invalid content arg - expected string]"))
+                                   0 0))
+                               (when (seq content)
+                                 (let [lines (trim-trailing-empty-lines (str/split-lines content))
+                                       total (count lines)
+                                       show (take 10 lines)
+                                       remaining (- total 10)]
+                                   (container/container-add-child c (text/make-text "" 0 0))
+                                   (container/container-add-child c (text/make-text "" 0 0))
+                                   (doseq [line show]
+                                     (container/container-add-child c
+                                       (text/make-text (theme/fg theme :tool-output line) 0 0)))
+                                   (when (pos? remaining)
+                                     (container/container-add-child c
+                                       (text/make-text
+                                         (utils/truncate-to-width
+                                           (str (theme/fg theme :muted
+                                                (str "... (" remaining " more lines, " total " total,"))
+                                                " "
+                                                (app-kb/key-hint "app.tools.expand" "to expand")
+                                                (theme/fg theme :muted ")"))
+                                           width "...")
+                                         0 0))))))
                              c))
             :render-result (fn [content is-error theme width expanded? & _]
                              (when is-error
-                               (let [lines (str/split-lines content)] (text/make-text (theme/fg theme :error (str/join "\n" lines)) 0 0))))}
+                               (text/make-text (str "\n" (theme/fg theme :error content)) 0 0)))}
    "edit"  {:render-shell :self
-            :render-call (fn [name args theme width _context]
-                           (let [path (:path args)
-                                 old-text (:old-text args)
-                                 new-text (:new-text args)
-                                 preview (compute-edit-preview path old-text new-text)
-                                 c (container/make-container)]
+            :render-call (fn [name args theme width context]
+                           (let [raw-path (:file-path args (:path args))
+                                 edits (normalize-edit-args args)
+                                 preview (edit-preview raw-path edits)
+                                 bg-fn (if (:success? preview)
+                                         #(theme/bg theme :tool-success-bg %)
+                                         #(theme/bg theme :tool-error-bg %))
+                                 box (box/make-box 1 1 bg-fn)]
+                             ;; Pi: edit call is a Box whose bg reflects preview state
+                             (box/box-add-child box
+                               (text/make-text
+                                 (str (theme/fg theme :tool-title (theme/bold "edit "))
+                                      (render-tool-path raw-path theme))
+                                 0 0))
                              (if (:success? preview)
-                               (let [{:keys [diff-lines num-additions num-removals]} preview]
-                                 ;; Header
-                                 (container/container-add-child c
-                                   (text/make-text
-                                     (str (theme/fg theme :tool-title (theme/bold "edit "))
-                                          (theme/fg theme :accent path))
-                                     0 0))
-                                 ;; Diff preview in a Box with success background
-                                 (let [preview-box (box/make-box 1 0
-                                                     #(theme/bg theme :tool-success-bg %))]
-                                   (box/box-add-child preview-box
-                                     (text/make-text
-                                       (str (theme/fg theme :tool-diff-context "Preview: ")
-                                            (theme/fg theme :tool-diff-added (str "+" num-additions " "))
-                                            (theme/fg theme :dim "/ ")
-                                            (theme/fg theme :tool-diff-removed (str "-" num-removals)))
-                                       0 0))
-                                   (doseq [[kind line] diff-lines]
-                                     (let [style-prefix (case kind
-                                                          :add (str (theme/fg theme :tool-diff-added) "+")
-                                                          :remove (str (theme/fg theme :tool-diff-removed) "-")
-                                                          :context (str (theme/fg theme :tool-diff-context) " "))]
-                                       (box/box-add-child preview-box
-                                         (text/make-text
-                                           (str style-prefix line)
-                                           0 0))))
-                                   (container/container-add-child c preview-box))
-                                 c)
-                               ;; Preview failed -- show header + error in error-colored Box
-                               (do
-                                 (container/container-add-child c
-                                   (text/make-text
-                                     (str (theme/fg theme :tool-title (theme/bold "edit "))
-                                          (theme/fg theme :accent path))
-                                     0 0))
-                                 (let [error-box (box/make-box 1 0
-                                                    #(theme/bg theme :tool-error-bg %))]
-                                   (box/box-add-child error-box
-                                     (text/make-text
-                                       (theme/fg theme :error (:error preview))
-                                       0 0))
-                                   (container/container-add-child c error-box))
-                                 c))))
-            :render-result (fn [content is-error theme width expanded? & _]
-                             (when is-error
-                               ;; Only show errors from actual execution (not preview)
-                               (let [lines (str/split-lines content)]
-                                 (text/make-text
-                                   (theme/fg theme :error (str/join "\n" lines))
-                                   0 0))))}
-
+                               (let [{:keys [diff-lines]} preview]
+                                 (box/box-add-child box (spacer/make-spacer 1))
+                                 (doseq [line (render-diff-lines diff-lines theme)]
+                                   (box/box-add-child box (text/make-text line 0 0))))
+                               (box/box-add-child box
+                                 (text/make-text (theme/fg theme :error (:error preview)) 0 0)))
+                             box))
+            :render-result (fn [content is-error theme width expanded? _started-at _ended-at _truncation context]
+                             (if is-error
+                               ;; Pi: suppress execution errors already shown by the preview
+                               (let [raw-path (:file-path (:args context) (:path (:args context)))
+                                     edits (normalize-edit-args (:args context))
+                                     preview-error (:error (edit-preview raw-path edits))]
+                                 (if (= content preview-error)
+                                   nil
+                                   (text/make-text (theme/fg theme :error content) 0 0)))
+                               nil))}
    "bash"  {:render-call (fn [name args theme width _context]
                            (let [cmd (:command args)
                                  timeout (:timeout args)

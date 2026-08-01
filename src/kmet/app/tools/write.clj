@@ -1,5 +1,6 @@
 (ns kmet.app.tools.write
-  "Write tool implementation — create or overwrite files."
+  "Write tool implementation — create or overwrite files.
+   Pi: write.ts — success message matches pi's wording."
   (:require [clojure.java.io :as io]
             [babashka.fs :as fs]))
 
@@ -8,8 +9,10 @@
   [{:keys [path content]}]
   (try
     (let [f (io/file path)]
-      (fs/create-dirs (fs/parent f))
+      ;; Pi: mkdir(dir, {recursive: true}) — skip when the path has no parent
+      (when-let [parent (fs/parent f)]
+        (fs/create-dirs parent))
       (spit f content)
-      {:content (str "Written " (count content) " bytes to " path)})
+      {:content (str "Successfully wrote " (count content) " bytes to " path)})
     (catch Exception e
       {:content (str "Error writing to " path ": " (ex-message e)) :is-error true})))

@@ -59,7 +59,9 @@
     (let [content (:content result)]
       (t/is (.contains content "a"))
       (t/is (.contains content "b"))
-      (t/is (not (.contains content "c"))))))
+      ;; Pi: a user limit stops early with a continuation footer
+      (t/is (not (re-find #"(?m)^c$" content)))
+      (t/is (.contains content "more lines in file")))))
 
 (t/deftest test-tool-read-nonexistent
   (let [result (tools/execute-tool "read" {:path "nonexistent-file"})]
@@ -71,7 +73,7 @@
 (t/deftest test-tool-write
   (let [result (tools/execute-tool "write" {:path "target/test-tools-write.txt" :content "hello world"})]
     (t/is (not (:is-error result)))
-    (t/is (.contains (:content result) "Written"))
+    (t/is (.contains (:content result) "Successfully wrote"))
     (t/is (= "hello world" (slurp "target/test-tools-write.txt")))))
 
 ;; ─── Tool edit ────────────────────────────────────────────────────────────
@@ -185,3 +187,62 @@
         (t/is (not (contains? v :optional))
           (str "Property " k " of " tool-name " should not have :optional"))))))
 
+
+(t/deftest test-tool-edit-edits-array
+  (spit "target/test-tools-edit.txt" "one two three")
+  (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit.txt"
+                                           :edits [{:old-text "one" :new-text "1"}
+                                                   {:old-text "three" :new-text "3"}]})]
+    (t/is (not (:is-error result)))
+    (t/is (= "1 two 3" (slurp "target/test-tools-edit.txt")))))
+
+(t/deftest test-tool-edit-camelcase-keys
+  (spit "target/test-tools-edit.txt" "hello world")
+  (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit.txt"
+                                           :edits [{:oldText "hello" :newText "bye"}]})]
+    (t/is (not (:is-error result)))
+    (t/is (= "bye world" (slurp "target/test-tools-edit.txt")))))
+
+(t/deftest test-tool-edit-json-string-edits
+  (spit "target/test-tools-edit.txt" "alpha beta")
+  (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit.txt"
+                                           :edits "[{\"oldText\":\"beta\",\"newText\":\"BETA\"}]"})]
+    (t/is (not (:is-error result)))
+    (t/is (= "alpha BETA" (slurp "target/test-tools-edit.txt")))))
+
+(t/deftest test-tool-edit-empty-edits
+  (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit.txt"})]
+    (t/is (:is-error result))
+    (t/is (.contains (:content result) "at least one replacement"))))
+
+(t/deftest test-tool-read-offset-1-indexed
+  (spit "target/test-tools-read.txt" "line1\nline2\nline3\nline4")
+  (let [result (tools/execute-tool "read" {:path "target/test-tools-read.txt" :offset 2 :limit 2})]
+    (t/is (.contains (:content result) "line2"))
+    (t/is (.contains (:content result) "line3"))
+    (t/is (not (.contains (:content result) "line1")))))
+
+(t/deftest test-tool-read-truncation-metadata
+  (spit "target/test-tools-read.txt" (clojure.string/join "\n" (range 1 3001)))
+  (let [result (tools/execute-tool "read" {:path "target/test-tools-read.txt"})]
+    (t/is (= 3000 (:total-lines (:truncation result))))
+    (t/is (= 2000 (:output-lines (:truncation result))))
+    (t/is (= :lines (:truncated-by (:truncation result))))))
+
+(t/deftest test-tool-write-parentless-path
+  ;; Regression: (fs/create-dirs (fs/parent f)) with a parentless path → nil → crash
+  (let [result (tools/execute-tool "write" {:path "target/parentless-write.txt" :content "x"})]
+    (t/is (not (:is-error result)) "parentless path should succeed")
+    (t/is (.contains (:content result) "Successfully wrote"))))
+
+(t/deftest test-tool-read-beyond-eof
+  (spit "target/test-tools-read.txt" "a\nb\nc")
+  (let [result (tools/execute-tool "read" {:path "target/test-tools-read.txt" :offset 99})]
+    (t/is (:is-error result))
+    (t/is (.contains (:content result) "beyond end of file"))))
+
+(t/deftest test-tool-read-image
+  (spit "target/test-tools-read.png" "fake-png-bytes")
+  (let [result (tools/execute-tool "read" {:path "target/test-tools-read.png"})]
+    (t/is (some? (:images result)))
+    (t/is (.contains (:content result) "Read image file"))))
