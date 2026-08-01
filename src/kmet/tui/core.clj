@@ -317,10 +317,12 @@
                                         (if (or (= i n) (not= (nth a i) (nth b i)))
                                           i
                                           (recur (inc i))))))
-                    ;; Pi-style full redraw: clear screen, rewrite all lines from top
+                    ;; Pi-style full redraw: clear screen, home, then clear
+                    ;; scrollback ([3J) so stale lines above don't show as
+                    ;; duplicates (pi: fullRender uses "\u001b[2J\u001b[H\u001b[3J").
                     do-full-redraw (fn do-full-redraw []
                                      (when (seq prev)
-                                       (terminal/write-output started "\u001b[2J\u001b[H"))
+                                       (terminal/write-output started "\u001b[2J\u001b[H\u001b[3J"))
                                      (terminal/write-output started CSI-2026-H)
                                      (doseq [i (range new-count)]
                                        (when (pos? i) (terminal/write-output started "\r\n"))
@@ -346,19 +348,27 @@
                     (do
                       (terminal/write-output started CSI-2026-H)
                       ;; Diff the common part (relative movement from current cursor)
-                      (let [[d _] (diff-lines common-prev common-new @hardware-cursor-row)]
-                        (doseq [x d] (terminal/write-output started x)))
-                      ;; Append new lines with \r\n
-                      (let [last-row (min prev-count h)]
-                        (terminal/write-output started (str "\u001b[" last-row "H"))
+                      (let [[d last-content-row] (diff-lines common-prev common-new @hardware-cursor-row)]
+                        (doseq [x d] (terminal/write-output started x))
+                        ;; Append new lines — move RELATIVE from the tracked cursor to the
+                        ;; row after the last common row (pi: computeLineDiff). Never an
+                        ;; absolute [H]: content rows aren't screen rows when the TUI
+                        ;; starts below screen row 0 (prior terminal output), which would
+                        ;; shift the appended lines and corrupt hardware-cursor-row
+                        ;; (cascading into later relative diffs, e.g. the spinner).
+                        (let [move-target (dec prev-count)
+                              line-diff (- move-target last-content-row)]
+                          (cond
+                            (pos? line-diff) (terminal/write-output started (str "\u001b[" line-diff "B"))
+                            (neg? line-diff) (terminal/write-output started (str "\u001b[" (- line-diff) "A"))))
                         (terminal/write-output started "\r\n")
                         (doseq [i (range prev-count new-count)]
                           (when (> i prev-count)
                             (terminal/write-output started "\r\n"))
-                          (terminal/write-output started (str "\u001b[2K" (nth lines i)))))
-                      (terminal/write-output started CSI-2026-L)
-                      (reset! hardware-cursor-row (dec new-count))
-                      (reset! viewport-top (max 0 (- new-count h))))))
+                          (terminal/write-output started (str "\u001b[2K" (nth lines i))))
+                        (terminal/write-output started CSI-2026-L)
+                        (reset! hardware-cursor-row (dec new-count))
+                        (reset! viewport-top (max 0 (- new-count h)))))))
 
                 ;; Content shrunk — full redraw if viewport shifted or changes above viewport,
                 ;; else diff common part then clear removed lines
@@ -373,18 +383,28 @@
                         ;; Changes above viewport — Pi: full redraw
                         (do-full-redraw)
                         ;; Viewport stable, changes within viewport
-                        (let [[d _] (diff-lines common-prev lines @hardware-cursor-row)]
+                        (let [[d last-content-row] (diff-lines common-prev lines @hardware-cursor-row)]
                           (terminal/write-output started CSI-2026-H)
                           (doseq [x d] (terminal/write-output started x))
+                          ;; Clear removed lines RELATIVE from the last new line
+                          ;; (pi: \r\n[2K per extra line, then move back up) — an
+                          ;; absolute [H] would be off by one when the TUI starts
+                          ;; below screen row 0. This path only runs while both
+                          ;; contents fit on screen (guarded above), so the extra
+                          ;; lines are always visible.
                           (let [extra (- prev-count new-count)
-                                clear-row (inc new-count)]
-                            (when (<= clear-row h)
-                              (terminal/write-output started (str "\u001b[" clear-row "H"))
-                              (let [lines-to-clear (min extra (- (inc h) clear-row))]
-                                (dotimes [e lines-to-clear]
-                                  (terminal/write-output started "\u001b[2K")
-                                  (when (< e (dec lines-to-clear))
-                                    (terminal/write-output started "\u001b[1B"))))))
+                                target-row (dec new-count)
+                                line-diff (- target-row last-content-row)
+                                move (cond
+                                       (pos? line-diff) (str "\u001b[" line-diff "B")
+                                       (neg? line-diff) (str "\u001b[" (- line-diff) "A")
+                                       :else "")]
+                            (when (seq move)
+                              (terminal/write-output started move))
+                            (dotimes [_ extra]
+                              (terminal/write-output started "\r\n\u001b[2K"))
+                            (when (pos? extra)
+                              (terminal/write-output started (str "\u001b[" extra "A"))))
                           (terminal/write-output started CSI-2026-L)
                           (reset! hardware-cursor-row (dec new-count)))))))
 

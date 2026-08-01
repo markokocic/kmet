@@ -750,6 +750,7 @@ Be precise and concise in your responses.")
         sp1 (spacer/make-spacer 1)
         ch (ui/make-chat-history :theme (cfg/get-theme config))
         pending-tool-comp (atom nil)  ;; Pi: component ref for in-place updates
+        cs-ref (atom nil)             ;; CoreState, filled after layout (for :status events)
 
         ;; Agent state
         ag (agent/make-agent-state
@@ -764,7 +765,7 @@ Be precise and concise in your responses.")
                            :tool-execution-start
                            ;; Pi: create pending component once, update in place
                            (let [msg {:role :tool
-                                      :name (:name evt)
+                                      :name (:tool-name evt)
                                       :args (:args evt {})
                                       :content ""
                                       :is-error false}]
@@ -802,6 +803,14 @@ Be precise and concise in your responses.")
                                  (ui/tool-execution-set-images! comp images))
                                (reset! pending-tool-comp nil)
                                (tui/tui-request-render t)))
+                           :status
+                           ;; Pi: agent status (thinking/executing/idle/error) drives the
+                           ;; header/footer status text — kept in sync via the :status event
+                           ;; so the yellow "● thinking" / "● executing" indicator appears
+                           ;; while the agent is working.
+                           (do (when-let [cs @cs-ref]
+                                 (update-header-footer! cs))
+                               (tui/tui-request-render t))
                            :auto-retry-start
                            ;; Clear partial streaming text so the retried stream starts fresh
                            (ui/chat-history-clear-streaming! ch)
@@ -855,6 +864,9 @@ Be precise and concise in your responses.")
                             :bash-signal (atom false)
                             :pending-bash-components (atom [])
                             :pending-bash-container (container/make-container)})]
+
+    ;; Expose CoreState to the agent on-event handler (for :status events)
+    (reset! cs-ref cs)
 
     ;; Focus editor
     (tui/tui-set-focus t ed)

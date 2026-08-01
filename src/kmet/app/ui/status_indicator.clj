@@ -19,7 +19,9 @@
       ;; Pi-style: one blank line above + one spinner line (with output-pad indentation)
       (let [lines (protocols/render (:spinner this) width)]
         (into [""] (mapv #(str " " %) lines)))
-      []))
+      ;; Pi: IdleStatus — always occupy the same two rows so the editor and
+      ;; footer below don't jump when the indicator appears/disappears.
+      ["" ""]))
   (invalidate [this]
     (protocols/invalidate (:spinner this))))
 
