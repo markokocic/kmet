@@ -42,7 +42,7 @@
 (defn- get-session-dir []
   (if-let [c @global-config]
     (cfg/get-session-dir c)
-    (str (System/getProperty "user.home") "/.local/share/kmet/sessions")))
+    (str (System/getProperty "user.home") "/.kmet/sessions")))
 
 (defn- ensure-session-dir []
   (let [d (get-session-dir)]

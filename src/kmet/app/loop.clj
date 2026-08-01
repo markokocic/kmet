@@ -871,7 +871,7 @@ Be precise and concise in your responses."}}]
     (if (nil? api-key)
       (do (when on-error
             (on-error (str "No API key for " (name provider)
-                           ". Set the key in ~/.config/kmet/auth.edn or the appropriate environment variable.")))
+                           ". Set the key in ~/.kmet/agent/auth.edn or the appropriate environment variable.")))
           (future))
       (future
         (try

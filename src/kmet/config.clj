@@ -1,6 +1,6 @@
 (ns kmet.config
   "Configuration loading for kmet.
-   Loads settings from ~/.config/kmet/settings.edn and .kmet/settings.edn
+   Loads settings from ~/.kmet/agent/settings.edn and .kmet/settings.edn
    (project-local overrides)."
   (:require [clojure.java.io :as io]
             [clojure.edn :as edn]
@@ -14,15 +14,15 @@
   {:provider :opencode-go
    :model "deepseek-v4-flash"
    :theme "dark"
-   :session-dir "~/.local/share/kmet/sessions"
+   :session-dir "~/.kmet/sessions"
    :max-session-entries 500
    :compact-threshold 400
    :models []
    :system-prompt nil
    :thinking :off
-   :extensions-dir "~/.config/kmet/extensions"
-   :skills-dir "~/.config/kmet/skills"
-   :themes-dir "~/.config/kmet/themes"
+   :extensions-dir "~/.kmet/agent/extensions"
+   :skills-dir "~/.kmet/agent/skills"
+   :themes-dir "~/.kmet/agent/themes"
    :providers {:openai {:model "gpt-4o"}
                :anthropic {:model "claude-sonnet-4-20250514"}
                :opencode-go {:model "deepseek-v4-flash"
@@ -98,10 +98,10 @@
 (defonce ^:private auth-atom (atom default-auth))
 
 (defn load-auth
-  "Load auth from ~/.config/kmet/auth.edn.
+  "Load auth from ~/.kmet/agent/auth.edn.
    Returns the auth map, merging with defaults."
   []
-  (let [auth (or (load-edn-file "~/.config/kmet/auth.edn") {})]
+  (let [auth (or (load-edn-file "~/.kmet/agent/auth.edn") {})]
     (reset! auth-atom auth)
     auth))
 
@@ -139,15 +139,15 @@
 (defn load-config
   "Load and merge configuration from user and project directories.
    Path values are resolved per scope before merging (global paths relative
-   to ~/.config/kmet, project paths relative to .kmet), then deep-merged:
+   to ~/.kmet/agent, project paths relative to .kmet), then deep-merged:
    defaults < user < project, with nested maps merged key-by-key (pi: project
    settings override global, nested objects merge).
    Returns merged map."
   [& {:keys [no-env?]}]
-  (let [user-config (load-edn-file "~/.config/kmet/settings.edn")
+  (let [user-config (load-edn-file "~/.kmet/agent/settings.edn")
         project-config (load-edn-file ".kmet/settings.edn")
         _ (load-auth)
-        global-dir (expand-path "~/.config/kmet")
+        global-dir (expand-path "~/.kmet/agent")
         project-dir (str (fs/absolutize ".kmet"))
         env-provider (when-not no-env?
                        (or (some-> (System/getenv "KMET_PROVIDER") keyword)

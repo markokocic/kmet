@@ -286,7 +286,7 @@
     (future
       (when-let [on-error (:on-error opts)]
         (on-error (str "No API key for " (name provider)
-                       ". Set the key in ~/.config/kmet/auth.edn."))))
+                       ". Set the key in ~/.kmet/agent/auth.edn."))))
     (let [api-type (or api-type provider)]
       (case api-type
         :openai (openai-request (assoc opts :api-key api-key))

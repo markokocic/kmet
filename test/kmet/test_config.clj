@@ -28,9 +28,9 @@
 
 (t/deftest test-expand-path-with-tilde
   (let [home (System/getProperty "user.home")
-        expanded (cfg/expand-path "~/.config/kmet/settings.edn")]
+        expanded (cfg/expand-path "~/.kmet/agent/settings.edn")]
     (t/is (str/starts-with? expanded home))
-    (t/is (str/ends-with? expanded "/.config/kmet/settings.edn"))))
+    (t/is (str/ends-with? expanded "/.kmet/agent/settings.edn"))))
 
 (t/deftest test-expand-path-relative
   (t/is (= ".kmet/settings.edn" (cfg/expand-path ".kmet/settings.edn"))))
@@ -67,10 +67,10 @@
 
 (t/deftest test-get-session-dir-tilde-expanded
   (let [home (System/getProperty "user.home")
-        c (assoc cfg/default-config :session-dir "~/.local/share/kmet/sessions")
+        c (assoc cfg/default-config :session-dir "~/.kmet/sessions")
         dir (cfg/get-session-dir c)]
     (t/is (str/starts-with? dir home))
-    (t/is (str/ends-with? dir "/.local/share/kmet/sessions"))))
+    (t/is (str/ends-with? dir "/.kmet/sessions"))))
 
 (t/deftest test-get-theme-name
   (let [c (assoc cfg/default-config :theme "light")]
@@ -119,7 +119,7 @@
         (t/is (= "x" (:model global)))
         (t/is (= "/p/base/.kmet/ext" (:extensions-dir project)))))
     (t/testing "tilde and absolute paths pass through"
-      (let [res (resolve-paths {:session-dir "~/.local/share/kmet/sessions"
+      (let [res (resolve-paths {:session-dir "~/.kmet/sessions"
                                 :skills-dir "/abs/skills"} "/base")]
         (t/is (str/starts-with? (:session-dir res) home))
         (t/is (= "/abs/skills" (:skills-dir res)))))
