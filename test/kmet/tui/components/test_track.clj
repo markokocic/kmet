@@ -62,12 +62,12 @@
 
 (t/deftest test-select-list-navigation-re-renders
   ;; selection change must invalidate the cache — the selected item shows
-  ;; the inverse-video marker after navigating (was stale without manual invalidate)
+  ;; the accent-colored prefix after navigating (was stale without manual invalidate)
   (let [s (sl/make-select-list [{:label "apple"} {:label "banana"}])]
     (core/render s 20)
     (core/handle-input s "\u001b[B") ;; down
-    (let [banana-line (nth (core/render s 20) 2)]
-      (t/is (.contains banana-line "\u001b[7m")))))
+    (let [banana-line (nth (core/render s 20) 1)]
+      (t/is (.contains banana-line "→ ")))))
 
 (t/deftest test-settings-list-navigation-re-renders
   ;; regression: navigation never re-rendered (cache omitted selected-idx) —

@@ -111,7 +111,7 @@
   (let [s (sl/make-select-list sample-items)]
     (core/handle-input s "zzzz")
     (let [lines (core/render s 40)]
-      (t/is (some #(.contains % "No matches") lines)))))
+      (t/is (some #(.contains % "No matching commands") lines)))))
 
 ;; ─── Select ───────────────────────────────────────────────────────────────
 

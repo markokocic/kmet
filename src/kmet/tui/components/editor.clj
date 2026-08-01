@@ -427,7 +427,10 @@
                     (:items suggestions))
         sl (select-list/make-select-list items
              :height @(:autocomplete-max-visible editor)
-             :theme @(:autocomplete-theme editor))]
+             :theme @(:autocomplete-theme editor)
+             ;; pi: SLASH_COMMAND_SELECT_LIST_LAYOUT (min 12 / max 32)
+             :min-primary-column-width 12
+             :max-primary-column-width 32)]
     (when-let [idx (get-best-autocomplete-match-index items (:prefix suggestions))]
       (when (>= idx 0)
         (reset! (:selected-idx-atom sl) idx)))

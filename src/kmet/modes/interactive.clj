@@ -268,7 +268,7 @@
                          (let [fname (str/replace s #".*/" "")
                                short-id (subs fname 0 (min 8 (count fname)))
                                loaded (session/load-session s)
-                               n-msgs (count (:entries loaded))]
+                               n-msgs (count @(:entries loaded))]
                            {:label (str short-id "... " n-msgs " msgs")
                             :value s})))
             sl-ref (atom nil)
@@ -308,6 +308,7 @@
                               (tui/tui-request-render (:tui cs)))))
             sl (select-list/make-select-list items
                  :height (min (count items) 15)
+                 :header "Resume session"
                  :on-select on-select-fn
                  :on-escape (fn []
                               (tui/tui-hide-overlay (:tui cs))
@@ -360,6 +361,7 @@
                                     (tui/tui-request-render (:tui cs)))))
                   sl (select-list/make-select-list items
                        :height (min (count items) 20)
+                       :header "Session tree"
                        :on-select on-select-fn
                        :on-escape (fn []
                                     (tui/tui-hide-overlay (:tui cs))
@@ -841,7 +843,7 @@ Be precise and concise in your responses.")
             ;; Scoped model list for cycle-model! (pi: _scopedModels)
             (agent/set-models! ag (:models config)))
         sp2 (spacer/make-spacer 1)
-        ed (tui/make-editor :height 8 :padding-x 2
+        ed (tui/make-editor :height 8 :padding-x 0
             :terminal-rows (fn [] (term/rows @(:terminal t)))
             :border-fn (fn [c] (th/dim c)))
         sp3 (spacer/make-spacer 1)

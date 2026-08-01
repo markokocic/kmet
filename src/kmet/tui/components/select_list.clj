@@ -1,6 +1,8 @@
 (ns kmet.tui.components.select-list
   "Interactive selection list with keyboard navigation and fuzzy filtering.
-   Port of @earendil-works/pi-tui SelectList."
+   Port of @earendil-works/pi-tui SelectList — same rendering: no header,
+   two-column item layout with aligned descriptions, `→ ` selected prefix,
+   `  (N/M)` scroll info, `  No matching commands` empty state."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as u]
@@ -19,6 +21,12 @@
      :description (fn [s] (str "\u001b[2m" s "\u001b[22m"))
      :scroll-info (fn [s] (str "\u001b[2m" s "\u001b[22m"))
      :no-match (fn [s] (str "\u001b[31m" s "\u001b[0m"))}))
+
+;; ─── Layout constants (pi: select-list.ts) ─────────────────────────────────
+
+(def ^:private DEFAULT-PRIMARY-COLUMN-WIDTH 32)
+(def ^:private PRIMARY-COLUMN-GAP 2)
+(def ^:private MIN-DESCRIPTION-WIDTH 10)
 
 ;; ─── Fuzzy matching ─────────────────────────────────────────────────────────
 
@@ -50,12 +58,59 @@
                     (recur (inc pi) (inc ti) (+ score (- n ti)))
                     (recur pi (inc ti) score)))))))))
 
+(defn- display-value [item]
+  (or (:label item) (:value item) ""))
+
+(defn- normalize-single-line [text]
+  (clojure.string/trim (clojure.string/replace text #"[\r\n]+" " ")))
+
+(defn- primary-column-width
+  "Pi: getPrimaryColumnWidth — widest primary value + gap, clamped to the
+   configured bounds (default 32)."
+  [filtered min-col max-col]
+  (let [widest (reduce (fn [w item] (max w (u/visible-width (display-value item))))
+                       0 filtered)
+        target (+ widest PRIMARY-COLUMN-GAP)
+        lo (max 1 (min min-col max-col))
+        hi (max 1 (max min-col max-col))]
+    (max lo (min target hi))))
+
+(defn- render-item
+  "Pi: renderItem — `→ ` prefix for the selection, primary value truncated to
+   the column width, description aligned in a second column when it fits."
+  [item selected? width desc theme primary-width]
+  (let [prefix (if selected? "→ " "  ")
+        value (display-value item)
+        primary-width (min primary-width (max 1 (- width 2 4)))]
+    (if (and desc (> width 40))
+      (let [max-primary (max 1 (- primary-width PRIMARY-COLUMN-GAP))
+            truncated-value (u/truncate-to-width value max-primary)
+            vw (u/visible-width truncated-value)
+            spacing (apply str (repeat (max 1 (- primary-width vw)) \space))
+            desc-start (+ 2 vw (count spacing))
+            remaining (- width desc-start 2)]
+        (if (> remaining MIN-DESCRIPTION-WIDTH)
+          (let [truncated-desc (u/truncate-to-width desc remaining)]
+            (if selected?
+              ((:selected-text theme) (str prefix truncated-value spacing truncated-desc))
+              (str prefix truncated-value
+                   ((:description theme) (str spacing truncated-desc)))))
+          (if selected?
+            ((:selected-text theme) (str prefix truncated-value))
+            (str prefix truncated-value))))
+      (let [max-width (- width 2 2)
+            truncated-value (u/truncate-to-width value max-width)]
+        (if selected?
+          ((:selected-text theme) (str prefix truncated-value))
+          (str prefix truncated-value))))))
+
 ;; ─── SelectList component ───────────────────────────────────────────────────
 
 (defrecord SelectList [items-atom selected-idx-atom filter-atom
                        on-select on-escape
                        focused? theme-atom height-atom cache-atom
-                       scroll-offset-atom]
+                       scroll-offset-atom header-atom
+                       min-primary-column-atom max-primary-column-atom]
   protocols/IComponent
 
   (render [this width]
@@ -64,6 +119,9 @@
             filter-str @filter-atom
             theme @theme-atom
             height @height-atom
+            header @header-atom
+            min-col @min-primary-column-atom
+            max-col @max-primary-column-atom
             filtered (if (empty? filter-str)
                        items
                        (vec (->> items
@@ -83,41 +141,22 @@
             visible (subvec filtered scroll-offset
                             (min (+ scroll-offset height) n))
             lines (volatile! [])]
-        ;; Header
-        (vswap! lines conj
-          (str " \u001b[1m"
-               (if (empty? filter-str) "Select:" (str "Filter: " filter-str))
-               "\u001b[0m"))
+        ;; Optional header (kmet extension — pi's SelectList renders items only)
+        (when (seq header)
+          (vswap! lines conj (str " " (u/truncate-to-width header (- width 2)))))
         ;; Items
         (if (empty? filtered)
-          (vswap! lines conj
-            (str "  " ((:no-match theme) (str "No matches for \"" filter-str "\""))))
-          (doseq [[idx item] (map-indexed vector visible)]
-            (let [global-idx (+ idx scroll-offset)
-                  prefix ((if (= global-idx selected)
-                            (:selected-prefix theme) (fn [s] s)) "▸ ")
-                  label ((:selected-text theme) (:label item))
-                  desc (when (:description item)
-                         (let [d ((:description theme) (:description item))]
-                           (str "  " d)))
-                  line-width (- width 2)
-                  truncated (u/truncate-to-width
-                              (str prefix (if (= global-idx selected)
-                                            (str "\u001b[7m" label "\u001b[27m")
-                                            label)
-                                   (or desc ""))
-                              line-width)
-                  padded (str truncated
-                             (apply str (repeat (max 0 (- width (u/visible-width truncated))) \space)))]
-              (vswap! lines conj padded))))
-        ;; Scroll indicator — only when items overflow the visible area
-        (when (> n (+ scroll-offset height))
-          (when (pos? n)
-            (let [info (str "Showing " (count visible) " of " n " items")
-                  scroll-line ((:scroll-info theme) info)]
-              (vswap! lines conj
-                (str scroll-line
-                     (apply str (repeat (max 0 (- width (u/visible-width scroll-line))) \space)))))))
+          (vswap! lines conj ((:no-match theme) "  No matching commands"))
+          (let [col-width (primary-column-width filtered min-col max-col)]
+            (doseq [[idx item] (map-indexed vector visible)]
+              (let [global-idx (+ idx scroll-offset)
+                    desc (when (:description item)
+                           (normalize-single-line (:description item)))]
+                (vswap! lines conj
+                  (render-item item (= global-idx selected) width desc theme col-width))))))
+        ;; Scroll info — pi: `  (N/M)` only when items overflow the visible area
+        (when (and (> n (+ scroll-offset height)) (pos? n))
+          (vswap! lines conj ((:scroll-info theme) (str "  (" (inc selected) "/" n ")"))))
         @lines)))
 
   (handle-input [this data]
@@ -197,9 +236,18 @@
 (defn make-select-list
   "Create a new SelectList component.
    Items are maps with :label, optional :value and :description.
-   Options: :height (default 10), :theme (default-theme)"
-  [items & {:keys [height theme on-select on-escape]
-            :or {height 10 theme default-theme}}]
+   Options:
+     :height                  — max visible items (default 10)
+     :theme                   — SelectListTheme map (default default-theme)
+     :header                  — optional title line above the items
+     :min-primary-column-width / :max-primary-column-width — description
+                               column bounds (pi defaults: 32)"
+  [items & {:keys [height theme header
+                   min-primary-column-width max-primary-column-width
+                   on-select on-escape]
+            :or {height 10 theme default-theme
+                 min-primary-column-width DEFAULT-PRIMARY-COLUMN-WIDTH
+                 max-primary-column-width DEFAULT-PRIMARY-COLUMN-WIDTH}}]
   (map->SelectList {:items-atom (atom items)
                     :selected-idx-atom (atom 0)
                     :filter-atom (atom "")
@@ -209,7 +257,10 @@
                     :theme-atom (atom theme)
                     :height-atom (atom height)
                     :cache-atom (atom nil)
-                    :scroll-offset-atom (atom 0)}))
+                    :scroll-offset-atom (atom 0)
+                    :header-atom (atom header)
+                    :min-primary-column-atom (atom min-primary-column-width)
+                    :max-primary-column-atom (atom max-primary-column-width)}))
 
 ;; ─── Public helpers ─────────────────────────────────────────────────────────
 
