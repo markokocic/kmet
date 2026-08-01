@@ -12,7 +12,7 @@
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.markdown :as md]
-            [kmet.tui.macros :refer [track!]]))
+            [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -44,13 +44,13 @@
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
-(defrecord AssistantMessageComponent [text-atom thinking-text-atom theme-atom
-                             output-pad-atom hide-thinking-atom finalized-atom
-                             rendered-text-lines-atom
-                             rendered-thinking-lines-atom
-                             last-render-width-atom
-                             cache-atom]
-  protocols/IComponent
+(defcomponent AssistantMessageComponent :assistant
+  [text-atom thinking-text-atom theme-atom
+   output-pad-atom hide-thinking-atom finalized-atom
+   rendered-text-lines-atom
+   rendered-thinking-lines-atom
+   last-render-width-atom
+   cache-atom]
   (render [this width]
     (track! this width
       (let [theme @theme-atom
@@ -91,15 +91,8 @@
             ;; No bottom padding — next component provides its own top spacing.
             (vec (concat (repeat pad-y empty)
                          content)))))))
-  (handle-input [_this _data] nil)
   (invalidate [this]
     (reset! (:cache-atom this) nil)))
-
-;; ─── IComponentKind ─────────────────────────────────────────────────────────
-
-(extend-type AssistantMessageComponent
-  protocols/IComponentKind
-  (component-kind [_] :assistant))
 
 ;; ─── Internal: reflow both text and thinking into the line atoms ──────────
 
@@ -142,8 +135,7 @@
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 
-(defn assistant-message-set-text! [comp text]
-  (reset! (:text-atom comp) text)
+(defsetter assistant-message-set-text! :text-atom comp text
   (reflow-all! comp (or @(:last-render-width-atom comp) 80)))
 
 (defn assistant-message-append-text! [comp text]
@@ -151,8 +143,7 @@
   (when-let [w @(:last-render-width-atom comp)]
     (reflow-all! comp w)))
 
-(defn assistant-message-set-thinking! [comp text]
-  (reset! (:thinking-text-atom comp) text)
+(defsetter assistant-message-set-thinking! :thinking-text-atom comp text
   (reflow-all! comp (or @(:last-render-width-atom comp) 80)))
 
 (defn assistant-message-append-thinking! [comp text]
@@ -163,20 +154,17 @@
 (defn assistant-message-finalize! [comp]
   (reset! (:finalized-atom comp) true))
 
-(defn assistant-message-set-hide-thinking! [comp hide?]
-  (reset! (:hide-thinking-atom comp) hide?)
+(defsetter assistant-message-set-hide-thinking! :hide-thinking-atom comp hide?
   (when-let [w @(:last-render-width-atom comp)]
     (reflow-all! comp w)))
 
-(defn assistant-message-set-theme! [comp theme]
-  (reset! (:theme-atom comp) theme)
+(defsetter assistant-message-set-theme! :theme-atom comp theme
   (when-let [w @(:last-render-width-atom comp)]
     (reflow-all! comp w)))
 
-(defn assistant-message-set-output-pad! [comp n]
-  (reset! (:output-pad-atom comp) n)
+(defsetter assistant-message-set-output-pad! :output-pad-atom comp n
   (when-let [w @(:last-render-width-atom comp)]
     (reflow-all! comp w)))
 
-(defn assistant-message-get-text [comp] @(:text-atom comp))
-(defn assistant-message-get-thinking [comp] @(:thinking-text-atom comp))
+(defgetter assistant-message-get-text :text-atom comp)
+(defgetter assistant-message-get-thinking :thinking-text-atom comp)

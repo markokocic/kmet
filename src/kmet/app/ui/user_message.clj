@@ -4,48 +4,38 @@
    and user-message-text foreground color. Matches Pi's architecture:
    Box handles padding/background/caching, Text handles word-wrap."
   (:require [kmet.tui.protocols :as protocols]
-            [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.box :as box]
-            [kmet.tui.components.text :as text]))
+            [kmet.tui.components.text :as text]
+            [kmet.tui.macros :refer [defsetter defcomponent]]))
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
-(defrecord UserMessageComponent [box           ;; Box wrapping the text
-                                 text-comp     ;; Text child component
-                                 text-atom     ;; raw text (uncolored, for backward compat)
-                                 theme-atom
-                                 output-pad-atom]
-  protocols/IComponent
+(defcomponent UserMessageComponent :user
+  [box           ;; Box wrapping the text
+   text-comp     ;; Text child component
+   text-atom     ;; raw text (uncolored, for backward compat)
+   theme-atom
+   output-pad-atom]
   (render [this width]
     (protocols/render @box width))
-  (handle-input [_this _data] nil)
   (invalidate [this]
     (protocols/invalidate @box)))
 
-;; ─── IComponentKind ─────────────────────────────────────────────────────────
-
-(extend-type UserMessageComponent
-  protocols/IComponentKind
-  (component-kind [_] :user))
-
 ;; ─── Public API (defined before make-user-message to avoid forward ref) ───
 
-(defn user-message-set-text! [comp text]
-  (reset! (:text-atom comp) text)
+(defsetter user-message-set-text! :text-atom comp text
   (let [theme @(:theme-atom comp)]
     (text/text-set! @(:text-comp comp) (theme/fg theme :user-message-text text))))
 
-(defn user-message-set-theme! [comp theme]
-  (reset! (:theme-atom comp) theme)
+(defsetter user-message-set-theme! :theme-atom comp theme
   ;; Update bg-fn on existing box
   (box/box-set-bg-fn @(:box comp) #(theme/bg theme :user-message-bg %))
   ;; Re-color existing text
   (let [raw @(:text-atom comp)]
     (text/text-set! @(:text-comp comp) (theme/fg theme :user-message-text raw))))
 
-(defn user-message-set-output-pad! [comp n]
-  (reset! (:output-pad-atom comp) n)
+(defsetter user-message-set-output-pad! :output-pad-atom comp n
   ;; Rebuild box with new padding
   (let [theme @(:theme-atom comp)
         raw @(:text-atom comp)

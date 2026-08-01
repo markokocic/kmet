@@ -7,20 +7,19 @@
    statusContainer — a dedicated layer between chat and editor."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
-            [kmet.tui.components.spinner :as spinner]))
+            [kmet.tui.components.spinner :as spinner]
+            [kmet.tui.macros :refer [defcomponent]]))
 
 (def ^:private SPINNER-FRAMES
   ["⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"])
 
-(defrecord StatusIndicator [spinner active-atom]
-  protocols/IComponent
+(defcomponent StatusIndicator nil [spinner active-atom]
   (render [this width]
     (if @active-atom
       ;; Pi-style: one blank line above + one spinner line (with output-pad indentation)
       (let [lines (protocols/render (:spinner this) width)]
         (into [""] (mapv #(str " " %) lines)))
       []))
-  (handle-input [_this _data] nil)
   (invalidate [this]
     (protocols/invalidate (:spinner this))))
 

@@ -1,10 +1,15 @@
 (ns kmet.tui.macros
-  "Reactive cache for TUI components (track!).
-   track! is a macro that rewrites @atom reads in the render body to tracked
-   derefs, so any atom change invalidates the cache automatically and setters
-   need no manual invalidate call. It must be a macro because deref rewriting
-   happens at compile time; it expands to a plain runtime call (track-render),
-   so SCI-based callers only need the function, not the macro.")
+  "Macros for TUI components.
+
+   track! — reactive render cache: rewrites @atom reads in the render body to
+   tracked derefs, so any atom change invalidates the cache automatically and
+   setters need no manual invalidate call. It must be a macro because deref
+   rewriting happens at compile time; it expands to a plain runtime call
+   (track-render), so SCI-based callers only need the function, not the macro.
+
+   defsetter / defgetter — component state accessor boilerplate: generate the
+   (defn name [comp value] (reset! (:field comp) value)) skeleton that every
+   component setter/getter repeats.")
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; track! — reactive cache (Reagent-style dependency tracking)
@@ -119,3 +124,74 @@
   [component]
   (when-let [cache (component-cache-atom component)]
     (reset! cache nil)))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+;; defsetter / defgetter — component state accessor boilerplate
+;; ═══════════════════════════════════════════════════════════════════════════
+
+(defmacro defsetter
+  "Define a one-arg setter for a component atom field.
+
+     (defsetter name field comp value body...)
+       → (defn name [comp value] (reset! (field comp) value) body...)
+
+   FIELD is the keyword name of the atom field. COMP and VALUE are the
+   parameter names of the generated function — BODY refers to them as
+   needed. BODY is optional and spliced after the reset, for side effects
+   that must follow the state change ((protocols/invalidate comp), reflow,
+   additional resets)."
+  [name field comp value & body]
+  `(defn ~name [~comp ~value]
+     (reset! (~field ~comp) ~value)
+     ~@body))
+
+(defmacro defgetter
+  "Define a one-arg getter for a component atom field.
+
+     (defgetter name field comp)
+       → (defn name [comp] @(field comp))"
+  [name field comp]
+  `(defn ~name [~comp]
+     @(~field ~comp)))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+;; defcomponent — record + IComponent + IComponentKind boilerplate
+;; ═══════════════════════════════════════════════════════════════════════════
+
+(defn- body-method
+  "First body form whose head symbol is SYM, or nil."
+  [body sym]
+  (first (filter #(and (seq? %) (= sym (first %))) body)))
+
+(defmacro defcomponent
+  "Define a TUI component: a defrecord implementing protocols/IComponent,
+   plus protocols/IComponentKind when KIND is non-nil.
+
+     (defcomponent Name kind [field...]
+       (render [this width] ...)          ; required
+       (handle-input [this data] ...)     ; optional — defaults to no-op
+       (invalidate [this] ...))           ; optional — defaults to no-op
+
+   KIND is a keyword like :user / :assistant / :tool / :custom for message
+   components, or nil for plain tui components (Text, Spacer, footer...).
+   Expands to a defrecord with the given method bodies, then an extend-type
+   for IComponentKind when KIND is given. Components that need additional
+   protocols (IFocusable) keep a separate extend-type form after the call."
+  [name kind fields & body]
+  (let [render (body-method body 'render)]
+    (when-not render
+      (throw (ex-info "defcomponent requires a render method" {:name name})))
+    (let [handle-input (or (body-method body 'handle-input)
+                           '(handle-input [_this _data] nil))
+          invalidate (or (body-method body 'invalidate)
+                         '(invalidate [this] nil))]
+      `(do
+         (defrecord ~name ~fields
+           kmet.tui.protocols/IComponent
+           ~render
+           ~handle-input
+           ~invalidate)
+         ~@(when kind
+             [`(extend-type ~name
+                 kmet.tui.protocols/IComponentKind
+                 (component-kind [~'_] ~kind))])))))

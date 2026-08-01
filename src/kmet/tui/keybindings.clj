@@ -2,8 +2,7 @@
   "KeybindingsManager — port of @earendil-works/pi-tui KeybindingsManager.
    Maps keybinding IDs (e.g. \"tui.editor.cursorUp\") to resolved key chords
    (e.g. [\"up\"]), with support for user overrides and conflict detection."
-  (:require [clojure.string :as str]
-            [kmet.tui.keys :as keys]))
+  (:require [kmet.tui.keys :as keys]))
 
 ;; ─── Default TUI keybinding definitions ──────────────────────────────────
 ;; Each entry: {:default-keys [key-id ...] :description str}

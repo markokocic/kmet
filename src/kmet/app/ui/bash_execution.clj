@@ -12,7 +12,7 @@
             [kmet.app.bash-executor :as bash-exec]
             [kmet.app.keybindings :as app-kb]
             [kmet.tui.keybindings :as tui-kb]
-            [kmet.tui.macros :refer [track!]]
+            [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]
             [clojure.string :as str]))
 
 ;; ─── Preview line limit ────────────────────────────────────────────────────
@@ -22,8 +22,7 @@
 ;; Renders the last PREVIEW-LINES output lines, each truncated to the content
 ;; width, plus a "… N more lines (ctrl+o to expand)" hint.
 
-(defrecord BashPreview [preview-text hidden-line-count pad]
-  protocols/IComponent
+(defcomponent BashPreview nil [preview-text hidden-line-count pad]
   (render [_this w]
     (let [visual-lines (u/truncate-to-visual-lines preview-text PREVIEW-LINES w)
           hint (when (pos? hidden-line-count)
@@ -34,26 +33,24 @@
                         (theme/fg theme/dark-theme :muted ")"))
                    w "..."))
           lines (if hint (conj visual-lines hint) visual-lines)]
-      (mapv #(str (apply str (repeat pad " ")) %) lines)))
-  (handle-input [_this _data] nil)
-  (invalidate [_this] nil))
+      (mapv #(str (apply str (repeat pad " ")) %) lines))))
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
-(defrecord BashExecutionComponent [command-atom      ;; string
-                                   output-lines-atom ;; vec of strings
-                                   status-atom       ;; :running :complete :cancelled :error
-                                   exit-code-atom    ;; int or nil
-                                   expanded-atom     ;; boolean
-                                   content-container  ;; Container for command/output/status
-                                   spinner-comp      ;; Spinner component (animated loader)
-                                   truncation-atom   ;; bash-exec truncation result or nil
-                                   full-output-path-atom ;; string or nil
-                                   started-at-atom   ;; long (System/currentTimeMillis)
-                                   ended-at-atom     ;; long or nil
-                                   cache-atom        ;; render cache
-                                   exclude-from-context-atom] ;; boolean (!! vs !)
-  protocols/IComponent
+(defcomponent BashExecutionComponent :bash
+  [command-atom      ;; string
+   output-lines-atom ;; vec of strings
+   status-atom       ;; :running :complete :cancelled :error
+   exit-code-atom    ;; int or nil
+   expanded-atom     ;; boolean
+   content-container  ;; Container for command/output/status
+   spinner-comp      ;; Spinner component (animated loader)
+   truncation-atom   ;; bash-exec truncation result or nil
+   full-output-path-atom ;; string or nil
+   started-at-atom   ;; long (System/currentTimeMillis)
+   ended-at-atom     ;; long or nil
+   cache-atom        ;; render cache
+   exclude-from-context-atom] ;; boolean (!! vs !)
   (render [this width]
     (track! this width
       (let [command @command-atom
@@ -159,8 +156,6 @@
                                 bottom-border)]
               result)))))
 
-  (handle-input [_this data] nil)
-
   (invalidate [this]
     (reset! (:cache-atom this) nil)))
 
@@ -200,10 +195,7 @@
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 
-(defn bash-execution-set-expanded!
-  "Toggle between collapsed preview and full output."
-  [comp expanded?]
-  (reset! (:expanded-atom comp) expanded?))
+(defsetter bash-execution-set-expanded! :expanded-atom comp expanded?)
 
 (defn bash-execution-append-output!
   "Append a chunk of output text. Handles incomplete line continuation
@@ -252,23 +244,12 @@
   [comp]
   (str/join "\n" @(:output-lines-atom comp)))
 
-(defn bash-execution-get-command
-  "Get the command string."
-  [comp]
-  @(:command-atom comp))
+(defgetter bash-execution-get-command :command-atom comp)
 
 (defn bash-execution-is-running?
   "Returns true if the bash command is still running."
   [comp]
   (= :running @(:status-atom comp)))
 
-(defn bash-execution-get-exit-code
-  "Get the exit code (nil if still running or cancelled)."
-  [comp]
-  @(:exit-code-atom comp))
-
-;; ─── IComponentKind ─────────────────────────────────────────────────────────
-
-(extend-type BashExecutionComponent
-  protocols/IComponentKind
-  (component-kind [_] :bash))
+;; nil if still running or cancelled
+(defgetter bash-execution-get-exit-code :exit-code-atom comp)

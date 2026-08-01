@@ -3,40 +3,33 @@
    Wraps label and content Text children in a Box with custom-message-bg.
    Matching Pi architecture: Box handles padding/background/caching."
   (:require [kmet.tui.protocols :as protocols]
-            [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.box :as box]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.container :as container]
-            [kmet.tui.components.spacer :as spacer]))
+            [kmet.tui.components.spacer :as spacer]
+            [kmet.tui.macros :refer [defsetter defgetter defcomponent]]))
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
-(defrecord CustomMessageComponent [spacer          ;; Spacer(1) for top vertical gap (Pi-style)
-                                   box             ;; Box wrapping the content
-                                   inner-container  ;; Container holding label + content Text children
-                                   label-atom
-                                   content-atom
-                                   theme-atom
-                                   output-pad-atom
-                                   expanded-atom   ;; current expanded state (collapsible messages)
-                                   collapsed-content-atom  ;; content when collapsed (nil = not collapsible)
-                                   expanded-content-atom]  ;; content when expanded (nil = not collapsible)
-  protocols/IComponent
+(defcomponent CustomMessageComponent :custom
+  [spacer          ;; Spacer(1) for top vertical gap (Pi-style)
+   box             ;; Box wrapping the content
+   inner-container  ;; Container holding label + content Text children
+   label-atom
+   content-atom
+   theme-atom
+   output-pad-atom
+   expanded-atom   ;; current expanded state (collapsible messages)
+   collapsed-content-atom  ;; content when collapsed (nil = not collapsible)
+   expanded-content-atom]  ;; content when expanded (nil = not collapsible)
   (render [this width]
     (let [spacer-lines (protocols/render @spacer width)
           box-lines (protocols/render @box width)]
       (into [] (concat spacer-lines box-lines))))
-  (handle-input [_this _data] nil)
   (invalidate [this]
     (protocols/invalidate @spacer)
     (protocols/invalidate @box)))
-
-;; ─── IComponentKind ─────────────────────────────────────────────────────────
-
-(extend-type CustomMessageComponent
-  protocols/IComponentKind
-  (component-kind [_] :custom))
 
 ;; ─── Internal: rebuild the content children ────────────────────────────────
 
@@ -70,13 +63,10 @@
 
 ;; ─── Public API (defined before make- to avoid forward ref) ──────────────
 
-(defn custom-message-set-label! [comp label]
-  "Set the label text shown in brackets."
-  (reset! (:label-atom comp) label)
+(defsetter custom-message-set-label! :label-atom comp label
   (rebuild-content! comp))
 
-(defn custom-message-set-content! [comp content]
-  (reset! (:content-atom comp) content)
+(defsetter custom-message-set-content! :content-atom comp content
   ;; Setting plain content clears any collapsible variants
   (reset! (:collapsed-content-atom comp) nil)
   (reset! (:expanded-content-atom comp) nil)
@@ -98,26 +88,16 @@
   (and (some? @(:collapsed-content-atom comp))
        (some? @(:expanded-content-atom comp))))
 
-(defn custom-message-set-expanded!
-  "Set the expanded state for a collapsible message."
-  [comp expanded?]
-  (reset! (:expanded-atom comp) expanded?)
+(defsetter custom-message-set-expanded! :expanded-atom comp expanded?
   (rebuild-content! comp))
 
-(defn custom-message-get-expanded
-  "Get the current expanded state of a collapsible message."
-  [comp]
-  @(:expanded-atom comp))
+(defgetter custom-message-get-expanded :expanded-atom comp)
 
-(defn custom-message-set-theme! [comp theme]
-  "Update the theme colors on the label, content, and box background."
-  (reset! (:theme-atom comp) theme)
+(defsetter custom-message-set-theme! :theme-atom comp theme
   (box/box-set-bg-fn @(:box comp) #(theme/bg theme :custom-message-bg %))
   (rebuild-content! comp))
 
-(defn custom-message-set-output-pad! [comp n]
-  "Set the horizontal output padding; rebuilds the box with the new padding."
-  (reset! (:output-pad-atom comp) n)
+(defsetter custom-message-set-output-pad! :output-pad-atom comp n
   ;; Rebuild box with new padding, keep spacer
   (let [theme @(:theme-atom comp)
         inner-container (container/make-container)

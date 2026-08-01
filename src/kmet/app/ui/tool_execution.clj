@@ -17,7 +17,8 @@
             [kmet.app.bash-executor :as bash-exec]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.image :as ic]
-            [kmet.tui.terminal-image :as timg]))
+            [kmet.tui.terminal-image :as timg]
+            [kmet.tui.macros :refer [defsetter defgetter defcomponent]]))
 
 ;; ─── Edit diff preview ─────────────────────────────────────────────────────
 ;; Compute a preview of an edit without actually modifying the file.
@@ -319,22 +320,22 @@
 ;; started-at is set on first set-content! call (execution start).
 ;; ended-at is set on set-error! or on final full-content set-content!.
 
-(defrecord ToolExecutionComponent [name-atom args-atom content-atom is-error-atom
-                                   theme-atom output-pad-atom expanded-atom
-                                   custom-render-call-atom custom-render-result-atom
-                                   started-at-atom ended-at-atom timer-active-atom
-                                   truncation-atom tool-call-id-atom
-                                   args-complete-atom
-                                   image-data-atom       ;; vector of {:data str :mime-type str}
-                                   converted-images-atom ;; atom of {idx -> {:base64 str :mime-type "image/png" :width-px int :height-px int}}
-                                   last-call-component-atom   ;; component from previous render-call
-                                   last-result-component-atom ;; component from previous render-result
-                                   renderer-state-atom        ;; persistent state for custom renderers
-                                   request-render-fn-atom  ;; nil or (fn) to trigger TUI re-render
-                                   cwd-atom                ;; current working directory
-                                   box             ;; outer Box (padding + bg)
-                                   inner-container] ;; Container for call/result children
-  protocols/IComponent
+(defcomponent ToolExecutionComponent :tool
+  [name-atom args-atom content-atom is-error-atom
+   theme-atom output-pad-atom expanded-atom
+   custom-render-call-atom custom-render-result-atom
+   started-at-atom ended-at-atom timer-active-atom
+   truncation-atom tool-call-id-atom
+   args-complete-atom
+   image-data-atom       ;; vector of {:data str :mime-type str}
+   converted-images-atom ;; atom of {idx -> {:base64 str :mime-type "image/png" :width-px int :height-px int}}
+   last-call-component-atom   ;; component from previous render-call
+   last-result-component-atom ;; component from previous render-result
+   renderer-state-atom        ;; persistent state for custom renderers
+   request-render-fn-atom  ;; nil or (fn) to trigger TUI re-render
+   cwd-atom                ;; current working directory
+   box             ;; outer Box (padding + bg)
+   inner-container] ;; Container for call/result children
   (render [this width]
     (let [theme @theme-atom
           is-error @is-error-atom
@@ -406,18 +407,11 @@
               (if (seq box-lines)
                 (into [""] box-lines)
                 []))))))))
-  (handle-input [_this _data] nil)
   (invalidate [this]
     (protocols/invalidate @box)
     ;; Pi: invalidate also triggers TUI re-render
     (when-let [cb @request-render-fn-atom]
       (cb))))
-
-;; ─── IComponentKind ─────────────────────────────────────────────────────────
-
-(extend-type ToolExecutionComponent
-  protocols/IComponentKind
-  (component-kind [_] :tool))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 ;; Pi: component manages timing internally — no started-at/ended-at passed in.
@@ -459,40 +453,32 @@
 ;; ─── Public API ────────────────────────────────────────────────────────────
 ;; Pi: set-content! and set-error! manage timing internally.
 
-(defn tool-execution-set-name! [comp name]
-  (reset! (:name-atom comp) name)
+(defsetter tool-execution-set-name! :name-atom comp name
   (protocols/invalidate comp))
 
-(defn tool-execution-set-content! [comp content]
+(defsetter tool-execution-set-content! :content-atom comp content
   ;; Pi: first content delivery marks execution started
   (when (nil? @(:started-at-atom comp))
     (reset! (:started-at-atom comp) (System/currentTimeMillis)))
-  (reset! (:content-atom comp) content)
   (protocols/invalidate comp))
 
-(defn tool-execution-set-error! [comp is-error]
+(defsetter tool-execution-set-error! :is-error-atom comp is-error
   ;; Pi: error marks execution ended
   (when (nil? @(:ended-at-atom comp))
     (reset! (:ended-at-atom comp) (System/currentTimeMillis)))
-  (reset! (:is-error-atom comp) is-error)
   (protocols/invalidate comp))
 
-(defn tool-execution-set-expanded! [comp expanded?]
-  (reset! (:expanded-atom comp) expanded?)
+(defsetter tool-execution-set-expanded! :expanded-atom comp expanded?
   (protocols/invalidate comp))
-(defn tool-execution-set-theme! [comp theme]
-  (reset! (:theme-atom comp) theme)
+(defsetter tool-execution-set-theme! :theme-atom comp theme
   (protocols/invalidate comp))
-(defn tool-execution-set-output-pad! [comp n]
-  (reset! (:output-pad-atom comp) n)
+(defsetter tool-execution-set-output-pad! :output-pad-atom comp n
   (protocols/invalidate comp))
 
-(defn tool-execution-set-truncation! [comp truncation]
-  (reset! (:truncation-atom comp) truncation)
+(defsetter tool-execution-set-truncation! :truncation-atom comp truncation
   (protocols/invalidate comp))
 
-(defn tool-execution-set-tool-call-id! [comp id]
-  (reset! (:tool-call-id-atom comp) id))
+(defsetter tool-execution-set-tool-call-id! :tool-call-id-atom comp id)
 
 (defn tool-execution-mark-execution-started!
   "Mark that tool execution has started (Pi: markExecutionStarted()).
@@ -503,8 +489,7 @@
     (reset! (:started-at-atom comp) (System/currentTimeMillis)))
   (protocols/invalidate comp))
 
-(defn tool-execution-get-tool-call-id [comp]
-  @(:tool-call-id-atom comp))
+(defgetter tool-execution-get-tool-call-id :tool-call-id-atom comp)
 
 (defn tool-execution-set-args-complete!
   "Mark that all tool arguments have been received.
@@ -538,12 +523,8 @@
                 (protocols/invalidate comp)))))))
     (protocols/invalidate comp)))
 
-(defn tool-execution-set-request-render-fn! [comp f]
-  "Set a callback function to be called on every invalidate (e.g. to trigger TUI re-render)."
-  (reset! (:request-render-fn-atom comp) f))
-(defn tool-execution-set-render-call-fn! [comp f]
-  (reset! (:custom-render-call-atom comp) f)
+(defsetter tool-execution-set-request-render-fn! :request-render-fn-atom comp f)
+(defsetter tool-execution-set-render-call-fn! :custom-render-call-atom comp f
   (protocols/invalidate comp))
-(defn tool-execution-set-render-result-fn! [comp f]
-  (reset! (:custom-render-result-atom comp) f)
+(defsetter tool-execution-set-render-result-fn! :custom-render-result-atom comp f
   (protocols/invalidate comp))

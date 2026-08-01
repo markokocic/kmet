@@ -9,23 +9,7 @@
 (def map->Tool tool/map->Tool)
 (def param tool/param)
 (def ->json-schema tool/->json-schema)
-
-(defn make-tool
-  "Create a Tool record.
-   See tool/Tool for all fields. :execution-mode defaults to nil (= :parallel)."
-  [& {:keys [name label description prompt-snippet prompt-guidelines
-             parameters execute render-call render-result
-             constrained-sampling render-shell prepare-arguments
-             execution-mode]}]
-  (tool/map->Tool
-    {:name name :label label :description description
-     :prompt-snippet prompt-snippet :prompt-guidelines prompt-guidelines
-     :parameters parameters :execute execute
-     :render-call render-call :render-result render-result
-     :constrained-sampling constrained-sampling
-     :render-shell render-shell
-     :prepare-arguments prepare-arguments
-     :execution-mode execution-mode}))
+(def make-tool tool/make-tool)
 
 ;; ─── From registry.clj (registry + execution) ───────────────────────────────
 

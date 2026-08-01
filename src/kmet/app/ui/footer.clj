@@ -1,12 +1,10 @@
 (ns kmet.app.ui.footer
   "FooterComponent — Pi's FooterComponent."
-  (:require [kmet.tui.protocols :as protocols]
-            [kmet.tui.utils :as u]
+  (:require [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
-            [kmet.tui.macros :refer [track!]]))
+            [kmet.tui.macros :refer [track! defsetter defcomponent]]))
 
-(defrecord FooterComponent [status-text-atom n-msgs-atom theme-atom cache-atom]
-  protocols/IComponent
+(defcomponent FooterComponent nil [status-text-atom n-msgs-atom theme-atom cache-atom]
   (render [this width]
     (track! this width
       (let [th @theme-atom
@@ -21,7 +19,6 @@
             status-line (str left (apply str (repeat pad \space)) right)]
         [(u/truncate-to-width sep width)
          (u/truncate-to-width status-line width)])))
-  (handle-input [_this _data] nil)
   (invalidate [this]
     (reset! (:cache-atom this) nil)))
 
@@ -37,7 +34,5 @@
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 
-(defn footer-set-status! [comp text]
-  (reset! (:status-text-atom comp) text))
-(defn footer-set-n-msgs! [comp n]
-  (reset! (:n-msgs-atom comp) n))
+(defsetter footer-set-status! :status-text-atom comp text)
+(defsetter footer-set-n-msgs! :n-msgs-atom comp n)

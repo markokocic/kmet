@@ -4,61 +4,54 @@
             [kmet.app.tools.read :as read]
             [kmet.app.tools.write :as write]
             [kmet.app.tools.edit :as edit]
-            [kmet.app.tools.bash :as bash]
-            [kmet.app.tools.grep :as grep]
-            [kmet.app.tools.find :as find]
-            [kmet.app.tools.ls :as ls]))
+            [kmet.app.tools.bash :as bash]))
 
 ;; ─── Built-in tools ─────────────────────────────────────────────────────────
 
 (def built-in-tools
   "Map of tool name → Tool record for all built-in tools."
-  {"read"  (tool/map->Tool
-             {:name "read"
-              :label "Read file"
-              :description "Read the contents of a file. Supports offset/limit for large files. Output is truncated to 2000 lines or 50KB (whichever is hit first)."
-              :prompt-snippet "Read file contents"
-              :prompt-guidelines ["Use read to examine files instead of cat or sed"]
-              :parameters (tool/->json-schema
-                            {:path     (tool/param :path :string "File path to read (relative or absolute)")
-                             :offset   (tool/param :offset :number "Line number to start reading from (0-indexed)" :optional? true)
-                             :limit    (tool/param :limit :number "Maximum number of lines to read" :optional? true)})
-              :execute read/execute})
-   "write" (tool/map->Tool
-             {:name "write"
-              :label "Write file"
-              :description "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
-              :prompt-snippet "Create or overwrite files"
-              :prompt-guidelines ["Use write only for new files or complete rewrites"]
-              :parameters (tool/->json-schema
-                            {:path    (tool/param :path :string "File path to write to (relative or absolute)")
-                             :content (tool/param :content :string "Content to write to the file")})
-              :execute write/execute})
-   "edit"  (tool/map->Tool
-             {:name "edit"
-              :label "Edit file"
-              :description "Make precise file edits with exact text replacement. When changing multiple separate locations in one file, use one edit call with multiple entries."
-              :prompt-snippet "Make precise file edits with exact text replacement"
-              :render-shell :self
-              :prompt-guidelines ["Use edit for precise changes (edits[].oldText must match exactly)"
-                                  "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls"]
-              :parameters (tool/->json-schema
-                            {:path    (tool/param :path :string "File path to edit")
-                             :old-text (tool/param :old-text :string "Exact text to find and replace — must match exactly including whitespace")
-                             :new-text (tool/param :new-text :string "Replacement text")})
-              :execute edit/execute})
-   "bash"  (tool/map->Tool
-             {:name "bash"
-              :label "Execute command"
-              :description "Execute a bash command with a timeout. For long-running commands, keep the timeout reasonable. Standard streams (stdout/stderr) are captured and returned."
-              :prompt-snippet "Execute bash commands"
-              :prompt-guidelines []
-              :parameters (tool/->json-schema
-                            {:command (tool/param :command :string "Bash command to execute")
-                             :timeout (tool/param :timeout :number "Timeout in seconds (optional)" :optional? true)})
-              :execute bash/execute})
+  {"read"  (tool/make-tool
+             :name "read"
+             :label "Read file"
+             :description "Read the contents of a file. Supports offset/limit for large files. Output is truncated to 2000 lines or 50KB (whichever is hit first)."
+             :prompt-snippet "Read file contents"
+             :prompt-guidelines ["Use read to examine files instead of cat or sed"]
+             :params {:path   {:type :string :description "File path to read (relative or absolute)"}
+                      :offset {:type :number :description "Line number to start reading from (0-indexed)" :optional? true}
+                      :limit  {:type :number :description "Maximum number of lines to read" :optional? true}}
+             :execute read/execute)
+   "write" (tool/make-tool
+             :name "write"
+             :label "Write file"
+             :description "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
+             :prompt-snippet "Create or overwrite files"
+             :prompt-guidelines ["Use write only for new files or complete rewrites"]
+             :params {:path    {:type :string :description "File path to write to (relative or absolute)"}
+                      :content {:type :string :description "Content to write to the file"}}
+             :execute write/execute)
+   "edit"  (tool/make-tool
+             :name "edit"
+             :label "Edit file"
+             :description "Make precise file edits with exact text replacement. When changing multiple separate locations in one file, use one edit call with multiple entries."
+             :prompt-snippet "Make precise file edits with exact text replacement"
+             :prompt-guidelines ["Use edit for precise changes (edits[].oldText must match exactly)"
+                                 "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls"]
+             :render-shell :self
+             :params {:path     {:type :string :description "File path to edit"}
+                      :old-text {:type :string :description "Exact text to find and replace — must match exactly including whitespace"}
+                      :new-text {:type :string :description "Replacement text"}}
+             :execute edit/execute)
+   "bash"  (tool/make-tool
+             :name "bash"
+             :label "Execute command"
+             :description "Execute a bash command with a timeout. For long-running commands, keep the timeout reasonable. Standard streams (stdout/stderr) are captured and returned."
+             :prompt-snippet "Execute bash commands"
+             :prompt-guidelines []
+             :params {:command {:type :string :description "Bash command to execute"}
+                      :timeout {:type :number :description "Timeout in seconds (optional)" :optional? true}}
+             :execute bash/execute)}
    ;; grep, find, ls — disabled
-   })
+   )
 
 ;; ─── Tool schema helpers ────────────────────────────────────────────────────
 

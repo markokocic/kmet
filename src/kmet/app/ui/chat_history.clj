@@ -14,7 +14,8 @@
             [kmet.app.ui.assistant-message :as am]
             [kmet.app.ui.tool-execution :as te]
             [kmet.app.ui.custom-message :as cm]
-            [kmet.app.ui.bash-execution :as be]))
+            [kmet.app.ui.bash-execution :as be]
+            [kmet.tui.macros :refer [defcomponent]]))
 
 ;; ─── Info component at top ─────────────────────────────────────────────────
 
@@ -53,15 +54,15 @@
 
 ;; ─── ChatHistoryComponent record ───────────────────────────────────────────
 
-(defrecord ChatHistoryComponent [messages-atom  ;; atom of vec of message maps, each with :component
-                        info-comp-atom  ;; atom of CustomMessageComponent or nil
-                        theme-atom
-                        output-pad-atom
-                        streaming-atom  ;; atom of streaming message map or nil
-                        status-line-atom  ;; atom of StatusLine (bottom status message) or nil
-                        tools-expanded-atom   ;; flag: tool output expanded (pi: toolOutputExpanded)
-                        thinking-hidden-atom] ;; flag: thinking blocks hidden (pi: hideThinkingBlock)
-  protocols/IComponent
+(defcomponent ChatHistoryComponent nil
+  [messages-atom  ;; atom of vec of message maps, each with :component
+   info-comp-atom  ;; atom of CustomMessageComponent or nil
+   theme-atom
+   output-pad-atom
+   streaming-atom  ;; atom of streaming message map or nil
+   status-line-atom  ;; atom of StatusLine (bottom status message) or nil
+   tools-expanded-atom   ;; flag: tool output expanded (pi: toolOutputExpanded)
+   thinking-hidden-atom] ;; flag: thinking blocks hidden (pi: hideThinkingBlock)
 
   (render [this width]
     (let [msgs @messages-atom
@@ -69,8 +70,6 @@
           msg-lines (render-messages msgs width (some? @info-comp-atom))
           status-lines (when-let [s @status-line-atom] (protocols/render s width))]
       (into [] (concat info-lines msg-lines status-lines))))
-
-  (handle-input [_this _data] nil)
 
   (invalidate [this]
     (when-let [i @info-comp-atom] (protocols/invalidate i))
@@ -338,21 +337,15 @@
 ;; ─── Status message (pi: showStatus) ────────────────────────────────────────
 
 ;; StatusLine — bottom-of-chat status line: a dim text under a Spacer(1).
-;; Implements IComponentKind with kind nil so kind-based dispatch (toggles,
-;; theme application) skips it.
-(defrecord StatusLine [spacer-atom text-atom]
-  protocols/IComponent
+;; No component kind — kind-based dispatch (toggles, theme application)
+;; returns nil for it.
+(defcomponent StatusLine nil [spacer-atom text-atom]
   (render [this width]
     (into [] (concat (protocols/render @spacer-atom width)
                      (protocols/render @text-atom width))))
-  (handle-input [_this _data] nil)
   (invalidate [this]
     (protocols/invalidate @spacer-atom)
     (protocols/invalidate @text-atom)))
-
-(extend-type StatusLine
-  protocols/IComponentKind
-  (component-kind [_] nil))
 
 (defn chat-history-show-status!
   "Show a dim status message at the bottom of the chat (pi: showStatus).
