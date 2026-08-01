@@ -4,6 +4,7 @@
   (:require [clojure.string :as str]
             [babashka.fs :as fs]
             [babashka.process :as proc]
+            [kmet.libs.process :as process]
             [kmet.debug :as debug]))
 
 (def DEFAULT-MAX-LINES 2000)
@@ -23,63 +24,6 @@
       (< b 1024) (str b "B")
       (< b (* 1024 1024)) (str (format "%.1f" (float (/ b 1024))) "KB")
       :else (str (format "%.1f" (float (/ b 1024 1024))) "MB"))))
-
-(def ^:private windows-os?
-  (str/starts-with? (System/getProperty "os.name") "Windows"))
-
-(defn- collect-descendant-pids
-  "Collect descendant pids of pid by walking the process table.
-   Returns a vector ordered parents-first (direct children before
-   grandchildren). Portable across Linux and macOS (no /proc dependency
-   on macOS)."
-  [pid]
-  (try
-    (let [p (proc/process ["ps" "-eo" "pid=,ppid="] {:out :pipe :err :ignore})
-          _ @p
-          lines (str/split-lines (slurp (:out p)))
-          parent-map (into {}
-                           (keep (fn [line]
-                                   (when-let [[_ c pp] (re-find #"^\s*(\d+)\s+(\d+)" line)]
-                                     [(Long/parseLong (str/trim c)) (Long/parseLong (str/trim pp))])))
-                           lines)]
-      (loop [frontier #{pid} found []]
-        (let [children (filterv (fn [[c p]]
-                                  (and (contains? parent-map c)
-                                       (contains? frontier p)
-                                       (not (contains? frontier c))
-                                       (not (some #{c} found))))
-                                parent-map)]
-          (if (empty? children)
-            found
-            (let [level (mapv first children)]
-              (recur (set level) (into found level)))))))
-    (catch Exception _ [])))
-
-(defn kill-process-tree!
-  "Kill a process and all its descendants (pi: killProcessTree).
-   ProcessBuilder children share the parent's process group, so the
-   negative-PID group kill fails — instead walk the process table and
-   kill each descendant directly (deepest first). Prevents grandchildren
-   (e.g. `bash -c 'sleep 30'`) from surviving a timeout/cancel."
-  [pid]
-  (if windows-os?
-    ;; Windows: taskkill /T kills the tree natively
-    (try
-      @(proc/process ["taskkill" "/F" "/T" "/PID" (str pid)]
-        {:out :inherit :err :ignore})
-      (catch Exception _e nil))
-    (doseq [p (concat (reverse (collect-descendant-pids pid)) [pid])]
-      (try
-        @(proc/process ["kill" "-9" (str p)] {:out :inherit :err :ignore})
-        (catch Exception _e nil)))))
-
-(defonce ^:private tracked-pids (atom #{}))
-(defn track-pid! [pid] (swap! tracked-pids conj pid))
-(defn untrack-pid! [pid] (swap! tracked-pids disj pid))
-(defn kill-tracked-children! []
-  (doseq [pid @tracked-pids]
-    (try (kill-process-tree! pid) (catch Exception _ nil)))
-  (reset! tracked-pids #{}))
 
 (def ^:private ANSI-PATTERN #"\u001b\[[0-9;]*[a-zA-Z]")
 (defn- strip-ansi [s] (str/replace s ANSI-PATTERN ""))
@@ -153,7 +97,7 @@
 
 (defn- find-bash-on-path []
   (try
-    (let [cmd (if windows-os?
+    (let [cmd (if process/windows-os?
                ["cmd.exe" "/c" "where bash.exe"]
                ["sh" "-c" "command -v bash"])
           p (proc/process cmd {:out :pipe :err :inherit})
@@ -162,7 +106,7 @@
           ;; Pi: where can return non-existent paths on Windows — verify the file exists
           first-match (first (str/split-lines output))]
       (when (and first-match
-                 (or (not windows-os?) (fs/exists? first-match))
+                 (or (not process/windows-os?) (fs/exists? first-match))
                  (seq (str/trim first-match)))
         (str/trim first-match)))
     (catch Exception _ nil)))
@@ -171,13 +115,13 @@
   (or (when (fs/exists? "/bin/bash") "/bin/bash")
       (when (fs/exists? "/usr/bin/bash") "/usr/bin/bash")
       (find-bash-on-path)
-      (when windows-os?
+      (when process/windows-os?
         (or (some (fn [env-var]
                     (when-let [pf (System/getenv env-var)]
                       (let [path (str pf "\\Git\\bin\\bash.exe")]
                         (when (fs/exists? path) path))))
                   ["ProgramFiles" "ProgramFiles(x86)"])))
-      (if windows-os? "cmd.exe" "sh")))
+      (if process/windows-os? "cmd.exe" "sh")))
 
 (defn create-default-ops [& {:keys [shell-path]}]
   ;; Pi: throw early if custom shellPath is specified but not found
@@ -189,13 +133,18 @@
       (let [_ (when-not (fs/exists? cwd)
                 (throw (ex-info (str "Working directory does not exist: " cwd) {:cwd cwd})))
             ;; Pi: getShellConfig resolves shell + args per platform
-            use-stdin? (and windows-os?
+            use-stdin? (and process/windows-os?
                            (re-find #"(?i)windows\\system32\\bash\.exe"
                              (str/replace shell "/" "\\")))
             shell-args (cond
                          (str/includes? shell "cmd") [shell "/c" command]
                          use-stdin? [shell "-s"]
-                         :else [shell "-c" command])
+                         ;; setsid makes the sh its own process-group leader so
+                         ;; kill-process-tree! can group-kill it — catches bg
+                         ;; jobs mksh reparents outside the ppid tree.
+                         :else (if-let [setsid @process/setsid-path]
+                                 [setsid shell "-c" command]
+                                 [shell "-c" command]))
             proc-opts {:dir cwd :err :pipe :out :pipe :env env
                        ;; Pi: stdin pipe when using -s transport
                        :in (if use-stdin? :pipe :inherit)}
@@ -205,7 +154,7 @@
                 (try (spit (:in p) command) (catch Exception _ nil))
                 (try (.close (:in p)) (catch Exception _ nil)))
             pid (try (-> p :proc .pid) (catch Exception _ nil))
-            _ (when pid (track-pid! pid))
+            _ (when pid (process/track-pid! pid))
             ;; Pi: timeout handled manually (setTimeout + killProcessTree) —
             ;; babashka.process's :timeout reports exit 0 on kill, so a
             ;; timed-out command wouldn't be distinguishable from success.
@@ -214,7 +163,7 @@
                               (future
                                 (Thread/sleep (* timeout 1000))
                                 (reset! timed-out true)
-                                (kill-process-tree! pid)))
+                                (process/kill-process-tree! pid)))
             read-stream (fn [stream]
                           (let [buf (byte-array 8192)]
                             (loop [] (let [n (.read stream buf)]
@@ -226,11 +175,11 @@
                               (catch Exception e (debug/log "ops stderr: " e)))))]
           (when signal
             (future (loop [] (when-not @signal (Thread/sleep 200) (recur)))
-                    (when pid (kill-process-tree! pid))))
+                    (when pid (process/kill-process-tree! pid))))
           (let [result (try (deref p) (catch Exception _ nil)) exit-code (:exit result)]
             (when timeout-watcher (future-cancel timeout-watcher))
             (try (deref out-future 5000 nil) (catch Exception _ nil))
-            (when pid (untrack-pid! pid))
+            (when pid (process/untrack-pid! pid))
             (cond
               ;; Pi: after the process exits, re-check abort/timeout — the kill
               ;; itself returns normally (SIGKILL exit code), so cancelled/timeout

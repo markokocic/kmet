@@ -1,8 +1,8 @@
-(ns kmet.tui.terminal-image
+(ns kmet.libs.terminal-image
   "Kitty terminal image protocol implementation.
-   Port of @earendil-works/pi-tui terminal-image.ts."
+   Port of @earendil-works/pi-tui terminal-image.ts. Generic protocol code —
+   no app/TUI dependencies."
   (:require [clojure.string :as str]
-            [babashka.fs :as fs]
             [babashka.process :as proc])
   (:import [java.util Base64]))
 
@@ -65,10 +65,17 @@
 (def ^:private kitty-suffix "\u001b\\")
 (def ^:private chunk-size 4096)
 
+(def ^:private kitty-format-codes
+  "Kitty graphics protocol format codes (f=). PNG/JPEG/GIF are supported
+   natively; WebP has no protocol code and falls back to text rendering."
+  {"image/png" "100"
+   "image/jpeg" "27"
+   "image/gif" "28"})
+
 (defn encode-kitty
-  [base64-data & {:keys [columns rows image-id move-cursor]
-                  :or {move-cursor true}}]
-  (let [params (atom ["a=T" "f=100" "q=2"])]
+  [base64-data & {:keys [mime-type columns rows image-id move-cursor]
+                  :or {mime-type "image/png" move-cursor true}}]
+  (let [params (atom ["a=T" (str "f=" (get kitty-format-codes mime-type "100")) "q=2"])]
     (when (false? move-cursor) (swap! params conj "C=1"))
     (when columns (swap! params conj (str "c=" columns)))
     (when rows (swap! params conj (str "r=" rows)))
@@ -232,44 +239,19 @@
 ;; ─── Render ──────────────────────────────────────────────────────────────
 
 (defn render-image
-  [base64-data img-dim & {:keys [max-width-cells max-height-cells image-id move-cursor]
-                           :or {max-width-cells 80 move-cursor true}}]
+  [base64-data img-dim & {:keys [mime-type max-width-cells max-height-cells image-id move-cursor]
+                           :or {mime-type "image/png" max-width-cells 80 move-cursor true}}]
   (let [caps (get-capabilities)]
-    (when (:images caps)
+    (when (and (:images caps) (contains? kitty-format-codes mime-type))
       (let [{:keys [columns rows]} (calculate-image-cell-size img-dim max-width-cells
                                      :max-height-cells max-height-cells
                                      :cell-dims' @cell-dims)]
         {:sequence (encode-kitty base64-data
+                     :mime-type mime-type
                      :columns columns :rows rows
                      :image-id image-id :move-cursor move-cursor)
          :rows rows
          :image-id image-id}))))
-
-;; ─── Image conversion ────────────────────────────────────────────────────
-
-(def convert-script-path
-  (delay (str (fs/parent *file*) "/../../scripts/convert_to_png.py")))
-
-(defn convert-to-png
-  [base64-data mime-type]
-  (if (= mime-type "image/png")
-    (let [dims (get-png-dimensions base64-data)]
-      (when dims
-        {:base64 base64-data :width-px (:width-px dims) :height-px (:height-px dims)
-         :mime-type "image/png"}))
-    (try
-      (let [proc (proc/process ["python3" @convert-script-path]
-                  {:in base64-data :out :string :err :string})
-            result (deref proc 15000 ::timeout)]
-        (if (= result ::timeout)
-          (do (proc/destroy proc) nil)
-          (let [lines (str/split-lines (:out result))]
-            (when (and (seq lines) (re-find #"^\d+x\d+$" (first lines)))
-              (let [[w h] (map read-string (str/split (first lines) #"x"))
-                    png-base64 (str/join (rest lines))]
-                {:base64 png-base64 :width-px w :height-px h
-                 :mime-type "image/png"})))))
-      (catch Exception _ nil))))
 
 ;; ─── Cleanup ─────────────────────────────────────────────────────────────
 

@@ -18,7 +18,7 @@
             [kmet.app.tools.edit-diff :as edit-diff]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.image :as ic]
-            [kmet.tui.terminal-image :as timg]
+            [kmet.libs.terminal-image :as timg]
             [kmet.tui.macros :refer [defsetter defgetter defcomponent]]
             [cheshire.core :as json]))
 
@@ -673,7 +673,6 @@
    details-atom        ;; result :details map (pi: result.details), e.g. edit diff
    args-complete-atom
    image-data-atom       ;; vector of {:data str :mime-type str}
-   converted-images-atom ;; atom of {idx -> {:base64 str :mime-type "image/png" :width-px int :height-px int}}
    last-call-component-atom   ;; component from previous render-call
    last-result-component-atom ;; component from previous render-result
    renderer-state-atom        ;; persistent state for custom renderers
@@ -709,8 +708,7 @@
               result-context (tool-execution-context this @last-result-component-atom)
               result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation result-context)
               _ (reset! last-result-component-atom result-comp)
-              image-data @image-data-atom
-              converted @converted-images-atom]
+              image-data @image-data-atom]
       ;; Pi: hide component when no call/render content and no images
       (if (and (nil? call-comp) (nil? result-comp) (not (seq image-data)))
         []
@@ -726,16 +724,13 @@
           (container/container-add-child container call-comp)
           (when result-comp
             (container/container-add-child container result-comp))
-          ;; Build image components from raw data + conversions (Pi: spacer + ImageComponent)
-          (doseq [[i img] (map-indexed vector image-data)]
-            (let [converted (get converted i)
-                  img-data (if converted (:base64 converted) (:data img))
-                  img-mime (if converted (:mime-type converted) (:mime-type img))]
-              (container/container-add-child container (spacer/make-spacer 1))
-              (container/container-add-child container
-                (ic/make-image img-data img-mime
+          ;; Build image components from raw data (Pi: spacer + ImageComponent)
+          (doseq [img image-data]
+            (container/container-add-child container (spacer/make-spacer 1))
+            (container/container-add-child container
+              (ic/make-image (:data img) (:mime-type img)
                   {:fallback-color (fn [s] (theme/fg theme :tool-output s))}
-                  :max-width-cells 60))))
+                  :max-width-cells 60)))
           ;; Pi: render-shell :self skips outer Box (tool renders its own framing)
           (if (= :self render-shell)
             (let [content-lines (protocols/render container width)]
@@ -787,7 +782,6 @@
                          :custom-render-call-atom (atom render-call-fn)
                          :custom-render-result-atom (atom render-result-fn)
                          :image-data-atom (atom [])
-                         :converted-images-atom (atom {})
                          :last-call-component-atom (atom nil)
                          :last-result-component-atom (atom nil)
                          :renderer-state-atom (atom {})
@@ -854,27 +848,10 @@
 (defn tool-execution-set-images!
   "Set image content blocks for this tool execution.
    images — vector of {:data str :mime-type str}
-   Stores raw image data; ImageComponents are built at render time.
-   For non-PNG images in kitty-capable terminals, triggers async conversion to PNG."
+   Stores raw image data; ImageComponents are built at render time."
   [comp images]
   (let [image-data (mapv (fn [img] {:data (:data img) :mime-type (:mime-type img)}) images)]
     (reset! (:image-data-atom comp) image-data)
-    (reset! (:converted-images-atom comp) {})
-    ;; Async conversion for non-PNG images in kitty terminals
-    (let [caps (timg/get-capabilities)]
-      (when (= :kitty (:images caps))
-        (doseq [[i img] (map-indexed vector images)]
-          (when (and (:data img) (:mime-type img) (not= (:mime-type img) "image/png"))
-            (future
-              (when-let [converted (timg/convert-to-png (:data img) (:mime-type img))]
-                (let [converted' @(:converted-images-atom comp)]
-                  (reset! (:converted-images-atom comp)
-                    (assoc converted' i
-                      {:base64 (:base64 converted)
-                       :mime-type "image/png"
-                       :width-px (:width-px converted)
-                       :height-px (:height-px converted)})))
-                (protocols/invalidate comp)))))))
     (protocols/invalidate comp)))
 
 (defsetter tool-execution-set-request-render-fn! :request-render-fn-atom comp f)

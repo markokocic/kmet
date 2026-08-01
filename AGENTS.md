@@ -31,6 +31,13 @@ src/kmet/
 ├── core.clj            — CLI entry, arg parsing, mode dispatch (pi: cli.js)
 ├── config.clj          — Configuration loading
 ├── debug.clj           — Debug/error logging
+├── libs/               — Generic, self-contained code that would be a third-party
+│   │                     library on the JVM (Babashka-compatible reimplementations)
+│   ├── diff.clj        — Myers O(ND) line diff
+│   ├── process.clj     — Process tree management (descendant collection, tree kill, pid registry)
+│   ├── sse.clj         — SSE line parsing + LLM stream processing
+│   └── terminal_image.clj — Kitty terminal image protocol + image dimension parsing
+│                           (native PNG/JPEG/GIF via f= codes — no conversion)
 ├── modes/              — Entry modes (pi: dist/modes/)
 │   ├── interactive.clj — Interactive TUI: layout, CoreState, submit/cancel,
 │   │                     bash commands, external editor, session browsing
@@ -95,10 +102,16 @@ src/kmet/
 ```
 
 ### Layer boundaries
+- **`kmet.libs.*`** — generic, self-contained. **Must not require any other kmet.*
+  namespace** (no app, tui, modes, or sibling-lib deps). Each lib is a portable
+  unit: only stdlib + third-party deps, and any bundled assets (scripts) live in
+  the lib directory. Enforced by `kmet.libs.test-self-contained`.
 - **`kmet.tui.*`** — generic. No dependency on app, LLM, or session concepts.
+  May depend on `kmet.libs.*`.
 - **`kmet.modes.*`** — entry modes. Depends on `kmet.app.*`, `kmet.tui.*`, `kmet.config`.
 - **`kmet.app.ui.*`** — app-specific. Builds on `kmet.tui.*`; imports `track!` from `kmet.tui.macros`.
 - **`kmet.app.*`** (non-ui) — business logic. Never imports `kmet.tui.*` or `kmet.app.ui.*`.
+  May depend on `kmet.libs.*`.
 - **`kmet.core`** — entry only: args + dispatch. Never contains app logic.
 
 ### ANSI escape codes

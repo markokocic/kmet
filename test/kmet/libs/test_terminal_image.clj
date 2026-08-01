@@ -1,7 +1,7 @@
-(ns kmet.tui.test-terminal-image
+(ns kmet.libs.test-terminal-image
   (:require [clojure.test :as t :refer [deftest is testing]]
             [clojure.string :as str]
-            [kmet.tui.terminal-image :as img]))
+            [kmet.libs.terminal-image :as img]))
 
 ;; 1x1 red PNG as base64 (generated with Python zlib+struct)
 (def ^:const test-png
@@ -25,6 +25,11 @@
   (testing "Kitty encoding without cursor movement"
     (let [no-move (img/encode-kitty test-png :move-cursor false)]
       (is (str/includes? no-move "C=1"))))
+  (testing "Kitty encoding native format codes"
+    (is (str/includes? (img/encode-kitty test-png :mime-type "image/png") "f=100"))
+    (is (str/includes? (img/encode-kitty test-png :mime-type "image/jpeg") "f=27"))
+    (is (str/includes? (img/encode-kitty test-png :mime-type "image/gif") "f=28"))
+    (is (str/includes? (img/encode-kitty test-png) "f=100")))
   (testing "Kitty chunked encoding for large payloads"
     (let [large (apply str (repeat 10000 "A"))
           chunked (img/encode-kitty large :image-id 1)]

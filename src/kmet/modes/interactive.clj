@@ -28,7 +28,8 @@
             [babashka.fs :as fs]
             [babashka.process :as proc]
             [kmet.app.bash-executor :as bash-exec]
-            [kmet.app.ui.bash-execution :as be]))
+            [kmet.app.ui.bash-execution :as be]
+            [kmet.libs.process :as process]))
 
 (declare resume-session show-session-tree)
 
@@ -1002,12 +1003,12 @@ Be precise and concise in your responses.")
         (reset! tui-ref (:tui cs))
         (when (:resume opts) (resume-session cs ensure-session-dir))
         (tui/tui-start (:tui cs))
-        (bash-exec/kill-tracked-children!)
+        (process/kill-tracked-children!)
         (println "kmet session ended.")
         (:tui cs))
       (catch Exception e
         ;; Restore terminal if TUI was started, then rethrow for -main
-        (bash-exec/kill-tracked-children!)
+        (process/kill-tracked-children!)
         (when-let [t @tui-ref]
           (try (tui/tui-stop t) (catch Exception _)))
         (throw e)))))

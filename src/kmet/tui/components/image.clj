@@ -3,7 +3,7 @@
    Port of @earendil-works/pi-tui Image component.
    Falls back to text representation when image protocol is unavailable."
   (:require [kmet.tui.protocols :as protocols]
-            [kmet.tui.terminal-image :as img]))
+            [kmet.libs.terminal-image :as img]))
 
 (defrecord ImageComponent [base64-data mime-type dimensions
                            theme-atom options image-id-atom
@@ -28,6 +28,7 @@
                                            (reset! image-id-atom id)
                                            id))
                             result (img/render-image base64-data dimensions
+                                      :mime-type mime-type
                                       :max-width-cells max-width
                                       :max-height-cells max-height
                                       :image-id image-id
