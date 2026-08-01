@@ -397,7 +397,7 @@
           "no background box — plain text like pi"))))
 
 (deftest test-info-banner-first-user-spacing
-  (testing "first user message after the info banner gets no extra separator (banner's own padding is the gap)"
+  (testing "first user message after the info banner gets the same separator as later messages (visible gap between the two boxes)"
     (let [ch (ch/make-chat-history)
           _ (ch/chat-history-set-info-msg! ch {:label "kmet" :content "banner"})
           _ (ch/chat-history-add-message! ch {:role :user :content "hello"})
@@ -406,8 +406,8 @@
           hello-idx (first (keep-indexed #(when (re-find #"hello" %2) %1) lines))]
       (is banner-idx)
       (is hello-idx)
-      (is (= hello-idx (+ banner-idx 3))
-          "banner content → 2 blank lines (box bottom pad + user box top pad) → user text"))))
+      (is (= hello-idx (+ banner-idx 4))
+          "banner content → 3 blank lines (box bottom pad + separator + user box top pad) → user text"))))
 
 (deftest test-unknown-system-role-renders
   (testing "roles without a dedicated component (:system, :unknown) render as plain text"

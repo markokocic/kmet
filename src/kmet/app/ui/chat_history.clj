@@ -41,14 +41,14 @@
 ;; ─── Render helpers (defined before the record) ────────────────────────────
 
 (defn- render-messages
-  "Render message components. Pi-style: a user message that follows any
-   earlier content gets a leading blank line — this is the Spacer(1) the
-   old container model stored explicitly. The info banner is not counted
-   as earlier content (pi keeps it in a separate header container), so the
-   first real message after the banner gets no extra separator — the
-   banner's own box padding provides the gap."
-  [msgs width]
-  (loop [msgs msgs, seen-any? false, acc []]
+  "Render message components. A user message that follows any earlier
+   content gets a leading blank line (the Spacer(1) the old container
+   model stored explicitly). The info banner counts as earlier content,
+   so the first user message after the banner gets the same separator as
+   subsequent ones — the banner's box padding alone doesn't read as a
+   visible gap between two boxed messages."
+  [msgs width banner-present?]
+  (loop [msgs msgs, seen-any? banner-present?, acc []]
     (if-let [m (first msgs)]
       (let [lines (protocols/render (:component m) width)
             sep? (and (= :user (:role m)) seen-any?)]
@@ -71,7 +71,7 @@
   (render [this width]
     (let [msgs @messages-atom
           info-lines (when-let [i @info-comp-atom] (protocols/render i width))
-          msg-lines (render-messages msgs width)
+          msg-lines (render-messages msgs width (some? @info-comp-atom))
           status-lines (when-let [s @status-line-atom] (protocols/render s width))]
       (into [] (concat info-lines msg-lines status-lines))))
 
