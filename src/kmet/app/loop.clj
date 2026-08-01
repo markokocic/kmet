@@ -375,10 +375,10 @@ Be precise and concise in your responses."}}]
   (boolean (some #(= :sequential (tool-execution-mode (:name %))) tool-calls)))
 
 (defn- run-tool-call!
-  "Await a tool future with 200ms progress pings. Returns the result map."
+  "Await a tool future with 100ms progress pings. Returns the result map."
   [agent tc-id f]
   (loop []
-    (let [v (deref f 200 :pending)]
+    (let [v (deref f 100 :pending)]
       (if (= :pending v)
         (do (emit agent {:type :tool-execution-update :tool-call-id tc-id})
             (recur))
@@ -387,8 +387,8 @@ Be precise and concise in your responses."}}]
 (defn- await-all-tool-results!
   "Poll all pending tool futures concurrently, emitting progress pings, until
    every future completes. Returns a map tool-call-id → result in approximate
-   completion order (newest completions discovered per 200ms poll batch).
-   Each cycle blocks on the next pending future (max 200ms) instead of a
+   completion order (newest completions discovered per 100ms poll batch).
+   Each cycle blocks on the next pending future (max 100ms) instead of a
    fixed sleep, so fast tools finish without artificial delay."
   [agent futures]
   (let [results (atom {})]
@@ -404,9 +404,9 @@ Be precise and concise in your responses."}}]
                   (emit agent {:type :tool-execution-update :tool-call-id tc-id})))
               (when-let [[_ f] (first (filter (fn [[_ f]] (= :pending (deref f 0 :pending)))
                                               remaining))]
-                ;; Block until this future completes; the 200ms timeout only
+                ;; Block until this future completes; the 100ms timeout only
                 ;; paces the progress pings for long-running tools.
-                (deref f 200 :pending))
+                (deref f 100 :pending))
               (recur)))))))
 
 (defn- before-tool-hook-result
