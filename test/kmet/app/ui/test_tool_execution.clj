@@ -64,10 +64,14 @@
         (is (some #(re-find #"just content" %) plain))))))
 
 (deftest test-set-output-pad
-  (testing "set-output-pad! changes padding"
-    (let [c (te/make-tool-execution :name "ls" :content "x" :output-pad 3)]
+  (testing "set-output-pad! rebuilds the box with the new horizontal padding"
+    (let [c (te/make-tool-execution :name "ls" :content "x" :output-pad 1)]
+      (is (= 1 (:padding-x @(:box c))))
       (te/tool-execution-set-output-pad! c 5)
-      (is (pos? (count (core/render c 40)))))))
+      (is (= 5 (:padding-x @(:box c))) "box padding-x updated")
+      (let [plain (mapv strip-ansi (core/render c 40))]
+        (is (some #(re-find #"^     ls" %) plain)
+            "call line indented by the new padding")))))
 
 (deftest test-invalidate
   (testing "invalidate clears cache"
@@ -321,3 +325,30 @@
                                   :args {:path "src/a.clj" :content content})]
         (is (some #(re-find #"line12" %) expanded))
         (is (not-any? #(re-find #"more lines" %) expanded))))))
+
+(deftest test-read-expanded-leading-blank
+  (testing "read result has a blank line between call and result (pi: result starts with a blank line)"
+    (let [plain (render-tool :name "read" :expanded? true
+                             :args {:path "a.clj"} :content "line1")
+          trimmed (mapv str/trim plain)
+          call-idx (first (keep-indexed #(when (= "read a.clj" %2) %1) trimmed))
+          line-idx (first (keep-indexed #(when (= "line1" %2) %1) trimmed))]
+      (is call-idx)
+      (is line-idx)
+      (is (= line-idx (inc (inc call-idx)))
+          "exactly one blank line separates call from result"))))
+
+(deftest test-bash-tool-result-blank-separators
+  (testing "bash tool result keeps blank lines before output and before Took"
+    (let [c (te/make-tool-execution :name "bash" :args {:command "echo hi"})]
+      ;; set-content! marks execution started; set-error! marks it ended
+      (te/tool-execution-set-content! c "hi\n")
+      (te/tool-execution-set-error! c false)
+      (let [plain (mapv strip-ansi (core/render c 60))
+            trimmed (mapv str/trim plain)
+            out-idx (first (keep-indexed #(when (= "hi" %2) %1) trimmed))
+            took-idx (first (keep-indexed #(when (str/starts-with? %2 "Took") %1) trimmed))]
+        (is out-idx)
+        (is took-idx)
+        (is (= "" (str/trim (nth plain (dec out-idx)))) "blank line before output")
+        (is (= "" (str/trim (nth plain (dec took-idx)))) "blank line before Took")))))

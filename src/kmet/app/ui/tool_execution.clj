@@ -400,7 +400,7 @@
                                      show (take max-lines lines)
                                      more (- n max-lines)]
                                  ;; Pi: result always starts with a blank line
-                                 (container/container-add-child c (text/make-text "" 0 0))
+                                 (container/container-add-child c (spacer/make-spacer 1))
                                  (when (seq lines)
                                    (doseq [line show]
                                      (container/container-add-child c
@@ -429,7 +429,7 @@
                                                        (bash-exec/format-size (or max-bytes bash-exec/DEFAULT-MAX-BYTES)) " limit)]")
                                                   :else nil)]
                                        (when warn
-                                         (container/container-add-child c (text/make-text "" 0 0))
+                                         (container/container-add-child c (spacer/make-spacer 1))
                                          (container/container-add-child c
                                            (text/make-text (theme/fg theme :warning warn) 0 0))))))
                                  c)))}
@@ -455,8 +455,8 @@
                                        max-lines (if (:expanded context) total 10)
                                        show (take max-lines lines)
                                        remaining (- total max-lines)]
-                                   (container/container-add-child c (text/make-text "" 0 0))
-                                   (container/container-add-child c (text/make-text "" 0 0))
+                                   (container/container-add-child c (spacer/make-spacer 1))
+                                   (container/container-add-child c (spacer/make-spacer 1))
                                    (doseq [line show]
                                      (container/container-add-child c
                                        (text/make-text (theme/fg theme :tool-output (replace-tabs line)) 0 0)))
@@ -576,12 +576,12 @@
                                                     (str/join "\n"))]
                                    (if expanded?
                                      (do
-                                       (container/container-add-child c (text/make-text "" 0 0))
+                                       (container/container-add-child c (spacer/make-spacer 1))
                                        (doseq [line (str/split-lines styled)]
                                          (container/container-add-child c (text/make-text line 0 0))))
                                      (let [{:keys [visual-lines skipped-count]}
                                            (utils/truncate-to-visual-lines styled BASH-PREVIEW-LINES width)]
-                                       (container/container-add-child c (text/make-text "" 0 0))
+                                       (container/container-add-child c (spacer/make-spacer 1))
                                        (when (pos? skipped-count)
                                          (container/container-add-child c
                                            (text/make-text
@@ -608,14 +608,14 @@
                                                        full-output-path (conj (str "Full output: " full-output-path))
                                                        :always (conj truncated-part)))
                                                   "]")]
-                                   (container/container-add-child c (text/make-text "" 0 0))
+                                   (container/container-add-child c (spacer/make-spacer 1))
                                    (container/container-add-child c
                                      (text/make-text (theme/fg theme :warning warn) 0 0))))
                                (when started-at
                                  (let [now (or ended-at (System/currentTimeMillis))
                                        elapsed-ms (- now started-at)
                                        label (if ended-at "Took" "Elapsed")]
-                                   (container/container-add-child c (text/make-text "" 0 0))
+                                   (container/container-add-child c (spacer/make-spacer 1))
                                    (container/container-add-child c
                                      (text/make-text
                                        (theme/fg theme :muted (str label " " (format "%.1f" (float (/ elapsed-ms 1000))) "s"))
@@ -819,6 +819,11 @@
 (defsetter tool-execution-set-theme! :theme-atom comp theme
   (protocols/invalidate comp))
 (defsetter tool-execution-set-output-pad! :output-pad-atom comp n
+  ;; Rebuild the box with the new horizontal padding (render sets the bg-fn)
+  (let [b (box/make-box n 1 nil)
+        inner @(:inner-container comp)]
+    (box/box-add-child b inner)
+    (reset! (:box comp) b))
   (protocols/invalidate comp))
 
 (defsetter tool-execution-set-truncation! :truncation-atom comp truncation

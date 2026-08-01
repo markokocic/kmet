@@ -9,11 +9,7 @@
             [kmet.app.ui.footer :as footer]
             [kmet.app.ui.chat-history :as chat-history]
             [kmet.app.ui.status-indicator :as status-indicator]
-            [kmet.app.ui.bash-execution :as bash-execution]
-            [kmet.tui.theme :as theme]
-            [kmet.tui.components.spacer :as spacer]
-            [kmet.tui.components.text :as text]
-            [kmet.tui.components.container :as container]))
+            [kmet.app.ui.bash-execution :as bash-execution]))
 
 ;; UserMessageComponent
 (def make-user-message user-message/make-user-message)
@@ -58,6 +54,7 @@
 ;; BashExecutionComponent
 (def make-bash-execution bash-execution/make-bash-execution)
 (def bash-execution-set-expanded! bash-execution/bash-execution-set-expanded!)
+(def bash-execution-set-theme! bash-execution/bash-execution-set-theme!)
 (def bash-execution-append-output! bash-execution/bash-execution-append-output!)
 (def bash-execution-set-complete! bash-execution/bash-execution-set-complete!)
 (def bash-execution-get-output bash-execution/bash-execution-get-output)
@@ -106,20 +103,16 @@
 
 (defn show-error!
   "Display an error message in the chat history.
-   Pi: showError — adds spacer + Text with error color to chatContainer."
+   Pi: showError — adds spacer + Text with error color to chatContainer.
+   Rendered as a plain Spacer(1) + error Text (no background box), not
+   persisted (session persistence is driven by the agent loop)."
   [chat msg]
-  (let [ch (:container chat)
-        t @(:theme-atom chat)]
-    (container/container-add-child ch (spacer/make-spacer 1))
-    (container/container-add-child ch
-      (text/make-text (theme/fg t :error (str "Error: " msg)) 1 0))))
+  (chat-history-add-message! chat {:role :error :content msg}))
 
 (defn show-warning!
   "Display a warning message in the chat history.
-   Pi: showWarning — adds spacer + Text with warning color to chatContainer."
+   Pi: showWarning — adds spacer + Text with warning color to chatContainer.
+   Rendered as a plain Spacer(1) + warning Text (no background box), not
+   persisted (session persistence is driven by the agent loop)."
   [chat msg]
-  (let [ch (:container chat)
-        t @(:theme-atom chat)]
-    (container/container-add-child ch (spacer/make-spacer 1))
-    (container/container-add-child ch
-      (text/make-text (theme/fg t :warning msg) 1 0))))
+  (chat-history-add-message! chat {:role :warning :content msg}))

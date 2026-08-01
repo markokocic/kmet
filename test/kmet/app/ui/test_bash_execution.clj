@@ -2,6 +2,7 @@
   (:require [clojure.test :as t]
             [kmet.app.ui.bash-execution :as be]
             [kmet.tui.protocols :as protocols]
+            [kmet.tui.theme :as theme]
             [kmet.tui.utils :as u]))
 
 (t/deftest test-bash-execution-render-no-output
@@ -41,3 +42,36 @@
     (be/bash-execution-set-complete! c nil true)
     (let [lines (protocols/render c 40)]
       (t/is (some #(clojure.string/includes? % "cancelled") lines) "cancelled status shown"))))
+
+(t/deftest test-bash-execution-borders-flush
+  ;; Every content line — preview output, blank separator, status — must be
+  ;; padded to the content width so both border columns stay flush. A broken
+  ;; right border shows as a │ not at the last column.
+  (let [c (be/make-bash-execution :command "ls" :exclude-from-context? false)]
+    (be/bash-execution-append-output! c (clojure.string/join "\n" (repeat 30 "line")))
+    (be/bash-execution-set-complete! c 0 false)
+    (let [lines (protocols/render c 40)
+          cw (- 40 2)]
+      (t/is (= 40 (u/visible-width (first lines))))
+      (t/is (= 40 (u/visible-width (last lines))))
+      (doseq [line (rest (butlast lines))]
+        (t/is (= 40 (u/visible-width line))
+          (str "content line spans full width: " (pr-str line))))
+      ;; No stray spacer line between status and bottom border
+      (t/is (some #(clojure.string/includes? % "Took") lines))
+      (let [took-idx (first (keep-indexed #(when (clojure.string/includes? %2 "Took") %1) lines))]
+        (t/is (= took-idx (- (count lines) 2))
+          "bottom border directly follows the status line")))))
+
+(t/deftest test-bash-execution-set-theme
+  ;; BashExecutionComponent takes a theme (was hardcoded dark-theme) and
+  ;; bash-execution-set-theme! updates the render + spinner colors without
+  ;; breaking subsequent renders.
+  (let [c (be/make-bash-execution :command "ls" :theme theme/dark-theme)]
+    (t/is (some? c))
+    (t/is (seq (protocols/render c 40)) "renders with dark theme")
+    (be/bash-execution-set-theme! c theme/light-theme)
+    (let [lines (protocols/render c 40)]
+      (t/is (some #(clojure.string/includes? % "$ ls") lines)
+        "still renders after theme switch")
+      (t/is (= 40 (u/visible-width (first lines))) "borders stay flush"))))

@@ -7,7 +7,6 @@
             [kmet.tui.utils :as u]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.container :as container]
-            [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.spinner :as spinner]
             [kmet.app.bash-executor :as bash-exec]
             [kmet.app.keybindings :as app-kb]
@@ -42,7 +41,8 @@
    started-at-atom   ;; long (System/currentTimeMillis)
    ended-at-atom     ;; long or nil
    cache-atom        ;; render cache
-   exclude-from-context-atom] ;; boolean (!! vs !)
+   exclude-from-context-atom ;; boolean (!! vs !)
+   theme-atom]       ;; Theme record (default dark-theme)
   (render [this width]
     (track! this width
       (let [command @command-atom
@@ -55,8 +55,9 @@
               full-output-path @full-output-path-atom
               started-at @started-at-atom
               ended-at @ended-at-atom
+              t @theme-atom
               color-key (if exclude? :dim :bash-mode)
-              border-color (fn [s] (theme/fg theme/dark-theme color-key s))
+              border-color (fn [s] (theme/fg t color-key s))
               content-pad 1]
 
           ;; ── Context truncation (pi: truncateTail before display) ──
@@ -71,20 +72,20 @@
             (container/container-clear content-container)
 
             ;; ── Command header ─────────────────────────────────────────
-            (let [header-text (str (theme/fg theme/dark-theme color-key
+            (let [header-text (str (theme/fg t color-key
                                     (theme/bold (str "$ " command))))
-                  header (text/make-text header-text 0 0)]
+                  header (text/make-text header-text 1 0)]
               (container/container-add-child content-container header))
 
             ;; ── Output ─────────────────────────────────────────────────
             (when (seq display-lines)
               (if expanded?
                 ;; Full output
-                (let [styled (mapv #(theme/fg theme/dark-theme :muted %) display-lines)
-                      output-text (text/make-text (str "\n" (str/join "\n" styled)) 0 0)]
+                (let [styled (mapv #(theme/fg t :muted %) display-lines)
+                      output-text (text/make-text (str "\n" (str/join "\n" styled)) 1 0)]
                   (container/container-add-child content-container output-text))
                 ;; Collapsed preview: last N lines with visual line truncation
-                (let [styled-preview (mapv #(theme/fg theme/dark-theme :muted %) preview-logical-lines)
+                (let [styled-preview (mapv #(theme/fg t :muted %) preview-logical-lines)
                       preview-text (str "\n" (str/join "\n" styled-preview))]
                   (container/container-add-child content-container
                     (->BashPreview preview-text content-pad)))))
@@ -101,26 +102,26 @@
                   (when (pos? hidden-line-count)
                     (if expanded?
                       (swap! status-parts conj
-                        (str (theme/fg theme/dark-theme :muted "(")
+                        (str (theme/fg t :muted "(")
                              (app-kb/key-hint "app.tools.expand" "to collapse")
-                             (theme/fg theme/dark-theme :muted ")")))
+                             (theme/fg t :muted ")")))
                       (swap! status-parts conj
-                        (str (theme/fg theme/dark-theme :muted
+                        (str (theme/fg t :muted
                              (str "... " hidden-line-count " more lines ("))
                              (app-kb/key-hint "app.tools.expand" "to expand")
-                             (theme/fg theme/dark-theme :muted ")")))))
+                             (theme/fg t :muted ")")))))
 
                   ;; Exit status
                   (case status
-                    :cancelled (swap! status-parts conj (theme/fg theme/dark-theme :warning "(cancelled)"))
-                    :error (swap! status-parts conj (theme/fg theme/dark-theme :error (str "(exit " exit-code ")")))
+                    :cancelled (swap! status-parts conj (theme/fg t :warning "(cancelled)"))
+                    :error (swap! status-parts conj (theme/fg t :error (str "(exit " exit-code ")")))
                     nil)
 
                   ;; Duration (pi: Elapsed X.Xs during, Took X.Xs after)
                   (let [now (or ended-at (System/currentTimeMillis))
                         elapsed-ms (- now started-at)]
                     (swap! status-parts conj
-                      (theme/fg theme/dark-theme :muted
+                      (theme/fg t :muted
                         (str (if ended-at "Took" "Elapsed")
                              " " (format "%.1f" (float (/ elapsed-ms 1000))) "s"))))
 
@@ -128,22 +129,28 @@
                   (let [was-truncated (or truncated (:truncated truncation))]
                     (when (and was-truncated full-output-path)
                       (swap! status-parts conj
-                        (theme/fg theme/dark-theme :warning
+                        (theme/fg t :warning
                           (str "Output truncated. Full output: " full-output-path)))))
 
                   (when (seq @status-parts)
                     (container/container-add-child content-container
-                      (text/make-text (str "\n" (str/join "\n" @status-parts)) 0 0))))))
-
-            ;; ── Spacer at bottom ──────────────────────────────────────
-            (container/container-add-child content-container (spacer/make-spacer 1))
+                      (text/make-text (str "\n" (str/join "\n" @status-parts)) 1 0))))))
 
             ;; ── Return bordered display ────────────────────────────────
-            (let [top-border (str (border-color "┌") (apply str (repeat (- width 2) "─")) (border-color "┐"))
+            ;; Pad every content line to the content width so the right border
+            ;; stays flush (BashPreview/spacer lines are bare strings, unlike
+            ;; Text children which self-pad).
+            (let [cw (- width 2)
+                  top-border (str (border-color "┌") (apply str (repeat (- width 2) "─")) (border-color "┐"))
                   bottom-border (str (border-color "└") (apply str (repeat (- width 2) "─")) (border-color "┘"))
-                  content-lines (protocols/render content-container (- width 2))
+                  content-lines (protocols/render content-container cw)
+                  pad-line (fn [line]
+                             (let [vis (u/visible-width line)]
+                               (if (>= vis cw)
+                                 line
+                                 (str line (apply str (repeat (- cw vis) \space))))))
                   result (conj (into [top-border]
-                                      (map #(str (border-color "│") % (border-color "│")))
+                                      (map #(str (border-color "│") (pad-line %) (border-color "│")))
                                       content-lines)
                                 bottom-border)]
               result)))))
@@ -157,9 +164,10 @@
   "Create a BashExecutionComponent with animated spinner.
    Options:
      :command                — the shell command string
-     :exclude-from-context?  — boolean (!! vs !)"
-  [& {:keys [command exclude-from-context?]
-      :or {command "" exclude-from-context? false}}]
+     :exclude-from-context?  — boolean (!! vs !)
+     :theme                  — Theme record (default dark-theme)"
+  [& {:keys [command exclude-from-context? theme]
+      :or {command "" exclude-from-context? false theme theme/dark-theme}}]
   (let [content-container (container/make-container)
         color-key (if exclude-from-context? :dim :bash-mode)
         cancel-key (or (tui-kb/key-text (tui-kb/get-global-keybindings) "app.interrupt") "Esc")
@@ -168,8 +176,8 @@
              :text (str "Running... (" cancel-key " to cancel)")
              :active true
              :prefix ""
-             :spinner-color-fn (fn [s] (theme/fg theme/dark-theme color-key s))
-             :message-color-fn (fn [s] (theme/fg theme/dark-theme :muted s)))]
+             :spinner-color-fn (fn [s] (theme/fg theme color-key s))
+             :message-color-fn (fn [s] (theme/fg theme :muted s)))]
     (map->BashExecutionComponent
       {:command-atom (atom command)
        :output-lines-atom (atom [])
@@ -183,7 +191,23 @@
        :started-at-atom (atom (System/currentTimeMillis))
        :ended-at-atom (atom nil)
        :cache-atom (atom nil)
-       :exclude-from-context-atom (atom exclude-from-context?)})))
+       :exclude-from-context-atom (atom exclude-from-context?)
+       :theme-atom (atom theme)})))
+
+;; ─── Public API ────────────────────────────────────────────────────────────
+
+(defsetter bash-execution-set-expanded! :expanded-atom comp expanded?)
+
+(defn bash-execution-set-theme!
+  "Set the theme on the border/output colors and the spinner."
+  [comp theme]
+  (reset! (:theme-atom comp) theme)
+  (let [color-key (if @(:exclude-from-context-atom comp) :dim :bash-mode)]
+    (spinner/spinner-set-spinner-color-fn! @(:spinner-comp comp)
+      #(theme/fg theme color-key %))
+    (spinner/spinner-set-message-color-fn! @(:spinner-comp comp)
+      #(theme/fg theme :muted %)))
+  (protocols/invalidate comp))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 

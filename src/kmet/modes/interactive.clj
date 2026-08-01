@@ -480,7 +480,8 @@
       ;; Create the UI component
       (let [bash-comp (be/make-bash-execution
                         :command command
-                        :exclude-from-context? exclude-from-context?)
+                        :exclude-from-context? exclude-from-context?
+                        :theme (cfg/get-theme (:config cs)))
             
             ;; ── Build session env (pi: resolveSpawnContext) ─────────────
             ag (:agent-state cs)

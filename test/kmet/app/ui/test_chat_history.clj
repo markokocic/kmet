@@ -2,6 +2,7 @@
   (:require [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
             [kmet.tui.theme :as theme]
+            [kmet.app.ui :as ui]
             [kmet.app.ui.chat-history :as ch]))
 
 (defn- strip-ansi [s]
@@ -383,3 +384,53 @@
       (ch/chat-history-remove-last! ch)
       (is (= [:info] (mapv :role (ch/chat-history-get-messages ch)))
           "remove-last removes the message, not the banner"))))
+
+(deftest test-show-error-warning
+  (testing "show-error! / show-warning! render plain spacer + colored text (pi: showError/showWarning)"
+    (let [ch (ch/make-chat-history)
+          _ (ui/show-warning! ch "bash already running")
+          _ (ui/show-error! ch "command failed")
+          lines (plain-lines ch 40)]
+      (is (some #(re-find #"Warning: bash already running" %) lines))
+      (is (some #(re-find #"Error: command failed" %) lines))
+      (is (not-any? #(re-find #"custom-message" %) lines)
+          "no background box — plain text like pi"))))
+
+(deftest test-info-banner-first-user-spacing
+  (testing "first user message after the info banner gets no extra separator (banner's own padding is the gap)"
+    (let [ch (ch/make-chat-history)
+          _ (ch/chat-history-set-info-msg! ch {:label "kmet" :content "banner"})
+          _ (ch/chat-history-add-message! ch {:role :user :content "hello"})
+          lines (plain-lines ch 20)
+          banner-idx (first (keep-indexed #(when (re-find #"banner" %2) %1) lines))
+          hello-idx (first (keep-indexed #(when (re-find #"hello" %2) %1) lines))]
+      (is banner-idx)
+      (is hello-idx)
+      (is (= hello-idx (+ banner-idx 3))
+          "banner content → 2 blank lines (box bottom pad + user box top pad) → user text"))))
+
+(deftest test-unknown-system-role-renders
+  (testing "roles without a dedicated component (:system, :unknown) render as plain text"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-add-message! ch {:role :system :content "compaction summary"})
+      (ch/chat-history-add-message! ch {:role :unknown :content "mystery content"})
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"compaction summary" %) lines))
+        (is (some #(re-find #"mystery content" %) lines))
+        (is (= 2 (count (ch/chat-history-get-messages ch)))
+            "messages are kept, not silently dropped")))))
+
+(deftest test-tool-block-content
+  (testing "tool messages with block-vector content (agent-loop :context-replaced) render"
+    (let [ch (ch/make-chat-history)]
+      ;; :context-replaced rebuild feeds agent messages whose tool content is
+      ;; [{:type :tool_result :content "..."}] — must not crash or print the raw vector
+      (ch/chat-history-add-message! ch
+        {:role :tool :name "bash"
+         :content [{:type :tool_result :tool_use_id "x" :content "file text"}]
+         :is-error false})
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"file text" %) lines)
+            "tool_result content extracted from the block")
+        (is (not-any? #(re-find #"tool_result|PersistentVector" %) lines)
+            "raw block vector must not render")))))

@@ -8,7 +8,8 @@
    pre-rendered lines instantly.
    Does NOT include a working spinner — the working indicator is a separate
    StatusIndicator in a dedicated layout layer between chat and editor (Pi-style)."
-  (:require [kmet.tui.protocols :as protocols]
+  (:require [clojure.string :as str]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.markdown :as md]
@@ -42,6 +43,8 @@
   (when (and (not finalized) has-content)
     (str left-pad (theme/bold (theme/fg theme :muted "▍")))))
 
+(declare reflow-all!)
+
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
 (defcomponent AssistantMessageComponent :assistant
@@ -49,6 +52,8 @@
    output-pad-atom hide-thinking-atom finalized-atom
    rendered-text-lines-atom
    rendered-thinking-lines-atom
+   rendered-text-atom        ;; text source of the cached lines (stale check)
+   rendered-thinking-atom    ;; thinking source of the cached lines (stale check)
    last-render-width-atom
    cache-atom]
   (render [this width]
@@ -61,17 +66,21 @@
             cw (max 1 (- width (* 2 pad-x)))
             left-pad (apply str (repeat pad-x \space))
             prev-width @last-render-width-atom
-            text (let [t @text-atom] (when (seq t) t))
-            thinking (let [t @thinking-text-atom] (when (seq t) t))
+            ;; Pi trims each content block (content.text.trim()); whitespace-only
+            ;; blocks render nothing (and get no Spacer(1)).
+            text (let [t (str/trim (or @text-atom ""))] (when (seq t) t))
+            thinking (let [t (str/trim (or @thinking-text-atom ""))] (when (seq t) t))
             text-empty? (nil? text)
             thinking-empty? (nil? thinking)
-            width-changed? (and prev-width (not= prev-width width))
-            text-lines (if width-changed?
-                         (wrap-text-to-width text cw left-pad theme)
-                         @rendered-text-lines-atom)
-            thinking-lines (if width-changed?
-                             (render-thinking-to-width thinking cw left-pad theme hide?)
-                             @rendered-thinking-lines-atom)]
+            ;; Reflow lazily on the render thread: appends only swap the text
+            ;; atom (never blocking the LLM stream); a render re-wraps when the
+            ;; width changed or new text arrived since the cached lines.
+            stale? (or (and prev-width (not= prev-width width))
+                       (not= text @rendered-text-atom)
+                       (not= thinking @rendered-thinking-atom))
+            _ (when stale? (reflow-all! this width))
+            text-lines @rendered-text-lines-atom
+            thinking-lines @rendered-thinking-lines-atom]
         ;; Pi-style: no visible content (streaming or finalized empty) → render nothing.
         ;; The working indicator is a separate StatusIndicator between chat and editor.
         (if (and text-empty? thinking-empty?)
@@ -97,7 +106,8 @@
 ;; ─── Internal: reflow both text and thinking into the line atoms ──────────
 
 (defn- reflow-all!
-  "Re-wrap/render all text and thinking, storing into line atoms."
+  "Re-wrap/render all text and thinking, storing into line atoms plus the
+   source text they were wrapped from (the render's stale check)."
   [comp width]
   (let [theme @(:theme-atom comp)
         output-pad @(:output-pad-atom comp)
@@ -105,12 +115,14 @@
         pad-x output-pad
         cw (max 1 (- width (* 2 pad-x)))
         left-pad (apply str (repeat pad-x \space))
-        text @(:text-atom comp)
-        thinking @(:thinking-text-atom comp)]
+        text (str/trim (or @(:text-atom comp) ""))
+        thinking (str/trim (or @(:thinking-text-atom comp) ""))]
     (reset! (:rendered-text-lines-atom comp)
       (wrap-text-to-width text cw left-pad theme))
     (reset! (:rendered-thinking-lines-atom comp)
       (render-thinking-to-width thinking cw left-pad theme hide?))
+    (reset! (:rendered-text-atom comp) text)
+    (reset! (:rendered-thinking-atom comp) thinking)
     (reset! (:last-render-width-atom comp) width)))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
@@ -127,6 +139,8 @@
                           :finalized-atom (atom finalized?)
                           :rendered-text-lines-atom (atom [])
                           :rendered-thinking-lines-atom (atom [])
+                          :rendered-text-atom (atom nil)
+                          :rendered-thinking-atom (atom nil)
                           :last-render-width-atom (atom nil)
                           :cache-atom (atom nil)})]
     ;; Do initial render so lines are ready immediately
@@ -135,21 +149,18 @@
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 
-(defsetter assistant-message-set-text! :text-atom comp text
-  (reflow-all! comp (or @(:last-render-width-atom comp) 80)))
+(defsetter assistant-message-set-text! :text-atom comp text)
 
 (defn assistant-message-append-text! [comp text]
-  (swap! (:text-atom comp) str text)
-  (when-let [w @(:last-render-width-atom comp)]
-    (reflow-all! comp w)))
+  ;; Appends only swap the text atom — reflow happens lazily in render, so
+  ;; streaming deltas never block the LLM thread (pi rebuilds content on
+  ;; every message_update; kmet defers the wrap to the render thread).
+  (swap! (:text-atom comp) str text))
 
-(defsetter assistant-message-set-thinking! :thinking-text-atom comp text
-  (reflow-all! comp (or @(:last-render-width-atom comp) 80)))
+(defsetter assistant-message-set-thinking! :thinking-text-atom comp text)
 
 (defn assistant-message-append-thinking! [comp text]
-  (swap! (:thinking-text-atom comp) str text)
-  (when-let [w @(:last-render-width-atom comp)]
-    (reflow-all! comp w)))
+  (swap! (:thinking-text-atom comp) str text))
 
 (defn assistant-message-finalize! [comp]
   (reset! (:finalized-atom comp) true))

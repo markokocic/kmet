@@ -105,3 +105,17 @@
     (let [c (am/make-assistant-message)]
       (is (not-any? #(re-find #"▍" %) (core/render c 40))
           "Empty streaming should not show cursor"))))
+
+(deftest test-whitespace-only-renders-nothing
+  (testing "whitespace-only text/thinking renders no lines (pi: content.text.trim() check)"
+    (let [c (am/make-assistant-message :text "   \n  " :finalized? true)]
+      (is (= [] (mapv strip-ansi (core/render c 40)))
+          "no pad line, no content — the block is invisible"))))
+
+(deftest test-text-trimmed
+  (testing "leading/trailing whitespace is trimmed before wrap (pi: text.trim())"
+    (let [c (am/make-assistant-message :text "  hello world  " :finalized? true)
+          lines (mapv strip-ansi (core/render c 40))]
+      (is (some #(re-find #"hello world" %) lines))
+      (is (not-any? #(re-find #"^ {2}hello" %) lines)
+          "no leading spaces survive"))))

@@ -10,6 +10,7 @@
             [kmet.tui.theme :as theme]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.text :as text]
+            [kmet.tui.components.container :as container]
             [kmet.app.ui.user-message :as um]
             [kmet.app.ui.assistant-message :as am]
             [kmet.app.ui.tool-execution :as te]
@@ -41,10 +42,13 @@
 
 (defn- render-messages
   "Render message components. Pi-style: a user message that follows any
-   earlier content (including the info banner) gets a leading blank line —
-   this is the Spacer(1) the old container model stored explicitly."
-  [msgs width seen-any?]
-  (loop [msgs msgs, seen-any? seen-any?, acc []]
+   earlier content gets a leading blank line — this is the Spacer(1) the
+   old container model stored explicitly. The info banner is not counted
+   as earlier content (pi keeps it in a separate header container), so the
+   first real message after the banner gets no extra separator — the
+   banner's own box padding provides the gap."
+  [msgs width]
+  (loop [msgs msgs, seen-any? false, acc []]
     (if-let [m (first msgs)]
       (let [lines (protocols/render (:component m) width)
             sep? (and (= :user (:role m)) seen-any?)]
@@ -67,7 +71,7 @@
   (render [this width]
     (let [msgs @messages-atom
           info-lines (when-let [i @info-comp-atom] (protocols/render i width))
-          msg-lines (render-messages msgs width (some? @info-comp-atom))
+          msg-lines (render-messages msgs width)
           status-lines (when-let [s @status-line-atom] (protocols/render s width))]
       (into [] (concat info-lines msg-lines status-lines))))
 
@@ -98,8 +102,8 @@
 
 (defn- content->display-text
   "Convert message content (string or block vector) to a display string.
-   Text blocks are joined; image blocks render as [image <mime-type>]
-   placeholders (pi renders image thumbnails)."
+   Handles :text blocks, :tool_result blocks (:content) and image blocks
+   (pi renders image thumbnails; here a placeholder)."
   [content]
   (cond
     (string? content) content
@@ -111,7 +115,16 @@
           (or (= (:type b) :image) (= (:type b) "image"))
           (str "[image " (or (:mime-type b) "?") "]")
           :else
-          (or (:text b) ""))))))
+          (or (:content b) (:text b) ""))))))
+
+(defn- make-plain-msg
+  "Create a Spacer(1) + plain Text pair — pi's showError/showWarning: a
+   dim/error/warning line with no background box."
+  [text]
+  (let [c (container/make-container)]
+    (container/container-add-child c (spacer/make-spacer 1))
+    (container/container-add-child c (text/make-text text 1 0))
+    c))
 
 (defn- make-component-for-msg
   "Create the appropriate component for a message map.
@@ -133,7 +146,7 @@
     :tool (let [comp (te/make-tool-execution
                        :name (:name msg "")
                        :args (:args msg {})
-                       :content (:content msg "")
+                       :content (content->display-text (:content msg ""))
                        :is-error (:is-error msg false)
                        :truncation (:truncation msg)
                        :details (:details msg)
@@ -145,13 +158,20 @@
             ;; Live pending messages (content "" + is-error false) are skipped.
             (when (or (seq (:content msg)) (:is-error msg))
               (te/tool-execution-set-error! comp (:is-error msg false)))
+            (when-let [images (:images msg)]
+              (te/tool-execution-set-images! comp images))
             comp)
     :bash (:component msg)  ;; Already-constructed BashExecutionComponent
     :info (cm/make-custom-message :label (:label msg)
                                   :content (:content msg "")
                                   :theme theme
                                   :output-pad output-pad)
-    nil))
+    :error (make-plain-msg (theme/fg theme :error (str "Error: " (:content msg ""))))
+    :warning (make-plain-msg (theme/fg theme :warning (str "Warning: " (:content msg ""))))
+    ;; Fallback for roles with no dedicated component (e.g. :system compaction
+    ;; summaries, unknown roles from session data): render content as plain
+    ;; text rather than silently dropping the message.
+    (make-plain-msg (theme/fg theme :text (content->display-text (:content msg ""))))))
 
 (defn chat-history-add-message!
   "Add a message to the chat history.
@@ -428,6 +448,7 @@
     :assistant (am/assistant-message-set-theme! child t)
     :tool (te/tool-execution-set-theme! child t)
     :custom (cm/custom-message-set-theme! child t)
+    :bash (be/bash-execution-set-theme! child t)
     nil))
 
 (defn- set-pad-on!

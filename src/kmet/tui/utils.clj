@@ -128,10 +128,71 @@
 
 ;; ─── Word wrapping ──────────────────────────────────────────────────────────
 
+(defn- leading-ansi-codes
+  "All ANSI escape sequences at the very start of s (pi: active codes)."
+  [s]
+  (let [ansi-re #"\u001b\[[0-9;]*[a-zA-Z]"]
+    (loop [s s acc ""]
+      (let [m (re-find ansi-re s)]
+        (if (and m (clojure.string/starts-with? s m))
+          (recur (subs s (count m)) (str acc m))
+          acc)))))
+
+(defn- split-long-word
+  "Split WORD (longer than max-width) into pieces of at most max-width
+   visible columns. Every character is preserved — long unbreakable words
+   (URLs, hashes, long flags) wrap instead of being clipped (pi:
+   breakLongWord). ANSI escapes are zero-width atoms kept with the piece
+   that contains them; the word's leading escapes are re-prepended to
+   continuation pieces so styling survives the break.
+   Fast path: pure-ASCII words break with a regex (visible width = char
+   count), avoiding per-character work — crucial for streaming long
+   tokens under SCI where per-char interop is slow."
+  [word max-width]
+  (let [n (count word)
+        ansi-re #"\u001b\[[0-9;]*[a-zA-Z]"
+        lead (leading-ansi-codes word)]
+    (if (not (re-find #"[^\u0020-\u007e]" word))
+      ;; ASCII fast path: char count == visible width
+      (let [body (subs word (count lead))
+            pieces (if (seq body)
+                     (vec (re-seq (re-pattern (str "(?s).{1," max-width "}")) body))
+                     [word])]
+        (if (seq lead)
+          (vec (map-indexed (fn [i p] (if (zero? i) p (str lead p))) pieces))
+          pieces))
+      ;; Walker: wide chars (CJK/emoji) or embedded ANSI — slice by visible
+      ;; width; one subs per piece, no per-character appends.
+      (loop [i 0 pieces []]
+        (if (>= i n)
+          pieces
+          (let [stop (loop [j i total 0]
+                       (if (>= j n)
+                         j
+                         (let [m (when (= \u001b (nth word j))
+                                   (re-find ansi-re (subs word j)))]
+                           (if (and m (clojure.string/starts-with? (subs word j) m))
+                             (recur (+ j (count m)) total)
+                             (let [cp (code-point-at word j)
+                                   w (char-width cp)
+                                   nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
+                               ;; Stop only once the piece has visible content —
+                               ;; never emit an empty piece (e.g. a styled word
+                               ;; starting with a 2-wide char at max-width 1).
+                               (if (and (pos? total) (> (+ total w) max-width))
+                                 j
+                                 (recur (+ j nchars) (+ total w))))))))]
+            (recur stop
+                   (conj pieces
+                         (if (seq pieces)
+                           (str lead (subs word i stop))
+                           (subs word i stop))))))))))
+
 (defn- wrap-single-line
   "Wrap a single line (no internal newlines) to max-width visible columns.
    Returns a vector of lines, each without trailing newlines.
-   ANSI escape codes are preserved and moved with their associated words."
+   ANSI escape codes are preserved and moved with their associated words.
+   Long unbreakable words are broken across lines, never clipped."
   [line max-width]
   (if (or (empty? line) (<= max-width 0))
     [""]
@@ -140,34 +201,48 @@
         [line]
         (let [words (clojure.string/split line #"(?<=\s)" -1)
               result (volatile! [])
-              current (volatile! "")]
+              sb (StringBuilder.)
+              cur-w (volatile! 0)]
           (doseq [w words]
-            (let [ww (visible-width w)
-                  lw (visible-width @current)
+            (let [ww (if (re-find #"[^\u0020-\u007e]" w) (visible-width w) (count w))
+                  lw @cur-w
                   sep (if (zero? lw) 0 1)]
               (if (<= (+ lw sep ww) max-width)
-                (vswap! current str w)
-                (do (vswap! result conj @current)
-                    (if (<= ww max-width)
-                      (vreset! current w)
-                      (let [clipped (truncate-to-width w max-width)]
-                        (vswap! result conj clipped)
-                        (vreset! current "")))))))
-          (let [last-line @current]
-            (if (seq last-line)
-              (conj @result last-line)
-              @result)))))))
+                (do (.append sb w)
+                    (vswap! cur-w + ww))
+                (do
+                  (when (pos? @cur-w)
+                    (vswap! result conj (str sb)))
+                  (if (<= ww max-width)
+                    (do (.setLength sb 0)
+                        (.append sb w)
+                        (vreset! cur-w ww))
+                    (let [pieces (split-long-word w max-width)
+                          last-p (or (last pieces) "")]
+                      (doseq [p (butlast pieces)]
+                        (vswap! result conj p))
+                      (.setLength sb 0)
+                      (.append sb last-p)
+                      (vreset! cur-w (if (re-find #"[^\u0020-\u007e]" last-p)
+                                       (visible-width last-p)
+                                       (count last-p)))))))))
+          (if (pos? @cur-w)
+            (conj @result (str sb))
+            @result))))))
 
 (defn wrap-text-with-ansi
   "Word wrap preserving ANSI escape codes.
    First splits on newlines so each returned line is a proper display line
    without embedded newlines. This ensures background padding in parent
    components extends to full terminal width on every line.
+   Tabs are expanded to 3 spaces (pi: replaceTabs) so wrapped output is
+   display-ready regardless of the terminal's tab stop.
    Internal fast path: uses visible-width-plain on already-stripped text."
   [text max-width]
   (if (or (empty? text) (<= max-width 0))
     [""]
-    (let [input-lines (clojure.string/split text #"\r\n|\r|\n")
+    (let [text (clojure.string/replace text "\t" "   ")
+          input-lines (clojure.string/split text #"\r\n|\r|\n")
           result (volatile! [])]
       (doseq [input-line input-lines]
         (let [wrapped (wrap-single-line input-line max-width)]
