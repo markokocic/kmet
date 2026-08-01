@@ -102,8 +102,8 @@
         (t/is (some #(= "description is required" (:message %)) diags)))
       (t/is (nil? (skills/get-skill "empty-fm"))))))
 
-(t/deftest test-load-skills-nested-metadata-ignored
-  (t/testing "indented (nested) YAML lines do not pollute the frontmatter"
+(t/deftest test-load-skills-nested-metadata
+  (t/testing "nested YAML parses into its own structure without polluting top-level fields"
     (let [tmp-dir (str "target/test-skills-nested-" (System/currentTimeMillis))
           skill-dir (str tmp-dir "/nested-meta")
           skill-file (str skill-dir "/SKILL.md")]
@@ -129,6 +129,34 @@
             loaded (skills/get-skill "collision-skill")]
         (t/is (= "First version." (:description loaded)))
         (t/is (some #(= "collision" (:type %)) diags))))))
+
+(t/deftest test-expand-skill-command
+  (let [tmp-dir (str "target/test-skills-expand-" (System/currentTimeMillis))
+        skill-dir (str tmp-dir "/expand-target")
+        skill-file (str skill-dir "/SKILL.md")]
+    (io/make-parents skill-file)
+    (spit skill-file "---\nname: expand-target\ndescription: Test.\n---\n# My Skill\nDo the thing.")
+    (skills/load-skills-from-dir tmp-dir)
+    (t/testing "/skill:name expands to a <skill> block (frontmatter stripped)"
+      (let [expanded (skills/expand-skill-command "/skill:expand-target")]
+        (t/is (str/includes? expanded "<skill name=\"expand-target\""))
+        (t/is (str/includes? expanded "References are relative to"))
+        (t/is (str/includes? expanded "# My Skill\nDo the thing."))
+        (t/is (str/ends-with? expanded "</skill>"))))
+    (t/testing "args are appended raw after the block (pi)"
+      (let [expanded (skills/expand-skill-command "/skill:expand-target arg1 \"a b\"")]
+        (t/is (str/includes? expanded "Do the thing.\n</skill>\n\narg1 \"a b\""))))
+    (t/testing "unknown skill passes through"
+      (t/is (= "/skill:nope x" (skills/expand-skill-command "/skill:nope x"))))
+    (t/testing "non-skill text passes through"
+      (t/is (= "hello" (skills/expand-skill-command "hello"))))))
+
+(t/deftest test-as-command-maps
+  (let [skills-list [{:name "code-review" :description "Review code."}
+                     {:name "hidden" :description "Hidden." :disable-model-invocation true}]]
+    (t/is (= [{:name "skill:code-review" :description "Review code."}
+              {:name "skill:hidden" :description "Hidden."}]
+             (skills/as-command-maps skills-list)))))
 
 (t/deftest test-format-skills-for-prompt
   (let [skill {:name "xml-skill"

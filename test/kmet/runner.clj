@@ -17,6 +17,7 @@
             [kmet.test-theme]
             [kmet.test-config]
             [kmet.app.test-skills]
+            [kmet.app.test-prompts]
             [kmet.app.test-extensions]
             [kmet.app.test-event-bus]
             [kmet.app.test-commands]
@@ -35,6 +36,7 @@
             [kmet.tui.components.test-track]
             [kmet.libs.test-self-contained]
             [kmet.libs.test-terminal-image]
+            [kmet.libs.test-yaml-lite]
             [kmet.app.ui.test-chat-history]
             [kmet.app.ui.test-user-message]
             [kmet.app.ui.test-assistant-message]
@@ -53,6 +55,7 @@
     kmet.app.test-loop
     kmet.test-theme kmet.test-config
     kmet.app.test-skills
+    kmet.app.test-prompts
     kmet.app.test-extensions
     kmet.app.test-event-bus
     kmet.app.test-commands
@@ -71,6 +74,7 @@
     kmet.tui.components.test-track
     kmet.libs.test-self-contained
     kmet.libs.test-terminal-image
+    kmet.libs.test-yaml-lite
     kmet.app.ui.test-chat-history
     kmet.app.ui.test-user-message
     kmet.app.ui.test-assistant-message

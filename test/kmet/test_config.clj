@@ -1,6 +1,8 @@
 (ns kmet.test-config
   (:require [clojure.test :as t]
             [clojure.string :as str]
+            [clojure.java.io :as io]
+            [babashka.fs :as fs]
             [kmet.config :as cfg]))
 
 ;; ─── Defaults ──────────────────────────────────────────────────────────────
@@ -114,10 +116,11 @@
         home (System/getProperty "user.home")]
     (t/testing "relative paths resolve against their scope dir"
       (let [global (resolve-paths {:session-dir "sessions" :model "x"} "/g/base")
-            project (resolve-paths {:extensions-dir ".kmet/ext"} "/p/base")]
+            project (resolve-paths {:extensions-dir ".kmet/ext" :prompts-dir "prompts"} "/p/base")]
         (t/is (= "/g/base/sessions" (:session-dir global)))
         (t/is (= "x" (:model global)))
-        (t/is (= "/p/base/.kmet/ext" (:extensions-dir project)))))
+        (t/is (= "/p/base/.kmet/ext" (:extensions-dir project)))
+        (t/is (= "/p/base/prompts" (:prompts-dir project)))))
     (t/testing "tilde and absolute paths pass through"
       (let [res (resolve-paths {:session-dir "~/.kmet/sessions"
                                 :skills-dir "/abs/skills"} "/base")]
@@ -129,6 +132,22 @@
       (t/is (= {:session-dir nil} (resolve-paths {:session-dir nil} "/base"))))))
 
 ;; ─── Provider config ───────────────────────────────────────────────────────
+
+(t/deftest test-resource-dirs
+  (let [canon (fn [p] (str (fs/canonicalize (io/file p))))
+        global (canon (str (System/getProperty "user.home") "/.kmet/agent/skills"))
+        project (canon (str (System/getProperty "user.dir") "/.kmet/skills"))]
+    (t/testing "defaults: merged == global default, deduped to [global project]"
+      (t/is (= [global project]
+               (cfg/resource-dirs cfg/default-config :skills-dir ".kmet/skills"))))
+    (t/testing "explicit override loads after the defaults (pi additive paths)"
+      (let [c (assoc cfg/default-config :skills-dir "/custom/skills")
+            dirs (cfg/resource-dirs c :skills-dir ".kmet/skills")]
+        (t/is (= [global project "/custom/skills"] dirs))))
+    (t/testing "duplicate paths are deduped"
+      (let [c (assoc cfg/default-config :skills-dir global)
+            dirs (cfg/resource-dirs c :skills-dir global)]
+        (t/is (= [global] dirs))))))
 
 (t/deftest test-get-provider-config-known
   (let [c (cfg/get-provider-config :openai)]

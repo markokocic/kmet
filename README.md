@@ -129,7 +129,8 @@ Create EDN theme files in `~/.kmet/agent/themes/`. See `examples/themes/` for fo
 
 ## Skills & Extensions
 
-- **Skills**: Place `name/SKILL.md` directories (or flat `.md` files) with YAML frontmatter (`name`, `description`) in `~/.kmet/agent/skills/` — listed in the system prompt as `<available_skills>`; the full `SKILL.md` is read on demand (Agent Skills standard, pi-compatible)
+- **Skills**: Place `name/SKILL.md` directories (or flat `.md` files) with YAML frontmatter (`name`, `description`) in `~/.kmet/agent/skills/` or `.kmet/skills/` — listed in the system prompt as `<available_skills>`; `/skill:name` loads one on demand (Agent Skills standard, pi-compatible)
+- **Prompt Templates**: Place `.md` files in `~/.kmet/agent/prompts/` or `.kmet/prompts/` — `/name args` expands to the template body with `$1`, `$@`, `${1:-default}`, `${@:N}` placeholders; unknown `/cmd` falls through to the agent (pi-compatible)
 - **Extensions**: Place `.clj` files in `~/.kmet/agent/extensions/` — loaded at startup
 
 ## Development

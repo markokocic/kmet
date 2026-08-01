@@ -22,6 +22,7 @@
    :thinking :off
    :extensions-dir "~/.kmet/agent/extensions"
    :skills-dir "~/.kmet/agent/skills"
+   :prompts-dir "~/.kmet/agent/prompts"
    :themes-dir "~/.kmet/agent/themes"
    :providers {:openai {:model "gpt-4o"}
                :anthropic {:model "claude-sonnet-4-20250514"}
@@ -43,7 +44,7 @@
   "Config keys whose values are filesystem paths. Resolved relative to their
    scope dir (pi: paths in ~/.pi/agent/settings.json resolve relative to
    ~/.pi/agent; in .pi/settings.json relative to .pi)."
-  #{:session-dir :extensions-dir :skills-dir :themes-dir})
+  #{:session-dir :extensions-dir :skills-dir :prompts-dir :themes-dir})
 
 (defn deep-merge
   "Recursively merge maps: nested maps merge key-by-key, non-map values from
@@ -190,6 +191,21 @@
   "Get the API type (:openai or :anthropic) for a given provider."
   [provider]
   (:api-type (get-provider-config provider)))
+
+(defn resource-dirs
+  "All directories to load for a resource type (pi: global + project +
+   explicit paths load simultaneously): the global default, the project-local
+   default (project-rel, resolved against cwd), and the merged config value
+   (an explicit override), deduped by canonical path. Order = pi load order
+   (global first), so global wins name collisions."
+  [config resource-key project-rel]
+  (->> [(get default-config resource-key)
+        project-rel
+        (get config resource-key)]
+       (map expand-path)
+       (map #(str (fs/canonicalize (io/file %))))
+       distinct
+       (mapv str)))
 
 
 

@@ -7,10 +7,13 @@
    via the read tool (progressive disclosure).
 
    Deviations from pi: no .gitignore/.ignore/.fdignore support (kmet scans only
-   its own skills dirs), and frontmatter uses a minimal scalar-only YAML parser."
+   its own skills dirs); frontmatter parses via kmet.libs.yaml-lite (a minimal YAML
+   subset parser — babashka has no YAML lib)."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [babashka.fs :as fs]))
+            [babashka.fs :as fs]
+            [kmet.debug :as debug]
+            [kmet.app.frontmatter :as fm]))
 
 ;; ─── Constants (pi: MAX_NAME_LENGTH / MAX_DESCRIPTION_LENGTH) ─────────────
 
@@ -20,48 +23,6 @@
 ;; ─── Skill state ──────────────────────────────────────────────────────────
 
 (defonce ^:private skills (atom []))
-
-;; ─── Frontmatter parsing (pi: utils/frontmatter.js) ───────────────────────
-
-(defn- parse-scalar
-  "Parse a YAML scalar value: strip matching quotes, map true/false to booleans."
-  [v]
-  (let [s (str/trim v)]
-    (cond
-      (and (str/starts-with? s "\"") (str/ends-with? s "\"") (>= (count s) 2))
-      (subs s 1 (dec (count s)))
-      (and (str/starts-with? s "'") (str/ends-with? s "'") (>= (count s) 2))
-      (subs s 1 (dec (count s)))
-      (= s "true") true
-      (= s "false") false
-      :else s)))
-
-(defn- parse-yaml-scalars
-  "Minimal YAML parser: `key: value` lines with keys at column 0 (root level).
-   Structured YAML (lists, maps, multi-line scalars) is ignored — pi uses a
-   full YAML parser."
-  [yaml]
-  (reduce (fn [acc line]
-            (if-let [[_ k v] (re-matches #"([A-Za-z0-9_-]+):\s*(.*?)\s*" line)]
-              (assoc acc k (parse-scalar v))
-              acc))
-          {}
-          (str/split-lines yaml)))
-
-(defn- parse-frontmatter
-  "Parse YAML frontmatter (--- delimited) from markdown content.
-   Returns {:frontmatter map :body string}. Content without frontmatter yields
-   an empty frontmatter map and the full content as body (pi: extractFrontmatter)."
-  [content]
-  (let [normalized (str/replace content #"\r\n|\r" "\n")]
-    (if-not (str/starts-with? normalized "---")
-      {:frontmatter {} :body normalized}
-      (let [end-idx (str/index-of normalized "\n---" 3)]
-        (if (nil? end-idx)
-          {:frontmatter {} :body normalized}
-          ;; max clamps for empty frontmatter (---\n---): pi's slice returns ""
-          {:frontmatter (parse-yaml-scalars (subs normalized 4 (max 4 end-idx)))
-           :body (str/trim (subs normalized (+ end-idx 4)))})))))
 
 ;; ─── Validation (pi: validateName / validateDescription) ──────────────────
 
@@ -98,7 +59,7 @@
   [file-path]
   (try
     (let [raw (slurp file-path)
-          {:keys [frontmatter]} (parse-frontmatter raw)
+          {:keys [frontmatter]} (fm/parse-frontmatter raw)
           name (str (or (get frontmatter "name") (fs/file-name (fs/parent file-path))))
           description (some-> (get frontmatter "description") str str/trim)
           errors (concat (if (str/blank? description)
@@ -186,6 +147,37 @@
 (defn get-skill
   [name]
   (first (filter #(= name (:name %)) @skills)))
+
+(defn expand-skill-command
+  "Expand /skill:name args into the skill body wrapped in a <skill> block
+   (pi: agent-session _expandSkillCommand). Returns text unchanged when not
+   a /skill: command, the skill is unknown, or the file cannot be read."
+  [text]
+  (if-not (str/starts-with? text "/skill:")
+    text
+    (let [space-idx (str/index-of text " ")
+          skill-name (if (nil? space-idx) (subs text 7) (subs text 7 space-idx))
+          args (if (nil? space-idx) "" (str/trim (subs text (inc space-idx))))]
+      (if-let [skill (get-skill skill-name)]
+        (try
+          (let [body (str/trim (:body (fm/parse-frontmatter (slurp (:file-path skill)))))
+                block (str "<skill name=\"" (:name skill) "\" location=\"" (:file-path skill) "\">\n"
+                           "References are relative to " (:base-dir skill) ".\n\n"
+                           body "\n</skill>")]
+            (if (seq args) (str block "\n\n" args) block))
+          (catch Exception e
+            (debug/log "skill expansion failed: " e)
+            text))
+        text))))
+
+(defn as-command-maps
+  "Skills in slash-command shape for the editor autocomplete provider
+   (pi: interactive-mode skillCommandList — /skill:name commands, enabled
+   by default)."
+  [skill-list]
+  (mapv (fn [s] {:name (str "skill:" (:name s))
+                 :description (:description s)})
+        skill-list))
 
 ;; ─── System prompt (pi: formatSkillsForPrompt) ────────────────────────────
 

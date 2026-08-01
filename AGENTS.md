@@ -36,6 +36,7 @@ src/kmet/
 │   ├── diff.clj        — Myers O(ND) line diff
 │   ├── process.clj     — Process tree management (descendant collection, tree kill, pid registry)
 │   ├── sse.clj         — SSE line parsing + LLM stream processing
+│   ├── yaml_lite.clj   — Minimal YAML subset parser (frontmatter; babashka-compatible)
 │   └── terminal_image.clj — Kitty terminal image protocol + image dimension parsing
 │                           (native PNG/JPEG/GIF via f= codes — no conversion)
 ├── modes/              — Entry modes (pi: dist/modes/)
@@ -48,6 +49,8 @@ src/kmet/
 │   ├── loop.clj        — Agent conversation loop
 │   ├── session.clj     — Session persistence
 │   ├── skills.clj      — Skills loading + system prompt
+│   ├── prompts.clj     — Prompt template loading + /name expansion (pi: core/prompt-templates.js)
+│   ├── frontmatter.clj — YAML frontmatter parsing shared by skills/prompts (pi: utils/frontmatter.js)
 │   ├── extensions.clj  — Extension loading, input/before-agent-start hooks
 │   ├── event_bus.clj   — Event vocabulary + extension event bus
 │   ├── commands.clj    — Slash command registry (builtins, skills, extensions)

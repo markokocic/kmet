@@ -19,6 +19,7 @@
             [kmet.tui.keybindings :as tui-kb]
             [kmet.config :as cfg]
             [kmet.app.skills :as skills]
+            [kmet.app.prompts :as prompts]
             [kmet.app.commands :as commands]
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
@@ -284,16 +285,6 @@
        :argument-hint argument-hint
        :handler (fn [cs _]
                   (command-not-implemented cs name))})))
-
-(defn- handle-command
-  "Handle slash commands via the command registry. Returns nil."
-  [cs cmd args]
-  (if-let [c (commands/find-command cmd)]
-    ((:handler c) cs args)
-    (ui/chat-history-add-message! (:chat-history cs)
-      {:role :assistant
-       :content (str "Unknown command: /" cmd ". Type /help for available commands.")}))
-  (update-header-footer! cs))
 
 ;; ─── Resume session ────────────────────────────────────────────────────────
 
@@ -610,16 +601,83 @@
                 (update-header-footer! cs)
                 (tui/tui-request-render (:tui cs))))))))))
 
+;; ─── Message submission (pi: session.prompt input event + agent run) ──────
+
+(defn- send-message
+  "Send text to the agent: steer while streaming, else start a new turn.
+   Input hooks must already have been applied (pi: agent run happens after
+   hook/expansion processing). Returns nil."
+  [cs text]
+  (if @(:running-turn? cs)
+    ;; Agent running: steer the current run (pi: steeringQueue).
+    ;; Finalize the in-progress assistant message first so the steered
+    ;; message lands below it; the next turn streams into a new message.
+    (do
+      (debug/log "user steered: " text)
+      (ui/chat-history-finalize-streaming! (:chat-history cs))
+      (ui/chat-history-finalize-thinking! (:chat-history cs))
+      (ui/chat-history-add-message! (:chat-history cs)
+        {:role :user :content text})
+      (agent/steer! (:agent-state cs) text)
+      (update-header-footer! cs)
+      (tui/tui-request-render (:tui cs)))
+    (do
+      (reset! (:running-turn? cs) true)
+      (ui/status-indicator-start! (:status-indicator cs))
+      (start-anim-timer! cs)
+      (debug/log "user submitted: " text)
+      (ui/chat-history-add-message! (:chat-history cs)
+        {:role :user :content text})
+      ;; Create streaming placeholder for incoming LLM response.
+      (ui/chat-history-start-streaming! (:chat-history cs))
+      (update-header-footer! cs)
+      (tui/tui-request-render (:tui cs))
+      (agent/run-agent-turn (:agent-state cs)
+        {:message text
+         :on-text #(on-agent-text cs %)
+         :on-thinking #(on-agent-thinking cs %)
+         :on-done (fn [_] (on-agent-done cs))
+         :on-error #(on-agent-error cs %)}))))
+
+(defn- apply-hooks
+  "Run extension input hooks on text; returns the (possibly transformed)
+   text, or nil when a hook consumed the input (pi: session.prompt input
+   event)."
+  [cs text]
+  (let [input (extensions/apply-input-hooks text :interactive
+                 {:streaming-behavior (when @(:running-turn? cs) :steer)})]
+    (if (= :handled (:action input))
+      (do (debug/log "input handled by extension: " text) nil)
+      (if (contains? input :text) (:text input) text))))
+
+(defn- submit-message
+  "Run input hooks on text, then send it to the agent (pi: session.prompt —
+   input event, then agent run). Returns nil."
+  [cs text]
+  (when-let [text (apply-hooks cs text)]
+    (send-message cs text)))
+
 (defn- handle-submit [cs text]
   (let [trimmed (str/trim text)]
     (when (seq trimmed)
       (cond
-        ;; Slash command
+        ;; Slash command; else skill command (/skill:name), prompt template
+        ;; (/name), or fall through to the agent (pi: commands dispatch
+        ;; first, then skill/template expansion)
         (str/starts-with? trimmed "/")
         (let [space (str/index-of trimmed " ")
               cmd (if (nil? space) (subs trimmed 1) (subs trimmed 1 space))
               args (if (nil? space) "" (str/trim (subs trimmed (inc space))))]
-          (handle-command cs cmd args))
+          (if-let [c (commands/find-command cmd)]
+            (do ((:handler c) cs args)
+                (update-header-footer! cs))
+            ;; pi: input hooks → skill command → prompt template → fall
+            ;; through to the agent (unknown /cmd is sent as a message)
+            (if-let [text (apply-hooks cs trimmed)]
+              (send-message cs
+                (-> text
+                    (skills/expand-skill-command)
+                    (prompts/expand-prompt-template (prompts/get-prompt-templates)))))))
         
         ;; Bash command (! or !!)
         (str/starts-with? trimmed "!")
@@ -641,43 +699,7 @@
         ;; whether the agent is running (input will be steered). Slash and
         ;; bash commands are native UI features and bypass the hooks.
         :else
-        (let [streaming? @(:running-turn? cs)
-              input (extensions/apply-input-hooks trimmed :interactive
-                       {:streaming-behavior (when streaming? :steer)})]
-          (if (= :handled (:action input))
-            ;; Extension consumed the input — no agent run, nothing displayed
-            (debug/log "input handled by extension: " trimmed)
-            (let [text (if (contains? input :text) (:text input) trimmed)]
-              (if streaming?
-                ;; Agent running: steer the current run (pi: steeringQueue).
-                ;; Finalize the in-progress assistant message first so the steered
-                ;; message lands below it; the next turn streams into a new message.
-                (do
-                  (debug/log "user steered: " text)
-                  (ui/chat-history-finalize-streaming! (:chat-history cs))
-                  (ui/chat-history-finalize-thinking! (:chat-history cs))
-                  (ui/chat-history-add-message! (:chat-history cs)
-                    {:role :user :content text})
-                  (agent/steer! (:agent-state cs) text)
-                  (update-header-footer! cs)
-                  (tui/tui-request-render (:tui cs)))
-                (do
-                  (reset! (:running-turn? cs) true)
-                  (ui/status-indicator-start! (:status-indicator cs))
-                  (start-anim-timer! cs)
-                  (debug/log "user submitted: " text)
-                  (ui/chat-history-add-message! (:chat-history cs)
-                    {:role :user :content text})
-                  ;; Create streaming placeholder for incoming LLM response.
-                  (ui/chat-history-start-streaming! (:chat-history cs))
-                  (update-header-footer! cs)
-                  (tui/tui-request-render (:tui cs))
-                  (agent/run-agent-turn (:agent-state cs)
-                    {:message text
-                     :on-text #(on-agent-text cs %)
-                     :on-thinking #(on-agent-thinking cs %)
-                     :on-done (fn [_] (on-agent-done cs))
-                     :on-error #(on-agent-error cs %)}))))))))))
+        (submit-message cs trimmed)))))
 
 (defn- handle-cancel [cs]
   "Cancel the current agent turn or bash command."
@@ -772,8 +794,12 @@
         provider (cfg/get-provider config)
         model (cfg/get-model config)
 
-        ;; Load skills and build system prompt
-        _ (skills/load-skills-from-dir (cfg/expand-path (:skills-dir config)))
+        ;; Load skills and prompt templates (pi: global + project + explicit
+        ;; paths load simultaneously)
+        _ (doseq [d (cfg/resource-dirs config :skills-dir ".kmet/skills")]
+            (skills/load-skills-from-dir d))
+        _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
+            (prompts/load-prompt-templates-from-dir d))
         base-prompt (or (:system-prompt config)
                         "You are kmet, a minimal coding agent. Help the user with their tasks.
 Use the available tools to read, write, edit files, and execute commands.
@@ -917,10 +943,13 @@ Be precise and concise in your responses.")
     (register-builtin-commands! config)
     (register-not-implemented-commands!)
 
-    ;; Autocomplete provider: slash commands + file paths
+    ;; Autocomplete provider: slash commands + prompt templates + skill
+    ;; commands + file paths
     (editor/editor-set-autocomplete-provider! ed
       (ac/make-combined-provider
-        :commands-fn #(commands/get-commands)
+        :commands-fn #(vec (concat (commands/get-commands)
+                                   (prompts/as-command-maps (prompts/get-prompt-templates))
+                                   (skills/as-command-maps (skills/get-skills))))
         :base-path (System/getProperty "user.dir")))
     (editor/editor-set-autocomplete-theme! ed (th/get-select-list-theme (cfg/get-theme config)))
 
