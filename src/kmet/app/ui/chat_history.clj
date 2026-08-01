@@ -130,14 +130,21 @@
                  :output-pad output-pad
                  :hide-thinking? thinking-hidden?
                  :finalized? true)
-    :tool (te/make-tool-execution
-            :name (:name msg "")
-            :args (:args msg {})
-            :content (:content msg "")
-            :is-error (:is-error msg false)
-            :theme theme
-            :output-pad output-pad
-            :expanded? tools-expanded?)
+    :tool (let [comp (te/make-tool-execution
+                       :name (:name msg "")
+                       :args (:args msg {})
+                       :content (:content msg "")
+                       :is-error (:is-error msg false)
+                       :truncation (:truncation msg)
+                       :theme theme
+                       :output-pad output-pad
+                       :expanded? tools-expanded?)]
+            ;; Pi: replayed/persisted tool results are final — mark ended so
+            ;; they render with success/error bg, footer strip, and Took.
+            ;; Live pending messages (content "" + is-error false) are skipped.
+            (when (or (seq (:content msg)) (:is-error msg))
+              (te/tool-execution-set-error! comp (:is-error msg false)))
+            comp)
     :bash (:component msg)  ;; Already-constructed BashExecutionComponent
     :info (cm/make-custom-message :label (:label msg)
                                   :content (:content msg "")

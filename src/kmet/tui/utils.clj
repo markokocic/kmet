@@ -80,29 +80,51 @@
 ;; ─── Truncation ─────────────────────────────────────────────────────────────
 
 (defn truncate-to-width
-  "Truncate string to fit within max-width visible columns."
+  "Truncate string to fit within max-width visible columns, appending
+   ellipsis when truncated. ANSI escape codes are preserved for the kept
+   prefix (pi: truncateToWidth), so styling survives truncation."
   ([s max-width] (truncate-to-width s max-width ""))
   ([s max-width ellipsis]
-   (let [clean (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" "")
-         e-width (visible-width ellipsis)
+   (let [e-width (visible-width ellipsis)
          target (- max-width e-width)]
-     (if (<= (visible-width clean) target) s
+     (if (<= (visible-width s) target)
+       s
+       (if-not (clojure.string/includes? s "\u001b[")
+         ;; Fast path: plain text — truncate by codepoint
          (let [sb (atom "")
                total (atom 0)
-               _ (loop [i 0, n (count clean)]
+               n (count s)
+               _ (loop [i 0]
                    (when (and (< i n) (< @total target))
-                     (let [cp (code-point-at clean i)
+                     (let [cp (code-point-at s i)
                            w (char-width cp)
                            nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
-                       (swap! sb str (subs clean i (+ i nchars)))
+                       (swap! sb str (subs s i (+ i nchars)))
                        (swap! total + w)
-                       (recur (+ i nchars) n))))]
-           (str @sb ellipsis))))))
-
-;; NOTE: truncate-to-width currently doesn't handle ANSI codes in the
-;; output correctly when truncating. The atom-based approach is a
-;; placeholder — for proper ANSI preservation, the original string
-;; with codes should be used, not the stripped version.
+                       (recur (+ i nchars)))))]
+           (str @sb ellipsis))
+         ;; ANSI path: keep escape codes with the characters they style;
+         ;; pending (unflushed) codes are dropped once truncation starts
+         (let [sb (StringBuilder.)
+               n (count s)
+               ansi-re #"\u001b\[[0-9;]*[a-zA-Z]"
+               ansi-at (fn [i]
+                         (let [m (re-matcher ansi-re s)]
+                           (when (and (.find m i) (= (.start m) i))
+                             [(.group m) (.end m)])))]
+           (loop [i 0 total 0 pending ""]
+             (if (or (>= i n) (>= total target))
+               (str sb ellipsis)
+               (if-let [[code end] (ansi-at i)]
+                 (recur end total (str pending code))
+                 (let [cp (code-point-at s i)
+                       w (char-width cp)
+                       nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
+                   (if (<= (+ total w) target)
+                     (do (.append sb pending)
+                         (.append sb (subs s i (+ i nchars)))
+                         (recur (+ i nchars) (+ total w) ""))
+                     (str sb ellipsis))))))))))))
 
 ;; ─── Word wrapping ──────────────────────────────────────────────────────────
 
@@ -199,15 +221,16 @@
 (defn truncate-to-visual-lines
   "Truncate text to the last max-lines visual lines at the given width.
    Uses wrap-text-with-ansi to resolve word-wrapped lines, then takes
-   the last max-lines. Lines are returned as a vector of strings.
-   This is width-aware — important for long single-line commands or
-   narrow terminals where a single string-line may wrap to multiple
-   visual lines."
+   the last max-lines. Returns {:visual-lines [...] :skipped-count n}
+   (pi: VisualTruncateResult). Width-aware — important for long
+   single-line commands or narrow terminals where a single string-line
+   may wrap to multiple visual lines."
   [text max-lines width]
   (if (or (empty? text) (<= max-lines 0) (<= width 0))
-    []
+    {:visual-lines [] :skipped-count 0}
     (let [visual-lines (wrap-text-with-ansi text width)
           n (count visual-lines)]
       (if (<= n max-lines)
-        visual-lines
-        (vec (take-last max-lines visual-lines))))))
+        {:visual-lines visual-lines :skipped-count 0}
+        {:visual-lines (vec (take-last max-lines visual-lines))
+         :skipped-count (- n max-lines)}))))

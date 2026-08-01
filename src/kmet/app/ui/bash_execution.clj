@@ -22,18 +22,10 @@
 ;; Renders the last PREVIEW-LINES output lines, each truncated to the content
 ;; width, plus a "… N more lines (ctrl+o to expand)" hint.
 
-(defcomponent BashPreview nil [preview-text hidden-line-count pad]
+(defcomponent BashPreview nil [preview-text pad]
   (render [_this w]
-    (let [visual-lines (u/truncate-to-visual-lines preview-text PREVIEW-LINES w)
-          hint (when (pos? hidden-line-count)
-                 (u/truncate-to-width
-                   (str (theme/fg theme/dark-theme :muted
-                        (str "... " hidden-line-count " more lines ("))
-                        (app-kb/key-hint "app.tools.expand" "to expand")
-                        (theme/fg theme/dark-theme :muted ")"))
-                   w "..."))
-          lines (if hint (conj visual-lines hint) visual-lines)]
-      (mapv #(str (apply str (repeat pad " ")) %) lines))))
+    (let [{:keys [visual-lines]} (u/truncate-to-visual-lines preview-text PREVIEW-LINES w)]
+      (mapv #(str (apply str (repeat pad " ")) %) visual-lines))))
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
@@ -95,7 +87,7 @@
                 (let [styled-preview (mapv #(theme/fg theme/dark-theme :muted %) preview-logical-lines)
                       preview-text (str "\n" (str/join "\n" styled-preview))]
                   (container/container-add-child content-container
-                    (->BashPreview preview-text hidden-line-count content-pad)))))
+                    (->BashPreview preview-text content-pad)))))
 
             ;; ── Loader or status ───────────────────────────────────────
             (if (= status :running)
@@ -204,7 +196,9 @@
   (let [clean (-> chunk
                   (str/replace #"\r\n" "\n")
                   (str/replace #"\r" "\n"))
-        new-lines (str/split-lines clean)
+        ;; Pi: split("\n") keeps a trailing "" for newline-terminated chunks;
+        ;; split-lines drops it, which breaks line-continuation detection.
+        new-lines (str/split clean #"\n" -1)
         current @(:output-lines-atom comp)]
     (if (and (seq current) (seq new-lines))
       ;; Pi: append first chunk to the last line (incomplete line continuation)

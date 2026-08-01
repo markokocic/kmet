@@ -27,20 +27,51 @@
 (def ^:private windows-os?
   (str/starts-with? (System/getProperty "os.name") "Windows"))
 
-(defn kill-process-tree! [pid]
+(defn- collect-descendant-pids
+  "Collect descendant pids of pid by walking the process table.
+   Returns a vector ordered parents-first (direct children before
+   grandchildren). Portable across Linux and macOS (no /proc dependency
+   on macOS)."
+  [pid]
+  (try
+    (let [p (proc/process ["ps" "-eo" "pid=,ppid="] {:out :pipe :err :ignore})
+          _ @p
+          lines (str/split-lines (slurp (:out p)))
+          parent-map (into {}
+                           (keep (fn [line]
+                                   (when-let [[_ c pp] (re-find #"^\s*(\d+)\s+(\d+)" line)]
+                                     [(Long/parseLong (str/trim c)) (Long/parseLong (str/trim pp))])))
+                           lines)]
+      (loop [frontier #{pid} found []]
+        (let [children (filterv (fn [[c p]]
+                                  (and (contains? parent-map c)
+                                       (contains? frontier p)
+                                       (not (contains? frontier c))
+                                       (not (some #{c} found))))
+                                parent-map)]
+          (if (empty? children)
+            found
+            (let [level (mapv first children)]
+              (recur (set level) (into found level)))))))
+    (catch Exception _ [])))
+
+(defn kill-process-tree!
+  "Kill a process and all its descendants (pi: killProcessTree).
+   ProcessBuilder children share the parent's process group, so the
+   negative-PID group kill fails — instead walk the process table and
+   kill each descendant directly (deepest first). Prevents grandchildren
+   (e.g. `bash -c 'sleep 30'`) from surviving a timeout/cancel."
+  [pid]
   (if windows-os?
-    ;; Windows: use taskkill to kill process tree
+    ;; Windows: taskkill /T kills the tree natively
     (try
       @(proc/process ["taskkill" "/F" "/T" "/PID" (str pid)]
-        {:out :inherit :err :inherit})
+        {:out :inherit :err :ignore})
       (catch Exception _e nil))
-    ;; Unix: kill the full process group (negative PID)
-    (try
-      @(proc/process ["kill" "-9" (str "-" pid)] {:out :inherit :err :inherit})
-      (catch Exception _e
-        (try
-          @(proc/process ["kill" "-9" (str pid)] {:out :inherit :err :inherit})
-          (catch Exception _e2 nil))))))
+    (doseq [p (concat (reverse (collect-descendant-pids pid)) [pid])]
+      (try
+        @(proc/process ["kill" "-9" (str p)] {:out :inherit :err :ignore})
+        (catch Exception _e nil)))))
 
 (defonce ^:private tracked-pids (atom #{}))
 (defn track-pid! [pid] (swap! tracked-pids conj pid))
@@ -112,8 +143,13 @@
              :max-lines max-lines :max-bytes max-bytes}))))))
 
 (defn- create-temp-file []
-  (let [tmp (java.io.File/createTempFile TEMP-FILE-PREFIX TEMP-FILE-SUFFIX)]
-    (.deleteOnExit tmp) (str (fs/canonicalize tmp))))
+  (let [tmp-dir (or (System/getenv "TMPDIR")
+                    (System/getProperty "java.io.tmpdir"))
+        tmp (fs/create-temp-file {:prefix TEMP-FILE-PREFIX
+                                  :suffix TEMP-FILE-SUFFIX
+                                  :dir tmp-dir})]
+    (fs/delete-on-exit tmp)
+    (str (fs/canonicalize tmp))))
 
 (defn- find-bash-on-path []
   (try
@@ -163,7 +199,6 @@
             proc-opts {:dir cwd :err :pipe :out :pipe :env env
                        ;; Pi: stdin pipe when using -s transport
                        :in (if use-stdin? :pipe :inherit)}
-            proc-opts (if timeout (assoc proc-opts :timeout (* timeout 1000)) proc-opts)
             p (proc/process shell-args proc-opts)
             ;; Pi: write command to stdin for WSL -s transport
             _ (when (and use-stdin? (:in p))
@@ -171,6 +206,15 @@
                 (try (.close (:in p)) (catch Exception _ nil)))
             pid (try (-> p :proc .pid) (catch Exception _ nil))
             _ (when pid (track-pid! pid))
+            ;; Pi: timeout handled manually (setTimeout + killProcessTree) —
+            ;; babashka.process's :timeout reports exit 0 on kill, so a
+            ;; timed-out command wouldn't be distinguishable from success.
+            timed-out (atom false)
+            timeout-watcher (when (and (number? timeout) (pos? timeout) pid)
+                              (future
+                                (Thread/sleep (* timeout 1000))
+                                (reset! timed-out true)
+                                (kill-process-tree! pid)))
             read-stream (fn [stream]
                           (let [buf (byte-array 8192)]
                             (loop [] (let [n (.read stream buf)]
@@ -184,9 +228,16 @@
             (future (loop [] (when-not @signal (Thread/sleep 200) (recur)))
                     (when pid (kill-process-tree! pid))))
           (let [result (try (deref p) (catch Exception _ nil)) exit-code (:exit result)]
+            (when timeout-watcher (future-cancel timeout-watcher))
             (try (deref out-future 5000 nil) (catch Exception _ nil))
             (when pid (untrack-pid! pid))
-            {:exit-code exit-code}))))))
+            (cond
+              ;; Pi: after the process exits, re-check abort/timeout — the kill
+              ;; itself returns normally (SIGKILL exit code), so cancelled/timeout
+              ;; must be inferred from the signal/flag, not the exit code.
+              @timed-out (throw (ex-info (str "timeout:" timeout) {}))
+              (and signal @signal) (throw (ex-info "aborted" {}))
+              :else {:exit-code exit-code})))))))
 
 (defn execute-bash
   [{:keys [command cwd env on-chunk signal timeout spawn-hook
@@ -304,9 +355,11 @@
                                  (if first-newline
                                    (subs raw-output (inc first-newline))
                                    raw-output)))
-                {:keys [content truncated]} (truncate-tail clean-output
-                                               :max-lines max-lines
-                                               :max-bytes max-bytes)]
+                truncation (truncate-tail clean-output
+                             :max-lines max-lines
+                             :max-bytes max-bytes)
+                truncated (:truncated truncation)
+                content (:content truncation)]
             (when (and truncated (nil? @temp-file-path))
               (let [path (create-temp-file)]
                 (reset! temp-file-path path)
@@ -315,6 +368,7 @@
              :exit-code nil
              :cancelled false
              :truncated truncated
+             :truncation truncation
              :full-output-path @temp-file-path}))]
 
     (try
@@ -354,23 +408,27 @@
                                (if first-newline
                                  (subs raw-output (inc first-newline))
                                  raw-output)))
-              _ (when (and (nil? @temp-file-path)
-                           (> (count clean-output) max-bytes))
+              truncation (truncate-tail clean-output
+                           :max-lines max-lines
+                           :max-bytes max-bytes)
+              content (:content truncation)
+              truncated (:truncated truncation)
+              ;; Pi: persistIfTruncated — save the full output whenever truncated
+              _ (when (and truncated (nil? @temp-file-path))
                   (let [path (create-temp-file)]
                     (reset! temp-file-path path)
-                    (spit path clean-output)))
-              {:keys [content truncated]} (truncate-tail clean-output
-                                             :max-lines max-lines
-                                             :max-bytes max-bytes)]
+                    (spit path clean-output)))]
           (cond
             (and signal @signal)
             {:output content :exit-code nil :cancelled true
-             :truncated truncated :full-output-path @temp-file-path}
+             :truncated truncated :truncation truncation
+             :full-output-path @temp-file-path}
             (str/includes? (str (ex-message e)) "timeout")
-            {:output (str content "\n\nCommand timed out after " (or timeout "?") "s")
-             :exit-code nil :cancelled false
-             :truncated truncated :full-output-path @temp-file-path}
+            {:output content :exit-code nil :cancelled false :timed-out true
+             :truncated truncated :truncation truncation
+             :full-output-path @temp-file-path}
             :else
             {:output (str content "\n\nError: " (ex-message e))
              :exit-code nil :cancelled false
-             :truncated truncated :full-output-path @temp-file-path}))))))
+             :truncated truncated :truncation truncation
+             :full-output-path @temp-file-path}))))))

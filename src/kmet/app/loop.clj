@@ -183,7 +183,8 @@ Be precise and concise in your responses."}}]
                       :tool_use_id tc-id
                       :content (:content result)}]
            :is-error (:is-error result false)}
-    (:images result) (assoc :images (:images result))))
+    (:images result) (assoc :images (:images result))
+    (:truncation result) (assoc :truncation (:truncation result))))
 
 ;; ─── Error classification (auto-retry) ─────────────────────────────────────
 

@@ -283,12 +283,21 @@
                                 (reset! (:agent-state cs) new-ag))
                               (doseq [e entries]
                                 (let [role (:role e)
-                                      texts (filter #(= (:type %) :text) (:content e))
-                                      content (str/join (map :text texts))]
+                                      ;; Tool results are stored as :tool_result blocks
+                                      ;; (with :content str); others as :text blocks
+                                      content (str/join
+                                                (keep (fn [b]
+                                                        (case (:type b)
+                                                          :text (:text b)
+                                                          :tool_result (:content b)
+                                                          nil))
+                                                      (:content e)))]
                                   (ui/chat-history-add-message! (:chat-history cs)
                                     (merge {:role role :content content}
                                       (when (= role :tool)
-                                        {:name (or (:name e) "tool")})))))
+                                        {:name (or (:name e) "tool")
+                                         :is-error (:is-error e false)
+                                         :truncation (:truncation e)})))))
                               (ui/chat-history-add-message! (:chat-history cs)
                                 {:role :assistant
                                  :content (str "Resumed session " short-id ".")})
@@ -521,15 +530,12 @@
                             :signal (:bash-signal cs)
                             :spawn-hook spawn-hook
                             :timeout 300})
-                  {:keys [output exit-code cancelled truncated full-output-path]} result]
+                  {:keys [exit-code cancelled truncated full-output-path]} result]
               (debug/log "bash done: exit=" exit-code " cancelled=" cancelled " truncated=" truncated)
               
-              ;; Mark complete on component
+              ;; Mark complete on component (pi: truncation metadata from the executor)
               (be/bash-execution-set-complete! bash-comp exit-code cancelled
-                :truncation (when truncated
-                              {:total-lines (count (str/split-lines output))
-                               :shown-lines (count (take-last 20 (str/split-lines output)))
-                               :full-output-path full-output-path})
+                :truncation (:truncation result)
                 :full-output-path full-output-path)
               
               ;; Record in session

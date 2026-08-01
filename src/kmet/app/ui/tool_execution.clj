@@ -212,72 +212,87 @@
    "bash"  {:render-call (fn [name args theme width _context]
                            (let [cmd (:command args)
                                  timeout (:timeout args)
-                                 cmd-str (if (nil? cmd)
-                                           "[invalid arg]"
-                                           (if (empty? cmd)
-                                             "..."
-                                             cmd))
-                                 timeout-suffix (when timeout
-                                                  (theme/fg theme :muted (str " (timeout: " timeout "s)")))]
+                                 cmd-str (if (string? cmd)
+                                           cmd
+                                           (if (nil? cmd) "" nil))
+                                 cmd-display (cond
+                                               (nil? cmd-str)
+                                               (theme/fg theme :error "[invalid arg]")
+                                               (empty? cmd-str)
+                                               (theme/fg theme :tool-output "...")
+                                               :else cmd-str)
+                                 timeout-suffix (if (and (number? timeout) (pos? timeout))
+                                                  (theme/fg theme :muted (str " (timeout " timeout "s)"))
+                                                  "")]
                              (text/make-text
-                               (str (theme/fg theme :tool-title (theme/bold (str "$ " cmd-str)))
+                               (str (theme/fg theme :tool-title (theme/bold (str "$ " cmd-display)))
                                     timeout-suffix)
                                0 0)))
             :render-result (fn [content is-error theme width expanded? started-at ended-at truncation _context]
                              (let [c (container/make-container)
-                                   BASH-PREVIEW-LINES 5]
-                               (when (seq content)
-                                 (let [styled-lines (if expanded?
-                                                      (mapv #(theme/fg theme :tool-output %)
-                                                        (str/split-lines content))
-                                                      ;; collapsed: use visual line truncation via truncate-to-visual-lines
-                                                      (let [visual-lines (utils/truncate-to-visual-lines
-                                                                           content BASH-PREVIEW-LINES width)]
-                                                        (mapv #(theme/fg theme :tool-output %) visual-lines)))]
+                                   BASH-PREVIEW-LINES 5
+                                   full-output-path (:full-output-path truncation)
+                                   output (let [trimmed (str/trim (or content ""))]
+                                            (if (and truncation
+                                                     full-output-path
+                                                     (some? ended-at)
+                                                     (str/ends-with? trimmed "]"))
+                                              (let [footer-start (str/last-index-of trimmed "\n\n[")]
+                                                (if (and footer-start
+                                                         (str/includes? (subs trimmed footer-start)
+                                                                   full-output-path))
+                                                  (str/trimr (subs trimmed 0 footer-start))
+                                                  trimmed))
+                                              trimmed))]
+                               (when (seq output)
+                                 (let [styled (->> (str/split-lines output)
+                                                    (mapv #(theme/fg theme :tool-output %))
+                                                    (str/join "\n"))]
                                    (if expanded?
                                      (do
                                        (container/container-add-child c (text/make-text "" 0 0))
-                                       (doseq [sline styled-lines]
-                                         (container/container-add-child c (text/make-text sline 0 0))))
-                                     (let [total (count (str/split-lines content))
-                                           shown (count styled-lines)
-                                           skipped (- total shown)]
+                                       (doseq [line (str/split-lines styled)]
+                                         (container/container-add-child c (text/make-text line 0 0))))
+                                     (let [{:keys [visual-lines skipped-count]}
+                                           (utils/truncate-to-visual-lines styled BASH-PREVIEW-LINES width)]
                                        (container/container-add-child c (text/make-text "" 0 0))
-                                       (when (pos? skipped)
+                                       (when (pos? skipped-count)
                                          (container/container-add-child c
                                            (text/make-text
                                              (utils/truncate-to-width
-                                               (str "... (" skipped " earlier lines, "
-                                                    (app-kb/key-hint "app.tools.expand" "to expand") ")")
-                                               (max 1 (- width 4))
-                                               "...")
+                                               (str (theme/fg theme :muted
+                                                    (str "... (" skipped-count " earlier lines,"))
+                                                    " "
+                                                    (app-kb/key-hint "app.tools.expand" "to expand")
+                                                    (theme/fg theme :muted ")"))
+                                               width "...")
                                              0 0)))
-                                       (doseq [sline styled-lines]
-                                         (container/container-add-child c (text/make-text sline 0 0)))))))
-                               ;; Show truncation warnings (pi: with formatSize for byte counts)
+                                       (doseq [line visual-lines]
+                                         (container/container-add-child c (text/make-text line 0 0)))))))
                                (when truncation
-                                 (let [{:keys [total-lines shown-lines truncated-by max-bytes
-                                              full-output-path]} truncation
-                                       size-str (when max-bytes
-                                                  (bash-exec/format-size max-bytes))
-                                       warn (if (= truncated-by :bytes)
-                                              (str "[Truncated: " shown-lines " lines shown ("
-                                                   size-str " limit). Full output: " full-output-path "]")
-                                              (str "[Truncated: showing " shown-lines " of " total-lines
-                                                   " lines. Full output: " full-output-path "]"))]
+                                 (let [{:keys [total-lines shown-lines truncated-by max-bytes]} truncation
+                                       size-str (when (= truncated-by :bytes)
+                                                  (bash-exec/format-size
+                                                    (or max-bytes bash-exec/DEFAULT-MAX-BYTES)))
+                                       truncated-part (if (= truncated-by :bytes)
+                                                        (str "Truncated: " shown-lines " lines shown (" size-str " limit)")
+                                                        (str "Truncated: showing " shown-lines " of " total-lines " lines"))
+                                       warn (str "[" (str/join ". "
+                                                     (cond-> []
+                                                       full-output-path (conj (str "Full output: " full-output-path))
+                                                       :always (conj truncated-part)))
+                                                  "]")]
                                    (container/container-add-child c (text/make-text "" 0 0))
                                    (container/container-add-child c
                                      (text/make-text (theme/fg theme :warning warn) 0 0))))
-                               ;; Pi: duration managed internally by component, with leading blank line
                                (when started-at
                                  (let [now (or ended-at (System/currentTimeMillis))
                                        elapsed-ms (- now started-at)
-                                       elapsed-sec (float (/ elapsed-ms 1000))
                                        label (if ended-at "Took" "Elapsed")]
                                    (container/container-add-child c (text/make-text "" 0 0))
                                    (container/container-add-child c
                                      (text/make-text
-                                       (theme/fg theme :muted (str label " " (format "%.1f" elapsed-sec) "s"))
+                                       (theme/fg theme :muted (str label " " (format "%.1f" (float (/ elapsed-ms 1000))) "s"))
                                        0 0))))
                                c))}})
 
