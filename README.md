@@ -16,7 +16,7 @@ with the agent having access to filesystem tools (read, write, edit, bash, grep,
 - **Multi-line Editor** — word-wrap, undo/redo, kill-ring, history, paste markers
 - **Chat History** — user/assistant/tool message display with scrolling
 - **Agent Loop** — orchestrates LLM calls and tool execution with streaming
-- **Config System** — `~/.config/kmet/settings.edn` and `.kmet/settings.edn` overrides
+- **Config System** — `~/.kmet/agent/settings.edn` and `.kmet/settings.edn` overrides
 - **Theme System** — customizable ANSI color themes from EDN files
 - **Session Persistence** — EDNL files with branching support
 - **Skills & Extensions** — markdown skills and Clojure extensions
@@ -108,29 +108,29 @@ src/kmet/
 
 Settings are loaded from:
 
-1. `~/.config/kmet/settings.edn` — user-wide settings
+1. `~/.kmet/agent/settings.edn` — user-wide settings
 2. `.kmet/settings.edn` — project-local overrides
 3. Environment variables: `KMET_PROVIDER`, `KMET_MODEL`
 
-Example `~/.config/kmet/settings.edn`:
+Example `~/.kmet/agent/settings.edn`:
 
 ```clojure
 {:provider :openai
  :theme "dark"
  :thinking :off
- :session-dir "~/.local/share/kmet/sessions"
+ :session-dir "~/.kmet/sessions"
  :providers {:openai {:model "gpt-4o"}
              :anthropic {:model "claude-sonnet-4-20250514"}}}
 ```
 
 ## Themes
 
-Create EDN theme files in `~/.config/kmet/themes/`. See `examples/themes/` for format.
+Create EDN theme files in `~/.kmet/agent/themes/`. See `examples/themes/` for format.
 
 ## Skills & Extensions
 
-- **Skills**: Place `.md` files in `~/.config/kmet/skills/` — appended to system prompt
-- **Extensions**: Place `.clj` files in `~/.config/kmet/extensions/` — loaded at startup
+- **Skills**: Place `name/SKILL.md` directories (or flat `.md` files) with YAML frontmatter (`name`, `description`) in `~/.kmet/agent/skills/` — listed in the system prompt as `<available_skills>`; the full `SKILL.md` is read on demand (Agent Skills standard, pi-compatible)
+- **Extensions**: Place `.clj` files in `~/.kmet/agent/extensions/` — loaded at startup
 
 ## Development
 
