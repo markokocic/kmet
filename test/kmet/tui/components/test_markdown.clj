@@ -178,6 +178,29 @@
         lines (mapv strip-ansi (core/render m 30))]
     (t/is (some #(.contains % "HL[clj]") lines))))
 
+(t/deftest test-markdown-theme-syntax-highlight
+  ;; get-markdown-theme wires the lib tokenizer: known lang → syntax colors,
+  ;; unknown lang → mdCodeBlock color (pi behavior)
+  (let [known (core/render (md/make-markdown "```clojure\n(defn f [] 1)\n```"
+                                             :theme (theme/get-markdown-theme theme/dark-theme)
+                                             :padding-x 0)
+                           30)
+        unknown (core/render (md/make-markdown "```frobnicate\n(defn f [] 1)\n```"
+                                               :theme (theme/get-markdown-theme theme/dark-theme)
+                                               :padding-x 0)
+                             30)]
+    (t/is (some #(.contains % "\u001b[38;2;86;156;214mdefn\u001b[39m") known))
+    (t/is (some #(.contains % "\u001b[38;2;181;189;104m(defn f [] 1)\u001b[39m") unknown))))
+
+(t/deftest test-markdown-empty-code-block-no-lines
+  ;; Empty fences render fence lines only — highlighted path matches the
+  ;; un-highlighted path (no phantom blank interior line).
+  (let [m (md/make-markdown "```clojure\n```"
+                            :theme (theme/get-markdown-theme theme/dark-theme)
+                            :padding-x 0)
+        lines (core/render m 30)]
+    (t/is (= 2 (count lines)))))
+
 (t/deftest test-markdown-code-in-list-item
   (let [m (md/make-markdown "- a\n  ```clj\n  (defn f [] 1)\n  ```" :padding-x 0)
         lines (mapv strip-ansi (core/render m 30))]

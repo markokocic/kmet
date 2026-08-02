@@ -3,7 +3,8 @@
    EDN-only loading with same :vars/:colors schema as pi's JSON."
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
-            [babashka.fs :as fs]))
+            [babashka.fs :as fs]
+            [kmet.libs.highlight :as hl]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Color tokens — matching pi's ThemeColor / ThemeBg exactly
@@ -123,8 +124,50 @@
 (defn strikethrough [text] (str "\u001b[9m" text "\u001b[29m"))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
-;; Sub-theme factories — matching pi's getMarkdownTheme() etc.
+;; Syntax highlighting — mirroring pi's getCliHighlightTheme() + highlightCode()
 ;; ═══════════════════════════════════════════════════════════════════════════
+
+(defn- highlight-formatters
+  "Scope keyword → text-styling fn for theme T (pi: buildCliHighlightTheme)."
+  [t]
+  {:keyword (fn [s] (fg t :syntax-keyword s))
+   :symbol (fn [s] (fg t :syntax-variable s))
+   :literal (fn [s] (fg t :syntax-number s))
+   :number (fn [s] (fg t :syntax-number s))
+   :string (fn [s] (fg t :syntax-string s))
+   :comment (fn [s] (fg t :syntax-comment s))
+   :function (fn [s] (fg t :syntax-function s))
+   :attr (fn [s] (fg t :syntax-variable s))
+   :variable (fn [s] (fg t :syntax-variable s))
+   :meta (fn [s] (fg t :muted s))
+   :operator (fn [s] (fg t :syntax-operator s))
+   :punctuation (fn [s] (fg t :syntax-punctuation s))
+   :tag (fn [s] (fg t :syntax-punctuation s))
+   :name (fn [s] (fg t :syntax-keyword s))
+   :section (fn [s] (fg t :md-heading s))
+   :code (fn [s] (fg t :md-code s))
+   :addition (fn [s] (fg t :tool-diff-added s))
+   :deletion (fn [s] (fg t :tool-diff-removed s))})
+
+(defn- render-highlighted
+  "Highlight CODE as LANG → vector of ANSI-colored lines (pi: highlightCode).
+   Unsupported language → each line in mdCodeBlock color (pi behavior);
+   unknown scopes pass through unstyled. Tokens spanning newlines are wrapped
+   per line-fragment so every line is self-contained (no color bleed). Blank
+   code renders no lines, matching the un-highlighted path."
+  [t code lang]
+  (if (str/blank? code)
+    []
+    (if-let [tokens (hl/tokenize lang code)]
+      (let [fmts (highlight-formatters t)
+            styled (fn [[scope s]]
+                     (if-let [f (and scope (get fmts scope))]
+                       (->> (str/split s #"\n" -1)
+                            (map (fn [frag] (if (str/blank? frag) "" (f frag))))
+                            (str/join "\n"))
+                       s))]
+        (str/split (apply str (map styled tokens)) #"\n" -1))
+      (mapv (fn [l] (fg t :md-code-block l)) (str/split code #"\n" -1)))))
 
 (defn get-markdown-theme
   "pi-equivalent: getMarkdownTheme() — returns MarkdownTheme fn map."
@@ -140,6 +183,7 @@
    :hr (fn [s] (fg t :md-hr s))
    :list-bullet (fn [s] (fg t :md-list-bullet s))
    :table-border (fn [s] (fg t :md-table-border s))
+   :highlight-code (fn [code lang] (render-highlighted t code lang))
    :bold bold
    :italic italic
    :underline underline

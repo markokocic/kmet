@@ -40,6 +40,7 @@
             [kmet.libs.test-terminal-image]
             [kmet.libs.test-yaml-lite]
             [kmet.libs.test-markdown]
+            [kmet.libs.test-highlight]
             [kmet.app.ui.test-chat-history]
             [kmet.app.ui.test-user-message]
             [kmet.app.ui.test-assistant-message]
@@ -81,6 +82,7 @@
     kmet.libs.test-terminal-image
     kmet.libs.test-yaml-lite
     kmet.libs.test-markdown
+    kmet.libs.test-highlight
     kmet.app.ui.test-chat-history
     kmet.app.ui.test-user-message
     kmet.app.ui.test-assistant-message
