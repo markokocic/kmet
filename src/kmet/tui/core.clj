@@ -18,7 +18,13 @@
             [kmet.tui.components.markdown :as markdown]
             [kmet.tui.components.spinner :as spinner]
             [kmet.tui.components.scroll-view :as scroll-view]
-            [kmet.tui.components.stack :as stack]))
+            [kmet.tui.components.stack :as stack]
+            ;; pi-parity stubs (not yet implemented — throw on use)
+            [kmet.tui.components.alt-screen-flash :as alt-screen-flash]
+            [kmet.tui.components.cancellable-loader :as cancellable-loader]
+            [kmet.tui.components.truncated-text :as truncated-text]
+            [kmet.tui.components.h-stack :as h-stack]
+            [kmet.tui.components.v-stack :as v-stack]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Protocol re-exports
@@ -616,4 +622,15 @@
 (def scroll-view-scroll-top scroll-view/scroll-top)
 (def scroll-view-follows-end? scroll-view/follows-end?)
 (def render-stack stack/render-stack)
+
+;; pi-parity stubs (not yet implemented — throw on use)
+(def make-alt-screen-flash alt-screen-flash/make-alt-screen-flash)
+(def alt-screen-flash! alt-screen-flash/alt-screen-flash!)
+(def alt-screen-flash-dispose! alt-screen-flash/alt-screen-flash-dispose!)
+(def make-cancellable-loader cancellable-loader/make-cancellable-loader)
+(def cancellable-loader-aborted? cancellable-loader/cancellable-loader-aborted?)
+(def cancellable-loader-dispose! cancellable-loader/cancellable-loader-dispose!)
+(def make-truncated-text truncated-text/make-truncated-text)
+(def make-h-stack h-stack/make-h-stack)
+(def make-v-stack v-stack/make-v-stack)
 

@@ -113,6 +113,12 @@ src/kmet/
 │       │                     follow-end, scroll API, scrollbar state machine)
 │       └── stack.clj    — vertical stack layout for the render loop (the single
 │                          IScrollView entry grows to fill remaining height)
+│       ── pi-parity stubs (throw on use; implement upon first use) ──
+│       ├── alt_screen_flash.clj
+│       ├── cancellable_loader.clj
+│       ├── truncated_text.clj
+│       ├── h_stack.clj
+│       └── v_stack.clj
 ```
 
 ### Layer boundaries
