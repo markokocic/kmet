@@ -37,13 +37,13 @@
   [& {:keys [text theme]
       :or {text "Working..." theme theme/dark-theme}}]
   (let [sp (spinner/make-spinner
-             :text text
-             :active false
-             :prefix ""
-             :frames SPINNER-FRAMES
-             :interval-ms 100
-             :spinner-color-fn #(theme/fg theme :accent %)
-             :message-color-fn #(theme/fg theme :dim %))]
+            :text text
+            :active false
+            :prefix ""
+            :frames SPINNER-FRAMES
+            :interval-ms 100
+            :spinner-color-fn #(theme/fg theme :accent %)
+            :message-color-fn #(theme/fg theme :dim %))]
     (map->StatusIndicator {:spinner sp :active-atom (atom false)})))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
@@ -69,6 +69,6 @@
   "Update the theme colors on the underlying spinner."
   [indicator theme]
   (spinner/spinner-set-spinner-color-fn! (:spinner indicator)
-    #(theme/fg theme :accent %))
+                                         #(theme/fg theme :accent %))
   (spinner/spinner-set-message-color-fn! (:spinner indicator)
-    #(theme/fg theme :dim %)))
+                                         #(theme/fg theme :dim %)))

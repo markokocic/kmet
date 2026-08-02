@@ -119,11 +119,11 @@
    assertions/failures/errors only when nonzero."
   [n-test n-pass n-fail n-error]
   (str/join ", "
-    (cond-> [(plural n-test "test" "tests")]
-      (pos? (+ n-pass n-fail n-error))
-      (conj (plural (+ n-pass n-fail n-error) "assertion" "assertions"))
-      (pos? n-fail) (conj (plural n-fail "failure" "failures"))
-      (pos? n-error) (conj (plural n-error "error" "errors")))))
+            (cond-> [(plural n-test "test" "tests")]
+              (pos? (+ n-pass n-fail n-error))
+              (conj (plural (+ n-pass n-fail n-error) "assertion" "assertions"))
+              (pos? n-fail) (conj (plural n-fail "failure" "failures"))
+              (pos? n-error) (conj (plural n-error "error" "errors")))))
 
 (defn- fmt-duration
   "Format elapsed milliseconds as a compact duration (ms or s)."
@@ -147,9 +147,9 @@
     (println "\nTesting" (ns-name ns-obj))
     (binding [*ns* ns-obj]
       (once-fx
-        (fn []
-          (doseq [v vars]
-            (each-fx (fn [] (t/test-var v)))))))
+       (fn []
+         (doseq [v vars]
+           (each-fx (fn [] (t/test-var v)))))))
     (let [after @t/*report-counters*
           n-test (- (:test after) (:test before))
           n-pass (- (:pass after) (:pass before))
@@ -187,7 +187,7 @@
       (println (str (str/join ", " [(plural fails "failure" "failures")
                                     (plural errs "error" "errors")]) ".")))
     (println "Results:" (str/join ", "
-                           (cond-> [(str (:pass results) " passed")]
-                             (pos? fails) (conj (str fails " failed"))
-                             (pos? errs) (conj (plural errs "error" "errors")))))
+                                  (cond-> [(str (:pass results) " passed")]
+                                    (pos? fails) (conj (str fails " failed"))
+                                    (pos? errs) (conj (plural errs "error" "errors")))))
     (System/exit (if (pos? (+ fails errs)) 1 0))))

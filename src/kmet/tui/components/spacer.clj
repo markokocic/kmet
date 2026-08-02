@@ -3,7 +3,7 @@
   (:require [kmet.tui.macros :refer [defcomponent]]))
 
 (defcomponent Spacer nil [lines-atom]
-  (render [this _width]
+  (render [_this _width]
     (vec (repeat @lines-atom ""))))
 
 (defn make-spacer

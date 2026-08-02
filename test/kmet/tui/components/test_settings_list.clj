@@ -72,14 +72,12 @@
     (dotimes [_ 3] (core/handle-input s K-RIGHT))  ;; dark > light > auto > dark
     (t/is (= "dark" (:value (first @(:items-atom s)))))))
 
-
-
 ;; ─── On-change callback ────────────────────────────────────────────────────
 
 (t/deftest test-settings-list-on-change
   (let [changes (atom [])
         s (sl/make-settings-list sample-items
-             :on-change (fn [id val] (swap! changes conj [id val])))]
+                                 :on-change (fn [id val] (swap! changes conj [id val])))]
     (core/handle-input s K-RIGHT)
     (t/is (= [[:theme "light"]] @changes))))
 
@@ -108,10 +106,10 @@
 ;; ─── get-item / set-value ─────────────────────────────────────────────────
 
 (t/deftest test-settings-list-get-item
-  (let [s (sl/make-settings-list sample-items)]
-    (let [item (sl/settings-list-get-item s :theme)]
-      (t/is (= "Theme" (:label item)))
-      (t/is (= "dark" (:value item))))))
+  (let [s (sl/make-settings-list sample-items)
+        item (sl/settings-list-get-item s :theme)]
+    (t/is (= "Theme" (:label item)))
+    (t/is (= "dark" (:value item)))))
 
 (t/deftest test-settings-list-get-item-not-found
   (let [s (sl/make-settings-list sample-items)]
@@ -125,16 +123,16 @@
 ;; ─── Render ───────────────────────────────────────────────────────────────
 
 (t/deftest test-settings-list-render
-  (let [s (sl/make-settings-list sample-items)]
-    (let [lines (core/render s 50)]
-      (t/is (pos? (count lines)))
-      (t/is (some #(.contains % "Theme") lines))
-      (t/is (some #(.contains % "Font Size") lines)))))
+  (let [s (sl/make-settings-list sample-items)
+        lines (core/render s 50)]
+    (t/is (pos? (count lines)))
+    (t/is (some #(.contains % "Theme") lines))
+    (t/is (some #(.contains % "Font Size") lines))))
 
 (t/deftest test-settings-list-render-empty
-  (let [s (sl/make-settings-list [])]
-    (let [lines (core/render s 30)]
-      (t/is (pos? (count lines))))))
+  (let [s (sl/make-settings-list [])
+        lines (core/render s 30)]
+    (t/is (pos? (count lines)))))
 
 ;; ─── Default theme ─────────────────────────────────────────────────────────
 

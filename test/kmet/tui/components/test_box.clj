@@ -27,9 +27,9 @@
       (t/is (.contains (first lines) "hi")))))
 
 (t/deftest test-box-empty
-  (let [b (box/make-box 1 1 nil)]
-    (let [lines (core/render b 10)]
-      (t/is (empty? lines)))))
+  (let [b (box/make-box 1 1 nil)
+        lines (core/render b 10)]
+    (t/is (empty? lines))))
 
 (t/deftest test-box-multiple-children
   (let [t1 (text/make-text "a" 0 0)

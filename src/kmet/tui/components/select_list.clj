@@ -3,7 +3,8 @@
    Port of @earendil-works/pi-tui SelectList — same rendering: no header,
    two-column item layout with aligned descriptions, `→ ` selected prefix,
    `  (N/M)` scroll info, `  No matching commands` empty state."
-  (:require [kmet.tui.protocols :as protocols]
+  (:require [clojure.string :as str]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as u]
             [kmet.tui.macros :refer [track!]]))
@@ -16,11 +17,11 @@
 
 (def default-theme
   (map->SelectListTheme
-    {:selected-prefix (fn [s] (str "\u001b[36m" s "\u001b[39m"))  ;; accent cyan
-     :selected-text (fn [s] (str "\u001b[36m" s "\u001b[39m"))   ;; accent cyan
-     :description (fn [s] (str "\u001b[2m" s "\u001b[22m"))
-     :scroll-info (fn [s] (str "\u001b[2m" s "\u001b[22m"))
-     :no-match (fn [s] (str "\u001b[31m" s "\u001b[0m"))}))
+   {:selected-prefix (fn [s] (str "\u001b[36m" s "\u001b[39m"))  ;; accent cyan
+    :selected-text (fn [s] (str "\u001b[36m" s "\u001b[39m"))   ;; accent cyan
+    :description (fn [s] (str "\u001b[2m" s "\u001b[22m"))
+    :scroll-info (fn [s] (str "\u001b[2m" s "\u001b[22m"))
+    :no-match (fn [s] (str "\u001b[31m" s "\u001b[0m"))}))
 
 ;; ─── Layout constants (pi: select-list.ts) ─────────────────────────────────
 
@@ -153,13 +154,13 @@
                     desc (when (:description item)
                            (normalize-single-line (:description item)))]
                 (vswap! lines conj
-                  (render-item item (= global-idx selected) width desc theme col-width))))))
+                        (render-item item (= global-idx selected) width desc theme col-width))))))
         ;; Scroll info — pi: `  (N/M)` only when items overflow the visible area
         (when (and (> n (+ scroll-offset height)) (pos? n))
           (vswap! lines conj ((:scroll-info theme) (str "  (" (inc selected) "/" n ")"))))
         @lines)))
 
-  (handle-input [this data]
+  (handle-input [_this data]
     (let [items @items-atom
           filter-str @filter-atom
           filtered (if (empty? filter-str)

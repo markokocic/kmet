@@ -1,5 +1,7 @@
 (ns kmet.app.ui.test-user-message
-  (:require [clojure.test :as t :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :as t :refer [deftest is testing]]
+            [kmet.tui.theme :as theme]
             [kmet.tui.core :as core]
             [kmet.app.ui.user-message :as um]))
 
@@ -14,11 +16,11 @@
 
 (deftest test-render-shows-content
   (testing "render shows the message text"
-    (let [c (um/make-user-message :text "Hello world")]
-      (let [lines (core/render c 40)]
-        (is (pos? (count lines)))
-        (is (some #(re-find #"Hello world" %) (mapv strip-ansi lines)))
-        "User message content should be visible"))))
+    (let [c (um/make-user-message :text "Hello world")
+          lines (core/render c 40)]
+      (is (pos? (count lines)))
+      (is (some #(re-find #"Hello world" %) (mapv strip-ansi lines)))
+      "User message content should be visible")))
 
 (deftest test-render-no-old-header
   (testing "no old-style ─── You header"
@@ -27,10 +29,10 @@
 
 (deftest test-render-background
   (testing "renders with user-message-bg background"
-    (let [c (um/make-user-message :text "test")]
-      (let [lines (core/render c 40)]
-        (is (every? #(re-find #"\u001b\[48" %) lines)
-            "All lines should have background ANSI codes")))))
+    (let [c (um/make-user-message :text "test")
+          lines (core/render c 40)]
+      (is (every? #(re-find #"\u001b\[48" %) lines)
+          "All lines should have background ANSI codes"))))
 
 (deftest test-set-text
   (testing "set-text! updates content"
@@ -58,6 +60,6 @@
 
 (deftest test-long-text-wraps
   (testing "long text wraps to fit width"
-    (let [c (um/make-user-message :text (apply str (repeat 200 "x")))]
-      (let [lines (core/render c 40)]
-        (is (> (count lines) 3) "Long text should wrap to multiple lines")))))
+    (let [c (um/make-user-message :text (apply str (repeat 200 "x")))
+          lines (core/render c 40)]
+      (is (> (count lines) 3) "Long text should wrap to multiple lines"))))

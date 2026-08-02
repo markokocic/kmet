@@ -1,5 +1,6 @@
 (ns kmet.tui.utils
-  "Text width calculation and wrapping utilities.")
+  "Text width calculation and wrapping utilities."
+  (:require [clojure.string :as str]))
 
 ;; ─── Cursor marker ────────────────────────────────────────────────────────
 ;; Zero-width APC sequence emitted at cursor position for IME positioning.
@@ -46,8 +47,7 @@
    Pure Clojure implementation (no .codePointAt).
    Handles surrogate pairs for characters outside the BMP."
   [s i]
-  (let [c (int (nth s i))
-        hi (int (first (str (char 0xd800))))]
+  (let [c (int (nth s i))]
     (if (and (>= c 0xD800) (<= c 0xDBFF) (< (inc i) (count s)))
       ;; High surrogate followed by low surrogate
       (let [low (int (nth s (inc i)))]
@@ -59,14 +59,14 @@
    Skips the ANSI-stripping step for efficiency."
   [s]
   (if (empty? s) 0
-    (if (re-find #"[^\u0020-\u007e]" s)
-      (loop [i 0, n (count s), total 0]
-        (if (>= i n) total
-          (let [cp (code-point-at s i)
-                w (char-width cp)
-                nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
-            (recur (+ i nchars) n (+ total w)))))
-      (count s))))
+      (if (re-find #"[^\u0020-\u007e]" s)
+        (loop [i 0, n (count s), total 0]
+          (if (>= i n) total
+              (let [cp (code-point-at s i)
+                    w (char-width cp)
+                    nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
+                (recur (+ i nchars) n (+ total w)))))
+        (count s))))
 
 (defn visible-width
   "Calculate the visible display width of a string in terminal columns.

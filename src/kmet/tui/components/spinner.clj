@@ -15,7 +15,7 @@
 (defrecord Spinner [active-atom text-atom start-atom frames-atom interval-ms-atom
                     prefix-atom spinner-color-fn-atom message-color-fn-atom]
   protocols/IComponent
-  (render [this width]
+  (render [_this width]
     (if-not @active-atom
       []  ;; invisible when inactive
       (let [elapsed (- (System/nanoTime) @start-atom)

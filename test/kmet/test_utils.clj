@@ -1,5 +1,6 @@
 (ns kmet.test-utils
-  (:require [clojure.test :as t]
+  (:require [clojure.string :as str]
+            [clojure.test :as t]
             [kmet.tui.utils :as u]))
 
 (t/deftest test-visible-width
@@ -28,7 +29,7 @@
     (t/is (not-any? empty? lines) "no blank lines from word wrapping")
     (t/is (= 65 (apply + (map u/visible-width lines))) "all characters kept")
     (t/is (clojure.string/includes? (last lines) "more")
-      "a following word joins the long word's last piece")))
+          "a following word joins the long word's last piece")))
 
 (t/deftest test-wrap-ansi-survives-break
   ;; The fg escape on a styled long word is re-applied to continuation lines.
@@ -36,12 +37,12 @@
         lines (u/wrap-text-with-ansi styled 22)]
     (t/is (= 60 (apply + (map u/visible-width lines))))
     (t/is (clojure.string/includes? (first lines) "\u001b[38")
-      "first piece keeps the fg code")
+          "first piece keeps the fg code")
     (t/is (clojure.string/includes? (second lines) "\u001b[38")
-      "continuation piece is re-styled")))
+          "continuation piece is re-styled")))
 
 (t/deftest test-wrap-cjk-width
   (let [lines (u/wrap-text-with-ansi (clojure.string/join "" (repeat 15 "汉字")) 22)]
     (t/is (= [22 22 16] (mapv u/visible-width lines))
-      "wide characters counted as 2 columns")
+          "wide characters counted as 2 columns")
     (t/is (= 60 (apply + (map u/visible-width lines))))))

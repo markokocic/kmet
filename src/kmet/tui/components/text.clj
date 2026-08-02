@@ -1,6 +1,7 @@
 (ns kmet.tui.components.text
   "Text component - displays multi-line text with word wrapping."
-  (:require [kmet.tui.utils :as u]
+  (:require [clojure.string :as str]
+            [kmet.tui.utils :as u]
             [kmet.tui.macros :refer [track! defcomponent]]))
 
 (defcomponent Text nil [text-atom padding-x padding-y bg-fn cache]
@@ -27,7 +28,7 @@
                      []
                      (into [] (concat pad-lines content-lines pad-lines)))]
         result)))
-  (invalidate [this] (reset! cache nil)))
+  (invalidate [_this] (reset! cache nil)))
 
 (defn make-text
   ([text] (make-text text 1 1 nil))

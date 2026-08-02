@@ -41,29 +41,29 @@
                                         :is-partial true})))))]
     (try
       (let [result (bash-exec/execute-bash
-                     {:command command
-                      :cwd (or (System/getProperty "user.dir") ".")
-                      :timeout timeout  ;; nil = no timeout (pi: optional, no default)
-                      :on-chunk (fn [chunk]
-                                  (swap! live-chunks conj chunk)
-                                  (swap! live-bytes + (byte-length chunk))
-                                  (trim-live!)
-                                  (send-update))
-                      :max-lines bash-exec/DEFAULT-MAX-LINES
-                      :max-bytes bash-exec/DEFAULT-MAX-BYTES})
-          {:keys [output exit-code cancelled truncated truncation full-output-path timed-out]} result]
-      ;; Pi: [Showing lines X-Y of Z. Full output: path] footer for the LLM
-      ;; (stripped from the TUI display by the bash render-result, which
-      ;; shows the truncation warning instead)
-      (let [footer (when (and truncation full-output-path)
+                    {:command command
+                     :cwd (or (System/getProperty "user.dir") ".")
+                     :timeout timeout  ;; nil = no timeout (pi: optional, no default)
+                     :on-chunk (fn [chunk]
+                                 (swap! live-chunks conj chunk)
+                                 (swap! live-bytes + (byte-length chunk))
+                                 (trim-live!)
+                                 (send-update))
+                     :max-lines bash-exec/DEFAULT-MAX-LINES
+                     :max-bytes bash-exec/DEFAULT-MAX-BYTES})
+            {:keys [output exit-code cancelled truncated truncation full-output-path timed-out]} result
+            ;; Pi: [Showing lines X-Y of Z. Full output: path] footer for the LLM
+            ;; (stripped from the TUI display by the bash render-result, which
+            ;; shows the truncation warning instead)
+            footer (when (and truncation full-output-path)
                      (let [total-lines (:total-lines truncation)
                            output-lines (:output-lines truncation)
                            start-line (+ (- total-lines output-lines) 1)
                            end-line total-lines
                            limit-str (when (= (:truncated-by truncation) :bytes)
                                        (str " (" (bash-exec/format-size
-                                                   (or (:max-bytes truncation)
-                                                       bash-exec/DEFAULT-MAX-BYTES))
+                                                  (or (:max-bytes truncation)
+                                                      bash-exec/DEFAULT-MAX-BYTES))
                                             " limit)"))]
                        (str "\n\n[Showing lines " start-line "-" end-line " of " total-lines
                             limit-str ". Full output: " full-output-path "]")))]
@@ -98,9 +98,9 @@
                                     :max-lines (:max-lines truncation)
                                     :full-output-path full-output-path}))
               {:content content
-               :is-error is-error})))))
-    (catch Exception e
-      (let [msg (ex-message e)]
-        (if (str/includes? msg "timeout")
-          {:content (str "Command timed out after " (or timeout "?") " seconds") :is-error true}
-          {:content (str "Error: " msg) :is-error true}))))))
+               :is-error is-error}))))
+      (catch Exception e
+        (let [msg (ex-message e)]
+          (if (str/includes? msg "timeout")
+            {:content (str "Command timed out after " (or timeout "?") " seconds") :is-error true}
+            {:content (str "Error: " msg) :is-error true}))))))

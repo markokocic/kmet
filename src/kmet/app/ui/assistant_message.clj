@@ -37,35 +37,22 @@
                 (str left-pad (theme/fg theme :thinking-text (theme/italic line))))
               md-lines)))))
 
-(defn- cursor-line
-  "Return a cursor indicator line or nil."
-  [left-pad theme finalized has-content]
-  (when (and (not finalized) has-content)
-    (str left-pad (theme/bold (theme/fg theme :muted "▍")))))
-
 (declare reflow-all!)
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
 (defcomponent AssistantMessageComponent :assistant
-  [text-atom thinking-text-atom theme-atom
-   output-pad-atom hide-thinking-atom finalized-atom
-   rendered-text-lines-atom
-   rendered-thinking-lines-atom
-   rendered-text-atom        ;; text source of the cached lines (stale check)
-   rendered-thinking-atom    ;; thinking source of the cached lines (stale check)
-   last-render-width-atom
-   cache-atom]
+              [text-atom thinking-text-atom theme-atom
+               output-pad-atom hide-thinking-atom
+               rendered-text-lines-atom
+               rendered-thinking-lines-atom
+               rendered-text-atom        ;; text source of the cached lines (stale check)
+               rendered-thinking-atom    ;; thinking source of the cached lines (stale check)
+               last-render-width-atom
+               cache-atom]
   (render [this width]
     (track! this width
-      (let [theme @theme-atom
-            output-pad @output-pad-atom
-            hide? @hide-thinking-atom
-            finalized @finalized-atom
-            pad-x output-pad
-            cw (max 1 (- width (* 2 pad-x)))
-            left-pad (apply str (repeat pad-x \space))
-            prev-width @last-render-width-atom
+      (let [prev-width @last-render-width-atom
             ;; Pi trims each content block (content.text.trim()); whitespace-only
             ;; blocks render nothing (and get no Spacer(1)).
             text (let [t (str/trim (or @text-atom ""))] (when (seq t) t))
@@ -86,16 +73,13 @@
         (if (and text-empty? thinking-empty?)
           []
           ;; Normal: render with reactive cache + top pad-y=1 only (Pi-style Spacer(1) equivalent)
-          (let [cursor (cursor-line left-pad theme finalized
-                          (or (seq thinking) (seq text)))
-                pad-y 1
+          (let [pad-y 1
                 empty (apply str (repeat width \space))
                 ;; Pi-style: spacer between thinking and text blocks when text follows
                 thinking-text-spacer? (and (seq thinking) (seq text))
                 content (vec (concat thinking-lines
                                      (when thinking-text-spacer? [empty])
-                                     text-lines
-                                     (when cursor [cursor])))]
+                                     text-lines))]
             ;; Pi-style: top padding only (Spacer(1) equivalent).
             ;; No bottom padding — next component provides its own top spacing.
             (vec (concat (repeat pad-y empty)
@@ -118,9 +102,9 @@
         text (str/trim (or @(:text-atom comp) ""))
         thinking (str/trim (or @(:thinking-text-atom comp) ""))]
     (reset! (:rendered-text-lines-atom comp)
-      (wrap-text-to-width text cw left-pad theme))
+            (wrap-text-to-width text cw left-pad theme))
     (reset! (:rendered-thinking-lines-atom comp)
-      (render-thinking-to-width thinking cw left-pad theme hide?))
+            (render-thinking-to-width thinking cw left-pad theme hide?))
     (reset! (:rendered-text-atom comp) text)
     (reset! (:rendered-thinking-atom comp) thinking)
     (reset! (:last-render-width-atom comp) width)))
@@ -128,21 +112,20 @@
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-assistant-message
-  [& {:keys [text thinking theme output-pad hide-thinking? finalized?]
+  [& {:keys [text thinking theme output-pad hide-thinking?]
       :or {text "" thinking "" theme theme/dark-theme
-           output-pad 1 hide-thinking? false finalized? false}}]
+           output-pad 1 hide-thinking? false}}]
   (let [comp (map->AssistantMessageComponent {:text-atom (atom text)
-                          :thinking-text-atom (atom thinking)
-                          :theme-atom (atom theme)
-                          :output-pad-atom (atom output-pad)
-                          :hide-thinking-atom (atom hide-thinking?)
-                          :finalized-atom (atom finalized?)
-                          :rendered-text-lines-atom (atom [])
-                          :rendered-thinking-lines-atom (atom [])
-                          :rendered-text-atom (atom nil)
-                          :rendered-thinking-atom (atom nil)
-                          :last-render-width-atom (atom nil)
-                          :cache-atom (atom nil)})]
+                                              :thinking-text-atom (atom thinking)
+                                              :theme-atom (atom theme)
+                                              :output-pad-atom (atom output-pad)
+                                              :hide-thinking-atom (atom hide-thinking?)
+                                              :rendered-text-lines-atom (atom [])
+                                              :rendered-thinking-lines-atom (atom [])
+                                              :rendered-text-atom (atom nil)
+                                              :rendered-thinking-atom (atom nil)
+                                              :last-render-width-atom (atom nil)
+                                              :cache-atom (atom nil)})]
     ;; Do initial render so lines are ready immediately
     (reflow-all! comp 80)
     comp))
@@ -161,9 +144,6 @@
 
 (defn assistant-message-append-thinking! [comp text]
   (swap! (:thinking-text-atom comp) str text))
-
-(defn assistant-message-finalize! [comp]
-  (reset! (:finalized-atom comp) true))
 
 (defsetter assistant-message-set-hide-thinking! :hide-thinking-atom comp hide?
   (when-let [w @(:last-render-width-atom comp)]

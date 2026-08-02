@@ -2,8 +2,7 @@
   "Line-oriented Myers O(ND) diff algorithm.
    Pure functions, no project dependencies. In a JVM Clojure project this
    would be io.github.java-diff-utils; kept in-house because Babashka can't
-   run it."
-  (:require [clojure.string :as str]))
+   run it.")
 
 (defn diff-region
   "Trim the common prefix/suffix from old/new line vectors.
@@ -44,9 +43,9 @@
                                    (< (aget v (dec ki)) (aget v (inc ki)))))
                     x (if down? (aget v (inc ki)) (inc (aget v (dec ki))))
                     x (loop [x x y (- x k)]
-                         (if (and (< x n) (< y m) (= (nth a x) (nth b y)))
-                           (recur (inc x) (inc y))
-                           x))
+                        (if (and (< x n) (< y m) (= (nth a x) (nth b y)))
+                          (recur (inc x) (inc y))
+                          x))
                     y (- x k)]
                 (aset v ki x)
                 (when (and (>= x n) (>= y m))

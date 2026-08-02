@@ -16,7 +16,7 @@
         cached
         (let [caps (img/get-capabilities)
               max-width (max 1 (min (- width 2)
-                                   (or (:max-width-cells (:options this)) 60)))
+                                    (or (:max-width-cells (:options this)) 60)))
               cell-dims (img/get-cell-dimensions)
               default-max-height (max 1 (Math/ceil
                                          (/ (* max-width (:width-px cell-dims))
@@ -28,11 +28,11 @@
                                            (reset! image-id-atom id)
                                            id))
                             result (img/render-image base64-data dimensions
-                                      :mime-type mime-type
-                                      :max-width-cells max-width
-                                      :max-height-cells max-height
-                                      :image-id image-id
-                                      :move-cursor false)]
+                                                     :mime-type mime-type
+                                                     :max-width-cells max-width
+                                                     :max-height-cells max-height
+                                                     :image-id image-id
+                                                     :move-cursor false)]
                         (if result
                           ;; Kitty: sequence on first line, blank padding lines
                           ;; so TUI accounts for image height
@@ -41,17 +41,17 @@
                                   (repeat (dec rows) "")))
                           ;; Render failed — fallback
                           [(img/image-fallback mime-type
-                             :dimensions dimensions
-                             :filename (:filename options))]))
+                                               :dimensions dimensions
+                                               :filename (:filename options))]))
                       ;; No image protocol — text fallback
                       [(img/image-fallback mime-type
-                         :dimensions dimensions
-                         :filename (:filename options))])]
+                                           :dimensions dimensions
+                                           :filename (:filename options))])]
           (reset! cache-atom lines)
           (reset! last-width-atom width)
           lines))))
   (handle-input [_this _data] nil)
-  (invalidate [this]
+  (invalidate [_this]
     (reset! cache-atom nil)))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
@@ -63,20 +63,20 @@
    theme — {:fallback-color (fn [str] -> str)}
    opts — :max-width-cells, :max-height-cells, :filename, :image-id"
   [base64-data mime-type theme & {:keys [max-width-cells max-height-cells filename image-id]
-                                   :or {max-width-cells 60}}]
+                                  :or {max-width-cells 60}}]
   (let [dimensions (or (img/get-image-dimensions base64-data mime-type)
                        {:width-px 800 :height-px 600})]
     (map->ImageComponent
-      {:base64-data base64-data
-       :mime-type mime-type
-       :dimensions dimensions
-       :theme-atom (atom theme)
-       :options {:max-width-cells max-width-cells
-                 :max-height-cells max-height-cells
-                 :filename filename}
-       :image-id-atom (atom image-id)
-       :cache-atom (atom nil)
-       :last-width-atom (atom nil)})))
+     {:base64-data base64-data
+      :mime-type mime-type
+      :dimensions dimensions
+      :theme-atom (atom theme)
+      :options {:max-width-cells max-width-cells
+                :max-height-cells max-height-cells
+                :filename filename}
+      :image-id-atom (atom image-id)
+      :cache-atom (atom nil)
+      :last-width-atom (atom nil)})))
 
 ;; ─── Public API ─────────────────────────────────────────────────────────
 

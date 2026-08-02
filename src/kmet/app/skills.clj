@@ -288,7 +288,7 @@
         snippets (into {} (keep (fn [t]
                                   (when (seq (:prompt-snippet t))
                                     [(:name t) (:prompt-snippet t)])))
-                           tools)
+                       tools)
         tool-guidelines (mapcat #(or (:prompt-guidelines %) []) tools)
         skills (or skills (get-skills))
         context-files (or context-files [])
@@ -307,14 +307,14 @@
       (let [visible-tools (filter #(contains? snippets %) selected-tools)
             tools-list (if (seq visible-tools)
                          (str/join "\n" (map (fn [name]
-                                                (str "- " name ": " (get snippets name)))
-                                              visible-tools))
+                                               (str "- " name ": " (get snippets name)))
+                                             visible-tools))
                          "(none)")
             guidelines (str/join "\n"
-                                (map #(str "- " %)
-                                     (build-guidelines selected-tools
-                                                       (concat tool-guidelines
-                                                               prompt-guidelines))))]
+                                 (map #(str "- " %)
+                                      (build-guidelines selected-tools
+                                                        (concat tool-guidelines
+                                                                prompt-guidelines))))]
         (str default-base-prompt
              "\n\nAvailable tools:\n" tools-list
              "\n\nIn addition to the tools above, you may have access to other custom tools depending on the project."

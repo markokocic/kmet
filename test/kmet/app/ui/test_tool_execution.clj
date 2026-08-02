@@ -14,23 +14,23 @@
 
 (deftest test-render-name
   (testing "renders tool name"
-    (let [c (te/make-tool-execution :name "read_file")]
-      (let [plain (mapv strip-ansi (core/render c 40))]
-        (is (some #(re-find #"read_file" %) plain))))))
+    (let [c (te/make-tool-execution :name "read_file")
+          plain (mapv strip-ansi (core/render c 40))]
+      (is (some #(re-find #"read_file" %) plain)))))
 
 (deftest test-render-content
   (testing "renders tool output content"
-    (let [c (te/make-tool-execution :name "ls" :content "file1\nfile2")]
-      (let [plain (mapv strip-ansi (core/render c 40))]
-        (is (some #(re-find #"file1" %) plain))
-        (is (some #(re-find #"file2" %) plain))))))
+    (let [c (te/make-tool-execution :name "ls" :content "file1\nfile2")
+          plain (mapv strip-ansi (core/render c 40))]
+      (is (some #(re-find #"file1" %) plain))
+      (is (some #(re-find #"file2" %) plain)))))
 
 (deftest test-render-error
   (testing "error tool uses tool-error-bg"
-    (let [c (te/make-tool-execution :name "my-tool" :content "failed" :is-error true)]
-      (let [rendered (core/render c 40)]
+    (let [c (te/make-tool-execution :name "my-tool" :content "failed" :is-error true)
+          rendered (core/render c 40)]
         ;; Content visible for errors
-        (is (some #(re-find #"failed" %) (mapv strip-ansi rendered)))))))
+      (is (some #(re-find #"failed" %) (mapv strip-ansi rendered))))))
 
 (deftest test-set-name
   (testing "set-name! updates tool name"
@@ -59,9 +59,9 @@
 
 (deftest test-empty-name
   (testing "empty name still renders"
-    (let [c (te/make-tool-execution :name "" :content "just content")]
-      (let [plain (mapv strip-ansi (core/render c 40))]
-        (is (some #(re-find #"just content" %) plain))))))
+    (let [c (te/make-tool-execution :name "" :content "just content")
+          plain (mapv strip-ansi (core/render c 40))]
+      (is (some #(re-find #"just content" %) plain)))))
 
 (deftest test-set-output-pad
   (testing "set-output-pad! rebuilds the box with the new horizontal padding"
@@ -184,8 +184,8 @@
     (let [f "target/test-tools-edit-resultdiff.txt"]
       (spit f "alpha\nbeta\ngamma")
       (let [c (te/make-tool-execution
-                :name "edit"
-                :args {:path f :old-text "beta" :new-text "BETA"})]
+               :name "edit"
+               :args {:path f :old-text "beta" :new-text "BETA"})]
         (te/tool-execution-set-args-complete! c)
         ;; preview computed against the original file
         (let [plain (mapv strip-ansi (core/render c 60))]
@@ -194,10 +194,10 @@
         ;; that differs from the previewed one
         (spit f "alpha\nbeta\ngamma\ndelta")
         (te/tool-execution-set-content! c
-          "Successfully replaced 1 block(s) in target/test-tools-edit-resultdiff.txt.")
+                                        "Successfully replaced 1 block(s) in target/test-tools-edit-resultdiff.txt.")
         (te/tool-execution-set-error! c false)
         (te/tool-execution-set-details! c
-          {:diff (str " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma\n 4 delta")})
+                                        {:diff (str " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma\n 4 delta")})
         ;; this pass still shows the stale preview; the result corrects the cache
         (let [plain (mapv strip-ansi (core/render c 60))]
           (is (some #(re-find #"\+2 BETA" %) plain)))
@@ -210,11 +210,11 @@
   (testing "replayed edit result (args incomplete, pi restore) shows the applied diff via details"
     (spit "target/test-tools-edit-replay.txt" "alpha\nBETA\ngamma")
     (let [c (te/make-tool-execution
-              :name "edit"
-              :args {:path "target/test-tools-edit-replay.txt"
-                     :old-text "beta" :new-text "BETA"}
-              :content "Successfully replaced 1 block(s) in target/test-tools-edit-replay.txt."
-              :details {:diff (str " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma")})]
+             :name "edit"
+             :args {:path "target/test-tools-edit-replay.txt"
+                    :old-text "beta" :new-text "BETA"}
+             :content "Successfully replaced 1 block(s) in target/test-tools-edit-replay.txt."
+             :details {:diff (str " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma")})]
       (te/tool-execution-set-error! c false)
       ;; first pass: render-result corrects the preview from details
       (core/render c 60)
@@ -227,18 +227,17 @@
   (testing "edit result matching the preview leaves the call box unchanged (no re-preview)"
     (spit "target/test-tools-edit-match.txt" "alpha\nbeta\ngamma")
     (let [c (te/make-tool-execution
-              :name "edit"
-              :args {:path "target/test-tools-edit-match.txt"
-                     :old-text "beta" :new-text "BETA"})]
+             :name "edit"
+             :args {:path "target/test-tools-edit-match.txt"
+                    :old-text "beta" :new-text "BETA"})]
       (te/tool-execution-set-args-complete! c)
       (let [before (mapv strip-ansi (core/render c 60))]
         (te/tool-execution-set-content! c
-          "Successfully replaced 1 block(s) in target/test-tools-edit-match.txt.")
+                                        "Successfully replaced 1 block(s) in target/test-tools-edit-match.txt.")
         (te/tool-execution-set-error! c false)
         (te/tool-execution-set-details! c
-          {:diff (str " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma")})
-        (let [after (mapv strip-ansi (core/render c 60))
-              after2 (mapv strip-ansi (core/render c 60))]
+                                        {:diff (str " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma")})
+        (let [after2 (mapv strip-ansi (core/render c 60))]
           ;; identical diff: no correction, no stale-file error
           (is (= before after2))
           (is (not-any? #(re-find #"Could not find old-text" %) after2)))))))
@@ -248,8 +247,8 @@
     (let [f "target/test-tools-edit-cache.txt"]
       (spit f "alpha\nbeta\ngamma")
       (let [c (te/make-tool-execution
-                :name "edit"
-                :args {:path f :old-text "beta" :new-text "BETA"})]
+               :name "edit"
+               :args {:path f :old-text "beta" :new-text "BETA"})]
         (te/tool-execution-set-args-complete! c)
         ;; First render: preview succeeds against the original file
         (let [plain (mapv strip-ansi (core/render c 60))]
@@ -268,13 +267,13 @@
   (testing "edit call shows pending box (no diff) until args are complete (pi argsComplete)"
     (spit "target/test-tools-edit-pending.txt" "alpha")
     (let [c (te/make-tool-execution
-              :name "edit"
-              :args {:path "target/test-tools-edit-pending.txt"
-                     :old-text "alpha" :new-text "ALPHA"})]
+             :name "edit"
+             :args {:path "target/test-tools-edit-pending.txt"
+                    :old-text "alpha" :new-text "ALPHA"})
       ;; args-complete is false here — no preview yet
-      (let [plain (mapv strip-ansi (core/render c 60))]
-        (is (some #(re-find #"edit" %) plain))
-        (is (not-any? #(re-find #"\+1 ALPHA" %) plain))))))
+          plain (mapv strip-ansi (core/render c 60))]
+      (is (some #(re-find #"edit" %) plain))
+      (is (not-any? #(re-find #"\+1 ALPHA" %) plain)))))
 
 (deftest test-read-compact-skill
   (testing "SKILL.md reads render as [skill] label + expand hint (pi getCompactReadClassification)"

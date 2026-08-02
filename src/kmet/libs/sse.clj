@@ -114,7 +114,7 @@
         (let [line (.readLine rdr)]
           (if (nil? line)
             (handler {:type :done :stop-reason :connection-closed})
-            (when (and (not (and signal @signal)))
+            (when (not (and signal @signal))
               (let [[ev data] (parse-sse-line line)]
                 (cond
                   ev (recur data buf)

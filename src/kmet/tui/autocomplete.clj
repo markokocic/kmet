@@ -110,7 +110,7 @@
     :else path))
 
 (defn- build-completion-value
-  [path {:keys [is-directory is-at-prefix is-quoted-prefix]}]
+  [path {:keys [is-at-prefix is-quoted-prefix]}]
   (let [needs-quotes? (or is-quoted-prefix (str/includes? path " "))
         prefix (if is-at-prefix "@" "")]
     (if needs-quotes?
@@ -183,10 +183,10 @@
                             is-dir? (fs/directory? p)
                             rel (relative-path raw-prefix name)
                             value (build-completion-value
-                                    (str rel (when is-dir? "/"))
-                                    {:is-directory is-dir?
-                                     :is-at-prefix is-at-prefix
-                                     :is-quoted-prefix is-quoted-prefix})]
+                                   (str rel (when is-dir? "/"))
+                                   {:is-directory is-dir?
+                                    :is-at-prefix is-at-prefix
+                                    :is-quoted-prefix is-quoted-prefix})]
                         {:value value
                          :label (str name (when is-dir? "/"))
                          :description nil}))
@@ -277,10 +277,10 @@
 (defrecord CombinedAutocompleteProvider [commands-fn base-path trigger-chars]
   AutocompleteProvider
 
-  (get-trigger-characters [this]
+  (get-trigger-characters [_this]
     trigger-chars)
 
-  (get-suggestions [this lines cursor-line cursor-col {:keys [force]}]
+  (get-suggestions [_this lines cursor-line cursor-col {:keys [force]}]
     (let [line (or (nth lines cursor-line) "")
           cursor-col (min cursor-col (count line))
           before (subs line 0 cursor-col)]
@@ -295,7 +295,7 @@
               (when (seq suggestions)
                 {:items suggestions :prefix path-prefix})))))))
 
-  (apply-completion [this lines cursor-line cursor-col item prefix]
+  (apply-completion [_this lines cursor-line cursor-col item prefix]
     (let [line (or (nth lines cursor-line) "")
           cursor-col (min cursor-col (count line))
           before-prefix (subs line 0 (max 0 (- cursor-col (count prefix))))
@@ -312,9 +312,6 @@
                                  (str/blank? (str/trim before-prefix))
                                  (not (str/includes? (subs prefix 1) "/")))
           is-at-prefix? (str/starts-with? prefix "@")
-          text-before-cursor (subs line 0 cursor-col)
-          is-arg-completion? (and (str/includes? text-before-cursor "/")
-                                  (str/includes? text-before-cursor " "))
           is-dir? (str/ends-with? (:label item) "/")
           cursor-offset (if (and is-dir? has-trailing-quote?) (dec (count value)) (count value))
           [new-line new-col]
@@ -335,7 +332,7 @@
        :cursor-line cursor-line
        :cursor-col new-col}))
 
-  (should-trigger-file-completion [this lines cursor-line cursor-col]
+  (should-trigger-file-completion [_this lines cursor-line cursor-col]
     (let [line (or (nth lines cursor-line) "")
           before (str/trim (subs line 0 cursor-col))]
       ;; Don't offer file completion for a bare slash command name
@@ -353,6 +350,6 @@
   [& {:keys [commands-fn base-path trigger-chars]
       :or {commands-fn (constantly []) trigger-chars []}}]
   (map->CombinedAutocompleteProvider
-    {:commands-fn commands-fn
-     :base-path (or base-path (System/getProperty "user.dir"))
-     :trigger-chars (vec trigger-chars)}))
+   {:commands-fn commands-fn
+    :base-path (or base-path (System/getProperty "user.dir"))
+    :trigger-chars (vec trigger-chars)}))

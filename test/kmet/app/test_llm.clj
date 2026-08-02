@@ -15,8 +15,8 @@
 (t/deftest test-llm-no-api-key
   (let [errors (atom [])
         fut (llm/send-message
-              {:provider :openai
-               :on-error (fn [e] (swap! errors conj e))})]
+             {:provider :openai
+              :on-error (fn [e] (swap! errors conj e))})]
     @fut  ;; wait for future
     (t/is (pos? (count @errors)))
     (t/is (.contains (first @errors) "No API key"))))
@@ -24,8 +24,8 @@
 (t/deftest test-llm-no-api-key-anthropic
   (let [errors (atom [])
         fut (llm/send-message
-              {:provider :anthropic
-               :on-error (fn [e] (swap! errors conj e))})]
+             {:provider :anthropic
+              :on-error (fn [e] (swap! errors conj e))})]
     @fut
     (t/is (pos? (count @errors)))
     (t/is (.contains (first @errors) "No API key"))))
@@ -35,9 +35,9 @@
 (t/deftest test-llm-unknown-provider
   (let [errors (atom [])
         fut (llm/send-message
-              {:provider :unknown
-               :api-key "test"
-               :on-error (fn [e] (swap! errors conj e))})]
+             {:provider :unknown
+              :api-key "test"
+              :on-error (fn [e] (swap! errors conj e))})]
     @fut
     (t/is (pos? (count @errors)))
     (t/is (.contains (first @errors) "Unknown provider"))))
@@ -66,9 +66,9 @@
 (t/deftest test-llm-no-tools
   (let [errors (atom [])
         fut (llm/send-message
-              {:provider :openai
-               :tools []
-               :on-error (fn [e] (swap! errors conj e))})]
+             {:provider :openai
+              :tools []
+              :on-error (fn [e] (swap! errors conj e))})]
     @fut
     (t/is (pos? (count @errors)))))
 

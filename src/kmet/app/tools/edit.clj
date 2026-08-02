@@ -55,8 +55,8 @@
                   (edit-diff/apply-edits-to-normalized-content normalized edits path)
                   final (str bom (edit-diff/restore-line-endings new-content original-ending))
                   {:keys [diff]} (edit-diff/format-diff-lines
-                                   (str/split-lines normalized)
-                                   (str/split-lines new-content))]
+                                  (str/split-lines normalized)
+                                  (str/split-lines new-content))]
               (spit f final)
               {:content (str "Successfully replaced " (count edits) " block(s) in " path ".")
                ;; Pi: EditToolDetails.diff — the actually-applied diff, used by

@@ -23,7 +23,6 @@
 (def assistant-message-append-text! assistant-message/assistant-message-append-text!)
 (def assistant-message-set-thinking! assistant-message/assistant-message-set-thinking!)
 (def assistant-message-append-thinking! assistant-message/assistant-message-append-thinking!)
-(def assistant-message-finalize! assistant-message/assistant-message-finalize!)
 (def assistant-message-set-hide-thinking! assistant-message/assistant-message-set-hide-thinking!)
 (def assistant-message-get-text assistant-message/assistant-message-get-text)
 (def assistant-message-get-thinking assistant-message/assistant-message-get-thinking)

@@ -3,8 +3,7 @@
    Port of @earendil-works/pi-tui ProcessTerminal.
    API is backward-compatible with JLine 3; implementation uses FFM/JNI.")
 
-(import '(org.jline.terminal TerminalBuilder Terminal)
-        '(java.io Writer))
+(import '(org.jline.terminal TerminalBuilder Terminal))
 
 (defprotocol ITerminal
   (start! [this on-input on-resize] "Enter raw mode, start reading input")
@@ -61,5 +60,5 @@
 
 (defn create-dumb-terminal []
   (let [t (TerminalBuilder/terminal
-            (into-array Object ["dumb" true "system" false]))]
+           (into-array Object ["dumb" true "system" false]))]
     (map->JLineTerminal {:terminal t})))

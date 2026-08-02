@@ -12,14 +12,14 @@
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
 (defcomponent UserMessageComponent :user
-  [box           ;; Box wrapping the text
-   text-comp     ;; Text child component
-   text-atom     ;; raw text (uncolored, for backward compat)
-   theme-atom
-   output-pad-atom]
-  (render [this width]
+              [box           ;; Box wrapping the text
+               text-comp     ;; Text child component
+               text-atom     ;; raw text (uncolored, for backward compat)
+               theme-atom
+               output-pad-atom]
+  (render [_this width]
     (protocols/render @box width))
-  (invalidate [this]
+  (invalidate [_this]
     (protocols/invalidate @box)))
 
 ;; ─── Public API (defined before make-user-message to avoid forward ref) ───

@@ -167,10 +167,10 @@
 ;; ─── Render ───────────────────────────────────────────────────────────────
 
 (t/deftest test-input-render-empty
-  (let [inp (input/make-input)]
-    (let [lines (core/render inp 10)]
-      (t/is (= 1 (count lines)))
-      (t/is (str/starts-with? (first lines) "> ")))))
+  (let [inp (input/make-input)
+        lines (core/render inp 10)]
+    (t/is (= 1 (count lines)))
+    (t/is (str/starts-with? (first lines) "> "))))
 
 (t/deftest test-input-render-with-text
   (let [inp (input/make-input)]

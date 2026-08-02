@@ -58,7 +58,7 @@
   [pid]
   (try
     (:exit @(proc/process ["kill" "-9" (str "-" pid)]
-             {:out :inherit :err :ignore}))
+                          {:out :inherit :err :ignore}))
     (catch Exception _ -1)))
 
 (defn kill-process-tree!
@@ -76,7 +76,7 @@
     ;; Windows: taskkill /T kills the tree natively
     (try
       @(proc/process ["taskkill" "/F" "/T" "/PID" (str pid)]
-        {:out :inherit :err :ignore})
+                     {:out :inherit :err :ignore})
       (catch Exception _e nil))
     (if (zero? (group-kill pid))
       nil

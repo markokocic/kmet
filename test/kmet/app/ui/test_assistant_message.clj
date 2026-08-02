@@ -1,5 +1,6 @@
 (ns kmet.app.ui.test-assistant-message
-  (:require [clojure.test :as t :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
             [kmet.app.ui.assistant-message :as am]))
 
@@ -13,28 +14,28 @@
 
 (deftest test-render-text
   (testing "renders message text"
-    (let [c (am/make-assistant-message :text "Hello world" :finalized? true)]
-      (let [lines (mapv strip-ansi (core/render c 40))]
-        (is (some #(re-find #"Hello world" %) lines))))))
+    (let [c (am/make-assistant-message :text "Hello world")
+          lines (mapv strip-ansi (core/render c 40))]
+      (is (some #(re-find #"Hello world" %) lines)))))
 
 (deftest test-render-thinking
   (testing "renders thinking text in italic"
-    (let [c (am/make-assistant-message :text "response" :thinking "reasoning...")]
-      (let [rendered (core/render c 40)]
+    (let [c (am/make-assistant-message :text "response" :thinking "reasoning...")
+          rendered (core/render c 40)]
         ;; Should have italic ANSI codes
-        (is (some #(re-find #"\u001b\[3m" %) rendered)
-            "Thinking should be in italic")
-        (is (some #(re-find #"reasoning" %) (mapv strip-ansi rendered)))))))
+      (is (some #(re-find #"\u001b\[3m" %) rendered)
+          "Thinking should be in italic")
+      (is (some #(re-find #"reasoning" %) (mapv strip-ansi rendered))))))
 
 (deftest test-hide-thinking
   (testing "when hidden, shows 'Thinking...' label instead of content"
     (let [c (am/make-assistant-message :text "response" :thinking "secret reasoning"
-                                       :hide-thinking? true)]
-      (let [plain (mapv strip-ansi (core/render c 40))]
-        (is (not-any? #(re-find #"secret reasoning" %) plain)
-            "Thinking content should be hidden")
-        (is (some #(re-find #"Thinking" %) plain)
-            "Should show Thinking... label")))))
+                                       :hide-thinking? true)
+          plain (mapv strip-ansi (core/render c 40))]
+      (is (not-any? #(re-find #"secret reasoning" %) plain)
+          "Thinking content should be hidden")
+      (is (some #(re-find #"Thinking" %) plain)
+          "Should show Thinking... label"))))
 
 (deftest test-append-text
   (testing "append-text! updates content during streaming"
@@ -49,19 +50,6 @@
       (am/assistant-message-append-thinking! c "step1 ")
       (am/assistant-message-append-thinking! c "step2")
       (is (= "step1 step2" (am/assistant-message-get-thinking c))))))
-
-(deftest test-finalize-removes-cursor
-  (testing "finalize removes the cursor indicator"
-    (let [c (am/make-assistant-message :text "hello")]
-      ;; Before finalize: should have cursor
-      (let [before (core/render c 40)]
-        (is (some #(re-find #"▍" %) before)
-            "Streaming message should have cursor"))
-      (am/assistant-message-finalize! c)
-      ;; After finalize: cursor gone
-      (let [after (core/render c 40)]
-        (is (not-any? #(re-find #"▍" %) after)
-            "Finalized message should not have cursor")))))
 
 (deftest test-set-text
   (testing "set-text! replaces content"
@@ -85,36 +73,25 @@
 
 (deftest test-empty-message
   (testing "empty message renders nothing (Pi-style: no content → no output)"
-    (let [c (am/make-assistant-message :finalized? true)
+    (let [c (am/make-assistant-message)
           lines (core/render c 40)]
-      (is (zero? (count lines)) "empty finalized message renders []"))))
+      (is (zero? (count lines)) "empty message renders []"))))
 
 (deftest test-only-thinking
   (testing "message with only thinking renders correctly"
-    (let [c (am/make-assistant-message :thinking "just thinking")]
-      (let [plain (mapv strip-ansi (core/render c 40))]
-        (is (some #(re-find #"just thinking" %) plain))))))
-
-(deftest test-cursor-shown-during-streaming
-  (testing "cursor shown when there's content during streaming"
-    (let [c (am/make-assistant-message :text "partial")]
-      (is (some #(re-find #"▍" %) (core/render c 40))))))
-
-(deftest test-no-cursor-for-empty-streaming
-  (testing "no cursor when streaming is empty"
-    (let [c (am/make-assistant-message)]
-      (is (not-any? #(re-find #"▍" %) (core/render c 40))
-          "Empty streaming should not show cursor"))))
+    (let [c (am/make-assistant-message :thinking "just thinking")
+          plain (mapv strip-ansi (core/render c 40))]
+      (is (some #(re-find #"just thinking" %) plain)))))
 
 (deftest test-whitespace-only-renders-nothing
   (testing "whitespace-only text/thinking renders no lines (pi: content.text.trim() check)"
-    (let [c (am/make-assistant-message :text "   \n  " :finalized? true)]
+    (let [c (am/make-assistant-message :text "   \n  ")]
       (is (= [] (mapv strip-ansi (core/render c 40)))
           "no pad line, no content — the block is invisible"))))
 
 (deftest test-text-trimmed
   (testing "leading/trailing whitespace is trimmed before wrap (pi: text.trim())"
-    (let [c (am/make-assistant-message :text "  hello world  " :finalized? true)
+    (let [c (am/make-assistant-message :text "  hello world  ")
           lines (mapv strip-ansi (core/render c 40))]
       (is (some #(re-find #"hello world" %) lines))
       (is (not-any? #(re-find #"^ {2}hello" %) lines)

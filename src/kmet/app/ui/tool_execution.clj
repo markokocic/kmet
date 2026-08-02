@@ -64,14 +64,14 @@
   (let [safe #{\- \_ \. \~ \/ \:}
         bytes (.getBytes ^String s "UTF-8")]
     (apply str
-      (for [b bytes
-            :let [c (bit-and (int b) 0xFF)]]
-        (if (or (and (>= c 0x41) (<= c 0x5A))
-                (and (>= c 0x61) (<= c 0x7A))
-                (and (>= c 0x30) (<= c 0x39))
-                (contains? safe (char c)))
-          (char c)
-          (format "%%%02X" c))))))
+           (for [b bytes
+                 :let [c (bit-and (int b) 0xFF)]]
+             (if (or (and (>= c 0x41) (<= c 0x5A))
+                     (and (>= c 0x61) (<= c 0x7A))
+                     (and (>= c 0x30) (<= c 0x39))
+                     (contains? safe (char c)))
+               (char c)
+               (format "%%%02X" c))))))
 
 (defn- file-url
   "Pi: pathToFileURL(...).href — file:// + percent-encoded absolute path."
@@ -157,7 +157,7 @@
       (let [start-line (or offset 1)
             end-line (when limit (+ start-line limit -1))]
         (theme/fg theme :warning
-          (str ":" start-line (when end-line (str "-" end-line))))))))
+                  (str ":" start-line (when end-line (str "-" end-line))))))))
 
 (defn- expand-key-text
   "Pi: keyText('app.tools.expand') — all resolved key chords joined with '/'."
@@ -167,9 +167,9 @@
 (defn- format-compact-read-call
   "Pi: formatCompactReadCall — skill/resources render as labeled read calls
    with an expand hint instead of a full path."
-  [classification args theme range-str]
+  [classification _args theme range-str]
   (let [expand-hint (theme/fg theme :dim
-                       (str " (" (expand-key-text) " to expand)"))]
+                              (str " (" (expand-key-text) " to expand)"))]
     (if (= :skill (:kind classification))
       (str (theme/fg theme :custom-message-label (theme/bold "[skill] "))
            (theme/fg theme :custom-message-text (:label classification))
@@ -202,8 +202,8 @@
               {:keys [base-content new-content]}
               (edit-diff/apply-edits-to-normalized-content normalized edits path)
               {:keys [diff]} (edit-diff/format-diff-lines
-                               (str/split-lines base-content)
-                               (str/split-lines new-content))]
+                              (str/split-lines base-content)
+                              (str/split-lines new-content))]
           {:success? true
            :diff diff
            :diff-lines (vec (str/split-lines diff))})))
@@ -289,15 +289,15 @@
           (word-diff (tabs (:content (first removed)))
                      (tabs (:content (first added))))]
       [(theme/fg theme :tool-diff-removed
-         (str "-" (:line-num (first removed)) " " removed-line))
+                 (str "-" (:line-num (first removed)) " " removed-line))
        (theme/fg theme :tool-diff-added
-         (str "+" (:line-num (first added)) " " added-line))])
+                 (str "+" (:line-num (first added)) " " added-line))])
     (into []
           (concat
-            (mapv #(theme/fg theme :tool-diff-removed
-                     (str "-" (:line-num %) " " (tabs (:content %)))) removed)
-            (mapv #(theme/fg theme :tool-diff-added
-                     (str "+" (:line-num %) " " (tabs (:content %)))) added)))))
+           (mapv #(theme/fg theme :tool-diff-removed
+                            (str "-" (:line-num %) " " (tabs (:content %)))) removed)
+           (mapv #(theme/fg theme :tool-diff-added
+                            (str "+" (:line-num %) " " (tabs (:content %)))) added)))))
 
 (defn- render-diff-lines
   "Style pi-format diff lines; single -/+ pairs get intra-line inverse
@@ -332,9 +332,9 @@
             (recur (inc i)
                    (conj acc
                          (theme/fg theme :tool-diff-context
-                           (if p
-                             (str " " (:line-num p) " " (tabs (:content p)))
-                             (nth diff-lines i)))))))))))
+                                   (if p
+                                     (str " " (:line-num p) " " (tabs (:content p)))
+                                     (nth diff-lines i)))))))))))
 
 ;; ─── Built-in tool renderers ──────────────────────────────────────────────
 ;; Each render-call takes (name args theme width context) → IComponent or nil.
@@ -355,46 +355,46 @@
    (pending/success/error) with the title and diff/error body."
   [preview raw-path theme cwd]
   (let [box (box/make-box 1 1
-              (cond
-                (nil? preview)       #(theme/bg theme :tool-pending-bg %)
-                (:success? preview)  #(theme/bg theme :tool-success-bg %)
-                :else                #(theme/bg theme :tool-error-bg %)))]
+                          (cond
+                            (nil? preview)       #(theme/bg theme :tool-pending-bg %)
+                            (:success? preview)  #(theme/bg theme :tool-success-bg %)
+                            :else                #(theme/bg theme :tool-error-bg %)))]
     (box/box-add-child box
-      (text/make-text
-        (str (theme/fg theme :tool-title (theme/bold "edit "))
-             (render-tool-path raw-path theme cwd))
-        0 0))
+                       (text/make-text
+                        (str (theme/fg theme :tool-title (theme/bold "edit "))
+                             (render-tool-path raw-path theme cwd))
+                        0 0))
     (when preview
       (box/box-add-child box (spacer/make-spacer 1))
       (box/box-add-child box
-        (text/make-text
-          (if (:success? preview)
-            (str/join "\n" (render-diff-lines (:diff-lines preview) theme))
-            (theme/fg theme :error (:error preview)))
-          0 0)))
+                         (text/make-text
+                          (if (:success? preview)
+                            (str/join "\n" (render-diff-lines (:diff-lines preview) theme))
+                            (theme/fg theme :error (:error preview)))
+                          0 0)))
     box))
 
 (def ^:private builtin-renderers
-  {"read"  {:render-call (fn [name args theme width context]
+  {"read"  {:render-call (fn [_name args theme _width context]
                            (let [raw-path (:file_path args (:path args))
                                  range-str (read-line-range args theme)
                                  classification (when-not (:expanded context)
                                                   (compact-read-classification raw-path (:cwd context)))]
                              (if classification
                                (text/make-text
-                                 (format-compact-read-call classification args theme range-str)
-                                 0 0)
+                                (format-compact-read-call classification args theme range-str)
+                                0 0)
                                (text/make-text
-                                 (str (theme/fg theme :tool-title (theme/bold "read "))
-                                      (render-tool-path raw-path theme (:cwd context))
-                                      range-str)
-                                 0 0))))
-            :render-result (fn [content is-error theme width expanded? _started-at _ended-at truncation _context]
+                                (str (theme/fg theme :tool-title (theme/bold "read "))
+                                     (render-tool-path raw-path theme (:cwd context))
+                                     range-str)
+                                0 0))))
+            :render-result (fn [content is-error theme _width expanded? _started-at _ended-at truncation _context]
                              (if (and (not expanded?) (not is-error))
                                nil
                                (let [c (container/make-container)
                                      lines (trim-trailing-empty-lines
-                                             (str/split-lines (sanitize-display-text (or content ""))))
+                                            (str/split-lines (sanitize-display-text (or content ""))))
                                      n (count lines)
                                      max-lines (if expanded? n 10)
                                      show (take max-lines lines)
@@ -404,17 +404,17 @@
                                  (when (seq lines)
                                    (doseq [line show]
                                      (container/container-add-child c
-                                       (text/make-text
-                                         (theme/fg theme :tool-output (replace-tabs line))
-                                         0 0)))
+                                                                    (text/make-text
+                                                                     (theme/fg theme :tool-output (replace-tabs line))
+                                                                     0 0)))
                                    (when (pos? more)
                                      (container/container-add-child c
-                                       (text/make-text
-                                         (str (theme/fg theme :muted (str "... (" more " more lines,"))
-                                              " "
-                                              (app-kb/key-hint "app.tools.expand" "to expand")
-                                              (theme/fg theme :muted ")"))
-                                         0 0)))
+                                                                    (text/make-text
+                                                                     (str (theme/fg theme :muted (str "... (" more " more lines,"))
+                                                                          " "
+                                                                          (app-kb/key-hint "app.tools.expand" "to expand")
+                                                                          (theme/fg theme :muted ")"))
+                                                                     0 0)))
                                    ;; Pi: truncation warnings (first line / lines / bytes)
                                    (when truncation
                                      (let [{:keys [first-line-exceeds-limit truncated-by output-lines total-lines max-lines max-bytes]} truncation
@@ -431,23 +431,23 @@
                                        (when warn
                                          (container/container-add-child c (spacer/make-spacer 1))
                                          (container/container-add-child c
-                                           (text/make-text (theme/fg theme :warning warn) 0 0))))))
+                                                                        (text/make-text (theme/fg theme :warning warn) 0 0))))))
                                  c)))}
-   "write" {:render-call (fn [name args theme width context]
+   "write" {:render-call (fn [_name args theme _width context]
                            (let [raw-path (:file_path args (:path args))
                                  content (:content args)
                                  c (container/make-container)]
                              (container/container-add-child c
-                               (text/make-text
-                                 (str (theme/fg theme :tool-title (theme/bold "write "))
-                                      (render-tool-path raw-path theme (:cwd context)))
-                                 0 0))
+                                                            (text/make-text
+                                                             (str (theme/fg theme :tool-title (theme/bold "write "))
+                                                                  (render-tool-path raw-path theme (:cwd context)))
+                                                             0 0))
                              (if (nil? (tool-path-str content))
                                ;; Pi: invalid content arg
                                (container/container-add-child c
-                                 (text/make-text
-                                   (str "\n\n" (theme/fg theme :error "[invalid content arg - expected string]"))
-                                   0 0))
+                                                              (text/make-text
+                                                               (str "\n\n" (theme/fg theme :error "[invalid content arg - expected string]"))
+                                                               0 0))
                                (when (seq content)
                                  (let [lines (trim-trailing-empty-lines
                                               (str/split-lines (normalize-display-text content)))
@@ -459,22 +459,22 @@
                                    (container/container-add-child c (spacer/make-spacer 1))
                                    (doseq [line show]
                                      (container/container-add-child c
-                                       (text/make-text (theme/fg theme :tool-output (replace-tabs line)) 0 0)))
+                                                                    (text/make-text (theme/fg theme :tool-output (replace-tabs line)) 0 0)))
                                    (when (pos? remaining)
                                      (container/container-add-child c
-                                       (text/make-text
-                                         (str (theme/fg theme :muted
-                                              (str "... (" remaining " more lines, " total " total,"))
-                                              " "
-                                              (app-kb/key-hint "app.tools.expand" "to expand")
-                                              (theme/fg theme :muted ")"))
-                                         0 0))))))
+                                                                    (text/make-text
+                                                                     (str (theme/fg theme :muted
+                                                                                    (str "... (" remaining " more lines, " total " total,"))
+                                                                          " "
+                                                                          (app-kb/key-hint "app.tools.expand" "to expand")
+                                                                          (theme/fg theme :muted ")"))
+                                                                     0 0))))))
                              c))
-            :render-result (fn [content is-error theme width expanded? & _]
+            :render-result (fn [content is-error theme _width _expanded? & _]
                              (when is-error
                                (text/make-text (str "\n" (theme/fg theme :error content)) 0 0)))}
    "edit"  {:render-shell :self
-            :render-call (fn [name args theme width context]
+            :render-call (fn [_name args theme _width context]
                            (let [raw-path (:file_path args (:path args))
                                  edits (normalize-edit-args args)
                                  args-key (str raw-path "|" (pr-str edits))
@@ -485,8 +485,8 @@
                                          ;; Pi: new args invalidate the cached preview
                                          ;; (incl. one set by a previous result)
                                          (let [s' (-> state
-                                                     (assoc :edit-args-key args-key)
-                                                     (dissoc :edit-preview))]
+                                                      (assoc :edit-args-key args-key)
+                                                      (dissoc :edit-preview))]
                                            (when set-state! (set-state! s'))
                                            s')
                                          state)
@@ -505,7 +505,7 @@
                              ;; the preview is cached per args so re-renders after a
                              ;; successful edit keep showing the original diff.
                              (build-edit-box preview raw-path theme (:cwd context))))
-            :render-result (fn [content is-error theme width expanded? _started-at _ended-at _truncation context]
+            :render-result (fn [content is-error theme _width _expanded? _started-at _ended-at _truncation context]
                              (let [state (:state context)
                                    set-state! (:set-state! context)]
                                (if is-error
@@ -516,7 +516,7 @@
                                      (let [c (container/make-container)]
                                        (container/container-add-child c (spacer/make-spacer 1))
                                        (container/container-add-child c
-                                         (text/make-text (theme/fg theme :error content) 1 0))
+                                                                      (text/make-text (theme/fg theme :error content) 1 0))
                                        c)))
                                  ;; Pi: when the actually-applied diff differs from the
                                  ;; previewed one (file changed between preview and apply,
@@ -535,7 +535,7 @@
                                      (when-let [invalidate (:invalidate context)]
                                        (invalidate)))
                                    nil))))}
-   "bash"  {:render-call (fn [name args theme width _context]
+   "bash"  {:render-call (fn [_name args theme _width _context]
                            (let [cmd (:command args)
                                  timeout (:timeout args)
                                  cmd-str (if (string? cmd)
@@ -551,10 +551,10 @@
                                                   (theme/fg theme :muted (str " (timeout " timeout "s)"))
                                                   "")]
                              (text/make-text
-                               (str (theme/fg theme :tool-title (theme/bold (str "$ " cmd-display)))
-                                    timeout-suffix)
-                               0 0)))
-            :render-result (fn [content is-error theme width expanded? started-at ended-at truncation _context]
+                              (str (theme/fg theme :tool-title (theme/bold (str "$ " cmd-display)))
+                                   timeout-suffix)
+                              0 0)))
+            :render-result (fn [content _is-error theme width expanded? started-at ended-at truncation _context]
                              (let [c (container/make-container)
                                    BASH-PREVIEW-LINES 5
                                    full-output-path (:full-output-path truncation)
@@ -566,14 +566,14 @@
                                               (let [footer-start (str/last-index-of trimmed "\n\n[")]
                                                 (if (and footer-start
                                                          (str/includes? (subs trimmed footer-start)
-                                                                   full-output-path))
+                                                                        full-output-path))
                                                   (str/trimr (subs trimmed 0 footer-start))
                                                   trimmed))
                                               trimmed))]
                                (when (seq output)
                                  (let [styled (->> (str/split-lines output)
-                                                    (mapv #(theme/fg theme :tool-output %))
-                                                    (str/join "\n"))]
+                                                   (mapv #(theme/fg theme :tool-output %))
+                                                   (str/join "\n"))]
                                    (if expanded?
                                      (do
                                        (container/container-add-child c (spacer/make-spacer 1))
@@ -584,42 +584,42 @@
                                        (container/container-add-child c (spacer/make-spacer 1))
                                        (when (pos? skipped-count)
                                          (container/container-add-child c
-                                           (text/make-text
-                                             (utils/truncate-to-width
-                                               (str (theme/fg theme :muted
-                                                    (str "... (" skipped-count " earlier lines,"))
-                                                    " "
-                                                    (app-kb/key-hint "app.tools.expand" "to expand")
-                                                    (theme/fg theme :muted ")"))
-                                               width "...")
-                                             0 0)))
+                                                                        (text/make-text
+                                                                         (utils/truncate-to-width
+                                                                          (str (theme/fg theme :muted
+                                                                                         (str "... (" skipped-count " earlier lines,"))
+                                                                               " "
+                                                                               (app-kb/key-hint "app.tools.expand" "to expand")
+                                                                               (theme/fg theme :muted ")"))
+                                                                          width "...")
+                                                                         0 0)))
                                        (doseq [line visual-lines]
                                          (container/container-add-child c (text/make-text line 0 0)))))))
                                (when truncation
                                  (let [{:keys [total-lines shown-lines truncated-by max-bytes]} truncation
                                        size-str (when (= truncated-by :bytes)
                                                   (bash-exec/format-size
-                                                    (or max-bytes bash-exec/DEFAULT-MAX-BYTES)))
+                                                   (or max-bytes bash-exec/DEFAULT-MAX-BYTES)))
                                        truncated-part (if (= truncated-by :bytes)
                                                         (str "Truncated: " shown-lines " lines shown (" size-str " limit)")
                                                         (str "Truncated: showing " shown-lines " of " total-lines " lines"))
                                        warn (str "[" (str/join ". "
-                                                     (cond-> []
-                                                       full-output-path (conj (str "Full output: " full-output-path))
-                                                       :always (conj truncated-part)))
-                                                  "]")]
+                                                               (cond-> []
+                                                                 full-output-path (conj (str "Full output: " full-output-path))
+                                                                 :always (conj truncated-part)))
+                                                 "]")]
                                    (container/container-add-child c (spacer/make-spacer 1))
                                    (container/container-add-child c
-                                     (text/make-text (theme/fg theme :warning warn) 0 0))))
+                                                                  (text/make-text (theme/fg theme :warning warn) 0 0))))
                                (when started-at
                                  (let [now (or ended-at (System/currentTimeMillis))
                                        elapsed-ms (- now started-at)
                                        label (if ended-at "Took" "Elapsed")]
                                    (container/container-add-child c (spacer/make-spacer 1))
                                    (container/container-add-child c
-                                     (text/make-text
-                                       (theme/fg theme :muted (str label " " (format "%.1f" (float (/ elapsed-ms 1000))) "s"))
-                                       0 0))))
+                                                                  (text/make-text
+                                                                   (theme/fg theme :muted (str label " " (format "%.1f" (float (/ elapsed-ms 1000))) "s"))
+                                                                   0 0))))
                                c))}})
 
 ;; ─── Default renderers (fallback when no custom or built-in) ──────────────
@@ -665,21 +665,21 @@
 ;; ended-at is set on set-error! or on final full-content set-content!.
 
 (defcomponent ToolExecutionComponent :tool
-  [name-atom args-atom content-atom is-error-atom
-   theme-atom output-pad-atom expanded-atom
-   custom-render-call-atom custom-render-result-atom
-   started-at-atom ended-at-atom timer-active-atom
-   truncation-atom tool-call-id-atom
-   details-atom        ;; result :details map (pi: result.details), e.g. edit diff
-   args-complete-atom
-   image-data-atom       ;; vector of {:data str :mime-type str}
-   last-call-component-atom   ;; component from previous render-call
-   last-result-component-atom ;; component from previous render-result
-   renderer-state-atom        ;; persistent state for custom renderers
-   request-render-fn-atom  ;; nil or (fn) to trigger TUI re-render
-   cwd-atom                ;; current working directory
-   box             ;; outer Box (padding + bg)
-   inner-container] ;; Container for call/result children
+              [name-atom args-atom content-atom is-error-atom
+               theme-atom output-pad-atom expanded-atom
+               custom-render-call-atom custom-render-result-atom
+               started-at-atom ended-at-atom timer-active-atom
+               truncation-atom tool-call-id-atom
+               details-atom        ;; result :details map (pi: result.details), e.g. edit diff
+               args-complete-atom
+               image-data-atom       ;; vector of {:data str :mime-type str}
+               last-call-component-atom   ;; component from previous render-call
+               last-result-component-atom ;; component from previous render-result
+               renderer-state-atom        ;; persistent state for custom renderers
+               request-render-fn-atom  ;; nil or (fn) to trigger TUI re-render
+               cwd-atom                ;; current working directory
+               box             ;; outer Box (padding + bg)
+               inner-container] ;; Container for call/result children
   (render [this width]
     (let [theme @theme-atom
           is-error @is-error-atom
@@ -689,26 +689,26 @@
           content @content-atom
           expanded? @expanded-atom
           started-at @started-at-atom
-          ended-at @ended-at-atom]
+          ended-at @ended-at-atom
       ;; Re-check empty — only when no call component rendered and no result
-      (let [builtin (get builtin-renderers name)
-              render-call-fn (or @custom-render-call-atom
-                                 (:render-call builtin)
-                                 default-render-call)
-              render-result-fn (or @custom-render-result-atom
-                                   (:render-result builtin)
-                                   default-render-result)
-              render-shell (or (:render-shell builtin) :default)
-              container @inner-container
-              content-width (max 1 (- width (* 2 output-pad)))
-              call-context (tool-execution-context this @last-call-component-atom)
-              call-comp (render-call-fn name args theme content-width call-context)
-              _ (reset! last-call-component-atom call-comp)
-              truncation @truncation-atom
-              result-context (tool-execution-context this @last-result-component-atom)
-              result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation result-context)
-              _ (reset! last-result-component-atom result-comp)
-              image-data @image-data-atom]
+          builtin (get builtin-renderers name)
+          render-call-fn (or @custom-render-call-atom
+                             (:render-call builtin)
+                             default-render-call)
+          render-result-fn (or @custom-render-result-atom
+                               (:render-result builtin)
+                               default-render-result)
+          render-shell (or (:render-shell builtin) :default)
+          container @inner-container
+          content-width (max 1 (- width (* 2 output-pad)))
+          call-context (tool-execution-context this @last-call-component-atom)
+          call-comp (render-call-fn name args theme content-width call-context)
+          _ (reset! last-call-component-atom call-comp)
+          truncation @truncation-atom
+          result-context (tool-execution-context this @last-result-component-atom)
+          result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation result-context)
+          _ (reset! last-result-component-atom result-comp)
+          image-data @image-data-atom]
       ;; Pi: hide component when no call/render content and no images
       (if (and (nil? call-comp) (nil? result-comp) (not (seq image-data)))
         []
@@ -728,9 +728,9 @@
           (doseq [img image-data]
             (container/container-add-child container (spacer/make-spacer 1))
             (container/container-add-child container
-              (ic/make-image (:data img) (:mime-type img)
-                  {:fallback-color (fn [s] (theme/fg theme :tool-output s))}
-                  :max-width-cells 60)))
+                                           (ic/make-image (:data img) (:mime-type img)
+                                                          {:fallback-color (fn [s] (theme/fg theme :tool-output s))}
+                                                          :max-width-cells 60)))
           ;; Pi: render-shell :self skips outer Box (tool renders its own framing)
           (if (= :self render-shell)
             (let [content-lines (protocols/render container width)]
@@ -746,8 +746,8 @@
                   box-lines (protocols/render @box width)]
               (if (seq box-lines)
                 (into [""] box-lines)
-                []))))))))
-  (invalidate [this]
+                [])))))))
+  (invalidate [_this]
     (protocols/invalidate @box)
     ;; Pi: invalidate also triggers TUI re-render
     (when-let [cb @request-render-fn-atom]
@@ -766,29 +766,29 @@
         b (box/make-box output-pad 1 #(theme/bg theme bg-key %))]
     (box/box-add-child b inner-container)
     (map->ToolExecutionComponent {:name-atom (atom name)
-                         :args-atom (atom args)
-                         :content-atom (atom content)
-                         :is-error-atom (atom is-error)
-                         :theme-atom (atom theme)
-                         :output-pad-atom (atom output-pad)
-                         :expanded-atom (atom expanded?)
-                         :started-at-atom (atom nil)
-                         :ended-at-atom (atom nil)
-                         :timer-active-atom (atom false)
-                         :truncation-atom (atom truncation)
-                         :tool-call-id-atom (atom nil)
-                         :details-atom (atom details)
-                         :args-complete-atom (atom false)
-                         :custom-render-call-atom (atom render-call-fn)
-                         :custom-render-result-atom (atom render-result-fn)
-                         :image-data-atom (atom [])
-                         :last-call-component-atom (atom nil)
-                         :last-result-component-atom (atom nil)
-                         :renderer-state-atom (atom {})
-                         :request-render-fn-atom (atom nil)
-                         :cwd-atom (atom cwd)
-                         :box (atom b)
-                         :inner-container (atom inner-container)})))
+                                  :args-atom (atom args)
+                                  :content-atom (atom content)
+                                  :is-error-atom (atom is-error)
+                                  :theme-atom (atom theme)
+                                  :output-pad-atom (atom output-pad)
+                                  :expanded-atom (atom expanded?)
+                                  :started-at-atom (atom nil)
+                                  :ended-at-atom (atom nil)
+                                  :timer-active-atom (atom false)
+                                  :truncation-atom (atom truncation)
+                                  :tool-call-id-atom (atom nil)
+                                  :details-atom (atom details)
+                                  :args-complete-atom (atom false)
+                                  :custom-render-call-atom (atom render-call-fn)
+                                  :custom-render-result-atom (atom render-result-fn)
+                                  :image-data-atom (atom [])
+                                  :last-call-component-atom (atom nil)
+                                  :last-result-component-atom (atom nil)
+                                  :renderer-state-atom (atom {})
+                                  :request-render-fn-atom (atom nil)
+                                  :cwd-atom (atom cwd)
+                                  :box (atom b)
+                                  :inner-container (atom inner-container)})))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 ;; Pi: set-content! and set-error! manage timing internally.

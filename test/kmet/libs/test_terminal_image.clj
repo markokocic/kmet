@@ -51,8 +51,8 @@
 (deftest test-fallback
   (testing "image-fallback formatting"
     (let [fb (img/image-fallback "image/png"
-               :dimensions {:width-px 800 :height-px 600}
-               :filename "test.png")]
+                                 :dimensions {:width-px 800 :height-px 600}
+                                 :filename "test.png")]
       (is (str/includes? fb "test.png"))
       (is (str/includes? fb "800x600"))
       (is (str/includes? fb "image/png")))))

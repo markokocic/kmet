@@ -58,7 +58,10 @@
                :image_url {:url (str "data:" (:mime-type i) ";base64," (:data i))}}))
       text)))
 
-(defn- openai-messages [messages]
+(defn openai-messages
+  "Map agent messages to OpenAI chat-completion messages.
+   Tested directly by test_llm, hence public."
+  [messages]
   (mapv (fn [m]
           (let [role (name (:role m))]
             (case role
@@ -71,13 +74,13 @@
                 (cond-> {:role "assistant" :content text}
                   (:tool-calls m)
                   (assoc :tool_calls
-                    (mapv (fn [tc]
-                            {:id (:id tc)
-                             :type "function"
-                             :function {:name (:name tc)
-                                        :arguments (cheshire.core/generate-string
-                                                     (:arguments tc))}})
-                          (:tool-calls m)))))
+                         (mapv (fn [tc]
+                                 {:id (:id tc)
+                                  :type "function"
+                                  :function {:name (:name tc)
+                                             :arguments (cheshire.core/generate-string
+                                                         (:arguments tc))}})
+                               (:tool-calls m)))))
               {:role role
                :content (openai-content (:content m))})))
         messages))
@@ -100,13 +103,13 @@
                             msg (cond-> {:role "assistant"}
                                   (seq text) (assoc :content text)
                                   has-tc (assoc :tool_calls
-                                            (mapv (fn [tc]
-                                                    {:id (:id tc)
-                                                     :type "function"
-                                                     :function {:name (:name tc)
-                                                                :arguments (cheshire.core/generate-string
-                                                                             (:arguments tc))}})
-                                                  (:tool-calls m))))]
+                                                (mapv (fn [tc]
+                                                        {:id (:id tc)
+                                                         :type "function"
+                                                         :function {:name (:name tc)
+                                                                    :arguments (cheshire.core/generate-string
+                                                                                (:arguments tc))}})
+                                                      (:tool-calls m))))]
                         ;; opencode-go requires reasoning_content on assistant messages
                         (assoc msg :reasoning_content ""))
                       {:role role
@@ -165,13 +168,13 @@
             (cond-> {:role role :content content}
               (and (= role "assistant") (:tool-calls m))
               (assoc :content
-                (vec (concat (if (string? (:content m)) [] (:content m))
-                             (mapv (fn [tc]
-                                     {:type "tool_use"
-                                      :id (:id tc)
-                                      :name (:name tc)
-                                      :input (:arguments tc)})
-                                   (:tool-calls m))))))))
+                     (vec (concat (if (string? (:content m)) [] (:content m))
+                                  (mapv (fn [tc]
+                                          {:type "tool_use"
+                                           :id (:id tc)
+                                           :name (:name tc)
+                                           :input (:arguments tc)})
+                                        (:tool-calls m))))))))
         messages))
 
 ;; ─── OpenAI request ────────────────────────────────────────────────────────
@@ -190,28 +193,28 @@
                     payload)]
       (try
         (let [response (http/post url
-                         {:headers {"Authorization" (str "Bearer " api-key)
-                                    "Content-Type" "application/json"}
-                          :body (json/generate-string payload)
-                          :as :stream
-                          :timeout 120000})]
+                                  {:headers {"Authorization" (str "Bearer " api-key)
+                                             "Content-Type" "application/json"}
+                                   :body (json/generate-string payload)
+                                   :as :stream
+                                   :timeout 120000})]
           (sse/process-openai-stream response
-            (fn [event]
-              (case (:type event)
-                :text (when on-text (on-text (:content event)))
-                :thinking (when on-thinking (on-thinking (:content event)))
-                :tool-call (when on-tool-call
-                             (on-tool-call {:id (:id event)
-                                            :name (:name event)
-                                            :arguments (:arguments event)
-                                            :index (:index event)}))
-                :tool-call-args (when on-tool-call
-                                  (on-tool-call {:arguments (:arguments event)
-                                                 :index (:index event)}))
-                :done (when on-done (on-done (:stop-reason event)))
-                :error (when on-error (on-error (:message event)))
-                nil))
-            signal))
+                                     (fn [event]
+                                       (case (:type event)
+                                         :text (when on-text (on-text (:content event)))
+                                         :thinking (when on-thinking (on-thinking (:content event)))
+                                         :tool-call (when on-tool-call
+                                                      (on-tool-call {:id (:id event)
+                                                                     :name (:name event)
+                                                                     :arguments (:arguments event)
+                                                                     :index (:index event)}))
+                                         :tool-call-args (when on-tool-call
+                                                           (on-tool-call {:arguments (:arguments event)
+                                                                          :index (:index event)}))
+                                         :done (when on-done (on-done (:stop-reason event)))
+                                         :error (when on-error (on-error (:message event)))
+                                         nil))
+                                     signal))
         (catch Exception e
           (when on-error (on-error (ex-message e))))))))
 
@@ -239,24 +242,24 @@
                     thinking-cfg (assoc :thinking thinking-cfg))]
       (try
         (let [response (http/post anthropic-url
-                         {:headers {"x-api-key" api-key
-                                    "anthropic-version" default-anthropic-version
-                                    "Content-Type" "application/json"}
-                          :body (json/generate-string payload)
-                          :as :stream
-                          :timeout 120000})]
+                                  {:headers {"x-api-key" api-key
+                                             "anthropic-version" default-anthropic-version
+                                             "Content-Type" "application/json"}
+                                   :body (json/generate-string payload)
+                                   :as :stream
+                                   :timeout 120000})]
           (sse/process-anthropic-stream response
-            (fn [event]
-              (case (:type event)
-                :text (when on-text (on-text (:content event)))
-                :tool-call (when on-tool-call
-                             (on-tool-call {:id (:id event)
-                                            :name (:name event)
-                                            :arguments (:arguments event)}))
-                :done (when on-done (on-done (:stop-reason event)))
-                :error (when on-error (on-error (:message event)))
-                nil))
-            signal))
+                                        (fn [event]
+                                          (case (:type event)
+                                            :text (when on-text (on-text (:content event)))
+                                            :tool-call (when on-tool-call
+                                                         (on-tool-call {:id (:id event)
+                                                                        :name (:name event)
+                                                                        :arguments (:arguments event)}))
+                                            :done (when on-done (on-done (:stop-reason event)))
+                                            :error (when on-error (on-error (:message event)))
+                                            nil))
+                                        signal))
         (catch Exception e
           (when on-error (on-error (ex-message e))))))))
 

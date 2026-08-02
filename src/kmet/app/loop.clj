@@ -337,7 +337,7 @@ Be precise and concise in your responses."}}]
     (swap! (:messages agent) conj user-msg)
     (when (:session agent)
       (session/append-entry (:session agent)
-        {:role :user :content (:content user-msg)}))
+                            {:role :user :content (:content user-msg)}))
     (emit agent {:type :message-start :message user-msg})))
 
 (defn- add-assistant-message!
@@ -484,8 +484,8 @@ Be precise and concise in your responses."}}]
                            (let [before (before-tool-hook-result agent tc-id tc-name tc-args assistant-msg)]
                              (if (:block before)
                                (assoc tc :kmet/blocked
-                                 {:content (or (:reason before) "Tool execution was blocked")
-                                  :is-error true})
+                                      {:content (or (:reason before) "Tool execution was blocked")
+                                       :is-error true})
                                tc))))
                        tool-calls)
         pending (filterv #(not (contains? % :kmet/blocked)) prepared)
@@ -547,8 +547,8 @@ Be precise and concise in your responses."}}]
                        {:content (or (:reason before) "Tool execution was blocked")
                         :is-error true}
                        (run-tool-call! agent tc-id
-                         (future (tools/execute-tool tc-name tc-args
-                                                     (tool-on-update agent tc-id)))))
+                                       (future (tools/execute-tool tc-name tc-args
+                                                                   (tool-on-update agent tc-id)))))
               result (after-tool-hook-result agent tc-id tc-name tc-args result assistant-msg)
               result-msg (tool-result-message tc-id tc-name result)]
           (swap! (:messages agent) conj result-msg)
@@ -581,16 +581,16 @@ Be precise and concise in your responses."}}]
              name (:name tc)]
          (if name
            (swap! pending assoc idx
-             {:id (:id tc) :name name :arguments (or (:arguments tc) "")})
+                  {:id (:id tc) :name name :arguments (or (:arguments tc) "")})
            (swap! pending update-in [idx :arguments]
-             (fn [old] (str (or old "") (or (:arguments tc) "")))))))
+                  (fn [old] (str (or old "") (or (:arguments tc) "")))))))
      (fn []
        (let [result (into []
-                      (for [[idx {:keys [id name arguments]}] @pending]
-                        {:id id :name name
-                         :arguments (try
-                                      (json/parse-string arguments true)
-                                      (catch Exception _ arguments))}))]
+                          (for [[_idx {:keys [id name arguments]}] @pending]
+                            {:id id :name name
+                             :arguments (try
+                                          (json/parse-string arguments true)
+                                          (catch Exception _ arguments))}))]
          (reset! pending {})
          result))]))
 
@@ -622,44 +622,44 @@ Be precise and concise in your responses."}}]
     (emit agent {:type :message-start
                  :message {:role :assistant :content []}})
     (llm/send-message
-      {:provider provider
-       :api-type (or (:api-type agent) (cfg/get-provider-api-type provider))
-       :model @(:model agent)
-       :api-key api-key
-       :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
-       :messages messages
-       :tools (vals (tools/get-all-tools))
-       :signal (:signal agent)
-       :thinking @(:thinking agent)
-       :on-text (fn [t]
-                  (swap! text-buf str t)
-                  (when on-text (on-text t))
-                  (emit agent {:type :message-update
-                               :message {:role :assistant
-                                         :content [{:type :text :text @text-buf}]}
-                               :delta {:type :text :content t}}))
-       :on-thinking (fn [t]
-                      (swap! thinking-buf str t)
-                      (when on-thinking (on-thinking t))
+     {:provider provider
+      :api-type (or (:api-type agent) (cfg/get-provider-api-type provider))
+      :model @(:model agent)
+      :api-key api-key
+      :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
+      :messages messages
+      :tools (vals (tools/get-all-tools))
+      :signal (:signal agent)
+      :thinking @(:thinking agent)
+      :on-text (fn [t]
+                 (swap! text-buf str t)
+                 (when on-text (on-text t))
+                 (emit agent {:type :message-update
+                              :message {:role :assistant
+                                        :content [{:type :text :text @text-buf}]}
+                              :delta {:type :text :content t}}))
+      :on-thinking (fn [t]
+                     (swap! thinking-buf str t)
+                     (when on-thinking (on-thinking t))
+                     (emit agent {:type :message-update
+                                  :message {:role :assistant
+                                            :content []
+                                            :thinking @thinking-buf}
+                                  :delta {:type :thinking :content t}}))
+      :on-tool-call (fn [tc]
+                      (tc-add tc)
                       (emit agent {:type :message-update
-                                   :message {:role :assistant
-                                             :content []
-                                             :thinking @thinking-buf}
-                                   :delta {:type :thinking :content t}}))
-       :on-tool-call (fn [tc]
-                       (tc-add tc)
-                       (emit agent {:type :message-update
-                                    :message {:role :assistant :content []}
-                                    :delta (assoc (select-keys tc [:id :name :arguments :index])
-                                                  :type :tool-call)}))
-       :on-done (fn [reason]
-                  (let [tool-calls (tc-flush)]
-                    (deliver done-promise
-                      {:text @text-buf
-                       :tool-calls tool-calls
-                       :stop-reason reason})))
-       :on-error (fn [e]
-                   (deliver done-promise {:error e}))})
+                                   :message {:role :assistant :content []}
+                                   :delta (assoc (select-keys tc [:id :name :arguments :index])
+                                                 :type :tool-call)}))
+      :on-done (fn [reason]
+                 (let [tool-calls (tc-flush)]
+                   (deliver done-promise
+                            {:text @text-buf
+                             :tool-calls tool-calls
+                             :stop-reason reason})))
+      :on-error (fn [e]
+                  (deliver done-promise {:error e}))})
     done-promise))
 
 ;; ─── Queues ────────────────────────────────────────────────────────────────
@@ -727,18 +727,18 @@ Be precise and concise in your responses."}}]
       (let [done (promise)
             text-buf (atom "")
             msgs (compaction/summarization-messages
-                   (:messages prep) (:previous-summary prep) custom-instructions)]
+                  (:messages prep) (:previous-summary prep) custom-instructions)]
         (llm/send-message
-          {:provider provider
-           :api-type (or (:api-type agent) (cfg/get-provider-api-type provider))
-           :model @(:model agent)
-           :api-key api-key
-           :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
-           :messages msgs
-           :signal (atom false)
-           :on-text (fn [t] (swap! text-buf str t))
-           :on-done (fn [_] (deliver done @text-buf))
-           :on-error (fn [_] (deliver done nil))})
+         {:provider provider
+          :api-type (or (:api-type agent) (cfg/get-provider-api-type provider))
+          :model @(:model agent)
+          :api-key api-key
+          :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
+          :messages msgs
+          :signal (atom false)
+          :on-text (fn [t] (swap! text-buf str t))
+          :on-done (fn [_] (deliver done @text-buf))
+          :on-error (fn [_] (deliver done nil))})
         (let [result (deref done 120000 :timeout)]
           (when (and (string? result) (seq result)) result))))))
 
@@ -798,7 +798,7 @@ Be precise and concise in your responses."}}]
               (count-based-compact! agent)))))
     false))
 
-(defn- maybe-compact!
+(defn maybe-compact!
   "Proactively compact before a run (pi: _checkCompaction — threshold case).
    Triggers on entry count (:compact-threshold) or estimated tokens
    (:compact-token-threshold). Returns true when compaction happened."
@@ -868,11 +868,11 @@ Be precise and concise in your responses."}}]
                      :messages @(:messages agent)})]
       (apply-next-turn-update! agent update)))
   (boolean
-    (when-let [f @(:should-stop-after-turn agent)]
-      (f {:turn-index turn-index
-          :message assistant-msg
-          :tool-results tool-results
-          :messages @(:messages agent)}))))
+   (when-let [f @(:should-stop-after-turn agent)]
+     (f {:turn-index turn-index
+         :message assistant-msg
+         :tool-results tool-results
+         :messages @(:messages agent)}))))
 
 (defn- resolve-api-key
   "Resolve the API key for the agent's provider, preferring the dynamic
@@ -944,7 +944,7 @@ Be precise and concise in your responses."}}]
             ;; can override the system prompt for this run and inject context
             ;; messages; runs once per submission, after the user message.
             (let [bas (extensions/apply-before-agent-start-hooks
-                        message @(:system agent))]
+                       message @(:system agent))]
               (when (:system-prompt bas)
                 (reset! (:system-prompt-override agent) (:system-prompt bas)))
               (doseq [m (:messages bas)]
@@ -986,7 +986,7 @@ Be precise and concise in your responses."}}]
                                         {:aborted true}) ;; cancelled — exit quietly
                                     {:settled t})
                                   (let [steer-msgs (drain-queue! (:steering agent)
-                                                                  (:steering-mode agent))]
+                                                                 (:steering-mode agent))]
                                     (doseq [m steer-msgs]
                                       (add-user-message! agent m))
                                     (emit agent {:type :turn-start :turn-index t})
@@ -1102,21 +1102,21 @@ Be precise and concise in your responses."}}]
                                                         (recur (inc t) [] false))))))))))))))]
                     (if (:aborted inner)
                       nil ;; aborted (error or cancel) — exit without follow-ups
-                      (let [turn' (:settled inner)]
-                        ;; Outer: poll follow-up queue
-                        (let [follow-ups (drain-queue! (:follow-up agent)
-                                                        (:follow-up-mode agent))]
-                          (if (seq follow-ups)
-                            (do (doseq [m follow-ups]
-                                  (add-user-message! agent m))
-                                (reset! (:status agent) :thinking)
-                                (emit agent {:type :status :status :thinking})
-                                (recur turn'))
-                            (do (reset! (:status agent) :idle)
-                                (emit agent {:type :status :status :idle})
-                                (emit agent {:type :agent-end
-                                             :messages (subvec @(:messages agent) msg-count-before)})
-                                (when on-done (on-done @text-buf))))))))))))
+                      (let [turn' (:settled inner)
+                            ;; Outer: poll follow-up queue
+                            follow-ups (drain-queue! (:follow-up agent)
+                                                     (:follow-up-mode agent))]
+                        (if (seq follow-ups)
+                          (do (doseq [m follow-ups]
+                                (add-user-message! agent m))
+                              (reset! (:status agent) :thinking)
+                              (emit agent {:type :status :status :thinking})
+                              (recur turn'))
+                          (do (reset! (:status agent) :idle)
+                              (emit agent {:type :status :status :idle})
+                              (emit agent {:type :agent-end
+                                           :messages (subvec @(:messages agent) msg-count-before)})
+                              (when on-done (on-done @text-buf)))))))))))
 
           (catch Exception e
             (reset! (:status agent) :error)

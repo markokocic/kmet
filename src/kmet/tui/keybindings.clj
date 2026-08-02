@@ -43,7 +43,7 @@
                                keys-by-id-atom  ;; atom of {id -> [key-str ...]}
                                conflicts-atom]  ;; atom of [{:key key-str :keybindings [id ...]}]
   Object
-  (toString [this] (str "#KeybindingsManager<" (count @keys-by-id-atom) " bindings>")))
+  (toString [_this] (str "#KeybindingsManager<" (count @keys-by-id-atom) " bindings>")))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -84,10 +84,10 @@
   ([definitions user-bindings]
    (let [user-bindings (or user-bindings {})]
      (map->KeybindingsManager
-       {:definitions definitions
-        :user-bindings-atom (atom user-bindings)
-        :keys-by-id-atom (atom (resolve-all-keys definitions user-bindings))
-        :conflicts-atom (atom (find-conflicts definitions user-bindings))}))))
+      {:definitions definitions
+       :user-bindings-atom (atom user-bindings)
+       :keys-by-id-atom (atom (resolve-all-keys definitions user-bindings))
+       :conflicts-atom (atom (find-conflicts definitions user-bindings))}))))
 
 (defn make-tui-keybindings-manager
   "Create a KeybindingsManager with the default TUI keybindings.

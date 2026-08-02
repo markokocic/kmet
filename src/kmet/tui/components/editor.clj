@@ -10,15 +10,14 @@
    Phase 6 — App actions (pi: CustomEditor): registered action handlers
    dispatched from handle-input (editor-set-on-action!), and expanded-text
    support for the external editor flow (editor-get-expanded-text)."
-  (:require [kmet.tui.protocols :as protocols]
+  (:require [clojure.string :as str]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.keybindings :as kb]
             [kmet.tui.utils :as u]
             [kmet.tui.components.editing :as edit]
             [kmet.tui.components.select-list :as select-list]
             [kmet.tui.autocomplete :as ac]))
-
-
 
 ;; ─── Grapheme helpers ─────────────────────────────────────────────────────
 ;; Imported from kmet.tui.components.editing (grapheme-left, grapheme-right,
@@ -58,13 +57,13 @@
                     ;; instead of breaking inside the marker
                     (do (when (< @cs char-idx)
                           (vswap! result conj
-                            (map->TextChunk {:text (subs line @cs char-idx)
-                                             :start-index @cs
-                                             :end-index char-idx})))
+                                  (map->TextChunk {:text (subs line @cs char-idx)
+                                                   :start-index @cs
+                                                   :end-index char-idx})))
                         (vswap! result conj
-                          (map->TextChunk {:text (:text seg)
-                                           :start-index char-idx
-                                           :end-index (+ char-idx (count (:text seg)))}))
+                                (map->TextChunk {:text (:text seg)
+                                                 :start-index char-idx
+                                                 :end-index (+ char-idx (count (:text seg)))}))
                         (vreset! cs (+ char-idx (count (:text seg))))
                         (vreset! cw gwidth)
                         (vreset! woi -1) (vreset! wow 0))
@@ -72,9 +71,9 @@
                     (let [sub-chunks (word-wrap-line (:text seg) max-width valid-paste-ids)]
                       (doseq [sc (butlast sub-chunks)]
                         (vswap! result conj
-                          (map->TextChunk {:text (:text sc)
-                                           :start-index (+ char-idx (:start-index sc))
-                                           :end-index (+ char-idx (:end-index sc))})))
+                                (map->TextChunk {:text (:text sc)
+                                                 :start-index (+ char-idx (:start-index sc))
+                                                 :end-index (+ char-idx (:end-index sc))})))
                       (let [last-sc (last sub-chunks)]
                         (vreset! cs (+ char-idx (:start-index last-sc)))
                         (vreset! cw (u/visible-width (:text last-sc)))
@@ -87,17 +86,17 @@
                                (<= (+ (- @cw @wow) gwidth) max-width))
                         (let [opp-seg (nth segments @woi)]
                           (vswap! result conj
-                            (map->TextChunk {:text (subs line @cs (:start opp-seg))
-                                             :start-index @cs
-                                             :end-index (:start opp-seg)}))
+                                  (map->TextChunk {:text (subs line @cs (:start opp-seg))
+                                                   :start-index @cs
+                                                   :end-index (:start opp-seg)}))
                           (vreset! cs (:start opp-seg))
                           (vreset! cw @wow))
                         (do
                           (when (< @cs char-idx)
                             (vswap! result conj
-                              (map->TextChunk {:text (subs line @cs char-idx)
-                                               :start-index @cs
-                                               :end-index char-idx})))
+                                    (map->TextChunk {:text (subs line @cs char-idx)
+                                                     :start-index @cs
+                                                     :end-index char-idx})))
                           (vreset! cs char-idx)
                           (vreset! cw 0)))
                       (vreset! woi -1) (vreset! wow 0))
@@ -110,9 +109,9 @@
                         (vreset! wow @cw))))))
               (recur (inc i))))
           (vswap! result conj
-            (map->TextChunk {:text (subs line @cs)
-                             :start-index @cs
-                             :end-index (count line)}))
+                  (map->TextChunk {:text (subs line @cs)
+                                   :start-index @cs
+                                   :end-index (count line)}))
           @result)))))
 
 ;; ─── Visual line map ───────────────────────────────────────────────────────
@@ -125,18 +124,18 @@
   (if (or (empty? lines) (and (= (count lines) 1) (empty? (first lines))))
     [(map->VisualLineInfo {:logical-line 0 :start-col 0 :length 0 :text ""})]
     (vec (mapcat
-      (fn [i]
-        (let [line (or (nth lines i) "")
-              lw (u/visible-width line)]
-          (if (<= lw width)
-            [(map->VisualLineInfo {:logical-line i :start-col 0
-                                   :length (count line) :text line})]
-            (map #(map->VisualLineInfo {:logical-line i
-                                        :start-col (:start-index %)
-                                        :length (count (:text %))
-                                        :text (:text %)})
-                 (word-wrap-line line width valid-paste-ids)))))
-      (range (count lines))))))
+          (fn [i]
+            (let [line (or (nth lines i) "")
+                  lw (u/visible-width line)]
+              (if (<= lw width)
+                [(map->VisualLineInfo {:logical-line i :start-col 0
+                                       :length (count line) :text line})]
+                (map #(map->VisualLineInfo {:logical-line i
+                                            :start-col (:start-index %)
+                                            :length (count (:text %))
+                                            :text (:text %)})
+                     (word-wrap-line line width valid-paste-ids)))))
+          (range (count lines))))))
 
 (defn- find-visual-line-at
   "Find visual line index containing the given logical line + column."
@@ -174,8 +173,6 @@
 (defn editor-get-text [editor]
   (clojure.string/join "\n" (:lines @(:state-atom editor))))
 
-
-
 ;; ─── Kill ring
 ;; Imported from kmet.tui.components.editing
 
@@ -206,9 +203,9 @@
   (when-let [snapshot (undo-pop (:undo-stack editor))]
     (undo-push (:redo-stack editor) (snapshot-state editor))
     (reset! (:state-atom editor)
-      (map->EditorState {:lines (:lines snapshot)
-                         :cursor-line (:cursor-line snapshot)
-                         :cursor-col (:cursor-col snapshot)}))
+            (map->EditorState {:lines (:lines snapshot)
+                               :cursor-line (:cursor-line snapshot)
+                               :cursor-col (:cursor-col snapshot)}))
     (reset! (:paste-store editor) (:paste-store snapshot))
     (reset! (:preferred-col-atom editor) nil)
     (reset! (:last-action editor) nil)
@@ -218,9 +215,9 @@
   (when-let [snapshot (undo-pop (:redo-stack editor))]
     (undo-push (:undo-stack editor) (snapshot-state editor))
     (reset! (:state-atom editor)
-      (map->EditorState {:lines (:lines snapshot)
-                         :cursor-line (:cursor-line snapshot)
-                         :cursor-col (:cursor-col snapshot)}))
+            (map->EditorState {:lines (:lines snapshot)
+                               :cursor-line (:cursor-line snapshot)
+                               :cursor-col (:cursor-col snapshot)}))
     (reset! (:paste-store editor) (:paste-store snapshot))
     (reset! (:preferred-col-atom editor) nil)
     (reset! (:last-action editor) nil)
@@ -232,23 +229,23 @@
   (let [cl (max 0 cursor-line) cc (max 0 cursor-col)]
     (if (and (zero? cl) (zero? cc))
       [0 0]
-      (let [line (get editor-lines cl "") n (count line)]
+      (let [line (get editor-lines cl "")]
         (if (> cc 0)
           (let [before (subs line 0 cc)
                 no-trail (clojure.string/replace before #"\s+$" "")
                 trimmed (count no-trail)]
             (if (zero? trimmed) [cl 0]
-              (let [last-char (subs no-trail (dec trimmed))
-                    word-char? (boolean (re-find #"^\w" last-char))]
-                (loop [i (dec trimmed)]
-                  (if (<= i 0) [cl 0]
-                    (let [c (subs line i (inc i))
-                          is-word (re-find #"^\w" c)
-                          is-space (re-find #"^\s" c)]
-                      (cond
-                        is-space (if word-char? (inc i) (recur (dec i)))
-                        word-char? (if is-word (recur (dec i)) (inc i))
-                        :else (if is-word (inc i) (recur (dec i))))))))))
+                (let [last-char (subs no-trail (dec trimmed))
+                      word-char? (boolean (re-find #"^\w" last-char))]
+                  (loop [i (dec trimmed)]
+                    (if (<= i 0) [cl 0]
+                        (let [c (subs line i (inc i))
+                              is-word (re-find #"^\w" c)
+                              is-space (re-find #"^\s" c)]
+                          (cond
+                            is-space (if word-char? (inc i) (recur (dec i)))
+                            word-char? (if is-word (recur (dec i)) (inc i))
+                            :else (if is-word (inc i) (recur (dec i))))))))))
           (if (> cl 0)
             (let [prev-line (get editor-lines (dec cl) "")]
               (if (zero? (count prev-line))
@@ -256,37 +253,37 @@
                 (let [no-trail (clojure.string/replace prev-line #"\s+$" "")
                       trimmed (count no-trail)]
                   (if (zero? trimmed) [(dec cl) 0]
-                    (let [last-char (subs no-trail (dec trimmed))
-                          word-char? (boolean (re-find #"^\w" last-char))]
-                      (loop [i (dec trimmed)]
-                        (if (<= i 0) [(dec cl) 0]
-                          (let [c (subs prev-line i (inc i))
-                                is-word (re-find #"^\w" c)
-                                is-space (re-find #"^\s" c)]
-                            (cond
-                              is-space (if word-char? (inc i) (recur (dec i)))
-                              word-char? (if is-word (recur (dec i)) (inc i))
-                              :else (if is-word (inc i) (recur (dec i))))))))))))
-            [0 0])))))
+                      (let [last-char (subs no-trail (dec trimmed))
+                            word-char? (boolean (re-find #"^\w" last-char))]
+                        (loop [i (dec trimmed)]
+                          (if (<= i 0) [(dec cl) 0]
+                              (let [c (subs prev-line i (inc i))
+                                    is-word (re-find #"^\w" c)
+                                    is-space (re-find #"^\s" c)]
+                                (cond
+                                  is-space (if word-char? (inc i) (recur (dec i)))
+                                  word-char? (if is-word (recur (dec i)) (inc i))
+                                  :else (if is-word (inc i) (recur (dec i))))))))))))
+            [0 0]))))))
 
 (defn- word-boundary-right [editor-lines cursor-line cursor-col]
   (let [cl (max 0 cursor-line) cc (max 0 cursor-col) total (count editor-lines)]
     (if (and (>= cl (dec total)) (>= cc (count (get editor-lines cl "")))) [cl cc]
-      (let [line (get editor-lines cl "") n (count line)]
-        (if (< cc n)
+        (let [line (get editor-lines cl "") n (count line)]
+          (if (< cc n)
           ;; Pure Clojure word boundary detection
-          (let [after (subs line cc)
-                skip-ws (count (take-while #(re-find #"^\s" (str %)) after))
-                start (+ cc skip-ws)]
-            (if (>= start n)
-              (if (< cl (dec total)) [(inc cl) 0] [cl n])
-              (let [rest-str (subs line start)
-                    word-len (count (take-while #(re-find #"^\w" (str %)) rest-str))]
-                (if (pos? word-len)
-                  [cl (+ start word-len)]
-                  (let [non-ws (count (take-while #(not (re-find #"^\s" (str %))) rest-str))]
-                    [cl (+ start (max 1 non-ws))])))))
-          (if (< cl (dec total)) [(inc cl) 0] [cl cc])))))))
+            (let [after (subs line cc)
+                  skip-ws (count (take-while #(re-find #"^\s" (str %)) after))
+                  start (+ cc skip-ws)]
+              (if (>= start n)
+                (if (< cl (dec total)) [(inc cl) 0] [cl n])
+                (let [rest-str (subs line start)
+                      word-len (count (take-while #(re-find #"^\w" (str %)) rest-str))]
+                  (if (pos? word-len)
+                    [cl (+ start word-len)]
+                    (let [non-ws (count (take-while #(not (re-find #"^\s" (str %))) rest-str))]
+                      [cl (+ start (max 1 non-ws))])))))
+            (if (< cl (dec total)) [(inc cl) 0] [cl cc]))))))
 
 ;; ─── Marker-aware segmentation & paste store sync ────────────────────────
 ;; Paste markers ([paste #N ...]) act as atomic units for cursor movement,
@@ -335,7 +332,7 @@
         new-ids (mapv inc (range (count live-ids)))
         id->new (zipmap live-ids new-ids)]
     (reset! (:paste-store editor)
-      (into {} (map (fn [id] [(id->new id) (get store id)]) live-ids)))
+            (into {} (map (fn [id] [(id->new id) (get store id)]) live-ids)))
     (reset! (:paste-counter editor) (count live-ids))
     (if (= live-ids new-ids)
       lines
@@ -347,12 +344,12 @@
   [editor]
   (when (seq @(:paste-store editor))
     (swap! (:state-atom editor)
-      (fn [st]
-        (let [lines (sync-paste-store! editor (:lines st))
-              cl (:cursor-line st)]
-          (assoc st
-            :lines lines
-            :cursor-col (min (:cursor-col st) (count (get lines cl "")))))))))
+           (fn [st]
+             (let [lines (sync-paste-store! editor (:lines st))
+                   cl (:cursor-line st)]
+               (assoc st
+                      :lines lines
+                      :cursor-col (min (:cursor-col st) (count (get lines cl "")))))))))
 
 ;; ─── Autocomplete
 ;; Port of pi editor.ts autocomplete integration (synchronous — no debounce
@@ -426,11 +423,11 @@
                        :description (:description it)})
                     (:items suggestions))
         sl (select-list/make-select-list items
-             :height @(:autocomplete-max-visible editor)
-             :theme @(:autocomplete-theme editor)
+                                         :height @(:autocomplete-max-visible editor)
+                                         :theme @(:autocomplete-theme editor)
              ;; pi: SLASH_COMMAND_SELECT_LIST_LAYOUT (min 12 / max 32)
-             :min-primary-column-width 12
-             :max-primary-column-width 32)]
+                                         :min-primary-column-width 12
+                                         :max-primary-column-width 32)]
     (when-let [idx (get-best-autocomplete-match-index items (:prefix suggestions))]
       (when (>= idx 0)
         (reset! (:selected-idx-atom sl) idx)))
@@ -446,9 +443,9 @@
   (reset! (:redo-stack editor) [])
   (reset! (:last-action editor) nil)
   (reset! (:state-atom editor)
-    (map->EditorState {:lines (:lines result)
-                       :cursor-line (:cursor-line result)
-                       :cursor-col (:cursor-col result)})))
+          (map->EditorState {:lines (:lines result)
+                             :cursor-line (:cursor-line result)
+                             :cursor-col (:cursor-col result)})))
 
 (defn- apply-selected-completion!
   "Apply the currently selected dropdown item to the editor (pi: Tab/Enter
@@ -564,10 +561,11 @@
 
 ;; ─── Line editing actions
 
-(defn- insert-character [editor char & {:keys [skip-undo-coalescing]}]
+(defn- insert-character
   "Insert a character. With :skip-undo-coalescing true (pi:
    skipUndoCoalescing) the undo stack and last-action are left untouched,
    for programmatic inserts that manage their own snapshot."
+  [editor char & {:keys [skip-undo-coalescing]}]
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
         cc (:cursor-col state) line (or (nth lines cl) "")]
     (when-not skip-undo-coalescing
@@ -576,8 +574,8 @@
       (reset! (:last-action editor) :type-word))
     (reset! (:redo-stack editor) [])
     (swap! (:state-atom editor) assoc
-      :lines (assoc lines cl (str (subs line 0 cc) char (subs line cc)))
-      :cursor-col (+ cc (count char)))
+           :lines (assoc lines cl (str (subs line 0 cc) char (subs line cc)))
+           :cursor-col (+ cc (count char)))
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))
     (when-not skip-undo-coalescing
       (maybe-trigger-autocomplete editor char))))
@@ -590,14 +588,14 @@
     (if (> cc 0)
       (let [line (or (nth lines cl) "") glen (segment-left editor line cc)]
         (swap! (:state-atom editor) assoc
-          :lines (assoc lines cl (str (subs line 0 glen) (subs line cc)))
-          :cursor-col glen))
+               :lines (assoc lines cl (str (subs line 0 glen) (subs line cc)))
+               :cursor-col glen))
       (when (> cl 0)
         (let [prev-line (or (nth lines (dec cl)) "") cur-line (or (nth lines cl) "")]
           (swap! (:state-atom editor) assoc
-            :lines (vec (concat (subvec lines 0 (dec cl))
-                                [(str prev-line cur-line)] (subvec lines (inc cl))))
-            :cursor-line (dec cl) :cursor-col (count prev-line)))))
+                 :lines (vec (concat (subvec lines 0 (dec cl))
+                                     [(str prev-line cur-line)] (subvec lines (inc cl))))
+                 :cursor-line (dec cl) :cursor-col (count prev-line)))))
     (after-destructive-edit! editor)
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))
     (retrigger-autocomplete editor)))
@@ -611,12 +609,12 @@
     (if (< cc (count line))
       (let [nxt (segment-right editor line cc)]
         (swap! (:state-atom editor) assoc
-          :lines (assoc lines cl (str (subs line 0 cc) (subs line nxt)))))
+               :lines (assoc lines cl (str (subs line 0 cc) (subs line nxt)))))
       (when (< cl (dec (count lines)))
         (let [next-line (or (nth lines (inc cl)) "")]
           (swap! (:state-atom editor) assoc
-            :lines (vec (concat (subvec lines 0 (inc cl))
-                                [(str line next-line)] (subvec lines (+ cl 2))))))))
+                 :lines (vec (concat (subvec lines 0 (inc cl))
+                                     [(str line next-line)] (subvec lines (+ cl 2))))))))
     (after-destructive-edit! editor)
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))
     (retrigger-autocomplete editor)))
@@ -629,9 +627,9 @@
     (reset! (:last-action editor) nil)
     (reset! (:redo-stack editor) [])
     (swap! (:state-atom editor) assoc
-      :lines (vec (concat (subvec lines 0 cl) [(subs line 0 cc)] [(subs line cc)]
-                          (subvec lines (inc cl))))
-      :cursor-line (inc cl) :cursor-col 0)
+           :lines (vec (concat (subvec lines 0 cl) [(subs line 0 cc)] [(subs line cc)]
+                               (subvec lines (inc cl))))
+           :cursor-line (inc cl) :cursor-col 0)
     (reset! (:preferred-col-atom editor) nil)
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
 
@@ -642,11 +640,11 @@
       (push-undo-state editor)
       (let [deleted (subs line 0 cc)]
         (edit/kill-ring-push (:kill-ring editor) deleted :prepend true
-                        :accumulate (= @(:last-action editor) :kill))
+                             :accumulate (= @(:last-action editor) :kill))
         (reset! (:last-action editor) :kill)
         (reset! (:redo-stack editor) [])
         (swap! (:state-atom editor) assoc
-          :lines (assoc lines cl (subs line cc)) :cursor-col 0)
+               :lines (assoc lines cl (subs line cc)) :cursor-col 0)
         (after-destructive-edit! editor))
       (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
 
@@ -657,11 +655,11 @@
       (push-undo-state editor)
       (let [deleted (subs line cc)]
         (edit/kill-ring-push (:kill-ring editor) deleted :prepend false
-                        :accumulate (= @(:last-action editor) :kill))
+                             :accumulate (= @(:last-action editor) :kill))
         (reset! (:last-action editor) :kill)
         (reset! (:redo-stack editor) [])
         (swap! (:state-atom editor) assoc
-          :lines (assoc lines cl (subs line 0 cc)))
+               :lines (assoc lines cl (subs line 0 cc)))
         (after-destructive-edit! editor))
       (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
 
@@ -676,7 +674,7 @@
                            (clojure.string/join "\n" (subvec lines (inc new-line) cl)) "\n"
                            (subs (nth lines cl) 0 cc)))]
         (edit/kill-ring-push (:kill-ring editor) deleted :prepend true
-                        :accumulate (= @(:last-action editor) :kill))
+                             :accumulate (= @(:last-action editor) :kill))
         (reset! (:last-action editor) :kill)
         (reset! (:redo-stack editor) [])
         (let [new-lines (if (= new-line cl)
@@ -689,27 +687,27 @@
       (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
 
 (defn- handle-delete-word-forward [editor]
-  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state) cc (:cursor-col state)]
-    (let [[tline tcol] (word-boundary-right lines cl cc)]
-      (when (or (not= tline cl) (not= tcol cc))
-        (push-undo-state editor)
-        (let [deleted (if (= tline cl)
-                        (subs (nth lines cl) cc tcol)
-                        (str (subs (nth lines cl) cc) "\n"
-                             (clojure.string/join "\n" (subvec lines (inc cl) tline)) "\n"
-                             (subs (nth lines tline) 0 tcol)))]
-          (edit/kill-ring-push (:kill-ring editor) deleted :prepend false
-                          :accumulate (= @(:last-action editor) :kill))
-          (reset! (:last-action editor) :kill)
-          (reset! (:redo-stack editor) [])
-          (let [new-lines (if (= tline cl)
-                            (assoc lines cl (str (subs (nth lines cl) 0 cc) (subs (nth lines cl) tcol)))
-                            (vec (concat (subvec lines 0 cl)
-                                         [(str (subs (nth lines cl) 0 cc) (subs (nth lines tline) tcol))]
-                                         (subvec lines (inc tline)))))]
-            (swap! (:state-atom editor) assoc :lines new-lines)))
-        (after-destructive-edit! editor)
-        (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))
+  (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state) cc (:cursor-col state)
+        [tline tcol] (word-boundary-right lines cl cc)]
+    (when (or (not= tline cl) (not= tcol cc))
+      (push-undo-state editor)
+      (let [deleted (if (= tline cl)
+                      (subs (nth lines cl) cc tcol)
+                      (str (subs (nth lines cl) cc) "\n"
+                           (clojure.string/join "\n" (subvec lines (inc cl) tline)) "\n"
+                           (subs (nth lines tline) 0 tcol)))]
+        (edit/kill-ring-push (:kill-ring editor) deleted :prepend false
+                             :accumulate (= @(:last-action editor) :kill))
+        (reset! (:last-action editor) :kill)
+        (reset! (:redo-stack editor) [])
+        (let [new-lines (if (= tline cl)
+                          (assoc lines cl (str (subs (nth lines cl) 0 cc) (subs (nth lines cl) tcol)))
+                          (vec (concat (subvec lines 0 cl)
+                                       [(str (subs (nth lines cl) 0 cc) (subs (nth lines tline) tcol))]
+                                       (subvec lines (inc tline)))))]
+          (swap! (:state-atom editor) assoc :lines new-lines)))
+      (after-destructive-edit! editor)
+      (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
 
 (defn- handle-kill-line [editor]
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)]
@@ -720,7 +718,7 @@
                           (vec (concat (subvec lines 0 cl) (subvec lines (inc cl)))))
             new-cl (min cl (dec (count new-lines)))]
         (edit/kill-ring-push (:kill-ring editor) (str deleted "\n") :prepend false
-                        :accumulate (= @(:last-action editor) :kill))
+                             :accumulate (= @(:last-action editor) :kill))
         (reset! (:last-action editor) :kill)
         (reset! (:redo-stack editor) [])
         (swap! (:state-atom editor) assoc :lines new-lines :cursor-line new-cl :cursor-col 0)
@@ -745,12 +743,12 @@
                                      (when (seq remaining) [remaining])
                                      (subvec lines (inc cl))))]
           (swap! (:state-atom editor) assoc
-            :lines new-lines :cursor-line (+ cl (count rest-parts))
-            :cursor-col (count (or (last rest-parts) ""))))
+                 :lines new-lines :cursor-line (+ cl (count rest-parts))
+                 :cursor-col (count (or (last rest-parts) ""))))
         (let [line (nth lines cl "")
               new-val (str (subs line 0 cc) text (subs line cc))]
           (swap! (:state-atom editor) assoc
-            :lines (assoc lines cl new-val) :cursor-col (+ cc (count text)))))
+                 :lines (assoc lines cl new-val) :cursor-col (+ cc (count text)))))
       (reset! (:last-action editor) :yank)
       (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
 
@@ -772,12 +770,12 @@
                                        (when (seq remaining) [remaining])
                                        (subvec lines (inc cl))))]
             (swap! (:state-atom editor) assoc
-              :lines new-lines :cursor-line (+ cl (count rest-parts))
-              :cursor-col (count (or (last rest-parts) ""))))
+                   :lines new-lines :cursor-line (+ cl (count rest-parts))
+                   :cursor-col (count (or (last rest-parts) ""))))
           (let [line (nth lines cl "")
                 new-val (str (subs line 0 cc) new-text (subs line cc))]
             (swap! (:state-atom editor) assoc
-              :lines (assoc lines cl new-val) :cursor-col (+ cc (count new-text)))))
+                   :lines (assoc lines cl new-val) :cursor-col (+ cc (count new-text)))))
         (reset! (:last-action editor) :yank)
         (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))
 
@@ -809,17 +807,17 @@
         (if (empty? rest-lines)
           ;; Single-line paste — cursor lands after the pasted text
           (swap! (:state-atom editor) assoc
-            :lines new-lines :cursor-col (+ cc (count first-line)))
+                 :lines new-lines :cursor-col (+ cc (count first-line)))
           (swap! (:state-atom editor) assoc
-            :lines new-lines :cursor-line (+ cl (count rest-lines))
-            :cursor-col (count (last rest-lines)))))
+                 :lines new-lines :cursor-line (+ cl (count rest-lines))
+                 :cursor-col (count (last rest-lines)))))
       (let [n (swap! (:paste-counter editor) inc)
             marker (str "[paste #" n " +" line-count " lines — ctrl+o to expand]")
             cur-line (nth lines cl "")
             new-cur-line (str (subs cur-line 0 cc) marker (subs cur-line cc))]
         (swap! (:paste-store editor) assoc n text)
         (swap! (:state-atom editor) assoc
-          :lines (assoc lines cl new-cur-line) :cursor-col (+ cc (count marker)))))
+               :lines (assoc lines cl new-cur-line) :cursor-col (+ cc (count marker)))))
     (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
 
 ;; ─── Character jump mode
@@ -836,20 +834,20 @@
       (let [result (if (= dir :forward)
                      (let [line (nth lines cl "") idx (clojure.string/index-of line (str char) cc)]
                        (if (>= idx 0) [cl idx]
-                         (loop [i (inc cl)]
-                           (when (< i (count lines))
-                             (let [li (nth lines i "") idx (clojure.string/index-of li (str char))]
-                               (if (>= idx 0) [i idx] (recur (inc i))))))))
+                           (loop [i (inc cl)]
+                             (when (< i (count lines))
+                               (let [li (nth lines i "") idx (clojure.string/index-of li (str char))]
+                                 (if (>= idx 0) [i idx] (recur (inc i))))))))
                      (let [line (nth lines cl "")
                            idx (if (<= cc 0) -1 (clojure.string/last-index-of line (str char) (dec cc)))]
                        (if (>= idx 0) [cl idx]
-                         (loop [i (dec cl)]
-                           (when (>= i 0)
-                             (let [li (nth lines i "") idx (clojure.string/last-index-of li (str char))]
-                               (if (>= idx 0) [i idx] (recur (dec i)))))))))]
+                           (loop [i (dec cl)]
+                             (when (>= i 0)
+                               (let [li (nth lines i "") idx (clojure.string/last-index-of li (str char))]
+                                 (if (>= idx 0) [i idx] (recur (dec i)))))))))]
         (when result
           (swap! (:state-atom editor) assoc
-            :cursor-line (first result) :cursor-col (second result))
+                 :cursor-line (first result) :cursor-col (second result))
           (reset! (:preferred-col-atom editor) nil))))))
 
 ;; ─── Cursor movement
@@ -915,8 +913,8 @@
                 (undo-push (:undo-stack editor) draft))
               (let [lines (:lines @(:state-atom editor))]
                 (swap! (:state-atom editor) assoc
-                  :cursor-line (max 0 (dec (count lines)))
-                  :cursor-col (count (last lines))))))
+                       :cursor-line (max 0 (dec (count lines)))
+                       :cursor-col (count (last lines))))))
         (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))
 
 (defn- history-forward [editor]
@@ -934,8 +932,8 @@
                 (undo-push (:undo-stack editor) draft))
               (let [lines (:lines @(:state-atom editor))]
                 (swap! (:state-atom editor) assoc
-                  :cursor-line (max 0 (dec (count lines)))
-                  :cursor-col (count (last lines))))))
+                       :cursor-line (max 0 (dec (count lines)))
+                       :cursor-col (count (last lines))))))
         (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))
 
 (defn editor-push-history! [editor text]
@@ -969,14 +967,14 @@
         (when (> cl 0)
           (let [prev-line (or (nth lines (dec cl)) "")]
             (swap! (:state-atom editor) assoc
-              :cursor-line (dec cl)
-              :cursor-col (count prev-line)))))
+                   :cursor-line (dec cl)
+                   :cursor-col (count prev-line)))))
       (if (< cc (count line))
         (swap! (:state-atom editor) assoc :cursor-col (segment-right editor line cc))
         (when (< cl (dec (count lines)))
           (swap! (:state-atom editor) assoc
-            :cursor-line (inc cl)
-            :cursor-col 0))))))
+                 :cursor-line (inc cl)
+                 :cursor-col 0))))))
 
 (defn- move-cursor-vertical [editor dir]
   (let [state @(:state-atom editor)
@@ -996,14 +994,11 @@
                                (reset! (:preferred-col-atom editor) cc))
                              (min cc (:length target-vl))))]
         (swap! (:state-atom editor) assoc
-          :cursor-line (:logical-line target-vl)
-          :cursor-col (+ (:start-col target-vl) target-col))))))
+               :cursor-line (:logical-line target-vl)
+               :cursor-col (+ (:start-col target-vl) target-col))))))
 
 (defn- page-scroll [editor dir]
-  (let [width @(:last-width-atom editor)
-        lines (:lines @(:state-atom editor))
-        visual-lines (build-visual-line-map lines width (valid-paste-ids editor))
-        page-size (max 1 (dec (get-editor-height editor)))]
+  (let [page-size (max 1 (dec (get-editor-height editor)))]
     (dotimes [_ page-size]
       (move-cursor-vertical editor dir))))
 
@@ -1092,7 +1087,7 @@
         ;; Top border
         (if (pos? scroll-offset)
           (vswap! result conj (str "─── ↑ " scroll-offset " more "
-                                    (apply str (repeat (max 0 (- width 12)) "─"))))
+                                   (apply str (repeat (max 0 (- width 12)) "─"))))
           (vswap! result conj (apply str (repeat width bdr))))
         ;; Render visible lines
         (doseq [[vi vl] (map-indexed vector visible)]
@@ -1111,11 +1106,11 @@
                                              "\u001b[7m" (if cursor-at-end? " " at-cursor) "\u001b[0m"
                                              after)
                     effective-width (if cursor-at-end?
-                                     (+ line-width 1)
-                                     line-width)
+                                      (+ line-width 1)
+                                      line-width)
                     cursor-in-padding? (and cursor-at-end?
-                                           (> effective-width content-width)
-                                           (pos? padding-x))
+                                            (> effective-width content-width)
+                                            (pos? padding-x))
                     p (apply str (repeat (max 0 (- content-width effective-width)) \space))
                     rp (if cursor-in-padding? (subs right-pad 1) right-pad)]
                 (vswap! result conj (str left-pad display-with-cursor p rp)))
@@ -1125,7 +1120,7 @@
         (let [remaining (- (count visual-lines) (+ scroll-offset (count visible)))]
           (if (pos? remaining)
             (vswap! result conj (str "─── ↓ " remaining " more "
-                                      (apply str (repeat (max 0 (- width 12)) "─"))))
+                                     (apply str (repeat (max 0 (- width 12)) "─"))))
             (vswap! result conj (apply str (repeat width bdr)))))
         ;; Autocomplete dropdown below the border (pi: SelectList in render)
         (when (and @(:autocomplete-state this) @(:autocomplete-list this))
@@ -1133,7 +1128,7 @@
             (let [lw (u/visible-width line)
                   line-padding (apply str (repeat (max 0 (- content-width lw)) \space))]
               (vswap! result conj
-                (str left-pad line line-padding right-pad)))))
+                      (str left-pad line line-padding right-pad)))))
         @result)))
 
   (handle-input [this data]
@@ -1455,8 +1450,8 @@
   (reduce-kv (fn [result id content]
                (if content
                  (clojure.string/replace result
-                   (re-pattern (str "\\[paste #" id "[^\\]]*\\]"))
-                   content)
+                                         (re-pattern (str "\\[paste #" id "[^\\]]*\\]"))
+                                         content)
                  result))
              (editor-get-text editor)
              @(:paste-store editor)))

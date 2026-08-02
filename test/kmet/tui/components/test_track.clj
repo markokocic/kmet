@@ -1,7 +1,8 @@
 (ns kmet.tui.components.test-track
   "Tests for the reactive track! cache: setters need no manual invalidate,
    cache hits return the same object, and width changes bust the cache."
-  (:require [clojure.test :as t]
+  (:require [clojure.string :as str]
+            [clojure.test :as t]
             [kmet.tui.core :as core]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.markdown :as md]
@@ -73,10 +74,10 @@
   ;; regression: navigation never re-rendered (cache omitted selected-idx) —
   ;; the selected value highlight must move from Alpha to Beta
   (let [s (settings/make-settings-list [{:id :a :label "Alpha" :value "x"}
-                                        {:id :b :label "Beta" :value "y"}])]
-    (let [before (vec (core/render s 30))]
-      (core/handle-input s "\u001b[B") ;; down
-      (t/is (not= before (vec (core/render s 30)))))))
+                                        {:id :b :label "Beta" :value "y"}])
+        before (vec (core/render s 30))]
+    (core/handle-input s "\u001b[B") ;; down
+    (t/is (not= before (vec (core/render s 30))))))
 
 (t/deftest test-settings-list-focus-shows-cursor
   ;; regression: focusing never re-rendered (focused? omitted from cache key)

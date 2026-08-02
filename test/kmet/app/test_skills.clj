@@ -23,7 +23,7 @@
   (t/testing "default prompt mirrors pi structure"
     (let [result (skills/build-system-prompt :cwd "/tmp")]
       (t/is (str/starts-with? result
-              "You are an expert coding assistant operating inside kmet, a coding agent harness."))
+                              "You are an expert coding assistant operating inside kmet, a coding agent harness."))
       (t/is (str/includes? result "Available tools:"))
       (t/is (str/includes? result "In addition to the tools above, you may have access to other custom tools depending on the project."))
       (t/is (str/includes? result "Guidelines:"))
@@ -54,23 +54,23 @@
       (t/is (not (str/includes? result "Available tools:")))))
   (t/testing "append-prompt is appended after the main prompt (pi)"
     (let [result (skills/build-system-prompt :cwd "/tmp"
-                   :append-prompt "Extra instructions.")]
+                                             :append-prompt "Extra instructions.")]
       (t/is (str/includes? result "Extra instructions."))))
   (t/testing "context files are wrapped in <project_context> (pi)"
     (let [result (skills/build-system-prompt :cwd "/tmp"
-                   :context-files [{:path "/x/AGENTS.md" :content "# Rules"}])]
+                                             :context-files [{:path "/x/AGENTS.md" :content "# Rules"}])]
       (t/is (str/includes? result "<project_context>"))
       (t/is (str/includes? result "<project_instructions path=\"/x/AGENTS.md\">"))
       (t/is (str/includes? result "# Rules"))))
   (t/testing "tools without a snippet are hidden, list shows (none) (pi)"
     (let [result (skills/build-system-prompt :cwd "/tmp"
-                   :tools [(tools/make-tool :name "no-snippet" :description "d")])]
+                                             :tools [(tools/make-tool :name "no-snippet" :description "d")])]
       (t/is (str/includes? result "(none)"))
       (t/is (not (str/includes? result "no-snippet")))))
   (t/testing "skills block is omitted when read tool is not available (pi)"
     (let [result (skills/build-system-prompt :cwd "/tmp"
-                   :tools [(tools/make-tool :name "bash" :description "d"
-                                            :prompt-snippet "Execute bash commands")])]
+                                             :tools [(tools/make-tool :name "bash" :description "d"
+                                                                      :prompt-snippet "Execute bash commands")])]
       (t/is (not (str/includes? result "<available_skills>"))))))
 
 (t/deftest test-get-skills-returns-list

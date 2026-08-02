@@ -1,7 +1,8 @@
 (ns kmet.tui.components.settings-list
   "Toggle/cycle through setting values.
    Port of @earendil-works/pi-tui SettingsList."
-  (:require [kmet.tui.protocols :as protocols]
+  (:require [clojure.string :as str]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as u]
             [kmet.tui.macros :refer [track!]]))
@@ -12,13 +13,13 @@
 
 (def default-theme
   (map->SettingsListTheme
-    {:label (fn [s sel] (if sel (str "\u001b[36m" s "\u001b[39m") s))
-     :value (fn [s sel] (if sel
-                           (str "\u001b[36m" s "\u001b[39m")
-                           (str "\u001b[2m" s "\u001b[22m")))
-     :description (fn [s] (str "\u001b[2m" s "\u001b[22m"))
-     :cursor (str "\u001b[36m→ \u001b[39m")
-     :hint (fn [s] (str "\u001b[2m" s "\u001b[22m"))}))
+   {:label (fn [s sel] (if sel (str "\u001b[36m" s "\u001b[39m") s))
+    :value (fn [s sel] (if sel
+                         (str "\u001b[36m" s "\u001b[39m")
+                         (str "\u001b[2m" s "\u001b[22m")))
+    :description (fn [s] (str "\u001b[2m" s "\u001b[22m"))
+    :cursor (str "\u001b[36m→ \u001b[39m")
+    :hint (fn [s] (str "\u001b[2m" s "\u001b[22m"))}))
 
 ;; ─── SettingsList component ─────────────────────────────────────────────────
 
@@ -37,7 +38,7 @@
                        items
                        (->> items
                             (filter #(let [label (:label %)]
-                                      (clojure.string/includes?
+                                       (clojure.string/includes?
                                         (clojure.string/lower-case label)
                                         (clojure.string/lower-case flt))))))
             n (count filtered)
@@ -46,9 +47,9 @@
             lines (volatile! [])]
         ;; Header
         (vswap! lines conj
-          (str " \u001b[1mSettings"
-               (if (empty? flt) "" (str " (filter: " flt ")"))
-               "\u001b[0m"))
+                (str " \u001b[1mSettings"
+                     (if (empty? flt) "" (str " (filter: " flt ")"))
+                     "\u001b[0m"))
         ;; Items
         (doseq [[idx item] (map-indexed vector filtered)]
           (let [is-selected (= idx selected)
@@ -62,30 +63,30 @@
                                  (clojure.string/join " | " (map #(if (= % current)
                                                                     ((:value theme) (pr-str %) true)
                                                                     ((:value theme) (pr-str %) false))
-                                                                  possible))
+                                                                 possible))
                                  " > ")
                             :else (str "  " ((:value theme) (pr-str current) is-selected)))
                 cursor (if (and is-selected @focused?) (:cursor theme) "  ")
                 line-str (str cursor label value-str)
                 truncated (u/truncate-to-width line-str (- width 1))
                 padded (str truncated
-                           (apply str (repeat (max 0 (- width (u/visible-width truncated))) \space)))]
+                            (apply str (repeat (max 0 (- width (u/visible-width truncated))) \space)))]
             (vswap! lines conj padded)))
         (when (zero? n)
           (vswap! lines conj
-            (str "  \u001b[2mNo matching settings\u001b[0m"
-                 (apply str (repeat (max 0 (- width 35)) \space)))))
+                  (str "  \u001b[2mNo matching settings\u001b[0m"
+                       (apply str (repeat (max 0 (- width 35)) \space)))))
         @lines)))
 
-  (handle-input [this data]
+  (handle-input [_this data]
     (let [items @items-atom
           flt @filter-atom
           filtered (if (empty? flt)
                      items
                      (->> items
                           (filter #(clojure.string/includes?
-                                     (clojure.string/lower-case (:label %))
-                                     (clojure.string/lower-case flt)))))
+                                    (clojure.string/lower-case (:label %))
+                                    (clojure.string/lower-case flt)))))
           n (count filtered)
           selected @selected-idx-atom]
       (cond
@@ -120,7 +121,7 @@
                     (when-let [cb @on-change-atom]
                       (cb (:id item) new-val))
                     (swap! items-atom update-in
-                      [(.indexOf items item) :value] (constantly new-val))))))
+                           [(.indexOf items item) :value] (constantly new-val))))))
             nil)
 
         ;; Previous value (left)
@@ -137,7 +138,7 @@
                     (when-let [cb @on-change-atom]
                       (cb (:id item) new-val))
                     (swap! items-atom update-in
-                      [(.indexOf items item) :value] (constantly new-val))))))
+                           [(.indexOf items item) :value] (constantly new-val))))))
             nil)
 
         ;; Backspace — remove filter char
@@ -188,12 +189,12 @@
 
 (defn settings-list-set-value! [sl id value]
   (swap! (:items-atom sl)
-    (fn [items]
-      (mapv (fn [item]
-              (if (= (:id item) id)
-                (assoc item :value value)
-                item))
-            items))))
+         (fn [items]
+           (mapv (fn [item]
+                   (if (= (:id item) id)
+                     (assoc item :value value)
+                     item))
+                 items))))
 
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────
 

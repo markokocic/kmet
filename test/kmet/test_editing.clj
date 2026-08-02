@@ -235,7 +235,6 @@
 
 (t/deftest test-renumber-paste-markers-in-line
   (let [line "x[paste #3 +5 lines — ctrl+o to expand]y"
-        m3 "[paste #3 +5 lines — ctrl+o to expand]"
         m2 "[paste #2 +5 lines — ctrl+o to expand]"]
     (t/is (= (str "x" m2 "y") (edit/renumber-paste-markers-in-line line {3 2})))
     (t/is (= line (edit/renumber-paste-markers-in-line line {1 9})) "unknown id unchanged")

@@ -2,7 +2,8 @@
   "TUI - Main class for managing terminal UI with differential rendering.
    Primary entry point for kmet.tui — all public symbols are re-exported
    from this namespace for convenience."
-  (:require [kmet.tui.protocols :as protocols]
+  (:require [clojure.string :as str]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.terminal :as terminal]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as utils]
@@ -37,8 +38,6 @@
 ;; ═══════════════════════════════════════════════════════════════════════════
 
 (defrecord Overlay [component x y width height focused?])
-
-
 
 (defn- extract-cursor-position
   "Find CURSOR-MARKER in rendered lines (viewport only), strip it from output,
@@ -117,7 +116,7 @@
 
 (defn tui-show-overlay [tui component & {:keys [x y width height]}]
   (let [o (map->Overlay {:component component :x x :y y
-                          :width width :height height :focused? true})]
+                         :width width :height height :focused? true})]
     (swap! (:overlays tui) conj o)
     (tui-set-focus tui component)
     o))
@@ -152,6 +151,12 @@
   "Generate differential ANSI sequences using relative cursor movement.
    prev and next must be same-length vectors.
    cursor-content-row is the current cursor position as a content row.
+   Changed lines are OVERWRITTEN in place, not erase-then-rewrite: every
+   line is padded to full terminal width, so writing the new line from
+   column 0 replaces the old one completely. Erasing first (\u001b[2K)
+   painted the blank line on terminals without CSI 2026 sync support —
+   the flicker while streaming. A [K tail-clear is emitted only when the
+   new line is visibly shorter than the old (unpadded overflow case).
    Returns [seqs last-content-row] where last-content-row is the content
    row of the last emitted change."
   [prev next cursor-content-row]
@@ -166,8 +171,9 @@
                   move (cond
                          (pos? delta) (str "\u001b[" delta "B")
                          (neg? delta) (str "\u001b[" (- delta) "A")
-                         :else "")]
-              (recur (inc i) (conj r (str move "\r\u001b[2K" b)) i))))))))
+                         :else "")
+                  clear (when (< (utils/visible-width b) (utils/visible-width a)) "\u001b[K")]
+              (recur (inc i) (conj r (str move "\r" b (or clear ""))) i))))))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Input reader
@@ -209,7 +215,7 @@
       (= (first s) \u001b)
       (loop [waited 0]
         (let [current @buf]
-          (if-let [key (keys/parse-key current)]
+          (if (keys/parse-key current)
             (do (reset! buf "")
                 (dispatch-input! tui current))
             (if (and (< waited MAX-ESC-WAIT)
@@ -297,9 +303,9 @@
                                       oy (or (:y o) 0)
                                       comp-lines (vec (render (:component o) ow))]
                                   (vec (concat
-                                         (repeat oy "")
-                                         (mapv #(str (apply str (repeat ox " ")) %) comp-lines)
-                                         (repeat (max 0 (- h oy (count comp-lines))) ""))))
+                                        (repeat oy "")
+                                        (mapv #(str (apply str (repeat ox " ")) %) comp-lines)
+                                        (repeat (max 0 (- h oy (count comp-lines))) ""))))
                                 (vec (mapcat #(render % w) @(:components tui))))
                     cursor-result (extract-cursor-position raw-lines h)
                     cursor (:cursor cursor-result)
@@ -310,6 +316,14 @@
                     prev-count (count prev)
                     new-count (count lines)
                     width-changed (and (pos? prev-w) (not= prev-w w))
+                    ;; One write per frame: the whole frame's output (sync markers,
+                    ;; cursor moves, line rewrites, cursor hide) accumulates into SB
+                    ;; and is written+flushed once. Flushing per diff entry made the
+                    ;; terminal paint each erase+rewrite separately — visible flicker
+                    ;; at 60fps, especially on terminals without CSI 2026 sync
+                    ;; support (e.g. Termux).
+                    sb (StringBuilder.)
+                    emit! (fn [s] (.append sb s))
                     ;; Find first index where a and b differ; returns count(a) if identical
                     first-changed (fn first-changed [a b]
                                     (let [n (count a)]
@@ -322,132 +336,135 @@
                     ;; duplicates (pi: fullRender uses "\u001b[2J\u001b[H\u001b[3J").
                     do-full-redraw (fn do-full-redraw []
                                      (when (seq prev)
-                                       (terminal/write-output started "\u001b[2J\u001b[H\u001b[3J"))
-                                     (terminal/write-output started CSI-2026-H)
+                                       (emit! "\u001b[2J\u001b[H\u001b[3J"))
+                                     (emit! CSI-2026-H)
                                      (doseq [i (range new-count)]
-                                       (when (pos? i) (terminal/write-output started "\r\n"))
-                                       (terminal/write-output started (nth lines i)))
-                                     (terminal/write-output started CSI-2026-L)
+                                       (when (pos? i) (emit! "\r\n"))
+                                       (emit! (nth lines i)))
+                                     (emit! CSI-2026-L)
                                      (reset! hardware-cursor-row (dec new-count))
                                      (reset! viewport-top (max 0 (- new-count h))))]
-              (cond
+                (cond
                 ;; Full redraw: first render or width change
-                (or (empty? prev) width-changed)
-                (do-full-redraw)
+                  (or (empty? prev) width-changed)
+                  (do-full-redraw)
 
                 ;; Content grew — full redraw if common part changed above viewport,
                 ;; else diff common part then append with \r\n for scrollback
-                (> new-count prev-count)
-                (let [common-prev (subvec prev 0 prev-count)
-                      common-new (subvec lines 0 prev-count)
-                      old-vt @viewport-top
-                      fc (first-changed common-prev common-new)]
-                  (if (< fc old-vt)
+                  (> new-count prev-count)
+                  (let [common-prev (subvec prev 0 prev-count)
+                        common-new (subvec lines 0 prev-count)
+                        old-vt @viewport-top
+                        fc (first-changed common-prev common-new)]
+                    (if (< fc old-vt)
                     ;; Changes above old viewport — Pi: can't incrementally update scrollback
-                    (do-full-redraw)
-                    (do
-                      (terminal/write-output started CSI-2026-H)
+                      (do-full-redraw)
+                      (do
+                        (emit! CSI-2026-H)
                       ;; Diff the common part (relative movement from current cursor)
-                      (let [[d last-content-row] (diff-lines common-prev common-new @hardware-cursor-row)]
-                        (doseq [x d] (terminal/write-output started x))
+                        (let [[d last-content-row] (diff-lines common-prev common-new @hardware-cursor-row)]
+                          (doseq [x d] (emit! x))
                         ;; Append new lines — move RELATIVE from the tracked cursor to the
                         ;; row after the last common row (pi: computeLineDiff). Never an
                         ;; absolute [H]: content rows aren't screen rows when the TUI
                         ;; starts below screen row 0 (prior terminal output), which would
                         ;; shift the appended lines and corrupt hardware-cursor-row
                         ;; (cascading into later relative diffs, e.g. the spinner).
-                        (let [move-target (dec prev-count)
-                              line-diff (- move-target last-content-row)]
-                          (cond
-                            (pos? line-diff) (terminal/write-output started (str "\u001b[" line-diff "B"))
-                            (neg? line-diff) (terminal/write-output started (str "\u001b[" (- line-diff) "A"))))
-                        (terminal/write-output started "\r\n")
-                        (doseq [i (range prev-count new-count)]
-                          (when (> i prev-count)
-                            (terminal/write-output started "\r\n"))
-                          (terminal/write-output started (str "\u001b[2K" (nth lines i))))
-                        (terminal/write-output started CSI-2026-L)
-                        (reset! hardware-cursor-row (dec new-count))
-                        (reset! viewport-top (max 0 (- new-count h)))))))
+                          (let [move-target (dec prev-count)
+                                line-diff (- move-target last-content-row)]
+                            (cond
+                              (pos? line-diff) (emit! (str "\u001b[" line-diff "B"))
+                              (neg? line-diff) (emit! (str "\u001b[" (- line-diff) "A"))))
+                          (emit! "\r\n")
+                          (doseq [i (range prev-count new-count)]
+                            (when (> i prev-count)
+                              (emit! "\r\n"))
+                            (emit! (str "\u001b[2K" (nth lines i))))
+                          (emit! CSI-2026-L)
+                          (reset! hardware-cursor-row (dec new-count))
+                          (reset! viewport-top (max 0 (- new-count h)))))))
 
                 ;; Content shrunk — full redraw if viewport shifted or changes above viewport,
                 ;; else diff common part then clear removed lines
-                (< new-count prev-count)
-                (let [new-vt (max 0 (- new-count h))]
-                  (if (not= new-vt @viewport-top)
+                  (< new-count prev-count)
+                  (let [new-vt (max 0 (- new-count h))]
+                    (if (not= new-vt @viewport-top)
                     ;; Viewport changed — Pi: can't map old screen rows to new
-                    (do-full-redraw)
-                    (let [common-prev (subvec prev 0 new-count)
-                          fc (first-changed common-prev lines)]
-                      (if (< fc @viewport-top)
+                      (do-full-redraw)
+                      (let [common-prev (subvec prev 0 new-count)
+                            fc (first-changed common-prev lines)]
+                        (if (< fc @viewport-top)
                         ;; Changes above viewport — Pi: full redraw
-                        (do-full-redraw)
+                          (do-full-redraw)
                         ;; Viewport stable, changes within viewport
-                        (let [[d last-content-row] (diff-lines common-prev lines @hardware-cursor-row)]
-                          (terminal/write-output started CSI-2026-H)
-                          (doseq [x d] (terminal/write-output started x))
+                          (let [[d last-content-row] (diff-lines common-prev lines @hardware-cursor-row)]
+                            (emit! CSI-2026-H)
+                            (doseq [x d] (emit! x))
                           ;; Clear removed lines RELATIVE from the last new line
                           ;; (pi: \r\n[2K per extra line, then move back up) — an
                           ;; absolute [H] would be off by one when the TUI starts
                           ;; below screen row 0. This path only runs while both
                           ;; contents fit on screen (guarded above), so the extra
                           ;; lines are always visible.
-                          (let [extra (- prev-count new-count)
-                                target-row (dec new-count)
-                                line-diff (- target-row last-content-row)
-                                move (cond
-                                       (pos? line-diff) (str "\u001b[" line-diff "B")
-                                       (neg? line-diff) (str "\u001b[" (- line-diff) "A")
-                                       :else "")]
-                            (when (seq move)
-                              (terminal/write-output started move))
-                            (dotimes [_ extra]
-                              (terminal/write-output started "\r\n\u001b[2K"))
-                            (when (pos? extra)
-                              (terminal/write-output started (str "\u001b[" extra "A"))))
-                          (terminal/write-output started CSI-2026-L)
-                          (reset! hardware-cursor-row (dec new-count)))))))
+                            (let [extra (- prev-count new-count)
+                                  target-row (dec new-count)
+                                  line-diff (- target-row last-content-row)
+                                  move (cond
+                                         (pos? line-diff) (str "\u001b[" line-diff "B")
+                                         (neg? line-diff) (str "\u001b[" (- line-diff) "A")
+                                         :else "")]
+                              (when (seq move)
+                                (emit! move))
+                              (dotimes [_ extra]
+                                (emit! "\r\n\u001b[2K"))
+                              (when (pos? extra)
+                                (emit! (str "\u001b[" extra "A"))))
+                            (emit! CSI-2026-L)
+                            (reset! hardware-cursor-row (dec new-count)))))))
 
                 ;; Same length — full redraw if changes above viewport,
                 ;; else differential with relative cursor movement
-                (not= prev lines)
-                (let [fc (first-changed prev lines)]
-                  (if (< fc @viewport-top)
+                  (not= prev lines)
+                  (let [fc (first-changed prev lines)]
+                    (if (< fc @viewport-top)
                     ;; Changes above viewport — Pi: full redraw
-                    (do-full-redraw)
-                    (let [[d last-content-row] (diff-lines prev lines @hardware-cursor-row)]
-                      (when (seq d)
-                        (terminal/write-output started CSI-2026-H)
-                        (doseq [x d] (terminal/write-output started x))
-                        (terminal/write-output started CSI-2026-L)
-                        (reset! hardware-cursor-row last-content-row)))))
+                      (do-full-redraw)
+                      (let [[d last-content-row] (diff-lines prev lines @hardware-cursor-row)]
+                        (when (seq d)
+                          (emit! CSI-2026-H)
+                          (doseq [x d] (emit! x))
+                          (emit! CSI-2026-L)
+                          (reset! hardware-cursor-row last-content-row)))))
 
                 ;; No changes
-                :else nil)
+                  :else nil)
               ;; Position hardware cursor (Pi-style: relative movement from tracked position)
               ;; Both hardware-cursor-row and cursor :row are content rows (0-indexed).
               ;; Since viewport is stable during cursor positioning, content-row delta
               ;; equals screen-row delta.
-              (if cursor
-                (let [target-row (min (:row cursor) (dec new-count))
-                      target-col (min (:col cursor) (dec w))
-                      row-delta (- target-row @hardware-cursor-row)
-                      buf (str (cond
-                                (pos? row-delta) (str "\u001b[" row-delta "B")
-                                (neg? row-delta) (str "\u001b[" (- row-delta) "A")
-                                :else "")
-                              "\u001b[" (inc target-col) "G")]
-                  (when (seq buf)
-                    (terminal/write-output started buf))
-                  (reset! hardware-cursor-row target-row)
-                  (if show-hardware-cursor?
-                    (terminal/show-cursor! started)
-                    (terminal/hide-cursor! started)))
-                (terminal/hide-cursor! started))
-              (reset! (:previous-lines tui) lines)
-              (reset! (:previous-width tui) w))))
-        (Thread/sleep 16)
-        (recur)))
+                (if cursor
+                  (let [target-row (min (:row cursor) (dec new-count))
+                        target-col (min (:col cursor) (dec w))
+                        row-delta (- target-row @hardware-cursor-row)
+                        buf (str (cond
+                                   (pos? row-delta) (str "\u001b[" row-delta "B")
+                                   (neg? row-delta) (str "\u001b[" (- row-delta) "A")
+                                   :else "")
+                                 "\u001b[" (inc target-col) "G")]
+                    (when (seq buf)
+                      (emit! buf))
+                    (reset! hardware-cursor-row target-row)
+                    (if show-hardware-cursor?
+                      (emit! "\u001b[?25h")
+                      (emit! "\u001b[?25l")))
+                  (emit! "\u001b[?25l"))
+              ;; Single write + flush per frame (no-op frames write nothing)
+                (when (pos? (.length sb))
+                  (terminal/write-output started (str sb)))
+                (reset! (:previous-lines tui) lines)
+                (reset! (:previous-width tui) w))))
+          (Thread/sleep 16)
+          (recur)))
       (finally
         (reset! (:running? tui) false)
         ;; Pi: on final stop position the cursor at end of content so the

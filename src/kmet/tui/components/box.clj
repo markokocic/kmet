@@ -33,10 +33,10 @@
                  (= (:child-lines cached) child-lines))
           (:lines cached)
           (let [result (into []
-                         (concat
-                           (repeat padding-y (apply-bg this "" width))
-                           (map #(apply-bg this % width) child-lines)
-                           (repeat padding-y (apply-bg this "" width))))]
+                             (concat
+                              (repeat padding-y (apply-bg this "" width))
+                              (map #(apply-bg this % width) child-lines)
+                              (repeat padding-y (apply-bg this "" width))))]
             (reset! cache {:width width :bg-sample bg-sample
                            :child-lines child-lines :lines result})
             result)))))

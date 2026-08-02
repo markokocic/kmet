@@ -14,14 +14,14 @@
         (let [entries (fs/list-dir dir)
               sorted (sort-by fs/file-name entries)
               result (str/join "\n"
-                      (map (fn [f]
-                             (let [name (fs/file-name f)
-                                   type (if (fs/directory? f) "d" "-")
-                                   size (try (fs/size f) (catch Exception _ 0))]
-                               (if long?
-                                 (str type " " (format "%10d" size) " " name)
-                                 name)))
-                           sorted))]
+                               (map (fn [f]
+                                      (let [name (fs/file-name f)
+                                            type (if (fs/directory? f) "d" "-")
+                                            size (try (fs/size f) (catch Exception _ 0))]
+                                        (if long?
+                                          (str type " " (format "%10d" size) " " name)
+                                          name)))
+                                    sorted))]
           {:content (str "Contents of " (str (fs/canonicalize dir)) ":\n" result)})))
     (catch Exception e
       {:content (str "Error listing: " (ex-message e)) :is-error true})))

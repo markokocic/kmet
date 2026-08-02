@@ -30,11 +30,11 @@
   (let [session {:dummy :session}
         events (atom [])
         agent (loop/make-agent-state
-                :model "gpt-4o"
-                :provider :anthropic
-                :system "custom prompt"
-                :session session
-                :on-event (fn [e] (swap! events conj e)))]
+               :model "gpt-4o"
+               :provider :anthropic
+               :system "custom prompt"
+               :session session
+               :on-event (fn [e] (swap! events conj e)))]
     (t/is (= "gpt-4o" @(:model agent)))
     (t/is (= :anthropic @(:provider agent)))
     (t/is (= "custom prompt" @(:system agent)))
@@ -121,8 +121,8 @@
         errors (atom [])
         done (promise)]
     (loop/run-agent-turn agent
-      {:message "hello"
-       :on-error (fn [e] (swap! errors conj e) (deliver done true))})
+                         {:message "hello"
+                          :on-error (fn [e] (swap! errors conj e) (deliver done true))})
     (t/is (true? (deref done 2000 :timeout)) "error callback fires")
     (t/is (pos? (count @errors)))
     (t/is (.contains (first @errors) "No API key"))))
@@ -131,15 +131,15 @@
 
 (t/deftest test-loop-run-agent-turn-structure
   (let [agent (loop/make-agent-state)
-        called (atom false)]
-    (let [fut (loop/run-agent-turn agent
-                {:message "hello"
-                 :on-text (fn [_] (reset! called true))
-                 :on-done (fn [_] (reset! called true))
-                 :on-error (fn [_] (reset! called true))})]
-      (t/is (future? fut))
-      @fut
-      (t/is @called))))
+        called (atom false)
+        fut (loop/run-agent-turn agent
+                                 {:message "hello"
+                                  :on-text (fn [_] (reset! called true))
+                                  :on-done (fn [_] (reset! called true))
+                                  :on-error (fn [_] (reset! called true))})]
+    (t/is (future? fut))
+    @fut
+    (t/is @called)))
 
 ;; ─── Multiple turns ──────────────────────────────────────────────────────
 
@@ -158,8 +158,8 @@
     ;; run with no API key — should exercire error path
     (let [errors (atom [])]
       (loop/run-agent-turn agent
-        {:message "test"
-         :on-error (fn [e] (swap! errors conj e))})
+                           {:message "test"
+                            :on-error (fn [e] (swap! errors conj e))})
       (Thread/sleep 200)
       ;; signal should have been reset by run-agent-turn
       (t/is (false? @(:signal agent)) "Signal reset at start of turn")
@@ -170,10 +170,10 @@
   (let [agent (loop/make-agent-state)
         done (promise)]
     (loop/run-agent-turn agent
-      {:message "hi"
-       :on-text (fn [_])
-       :on-done (fn [_] (deliver done true))
-       :on-error (fn [_] (deliver done true))})
+                         {:message "hi"
+                          :on-text (fn [_])
+                          :on-done (fn [_] (deliver done true))
+                          :on-error (fn [_] (deliver done true))})
     (deref done 2000 :timeout)
     (t/is (false? @(:signal agent)) "Signal should be false after turn ends")))
 
@@ -181,8 +181,8 @@
   (let [agent (loop/make-agent-state)]
     (reset! (:status agent) :idle)
     (loop/run-agent-turn agent
-      {:message "hi"
-       :on-error (fn [_])})
+                         {:message "hi"
+                          :on-error (fn [_])})
     (Thread/sleep 200)
     (t/is (= :idle @(:status agent)) "Status should be idle after error turn")
     (t/is (false? @(:signal agent)) "Signal should be false after error turn")))
@@ -221,9 +221,9 @@
                       :done))]
       ;; deref inside with-redefs keeps the rebinding until the turn completes
       @(loop/run-agent-turn agent
-         {:message "hi"
-          :on-done (fn [_])
-          :on-error (fn [_])}))
+                            {:message "hi"
+                             :on-done (fn [_])
+                             :on-error (fn [_])}))
     (let [types (mapv :type @events)]
       (doseq [t [:agent-start :turn-start :message-start
                  :message-update :message-end :turn-end
@@ -263,9 +263,9 @@
                   (fn [_ _ _] (Thread/sleep 250) {:content "ok" :is-error false})]
       ;; deref inside with-redefs keeps the rebinding until the turn completes
       @(loop/run-agent-turn agent
-         {:message "run tool"
-          :on-done (fn [_])
-          :on-error (fn [_])}))
+                            {:message "run tool"
+                             :on-done (fn [_])
+                             :on-error (fn [_])}))
     (let [types (mapv :type @events)]
       (doseq [t [:tool-execution-start :tool-execution-update
                  :tool-execution-end :turn-end]]
@@ -292,9 +292,9 @@
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (extensions/clear-before-agent-start-hooks!)
     (extensions/register-before-agent-start-hook!
-      (fn [_]
-        {:system-prompt "EXTRA SYSTEM PROMPT"
-         :message {:role :info :label "ext" :content "injected note"}}))
+     (fn [_]
+       {:system-prompt "EXTRA SYSTEM PROMPT"
+        :message {:role :info :label "ext" :content "injected note"}}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
@@ -305,9 +305,9 @@
                       :done))]
       ;; deref inside with-redefs keeps the rebinding until the turn completes
       @(loop/run-agent-turn agent
-         {:message "hi"
-          :on-done (fn [_])
-          :on-error (fn [_])}))
+                            {:message "hi"
+                             :on-done (fn [_])
+                             :on-error (fn [_])}))
     (extensions/clear-before-agent-start-hooks!)
     (t/is (str/includes? (get-in @sent [:messages 0 :content 0 :text])
                          "EXTRA SYSTEM PROMPT")
@@ -338,10 +338,10 @@
                         (on-done :stop))
                       :done))]
       @(loop/run-agent-turn agent
-         {:message "look at this"
-          :images [{:type :image :data "AA" :mime-type "image/png"}]
-          :on-done (fn [_])
-          :on-error (fn [_])}))
+                            {:message "look at this"
+                             :images [{:type :image :data "AA" :mime-type "image/png"}]
+                             :on-done (fn [_])
+                             :on-error (fn [_])}))
     (let [user-msg (first (filter #(= :user (:role %)) @(:messages agent)))]
       (t/is (= [{:type :text :text "look at this"}
                 {:type :image :data "AA" :mime-type "image/png"}]
@@ -352,8 +352,6 @@
                 {:type :image :data "AA" :mime-type "image/png"}]
                (:content llm-user))
             "image blocks reach the LLM call in kmet message format"))))
-
-
 
 ;; ─── Queues (steering / follow-up) ────────────────────────────────────────
 
@@ -419,9 +417,9 @@
                     {:content "ok" :is-error false})]
       ;; deref inside with-redefs keeps the rebinding until the run completes
       @(loop/run-agent-turn agent
-         {:message "first"
-          :on-done (fn [_])
-          :on-error (fn [_])}))
+                            {:message "first"
+                             :on-done (fn [_])
+                             :on-error (fn [_])}))
     (t/is (= 2 @calls) "exactly two LLM calls: initial + steered")
     (t/is (some #(= "steered" (get-in % [:content 0 :text])) (loop/get-context agent))
           "steered message should be in context")
@@ -453,9 +451,9 @@
                     (loop/follow-up! agent "followup")
                     {:content "ok" :is-error false})]
       @(loop/run-agent-turn agent
-         {:message "start"
-          :on-done (fn [_] (swap! done-count inc))
-          :on-error (fn [_])}))
+                            {:message "start"
+                             :on-done (fn [_] (swap! done-count inc))
+                             :on-error (fn [_])}))
     (t/is (= 3 @calls) "three LLM calls: initial, tool follow-up, queued follow-up")
     (t/is (= 1 @done-count) "on-done called once, at the very end")
     (let [ctx (loop/get-context agent)]
@@ -491,9 +489,9 @@
                     (loop/steer! agent "s2")
                     {:content "ok" :is-error false})]
       @(loop/run-agent-turn agent
-         {:message "start"
-          :on-done (fn [_])
-          :on-error (fn [_])}))
+                            {:message "start"
+                             :on-done (fn [_])
+                             :on-error (fn [_])}))
     (t/is (= 3 @calls) "three LLM calls: initial + one per steered message")
     (t/is (some #(= "s1" (get-in % [:content 0 :text])) (loop/get-context agent)))
     (t/is (some #(= "s2" (get-in % [:content 0 :text])) (loop/get-context agent)))
@@ -530,9 +528,9 @@
                     (loop/follow-up! agent "f2")
                     {:content "ok" :is-error false})]
       @(loop/run-agent-turn agent
-         {:message "start"
-          :on-done (fn [_])
-          :on-error (fn [_])}))
+                            {:message "start"
+                             :on-done (fn [_])
+                             :on-error (fn [_])}))
     (t/is (= 4 @calls) "four LLM calls: initial + tool + one per follow-up")
     (t/is (empty? @(:follow-up agent)) "follow-up queue drained")))
 
@@ -547,9 +545,9 @@
                   ;; hangs forever: on-done/on-error never fire
                   (fn [_] (future (Thread/sleep 10000) :never))]
       (let [fut (loop/run-agent-turn agent
-                  {:message "hi"
-                   :on-done (fn [_] (swap! dones inc))
-                   :on-error (fn [e] (swap! errors conj e))})]
+                                     {:message "hi"
+                                      :on-done (fn [_] (swap! dones inc))
+                                      :on-error (fn [e] (swap! errors conj e))})]
         ;; wait until the LLM call is in flight
         (loop []
           (when (nil? @(:active-call agent))
@@ -577,9 +575,9 @@
                         (on-error "boom"))
                       :done))]
       @(loop/run-agent-turn agent
-         {:message "hi"
-          :on-done (fn [_])
-          :on-error (fn [_])}))
+                            {:message "hi"
+                             :on-done (fn [_])
+                             :on-error (fn [_])}))
     (let [types (mapv :type @events)]
       (t/is (some #{:error} types) ":error event emitted on LLM error")
       (t/is (some #(and (= :agent-end (:type %)) (= "boom" (:error %))) @events)
@@ -603,9 +601,9 @@
                     (Thread/sleep 2000)
                     {:content "ok" :is-error false})]
       (let [fut (loop/run-agent-turn agent
-                  {:message "hi"
-                   :on-done (fn [_] (swap! dones inc))
-                   :on-error (fn [e] (swap! errors conj e))})]
+                                     {:message "hi"
+                                      :on-done (fn [_] (swap! dones inc))
+                                      :on-error (fn [e] (swap! errors conj e))})]
         ;; wait until the tool is executing
         (loop []
           (when-not (= :executing @(:status agent))
@@ -671,7 +669,7 @@
         executed (atom false)
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (loop/set-before-tool-call! agent
-      (fn [_] {:block true :reason "Permission denied"}))
+                                (fn [_] {:block true :reason "Permission denied"}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] (reset! executed true)
@@ -687,7 +685,7 @@
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (loop/set-before-tool-call! agent
-      (fn [_] (throw (ex-info "hook boom" {}))))
+                                (fn [_] (throw (ex-info "hook boom" {}))))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
@@ -700,8 +698,8 @@
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (loop/set-after-tool-call! agent
-      (fn [{:keys [result]}]
-        {:content (str (:content result) " [sanitized]")}))
+                               (fn [{:keys [result]}]
+                                 {:content (str (:content result) " [sanitized]")}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] {:content "secret-key=abc" :is-error false})]
@@ -714,8 +712,8 @@
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (loop/set-after-tool-call! agent
-      (fn [{:keys [result]}]
-        {:content (:content result) :is-error true}))
+                               (fn [{:keys [result]}]
+                                 {:content (:content result) :is-error true}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
@@ -727,7 +725,7 @@
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (loop/set-after-tool-call! agent
-      (fn [_] (throw (ex-info "hook boom" {}))))
+                               (fn [_] (throw (ex-info "hook boom" {}))))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
@@ -742,9 +740,9 @@
   (let [events (atom [])
         call-count (atom 0)
         agent (loop/make-agent-state
-                :on-event (fn [e] (swap! events conj e))
-                :max-retries 2
-                :base-delay-ms 1)]
+               :on-event (fn [e] (swap! events conj e))
+               :max-retries 2
+               :base-delay-ms 1)]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
@@ -780,9 +778,9 @@
   (let [events (atom [])
         errors (atom [])
         agent (loop/make-agent-state
-                :on-event (fn [e] (swap! events conj e))
-                :max-retries 1
-                :base-delay-ms 1)]
+               :on-event (fn [e] (swap! events conj e))
+               :max-retries 1
+               :base-delay-ms 1)]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
@@ -804,9 +802,9 @@
   (let [events (atom [])
         errors (atom [])
         agent (loop/make-agent-state
-                :on-event (fn [e] (swap! events conj e))
-                :max-retries 3
-                :base-delay-ms 1)]
+               :on-event (fn [e] (swap! events conj e))
+               :max-retries 3
+               :base-delay-ms 1)]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
@@ -821,9 +819,9 @@
 (t/deftest test-loop-no-retry-on-context-overflow
   (let [events (atom [])
         agent (loop/make-agent-state
-                :on-event (fn [e] (swap! events conj e))
-                :max-retries 3
-                :base-delay-ms 1)]
+               :on-event (fn [e] (swap! events conj e))
+               :max-retries 3
+               :base-delay-ms 1)]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
@@ -838,9 +836,9 @@
 (t/deftest ^:slow test-loop-retry-cancel-during-backoff
   (let [events (atom [])
         agent (loop/make-agent-state
-                :on-event (fn [e] (swap! events conj e))
-                :max-retries 3
-                :base-delay-ms 5000)]
+               :on-event (fn [e] (swap! events conj e))
+               :max-retries 3
+               :base-delay-ms 5000)]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
@@ -862,9 +860,9 @@
   (let [events (atom [])
         call-count (atom 0)
         agent (loop/make-agent-state
-                :on-event (fn [e] (swap! events conj e))
-                :max-retries 1
-                :base-delay-ms 500)]
+               :on-event (fn [e] (swap! events conj e))
+               :max-retries 1
+               :base-delay-ms 500)]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
@@ -874,8 +872,8 @@
                             (on-error "timeout"))
                         2 (do (when-let [on-text (:on-text opts)]
                                 (on-text "first success"))
-                            (when-let [on-done (:on-done opts)]
-                              (on-done :stop)))
+                              (when-let [on-done (:on-done opts)]
+                                (on-done :stop)))
                         3 (when-let [on-error (:on-error opts)]
                             (on-error "503 service unavailable"))
                         (when-let [on-error (:on-error opts)]
@@ -911,8 +909,8 @@
 (t/deftest test-loop-cycle-model
   (let [events (atom [])
         agent (loop/make-agent-state
-                :model "a" :models ["a" "b" "c"]
-                :on-event (fn [e] (swap! events conj e)))]
+               :model "a" :models ["a" "b" "c"]
+               :on-event (fn [e] (swap! events conj e)))]
     (t/is (= "b" (loop/cycle-model! agent 1)))
     (t/is (= "c" (loop/cycle-model! agent 1)))
     (t/is (= "a" (loop/cycle-model! agent 1)) "wraps around at the end")
@@ -947,9 +945,9 @@
   (let [seen (atom nil)
         agent (loop/make-agent-state)]
     (loop/set-transform-context! agent
-      (fn [messages]
-        (reset! seen messages)
-        (conj messages {:role :user :content [{:type :text :text "injected"}]})))
+                                 (fn [messages]
+                                   (reset! seen messages)
+                                   (conj messages {:role :user :content [{:type :text :text "injected"}]})))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
@@ -974,10 +972,10 @@
         holder (atom nil)
         ;; The extension sets the override on :agent-start (pi: before_agent_start)
         agent (loop/make-agent-state
-                :system "base prompt"
-                :on-event (fn [evt]
-                            (when (= :agent-start (:type evt))
-                              (loop/set-system-prompt-override! @holder "override prompt"))))]
+               :system "base prompt"
+               :on-event (fn [evt]
+                           (when (= :agent-start (:type evt))
+                             (loop/set-system-prompt-override! @holder "override prompt"))))]
     (reset! holder agent)
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
@@ -1002,7 +1000,7 @@
 (t/deftest test-loop-prepare-next-turn-updates-state
   (let [agent (loop/make-agent-state :model "model-a" :thinking :off)]
     (loop/set-prepare-next-turn! agent
-      (fn [_] {:model "model-b" :thinking :high :system-prompt-override "custom"}))
+                                 (fn [_] {:model "model-b" :thinking :high :system-prompt-override "custom"}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
@@ -1073,11 +1071,11 @@
   (let [seq-calls (atom 0)
         agent (loop/make-agent-state)]
     (tools/register-tool!
-      (tools/make-tool :name "seq-tool" :label "Seq"
-                       :description "sequential test tool"
-                       :parameters {:x (tools/param :x :string "x")}
-                       :execute (fn [_] {:content "seq" :is-error false})
-                       :execution-mode :sequential))
+     (tools/make-tool :name "seq-tool" :label "Seq"
+                      :description "sequential test tool"
+                      :parameters {:x (tools/param :x :string "x")}
+                      :execute (fn [_] {:content "seq" :is-error false})
+                      :execution-mode :sequential))
     (try
       (with-redefs [cfg/get-api-key (fn [_] "test-key")
                     llm/send-message
@@ -1113,12 +1111,12 @@
         dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
         sess (session/create-session (str dir))
         agent (loop/make-agent-state
-                :on-event (fn [e] (swap! events conj e))
-                :session sess
+               :on-event (fn [e] (swap! events conj e))
+               :session sess
                 ;; high entry threshold so the proactive check never fires;
                 ;; only the overflow path compacts
-                :compact-threshold 100
-                :keep-recent-tokens 5)]
+               :compact-threshold 100
+               :keep-recent-tokens 5)]
     (try
       (dotimes [i 12]
         (session/append-entry sess {:role :user :content [{:type :text :text (str "msg " i)}]}))
@@ -1172,10 +1170,10 @@
   (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
         sess (session/create-session (str dir))
         agent (loop/make-agent-state
-                :session sess
-                :compact-token-threshold 10
-                :compact-threshold 1000
-                :keep-recent-tokens 40)]
+               :session sess
+               :compact-token-threshold 10
+               :compact-threshold 1000
+               :keep-recent-tokens 40)]
     (try
       (doseq [i (range 10)]
         (let [m {:role :user
@@ -1217,7 +1215,7 @@
         calls (atom 0)
         agent (loop/make-agent-state)]
     (loop/set-get-api-key! agent
-      (fn [_] (swap! keys-seen conj (str "key-" (count @keys-seen)))))
+                           (fn [_] (swap! keys-seen conj (str "key-" (count @keys-seen)))))
     (with-redefs [cfg/get-api-key (fn [_] "cfg-key")
                   llm/send-message
                   (fn [opts]
@@ -1247,7 +1245,7 @@
         agent (loop/make-agent-state :session sess)]
     (try
       (loop/set-prepare-next-turn! agent
-        (fn [_] {:context [{:role :user :content [{:type :text :text "replacement"}]}]}))
+                                   (fn [_] {:context [{:role :user :content [{:type :text :text "replacement"}]}]}))
       (with-redefs [cfg/get-api-key (fn [_] "test-key")
                     llm/send-message (stub-llm-tool-then-text (atom 0))
                     tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
@@ -1266,7 +1264,7 @@
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (loop/set-prepare-next-turn! agent
-      (fn [_] {:context [{:role :user :content [{:type :text :text "replacement"}]}]}))
+                                 (fn [_] {:context [{:role :user :content [{:type :text :text "replacement"}]}]}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]

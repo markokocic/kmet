@@ -8,7 +8,7 @@
 
 (defn param
   "Define a tool parameter for JSON schema generation."
-  [name type description & {:keys [optional?]}]
+  [_name type description & {:keys [optional?]}]
   (merge {:type type :description description}
          (when optional? {:optional true})))
 
@@ -18,8 +18,8 @@
   [params]
   (into {} (map (fn [[k {:keys [type description optional?]}]]
                   [k (param k type description
-                        (when optional? {:optional? true}))])
-            params)))
+                            (when optional? {:optional? true}))])
+                params)))
 
 (defn ->json-schema
   "Convert a map of param definitions to a JSON schema map."
@@ -27,8 +27,8 @@
   {:type "object"
    :properties (reduce-kv (fn [m k v]
                             (assoc m (name k)
-                              {:type (name (:type v))
-                               :description (:description v)}))
+                                   {:type (name (:type v))
+                                    :description (:description v)}))
                           {} params)
    :required (vec (->> params (remove #(:optional (val %))) (map key) (map name)))})
 
@@ -44,14 +44,14 @@
              constrained-sampling render-shell prepare-arguments
              execution-mode streams?]}]
   (map->Tool
-    {:name name :label label :description description
-     :prompt-snippet prompt-snippet :prompt-guidelines prompt-guidelines
-     :parameters (if params (->json-schema (compact->params params)) parameters)
-     :execute execute
-     :render-call render-call :render-result render-result
-     :constrained-sampling constrained-sampling
-     :render-shell render-shell
-     :prepare-arguments prepare-arguments
-     :execution-mode execution-mode
-     :streams? streams?}))
+   {:name name :label label :description description
+    :prompt-snippet prompt-snippet :prompt-guidelines prompt-guidelines
+    :parameters (if params (->json-schema (compact->params params)) parameters)
+    :execute execute
+    :render-call render-call :render-result render-result
+    :constrained-sampling constrained-sampling
+    :render-shell render-shell
+    :prepare-arguments prepare-arguments
+    :execution-mode execution-mode
+    :streams? streams?}))
 

@@ -1,5 +1,6 @@
 {:min-bb-version "1.12.215"
  :paths ["src" "test"]
+ :deps {dev.weavejester/cljfmt {:mvn/version "0.16.5"}}
  :tasks
  {run     {:doc "Run kmet (interactive TUI)"
            :requires ([kmet.core :as core])
@@ -23,6 +24,15 @@
            :requires ([kmet.core])
            :task (println "All source namespaces compile successfully.")
            :override-builtin true}
+  lint    {:doc "Lint src/test with clj-kondo"
+           :requires ([babashka.process :as p])
+           :task (p/shell "clj-kondo" "--lint" "src" "test")}
+  format  {:doc "Format src/test with cljfmt (fix in place)"
+           :requires ([cljfmt.tool :as fmt])
+           :task (fmt/fix {:paths ["src" "test"]})}
+  format-check {:doc "Check src/test formatting with cljfmt (no changes)"
+                :requires ([cljfmt.tool :as fmt])
+                :task (fmt/check {:paths ["src" "test"]})}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run       Interactive TUI (--help for options)\n  nrepl     Start nREPL server\n  test      Run fast test suites (excludes ^:slow tests)\n  test-ext  Run ONLY slow (^:slow) test suites (pre-commit validation)\n  check     Verify compilation")
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests)\n  test-ext      Run ONLY slow (^:slow) test suites (pre-commit validation)\n  check         Verify compilation\n  lint          Lint src/test with clj-kondo\n  format        Format src/test with cljfmt (fix in place)\n  format-check  Check src/test formatting with cljfmt (no changes)")
            :override-builtin true}}}

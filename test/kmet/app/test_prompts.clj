@@ -143,10 +143,10 @@
       (spit (str tmp-dir "/plain.md") "\n\nFirst meaningful line.\nSecond line.")
       (io/make-parents (str tmp-dir "/long.md"))
       (spit (str tmp-dir "/long.md") long-line)
-      (let [loaded (prompts/load-prompt-templates-from-dir tmp-dir)]
-        (t/is (= "First meaningful line." (:description (prompts/get-prompt-template "plain"))))
-        (t/is (= (str (subs long-line 0 60) "...")
-                 (:description (prompts/get-prompt-template "long"))))))))
+      (prompts/load-prompt-templates-from-dir tmp-dir)
+      (t/is (= "First meaningful line." (:description (prompts/get-prompt-template "plain"))))
+      (t/is (= (str (subs long-line 0 60) "...")
+               (:description (prompts/get-prompt-template "long")))))))
 
 (t/deftest test-load-prompt-templates-from-dir-non-existent
   (t/is (= [] (prompts/load-prompt-templates-from-dir "/nonexistent/prompts"))))

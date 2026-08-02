@@ -92,10 +92,10 @@
                     is-first (zero? offset)
                     is-last (>= end' n)]
                 (vswap! chunks conj
-                  (cond
-                    is-first (str kitty-prefix param-str ",m=1;" chunk kitty-suffix)
-                    is-last (str kitty-prefix "m=0;" chunk kitty-suffix)
-                    :else (str kitty-prefix "m=1;" chunk kitty-suffix)))
+                        (cond
+                          is-first (str kitty-prefix param-str ",m=1;" chunk kitty-suffix)
+                          is-last (str kitty-prefix "m=0;" chunk kitty-suffix)
+                          :else (str kitty-prefix "m=1;" chunk kitty-suffix)))
                 (recur end'))))
           (str/join @chunks))))))
 
@@ -219,18 +219,18 @@
   (try
     (let [p (proc/process ["sh" "-c"
                            "printf '\\033[16t' > /dev/tty; read -t 1 line < /dev/tty"]
-                {:out :string :err :string})
+                          {:out :string :err :string})
           result (deref p 2000 ::timeout)]
       (if (= result ::timeout)
         default-cell-dimensions
         (let [line (str/trim (:out result))]
-          (if-let [[_ w h] (re-find #"^(\d+);(\d+);(\d+)?t$" line)]
+          (if-let [[_ _ _] (re-find #"^(\d+);(\d+);(\d+)?t$" line)]
             (let [[_ _ rows-px cols-px] (re-find #";(\d+);(\d+)t" line)]
               (when (and rows-px cols-px)
                 (let [dims {:width-px (/ (Integer/parseInt cols-px)
-                                        (or (some-> (System/getenv "COLUMNS") Integer/parseInt) 80))
+                                         (or (some-> (System/getenv "COLUMNS") Integer/parseInt) 80))
                             :height-px (/ (Integer/parseInt rows-px)
-                                         (or (some-> (System/getenv "LINES") Integer/parseInt) 24))}]
+                                          (or (some-> (System/getenv "LINES") Integer/parseInt) 24))}]
                   (set-cell-dimensions! dims)
                   dims)))
             default-cell-dimensions))))
@@ -240,16 +240,16 @@
 
 (defn render-image
   [base64-data img-dim & {:keys [mime-type max-width-cells max-height-cells image-id move-cursor]
-                           :or {mime-type "image/png" max-width-cells 80 move-cursor true}}]
+                          :or {mime-type "image/png" max-width-cells 80 move-cursor true}}]
   (let [caps (get-capabilities)]
     (when (and (:images caps) (contains? kitty-format-codes mime-type))
       (let [{:keys [columns rows]} (calculate-image-cell-size img-dim max-width-cells
-                                     :max-height-cells max-height-cells
-                                     :cell-dims' @cell-dims)]
+                                                              :max-height-cells max-height-cells
+                                                              :cell-dims' @cell-dims)]
         {:sequence (encode-kitty base64-data
-                     :mime-type mime-type
-                     :columns columns :rows rows
-                     :image-id image-id :move-cursor move-cursor)
+                                 :mime-type mime-type
+                                 :columns columns :rows rows
+                                 :image-id image-id :move-cursor move-cursor)
          :rows rows
          :image-id image-id}))))
 

@@ -146,7 +146,7 @@
             (let [code (slurp (str f))]
               (load-string code)
               (swap! extensions conj
-                {:name (fs/file-name f) :file (str (fs/canonicalize f))}))
+                     {:name (fs/file-name f) :file (str (fs/canonicalize f))}))
             (catch Exception e
               (binding [*out* *err*]
                 (println "Warning: Failed to load extension" (fs/file-name f) ":" (ex-message e))))))))))

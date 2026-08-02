@@ -46,7 +46,6 @@
 ;; Color helpers — matching pi's hexToRgb, rgbTo256, fgAnsi, bgAnsi
 ;; ═══════════════════════════════════════════════════════════════════════════
 
-(def ^:private RST "\u001b[0m")
 (def ^:private FG-RST "\u001b[39m")
 (def ^:private BG-RST "\u001b[49m")
 
@@ -101,14 +100,6 @@
           (str "\u001b[48;5;" (rgb->256 r g b) "m")))
       BG-RST)
     :else BG-RST))
-
-(defn- resolve-var-ref [v vars visited]
-  (if (visited v)
-    (throw (ex-info "Circular var ref" {:var v}))
-    (let [resolved (get vars v)]
-      (if (and resolved (string? resolved) (not (str/starts-with? resolved "#")))
-        (recur resolved vars (conj visited v))
-        resolved))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Theme API — matching pi's theme.fg() / theme.bg() / bold() etc.
@@ -197,8 +188,8 @@
   "Convert camelCase string to kebab-case keyword."
   [s]
   (keyword
-    (str/lower-case
-      (str/replace s #"([a-z])([A-Z])" "$1-$2"))))
+   (str/lower-case
+    (str/replace s #"([a-z])([A-Z])" "$1-$2"))))
 
 ;; Mapping from pi's camelCase color keys to kebab-case keywords
 (def token-map
@@ -283,42 +274,42 @@
                                    (resolve-colors-from-flat-map data color-mode))
          ;; Fill missing tokens with dark theme defaults
          dark (resolve-colors-from-flat-map
-                {:accent "#8abeb7" :border "#5f87ff" :border-accent "#00d7ff"
-                 :border-muted "#505050" :success "#b5bd68" :error "#cc6666"
-                 :warning "#ffff00" :muted "#808080" :dim "#666666"
-                 :text "#d4d4d4" :thinking-text "#808080"
-                 :selected-bg "#3a3a4a" :user-message-bg "#343541"
-                 :user-message-text "#d4d4d4" :custom-message-bg "#2d2838"
-                 :custom-message-text "#d4d4d4" :custom-message-label "#9575cd"
-                 :tool-pending-bg "#282832" :tool-success-bg "#283228"
-                 :tool-error-bg "#3c2828" :tool-title "#d4d4d4"
-                 :tool-output "#808080"
-                 :md-heading "#f0c674" :md-link "#81a2be" :md-link-url "#666666"
-                 :md-code "#8abeb7" :md-code-block "#b5bd68"
-                 :md-code-block-border "#808080" :md-quote "#808080"
-                 :md-quote-border "#808080" :md-hr "#808080"
-                 :md-list-bullet "#8abeb7"
-                 :tool-diff-added "#b5bd68" :tool-diff-removed "#cc6666"
-                 :tool-diff-context "#808080"
-                 :syntax-comment "#6A9955" :syntax-keyword "#569CD6"
-                 :syntax-function "#DCDCAA" :syntax-variable "#9CDCFE"
-                 :syntax-string "#CE9178" :syntax-number "#B5CEA8"
-                 :syntax-type "#4EC9B0" :syntax-operator "#D4D4D4"
-                 :syntax-punctuation "#D4D4D4"
-                 :thinking-off "#505050" :thinking-minimal "#6e6e6e"
-                 :thinking-low "#5f87af" :thinking-medium "#81a2be"
-                 :thinking-high "#b294bb" :thinking-xhigh "#d183e8"
-                 :thinking-max "#ff5fff"
-                 :bash-mode "#b5bd68"}
-                color-mode)
+               {:accent "#8abeb7" :border "#5f87ff" :border-accent "#00d7ff"
+                :border-muted "#505050" :success "#b5bd68" :error "#cc6666"
+                :warning "#ffff00" :muted "#808080" :dim "#666666"
+                :text "#d4d4d4" :thinking-text "#808080"
+                :selected-bg "#3a3a4a" :user-message-bg "#343541"
+                :user-message-text "#d4d4d4" :custom-message-bg "#2d2838"
+                :custom-message-text "#d4d4d4" :custom-message-label "#9575cd"
+                :tool-pending-bg "#282832" :tool-success-bg "#283228"
+                :tool-error-bg "#3c2828" :tool-title "#d4d4d4"
+                :tool-output "#808080"
+                :md-heading "#f0c674" :md-link "#81a2be" :md-link-url "#666666"
+                :md-code "#8abeb7" :md-code-block "#b5bd68"
+                :md-code-block-border "#808080" :md-quote "#808080"
+                :md-quote-border "#808080" :md-hr "#808080"
+                :md-list-bullet "#8abeb7"
+                :tool-diff-added "#b5bd68" :tool-diff-removed "#cc6666"
+                :tool-diff-context "#808080"
+                :syntax-comment "#6A9955" :syntax-keyword "#569CD6"
+                :syntax-function "#DCDCAA" :syntax-variable "#9CDCFE"
+                :syntax-string "#CE9178" :syntax-number "#B5CEA8"
+                :syntax-type "#4EC9B0" :syntax-operator "#D4D4D4"
+                :syntax-punctuation "#D4D4D4"
+                :thinking-off "#505050" :thinking-minimal "#6e6e6e"
+                :thinking-low "#5f87af" :thinking-medium "#81a2be"
+                :thinking-high "#b294bb" :thinking-xhigh "#d183e8"
+                :thinking-max "#ff5fff"
+                :bash-mode "#b5bd68"}
+               color-mode)
          complete-fg (merge (:fg-map dark) fg-map)
          complete-bg (merge (:bg-map dark) bg-map)]
      (map->Theme
-       {:name name
-        :fg-colors complete-fg
-        :bg-colors complete-bg
-        :color-mode color-mode
-        :source-path source-path}))))
+      {:name name
+       :fg-colors complete-fg
+       :bg-colors complete-bg
+       :color-mode color-mode
+       :source-path source-path}))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Built-in themes — same color values as pi's dark.json / light.json
@@ -326,83 +317,83 @@
 
 (def dark-theme
   (make-theme
-    {:name "dark"
-     :vars {"cyan" "#00d7ff" "blue" "#5f87ff" "green" "#b5bd68"
-            "red" "#cc6666" "yellow" "#ffff00"
-            "text" "#d4d4d4" "gray" "#808080" "dimGray" "#666666"
-            "darkGray" "#505050" "accent" "#8abeb7"
-            "selectedBg" "#3a3a4a" "userMsgBg" "#343541"
-            "toolPendingBg" "#282832" "toolSuccessBg" "#283228"
-            "toolErrorBg" "#3c2828" "customMsgBg" "#2d2838"}
-     :colors {"accent" "accent" "border" "blue"
-              "borderAccent" "cyan" "borderMuted" "darkGray"
-              "success" "green" "error" "red" "warning" "yellow"
-              "muted" "gray" "dim" "dimGray" "text" "text"
-              "thinkingText" "gray"
-              "selectedBg" "selectedBg" "userMessageBg" "userMsgBg"
-              "userMessageText" "text"
-              "customMessageBg" "customMsgBg" "customMessageText" "text"
-              "customMessageLabel" "#9575cd"
-              "toolPendingBg" "toolPendingBg" "toolSuccessBg" "toolSuccessBg"
-              "toolErrorBg" "toolErrorBg" "toolTitle" "text"
-              "toolOutput" "gray"
-              "mdHeading" "#f0c674" "mdLink" "#81a2be"
-              "mdLinkUrl" "dimGray" "mdCode" "accent"
-              "mdCodeBlock" "green" "mdCodeBlockBorder" "gray"
-              "mdQuote" "gray" "mdQuoteBorder" "gray" "mdHr" "gray"
-              "mdListBullet" "accent"
-              "toolDiffAdded" "green" "toolDiffRemoved" "red"
-              "toolDiffContext" "gray"
-              "syntaxComment" "#6A9955" "syntaxKeyword" "#569CD6"
-              "syntaxFunction" "#DCDCAA" "syntaxVariable" "#9CDCFE"
-              "syntaxString" "#CE9178" "syntaxNumber" "#B5CEA8"
-              "syntaxType" "#4EC9B0" "syntaxOperator" "#D4D4D4"
-              "syntaxPunctuation" "#D4D4D4"
-              "thinkingOff" "darkGray" "thinkingMinimal" "#6e6e6e"
-              "thinkingLow" "#5f87af" "thinkingMedium" "#81a2be"
-              "thinkingHigh" "#b294bb" "thinkingXhigh" "#d183e8"
-              "thinkingMax" "#ff5fff"
-              "bashMode" "green"}}))
+   {:name "dark"
+    :vars {"cyan" "#00d7ff" "blue" "#5f87ff" "green" "#b5bd68"
+           "red" "#cc6666" "yellow" "#ffff00"
+           "text" "#d4d4d4" "gray" "#808080" "dimGray" "#666666"
+           "darkGray" "#505050" "accent" "#8abeb7"
+           "selectedBg" "#3a3a4a" "userMsgBg" "#343541"
+           "toolPendingBg" "#282832" "toolSuccessBg" "#283228"
+           "toolErrorBg" "#3c2828" "customMsgBg" "#2d2838"}
+    :colors {"accent" "accent" "border" "blue"
+             "borderAccent" "cyan" "borderMuted" "darkGray"
+             "success" "green" "error" "red" "warning" "yellow"
+             "muted" "gray" "dim" "dimGray" "text" "text"
+             "thinkingText" "gray"
+             "selectedBg" "selectedBg" "userMessageBg" "userMsgBg"
+             "userMessageText" "text"
+             "customMessageBg" "customMsgBg" "customMessageText" "text"
+             "customMessageLabel" "#9575cd"
+             "toolPendingBg" "toolPendingBg" "toolSuccessBg" "toolSuccessBg"
+             "toolErrorBg" "toolErrorBg" "toolTitle" "text"
+             "toolOutput" "gray"
+             "mdHeading" "#f0c674" "mdLink" "#81a2be"
+             "mdLinkUrl" "dimGray" "mdCode" "accent"
+             "mdCodeBlock" "green" "mdCodeBlockBorder" "gray"
+             "mdQuote" "gray" "mdQuoteBorder" "gray" "mdHr" "gray"
+             "mdListBullet" "accent"
+             "toolDiffAdded" "green" "toolDiffRemoved" "red"
+             "toolDiffContext" "gray"
+             "syntaxComment" "#6A9955" "syntaxKeyword" "#569CD6"
+             "syntaxFunction" "#DCDCAA" "syntaxVariable" "#9CDCFE"
+             "syntaxString" "#CE9178" "syntaxNumber" "#B5CEA8"
+             "syntaxType" "#4EC9B0" "syntaxOperator" "#D4D4D4"
+             "syntaxPunctuation" "#D4D4D4"
+             "thinkingOff" "darkGray" "thinkingMinimal" "#6e6e6e"
+             "thinkingLow" "#5f87af" "thinkingMedium" "#81a2be"
+             "thinkingHigh" "#b294bb" "thinkingXhigh" "#d183e8"
+             "thinkingMax" "#ff5fff"
+             "bashMode" "green"}}))
 
 (def light-theme
   (make-theme
-    {:name "light"
-     :vars {"cyan" "#00afd7" "blue" "#005f87" "green" "#4e9a06"
-            "red" "#cc0000" "yellow" "#c4a000"
-            "text" "#2e3436" "gray" "#888a85" "dimGray" "#babdb6"
-            "darkGray" "#d3d7cf" "accent" "#4e9a06"
-            "selectedBg" "#d3d7cf" "userMsgBg" "#eeeeec"
-            "toolPendingBg" "#f5f5f0" "toolSuccessBg" "#f0fff0"
-            "toolErrorBg" "#fff0f0" "customMsgBg" "#f0ecf5"}
-     :colors {"accent" "accent" "border" "blue"
-              "borderAccent" "cyan" "borderMuted" "darkGray"
-              "success" "green" "error" "red" "warning" "yellow"
-              "muted" "gray" "dim" "dimGray" "text" "text"
-              "thinkingText" "gray"
-              "selectedBg" "selectedBg" "userMessageBg" "userMsgBg"
-              "userMessageText" "text"
-              "customMessageBg" "customMsgBg" "customMessageText" "text"
-              "customMessageLabel" "#5e3a87"
-              "toolPendingBg" "toolPendingBg" "toolSuccessBg" "toolSuccessBg"
-              "toolErrorBg" "toolErrorBg" "toolTitle" "text"
-              "toolOutput" "gray"
-              "mdHeading" "#c4a000" "mdLink" "#005f87"
-              "mdLinkUrl" "dimGray" "mdCode" "accent"
-              "mdCodeBlock" "green" "mdCodeBlockBorder" "gray"
-              "mdQuote" "gray" "mdQuoteBorder" "gray" "mdHr" "gray"
-              "mdListBullet" "accent"
-              "toolDiffAdded" "green" "toolDiffRemoved" "red"
-              "toolDiffContext" "gray"
-              "syntaxComment" "#6A9955" "syntaxKeyword" "#0000ff"
-              "syntaxFunction" "#795e26" "syntaxVariable" "#001080"
-              "syntaxString" "#a31515" "syntaxNumber" "#098658"
-              "syntaxType" "#267f99" "syntaxOperator" "#2e3436"
-              "syntaxPunctuation" "#2e3436"
-              "thinkingOff" "darkGray" "thinkingMinimal" "#c0c0c0"
-              "thinkingLow" "#5f87af" "thinkingMedium" "#005f87"
-              "thinkingHigh" "#800080" "thinkingXhigh" "#a020f0"
-              "thinkingMax" "#ff00ff"
-              "bashMode" "green"}}))
+   {:name "light"
+    :vars {"cyan" "#00afd7" "blue" "#005f87" "green" "#4e9a06"
+           "red" "#cc0000" "yellow" "#c4a000"
+           "text" "#2e3436" "gray" "#888a85" "dimGray" "#babdb6"
+           "darkGray" "#d3d7cf" "accent" "#4e9a06"
+           "selectedBg" "#d3d7cf" "userMsgBg" "#eeeeec"
+           "toolPendingBg" "#f5f5f0" "toolSuccessBg" "#f0fff0"
+           "toolErrorBg" "#fff0f0" "customMsgBg" "#f0ecf5"}
+    :colors {"accent" "accent" "border" "blue"
+             "borderAccent" "cyan" "borderMuted" "darkGray"
+             "success" "green" "error" "red" "warning" "yellow"
+             "muted" "gray" "dim" "dimGray" "text" "text"
+             "thinkingText" "gray"
+             "selectedBg" "selectedBg" "userMessageBg" "userMsgBg"
+             "userMessageText" "text"
+             "customMessageBg" "customMsgBg" "customMessageText" "text"
+             "customMessageLabel" "#5e3a87"
+             "toolPendingBg" "toolPendingBg" "toolSuccessBg" "toolSuccessBg"
+             "toolErrorBg" "toolErrorBg" "toolTitle" "text"
+             "toolOutput" "gray"
+             "mdHeading" "#c4a000" "mdLink" "#005f87"
+             "mdLinkUrl" "dimGray" "mdCode" "accent"
+             "mdCodeBlock" "green" "mdCodeBlockBorder" "gray"
+             "mdQuote" "gray" "mdQuoteBorder" "gray" "mdHr" "gray"
+             "mdListBullet" "accent"
+             "toolDiffAdded" "green" "toolDiffRemoved" "red"
+             "toolDiffContext" "gray"
+             "syntaxComment" "#6A9955" "syntaxKeyword" "#0000ff"
+             "syntaxFunction" "#795e26" "syntaxVariable" "#001080"
+             "syntaxString" "#a31515" "syntaxNumber" "#098658"
+             "syntaxType" "#267f99" "syntaxOperator" "#2e3436"
+             "syntaxPunctuation" "#2e3436"
+             "thinkingOff" "darkGray" "thinkingMinimal" "#c0c0c0"
+             "thinkingLow" "#5f87af" "thinkingMedium" "#005f87"
+             "thinkingHigh" "#800080" "thinkingXhigh" "#a020f0"
+             "thinkingMax" "#ff00ff"
+             "bashMode" "green"}}))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Registry & Loading — EDN only, same schema as pi's JSON

@@ -33,7 +33,7 @@
       (when (and (some? (:collapsed-content msg))
                  (some? (:expanded-content msg)))
         (cm/custom-message-set-collapsible-content! comp
-          (:collapsed-content msg) (:expanded-content msg))
+                                                    (:collapsed-content msg) (:expanded-content msg))
         (when (:expanded? msg)
           (cm/custom-message-set-expanded! comp true)))
       comp)))
@@ -59,23 +59,23 @@
 ;; ─── ChatHistoryComponent record ───────────────────────────────────────────
 
 (defcomponent ChatHistoryComponent nil
-  [messages-atom  ;; atom of vec of message maps, each with :component
-   info-comp-atom  ;; atom of CustomMessageComponent or nil
-   theme-atom
-   output-pad-atom
-   streaming-atom  ;; atom of streaming message map or nil
-   status-line-atom  ;; atom of StatusLine (bottom status message) or nil
-   tools-expanded-atom   ;; flag: tool output expanded (pi: toolOutputExpanded)
-   thinking-hidden-atom] ;; flag: thinking blocks hidden (pi: hideThinkingBlock)
+              [messages-atom  ;; atom of vec of message maps, each with :component
+               info-comp-atom  ;; atom of CustomMessageComponent or nil
+               theme-atom
+               output-pad-atom
+               streaming-atom  ;; atom of streaming message map or nil
+               status-line-atom  ;; atom of StatusLine (bottom status message) or nil
+               tools-expanded-atom   ;; flag: tool output expanded (pi: toolOutputExpanded)
+               thinking-hidden-atom] ;; flag: thinking blocks hidden (pi: hideThinkingBlock)
 
-  (render [this width]
+  (render [_this width]
     (let [msgs @messages-atom
           info-lines (when-let [i @info-comp-atom] (protocols/render i width))
           msg-lines (render-messages msgs width (some? @info-comp-atom))
           status-lines (when-let [s @status-line-atom] (protocols/render s width))]
       (into [] (concat info-lines msg-lines status-lines))))
 
-  (invalidate [this]
+  (invalidate [_this]
     (when-let [i @info-comp-atom] (protocols/invalidate i))
     (doseq [m @messages-atom] (protocols/invalidate (:component m)))
     (when-let [s @status-line-atom] (protocols/invalidate s))))
@@ -110,12 +110,12 @@
     (nil? content) ""
     :else
     (str/join "\n"
-      (for [b content]
-        (cond
-          (or (= (:type b) :image) (= (:type b) "image"))
-          (str "[image " (or (:mime-type b) "?") "]")
-          :else
-          (or (:content b) (:text b) ""))))))
+              (for [b content]
+                (cond
+                  (or (= (:type b) :image) (= (:type b) "image"))
+                  (str "[image " (or (:mime-type b) "?") "]")
+                  :else
+                  (or (:content b) (:text b) ""))))))
 
 (defn- make-plain-msg
   "Create a Spacer(1) + plain Text pair — pi's showError/showWarning: a
@@ -134,25 +134,24 @@
   [msg theme output-pad tools-expanded? thinking-hidden?]
   (case (:role msg)
     :user (um/make-user-message
-            :text (content->display-text (:content msg ""))
-            :theme theme :output-pad output-pad)
+           :text (content->display-text (:content msg ""))
+           :theme theme :output-pad output-pad)
     :assistant (am/make-assistant-message
-                 :text (content->display-text (:content msg ""))
-                 :thinking (:thinking msg "")
-                 :theme theme
-                 :output-pad output-pad
-                 :hide-thinking? thinking-hidden?
-                 :finalized? true)
+                :text (content->display-text (:content msg ""))
+                :thinking (:thinking msg "")
+                :theme theme
+                :output-pad output-pad
+                :hide-thinking? thinking-hidden?)
     :tool (let [comp (te/make-tool-execution
-                       :name (:name msg "")
-                       :args (:args msg {})
-                       :content (content->display-text (:content msg ""))
-                       :is-error (:is-error msg false)
-                       :truncation (:truncation msg)
-                       :details (:details msg)
-                       :theme theme
-                       :output-pad output-pad
-                       :expanded? tools-expanded?)]
+                      :name (:name msg "")
+                      :args (:args msg {})
+                      :content (content->display-text (:content msg ""))
+                      :is-error (:is-error msg false)
+                      :truncation (:truncation msg)
+                      :details (:details msg)
+                      :theme theme
+                      :output-pad output-pad
+                      :expanded? tools-expanded?)]
             ;; Pi: replayed/persisted tool results are final — mark ended so
             ;; they render with success/error bg, footer strip, and Took.
             ;; Live pending messages (content "" + is-error false) are skipped.
@@ -203,9 +202,9 @@
     (when comp
       (let [entry (assoc msg :component comp)]
         (swap! (:messages-atom ch)
-          (fn [msgs]
-            (let [idx (if streaming (max 0 (dec (count msgs))) (count msgs))]
-              (vec (concat (subvec msgs 0 idx) [entry] (subvec msgs idx))))))))
+               (fn [msgs]
+                 (let [idx (if streaming (max 0 (dec (count msgs))) (count msgs))]
+                   (vec (concat (subvec msgs 0 idx) [entry] (subvec msgs idx))))))))
     comp))
 
 (defn chat-history-remove-last!
@@ -225,11 +224,10 @@
    Inherits the current thinking-hidden flag (pi: hideThinkingBlock)."
   [ch]
   (let [comp (am/make-assistant-message
-               :text "" :thinking ""
-               :theme @(:theme-atom ch)
-               :output-pad @(:output-pad-atom ch)
-               :hide-thinking? @(:thinking-hidden-atom ch)
-               :finalized? false)
+              :text "" :thinking ""
+              :theme @(:theme-atom ch)
+              :output-pad @(:output-pad-atom ch)
+              :hide-thinking? @(:thinking-hidden-atom ch))
         msg {:role :assistant :content "" :component comp :streaming? true}]
     (swap! (:messages-atom ch) conj msg)
     (reset! (:streaming-atom ch) msg)
@@ -254,28 +252,27 @@
 (defn chat-history-finalize-streaming!
   "Finalize the current streaming message.
    Captures the final text/thinking from the component into the message map
-   and removes the cursor. Returns the component (or nil if no streaming)."
+   and marks it non-streaming. Returns the component (or nil if no streaming)."
   [ch]
   (when-let [msg @(:streaming-atom ch)]
     (let [comp (:component msg)
           text (am/assistant-message-get-text comp)
           thinking (am/assistant-message-get-thinking comp)]
-      (am/assistant-message-finalize! comp)
       (swap! (:messages-atom ch)
-        (fn [msgs]
-          (mapv (fn [m]
-                  (if (identical? m msg)
-                    (cond-> (assoc m :content text :streaming? false)
-                      (seq thinking) (assoc :thinking thinking))
-                    m))
-                msgs)))
+             (fn [msgs]
+               (mapv (fn [m]
+                       (if (identical? m msg)
+                         (cond-> (assoc m :content text :streaming? false)
+                           (seq thinking) (assoc :thinking thinking))
+                         m))
+                     msgs)))
       (reset! (:streaming-atom ch) nil)
       comp)))
 
 (defn chat-history-finalize-thinking!
   "Clear the thinking buffer on the streaming component (no-op with new architecture
    since thinking is stored in the message component itself)."
-  [ch]
+  [_ch]
   ;; Pi doesn't separately clear thinking — it's captured in the component.
   ;; If there's a streaming component, the thinking is part of it.
   nil)
@@ -368,10 +365,10 @@
 ;; No component kind — kind-based dispatch (toggles, theme application)
 ;; returns nil for it.
 (defcomponent StatusLine nil [spacer-atom text-atom]
-  (render [this width]
+  (render [_this width]
     (into [] (concat (protocols/render @spacer-atom width)
                      (protocols/render @text-atom width))))
-  (invalidate [this]
+  (invalidate [_this]
     (protocols/invalidate @spacer-atom)
     (protocols/invalidate @text-atom)))
 
@@ -383,8 +380,8 @@
   (if-let [line @(:status-line-atom ch)]
     (text/text-set! @(:text-atom line) (theme/dim message))
     (reset! (:status-line-atom ch)
-      (map->StatusLine {:spacer-atom (atom (spacer/make-spacer 1))
-                        :text-atom (atom (text/make-text (theme/dim message) 1 0))})))
+            (map->StatusLine {:spacer-atom (atom (spacer/make-spacer 1))
+                              :text-atom (atom (text/make-text (theme/dim message) 1 0))})))
   nil)
 
 ;; ─── Misc ─────────────────────────────────────────────────────────────────
@@ -422,17 +419,17 @@
    are UI-only, and strips the :component/:streaming? keys."
   [ch]
   (->> (concat
-         (when-let [info @(:info-comp-atom ch)]
-           [{:role :info
-             :label @(:label-atom info)
-             :content @(:content-atom info)}])
-         @(:messages-atom ch))
+        (when-let [info @(:info-comp-atom ch)]
+          [{:role :info
+            :label @(:label-atom info)
+            :content @(:content-atom info)}])
+        @(:messages-atom ch))
        (remove #(= :bash (:role %)))
        (mapv #(dissoc % :component :streaming?))))
 
 (defn chat-history-set-max-lines!
   "No-op: Pi architecture doesn't use max-lines (terminal handles viewport)."
-  [ch _n] nil)
+  [_ch _n] nil)
 
 (defn- all-message-comps
   "All message components plus the info banner component."
@@ -479,5 +476,5 @@
 
 (extend-type ChatHistoryComponent
   protocols/IFocusable
-  (focused [this] false)
-  (set-focused! [this val]))
+  (focused [_this] false)
+  (set-focused! [_this _val]))

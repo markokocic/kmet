@@ -2,7 +2,8 @@
   "Markdown to ANSI-styled terminal output.
    Port of @earendil-works/pi-tui Markdown.
    Minimal CommonMark renderer for terminal display."
-  (:require [kmet.tui.protocols :as protocols]
+  (:require [clojure.string :as str]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
             [kmet.tui.macros :refer [track!]]))
 
@@ -22,21 +23,21 @@
 
 (def default-theme
   (map->MarkdownTheme
-    {:heading (fn [s]
-                (str bold-ansi "\u001b[33m" s rst))
-     :link (fn [s] (str ul-ansi "\u001b[36m" s rst))
-     :link-url (fn [s] (str " " dim-ansi "(" s ")" rst))
-     :code (fn [s] (str "\u001b[33m" s rst))
-     :code-block (fn [s] (str "\u001b[33m" s rst))
-     :code-block-border identity
-     :quote (fn [s] (str dim-ansi "\u001b[37m" s rst))
-     :quote-border (fn [s] (str dim-ansi "\u001b[90m" s rst))
-     :hr (fn [s] (str dim-ansi s rst))
-     :list-bullet (fn [s] (str "\u001b[36m" s rst))
-     :bold (fn [s] (str bold-ansi s "\u001b[22m"))
-     :italic (fn [s] (str italic-ansi s "\u001b[23m"))
-     :underline (fn [s] (str ul-ansi s "\u001b[24m"))
-     :strikethrough (fn [s] (str strike-ansi s "\u001b[29m"))}))
+   {:heading (fn [s]
+               (str bold-ansi "\u001b[33m" s rst))
+    :link (fn [s] (str ul-ansi "\u001b[36m" s rst))
+    :link-url (fn [s] (str " " dim-ansi "(" s ")" rst))
+    :code (fn [s] (str "\u001b[33m" s rst))
+    :code-block (fn [s] (str "\u001b[33m" s rst))
+    :code-block-border identity
+    :quote (fn [s] (str dim-ansi "\u001b[37m" s rst))
+    :quote-border (fn [s] (str dim-ansi "\u001b[90m" s rst))
+    :hr (fn [s] (str dim-ansi s rst))
+    :list-bullet (fn [s] (str "\u001b[36m" s rst))
+    :bold (fn [s] (str bold-ansi s "\u001b[22m"))
+    :italic (fn [s] (str italic-ansi s "\u001b[23m"))
+    :underline (fn [s] (str ul-ansi s "\u001b[24m"))
+    :strikethrough (fn [s] (str strike-ansi s "\u001b[29m"))}))
 
 ;; ─── Minimal inline parser ─────────────────────────────────────────────────
 
@@ -125,101 +126,101 @@
             result (volatile! [])
             in-code-block (volatile! false)
             code-lang (volatile! "")]
-          (doseq [line lines]
-            (let [trimmed (clojure.string/trim line)]
-              (cond
+        (doseq [line lines]
+          (let [trimmed (clojure.string/trim line)]
+            (cond
                 ;; Code block fences
-                (and (not @in-code-block) (re-matches code-fence-re trimmed))
+              (and (not @in-code-block) (re-matches code-fence-re trimmed))
+              (do (vswap! result conj "")
+                  (vswap! in-code-block not)
+                  (let [lang (second (re-find code-fence-re trimmed))]
+                    (vreset! code-lang (or lang ""))))
+
+              @in-code-block
+              (if (re-matches code-fence-re trimmed)
                 (do (vswap! result conj "")
                     (vswap! in-code-block not)
-                    (let [lang (second (re-find code-fence-re trimmed))]
-                      (vreset! code-lang (or lang ""))))
-
-                @in-code-block
-                (if (re-matches code-fence-re trimmed)
-                  (do (vswap! result conj "")
-                      (vswap! in-code-block not)
-                      (vreset! code-lang ""))
-                  (let [styled ((:code-block theme) (str "  " line))
-                        padded (str left-pad styled
-                                    (apply str (repeat (max 0 (- content-width (u/visible-width styled))) \space)))]
-                    (vswap! result conj padded)))
+                    (vreset! code-lang ""))
+                (let [styled ((:code-block theme) (str "  " line))
+                      padded (str left-pad styled
+                                  (apply str (repeat (max 0 (- content-width (u/visible-width styled))) \space)))]
+                  (vswap! result conj padded)))
 
                 ;; Horizontal rule
-                (re-matches hr-re trimmed)
-                (let [hr ((:hr theme) (apply str (repeat content-width "─")))
-                      padded (str left-pad hr)]
-                  (vswap! result conj padded))
+              (re-matches hr-re trimmed)
+              (let [hr ((:hr theme) (apply str (repeat content-width "─")))
+                    padded (str left-pad hr)]
+                (vswap! result conj padded))
 
                 ;; Heading
-                (re-matches heading-re trimmed)
-                (let [[_ level-str content] (re-find heading-re trimmed)
-                      level (count level-str)
-                      styled ((:heading theme) (parse-inlines content theme))
-                      line-width (u/visible-width styled)
-                      padded (str left-pad styled
-                                  (apply str (repeat (max 0 (- content-width line-width)) \space)))]
-                  (vswap! result conj padded)
+              (re-matches heading-re trimmed)
+              (let [[_ level-str content] (re-find heading-re trimmed)
+                    level (count level-str)
+                    styled ((:heading theme) (parse-inlines content theme))
+                    line-width (u/visible-width styled)
+                    padded (str left-pad styled
+                                (apply str (repeat (max 0 (- content-width line-width)) \space)))]
+                (vswap! result conj padded)
                   ;; Add underline for H1/H2
-                  (when (<= level 2)
-                    (let [underline ((:hr theme) (apply str (repeat content-width (if (= level 1) "═" "─"))))
-                          upadded (str left-pad underline)]
-                      (vswap! result conj upadded))))
+                (when (<= level 2)
+                  (let [underline ((:hr theme) (apply str (repeat content-width (if (= level 1) "═" "─"))))
+                        upadded (str left-pad underline)]
+                    (vswap! result conj upadded))))
 
                 ;; Blockquote
-                (re-matches quote-re trimmed)
-                (let [[_ content] (re-find quote-re trimmed)
-                      border ((:quote-border theme) "▎")
-                      styled ((:quote theme) (parse-inlines content theme))
-                      line-width (u/visible-width styled)
-                      padded (str left-pad border styled
-                                  (apply str (repeat (max 0 (- content-width (inc line-width))) \space)))]
-                  (vswap! result conj padded))
+              (re-matches quote-re trimmed)
+              (let [[_ content] (re-find quote-re trimmed)
+                    border ((:quote-border theme) "▎")
+                    styled ((:quote theme) (parse-inlines content theme))
+                    line-width (u/visible-width styled)
+                    padded (str left-pad border styled
+                                (apply str (repeat (max 0 (- content-width (inc line-width))) \space)))]
+                (vswap! result conj padded))
 
                 ;; Unordered list
-                (re-matches ul-re trimmed)
-                (let [[_ content] (re-find ul-re trimmed)
-                      bullet ((:list-bullet theme) "• ")
-                      styled (parse-inlines content theme)
-                      line-width (u/visible-width (str bullet styled))
-                      padded (str left-pad bullet styled
-                                  (apply str (repeat (max 0 (- content-width line-width)) \space)))]
-                  (vswap! result conj padded))
+              (re-matches ul-re trimmed)
+              (let [[_ content] (re-find ul-re trimmed)
+                    bullet ((:list-bullet theme) "• ")
+                    styled (parse-inlines content theme)
+                    line-width (u/visible-width (str bullet styled))
+                    padded (str left-pad bullet styled
+                                (apply str (repeat (max 0 (- content-width line-width)) \space)))]
+                (vswap! result conj padded))
 
                 ;; Ordered list
-                (re-matches ol-re trimmed)
-                (let [[_ content] (re-find ol-re trimmed)
-                      bullet ((:list-bullet theme) "1. ")
-                      styled (parse-inlines content theme)
-                      line-width (u/visible-width (str bullet styled))
-                      padded (str left-pad bullet styled
-                                  (apply str (repeat (max 0 (- content-width line-width)) \space)))]
-                  (vswap! result conj padded))
+              (re-matches ol-re trimmed)
+              (let [[_ content] (re-find ol-re trimmed)
+                    bullet ((:list-bullet theme) "1. ")
+                    styled (parse-inlines content theme)
+                    line-width (u/visible-width (str bullet styled))
+                    padded (str left-pad bullet styled
+                                (apply str (repeat (max 0 (- content-width line-width)) \space)))]
+                (vswap! result conj padded))
 
                 ;; Empty line
-                (re-matches empty-re line)
-                (vswap! result conj (str left-pad
-                                         (apply str (repeat content-width \space))))
+              (re-matches empty-re line)
+              (vswap! result conj (str left-pad
+                                       (apply str (repeat content-width \space))))
 
                 ;; Regular paragraph
-                :else
-                (let [styled (parse-inlines line theme)
-                      line-width (u/visible-width styled)]
-                  (if (<= line-width content-width)
-                    (let [padded (str left-pad styled
-                                      (apply str (repeat (max 0 (- content-width line-width)) \space)))]
-                      (vswap! result conj padded))
+              :else
+              (let [styled (parse-inlines line theme)
+                    line-width (u/visible-width styled)]
+                (if (<= line-width content-width)
+                  (let [padded (str left-pad styled
+                                    (apply str (repeat (max 0 (- content-width line-width)) \space)))]
+                    (vswap! result conj padded))
                     ;; Word-wrap long lines
-                    (let [wrapped (u/wrap-text-with-ansi styled content-width)]
-                      (doseq [wl wrapped]
-                        (let [wl-width (u/visible-width wl)
-                              padded (str left-pad wl
-                                          (apply str (repeat (max 0 (- content-width wl-width)) \space)))]
-                          (vswap! result conj padded)))))))))
-          (let [result-lines @result]
-            result-lines))))
+                  (let [wrapped (u/wrap-text-with-ansi styled content-width)]
+                    (doseq [wl wrapped]
+                      (let [wl-width (u/visible-width wl)
+                            padded (str left-pad wl
+                                        (apply str (repeat (max 0 (- content-width wl-width)) \space)))]
+                        (vswap! result conj padded)))))))))
+        (let [result-lines @result]
+          result-lines))))
 
-  (handle-input [this data] nil)
+  (handle-input [_this _data] nil)
 
   (invalidate [this]
     (reset! (:cache-atom this) nil)))
@@ -229,8 +230,7 @@
 (defn make-markdown
   "Create a Markdown display component.
    Options: :theme (default-theme), :padding-x (default 1)"
-  [text & {:keys [theme padding-x] :or {padding-x 1}
-           :as opts}]
+  [text & {:keys [theme padding-x] :or {padding-x 1}}]
   (let [t (or theme default-theme)]
     (map->Markdown {:text-atom (atom text)
                     :theme-atom (atom t)

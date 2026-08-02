@@ -32,8 +32,8 @@
 (defn- make-provider
   []
   (ac/make-combined-provider
-    :commands-fn (constantly commands)
-    :base-path test-dir))
+   :commands-fn (constantly commands)
+   :base-path test-dir))
 
 (t/deftest slash-command-name-completion
   (let [p (make-provider)

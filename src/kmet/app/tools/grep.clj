@@ -23,7 +23,7 @@
               (doseq [[idx line] (map-indexed vector (line-seq rdr))]
                 (when (re-find (re-pattern pattern) line)
                   (vswap! results conj (str file ":" (inc idx) ": " line)))))
-            (catch Exception e
+            (catch Exception _e
               (vswap! skipped conj (str file))))))
       (let [r @results
             sk @skipped]

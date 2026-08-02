@@ -33,13 +33,13 @@
   (if (string? content)
     (count content)
     (reduce + 0
-      (for [b content]
-        (case (:type b)
-          :image image-chars
-          :text (count (or (:text b) ""))
-          :thinking (count (or (:thinking b) ""))
-          :tool_result (count (or (:content b) ""))
-          0)))))
+            (for [b content]
+              (case (:type b)
+                :image image-chars
+                :text (count (or (:text b) ""))
+                :thinking (count (or (:thinking b) ""))
+                :tool_result (count (or (:content b) ""))
+                0)))))
 
 (defn estimate-tokens
   "Rough token estimate for a session entry (pi: estimateTokens, chars/4).
@@ -54,9 +54,9 @@
                            (count (or (:output entry) ""))))
                 (+ (text-chars (:content entry))
                    (reduce + 0
-                     (for [tc (:tool-calls entry)]
-                       (+ (count (or (:name tc) ""))
-                          (count (str (or (:arguments tc) ""))))))))]
+                           (for [tc (:tool-calls entry)]
+                             (+ (count (or (:name tc) ""))
+                                (count (str (or (:arguments tc) ""))))))))]
     (quot (+ chars 3) 4))) ;; ceil(chars / 4)
 
 ;; ─── Cut-point selection (pi: findCutPoint) ────────────────────────────────
@@ -148,8 +148,8 @@
         args (if (map? args) args
                  (try (edn/read-string (str args)) (catch Exception _ {})))
         args-str (str/join ", "
-                   (for [[k v] args]
-                     (str (name k) "=" (pr-str v))))]
+                           (for [[k v] args]
+                             (str (name k) "=" (pr-str v))))]
     (str (:name tc) "(" args-str ")")))
 
 (defn serialize-conversation
@@ -157,27 +157,27 @@
    serializeConversation). Tool results are truncated to 2000 chars."
   [entries]
   (str/join "\n\n"
-    (keep (fn [e]
-            (case (:role e)
-              :user (let [t (content-text (:content e))]
-                      (when (seq t) (str "[User]: " t)))
-              :assistant
-              (let [thinking (str/join "\n"
-                               (for [b (:content e) :when (= :thinking (:type b))]
-                                 (:thinking b)))
-                    text (content-text (:content e))
-                    tcs (:tool-calls e)
-                    parts (cond-> []
-                            (seq thinking) (conj (str "[Assistant thinking]: " thinking))
-                            (seq text) (conj (str "[Assistant]: " text))
-                            (seq tcs) (conj (str "[Assistant tool calls]: "
-                                                 (str/join "; " (map tool-call-str tcs)))))]
-                (when (seq parts) (str/join "\n" parts)))
-              :tool (let [t (content-text (:content e))]
-                      (when (seq t)
-                        (str "[Tool result]: " (truncate-for-summary t))))
-              nil))
-          entries)))
+            (keep (fn [e]
+                    (case (:role e)
+                      :user (let [t (content-text (:content e))]
+                              (when (seq t) (str "[User]: " t)))
+                      :assistant
+                      (let [thinking (str/join "\n"
+                                               (for [b (:content e) :when (= :thinking (:type b))]
+                                                 (:thinking b)))
+                            text (content-text (:content e))
+                            tcs (:tool-calls e)
+                            parts (cond-> []
+                                    (seq thinking) (conj (str "[Assistant thinking]: " thinking))
+                                    (seq text) (conj (str "[Assistant]: " text))
+                                    (seq tcs) (conj (str "[Assistant tool calls]: "
+                                                         (str/join "; " (map tool-call-str tcs)))))]
+                        (when (seq parts) (str/join "\n" parts)))
+                      :tool (let [t (content-text (:content e))]
+                              (when (seq t)
+                                (str "[Tool result]: " (truncate-for-summary t))))
+                      nil))
+                  entries)))
 
 ;; ─── Summarization prompts (pi: SUMMARIZATION_PROMPT / UPDATE_SUMMARIZATION_PROMPT) ──
 

@@ -1,5 +1,6 @@
 (ns kmet.tui.components.test-select-list
-  (:require [clojure.test :as t]
+  (:require [clojure.string :as str]
+            [clojure.test :as t]
             [kmet.tui.core :as core]
             [kmet.tui.components.select-list :as sl]))
 
@@ -170,20 +171,20 @@
 (t/deftest test-select-list-set-theme
   (let [s (sl/make-select-list sample-items)]
     (sl/select-list-set-theme! s (sl/map->SelectListTheme
-                                   {:selected-prefix "→ "
-                                    :selected-text identity
-                                    :description (fn [d] (str "(" d ")"))
-                                    :scroll-info identity
-                                    :no-match identity}))
+                                  {:selected-prefix "→ "
+                                   :selected-text identity
+                                   :description (fn [d] (str "(" d ")"))
+                                   :scroll-info identity
+                                   :no-match identity}))
     (t/is (some? @(:theme-atom s)))))
 
 ;; ─── Render ───────────────────────────────────────────────────────────────
 
 (t/deftest test-select-list-render
-  (let [s (sl/make-select-list sample-items)]
-    (let [lines (core/render s 40)]
-      (t/is (pos? (count lines)))
-      (t/is (some #(.contains % "apple") lines)))))
+  (let [s (sl/make-select-list sample-items)
+        lines (core/render s 40)]
+    (t/is (pos? (count lines)))
+    (t/is (some #(.contains % "apple") lines))))
 
 (t/deftest test-select-list-render-cache
   (let [s (sl/make-select-list sample-items)]

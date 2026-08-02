@@ -11,60 +11,60 @@
 (def built-in-tools
   "Map of tool name → Tool record for all built-in tools."
   {"read"  (tool/make-tool
-             :name "read"
-             :label "Read file"
-             :description "Read the contents of a file. Supports offset/limit for large files. Output is truncated to 2000 lines or 50KB (whichever is hit first)."
-             :prompt-snippet "Read file contents"
-             :prompt-guidelines ["Use read to examine files instead of cat or sed."]
-             :params {:path   {:type :string :description "File path to read (relative or absolute)"}
-                      :offset {:type :number :description "Line number to start reading from (1-indexed)" :optional? true}
-                      :limit  {:type :number :description "Maximum number of lines to read" :optional? true}}
-             :execute read/execute)
+            :name "read"
+            :label "Read file"
+            :description "Read the contents of a file. Supports offset/limit for large files. Output is truncated to 2000 lines or 50KB (whichever is hit first)."
+            :prompt-snippet "Read file contents"
+            :prompt-guidelines ["Use read to examine files instead of cat or sed."]
+            :params {:path   {:type :string :description "File path to read (relative or absolute)"}
+                     :offset {:type :number :description "Line number to start reading from (1-indexed)" :optional? true}
+                     :limit  {:type :number :description "Maximum number of lines to read" :optional? true}}
+            :execute read/execute)
    "write" (tool/make-tool
-             :name "write"
-             :label "Write file"
-             :description "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
-             :prompt-snippet "Create or overwrite files"
-             :prompt-guidelines ["Use write only for new files or complete rewrites."]
-             :params {:path    {:type :string :description "File path to write to (relative or absolute)"}
-                      :content {:type :string :description "Content to write to the file"}}
-             :execute write/execute)
+            :name "write"
+            :label "Write file"
+            :description "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
+            :prompt-snippet "Create or overwrite files"
+            :prompt-guidelines ["Use write only for new files or complete rewrites."]
+            :params {:path    {:type :string :description "File path to write to (relative or absolute)"}
+                     :content {:type :string :description "Content to write to the file"}}
+            :execute write/execute)
    "edit"  (tool/make-tool
-             :name "edit"
-             :label "Edit file"
-             :description "Make precise file edits with exact text replacement. When changing multiple separate locations in one file, use one edit call with multiple entries."
-             :prompt-snippet "Make precise file edits with exact text replacement, including multiple disjoint edits in one call"
-             :prompt-guidelines ["Use edit for precise changes (edits[].oldText must match exactly)"
-                                 "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls"
-                                 "Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit."
-                                 "Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions."]
-             :render-shell :self
+            :name "edit"
+            :label "Edit file"
+            :description "Make precise file edits with exact text replacement. When changing multiple separate locations in one file, use one edit call with multiple entries."
+            :prompt-snippet "Make precise file edits with exact text replacement, including multiple disjoint edits in one call"
+            :prompt-guidelines ["Use edit for precise changes (edits[].oldText must match exactly)"
+                                "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls"
+                                "Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit."
+                                "Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions."]
+            :render-shell :self
              ;; Pi: editSchema — edits is an array of {oldText, newText}
-             :parameters {:type "object"
-                          :properties {"path" {:type "string"
-                                               :description "Path to the file to edit (relative or absolute)"}
-                                       "edits" {:type "array"
-                                                :items {:type "object"
-                                                        :properties {"oldText" {:type "string"
-                                                                                :description "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."}
-                                                                     "newText" {:type "string"
-                                                                                :description "Replacement text for this targeted edit."}}
-                                                        :required ["oldText" "newText"]}
-                                                :description "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead."}}
-                          :required ["path" "edits"]}
-             :execute edit/execute)
+            :parameters {:type "object"
+                         :properties {"path" {:type "string"
+                                              :description "Path to the file to edit (relative or absolute)"}
+                                      "edits" {:type "array"
+                                               :items {:type "object"
+                                                       :properties {"oldText" {:type "string"
+                                                                               :description "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."}
+                                                                    "newText" {:type "string"
+                                                                               :description "Replacement text for this targeted edit."}}
+                                                       :required ["oldText" "newText"]}
+                                               :description "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead."}}
+                         :required ["path" "edits"]}
+            :execute edit/execute)
    "bash"  (tool/make-tool
-             :name "bash"
-             :label "Execute command"
-             :description "Execute a bash command with a timeout. For long-running commands, keep the timeout reasonable. Standard streams (stdout/stderr) are captured and returned."
-             :prompt-snippet "Execute bash commands (ls, grep, find, etc.)"
-             :prompt-guidelines []
-             :params {:command {:type :string :description "Bash command to execute"}
-                      :timeout {:type :number :description "Timeout in seconds (optional)" :optional? true}}
-             :execute bash/execute
-             :streams? true)}
+            :name "bash"
+            :label "Execute command"
+            :description "Execute a bash command with a timeout. For long-running commands, keep the timeout reasonable. Standard streams (stdout/stderr) are captured and returned."
+            :prompt-snippet "Execute bash commands (ls, grep, find, etc.)"
+            :prompt-guidelines []
+            :params {:command {:type :string :description "Bash command to execute"}
+                     :timeout {:type :number :description "Timeout in seconds (optional)" :optional? true}}
+            :execute bash/execute
+            :streams? true)}
    ;; grep, find, ls — disabled
-   )
+  )
 
 ;; ─── Tool schema helpers ────────────────────────────────────────────────────
 

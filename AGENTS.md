@@ -6,7 +6,14 @@
 - **Entry**: `bb run` — runs `kmet.core/-main`
 - **nREPL**: `bb nrepl` — starts nREPL server on port 1667 for interactive development (blocks). Connect your editor/tool to `localhost:1667`.
   To stop: evaluate `(System/exit 0)` via nREPL (or `fuser -k 1667/tcp` from another terminal).
-- **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`; JLine **4.3.1** bundled with Babashka (see babashka `deps.edn`: `org.jline/jline-terminal`, `org.jline/jline-reader`).
+- **Lint**: `bb lint` — clj-kondo over `src`/`test`. Custom macros (`defcomponent`/`defsetter`/`defgetter`)
+  are handled via analysis hooks in `.clj-kondo/hooks/`; keep them in sync when the macro shapes change.
+- **Format**: `bb format` (fix) / `bb format-check` (verify) — cljfmt over `src`/`test`.
+  `cljfmt.edn` carries `:extra-indents` for the custom macros; default arg alignment is
+  align-to-first-argument (modern cljfmt). Run `bb format` after structural edits (e.g. let merges).
+- **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`;
+  tooling deps (`cljfmt`) in `bb.edn` `:deps`; JLine **4.3.1** bundled with Babashka (see
+  babashka `deps.edn`: `org.jline/jline-terminal`, `org.jline/jline-reader`).
 
 ### API Preferences (avoid Java interop)
 - **`babashka.fs`** over `java.io.File` for all file operations

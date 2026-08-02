@@ -28,9 +28,9 @@
   [& {:keys [status n-msgs theme]
       :or {status "" n-msgs 0 theme theme/dark-theme}}]
   (map->FooterComponent {:status-text-atom (atom status)
-                :n-msgs-atom (atom n-msgs)
-                :theme-atom (atom theme)
-                :cache-atom (atom nil)}))
+                         :n-msgs-atom (atom n-msgs)
+                         :theme-atom (atom theme)
+                         :cache-atom (atom nil)}))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 

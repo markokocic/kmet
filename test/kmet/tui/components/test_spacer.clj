@@ -4,19 +4,19 @@
             [kmet.tui.components.spacer :as spacer]))
 
 (t/deftest test-spacer-default
-  (let [s (spacer/make-spacer)]
-    (let [lines (core/render s 10)]
-      (t/is (= 1 (count lines)))
-      (t/is (= "" (first lines))))))
+  (let [s (spacer/make-spacer)
+        lines (core/render s 10)]
+    (t/is (= 1 (count lines)))
+    (t/is (= "" (first lines)))))
 
 (t/deftest test-spacer-n
-  (let [s (spacer/make-spacer 3)]
-    (let [lines (core/render s 10)]
-      (t/is (= 3 (count lines)))
-      (doseq [l lines]
-        (t/is (= "" l))))))
+  (let [s (spacer/make-spacer 3)
+        lines (core/render s 10)]
+    (t/is (= 3 (count lines)))
+    (doseq [l lines]
+      (t/is (= "" l)))))
 
 (t/deftest test-spacer-zero
-  (let [s (spacer/make-spacer 0)]
-    (let [lines (core/render s 10)]
-      (t/is (empty? lines)))))
+  (let [s (spacer/make-spacer 0)
+        lines (core/render s 10)]
+    (t/is (empty? lines))))

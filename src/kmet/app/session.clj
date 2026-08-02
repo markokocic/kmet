@@ -41,14 +41,14 @@
         content (slurp file)
         lines (str/split-lines content)
         entries (vec (keep identity
-          (for [line lines]
-            (let [trimmed (str/trim line)]
-              (when (seq trimmed)
-                (try (edn/read-string trimmed)
-                     (catch Exception ex
-                       (binding [*out* *err*]
-                         (println "Warning: Skipping invalid entry in" path ":" (ex-message ex)))
-                       nil)))))))
+                           (for [line lines]
+                             (let [trimmed (str/trim line)]
+                               (when (seq trimmed)
+                                 (try (edn/read-string trimmed)
+                                      (catch Exception ex
+                                        (binding [*out* *err*]
+                                          (println "Warning: Skipping invalid entry in" path ":" (ex-message ex)))
+                                        nil)))))))
         leaf-id (some-> entries last :id)]
     (map->Session {:file (str (fs/canonicalize file))
                    :id (str/replace (fs/file-name file) #"\.ednl$" "")
@@ -87,7 +87,6 @@
    Returns map of {:id info, :children [...]}"
   [session]
   (let [entries @(:entries session)
-        index (reduce (fn [m e] (assoc m (:id e) e)) {} entries)
         children (fn [parent-id]
                    (filter #(= (:parent-id %) parent-id) entries))
         root-children (filter #(nil? (:parent-id %)) entries)]
@@ -177,7 +176,6 @@
             (let [clean (dissoc e :id :parent-id :timestamp)]
               (append-entry fork clean)))
           fork)))))
-
 
 ;; ─── Bash result recording ─────────────────────────────────────────────────
 

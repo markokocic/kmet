@@ -1,5 +1,7 @@
 (ns kmet.app.ui.test-custom-message
-  (:require [clojure.test :as t :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :as t :refer [deftest is testing]]
+            [kmet.tui.theme :as theme]
             [kmet.tui.core :as core]
             [kmet.app.ui.custom-message :as cm]))
 
@@ -13,24 +15,24 @@
 
 (deftest test-render-label
   (testing "renders label in brackets"
-    (let [c (cm/make-custom-message :label "system" :content "message")]
-      (let [plain (mapv strip-ansi (core/render c 40))]
-        (is (some #(re-find #"\[system\]" %) plain)
-            "Label should show as [system]")))))
+    (let [c (cm/make-custom-message :label "system" :content "message")
+          plain (mapv strip-ansi (core/render c 40))]
+      (is (some #(re-find #"\[system\]" %) plain)
+          "Label should show as [system]"))))
 
 (deftest test-render-content
   (testing "renders content text"
-    (let [c (cm/make-custom-message :label "info" :content "Welcome to kmet")]
-      (let [plain (mapv strip-ansi (core/render c 40))]
-        (is (some #(re-find #"Welcome to kmet" %) plain))))))
+    (let [c (cm/make-custom-message :label "info" :content "Welcome to kmet")
+          plain (mapv strip-ansi (core/render c 40))]
+      (is (some #(re-find #"Welcome to kmet" %) plain)))))
 
 (deftest test-no-label
   (testing "renders without label"
-    (let [c (cm/make-custom-message :content "just content")]
-      (let [plain (mapv strip-ansi (core/render c 40))]
-        (is (some #(re-find #"just content" %) plain))
-        (is (not-any? #(re-find #"\[" %) plain)
-            "No label should mean no brackets")))))
+    (let [c (cm/make-custom-message :content "just content")
+          plain (mapv strip-ansi (core/render c 40))]
+      (is (some #(re-find #"just content" %) plain))
+      (is (not-any? #(re-find #"\[" %) plain)
+          "No label should mean no brackets"))))
 
 (deftest test-empty-content
   (testing "empty content still renders box padding"
@@ -67,15 +69,15 @@
 
 (deftest test-background
   (testing "renders with custom-message-bg background"
-    (let [c (cm/make-custom-message :label "info" :content "test")]
-      (let [lines (core/render c 40)]
+    (let [c (cm/make-custom-message :label "info" :content "test")
+          lines (core/render c 40)]
         ;; First line is Spacer(1) — no background. Remaining lines (from Box) have bg.
-        (is (every? #(re-find #"\u001b\[48" %) (rest lines))
-            "Box lines should have background ANSI codes")))))
+      (is (every? #(re-find #"\u001b\[48" %) (rest lines))
+          "Box lines should have background ANSI codes"))))
 
 (deftest test-long-content-wraps
   (testing "long content wraps to fit width"
     (let [c (cm/make-custom-message :label "info"
-                                    :content (apply str (repeat 200 "x")))]
-      (let [lines (core/render c 30)]
-        (is (> (count lines) 3) "Long content should wrap to multiple lines")))))
+                                    :content (apply str (repeat 200 "x")))
+          lines (core/render c 30)]
+      (is (> (count lines) 3) "Long content should wrap to multiple lines"))))

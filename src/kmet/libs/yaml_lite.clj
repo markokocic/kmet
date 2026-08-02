@@ -194,7 +194,7 @@
   (let [non-blank (remove :blank collected)
         base (or (some-> explicit (+ key-indent))
                  (when (seq non-blank) (apply min (map :indent non-blank))))
-        lines (mapv (fn [{:keys [blank indent raw]}]
+        lines (mapv (fn [{:keys [blank raw]}]
                       (if blank "" (subs raw (min base (count raw)))))
                     collected)
         lines (drop-while str/blank? lines)

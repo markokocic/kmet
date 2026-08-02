@@ -12,11 +12,11 @@
 (t/deftest test-container-render
   (let [t1 (text/make-text "a" 0 0)
         t2 (text/make-text "b" 0 0)
-        c (container/make-container [t1 t2])]
-    (let [lines (core/render c 5)]
-      (t/is (= 2 (count lines)))
-      (t/is (.contains (first lines) "a"))
-      (t/is (.contains (second lines) "b")))))
+        c (container/make-container [t1 t2])
+        lines (core/render c 5)]
+    (t/is (= 2 (count lines)))
+    (t/is (.contains (first lines) "a"))
+    (t/is (.contains (second lines) "b"))))
 
 (t/deftest test-container-add-remove
   (let [t1 (text/make-text "a" 0 0)

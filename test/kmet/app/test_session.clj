@@ -31,13 +31,13 @@
     (t/is (nil? @(:leaf-id session)))))
 
 (t/deftest test-session-append-entry
-  (let [session (s/create-session test-dir)]
-    (let [entry (s/append-entry session {:role :user :content [{:type :text :text "hello"}]})]
-      (t/is (string? (:id entry)))
-      (t/is (nil? (:parent-id entry)))
-      (t/is (= :user (:role entry)))
-      (t/is (= 1 (count @(:entries session))))
-      (t/is (string? @(:leaf-id session))))))
+  (let [session (s/create-session test-dir)
+        entry (s/append-entry session {:role :user :content [{:type :text :text "hello"}]})]
+    (t/is (string? (:id entry)))
+    (t/is (nil? (:parent-id entry)))
+    (t/is (= :user (:role entry)))
+    (t/is (= 1 (count @(:entries session))))
+    (t/is (string? @(:leaf-id session)))))
 
 (t/deftest test-session-append-multiple
   (let [session (s/create-session test-dir)]
@@ -47,10 +47,10 @@
     (t/is (= 3 (count @(:entries session))))))
 
 (t/deftest test-session-parent-id-chain
-  (let [session (s/create-session test-dir)]
-    (let [e1 (s/append-entry session {:role :user :content [{:type :text :text "q"}]})
-          e2 (s/append-entry session {:role :assistant :content [{:type :text :text "a"}]})]
-      (t/is (= (:id e1) (:parent-id e2))))))
+  (let [session (s/create-session test-dir)
+        e1 (s/append-entry session {:role :user :content [{:type :text :text "q"}]})
+        e2 (s/append-entry session {:role :assistant :content [{:type :text :text "a"}]})]
+    (t/is (= (:id e1) (:parent-id e2)))))
 
 (t/deftest test-session-get-branch
   (let [session (s/create-session test-dir)]
@@ -116,11 +116,11 @@
       (t/is (vector? tree))
       (t/is (pos? (count tree)))
       (t/is (= :user (:role (first tree)))
-        "Root is the first entry (user)")
+            "Root is the first entry (user)")
       (t/is (= 1 (count (:children (first tree))))
-        "Root has one child")
+            "Root has one child")
       (t/is (= :assistant (:role (first (:children (first tree)))))
-        "First child is assistant"))))
+            "First child is assistant"))))
 
 (t/deftest test-session-compact
   (let [session (s/create-session test-dir)]
@@ -132,11 +132,11 @@
       (t/is (<= (count @(:entries session)) 6)))))
 
 (t/deftest test-session-delete
-  (let [session (s/create-session test-dir)]
-    (let [f (:file session)]
-      (t/is (.exists (io/file f)))
-      (s/delete-session! session)
-      (t/is (not (.exists (io/file f)))))))
+  (let [session (s/create-session test-dir)
+        f (:file session)]
+    (t/is (.exists (io/file f)))
+    (s/delete-session! session)
+    (t/is (not (.exists (io/file f))))))
 
 ;; ─── Regression: corrupted entries ────────────────────────────────────────
 

@@ -29,131 +29,129 @@
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
 (defcomponent BashExecutionComponent :bash
-  [command-atom      ;; string
-   output-lines-atom ;; vec of strings
-   status-atom       ;; :running :complete :cancelled :error
-   exit-code-atom    ;; int or nil
-   expanded-atom     ;; boolean
-   content-container  ;; Container for command/output/status
-   spinner-comp      ;; Spinner component (animated loader)
-   truncation-atom   ;; bash-exec truncation result or nil
-   full-output-path-atom ;; string or nil
-   started-at-atom   ;; long (System/currentTimeMillis)
-   ended-at-atom     ;; long or nil
-   cache-atom        ;; render cache
-   exclude-from-context-atom ;; boolean (!! vs !)
-   theme-atom]       ;; Theme record (default dark-theme)
+              [command-atom      ;; string
+               output-lines-atom ;; vec of strings
+               status-atom       ;; :running :complete :cancelled :error
+               exit-code-atom    ;; int or nil
+               expanded-atom     ;; boolean
+               content-container  ;; Container for command/output/status
+               spinner-comp      ;; Spinner component (animated loader)
+               truncation-atom   ;; bash-exec truncation result or nil
+               full-output-path-atom ;; string or nil
+               started-at-atom   ;; long (System/currentTimeMillis)
+               ended-at-atom     ;; long or nil
+               cache-atom        ;; render cache
+               exclude-from-context-atom ;; boolean (!! vs !)
+               theme-atom]       ;; Theme record (default dark-theme)
   (render [this width]
     (track! this width
       (let [command @command-atom
-              raw-output-lines @output-lines-atom
-              status @status-atom
-              exit-code @exit-code-atom
-              expanded? @expanded-atom
-              exclude? @exclude-from-context-atom
-              truncation @truncation-atom
-              full-output-path @full-output-path-atom
-              started-at @started-at-atom
-              ended-at @ended-at-atom
-              t @theme-atom
-              color-key (if exclude? :dim :bash-mode)
-              border-color (fn [s] (theme/fg t color-key s))
-              content-pad 1]
-
-          ;; ── Context truncation (pi: truncateTail before display) ──
-          (let [full-output (str/join "\n" raw-output-lines)
-                {:keys [content truncated]}
-                (bash-exec/truncate-tail full-output)
-                display-lines (if (seq content) (str/split-lines content) [])
-                preview-logical-lines (take-last PREVIEW-LINES display-lines)
-                hidden-line-count (- (count display-lines) (count preview-logical-lines))]
+            raw-output-lines @output-lines-atom
+            status @status-atom
+            exit-code @exit-code-atom
+            expanded? @expanded-atom
+            exclude? @exclude-from-context-atom
+            truncation @truncation-atom
+            full-output-path @full-output-path-atom
+            started-at @started-at-atom
+            ended-at @ended-at-atom
+            t @theme-atom
+            color-key (if exclude? :dim :bash-mode)
+            border-color (fn [s] (theme/fg t color-key s))
+            content-pad 1
+            ;; ── Context truncation (pi: truncateTail before display) ──
+            full-output (str/join "\n" raw-output-lines)
+            {:keys [content truncated]}
+            (bash-exec/truncate-tail full-output)
+            display-lines (if (seq content) (str/split-lines content) [])
+            preview-logical-lines (take-last PREVIEW-LINES display-lines)
+            hidden-line-count (- (count display-lines) (count preview-logical-lines))]
 
             ;; Rebuild content container
-            (container/container-clear content-container)
+        (container/container-clear content-container)
 
             ;; ── Command header ─────────────────────────────────────────
-            (let [header-text (str (theme/fg t color-key
-                                    (theme/bold (str "$ " command))))
-                  header (text/make-text header-text 1 0)]
-              (container/container-add-child content-container header))
+        (let [header-text (str (theme/fg t color-key
+                                         (theme/bold (str "$ " command))))
+              header (text/make-text header-text 1 0)]
+          (container/container-add-child content-container header))
 
             ;; ── Output ─────────────────────────────────────────────────
-            (when (seq display-lines)
-              (if expanded?
+        (when (seq display-lines)
+          (if expanded?
                 ;; Full output
-                (let [styled (mapv #(theme/fg t :muted %) display-lines)
-                      output-text (text/make-text (str "\n" (str/join "\n" styled)) 1 0)]
-                  (container/container-add-child content-container output-text))
+            (let [styled (mapv #(theme/fg t :muted %) display-lines)
+                  output-text (text/make-text (str "\n" (str/join "\n" styled)) 1 0)]
+              (container/container-add-child content-container output-text))
                 ;; Collapsed preview: last N lines with visual line truncation
-                (let [styled-preview (mapv #(theme/fg t :muted %) preview-logical-lines)
-                      preview-text (str "\n" (str/join "\n" styled-preview))]
-                  (container/container-add-child content-container
-                    (->BashPreview preview-text content-pad)))))
+            (let [styled-preview (mapv #(theme/fg t :muted %) preview-logical-lines)
+                  preview-text (str "\n" (str/join "\n" styled-preview))]
+              (container/container-add-child content-container
+                                             (->BashPreview preview-text content-pad)))))
 
             ;; ── Loader or status ───────────────────────────────────────
-            (if (= status :running)
+        (if (= status :running)
               ;; Spinner text and colors are set once in make-bash-execution
-              (container/container-add-child content-container @spinner-comp)
-              (do
-                ;; Status line: hidden lines hint + exit status + truncation + duration
-                (let [status-parts (atom [])]
+          (container/container-add-child content-container @spinner-comp)
+            ;; Status line: hidden lines hint + exit status + truncation + duration
+          (let [status-parts (atom [])]
 
                   ;; Hidden lines hint
-                  (when (pos? hidden-line-count)
-                    (if expanded?
-                      (swap! status-parts conj
-                        (str (theme/fg t :muted "(")
-                             (app-kb/key-hint "app.tools.expand" "to collapse")
-                             (theme/fg t :muted ")")))
-                      (swap! status-parts conj
-                        (str (theme/fg t :muted
-                             (str "... " hidden-line-count " more lines ("))
-                             (app-kb/key-hint "app.tools.expand" "to expand")
-                             (theme/fg t :muted ")")))))
+            (when (pos? hidden-line-count)
+              (if expanded?
+                (swap! status-parts conj
+                       (str (theme/fg t :muted "(")
+                            (app-kb/key-hint "app.tools.expand" "to collapse")
+                            (theme/fg t :muted ")")))
+                (swap! status-parts conj
+                       (str (theme/fg t :muted
+                                      (str "... " hidden-line-count " more lines ("))
+                            (app-kb/key-hint "app.tools.expand" "to expand")
+                            (theme/fg t :muted ")")))))
 
                   ;; Exit status
-                  (case status
-                    :cancelled (swap! status-parts conj (theme/fg t :warning "(cancelled)"))
-                    :error (swap! status-parts conj (theme/fg t :error (str "(exit " exit-code ")")))
-                    nil)
+            (case status
+              :cancelled (swap! status-parts conj (theme/fg t :warning "(cancelled)"))
+              :error (swap! status-parts conj (theme/fg t :error (str "(exit " exit-code ")")))
+              nil)
 
                   ;; Duration (pi: Elapsed X.Xs during, Took X.Xs after)
-                  (let [now (or ended-at (System/currentTimeMillis))
-                        elapsed-ms (- now started-at)]
-                    (swap! status-parts conj
-                      (theme/fg t :muted
-                        (str (if ended-at "Took" "Elapsed")
-                             " " (format "%.1f" (float (/ elapsed-ms 1000))) "s"))))
+            (let [now (or ended-at (System/currentTimeMillis))
+                  elapsed-ms (- now started-at)]
+              (swap! status-parts conj
+                     (theme/fg t :muted
+                               (str (if ended-at "Took" "Elapsed")
+                                    " " (format "%.1f" (float (/ elapsed-ms 1000))) "s"))))
 
                   ;; Truncation warning (pi: combined check — context OR server-side truncation)
-                  (let [was-truncated (or truncated (:truncated truncation))]
-                    (when (and was-truncated full-output-path)
-                      (swap! status-parts conj
-                        (theme/fg t :warning
-                          (str "Output truncated. Full output: " full-output-path)))))
+            (let [was-truncated (or truncated (:truncated truncation))]
+              (when (and was-truncated full-output-path)
+                (swap! status-parts conj
+                       (theme/fg t :warning
+                                 (str "Output truncated. Full output: " full-output-path)))))
 
-                  (when (seq @status-parts)
-                    (container/container-add-child content-container
-                      (text/make-text (str "\n" (str/join "\n" @status-parts)) 1 0))))))
+            (when (seq @status-parts)
+              (container/container-add-child content-container
+                                             (text/make-text (str "\n" (str/join "\n" @status-parts)) 1 0)))))
 
             ;; ── Return bordered display ────────────────────────────────
             ;; Pad every content line to the content width so the right border
             ;; stays flush (BashPreview/spacer lines are bare strings, unlike
             ;; Text children which self-pad).
-            (let [cw (- width 2)
-                  top-border (str (border-color "┌") (apply str (repeat (- width 2) "─")) (border-color "┐"))
-                  bottom-border (str (border-color "└") (apply str (repeat (- width 2) "─")) (border-color "┘"))
-                  content-lines (protocols/render content-container cw)
-                  pad-line (fn [line]
-                             (let [vis (u/visible-width line)]
-                               (if (>= vis cw)
-                                 line
-                                 (str line (apply str (repeat (- cw vis) \space))))))
-                  result (conj (into [top-border]
-                                      (map #(str (border-color "│") (pad-line %) (border-color "│")))
-                                      content-lines)
-                                bottom-border)]
-              result)))))
+        (let [cw (- width 2)
+              top-border (str (border-color "┌") (apply str (repeat (- width 2) "─")) (border-color "┐"))
+              bottom-border (str (border-color "└") (apply str (repeat (- width 2) "─")) (border-color "┘"))
+              content-lines (protocols/render content-container cw)
+              pad-line (fn [line]
+                         (let [vis (u/visible-width line)]
+                           (if (>= vis cw)
+                             line
+                             (str line (apply str (repeat (- cw vis) \space))))))
+              result (conj (into [top-border]
+                                 (map #(str (border-color "│") (pad-line %) (border-color "│")))
+                                 content-lines)
+                           bottom-border)]
+          result))))
 
   (invalidate [this]
     (reset! (:cache-atom this) nil)))
@@ -173,30 +171,26 @@
         cancel-key (or (tui-kb/key-text (tui-kb/get-global-keybindings) "app.interrupt") "Esc")
         ;; Create animated spinner with text and colors set once (pi: Loader constructor)
         sp (spinner/make-spinner
-             :text (str "Running... (" cancel-key " to cancel)")
-             :active true
-             :prefix ""
-             :spinner-color-fn (fn [s] (theme/fg theme color-key s))
-             :message-color-fn (fn [s] (theme/fg theme :muted s)))]
+            :text (str "Running... (" cancel-key " to cancel)")
+            :active true
+            :prefix ""
+            :spinner-color-fn (fn [s] (theme/fg theme color-key s))
+            :message-color-fn (fn [s] (theme/fg theme :muted s)))]
     (map->BashExecutionComponent
-      {:command-atom (atom command)
-       :output-lines-atom (atom [])
-       :status-atom (atom :running)
-       :exit-code-atom (atom nil)
-       :expanded-atom (atom false)
-       :content-container content-container
-       :spinner-comp (atom sp)
-       :truncation-atom (atom nil)
-       :full-output-path-atom (atom nil)
-       :started-at-atom (atom (System/currentTimeMillis))
-       :ended-at-atom (atom nil)
-       :cache-atom (atom nil)
-       :exclude-from-context-atom (atom exclude-from-context?)
-       :theme-atom (atom theme)})))
-
-;; ─── Public API ────────────────────────────────────────────────────────────
-
-(defsetter bash-execution-set-expanded! :expanded-atom comp expanded?)
+     {:command-atom (atom command)
+      :output-lines-atom (atom [])
+      :status-atom (atom :running)
+      :exit-code-atom (atom nil)
+      :expanded-atom (atom false)
+      :content-container content-container
+      :spinner-comp (atom sp)
+      :truncation-atom (atom nil)
+      :full-output-path-atom (atom nil)
+      :started-at-atom (atom (System/currentTimeMillis))
+      :ended-at-atom (atom nil)
+      :cache-atom (atom nil)
+      :exclude-from-context-atom (atom exclude-from-context?)
+      :theme-atom (atom theme)})))
 
 (defn bash-execution-set-theme!
   "Set the theme on the border/output colors and the spinner."
@@ -204,9 +198,9 @@
   (reset! (:theme-atom comp) theme)
   (let [color-key (if @(:exclude-from-context-atom comp) :dim :bash-mode)]
     (spinner/spinner-set-spinner-color-fn! @(:spinner-comp comp)
-      #(theme/fg theme color-key %))
+                                           #(theme/fg theme color-key %))
     (spinner/spinner-set-message-color-fn! @(:spinner-comp comp)
-      #(theme/fg theme :muted %)))
+                                           #(theme/fg theme :muted %)))
   (protocols/invalidate comp))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
@@ -245,10 +239,10 @@
   (reset! (:ended-at-atom comp) (System/currentTimeMillis))
   (reset! (:exit-code-atom comp) exit-code)
   (reset! (:status-atom comp)
-    (cond
-      cancelled? :cancelled
-      (and exit-code (not= exit-code 0)) :error
-      :else :complete))
+          (cond
+            cancelled? :cancelled
+            (and exit-code (not= exit-code 0)) :error
+            :else :complete))
   (when truncation
     (reset! (:truncation-atom comp) truncation))
   (when full-output-path

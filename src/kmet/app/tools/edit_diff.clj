@@ -93,8 +93,7 @@
                           (recur (inc i) old-num new-num false acc))
                         :else
                         ;; No adjacent changes — skip entirely (pi)
-                        (recur (inc i) (+ old-num rn) (+ new-num rn) false acc)))))))
-        ]
+                        (recur (inc i) (+ old-num rn) (+ new-num rn) false acc)))))))]
     {:diff (str/join "\n" acc)}))
 ;; ─── Line-ending / BOM handling (pi: edit-diff.ts) ─────────────────────────
 
@@ -220,14 +219,14 @@
             (let [{:keys [start end]} (nth lines start-line)]
               (not (and (>= rstart start) (< rstart end)))))
       (throw (ex-info "Replacement range is outside the base content."
-               {:type :edit-error}))
+                      {:type :edit-error}))
       (let [end-line (loop [j start-line]
                        (if (and (< j n) (< (:end (nth lines j)) rend))
                          (recur (inc j))
                          j))]
         (if (>= end-line n)
           (throw (ex-info "Replacement range is outside the base content."
-                   {:type :edit-error}))
+                          {:type :edit-error}))
           {:start-line start-line :end-line (inc end-line)})))))
 
 (defn- apply-replacements-preserving-unchanged-lines
@@ -239,7 +238,7 @@
         base-lines (get-line-spans base-content)]
     (when (not= (count original-lines) (count base-lines))
       (throw (ex-info "Cannot preserve unchanged lines because the base content has a different line count."
-               {:type :edit-error})))
+                      {:type :edit-error})))
     (let [groups (loop [reps (vec (sort-by :match-index replacements)) groups []]
                    (if (empty? reps)
                      groups
@@ -276,7 +275,6 @@
 
 ;; ─── Edit application (pi: applyEditsToNormalizedContent) ──────────────────
 
-
 (defn apply-edits-to-normalized-content
   "Pi: applyEditsToNormalizedContent — apply one or more exact-text
    replacements to LF-normalized content. Tries exact match first, then fuzzy
@@ -294,14 +292,14 @@
     (doseq [[i e] (map-indexed vector normalized-edits)]
       (when (zero? (count (:old-text e)))
         (throw (ex-info
-                 (if single?
-                   (str "oldText must not be empty in " path ".")
-                   (str "edits[" i "].oldText must not be empty in " path "."))
-                 {:type :edit-error}))))
+                (if single?
+                  (str "oldText must not be empty in " path ".")
+                  (str "edits[" i "].oldText must not be empty in " path "."))
+                {:type :edit-error}))))
     (let [used-fuzzy? (boolean
-                        (some :used-fuzzy?
-                              (map #(fuzzy-find-text normalized-content (:old-text %))
-                                   normalized-edits)))
+                       (some :used-fuzzy?
+                             (map #(fuzzy-find-text normalized-content (:old-text %))
+                                  normalized-edits)))
           replacement-base (if used-fuzzy?
                              (normalize-for-fuzzy-match normalized-content)
                              normalized-content)
@@ -313,22 +311,22 @@
                         (if-not (:found match)
                           ;; Pi: getNotFoundError
                           (throw (ex-info
-                                   (if single?
-                                     (str "Could not find the exact text in " path
-                                          ". The old text must match exactly including all whitespace and newlines.")
-                                     (str "Could not find edits[" i "] in " path
-                                          ". The oldText must match exactly including all whitespace and newlines."))
-                                   {:type :edit-error}))
+                                  (if single?
+                                    (str "Could not find the exact text in " path
+                                         ". The old text must match exactly including all whitespace and newlines.")
+                                    (str "Could not find edits[" i "] in " path
+                                         ". The oldText must match exactly including all whitespace and newlines."))
+                                  {:type :edit-error}))
                           (let [occurrences (count-occurrences replacement-base (:old-text edit))]
                             (when (> occurrences 1)
                               ;; Pi: getDuplicateError
                               (throw (ex-info
-                                       (if single?
-                                         (str "Found " occurrences " occurrences of the text in " path
-                                              ". The text must be unique. Please provide more context to make it unique.")
-                                         (str "Found " occurrences " occurrences of edits[" i "] in " path
-                                              ". Each oldText must be unique. Please provide more context to make it unique."))
-                                       {:type :edit-error})))
+                                      (if single?
+                                        (str "Found " occurrences " occurrences of the text in " path
+                                             ". The text must be unique. Please provide more context to make it unique.")
+                                        (str "Found " occurrences " occurrences of edits[" i "] in " path
+                                             ". Each oldText must be unique. Please provide more context to make it unique."))
+                                      {:type :edit-error})))
                             (recur (inc i)
                                    (conj acc {:edit-index i
                                               :match-index (:index match)
@@ -342,21 +340,21 @@
                   (when (> (+ (:match-index prev) (:match-length prev))
                            (:match-index curr))
                     (throw (ex-info
-                             (str "edits[" (:edit-index prev) "] and edits[" (:edit-index curr)
-                                  "] overlap in " path
-                                  ". Merge them into one edit or target disjoint regions.")
-                             {:type :edit-error})))
+                            (str "edits[" (:edit-index prev) "] and edits[" (:edit-index curr)
+                                 "] overlap in " path
+                                 ". Merge them into one edit or target disjoint regions.")
+                            {:type :edit-error})))
                   (recur (inc i)))))
           new-content (if used-fuzzy?
                         (apply-replacements-preserving-unchanged-lines
-                          normalized-content replacement-base matched)
+                         normalized-content replacement-base matched)
                         (apply-replacements replacement-base matched 0))]
       ;; Pi: getNoChangeError
       (when (= normalized-content new-content)
         (throw (ex-info
-                 (if single?
-                   (str "No changes made to " path
-                        ". The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.")
-                   (str "No changes made to " path ". The replacements produced identical content."))
-                 {:type :edit-error})))
+                (if single?
+                  (str "No changes made to " path
+                       ". The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.")
+                  (str "No changes made to " path ". The replacements produced identical content."))
+                {:type :edit-error})))
       {:base-content normalized-content :new-content new-content})))

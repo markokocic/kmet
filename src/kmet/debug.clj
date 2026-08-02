@@ -32,8 +32,8 @@
   [& parts]
   (when @debug-enabled
     (let [parts-str (apply str
-                     (map (fn [p] (if (instance? Exception p) (exception-str p) (str p)))
-                       parts))]
+                           (map (fn [p] (if (instance? Exception p) (exception-str p) (str p)))
+                                parts))]
       (write-line log-path (str "[" (timestamp) "] " parts-str "\n")))))
 
 (defn log-error
@@ -41,8 +41,8 @@
    If the last argument is an Exception, formats it with full stack trace."
   [& parts]
   (let [parts-str (apply str
-                   (map (fn [p] (if (instance? Exception p) (exception-str p) (str p)))
-                     parts))
+                         (map (fn [p] (if (instance? Exception p) (exception-str p) (str p)))
+                              parts))
         line (str "[" (timestamp) "] ERROR: " parts-str "\n")]
     (write-line error-path line)
     ;; Also log to debug.log if enabled

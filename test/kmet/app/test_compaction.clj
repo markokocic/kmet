@@ -97,8 +97,8 @@
       (t/is (str/includes? text "[Tool result]: result text"))))
   (t/testing "info and excluded bash are skipped"
     (let [text (compaction/serialize-conversation
-                 [{:role :info :content "ignored"}
-                  {:role :bash :command "ls" :output "out" :exclude-from-context? true}])]
+                [{:role :info :content "ignored"}
+                 {:role :bash :command "ls" :output "out" :exclude-from-context? true}])]
       (t/is (empty? text)))))
 
 ;; ─── Summarization request (pi: generateSummaryWithUsage) ─────────────────
@@ -112,10 +112,10 @@
         (t/is (str/includes? text "## Goal"))
         (t/is (not (str/includes? text "<previous-summary>"))))))
   (t/testing "update prompt with previous summary"
-    (let [msgs (compaction/summarization-messages [{:role :user :content "x"}] "OLD" nil)]
-      (let [text (-> msgs second :content first :text)]
-        (t/is (str/includes? text "<previous-summary>\nOLD\n</previous-summary>"))
-        (t/is (str/includes? text "PRESERVE all existing information")))))
+    (let [msgs (compaction/summarization-messages [{:role :user :content "x"}] "OLD" nil)
+          text (-> msgs second :content first :text)]
+      (t/is (str/includes? text "<previous-summary>\nOLD\n</previous-summary>"))
+      (t/is (str/includes? text "PRESERVE all existing information"))))
   (t/testing "custom instructions appended"
     (let [msgs (compaction/summarization-messages [{:role :user :content "x"}] nil "focus on tests")]
       (t/is (str/includes? (-> msgs second :content first :text)

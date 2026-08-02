@@ -29,7 +29,7 @@
   "Read a file and return its contents as a base64-encoded string."
   [path]
   (.encodeToString (Base64/getEncoder)
-    (fs/read-all-bytes (io/file path))))
+                   (fs/read-all-bytes (io/file path))))
 
 ;; ─── Tool implementation ───────────────────────────────────────────────────
 
@@ -67,7 +67,7 @@
                     output-text (cond
                                   (:first-line-exceeds-limit truncation)
                                   (let [first-line-size (bash-exec/format-size
-                                                          (count (nth all-lines start-line "")))]
+                                                         (count (nth all-lines start-line "")))]
                                     (str "[Line " start-line-display " is " first-line-size ", exceeds "
                                          (bash-exec/format-size bash-exec/DEFAULT-MAX-BYTES)
                                          " limit. Use bash: sed -n '" start-line-display "p' " path

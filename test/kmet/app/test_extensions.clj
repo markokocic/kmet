@@ -30,7 +30,7 @@
 (t/deftest test-input-hook-transform
   (extensions/clear-input-hooks!)
   (extensions/register-input-hook!
-    (fn [{:keys [text]}] {:action :transform :text (str ">> " text)}))
+   (fn [{:keys [text]}] {:action :transform :text (str ">> " text)}))
   (let [r (extensions/apply-input-hooks "hello" :interactive)]
     (t/is (= :transform (:action r)))
     (t/is (= ">> hello" (:text r)))))
@@ -38,9 +38,9 @@
 (t/deftest test-input-hook-transform-chains
   (extensions/clear-input-hooks!)
   (extensions/register-input-hook!
-    (fn [{:keys [text]}] {:action :transform :text (str text "!")}))
+   (fn [{:keys [text]}] {:action :transform :text (str text "!")}))
   (extensions/register-input-hook!
-    (fn [{:keys [text]}] {:action :transform :text (str "[" text "]")}))
+   (fn [{:keys [text]}] {:action :transform :text (str "[" text "]")}))
   (let [r (extensions/apply-input-hooks "a" :interactive)]
     (t/is (= "[a!]" (:text r)) "later hooks see earlier transforms")))
 
@@ -90,15 +90,15 @@
   (let [seen (atom nil)]
     (extensions/register-input-hook! (fn [{:keys [images]}] (reset! seen images)))
     (extensions/apply-input-hooks "x" :interactive
-      {:images [{:type :image :data "AA" :mime-type "image/png"}]})
+                                  {:images [{:type :image :data "AA" :mime-type "image/png"}]})
     (t/is (= [{:type :image :data "AA" :mime-type "image/png"}] @seen))))
 
 (t/deftest test-input-hook-images-transform
   (extensions/clear-input-hooks!)
   (extensions/register-input-hook!
-    (fn [{:keys [images]}]
-      {:action :transform :text "t"
-       :images (conj images {:type :image :data "BB" :mime-type "image/jpeg"})}))
+   (fn [{:keys [images]}]
+     {:action :transform :text "t"
+      :images (conj images {:type :image :data "BB" :mime-type "image/jpeg"})}))
   (let [r (extensions/apply-input-hooks "x" :interactive)]
     (t/is (= :transform (:action r)))
     (t/is (= [{:type :image :data "BB" :mime-type "image/jpeg"}] (:images r)))))
@@ -106,7 +106,7 @@
 (t/deftest test-input-hook-images-pass-through
   (extensions/clear-input-hooks!)
   (let [r (extensions/apply-input-hooks "x" :interactive
-          {:images [{:type :image :data "AA" :mime-type "image/png"}]})]
+                                        {:images [{:type :image :data "AA" :mime-type "image/png"}]})]
     (t/is (= :pass (:action r)))
     (t/is (= [{:type :image :data "AA" :mime-type "image/png"}] (:images r))
           "pass result carries the images")))
@@ -120,15 +120,15 @@
 (t/deftest test-before-agent-start-system-prompt
   (extensions/clear-before-agent-start-hooks!)
   (extensions/register-before-agent-start-hook!
-    (fn [{:keys [system-prompt]}]
-      {:system-prompt (str system-prompt "\nEXTRA")}))
+   (fn [{:keys [system-prompt]}]
+     {:system-prompt (str system-prompt "\nEXTRA")}))
   (let [r (extensions/apply-before-agent-start-hooks "hi" "base")]
     (t/is (= "base\nEXTRA" (:system-prompt r)))))
 
 (t/deftest test-before-agent-start-messages
   (extensions/clear-before-agent-start-hooks!)
   (extensions/register-before-agent-start-hook!
-    (fn [_] {:message {:role :user :content [{:type :text :text "note"}]}}))
+   (fn [_] {:message {:role :user :content [{:type :text :text "note"}]}}))
   (let [r (extensions/apply-before-agent-start-hooks "hi" "base")]
     (t/is (= 1 (count (:messages r))))
     (t/is (= :user (:role (first (:messages r)))))))
@@ -136,11 +136,11 @@
 (t/deftest test-before-agent-start-chains
   (extensions/clear-before-agent-start-hooks!)
   (extensions/register-before-agent-start-hook!
-    (fn [{:keys [system-prompt]}] {:system-prompt (str system-prompt "+")}))
+   (fn [{:keys [system-prompt]}] {:system-prompt (str system-prompt "+")}))
   (extensions/register-before-agent-start-hook!
-    (fn [{:keys [system-prompt]}]
-      {:system-prompt (str system-prompt "+")
-       :message {:role :info :label "ext" :content "note"}}))
+   (fn [{:keys [system-prompt]}]
+     {:system-prompt (str system-prompt "+")
+      :message {:role :info :label "ext" :content "note"}}))
   (let [r (extensions/apply-before-agent-start-hooks "hi" "base")]
     (t/is (= "base++" (:system-prompt r)) "later hooks see earlier overrides")
     (t/is (= 1 (count (:messages r))))))

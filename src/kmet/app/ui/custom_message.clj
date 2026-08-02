@@ -13,21 +13,21 @@
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
 (defcomponent CustomMessageComponent :custom
-  [spacer          ;; Spacer(1) for top vertical gap (Pi-style)
-   box             ;; Box wrapping the content
-   inner-container  ;; Container holding label + content Text children
-   label-atom
-   content-atom
-   theme-atom
-   output-pad-atom
-   expanded-atom   ;; current expanded state (collapsible messages)
-   collapsed-content-atom  ;; content when collapsed (nil = not collapsible)
-   expanded-content-atom]  ;; content when expanded (nil = not collapsible)
-  (render [this width]
+              [spacer          ;; Spacer(1) for top vertical gap (Pi-style)
+               box             ;; Box wrapping the content
+               inner-container  ;; Container holding label + content Text children
+               label-atom
+               content-atom
+               theme-atom
+               output-pad-atom
+               expanded-atom   ;; current expanded state (collapsible messages)
+               collapsed-content-atom  ;; content when collapsed (nil = not collapsible)
+               expanded-content-atom]  ;; content when expanded (nil = not collapsible)
+  (render [_this width]
     (let [spacer-lines (protocols/render @spacer width)
           box-lines (protocols/render @box width)]
       (into [] (concat spacer-lines box-lines))))
-  (invalidate [this]
+  (invalidate [_this]
     (protocols/invalidate @spacer)
     (protocols/invalidate @box)))
 
@@ -55,11 +55,11 @@
     (when (seq label)
       (let [label-str (theme/fg theme :custom-message-label (theme/bold (str "[" label "]")))]
         (container/container-add-child container
-          (text/make-text label-str 0 0))))
+                                       (text/make-text label-str 0 0))))
     (when (seq content)
       (let [colored (theme/fg theme :custom-message-text content)]
         (container/container-add-child container
-          (text/make-text colored 0 0))))))
+                                       (text/make-text colored 0 0))))))
 
 ;; ─── Public API (defined before make- to avoid forward ref) ──────────────
 
@@ -123,15 +123,15 @@
         b (box/make-box output-pad 1 nil)]
     (box/box-add-child b inner-container)
     (let [comp (map->CustomMessageComponent {:spacer (atom s)
-                                              :box (atom b)
-                                              :inner-container (atom inner-container)
-                                              :label-atom (atom label)
-                                              :content-atom (atom content)
-                                              :theme-atom (atom theme)
-                                              :output-pad-atom (atom output-pad)
-                                              :expanded-atom (atom false)
-                                              :collapsed-content-atom (atom nil)
-                                              :expanded-content-atom (atom nil)})]
+                                             :box (atom b)
+                                             :inner-container (atom inner-container)
+                                             :label-atom (atom label)
+                                             :content-atom (atom content)
+                                             :theme-atom (atom theme)
+                                             :output-pad-atom (atom output-pad)
+                                             :expanded-atom (atom false)
+                                             :collapsed-content-atom (atom nil)
+                                             :expanded-content-atom (atom nil)})]
       ;; Set initial content
       (rebuild-content! comp)
       (box/box-set-bg-fn b #(theme/bg theme :custom-message-bg %))

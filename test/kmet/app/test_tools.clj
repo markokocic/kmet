@@ -1,5 +1,6 @@
 (ns kmet.app.test-tools
-  (:require [clojure.test :as t]
+  (:require [clojure.string :as str]
+            [clojure.test :as t]
             [kmet.app.tools.core :as tools]))
 
 ;; ─── Tool registry ─────────────────────────────────────────────────────────
@@ -55,13 +56,13 @@
 
 (t/deftest test-tool-read-with-limit
   (spit "target/test-tools-read.txt" "a\nb\nc\nd\ne")
-  (let [result (tools/execute-tool "read" {:path "target/test-tools-read.txt" :limit 2})]
-    (let [content (:content result)]
-      (t/is (.contains content "a"))
-      (t/is (.contains content "b"))
-      ;; Pi: a user limit stops early with a continuation footer
-      (t/is (not (re-find #"(?m)^c$" content)))
-      (t/is (.contains content "more lines in file")))))
+  (let [result (tools/execute-tool "read" {:path "target/test-tools-read.txt" :limit 2})
+        content (:content result)]
+    (t/is (.contains content "a"))
+    (t/is (.contains content "b"))
+    ;; Pi: a user limit stops early with a continuation footer
+    (t/is (not (re-find #"(?m)^c$" content)))
+    (t/is (.contains content "more lines in file"))))
 
 (t/deftest test-tool-read-nonexistent
   (let [result (tools/execute-tool "read" {:path "nonexistent-file"})]
@@ -160,14 +161,14 @@
 
 (t/deftest ^:slow test-tool-bash-streams
   (t/testing "bash tool streams partial output via on-update (pi onUpdate)"
-    (let [updates (atom [])]
-      (let [result (tools/execute-tool "bash" {:command "echo first; sleep 0.3; echo second"}
-                                       (fn [partial]
-                                         (swap! updates conj (:content partial))))]
-        (t/is (not (:is-error result)))
-        (t/is (seq @updates))
-        (t/is (some #(clojure.string/includes? % "first") @updates))
-        (t/is (clojure.string/includes? (:content result) "second"))))))
+    (let [updates (atom [])
+          result (tools/execute-tool "bash" {:command "echo first; sleep 0.3; echo second"}
+                                     (fn [partial]
+                                       (swap! updates conj (:content partial))))]
+      (t/is (not (:is-error result)))
+      (t/is (seq @updates))
+      (t/is (some #(clojure.string/includes? % "first") @updates))
+      (t/is (clojure.string/includes? (:content result) "second")))))
 
 ;; ─── Tool bash ────────────────────────────────────────────────────────────
 
@@ -186,13 +187,13 @@
 
 (t/deftest ^:slow test-tool-bash-large-stderr
   (let [result (tools/execute-tool "bash"
-                {:command "for i in $(seq 1 200); do echo err$i >&2; done; echo ok"})]
+                                   {:command "for i in $(seq 1 200); do echo err$i >&2; done; echo ok"})]
     (t/is (not (:is-error result)) "Large stderr should not deadlock")
     (t/is (.contains (:content result) "ok"))))
 
 (t/deftest ^:slow test-tool-bash-large-stdout
   (let [result (tools/execute-tool "bash"
-                {:command "for i in $(seq 1 200); do echo out$i; done; echo done"})]
+                                   {:command "for i in $(seq 1 200); do echo out$i; done; echo done"})]
     (t/is (not (:is-error result)) "Large stdout should not deadlock")
     (t/is (.contains (:content result) "done"))))
 
@@ -228,11 +229,11 @@
 
 (t/deftest test-tools-register-custom
   (let [custom (tools/make-tool
-                 :name "custom"
-                 :label "Custom"
-                 :description "A custom tool"
-                 :parameters {:type "object" :properties {} :required []}
-                 :execute (fn [_] {:content "done"}))]
+                :name "custom"
+                :label "Custom"
+                :description "A custom tool"
+                :parameters {:type "object" :properties {} :required []}
+                :execute (fn [_] {:content "done"}))]
     (tools/register-tool! custom)
     (t/is (contains? (tools/get-all-tools) "custom"))
     (let [result (tools/execute-tool "custom" {})]
@@ -256,8 +257,7 @@
           props (:properties params)]
       (doseq [[k v] props]
         (t/is (not (contains? v :optional))
-          (str "Property " k " of " tool-name " should not have :optional"))))))
-
+              (str "Property " k " of " tool-name " should not have :optional"))))))
 
 (t/deftest test-tool-edit-edits-array
   (spit "target/test-tools-edit.txt" "one two three")

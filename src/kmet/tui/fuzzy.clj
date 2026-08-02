@@ -1,7 +1,8 @@
 (ns kmet.tui.fuzzy
   "Fuzzy matching utilities. Port of @earendil-works/pi-tui fuzzy.ts.
    Matches if all query characters appear in order (not necessarily
-   consecutive). Lower score = better match.")
+   consecutive). Lower score = better match."
+  (:require [clojure.string :as str]))
 
 (defn- word-boundary?
   "True when the character at index i of text is at a word boundary
@@ -75,19 +76,19 @@
                       (remove clojure.string/blank?))
           results
           (reduce
-            (fn [acc item]
-              (let [text (get-text item)
-                    [matched? total]
-                    (reduce (fn [[ok s] tok]
-                              (if-not ok
-                                [false s]
-                                (let [m (fuzzy-match tok text)]
-                                  (if (:matches m)
-                                    [true (+ s (:score m))]
-                                    [false s]))))
-                            [true 0] tokens)]
-                (if matched?
-                  (conj acc {:item item :score total})
-                  acc)))
-            [] items)]
+           (fn [acc item]
+             (let [text (get-text item)
+                   [matched? total]
+                   (reduce (fn [[ok s] tok]
+                             (if-not ok
+                               [false s]
+                               (let [m (fuzzy-match tok text)]
+                                 (if (:matches m)
+                                   [true (+ s (:score m))]
+                                   [false s]))))
+                           [true 0] tokens)]
+               (if matched?
+                 (conj acc {:item item :score total})
+                 acc)))
+           [] items)]
       (mapv :item (sort-by :score results)))))

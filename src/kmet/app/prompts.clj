@@ -62,29 +62,29 @@
   (let [all-args (str/join " " args)
         n (count args)]
     (str/replace content
-      #"\$\{(\d+|ARGUMENTS|@):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)"
-      (fn [[_ default-target default-value slice-start slice-length simple]]
-        (cond
-          default-target
-          (if (or (= default-target "@") (= default-target "ARGUMENTS"))
-            (if (seq all-args) all-args default-value)
-            (let [i (parse-long-safe default-target)
-                  value (when (and i (>= i 1) (<= i n)) (nth args (dec i)))]
-              (if (seq value) value default-value)))
-          slice-start
-          (let [start (if-let [i (parse-long-safe slice-start)]
-                        (min n (max 0 (dec i)))
-                        n)
-                end (if-let [l (parse-long-safe slice-length)]
-                      (min n (+ start l))
-                      n)]
-            (str/join " " (subvec args start end)))
-          :else
-          (if (or (= simple "@") (= simple "ARGUMENTS"))
-            all-args
-            (if-let [i (parse-long-safe simple)]
-              (nth args (dec i) "")
-              "")))))))
+                 #"\$\{(\d+|ARGUMENTS|@):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)"
+                 (fn [[_ default-target default-value slice-start slice-length simple]]
+                   (cond
+                     default-target
+                     (if (or (= default-target "@") (= default-target "ARGUMENTS"))
+                       (if (seq all-args) all-args default-value)
+                       (let [i (parse-long-safe default-target)
+                             value (when (and i (>= i 1) (<= i n)) (nth args (dec i)))]
+                         (if (seq value) value default-value)))
+                     slice-start
+                     (let [start (if-let [i (parse-long-safe slice-start)]
+                                   (min n (max 0 (dec i)))
+                                   n)
+                           end (if-let [l (parse-long-safe slice-length)]
+                                 (min n (+ start l))
+                                 n)]
+                       (str/join " " (subvec args start end)))
+                     :else
+                     (if (or (= simple "@") (= simple "ARGUMENTS"))
+                       all-args
+                       (if-let [i (parse-long-safe simple)]
+                         (nth args (dec i) "")
+                         "")))))))
 
 ;; ─── Loading (pi: loadTemplateFromFile / loadTemplatesFromDir) ────────────
 

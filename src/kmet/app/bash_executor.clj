@@ -98,8 +98,8 @@
 (defn- find-bash-on-path []
   (try
     (let [cmd (if process/windows-os?
-               ["cmd.exe" "/c" "where bash.exe"]
-               ["sh" "-c" "command -v bash"])
+                ["cmd.exe" "/c" "where bash.exe"]
+                ["sh" "-c" "command -v bash"])
           p (proc/process cmd {:out :pipe :err :inherit})
           _ @p
           output (str/trim (slurp (:out p)))
@@ -116,26 +116,26 @@
       (when (fs/exists? "/usr/bin/bash") "/usr/bin/bash")
       (find-bash-on-path)
       (when process/windows-os?
-        (or (some (fn [env-var]
-                    (when-let [pf (System/getenv env-var)]
-                      (let [path (str pf "\\Git\\bin\\bash.exe")]
-                        (when (fs/exists? path) path))))
-                  ["ProgramFiles" "ProgramFiles(x86)"])))
+        (some (fn [env-var]
+                (when-let [pf (System/getenv env-var)]
+                  (let [path (str pf "\\Git\\bin\\bash.exe")]
+                    (when (fs/exists? path) path))))
+              ["ProgramFiles" "ProgramFiles(x86)"]))
       (if process/windows-os? "cmd.exe" "sh")))
 
 (defn create-default-ops [& {:keys [shell-path]}]
   ;; Pi: throw early if custom shellPath is specified but not found
   (when (and shell-path (not (fs/exists? shell-path)))
     (throw (ex-info (str "Custom shell path not found: " shell-path)
-             {:shell-path shell-path})))
+                    {:shell-path shell-path})))
   (let [shell (or shell-path (resolve-shell))]
     (fn [{:keys [command cwd on-data signal timeout env]}]
       (let [_ (when-not (fs/exists? cwd)
                 (throw (ex-info (str "Working directory does not exist: " cwd) {:cwd cwd})))
             ;; Pi: getShellConfig resolves shell + args per platform
             use-stdin? (and process/windows-os?
-                           (re-find #"(?i)windows\\system32\\bash\.exe"
-                             (str/replace shell "/" "\\")))
+                            (re-find #"(?i)windows\\system32\\bash\.exe"
+                                     (str/replace shell "/" "\\")))
             shell-args (cond
                          (str/includes? shell "cmd") [shell "/c" command]
                          use-stdin? [shell "-s"]
@@ -167,26 +167,26 @@
             read-stream (fn [stream]
                           (let [buf (byte-array 8192)]
                             (loop [] (let [n (.read stream buf)]
-                                       (when (pos? n) (on-data buf 0 n) (recur))))))]
-        (let [out-future (future (try (read-stream (:out p))
-                                     (catch Exception e (debug/log "ops stdout: " e))))
-              _ (when-let [err-stream (:err p)]
-                  (future (try (read-stream err-stream)
-                              (catch Exception e (debug/log "ops stderr: " e)))))]
-          (when signal
-            (future (loop [] (when-not @signal (Thread/sleep 200) (recur)))
-                    (when pid (process/kill-process-tree! pid))))
-          (let [result (try (deref p) (catch Exception _ nil)) exit-code (:exit result)]
-            (when timeout-watcher (future-cancel timeout-watcher))
-            (try (deref out-future 5000 nil) (catch Exception _ nil))
-            (when pid (process/untrack-pid! pid))
-            (cond
+                                       (when (pos? n) (on-data buf 0 n) (recur))))))
+            out-future (future (try (read-stream (:out p))
+                                    (catch Exception e (debug/log "ops stdout: " e))))
+            _ (when-let [err-stream (:err p)]
+                (future (try (read-stream err-stream)
+                             (catch Exception e (debug/log "ops stderr: " e)))))]
+        (when signal
+          (future (loop [] (when-not @signal (Thread/sleep 200) (recur)))
+                  (when pid (process/kill-process-tree! pid))))
+        (let [result (try (deref p) (catch Exception _ nil)) exit-code (:exit result)]
+          (when timeout-watcher (future-cancel timeout-watcher))
+          (try (deref out-future 5000 nil) (catch Exception _ nil))
+          (when pid (process/untrack-pid! pid))
+          (cond
               ;; Pi: after the process exits, re-check abort/timeout — the kill
               ;; itself returns normally (SIGKILL exit code), so cancelled/timeout
               ;; must be inferred from the signal/flag, not the exit code.
-              @timed-out (throw (ex-info (str "timeout:" timeout) {}))
-              (and signal @signal) (throw (ex-info "aborted" {}))
-              :else {:exit-code exit-code})))))))
+            @timed-out (throw (ex-info (str "timeout:" timeout) {}))
+            (and signal @signal) (throw (ex-info "aborted" {}))
+            :else {:exit-code exit-code}))))))
 
 (defn execute-bash
   [{:keys [command cwd env on-chunk signal timeout spawn-hook
@@ -253,7 +253,7 @@
         (fn []
           (let [out-buf (java.nio.CharBuffer/allocate 64)
                 _ (.decode utf8-decoder
-                    (java.nio.ByteBuffer/wrap (byte-array 0)) out-buf true)
+                           (java.nio.ByteBuffer/wrap (byte-array 0)) out-buf true)
                 _ (.flush utf8-decoder out-buf)
                 pos (.position out-buf)]
             (when (pos? pos)
@@ -305,8 +305,8 @@
                                    (subs raw-output (inc first-newline))
                                    raw-output)))
                 truncation (truncate-tail clean-output
-                             :max-lines max-lines
-                             :max-bytes max-bytes)
+                                          :max-lines max-lines
+                                          :max-bytes max-bytes)
                 truncated (:truncated truncation)
                 content (:content truncation)]
             (when (and truncated (nil? @temp-file-path))
@@ -328,12 +328,12 @@
               (spawn-hook {:command resolved-command :cwd cwd :env merged-env})
               {:command resolved-command :cwd cwd :env merged-env})
             ops-result (exec-ops
-                         {:command command
-                          :cwd cwd
-                          :on-data handle-raw-bytes
-                          :signal signal
-                          :timeout timeout
-                          :env env})
+                        {:command command
+                         :cwd cwd
+                         :on-data handle-raw-bytes
+                         :signal signal
+                         :timeout timeout
+                         :env env})
             exit-code (:exit-code ops-result)]
         ;; Grace polling for pending stream data after operations complete
         (loop [last-bytes @tail-bytes
@@ -358,8 +358,8 @@
                                  (subs raw-output (inc first-newline))
                                  raw-output)))
               truncation (truncate-tail clean-output
-                           :max-lines max-lines
-                           :max-bytes max-bytes)
+                                        :max-lines max-lines
+                                        :max-bytes max-bytes)
               content (:content truncation)
               truncated (:truncated truncation)
               ;; Pi: persistIfTruncated — save the full output whenever truncated

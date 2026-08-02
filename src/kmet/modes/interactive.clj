@@ -98,7 +98,6 @@
 (defn- fmt-header [cs]
   (let [provider @(:provider (:agent-state cs))
         model @(:model (:agent-state cs))
-        status (name (agent/get-status (:agent-state cs)))
         sess-id (some-> (:session cs) :id (subs 0 8) (str "..."))
         cwd (System/getProperty "user.dir")
         short-cwd (if (> (count cwd) 30) (str "..." (subs cwd (- (count cwd) 27))) cwd)]
@@ -167,116 +166,116 @@
    argument completions feed the editor autocomplete dropdown."
   [config]
   (commands/register-command!
-    {:name "quit"
-     :description "Exit kmet"
-     :handler (fn [cs _]
-                (debug/log "/quit command")
-                (tui/tui-stop (:tui cs)))})
+   {:name "quit"
+    :description "Exit kmet"
+    :handler (fn [cs _]
+               (debug/log "/quit command")
+               (tui/tui-stop (:tui cs)))})
   (commands/register-command!
-    {:name "help"
-     :description "Show available commands and shortcuts"
-     :handler (fn [cs _]
-                (ui/chat-history-add-message! (:chat-history cs)
-                  {:role :assistant :content (help-text)}))})
+   {:name "help"
+    :description "Show available commands and shortcuts"
+    :handler (fn [cs _]
+               (ui/chat-history-add-message! (:chat-history cs)
+                                             {:role :assistant :content (help-text)}))})
   (commands/register-command!
-    {:name "tools"
-     :description "List available tools with parameters"
-     :handler (fn [cs _]
-                (ui/chat-history-add-message! (:chat-history cs)
-                  {:role :assistant :content (tools-text)}))})
+   {:name "tools"
+    :description "List available tools with parameters"
+    :handler (fn [cs _]
+               (ui/chat-history-add-message! (:chat-history cs)
+                                             {:role :assistant :content (tools-text)}))})
   (commands/register-command!
-    {:name "model"
-     :description "Switch model"
-     :argument-hint "<provider:model>"
-     :get-argument-completions
-     (fn [_]
-       (mapv (fn [m] {:value m :label m})
-             (or (:models config) [(:model config)])))
-     :handler (fn [cs args]
-                (if (seq args)
-                  (let [parts (str/split args #":" 2)
-                        provider (keyword (or (first parts) "openai"))
-                        model (or (second parts) (:model (:config cs)))]
-                    (agent/set-provider! (:agent-state cs) provider)
-                    (agent/set-model! (:agent-state cs) model)
-                    (ui/chat-history-add-message! (:chat-history cs)
-                      {:role :assistant :content (str "Switched to " (fmt-model provider model))}))
-                  (ui/chat-history-add-message! (:chat-history cs)
-                    {:role :assistant :content
-                     (str "Current model: " (fmt-model @(:provider (:agent-state cs))
-                                                       @(:model (:agent-state cs)))
-                          "\nUsage: /model <provider:model>")})))})
+   {:name "model"
+    :description "Switch model"
+    :argument-hint "<provider:model>"
+    :get-argument-completions
+    (fn [_]
+      (mapv (fn [m] {:value m :label m})
+            (or (:models config) [(:model config)])))
+    :handler (fn [cs args]
+               (if (seq args)
+                 (let [parts (str/split args #":" 2)
+                       provider (keyword (or (first parts) "openai"))
+                       model (or (second parts) (:model (:config cs)))]
+                   (agent/set-provider! (:agent-state cs) provider)
+                   (agent/set-model! (:agent-state cs) model)
+                   (ui/chat-history-add-message! (:chat-history cs)
+                                                 {:role :assistant :content (str "Switched to " (fmt-model provider model))}))
+                 (ui/chat-history-add-message! (:chat-history cs)
+                                               {:role :assistant :content
+                                                (str "Current model: " (fmt-model @(:provider (:agent-state cs))
+                                                                                  @(:model (:agent-state cs)))
+                                                     "\nUsage: /model <provider:model>")})))})
   (commands/register-command!
-    {:name "new"
-     :description "Start a new session"
-     :handler (fn [cs _]
-                (let [new-session (session/create-session (ensure-session-dir))]
-                  (debug/log "new session created: " (:id new-session))
-                  (ui/chat-history-clear! (:chat-history cs))
-                  (reset! (:session cs) new-session)
-                  (let [old-ag (:agent-state cs)
-                        new-ag (assoc old-ag :session new-session)]
-                    (reset! (:agent-state cs) new-ag))
-                  (ui/chat-history-add-message! (:chat-history cs)
-                    {:role :assistant :content "Started a new session."})))})
+   {:name "new"
+    :description "Start a new session"
+    :handler (fn [cs _]
+               (let [new-session (session/create-session (ensure-session-dir))]
+                 (debug/log "new session created: " (:id new-session))
+                 (ui/chat-history-clear! (:chat-history cs))
+                 (reset! (:session cs) new-session)
+                 (let [old-ag (:agent-state cs)
+                       new-ag (assoc old-ag :session new-session)]
+                   (reset! (:agent-state cs) new-ag))
+                 (ui/chat-history-add-message! (:chat-history cs)
+                                               {:role :assistant :content "Started a new session."})))})
   (commands/register-command!
-    {:name "resume"
-     :description "Browse past sessions"
-     :handler (fn [cs _]
-                (debug/log "/resume command")
-                (resume-session cs ensure-session-dir))})
+   {:name "resume"
+    :description "Browse past sessions"
+    :handler (fn [cs _]
+               (debug/log "/resume command")
+               (resume-session cs ensure-session-dir))})
   (commands/register-command!
-    {:name "tree"
-     :description "Browse session entry tree"
-     :handler (fn [cs _]
-                (show-session-tree cs))})
+   {:name "tree"
+    :description "Browse session entry tree"
+    :handler (fn [cs _]
+               (show-session-tree cs))})
   (commands/register-command!
-    {:name "reload"
-     :description "Reload keybindings, extensions, skills, prompts, themes, and context files"
-     :handler handle-reload})
+   {:name "reload"
+    :description "Reload keybindings, extensions, skills, prompts, themes, and context files"
+    :handler handle-reload})
   (commands/register-command!
-    {:name "compact"
-     :description "Manually compact the session context"
-     :argument-hint "<instructions>"
-     :handler (fn [cs args]
-                (let [{:keys [agent-state chat-history]} cs
-                      instructions (when (seq args) args)]
-                  (if-not (= :idle (agent/get-status agent-state))
-                    (ui/chat-history-add-message! chat-history
-                      {:role :info :label "Compact"
-                       :content "Wait for the current response to finish before compacting."})
-                    (if (agent/compact-context! agent-state instructions)
-                      (ui/chat-history-add-message! chat-history
-                        {:role :info :label "Compact"
-                         :content "Session compacted."})
-                      (ui/chat-history-add-message! chat-history
-                        {:role :info :label "Compact"
-                         :content "Nothing to compact (session too small)."})))))})
+   {:name "compact"
+    :description "Manually compact the session context"
+    :argument-hint "<instructions>"
+    :handler (fn [cs args]
+               (let [{:keys [agent-state chat-history]} cs
+                     instructions (when (seq args) args)]
+                 (if-not (= :idle (agent/get-status agent-state))
+                   (ui/chat-history-add-message! chat-history
+                                                 {:role :info :label "Compact"
+                                                  :content "Wait for the current response to finish before compacting."})
+                   (if (agent/compact-context! agent-state instructions)
+                     (ui/chat-history-add-message! chat-history
+                                                   {:role :info :label "Compact"
+                                                    :content "Session compacted."})
+                     (ui/chat-history-add-message! chat-history
+                                                   {:role :info :label "Compact"
+                                                    :content "Nothing to compact (session too small)."})))))})
   (commands/register-command!
-    {:name "theme"
-     :description "Switch theme"
-     :argument-hint "<name>"
-     :get-argument-completions
-     (fn [_]
-       (mapv (fn [t] {:value t :label t}) ["dark" "light"]))
-     :handler (fn [cs args]
-                (if (seq args)
-                  (ui/chat-history-add-message! (:chat-history cs)
-                    {:role :assistant
-                     :content (str "Theme switching not yet implemented. "
-                                   "Available themes: dark, light. "
-                                   "Current theme: " (cfg/get-theme-name (:config cs)))})
-                  (ui/chat-history-add-message! (:chat-history cs)
-                    {:role :assistant
-                     :content (str "Current theme: " (cfg/get-theme-name (:config cs))
-                                   "\nUsage: /theme <name>")})))}))
+   {:name "theme"
+    :description "Switch theme"
+    :argument-hint "<name>"
+    :get-argument-completions
+    (fn [_]
+      (mapv (fn [t] {:value t :label t}) ["dark" "light"]))
+    :handler (fn [cs args]
+               (if (seq args)
+                 (ui/chat-history-add-message! (:chat-history cs)
+                                               {:role :assistant
+                                                :content (str "Theme switching not yet implemented. "
+                                                              "Available themes: dark, light. "
+                                                              "Current theme: " (cfg/get-theme-name (:config cs)))})
+                 (ui/chat-history-add-message! (:chat-history cs)
+                                               {:role :assistant
+                                                :content (str "Current theme: " (cfg/get-theme-name (:config cs))
+                                                              "\nUsage: /theme <name>")})))}))
 
 (defn- command-not-implemented
   "In-chat reply for pi slash commands kmet does not implement yet."
   [cs name]
   (ui/chat-history-add-message! (:chat-history cs)
-    {:role :assistant
-     :content (str "Command /" name " is not implemented in kmet yet.")}))
+                                {:role :assistant
+                                 :content (str "Command /" name " is not implemented in kmet yet.")}))
 
 (defn- handle-reload
   "Reload settings, extensions, skills, prompts, themes, context files, and
@@ -287,8 +286,8 @@
   (let [{:keys [agent-state chat-history]} cs]
     (if-not (= :idle (agent/get-status agent-state))
       (ui/chat-history-add-message! chat-history
-        {:role :info :label "Reload"
-         :content "Wait for the current response to finish before reloading."})
+                                    {:role :info :label "Reload"
+                                     :content "Wait for the current response to finish before reloading."})
       (try
         ;; pi: settingsManager.reload() + theme re-registration
         (let [config (cfg/init!)
@@ -305,20 +304,20 @@
                   (prompts/load-prompt-templates-from-dir d))
               ;; pi: _rebuildSystemPrompt with new sources
               system-prompt (skills/build-system-prompt
-                              :custom-prompt (cfg/get-custom-prompt config)
-                              :append-prompt (cfg/get-append-system-prompt config)
-                              :context-files (context/load-project-context-files
-                                               (cfg/get-agent-dir) (str (fs/cwd))))]
+                             :custom-prompt (cfg/get-custom-prompt config)
+                             :append-prompt (cfg/get-append-system-prompt config)
+                             :context-files (context/load-project-context-files
+                                             (cfg/get-agent-dir) (str (fs/cwd))))]
           (reset! global-config config)
           (agent/set-system-prompt! agent-state system-prompt)
           (update-header-footer! cs)
           (ui/chat-history-add-message! chat-history
-            {:role :info :label "Reload"
-             :content "Reloaded keybindings, extensions, skills, prompts, themes, and context files."}))
+                                        {:role :info :label "Reload"
+                                         :content "Reloaded keybindings, extensions, skills, prompts, themes, and context files."}))
         (catch Exception e
           (ui/chat-history-add-message! chat-history
-            {:role :info :label "Reload"
-             :content (str "Reload failed: " (ex-message e))}))))))
+                                        {:role :info :label "Reload"
+                                         :content (str "Reload failed: " (ex-message e))}))))))
 
 (defn- register-not-implemented-commands!
   "Register pi's builtin slash commands that kmet does not implement yet,
@@ -345,11 +344,11 @@
             :argument-hint "<provider>"}
            {:name "logout" :description "Remove provider authentication"}]]
     (commands/register-command!
-      {:name name
-       :description description
-       :argument-hint argument-hint
-       :handler (fn [cs _]
-                  (command-not-implemented cs name))})))
+     {:name name
+      :description description
+      :argument-hint argument-hint
+      :handler (fn [cs _]
+                 (command-not-implemented cs name))})))
 
 ;; ─── Resume session ────────────────────────────────────────────────────────
 
@@ -359,7 +358,7 @@
   (let [sessions (session/list-sessions (session-dir-fn))]
     (if (empty? sessions)
       (ui/chat-history-add-message! (:chat-history cs)
-        {:role :assistant :content "No past sessions found."})
+                                    {:role :assistant :content "No past sessions found."})
       (let [items (vec (for [s sessions]
                          (let [fname (str/replace s #".*/" "")
                                short-id (subs fname 0 (min 8 (count fname)))
@@ -369,46 +368,46 @@
                             :value s})))
             sl-ref (atom nil)
             on-select-fn (fn []
-                          (when-let [sel (select-list/select-list-get-selected @sl-ref)]
-                            (let [sess (session/load-session (:value sel))
-                                  entries (session/get-branch sess)
-                                  fname (str/replace (:value sel) #".*/" "")
-                                  short-id (subs fname 0 (min 8 (count fname)))]
-                              (ui/chat-history-clear! (:chat-history cs))
-                              (reset! (:session cs) sess)
-                              (let [new-ag (assoc (:agent-state cs) :session sess)]
-                                (reset! (:agent-state cs) new-ag))
-                              (doseq [e entries]
-                                (let [role (:role e)
+                           (when-let [sel (select-list/select-list-get-selected @sl-ref)]
+                             (let [sess (session/load-session (:value sel))
+                                   entries (session/get-branch sess)
+                                   fname (str/replace (:value sel) #".*/" "")
+                                   short-id (subs fname 0 (min 8 (count fname)))]
+                               (ui/chat-history-clear! (:chat-history cs))
+                               (reset! (:session cs) sess)
+                               (let [new-ag (assoc (:agent-state cs) :session sess)]
+                                 (reset! (:agent-state cs) new-ag))
+                               (doseq [e entries]
+                                 (let [role (:role e)
                                       ;; Tool results are stored as :tool_result blocks
                                       ;; (with :content str); others as :text blocks
-                                      content (str/join
+                                       content (str/join
                                                 (keep (fn [b]
                                                         (case (:type b)
                                                           :text (:text b)
                                                           :tool_result (:content b)
                                                           nil))
                                                       (:content e)))]
-                                  (ui/chat-history-add-message! (:chat-history cs)
-                                    (merge {:role role :content content}
-                                      (when (= role :tool)
-                                        {:name (or (:name e) "tool")
-                                         :is-error (:is-error e false)
-                                         :truncation (:truncation e)
-                                         :details (:details e)})))))
-                              (ui/chat-history-add-message! (:chat-history cs)
-                                {:role :assistant
-                                 :content (str "Resumed session " short-id ".")})
-                              (tui/tui-hide-overlay (:tui cs))
-                              (update-header-footer! cs)
-                              (tui/tui-request-render (:tui cs)))))
+                                   (ui/chat-history-add-message! (:chat-history cs)
+                                                                 (merge {:role role :content content}
+                                                                        (when (= role :tool)
+                                                                          {:name (or (:name e) "tool")
+                                                                           :is-error (:is-error e false)
+                                                                           :truncation (:truncation e)
+                                                                           :details (:details e)})))))
+                               (ui/chat-history-add-message! (:chat-history cs)
+                                                             {:role :assistant
+                                                              :content (str "Resumed session " short-id ".")})
+                               (tui/tui-hide-overlay (:tui cs))
+                               (update-header-footer! cs)
+                               (tui/tui-request-render (:tui cs)))))
             sl (select-list/make-select-list items
-                 :height (min (count items) 15)
-                 :header "Resume session"
-                 :on-select on-select-fn
-                 :on-escape (fn []
-                              (tui/tui-hide-overlay (:tui cs))
-                              (tui/tui-request-render (:tui cs))))]
+                                             :height (min (count items) 15)
+                                             :header "Resume session"
+                                             :on-select on-select-fn
+                                             :on-escape (fn []
+                                                          (tui/tui-hide-overlay (:tui cs))
+                                                          (tui/tui-request-render (:tui cs))))]
         (reset! sl-ref sl)
         (tui/tui-show-overlay (:tui cs) sl :width 50 :height (min (count items) 15))
         (tui/tui-request-render (:tui cs))))))
@@ -421,50 +420,49 @@
   (let [sess (:session cs)]
     (if (nil? sess)
       (ui/chat-history-add-message! (:chat-history cs)
-        {:role :assistant :content "No active session."})
+                                    {:role :assistant :content "No active session."})
       (let [tree (session/get-tree sess)]
         (if (empty? tree)
           (ui/chat-history-add-message! (:chat-history cs)
-            {:role :assistant :content "Session is empty."})
+                                        {:role :assistant :content "Session is empty."})
           (let [flatten-tree (fn flatten-tree [nodes depth]
-                              (mapcat (fn [n]
-                                        (let [prefix (apply str (repeat depth "  "))
-                                              role-str (name (:role n))
-                                              label (str prefix role-str ": " (:summary n))]
-                                          (cons {:label label
-                                                 :value (:id n)
-                                                 :depth depth
-                                                 :entry n}
-                                                (flatten-tree (:children n) (inc depth)))))
-                                      nodes))
-                items (vec (flatten-tree tree 0))]
-            (let [sl-ref (atom nil)
-                  on-select-fn (fn []
-                                (when-let [sel (select-list/select-list-get-selected @sl-ref)]
-                                  (let [entry (:entry sel)
-                                        entry-id (:value sel)
-                                        role (:role entry)
-                                        texts (if (string? (:content entry))
-                                                [(:content entry)]
-                                                (map :text (filter #(= (:type %) :text) (:content entry))))
-                                        content (str/join texts)]
-                                    (ui/chat-history-add-message! (:chat-history cs)
-                                      (merge {:role (or role :unknown) :content content}
-                                        (when (= role :tool)
-                                          {:name (or (:name entry) "tool")})))
-                                    (tui/tui-hide-overlay (:tui cs))
-                                    (update-header-footer! cs)
-                                    (tui/tui-request-render (:tui cs)))))
-                  sl (select-list/make-select-list items
-                       :height (min (count items) 20)
-                       :header "Session tree"
-                       :on-select on-select-fn
-                       :on-escape (fn []
-                                    (tui/tui-hide-overlay (:tui cs))
-                                    (tui/tui-request-render (:tui cs))))]
-              (reset! sl-ref sl)
-              (tui/tui-show-overlay (:tui cs) sl :width 70 :height (min (count items) 20))
-              (tui/tui-request-render (:tui cs)))))))))
+                               (mapcat (fn [n]
+                                         (let [prefix (apply str (repeat depth "  "))
+                                               role-str (name (:role n))
+                                               label (str prefix role-str ": " (:summary n))]
+                                           (cons {:label label
+                                                  :value (:id n)
+                                                  :depth depth
+                                                  :entry n}
+                                                 (flatten-tree (:children n) (inc depth)))))
+                                       nodes))
+                items (vec (flatten-tree tree 0))
+                sl-ref (atom nil)
+                on-select-fn (fn []
+                               (when-let [sel (select-list/select-list-get-selected @sl-ref)]
+                                 (let [entry (:entry sel)
+                                       role (:role entry)
+                                       texts (if (string? (:content entry))
+                                               [(:content entry)]
+                                               (map :text (filter #(= (:type %) :text) (:content entry))))
+                                       content (str/join texts)]
+                                   (ui/chat-history-add-message! (:chat-history cs)
+                                                                 (merge {:role (or role :unknown) :content content}
+                                                                        (when (= role :tool)
+                                                                          {:name (or (:name entry) "tool")})))
+                                   (tui/tui-hide-overlay (:tui cs))
+                                   (update-header-footer! cs)
+                                   (tui/tui-request-render (:tui cs)))))
+                sl (select-list/make-select-list items
+                                                 :height (min (count items) 20)
+                                                 :header "Session tree"
+                                                 :on-select on-select-fn
+                                                 :on-escape (fn []
+                                                              (tui/tui-hide-overlay (:tui cs))
+                                                              (tui/tui-request-render (:tui cs))))]
+            (reset! sl-ref sl)
+            (tui/tui-show-overlay (:tui cs) sl :width 70 :height (min (count items) 20))
+            (tui/tui-request-render (:tui cs))))))))
 
 ;; ─── Animation timer ────────────────────────────────────────────────────────
 ;; Drives re-renders while the agent turn is running, so the separate
@@ -496,8 +494,9 @@
 
 ;; ─── Agent response handler ────────────────────────────────────────────────
 
-(defn- on-agent-text [cs text]
+(defn- on-agent-text
   "Called for each text delta from the LLM during streaming."
+  [cs text]
   (try
     (ui/chat-history-append-streaming-text! (:chat-history cs) text)
     (tui/tui-request-render (:tui cs))
@@ -505,8 +504,9 @@
       (debug/log "on-agent-text callback: " e)
       (binding [*out* *err*] (println "on-agent-text error:" (ex-message e) (.getClass e))))))
 
-(defn- on-agent-thinking [cs text]
+(defn- on-agent-thinking
   "Called for each thinking/reasoning delta from the LLM during streaming."
+  [cs text]
   (try
     (ui/chat-history-append-thinking-text! (:chat-history cs) text)
     (tui/tui-request-render (:tui cs))
@@ -514,10 +514,11 @@
       (debug/log "on-agent-thinking callback: " e)
       (binding [*out* *err*] (println "on-agent-thinking error:" (ex-message e) (.getClass e))))))
 
-(defn- on-agent-done [cs]
+(defn- on-agent-done
   "Called when the LLM turn completes.
    Finalize streaming FIRST (captures thinking text), then clear thinking.
    Session persistence is handled by the agent loop internally."
+  [cs]
   (try
     (stop-anim-timer! cs)
     (ui/status-indicator-stop! (:status-indicator cs))
@@ -531,8 +532,9 @@
       (debug/log "on-agent-done callback: " e)
       (binding [*out* *err*] (println "on-agent-done error:" (ex-message e) (.getClass e))))))
 
-(defn- on-agent-error [cs error-msg]
+(defn- on-agent-error
   "Called when an error occurs during the agent turn."
+  [cs error-msg]
   (try
     (stop-anim-timer! cs)
     (ui/status-indicator-stop! (:status-indicator cs))
@@ -548,7 +550,7 @@
         (do (ui/chat-history-finalize-streaming! ch)
             (ui/chat-history-finalize-thinking! ch))))
     (ui/chat-history-add-message! (:chat-history cs)
-      {:role :assistant :content (th/fg th/dark-theme :error (str "Error: " error-msg))})
+                                  {:role :assistant :content (th/fg th/dark-theme :error (str "Error: " error-msg))})
     (reset! (:running-turn? cs) false)
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))
@@ -566,45 +568,41 @@
    Pi: handleBashCommand() in interactive-mode.ts"
   [cs command exclude-from-context?]
   (debug/log "bash command: " command " (exclude-context: " exclude-from-context? ")")
-  
+
   (if @(:bash-running? cs)
     (do
       (debug/log "bash: already running, ignoring")
       (ui/show-warning! (:chat-history cs)
-        "A bash command is already running. Press Escape to cancel it first."))
+                        "A bash command is already running. Press Escape to cancel it first."))
     (do
       (reset! (:bash-signal cs) false)
       (reset! (:bash-running? cs) true)
-      
+
       ;; Create the UI component
       (let [bash-comp (be/make-bash-execution
-                        :command command
-                        :exclude-from-context? exclude-from-context?
-                        :theme (cfg/get-theme (:config cs)))
-            
+                       :command command
+                       :exclude-from-context? exclude-from-context?
+                       :theme (cfg/get-theme (:config cs)))
+
             ;; ── Build session env (pi: resolveSpawnContext) ─────────────
             ag (:agent-state cs)
             session-env
-            (let [m (transient {})]
-              (when-let [sess (:session cs)]
-                (assoc! m "KMET_SESSION_ID" (:id sess)))
-              (assoc! m "KMET_PROVIDER" (name @(:provider ag)))
-              (assoc! m "KMET_MODEL" @(:model ag))
-              (when-let [tl @(:thinking ag)]
-                (when-not (= tl :off)
-                  (assoc! m "KMET_REASONING_LEVEL" (name tl))))
-              (persistent! m))
-            
+            (let [tl @(:thinking ag)]
+              (cond-> {"KMET_PROVIDER" (name @(:provider ag))
+                       "KMET_MODEL" @(:model ag)}
+                (:session cs) (assoc "KMET_SESSION_ID" (:id (:session cs)))
+                (and tl (not= tl :off)) (assoc "KMET_REASONING_LEVEL" (name tl))))
+
             ;; ── Emit user-bash event for extensions (pi: emitUserBash) ──
             _ (event-bus/emit-event!
-                {:type :user-bash
-                 :command command
-                 :exclude-from-context? exclude-from-context?
-                 :cwd (System/getProperty "user.dir")})
-            
+               {:type :user-bash
+                :command command
+                :exclude-from-context? exclude-from-context?
+                :cwd (System/getProperty "user.dir")})
+
             ;; ── Spawn hook (pi: BashSpawnHook) — extensions can modify command ──
             spawn-hook nil]
-        
+
         ;; Add to chat (or pending container if agent is streaming)
         ;; Pi: pendingMessagesContainer sits between chat and footer
         (if @(:running-turn? cs)
@@ -612,37 +610,37 @@
             (container/container-add-child (:pending-bash-container cs) bash-comp)
             (swap! (:pending-bash-components cs) conj bash-comp))
           (ui/chat-history-add-message! (:chat-history cs)
-            {:role :bash :command command
-             :component bash-comp}))
-        
+                                        {:role :bash :command command
+                                         :component bash-comp}))
+
         (update-header-footer! cs)
         (tui/tui-request-render (:tui cs))
-        
+
         ;; Execute in background
         (future
           (try
             (let [result (bash-exec/execute-bash
-                           {:command command
-                            :cwd (System/getProperty "user.dir")
-                            :env session-env
-                            :on-chunk (fn [chunk]
-                                        (be/bash-execution-append-output! bash-comp chunk)
-                                        (tui/tui-request-render (:tui cs)))
-                            :signal (:bash-signal cs)
-                            :spawn-hook spawn-hook
-                            :timeout 300})
+                          {:command command
+                           :cwd (System/getProperty "user.dir")
+                           :env session-env
+                           :on-chunk (fn [chunk]
+                                       (be/bash-execution-append-output! bash-comp chunk)
+                                       (tui/tui-request-render (:tui cs)))
+                           :signal (:bash-signal cs)
+                           :spawn-hook spawn-hook
+                           :timeout 300})
                   {:keys [exit-code cancelled truncated full-output-path]} result]
               (debug/log "bash done: exit=" exit-code " cancelled=" cancelled " truncated=" truncated)
-              
+
               ;; Mark complete on component (pi: truncation metadata from the executor)
               (be/bash-execution-set-complete! bash-comp exit-code cancelled
-                :truncation (:truncation result)
-                :full-output-path full-output-path)
-              
+                                               :truncation (:truncation result)
+                                               :full-output-path full-output-path)
+
               ;; Record in session
               (when-let [sess (:session cs)]
                 (session/record-bash-result! sess command result exclude-from-context?))
-              
+
               ;; Move pending bash from pending container to chat (pi: pendingMessagesContainer)
               (when @(:running-turn? cs)
                 (let [pending (:pending-bash-components cs)]
@@ -650,13 +648,13 @@
                     (doseq [comp @pending]
                       (container/container-remove-child (:pending-bash-container cs) comp)
                       (ui/chat-history-add-message! (:chat-history cs)
-                        {:role :bash :command command :component comp}))
+                                                    {:role :bash :command command :component comp}))
                     (reset! pending []))))
-              
+
               (reset! (:bash-running? cs) false)
               (update-header-footer! cs)
               (tui/tui-request-render (:tui cs)))
-            
+
             (catch Exception e
               (let [err-msg (or (ex-message e) "Unknown error")]
                 (debug/log "bash command error: " e)
@@ -682,7 +680,7 @@
       (ui/chat-history-finalize-streaming! (:chat-history cs))
       (ui/chat-history-finalize-thinking! (:chat-history cs))
       (ui/chat-history-add-message! (:chat-history cs)
-        {:role :user :content text})
+                                    {:role :user :content text})
       (agent/steer! (:agent-state cs) text)
       (update-header-footer! cs)
       (tui/tui-request-render (:tui cs)))
@@ -692,17 +690,17 @@
       (start-anim-timer! cs)
       (debug/log "user submitted: " text)
       (ui/chat-history-add-message! (:chat-history cs)
-        {:role :user :content text})
+                                    {:role :user :content text})
       ;; Create streaming placeholder for incoming LLM response.
       (ui/chat-history-start-streaming! (:chat-history cs))
       (update-header-footer! cs)
       (tui/tui-request-render (:tui cs))
       (agent/run-agent-turn (:agent-state cs)
-        {:message text
-         :on-text #(on-agent-text cs %)
-         :on-thinking #(on-agent-thinking cs %)
-         :on-done (fn [_] (on-agent-done cs))
-         :on-error #(on-agent-error cs %)}))))
+                            {:message text
+                             :on-text #(on-agent-text cs %)
+                             :on-thinking #(on-agent-thinking cs %)
+                             :on-done (fn [_] (on-agent-done cs))
+                             :on-error #(on-agent-error cs %)}))))
 
 (defn- apply-hooks
   "Run extension input hooks on text; returns the (possibly transformed)
@@ -710,7 +708,7 @@
    event)."
   [cs text]
   (let [input (extensions/apply-input-hooks text :interactive
-                 {:streaming-behavior (when @(:running-turn? cs) :steer)})]
+                                            {:streaming-behavior (when @(:running-turn? cs) :steer)})]
     (if (= :handled (:action input))
       (do (debug/log "input handled by extension: " text) nil)
       (if (contains? input :text) (:text input) text))))
@@ -738,12 +736,12 @@
                 (update-header-footer! cs))
             ;; pi: input hooks → skill command → prompt template → fall
             ;; through to the agent (unknown /cmd is sent as a message)
-            (if-let [text (apply-hooks cs trimmed)]
+            (when-let [text (apply-hooks cs trimmed)]
               (send-message cs
-                (-> text
-                    (skills/expand-skill-command)
-                    (prompts/expand-prompt-template (prompts/get-prompt-templates)))))))
-        
+                            (-> text
+                                (skills/expand-skill-command)
+                                (prompts/expand-prompt-template (prompts/get-prompt-templates)))))))
+
         ;; Bash command (! or !!)
         (str/starts-with? trimmed "!")
         (let [exclude-from-context? (str/starts-with? trimmed "!!")
@@ -751,12 +749,12 @@
           (when (seq command)
             (if @(:bash-running? cs)
               (ui/chat-history-add-message! (:chat-history cs)
-                {:role :assistant :content "A bash command is already running. Cancel it first."})
+                                            {:role :assistant :content "A bash command is already running. Cancel it first."})
               (do
                 (editor/editor-push-history! (:editor cs) trimmed)
                 (editor/editor-set-text! (:editor cs) "")
                 (handle-bash-command cs command exclude-from-context?)))))
-        
+
         ;; Regular message — agent loop handles session persistence.
         ;; Input hooks (pi: input extension event) run first: a hook can
         ;; consume the input ({:action :handled}) or rewrite it
@@ -766,8 +764,9 @@
         :else
         (submit-message cs trimmed)))))
 
-(defn- handle-cancel [cs]
+(defn- handle-cancel
   "Cancel the current agent turn or bash command."
+  [cs]
   (when @(:bash-running? cs)
     (debug/log "bash command cancelled by user")
     (reset! (:bash-signal cs) true)
@@ -787,7 +786,7 @@
           (do (ui/chat-history-remove-last! ch) (reset! (:streaming-atom ch) nil))
           (do (ui/chat-history-finalize-streaming! ch) (ui/chat-history-finalize-thinking! ch)))))
     (ui/chat-history-add-message! (:chat-history cs)
-      {:role :assistant :content (th/dim "(cancelled)")})
+                                  {:role :assistant :content (th/dim "(cancelled)")})
     (reset! (:running-turn? cs) false)
     (update-header-footer! cs)
     (tui/tui-request-render (:tui cs))))
@@ -808,7 +807,7 @@
                     "/tmp")
         _ (fs/create-dirs tmp-dir)
         tmp-file (str (fs/create-temp-file
-                        {:prefix "kmet-editor-" :suffix ".md" :dir tmp-dir}))]
+                       {:prefix "kmet-editor-" :suffix ".md" :dir tmp-dir}))]
     ;; suspend is inside the try so the finally always resumes the TUI
     (try
       (tui/tui-suspend! (:tui cs))
@@ -828,9 +827,9 @@
                      (catch Exception e
                        (debug/log "external editor error: " e)
                        (ui/chat-history-add-message! (:chat-history cs)
-                         {:role :assistant
-                          :content (str "External editor failed to start: "
-                                        (ex-message e))})
+                                                     {:role :assistant
+                                                      :content (str "External editor failed to start: "
+                                                                    (ex-message e))})
                        :error))]
         (when (= result :ok)
           (let [new-content (try (slurp tmp-file) (catch Exception _ nil))]
@@ -866,17 +865,17 @@
         _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
             (prompts/load-prompt-templates-from-dir d))
         system-prompt (skills/build-system-prompt
-                        :custom-prompt (cfg/get-custom-prompt config)
-                        :append-prompt (cfg/get-append-system-prompt config)
-                        :context-files (context/load-project-context-files
-                                         (cfg/get-agent-dir) (str (fs/cwd))))
+                       :custom-prompt (cfg/get-custom-prompt config)
+                       :append-prompt (cfg/get-append-system-prompt config)
+                       :context-files (context/load-project-context-files
+                                       (cfg/get-agent-dir) (str (fs/cwd))))
 
         ;; Initialize keybindings (global singleton for key-hint + input handling)
         _ (let [kmgr (app-kb/make-agent-keybindings-manager)]
-          (tui-kb/set-global-keybindings! kmgr)
-          (app-kb/set-key-hint-theme-fns!
-            #(th/dim %)
-            #(th/fg (cfg/get-theme config) :muted %)))
+            (tui-kb/set-global-keybindings! kmgr)
+            (app-kb/set-key-hint-theme-fns!
+             #(th/dim %)
+             #(th/fg (cfg/get-theme config) :muted %)))
 
         ;; Components (define before agent state so on-event can reference them)
         hdr (text/make-text "" 1 0)
@@ -887,98 +886,98 @@
 
         ;; Agent state
         ag (agent/make-agent-state
-             :model model
-             :provider provider
-             :system system-prompt
-             :session session
-             :compact-threshold (:compact-threshold config)
-             :compact-token-threshold (:compact-token-threshold config)
-             :keep-recent-tokens (or (:keep-recent-tokens config) 20000)
-             :thinking (:thinking config :off)
-             :on-event (fn [evt]
-                         (case (:type evt)
-                           :tool-execution-start
+            :model model
+            :provider provider
+            :system system-prompt
+            :session session
+            :compact-threshold (:compact-threshold config)
+            :compact-token-threshold (:compact-token-threshold config)
+            :keep-recent-tokens (or (:keep-recent-tokens config) 20000)
+            :thinking (:thinking config :off)
+            :on-event (fn [evt]
+                        (case (:type evt)
+                          :tool-execution-start
                            ;; Pi: create pending component once, update in place
-                           (let [msg {:role :tool
-                                      :name (:tool-name evt)
-                                      :args (:args evt {})
-                                      :content ""
-                                      :is-error false}]
-                             (ui/chat-history-finalize-streaming! ch)
-                             (let [comp (ui/chat-history-add-message! ch msg)]
+                          (let [msg {:role :tool
+                                     :name (:tool-name evt)
+                                     :args (:args evt {})
+                                     :content ""
+                                     :is-error false}]
+                            (ui/chat-history-finalize-streaming! ch)
+                            (let [comp (ui/chat-history-add-message! ch msg)]
                                ;; Wire invalidate → TUI re-render
-                               (ui/tool-execution-set-request-render-fn! comp
-                                 #(tui/tui-request-render t))
+                              (ui/tool-execution-set-request-render-fn! comp
+                                                                        #(tui/tui-request-render t))
                                ;; Store tool call ID for correlation
-                               (ui/tool-execution-set-tool-call-id! comp (:tool-call-id evt))
+                              (ui/tool-execution-set-tool-call-id! comp (:tool-call-id evt))
                                ;; Args are complete when received (kmet: no streaming args)
-                               (ui/tool-execution-set-args-complete! comp)
+                              (ui/tool-execution-set-args-complete! comp)
                                ;; Mark execution started so pending bg + timer activate now
-                               (ui/tool-execution-mark-execution-started! comp)
-                               (reset! pending-tool-comp comp))
-                             (tui/tui-request-render t))
-                           :tool-execution-update
+                              (ui/tool-execution-mark-execution-started! comp)
+                              (reset! pending-tool-comp comp))
+                            (tui/tui-request-render t))
+                          :tool-execution-update
                            ;; Pi: live partial content from streaming tools (bash),
                            ;; plus periodic pings that update the elapsed timer
-                           (do (when-let [comp @pending-tool-comp]
-                                 (when-let [content (:content evt)]
-                                   (ui/tool-execution-set-content! comp content)))
-                               (tui/tui-request-render t))
-                           :tool-execution-end
+                          (do (when-let [comp @pending-tool-comp]
+                                (when-let [content (:content evt)]
+                                  (ui/tool-execution-set-content! comp content)))
+                              (tui/tui-request-render t))
+                          :tool-execution-end
                            ;; Pi: update the existing component in place
-                           (when-let [comp @pending-tool-comp]
-                             (let [result (:result evt)]
-                               (ui/tool-execution-set-content! comp (:content result))
-                               (ui/tool-execution-set-error! comp (:is-error result false))
-                               (when-let [truncation (:truncation result)]
-                                 (ui/tool-execution-set-truncation! comp truncation))
-                               (when-let [details (:details result)]
-                                 (ui/tool-execution-set-details! comp details))
-                               (when-let [images (:images result)]
-                                 (ui/tool-execution-set-images! comp images))
-                               (reset! pending-tool-comp nil)
-                               (tui/tui-request-render t)))
-                           :status
+                          (when-let [comp @pending-tool-comp]
+                            (let [result (:result evt)]
+                              (ui/tool-execution-set-content! comp (:content result))
+                              (ui/tool-execution-set-error! comp (:is-error result false))
+                              (when-let [truncation (:truncation result)]
+                                (ui/tool-execution-set-truncation! comp truncation))
+                              (when-let [details (:details result)]
+                                (ui/tool-execution-set-details! comp details))
+                              (when-let [images (:images result)]
+                                (ui/tool-execution-set-images! comp images))
+                              (reset! pending-tool-comp nil)
+                              (tui/tui-request-render t)))
+                          :status
                            ;; Pi: agent status (thinking/executing/idle/error) drives the
                            ;; header/footer status text — kept in sync via the :status event
                            ;; so the yellow "● thinking" / "● executing" indicator appears
                            ;; while the agent is working.
-                           (do (when-let [cs @cs-ref]
-                                 (update-header-footer! cs))
-                               (tui/tui-request-render t))
-                           :auto-retry-start
+                          (do (when-let [cs @cs-ref]
+                                (update-header-footer! cs))
+                              (tui/tui-request-render t))
+                          :auto-retry-start
                            ;; Clear partial streaming text so the retried stream starts fresh
-                           (ui/chat-history-clear-streaming! ch)
-                           (tui/tui-request-render t)
-                           :context-replaced
+                          (ui/chat-history-clear-streaming! ch)
+                          (tui/tui-request-render t)
+                          :context-replaced
                            ;; Rebuild the chat history to mirror the replaced context
-                           (ui/chat-history-rebuild! ch (:messages evt))
-                           (tui/tui-request-render t)
-                           :message-start
+                          (ui/chat-history-rebuild! ch (:messages evt))
+                          (tui/tui-request-render t)
+                          :message-start
                            ;; before-agent-start injected messages (role :info)
                            ;; display as labeled info boxes above the incoming
                            ;; response; user/assistant message-starts are
                            ;; already mirrored by the UI. Content is normalized
                            ;; from text blocks to a string for the info box.
-                           (when (= :info (:role (:message evt)))
-                             (let [m (:message evt)
-                                   text (if (string? (:content m))
-                                          (:content m)
-                                          (str/join
-                                            (for [b (:content m)
-                                                  :when (= :text (:type b))]
-                                              (:text b))))]
-                               (ui/chat-history-insert-before-streaming! ch
-                                 (assoc m :content text))
-                               (tui/tui-request-render t)))
-                           nil)))
+                          (when (= :info (:role (:message evt)))
+                            (let [m (:message evt)
+                                  text (if (string? (:content m))
+                                         (:content m)
+                                         (str/join
+                                          (for [b (:content m)
+                                                :when (= :text (:type b))]
+                                            (:text b))))]
+                              (ui/chat-history-insert-before-streaming! ch
+                                                                        (assoc m :content text))
+                              (tui/tui-request-render t)))
+                          nil)))
         _ (when (seq (:models config))
             ;; Scoped model list for cycle-model! (pi: _scopedModels)
             (agent/set-models! ag (:models config)))
         sp2 (spacer/make-spacer 1)
         ed (tui/make-editor :height 8 :padding-x 0
-            :terminal-rows (fn [] (term/rows @(:terminal t)))
-            :border-fn (fn [c] (th/dim c)))
+                            :terminal-rows (fn [] (term/rows @(:terminal t)))
+                            :border-fn (fn [c] (th/dim c)))
         sp3 (spacer/make-spacer 1)
         ftr (ui/make-footer :status "" :n-msgs 0 :theme (cfg/get-theme config))
 
@@ -1013,11 +1012,11 @@
     ;; Autocomplete provider: slash commands + prompt templates + skill
     ;; commands + file paths
     (editor/editor-set-autocomplete-provider! ed
-      (ac/make-combined-provider
-        :commands-fn #(vec (concat (commands/get-commands)
-                                   (prompts/as-command-maps (prompts/get-prompt-templates))
-                                   (skills/as-command-maps (skills/get-skills))))
-        :base-path (System/getProperty "user.dir")))
+                                              (ac/make-combined-provider
+                                               :commands-fn #(vec (concat (commands/get-commands)
+                                                                          (prompts/as-command-maps (prompts/get-prompt-templates))
+                                                                          (skills/as-command-maps (skills/get-skills))))
+                                               :base-path (System/getProperty "user.dir")))
     (editor/editor-set-autocomplete-theme! ed (th/get-select-list-theme (cfg/get-theme config)))
 
     ;; Status indicator (Pi-style: separate layer between chat and editor)
@@ -1038,59 +1037,59 @@
 
       ;; Wire editor submit
       (editor/editor-set-on-submit! ed
-        (fn [text]
-          (when text
-            (handle-submit cs text)
-            (editor/editor-set-text! ed "")
-            (tui/tui-request-render t))))
+                                    (fn [text]
+                                      (when text
+                                        (handle-submit cs text)
+                                        (editor/editor-set-text! ed "")
+                                        (tui/tui-request-render t))))
 
       ;; Editor actions (pi: CustomEditor.onAction) — app keybindings dispatched
       ;; through the editor's action system, which also checks the autocomplete
       ;; dropdown state (e.g. escape closes the dropdown instead of cancelling)
       (editor/editor-set-on-action! ed "app.interrupt"
         ;; pi: onEscape — abort the running agent turn or bash command
-        (fn [] (handle-cancel cs)))
+                                    (fn [] (handle-cancel cs)))
       (editor/editor-set-on-action! ed "app.exit"
-        (fn [] (tui/tui-stop t)))
+                                    (fn [] (tui/tui-stop t)))
       ;; pi: handleCtrlC — single ctrl+c clears the editor, double within
       ;; 500ms quits
       (let [last-ctrl-c (atom 0)]
         (editor/editor-set-on-action! ed "app.clear"
-          (fn []
-            (let [now (System/currentTimeMillis)]
-              (if (< (- now @last-ctrl-c) 500)
-                (tui/tui-stop t)
-                (do (reset! last-ctrl-c now)
-                    (editor/editor-set-text! ed "")
-                    (tui/tui-request-render t)))))))
+                                      (fn []
+                                        (let [now (System/currentTimeMillis)]
+                                          (if (< (- now @last-ctrl-c) 500)
+                                            (tui/tui-stop t)
+                                            (do (reset! last-ctrl-c now)
+                                                (editor/editor-set-text! ed "")
+                                                (tui/tui-request-render t)))))))
       (editor/editor-set-on-action! ed "app.tools.expand"
-        (fn []
+                                    (fn []
           ;; pi: showStatus feedback on toggle
-          (let [expanded? (ui/chat-history-toggle-tool-expanded! ch)]
-            (ui/chat-history-show-status! ch
-              (str "Tool output: " (if expanded? "expanded" "collapsed")))
-            (update-header-footer! cs)
-            (tui/tui-request-render t))))
+                                      (let [expanded? (ui/chat-history-toggle-tool-expanded! ch)]
+                                        (ui/chat-history-show-status! ch
+                                                                      (str "Tool output: " (if expanded? "expanded" "collapsed")))
+                                        (update-header-footer! cs)
+                                        (tui/tui-request-render t))))
       (editor/editor-set-on-action! ed "app.thinking.toggle"
-        (fn []
+                                    (fn []
           ;; pi: showStatus feedback on toggle
-          (let [hidden? (ui/chat-history-toggle-thinking-hidden! ch)]
-            (ui/chat-history-show-status! ch
-              (str "Thinking blocks: " (if hidden? "hidden" "visible")))
-            (update-header-footer! cs)
-            (tui/tui-request-render t))))
+                                      (let [hidden? (ui/chat-history-toggle-thinking-hidden! ch)]
+                                        (ui/chat-history-show-status! ch
+                                                                      (str "Thinking blocks: " (if hidden? "hidden" "visible")))
+                                        (update-header-footer! cs)
+                                        (tui/tui-request-render t))))
       (editor/editor-set-on-action! ed "app.editor.external"
-        (fn [] (handle-external-editor cs)))
+                                    (fn [] (handle-external-editor cs)))
 
       ;; Global input listeners — only truly global keys stay here (pi: keep
       ;; app actions in the editor; the TUI keeps only global keys)
       (tui/tui-add-input-listener t
-        (fn [data]
-          (cond
-            (keys/matches-key? data (keys/ctrl "l"))
-            (do (term/clear-screen! @(:terminal t))
-                (tui/tui-request-render t))
-            :else nil)))
+                                  (fn [data]
+                                    (cond
+                                      (keys/matches-key? data (keys/ctrl "l"))
+                                      (do (term/clear-screen! @(:terminal t))
+                                          (tui/tui-request-render t))
+                                      :else nil)))
 
       ;; Initialize header/footer
       (text/text-set! hdr (fmt-header cs))
@@ -1118,10 +1117,10 @@
                       "  " (th/dim "!!") " — bash (no context)\n\n"
                       (th/dim "Type a message, or use /help for all commands."))]
         (ui/chat-history-set-info-msg! ch
-          {:label "kmet"
-           :content compact
-           :collapsed-content compact
-           :expanded-content full}))
+                                       {:label "kmet"
+                                        :content compact
+                                        :collapsed-content compact
+                                        :expanded-content full}))
 
       cs)))
 

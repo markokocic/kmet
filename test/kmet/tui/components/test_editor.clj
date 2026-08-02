@@ -148,8 +148,6 @@
     (core/handle-input e (ctrl 25))  ;; ctrl+y = yank
     (t/is (= "hello" (editor/editor-get-text e)))))
 
-
-
 ;; ─── Submit ───────────────────────────────────────────────────────────────
 
 (t/deftest test-editor-submit
@@ -235,10 +233,10 @@
       (t/is (str/ends-with? (last lines) "───")))))
 
 (t/deftest test-editor-render-empty
-  (let [e (editor/make-editor :height 3)]
-    (let [lines (core/render e 20)]
-      (t/is (pos? (count lines)))
-      (t/is (> (count lines) 1)))))
+  (let [e (editor/make-editor :height 3)
+        lines (core/render e 20)]
+    (t/is (pos? (count lines)))
+    (t/is (> (count lines) 1))))
 
 ;; ─── Text length ──────────────────────────────────────────────────────────
 
@@ -285,8 +283,6 @@
     (doseq [c "hello"] (core/handle-input e (str c)))
     (core/handle-input e (ctrl 11))
     (t/is (= "hello" (editor/editor-get-text e)))))
-
-
 
 ;; ─── Regression: grapheme operations with cached BreakIterator ───────────
 
@@ -522,9 +518,9 @@
   []
   (let [e (editor/make-editor)]
     (core/editor-set-autocomplete-provider! e
-      (ac/make-combined-provider
-        :commands-fn (constantly ac-commands)
-        :base-path ac-test-dir))
+                                            (ac/make-combined-provider
+                                             :commands-fn (constantly ac-commands)
+                                             :base-path ac-test-dir))
     e))
 
 (t/deftest test-autocomplete-tab-without-provider-inserts-spaces
@@ -625,7 +621,7 @@
    (app.interrupt, app.exit, app.tools.expand, ...) resolve to keys."
   []
   (editor/make-editor
-    :keybindings (app-kb/make-agent-keybindings-manager)))
+   :keybindings (app-kb/make-agent-keybindings-manager)))
 
 (t/deftest test-editor-action-register
   (let [e (editor/make-editor)
@@ -634,7 +630,7 @@
     (t/is (= 1 (count @(:action-handlers e))))
     (t/is (fn? (get @(:action-handlers e) "app.clear")))
     ;; Replace
-    (editor/editor-set-on-action! e "app.clear" (fn [] (swap! called inc 2)))
+    (editor/editor-set-on-action! e "app.clear" (fn [] (swap! called inc)))
     (t/is (= 1 (count @(:action-handlers e))))
     (editor/editor-set-on-action! e "app.clear" nil)
     (t/is (empty? @(:action-handlers e)))))
@@ -681,9 +677,9 @@
   (let [e (make-action-editor)
         cancelled (atom 0)]
     (core/editor-set-autocomplete-provider! e
-      (ac/make-combined-provider
-        :commands-fn (constantly ac-commands)
-        :base-path ac-test-dir))
+                                            (ac/make-combined-provider
+                                             :commands-fn (constantly ac-commands)
+                                             :base-path ac-test-dir))
     (editor/editor-set-on-action! e "app.interrupt" (fn [] (swap! cancelled inc)))
     (core/handle-input e "/")
     (t/is (= :regular @(:autocomplete-state e)))

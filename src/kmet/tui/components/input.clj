@@ -1,12 +1,11 @@
 (ns kmet.tui.components.input
   "Single-line text input with horizontal scrolling and cursor.
    Port of @earendil-works/pi-tui Input."
-  (:require [kmet.tui.protocols :as protocols]
+  (:require [clojure.string :as str]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as u]
             [kmet.tui.components.editing :as edit]))
-
-
 
 ;; ─── Grapheme helpers and kill ring ──────────────────────────────────────
 ;; Imported from kmet.tui.components.editing
@@ -54,7 +53,7 @@
       (undo-push (:undo-stack input) {:value value :cursor cursor})
       (let [glen (edit/grapheme-left value cursor)]
         (reset! (:value-atom input)
-          (str (subs value 0 glen) (subs value cursor)))
+                (str (subs value 0 glen) (subs value cursor)))
         (reset! (:cursor-atom input) glen)))))
 
 (defn- handle-forward-delete [input]
@@ -65,7 +64,7 @@
       (undo-push (:undo-stack input) {:value value :cursor cursor})
       (let [nxt (edit/grapheme-right value cursor)]
         (reset! (:value-atom input)
-          (str (subs value 0 cursor) (subs value nxt)))))))
+                (str (subs value 0 cursor) (subs value nxt)))))))
 
 (defn- delete-to-line-start [input]
   (let [value @(:value-atom input)
@@ -74,7 +73,7 @@
       (undo-push (:undo-stack input) {:value value :cursor cursor})
       (let [deleted (subs value 0 cursor)]
         (edit/kill-ring-push (:kill-ring input) deleted :prepend true
-                        :accumulate (= @(:last-action input) :kill))
+                             :accumulate (= @(:last-action input) :kill))
         (reset! (:last-action input) :kill)
         (reset! (:value-atom input) (subs value cursor))
         (reset! (:cursor-atom input) 0)))))
@@ -86,7 +85,7 @@
       (undo-push (:undo-stack input) {:value value :cursor cursor})
       (let [deleted (subs value cursor)]
         (edit/kill-ring-push (:kill-ring input) deleted :prepend false
-                        :accumulate (= @(:last-action input) :kill))
+                             :accumulate (= @(:last-action input) :kill))
         (reset! (:last-action input) :kill)
         (reset! (:value-atom input) (subs value 0 cursor))))))
 
@@ -97,14 +96,14 @@
       (let [was-kill (= @(:last-action input) :kill)]
         (undo-push (:undo-stack input) {:value value :cursor cursor})
         (let [old-cursor cursor
-              new-cursor (edit/word-boundary-left value cursor)]
-          (let [deleted (subs value new-cursor old-cursor)]
-            (edit/kill-ring-push (:kill-ring input) deleted :prepend true
-                            :accumulate was-kill)
-            (reset! (:last-action input) :kill)
-            (reset! (:value-atom input)
-              (str (subs value 0 new-cursor) (subs value old-cursor)))
-            (reset! (:cursor-atom input) new-cursor)))))))
+              new-cursor (edit/word-boundary-left value cursor)
+              deleted (subs value new-cursor old-cursor)]
+          (edit/kill-ring-push (:kill-ring input) deleted :prepend true
+                               :accumulate was-kill)
+          (reset! (:last-action input) :kill)
+          (reset! (:value-atom input)
+                  (str (subs value 0 new-cursor) (subs value old-cursor)))
+          (reset! (:cursor-atom input) new-cursor))))))
 
 (defn- delete-word-forward [input]
   (let [value @(:value-atom input)
@@ -113,13 +112,13 @@
       (let [was-kill (= @(:last-action input) :kill)]
         (undo-push (:undo-stack input) {:value value :cursor cursor})
         (let [old-cursor cursor
-              new-cursor (edit/word-boundary-right value cursor)]
-          (let [deleted (subs value old-cursor new-cursor)]
-            (edit/kill-ring-push (:kill-ring input) deleted :prepend false
-                            :accumulate was-kill)
-            (reset! (:last-action input) :kill)
-            (reset! (:value-atom input)
-              (str (subs value 0 old-cursor) (subs value new-cursor)))))))))
+              new-cursor (edit/word-boundary-right value cursor)
+              deleted (subs value old-cursor new-cursor)]
+          (edit/kill-ring-push (:kill-ring input) deleted :prepend false
+                               :accumulate was-kill)
+          (reset! (:last-action input) :kill)
+          (reset! (:value-atom input)
+                  (str (subs value 0 old-cursor) (subs value new-cursor))))))))
 
 (defn- yank-action [input]
   (let [value @(:value-atom input)
@@ -155,7 +154,7 @@
 (defn- render-line
   "Render a single line of input with cursor marker at cursor position.
    Returns the line string WITHOUT the prompt."
-  [value cursor focused? scrolled?]
+  [value cursor focused? _scrolled?]
   (let [at-end? (>= cursor (count value))
         at-char (if at-end? " " (edit/grapheme-at value cursor))
         char-len (count at-char)

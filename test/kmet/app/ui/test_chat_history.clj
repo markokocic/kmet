@@ -1,5 +1,6 @@
 (ns kmet.app.ui.test-chat-history
-  (:require [clojure.test :as t :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
             [kmet.tui.theme :as theme]
             [kmet.app.ui :as ui]
@@ -8,8 +9,9 @@
 (defn- strip-ansi [s]
   (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))
 
-(defn- plain-lines [component width]
+(defn- plain-lines
   "Render component and strip ANSI codes for easier testing."
+  [component width]
   (mapv strip-ansi (core/render component width)))
 
 (deftest test-create
@@ -54,7 +56,7 @@
   (testing "render a tool message with Pi-style box"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-add-message! ch
-        {:role :tool :name "my-tool" :content "file contents" :is-error false})
+                                    {:role :tool :name "my-tool" :content "file contents" :is-error false})
       (let [lines (plain-lines ch 40)]
         (is (pos? (count lines)))
         (is (some #(re-find #"my-tool" %) lines))
@@ -64,7 +66,7 @@
   (testing "render a tool error message with Pi-style box"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-add-message! ch
-        {:role :tool :name "my-tool" :content "command not found" :is-error true})
+                                    {:role :tool :name "my-tool" :content "command not found" :is-error true})
       (let [lines (plain-lines ch 40)]
         (is (pos? (count lines)))
         (is (some #(re-find #"my-tool" %) lines))
@@ -188,8 +190,6 @@
       (is (= 1 (count (ch/chat-history-get-messages ch))))
       (is (= "first" (:content (first (ch/chat-history-get-messages ch))))))))
 
-
-
 (deftest test-rebuild
   (testing "rebuild replaces all messages and preserves the info banner"
     (let [ch (ch/make-chat-history)
@@ -219,7 +219,7 @@
       (ch/chat-history-start-streaming! ch)
       (ch/chat-history-append-streaming-text! ch "response")
       (ch/chat-history-insert-before-streaming! ch
-        {:role :info :label "ext" :content "injected note"})
+                                                {:role :info :label "ext" :content "injected note"})
       (let [msgs (ch/chat-history-get-messages ch)]
         (is (= 3 (count msgs)))
         (is (= :user (:role (nth msgs 0))))
@@ -231,7 +231,7 @@
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-add-message! ch {:role :user :content "hi"})
       (ch/chat-history-insert-before-streaming! ch
-        {:role :info :label "ext" :content "note"})
+                                                {:role :info :label "ext" :content "note"})
       (let [msgs (ch/chat-history-get-messages ch)]
         (is (= 2 (count msgs)))
         (is (= :info (:role (nth msgs 1))))))))
@@ -240,7 +240,7 @@
   (testing "block-vector user content renders as plain text, not a literal vector"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-add-message! ch
-        {:role :user :content [{:type :text :text "hi there"}]})
+                                    {:role :user :content [{:type :text :text "hi there"}]})
       (let [lines (plain-lines ch 40)]
         (is (some #(re-find #"hi there" %) lines))
         (is (not-any? #(re-find #"\{:type" %) lines)
@@ -250,9 +250,9 @@
   (testing "image blocks render as [image mime-type] placeholders"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-add-message! ch
-        {:role :user
-         :content [{:type :text :text "see:"}
-                   {:type :image :data "AA" :mime-type "image/png"}]})
+                                    {:role :user
+                                     :content [{:type :text :text "see:"}
+                                               {:type :image :data "AA" :mime-type "image/png"}]})
       (let [lines (plain-lines ch 40)]
         (is (some #(re-find #"see:" %) lines))
         (is (some #(re-find #"\[image image/png\]" %) lines))))))
@@ -284,9 +284,9 @@
   (testing "collapsible info banner toggles with the tool-expand action"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-set-info-msg! ch
-        {:label "kmet" :content "plain"
-         :collapsed-content "Press ctrl+o to expand"
-         :expanded-content "Full help here"})
+                                     {:label "kmet" :content "plain"
+                                      :collapsed-content "Press ctrl+o to expand"
+                                      :expanded-content "Full help here"})
       (let [lines (plain-lines ch 40)]
         (is (some #(re-find #"Press ctrl\+o to expand" %) lines)
             "collapsed content shown by default")
@@ -309,9 +309,9 @@
   (testing "rebuild keeps collapsible variants and expanded state"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-set-info-msg! ch
-        {:label "kmet" :content "plain"
-         :collapsed-content "Collapsed banner"
-         :expanded-content "Expanded banner"})
+                                     {:label "kmet" :content "plain"
+                                      :collapsed-content "Collapsed banner"
+                                      :expanded-content "Expanded banner"})
       (ch/chat-history-toggle-tool-expanded! ch)  ;; expand
       (ch/chat-history-rebuild! ch [{:role :user :content "new"}])
       (let [lines (plain-lines ch 40)]
@@ -350,10 +350,10 @@
   (testing "new assistant messages inherit the thinking-hidden flag"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-add-message! ch
-        {:role :assistant :content "a" :thinking "t"})
+                                    {:role :assistant :content "a" :thinking "t"})
       (ch/chat-history-toggle-thinking-hidden! ch)
       (ch/chat-history-add-message! ch
-        {:role :assistant :content "b" :thinking "t2"})
+                                    {:role :assistant :content "b" :thinking "t2"})
       (let [assistants (keep (fn [m] (when (contains? (:component m) :hide-thinking-atom)
                                        (:component m)))
                              @(:messages-atom ch))]
@@ -426,9 +426,9 @@
       ;; :context-replaced rebuild feeds agent messages whose tool content is
       ;; [{:type :tool_result :content "..."}] — must not crash or print the raw vector
       (ch/chat-history-add-message! ch
-        {:role :tool :name "bash"
-         :content [{:type :tool_result :tool_use_id "x" :content "file text"}]
-         :is-error false})
+                                    {:role :tool :name "bash"
+                                     :content [{:type :tool_result :tool_use_id "x" :content "file text"}]
+                                     :is-error false})
       (let [lines (plain-lines ch 40)]
         (is (some #(re-find #"file text" %) lines)
             "tool_result content extracted from the block")
