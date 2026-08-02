@@ -51,11 +51,23 @@
            ["\u001b[b"    (shift KEY-DOWN)]
            ["\u001b[c"    (shift KEY-RIGHT)]
            ["\u001b[d"    (shift KEY-LEFT)]
+       ;; Shift + Tab
+           ["\u001b[Z"    (shift "tab")]
+       ;; SS3 arrows (application cursor mode)
+           ["\u001bOA"    KEY-UP]
+           ["\u001bOB"    KEY-DOWN]
+           ["\u001bOC"    KEY-RIGHT]
+           ["\u001bOD"    KEY-LEFT]
        ;; Ctrl + cursor
            ["\u001bOa"    (ctrl KEY-UP)]
            ["\u001bOb"    (ctrl KEY-DOWN)]
            ["\u001bOc"    (ctrl KEY-RIGHT)]
            ["\u001bOd"    (ctrl KEY-LEFT)]
+       ;; Ctrl + cursor (xterm CSI-with-modifier form)
+           ["\u001b[1;5A"  (ctrl KEY-UP)]
+           ["\u001b[1;5B"  (ctrl KEY-DOWN)]
+           ["\u001b[1;5C"  (ctrl KEY-RIGHT)]
+           ["\u001b[1;5D"  (ctrl KEY-LEFT)]
        ;; Alt + arrows (ESC + legacy)
            ["\u001b\u001b[A"  (alt KEY-UP)]
            ["\u001b\u001b[B"  (alt KEY-DOWN)]
@@ -66,6 +78,9 @@
            ["\u001bf"    (alt KEY-RIGHT)]
            ["\u001bp"    (alt KEY-UP)]
            ["\u001bn"    (alt KEY-DOWN)]
+       ;; Alt + Enter
+           ["\u001b\r"   (alt "enter")]
+           ["\u001b\n"   (alt "enter")]
        ;; Function keys
            ["\u001bOP"    "f1"]
            ["\u001bOQ"    "f2"]

@@ -1025,13 +1025,18 @@
 
     ;; Status indicator (Pi-style: separate layer between chat and editor)
     (let [si (ui/make-status-indicator :theme (cfg/get-theme config))
-          cs (assoc cs :status-indicator si)]
+          cs (assoc cs :status-indicator si)
+          ;; Bounded chat viewport: the ScrollView gets the height left over by
+          ;; the fixed header/dock, so total rendered content never exceeds the
+          ;; screen and streaming tool output doesn't trigger full-screen
+          ;; redraws (pi: transcriptScrollView in interactive-mode.ts).
+          ch-scroll (tui/make-scroll-view ch :follow-end true)]
 
       ;; Add components (pending bash container between chat and status indicator)
       ;; Pi: pendingMessagesContainer sits between chatContainer and footer
       (tui/tui-add-child t hdr)
       (tui/tui-add-child t sp1)
-      (tui/tui-add-child t ch)
+      (tui/tui-add-child t ch-scroll)
       (tui/tui-add-child t (:pending-bash-container cs))
       (tui/tui-add-child t si)
       (tui/tui-add-child t sp2)
@@ -1089,11 +1094,19 @@
       ;; app actions in the editor; the TUI keeps only global keys)
       (tui/tui-add-input-listener t
                                   (fn [data]
-                                    (cond
-                                      (keys/matches-key? data (keys/ctrl "l"))
-                                      (do (term/clear-screen! @(:terminal t))
-                                          (tui/tui-request-render t))
-                                      :else nil)))
+                                    (let [kmgr (tui-kb/get-global-keybindings)]
+                                      (cond
+                                        (keys/matches-key? data (keys/ctrl "l"))
+                                        (do (term/clear-screen! @(:terminal t))
+                                            (tui/tui-request-render t))
+                                        ;; Scroll the chat viewport (pi: altScreen
+                                        ;; pageUp/pageDown; ctrl+arrows here since the
+                                        ;; editor owns pageUp/pageDown).
+                                        (tui-kb/matches-key kmgr data "app.chat.scrollUp")
+                                        (tui/scroll-view-scroll-by! ch-scroll -3)
+                                        (tui-kb/matches-key kmgr data "app.chat.scrollDown")
+                                        (tui/scroll-view-scroll-by! ch-scroll 3)
+                                        :else nil))))
 
       ;; Initialize header/footer
       (text/text-set! hdr (fmt-header cs))
@@ -1107,16 +1120,17 @@
                          (th/dim (str "Press " expand-key " to show full startup help.")))
             full (str "Welcome to " (th/bold "kmet") " — minimal coding agent.\n\n"
                       "Shortcuts:\n"
-                      "  " (th/dim "Enter") "      — submit message\n"
-                      "  " (th/dim "Escape") "     — cancel current turn / bash\n"
-                      "  " (th/dim "Ctrl+C") "     — clear editor (twice to quit)\n"
-                      "  " (th/dim "Ctrl+D") "     — exit when editor is empty\n"
-                      "  " (th/dim "Ctrl+G") "     — open external editor\n"
-                      "  " (th/dim expand-key) "     — toggle tool output\n"
-                      "  " (th/dim thinking-key) "     — toggle thinking blocks\n"
-                      "  " (th/dim "Ctrl+P") "     — cycle to next model\n"
-                      "  " (th/dim "Ctrl+L") "     — clear terminal\n"
-                      "  " (th/dim "Alt+Enter") "   — queue follow-up message\n"
+                      "  " (th/dim "Enter")        " — submit message\n"
+                      "  " (th/dim "Escape")       " — cancel current turn / bash\n"
+                      "  " (th/dim "Ctrl+C")       " — clear editor (twice to quit)\n"
+                      "  " (th/dim "Ctrl+D")       " — exit when editor is empty\n"
+                      "  " (th/dim "Ctrl+G")       " — open external editor\n"
+                      "  " (th/dim expand-key)     " — toggle tool output\n"
+                      "  " (th/dim thinking-key)   " — toggle thinking blocks\n"
+                      "  " (th/dim "Ctrl+P")       " — cycle to next model\n"
+                      "  " (th/dim "Ctrl+L")       " — clear terminal\n"
+                      "  " (th/dim "Ctrl+Up/Down") " — scroll chat viewport\n"
+                      "  " (th/dim "Alt+Enter")    " — queue follow-up message\n"
                       "  " (th/dim "/") " — commands   " (th/dim "!") " — bash   "
                       "  " (th/dim "!!") " — bash (no context)\n\n"
                       (th/dim "Type a message, or use /help for all commands."))]

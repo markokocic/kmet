@@ -16,7 +16,9 @@
             [kmet.tui.components.select-list :as select-list]
             [kmet.tui.components.settings-list :as settings-list]
             [kmet.tui.components.markdown :as markdown]
-            [kmet.tui.components.spinner :as spinner]))
+            [kmet.tui.components.spinner :as spinner]
+            [kmet.tui.components.scroll-view :as scroll-view]
+            [kmet.tui.components.stack :as stack]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Protocol re-exports
@@ -144,34 +146,6 @@
               (str line (apply str (repeat (- width vis) \space))))))
         lines))
 
-(defn- diff-lines
-  "Generate differential ANSI sequences using relative cursor movement.
-   prev and next must be same-length vectors.
-   cursor-content-row is the current cursor position as a content row.
-   Changed lines are OVERWRITTEN in place, not erase-then-rewrite: every
-   line is padded to full terminal width, so writing the new line from
-   column 0 replaces the old one completely. Erasing first (\u001b[2K)
-   painted the blank line on terminals without CSI 2026 sync support —
-   the flicker while streaming. A [K tail-clear is emitted only when the
-   new line is visibly shorter than the old (unpadded overflow case).
-   Returns [seqs last-content-row] where last-content-row is the content
-   row of the last emitted change."
-  [prev next cursor-content-row]
-  (let [n (count prev)]
-    (loop [i 0, r [], last-content-row cursor-content-row]
-      (if (>= i n)
-        [r last-content-row]
-        (let [a (nth prev i "") b (nth next i "")]
-          (if (= a b)
-            (recur (inc i) r last-content-row)
-            (let [delta (- i last-content-row)
-                  move (cond
-                         (pos? delta) (str "\u001b[" delta "B")
-                         (neg? delta) (str "\u001b[" (- delta) "A")
-                         :else "")
-                  clear (when (< (utils/visible-width b) (utils/visible-width a)) "\u001b[K")]
-              (recur (inc i) (conj r (str move "\r" b (or clear ""))) i))))))))
-
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Input reader
 ;; ═══════════════════════════════════════════════════════════════════════════
@@ -208,23 +182,31 @@
         (reset! buf (or (when (seq before) before) ""))
         (dispatch-input! tui marker))
 
-      ;; Starts with ESC — try to complete sequence
+      ;; Starts with ESC — try to complete sequence. A lone ESC is NOT
+      ;; dispatched yet: it may be the prefix of an arrow/CSI/SS3 sequence,
+      ;; so we wait up to MAX-ESC-WAIT for the rest before treating it as
+      ;; the Escape key (pi: isCompleteSequence returns "incomplete" for a
+      ;; single ESC). Without this, "\u001b[A" arrived as ESC then "[A" as
+      ;; raw text — arrows and ctrl+arrows never parsed.
       (= (first s) \u001b)
       (loop [waited 0]
         (let [current @buf]
-          (if (keys/parse-key current)
+          (if (and (keys/parse-key current)
+                   (not= current "\u001b"))
             (do (reset! buf "")
                 (dispatch-input! tui current))
             (if (and (< waited MAX-ESC-WAIT)
-                     (keys/escape-prefix? current)
+                     (or (keys/escape-prefix? current) (= current "\u001b"))
                      (< (count current) 12))
-              (if (.ready reader)
-                (let [ch (.read reader)]
-                  (when (>= ch 0)
-                    (swap! buf str (char ch)))
-                  (recur 0))
-                (do (Thread/sleep ESC-WAIT-STEP)
-                    (recur (+ waited ESC-WAIT-STEP))))
+              ;; Timed non-blocking read: JLine's NonBlockingReader.read(ms)
+              ;; returns the char, -1 on EOF, -2 on timeout. .ready() is not
+              ;; reliable here (returned false while data was pending), so the
+              ;; old .ready + .read combo starved the accumulation loop.
+              (let [ch (.read reader ESC-WAIT-STEP)]
+                (if (>= ch 0)
+                  (do (swap! buf str (char ch))
+                      (recur 0))
+                  (recur (+ waited ESC-WAIT-STEP))))
               ;; Timeout or invalid — dispatch first char, keep rest
               (let [first-char (subs current 0 1)
                     rest (subs current 1)]
@@ -303,7 +285,12 @@
                                         (repeat oy "")
                                         (mapv #(str (apply str (repeat ox " ")) %) comp-lines)
                                         (repeat (max 0 (- h oy (count comp-lines))) ""))))
-                                (vec (mapcat #(render % w) @(:components tui))))
+                                ;; Main content: the stack layout bounds the ScrollView
+                                ;; (chat) to the space left by the fixed components, so
+                                ;; the total never exceeds the screen and mid-document
+                                ;; growth doesn't trigger full-screen redraws.
+                                (stack/render-stack @(:components tui) w h
+                                                    #(tui-request-render tui)))
                     cursor-result (extract-cursor-position raw-lines h)
                     cursor (:cursor cursor-result)
                     lines (:lines cursor-result)
@@ -321,13 +308,9 @@
                     ;; support (e.g. Termux).
                     sb (StringBuilder.)
                     emit! (fn [s] (.append sb s))
-                    ;; Find first index where a and b differ; returns count(a) if identical
-                    first-changed (fn first-changed [a b]
-                                    (let [n (count a)]
-                                      (loop [i 0]
-                                        (if (or (= i n) (not= (nth a i) (nth b i)))
-                                          i
-                                          (recur (inc i))))))
+                    old-vt @viewport-top
+                    new-vt (max 0 (- new-count h))
+                    scroll (- new-vt old-vt)
                     ;; Pi-style full redraw: clear screen, home, then clear
                     ;; scrollback ([3J) so stale lines above don't show as
                     ;; duplicates (pi: fullRender uses "\u001b[2J\u001b[H\u001b[3J").
@@ -340,98 +323,69 @@
                                        (emit! (nth lines i)))
                                      (emit! CSI-2026-L)
                                      (reset! hardware-cursor-row (dec new-count))
-                                     (reset! viewport-top (max 0 (- new-count h))))]
+                                     (reset! viewport-top new-vt))
+                    ;; Screen-row diff. The terminal screen shows the last h rows of
+                    ;; the buffer, which holds every content row written so far — so
+                    ;; the "current" screen content is old rows [old-vt .. old-vt+h-1]
+                    ;; ("" beyond prev-count). When the viewport moved down (content
+                    ;; grew), the rows entering the viewport were already written in
+                    ;; earlier frames, so scrolling the screen down exposes them
+                    ;; without a full redraw — the terminal scrolls its own buffer.
+                    ;; This keeps the screen stable while mid-document boxes (streaming
+                    ;; bash/tool output) grow or shift above the viewport: only the
+                    ;; screen rows that actually changed are rewritten in place.
+                    ;; Content-row diffs can't do this — a one-line insert above the
+                    ;; viewport shifts every content row below it, so the old code
+                    ;; fell back to "\u001b[2J\u001b[H\u001b[3J" + full repaint every
+                    ;; chunk, which flashes on terminals without CSI 2026 sync
+                    ;; support (e.g. Termux).
+                    do-screen-diff (fn do-screen-diff []
+                                     (let [cursor-row (atom (- @hardware-cursor-row old-vt))]
+                                       (when (pos? scroll)
+                                         (let [bottom (dec h)]
+                                           (when (< @cursor-row bottom)
+                                             (emit! (str "\u001b[" (- bottom @cursor-row) "B")))
+                                           (reset! cursor-row bottom)
+                                           (emit! (apply str (repeat scroll "\r\n")))))
+                                       (loop [r 0]
+                                         (if (>= r h)
+                                           (reset! hardware-cursor-row (+ @cursor-row new-vt))
+                                           (let [idx (+ new-vt r)
+                                                 cur (if (< idx prev-count) (nth prev idx) "")
+                                                 exp (if (< idx new-count) (nth lines idx) "")]
+                                             (if (= cur exp)
+                                               (recur (inc r))
+                                               (let [delta (- r @cursor-row)
+                                                     move (cond
+                                                            (pos? delta) (str "\u001b[" delta "B")
+                                                            (neg? delta) (str "\u001b[" (- delta) "A")
+                                                            :else "")
+                                                     ;; Rows beyond the new content must be cleared:
+                                                     ;; a bare "" would leave the old text visible.
+                                                     out (if (empty? exp)
+                                                           (apply str (repeat w \space))
+                                                           exp)]
+                                                 (emit! (str move "\r" out))
+                                                 (reset! cursor-row r)
+                                                 (recur (inc r)))))))))]
                 (cond
-                ;; Full redraw: first render or width change
-                  (or (empty? prev) width-changed)
+                ;; Full redraw: first render, width change, viewport moved up (content
+                ;; shrank), or content first overflowing the screen (crossing into
+                ;; scrollback can't be done incrementally).
+                  (or (empty? prev) width-changed
+                      (< new-vt old-vt)
+                      (and (pos? scroll) (< prev-count h)))
                   (do-full-redraw)
 
-                ;; Content grew — full redraw if common part changed above viewport,
-                ;; else diff common part then append with \r\n for scrollback
-                  (> new-count prev-count)
-                  (let [common-prev (subvec prev 0 prev-count)
-                        common-new (subvec lines 0 prev-count)
-                        old-vt @viewport-top
-                        fc (first-changed common-prev common-new)]
-                    (if (< fc old-vt)
-                    ;; Changes above old viewport — Pi: can't incrementally update scrollback
-                      (do-full-redraw)
-                      (do
-                        (emit! CSI-2026-H)
-                      ;; Diff the common part (relative movement from current cursor)
-                        (let [[d last-content-row] (diff-lines common-prev common-new @hardware-cursor-row)]
-                          (doseq [x d] (emit! x))
-                        ;; Append new lines — move RELATIVE from the tracked cursor to the
-                        ;; row after the last common row (pi: computeLineDiff). Never an
-                        ;; absolute [H]: content rows aren't screen rows when the TUI
-                        ;; starts below screen row 0 (prior terminal output), which would
-                        ;; shift the appended lines and corrupt hardware-cursor-row
-                        ;; (cascading into later relative diffs, e.g. the spinner).
-                          (let [move-target (dec prev-count)
-                                line-diff (- move-target last-content-row)]
-                            (cond
-                              (pos? line-diff) (emit! (str "\u001b[" line-diff "B"))
-                              (neg? line-diff) (emit! (str "\u001b[" (- line-diff) "A"))))
-                          (emit! "\r\n")
-                          (doseq [i (range prev-count new-count)]
-                            (when (> i prev-count)
-                              (emit! "\r\n"))
-                            (emit! (str "\u001b[2K" (nth lines i))))
-                          (emit! CSI-2026-L)
-                          (reset! hardware-cursor-row (dec new-count))
-                          (reset! viewport-top (max 0 (- new-count h)))))))
-
-                ;; Content shrunk — full redraw if viewport shifted or changes above viewport,
-                ;; else diff common part then clear removed lines
-                  (< new-count prev-count)
-                  (let [new-vt (max 0 (- new-count h))]
-                    (if (not= new-vt @viewport-top)
-                    ;; Viewport changed — Pi: can't map old screen rows to new
-                      (do-full-redraw)
-                      (let [common-prev (subvec prev 0 new-count)
-                            fc (first-changed common-prev lines)]
-                        (if (< fc @viewport-top)
-                        ;; Changes above viewport — Pi: full redraw
-                          (do-full-redraw)
-                        ;; Viewport stable, changes within viewport
-                          (let [[d last-content-row] (diff-lines common-prev lines @hardware-cursor-row)]
-                            (emit! CSI-2026-H)
-                            (doseq [x d] (emit! x))
-                          ;; Clear removed lines RELATIVE from the last new line
-                          ;; (pi: \r\n[2K per extra line, then move back up) — an
-                          ;; absolute [H] would be off by one when the TUI starts
-                          ;; below screen row 0. This path only runs while both
-                          ;; contents fit on screen (guarded above), so the extra
-                          ;; lines are always visible.
-                            (let [extra (- prev-count new-count)
-                                  target-row (dec new-count)
-                                  line-diff (- target-row last-content-row)
-                                  move (cond
-                                         (pos? line-diff) (str "\u001b[" line-diff "B")
-                                         (neg? line-diff) (str "\u001b[" (- line-diff) "A")
-                                         :else "")]
-                              (when (seq move)
-                                (emit! move))
-                              (dotimes [_ extra]
-                                (emit! "\r\n\u001b[2K"))
-                              (when (pos? extra)
-                                (emit! (str "\u001b[" extra "A"))))
-                            (emit! CSI-2026-L)
-                            (reset! hardware-cursor-row (dec new-count)))))))
-
-                ;; Same length — full redraw if changes above viewport,
-                ;; else differential with relative cursor movement
-                  (not= prev lines)
-                  (let [fc (first-changed prev lines)]
-                    (if (< fc @viewport-top)
-                    ;; Changes above viewport — Pi: full redraw
-                      (do-full-redraw)
-                      (let [[d last-content-row] (diff-lines prev lines @hardware-cursor-row)]
-                        (when (seq d)
-                          (emit! CSI-2026-H)
-                          (doseq [x d] (emit! x))
-                          (emit! CSI-2026-L)
-                          (reset! hardware-cursor-row last-content-row)))))
+                ;; Everything else: scroll the screen (if the viewport moved down) and
+                ;; rewrite only the screen rows that changed.
+                  (or (pos? scroll) (not= prev lines))
+                  (let [before (.length sb)]
+                    (emit! CSI-2026-H)
+                    (do-screen-diff)
+                    (when (> (.length sb) before)
+                      (emit! CSI-2026-L))
+                    (reset! viewport-top new-vt))
 
                 ;; No changes
                   :else nil)
@@ -649,4 +603,17 @@
 (def spinner-set-prefix! spinner/spinner-set-prefix!)
 (def spinner-set-spinner-color-fn! spinner/spinner-set-spinner-color-fn!)
 (def spinner-set-message-color-fn! spinner/spinner-set-message-color-fn!)
+
+;; ScrollView + stack layout
+(def IScrollView scroll-view/IScrollView)
+(def make-scroll-view scroll-view/make-scroll-view)
+(def scroll-view-update-layout! scroll-view/update-layout!)
+(def scroll-view-render-window scroll-view/render-window)
+(def scroll-view-scroll-by! scroll-view/scroll-by!)
+(def scroll-view-scroll-to! scroll-view/scroll-to!)
+(def scroll-view-scroll-to-start! scroll-view/scroll-to-start!)
+(def scroll-view-scroll-to-end! scroll-view/scroll-to-end!)
+(def scroll-view-scroll-top scroll-view/scroll-top)
+(def scroll-view-follows-end? scroll-view/follows-end?)
+(def render-stack stack/render-stack)
 

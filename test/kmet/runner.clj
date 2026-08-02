@@ -36,6 +36,7 @@
             [kmet.tui.components.test-settings-list]
             [kmet.tui.components.test-markdown]
             [kmet.tui.components.test-track]
+            [kmet.tui.components.test-scroll-view]
             [kmet.libs.test-self-contained]
             [kmet.libs.test-terminal-image]
             [kmet.libs.test-yaml-lite]
@@ -78,6 +79,7 @@
     kmet.tui.components.test-settings-list
     kmet.tui.components.test-markdown
     kmet.tui.components.test-track
+    kmet.tui.components.test-scroll-view
     kmet.libs.test-self-contained
     kmet.libs.test-terminal-image
     kmet.libs.test-yaml-lite

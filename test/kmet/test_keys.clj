@@ -50,7 +50,19 @@
 (t/deftest test-parse-key-alt
   (t/is (= "alt+left" (k/parse-key "\u001bb")))
   (t/is (= "alt+right" (k/parse-key "\u001bf")))
-  (t/is (= "alt+up" (k/parse-key "\u001bp"))))
+  (t/is (= "alt+up" (k/parse-key "\u001bp")))
+  (t/is (= "alt+enter" (k/parse-key "\u001b\r")))
+  (t/is (= "alt+enter" (k/parse-key "\u001b\n"))))
+
+(t/deftest test-parse-key-modified
+  (t/is (= "ctrl+up" (k/parse-key "\u001b[1;5A")))
+  (t/is (= "ctrl+down" (k/parse-key "\u001b[1;5B")))
+  (t/is (= "ctrl+up" (k/parse-key "\u001bOa")))
+  (t/is (= "shift+tab" (k/parse-key "\u001b[Z")))
+  (t/is (= "up" (k/parse-key "\u001bOA")))
+  (t/is (= "down" (k/parse-key "\u001bOB")))
+  (t/is (= "right" (k/parse-key "\u001bOC")))
+  (t/is (= "left" (k/parse-key "\u001bOD"))))
 
 (t/deftest test-parse-key-regular
   (t/is (= "a" (k/parse-key "a")))

@@ -72,10 +72,10 @@ bb run --print "list files in current directory"
 |-----|--------|
 | `Enter` | Submit message |
 | `Escape` | Cancel current turn |
-| `Ctrl+Z` | Quit |
-| `Ctrl+C` | Cancel / clear editor |
+| `Ctrl+D` | Exit when editor is empty |
+| `Ctrl+C` | Clear editor (twice to quit) |
 | `Ctrl+L` | Clear terminal |
-| `Up/Down` | Scroll chat history |
+| `Ctrl+Up/Down` | Scroll chat viewport |
 
 ## Project Structure
 

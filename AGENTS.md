@@ -108,7 +108,11 @@ src/kmet/
 │       ├── select_list.clj
 │       ├── settings_list.clj
 │       ├── spinner.clj
-│       └── image.clj
+│       ├── image.clj
+│       ├── scroll_view.clj — bounded viewport over one child (pi ScrollView:
+│       │                     follow-end, scroll API, scrollbar state machine)
+│       └── stack.clj    — vertical stack layout for the render loop (the single
+│                          IScrollView entry grows to fill remaining height)
 ```
 
 ### Layer boundaries
