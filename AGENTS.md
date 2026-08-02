@@ -139,8 +139,12 @@ src/kmet/
   Use **`bb test-ext`** to run only the `^:slow` tests (timing/process
   suites: real backoff sleeps, parallel tool timing, bash tool process
   spawns). Mark slow tests with `^:slow` on the deftest; selection happens
-  per test var in `kmet.runner`. Run `bb test-ext` during final validation
-  before commit.
+  per test var in `kmet.runner`.
+
+### Final validation
+`bb lint` and `bb format-check` are slow — don't run them during iterative
+development. Run the full gate once before wrapping up:
+`bb lint` + `bb format-check` + `bb test` + `bb test-ext`.
 
 ## Platform
 - **Target**: cross-platform (any system with Babashka and a terminal)
