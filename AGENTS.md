@@ -111,14 +111,20 @@ src/kmet/
 │       ├── image.clj
 │       ├── scroll_view.clj — bounded viewport over one child (pi ScrollView:
 │       │                     follow-end, scroll API, scrollbar state machine)
-│       └── stack.clj    — vertical stack layout for the render loop (the single
-│                          IScrollView entry grows to fill remaining height)
-│       ── pi-parity stubs (throw on use; implement upon first use) ──
-│       ├── alt_screen_flash.clj
-│       ├── cancellable_loader.clj
-│       ├── truncated_text.clj
-│       ├── h_stack.clj
-│       └── v_stack.clj
+│       ├── stack.clj    — stack sizing (allocate-stack-sizes) + the render-loop
+│       │                  vertical layout (the single IScrollView entry grows
+│       │                  to fill remaining height)
+│       ├── h_stack.clj  — horizontal flex stack (grow/shrink allocation,
+│       │                  ANSI-aware line compositing; pi HStack)
+│       ├── v_stack.clj  — vertical stack component (children top-to-bottom
+│       │                  with gap; pi VStack — used for the interactive dock)
+│       ├── alt_screen_flash.clj — transient inverse-video messages owned by
+│       │                  the TUI and composited over the screen bottom
+│       │                  (pi AltScreenFlashContainer; tui-flash!)
+│       ├── cancellable_loader.clj — spinner cancellable with Escape + abort
+│       │                  signal (pi CancellableLoader)
+│       └── truncated_text.clj — single-line truncating text (pi TruncatedText;
+│                              used for the chat status line)
 ```
 
 ### Layer boundaries

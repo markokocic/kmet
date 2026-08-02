@@ -1,6 +1,7 @@
 (ns kmet.tui.utils
   "Text width calculation and wrapping utilities."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [kmet.libs.terminal-image :as img]))
 
 ;; ─── Cursor marker ────────────────────────────────────────────────────────
 ;; Zero-width APC sequence emitted at cursor position for IME positioning.
@@ -126,50 +127,62 @@
 
 (defn truncate-to-width
   "Truncate string to fit within max-width visible columns, appending
-   ellipsis when truncated. ANSI escape codes are preserved for the kept
-   prefix (pi: truncateToWidth), so styling survives truncation."
+   ellipsis when truncated. Text that already fits within max-width is
+   returned unchanged — the ellipsis is never added to fitting text (pi:
+   truncateToWidth guards on max-width, not target). When the ellipsis
+   alone doesn't fit, it is clipped to max-width (pi:
+   truncateFragmentToWidth). ANSI escape codes are preserved for the kept
+   prefix, so styling survives truncation."
   ([s max-width] (truncate-to-width s max-width ""))
   ([s max-width ellipsis]
-   (let [e-width (visible-width ellipsis)
-         target (- max-width e-width)]
-     (if (<= (visible-width s) target)
-       s
-       (if-not (clojure.string/includes? s "\u001b[")
-         ;; Fast path: plain text — truncate by codepoint
-         (let [sb (atom "")
-               total (atom 0)
-               n (count s)
-               _ (loop [i 0]
-                   (when (and (< i n) (< @total target))
-                     (let [cp (code-point-at s i)
-                           w (char-width cp)
-                           nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
-                       (swap! sb str (subs s i (+ i nchars)))
-                       (swap! total + w)
-                       (recur (+ i nchars)))))]
-           (str @sb ellipsis))
-         ;; ANSI path: keep escape codes with the characters they style;
-         ;; pending (unflushed) codes are dropped once truncation starts
-         (let [sb (StringBuilder.)
-               n (count s)
-               ansi-re #"\u001b\[[0-9;]*[a-zA-Z]"
-               ansi-at (fn [i]
-                         (let [m (re-matcher ansi-re s)]
-                           (when (and (.find m i) (= (.start m) i))
-                             [(.group m) (.end m)])))]
-           (loop [i 0 total 0 pending ""]
-             (if (or (>= i n) (>= total target))
-               (str sb ellipsis)
-               (if-let [[code end] (ansi-at i)]
-                 (recur end total (str pending code))
-                 (let [cp (code-point-at s i)
-                       w (char-width cp)
-                       nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
-                   (if (<= (+ total w) target)
-                     (do (.append sb pending)
-                         (.append sb (subs s i (+ i nchars)))
-                         (recur (+ i nchars) (+ total w) ""))
-                     (str sb ellipsis))))))))))))
+   (cond
+     (<= max-width 0) ""
+     (<= (visible-width s) max-width) s
+     :else
+     (let [e-width (visible-width ellipsis)
+           target (- max-width e-width)]
+       (if (>= e-width max-width)
+         ;; The ellipsis alone doesn't fit — clip it to max-width
+         (let [clipped (truncate-to-width ellipsis max-width)]
+           (if (pos? (visible-width clipped)) clipped ""))
+         (if-not (clojure.string/includes? s "\u001b[")
+           ;; Fast path: plain text — truncate by codepoint, never letting
+           ;; the kept prefix cross target (pi: keptWidth + width <= target)
+           (let [sb (atom "")
+                 total (atom 0)
+                 n (count s)
+                 _ (loop [i 0]
+                     (when (and (< i n)
+                                (<= (+ @total (char-width (code-point-at s i))) target))
+                       (let [cp (code-point-at s i)
+                             w (char-width cp)
+                             nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
+                         (swap! sb str (subs s i (+ i nchars)))
+                         (swap! total + w)
+                         (recur (+ i nchars)))))]
+             (str @sb ellipsis))
+           ;; ANSI path: keep escape codes with the characters they style;
+           ;; pending (unflushed) codes are dropped once truncation starts
+           (let [sb (StringBuilder.)
+                 n (count s)
+                 ansi-re #"\u001b\[[0-9;]*[a-zA-Z]"
+                 ansi-at (fn [i]
+                           (let [m (re-matcher ansi-re s)]
+                             (when (and (.find m i) (= (.start m) i))
+                               [(.group m) (.end m)])))]
+             (loop [i 0 total 0 pending ""]
+               (if (or (>= i n) (>= total target))
+                 (str sb ellipsis)
+                 (if-let [[code end] (ansi-at i)]
+                   (recur end total (str pending code))
+                   (let [cp (code-point-at s i)
+                         w (char-width cp)
+                         nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
+                     (if (<= (+ total w) target)
+                       (do (.append sb pending)
+                           (.append sb (subs s i (+ i nchars)))
+                           (recur (+ i nchars) (+ total w) ""))
+                       (str sb ellipsis)))))))))))))
 
 ;; ─── Word wrapping ──────────────────────────────────────────────────────────
 
@@ -335,6 +348,199 @@
                 (apply str result)
                 (recur (+ i nchars) (+ col w) (conj result char-str)))
               (recur (+ i nchars) (+ col w) result))))))))
+
+;; ─── ANSI-aware window slicing ──────────────────────────────────────────────
+
+(def ^:private ANSI-RE #"\u001b\[[0-9;]*[a-zA-Z]")
+
+(defn- ansi-code-at
+  "Return [code length] when an ANSI escape sequence starts at index I of S."
+  [s i]
+  (when (and (< i (count s)) (= \u001b (nth s i)))
+    (let [m (re-matcher ANSI-RE s)]
+      (when (and (.find m i) (= (.start m) i))
+        [(.group m) (- (.end m) i)]))))
+
+(defn slice-with-width
+  "Slice LINE's visible columns [start-col, start-col+length), ANSI-aware.
+   Returns {:text str :width n}. ANSI codes before start-col are kept as
+   pending and prepended to the first emitted character so styling survives
+   the slice (pi: sliceWithWidth). With strict?, a wide character crossing
+   the end boundary is excluded. Grapheme widths agree with visible-width
+   (skin-tone modifiers after a 2-wide base measure 0)."
+  [line start-col length & {:keys [strict?]}]
+  (if (<= length 0)
+    {:text "" :width 0}
+    (let [n (count line)
+          end-col (+ start-col length)
+          result (StringBuilder.)
+          result-width (atom 0)
+          current-col (atom 0)
+          pending (StringBuilder.)
+          stop? (atom false)]
+      (loop [i 0, prev-w 0]
+        (when (and (< i n) (not @stop?))
+          (if-let [[code clen] (ansi-code-at line i)]
+            (do
+              ;; Codes inside the window are kept; codes before it are held
+              ;; pending and prepended with the first emitted character.
+              (when (and (<= start-col @current-col) (< @current-col end-col))
+                (.append result code))
+              (when (< @current-col start-col)
+                (.append pending code))
+              (recur (+ i clen) prev-w))
+            ;; Text run up to the next ANSI code — walk graphemes
+            (let [text-end (loop [j i]
+                             (if (and (< j n) (nil? (ansi-code-at line j)))
+                               (recur (inc j))
+                               j))
+                  run (subs line i text-end)
+                  next-prev-w (loop [j 0, prev-w prev-w]
+                                (if (and (< j (count run)) (not @stop?))
+                                  (let [[w next-i] (grapheme-width-and-next run j (count run) prev-w)
+                                        col @current-col]
+                                    (when (and (>= col start-col) (< col end-col)
+                                               (or (not strict?) (<= (+ col w) end-col)))
+                                      (let [pending-str (str pending)]
+                                        (when (seq pending-str)
+                                          (.append result pending-str)
+                                          (.setLength pending 0)))
+                                      (.append result (subs run j next-i))
+                                      (swap! result-width + w))
+                                    (swap! current-col + w)
+                                    (when (>= (+ col w) end-col)
+                                      (reset! stop? true))
+                                    (recur next-i w))
+                                  prev-w))]
+              (recur text-end next-prev-w)))))
+      {:text (str result) :width @result-width})))
+
+;; ─── SGR style tracking (pi: AnsiCodeTracker) ──────────────────────────────
+
+(defn- reset-sgr-state
+  "Empty SGR attribute state (default terminal style)."
+  []
+  {:bold false :dim false :italic false :underline false
+   :blink false :inverse false :hidden false :strike false
+   :fg nil :bg nil})
+
+(defn- apply-sgr-code
+  "Apply one SGR escape (e.g. \"\\u001b[38;2;1;2;3m\") to STATE and return
+   the new state (pi: AnsiCodeTracker.process)."
+  [state code]
+  (let [m (re-find #"\u001b\[([0-9;]*)m" code)]
+    (if (not m)
+      state
+      (let [params (if (or (= (second m) "") (= (second m) "0"))
+                     [0]
+                     (mapv #(Long/parseLong %) (str/split (second m) #";")))
+            n (count params)]
+        (loop [state state i 0]
+          (if (>= i n)
+            state
+            (let [c (nth params i)
+                  color (fn [base]
+                          (if (and (< (inc i) n) (= (nth params (inc i)) 5) (< (+ i 2) n))
+                            {:code (str base ";5;" (nth params (+ i 2))) :next (+ i 3)}
+                            (if (and (< (inc i) n) (= (nth params (inc i)) 2) (< (+ i 4) n))
+                              {:code (str base ";2;" (nth params (+ i 2)) ";" (nth params (+ i 3))
+                                          ";" (nth params (+ i 4)))
+                               :next (+ i 5)}
+                              {:code nil :next (inc i)})))]
+              (cond
+                (= c 0) (recur (reset-sgr-state) (inc i))
+                (= c 38) (let [{:keys [code next]} (color "38")]
+                           (recur (if code (assoc state :fg code) state) next))
+                (= c 48) (let [{:keys [code next]} (color "48")]
+                           (recur (if code (assoc state :bg code) state) next))
+                (= c 1) (recur (assoc state :bold true) (inc i))
+                (= c 2) (recur (assoc state :dim true) (inc i))
+                (= c 3) (recur (assoc state :italic true) (inc i))
+                (= c 4) (recur (assoc state :underline true) (inc i))
+                (= c 5) (recur (assoc state :blink true) (inc i))
+                (= c 7) (recur (assoc state :inverse true) (inc i))
+                (= c 8) (recur (assoc state :hidden true) (inc i))
+                (= c 9) (recur (assoc state :strike true) (inc i))
+                (= c 21) (recur (assoc state :bold false) (inc i))
+                (= c 22) (recur (assoc state :bold false :dim false) (inc i))
+                (= c 23) (recur (assoc state :italic false) (inc i))
+                (= c 24) (recur (assoc state :underline false) (inc i))
+                (= c 25) (recur (assoc state :blink false) (inc i))
+                (= c 27) (recur (assoc state :inverse false) (inc i))
+                (= c 28) (recur (assoc state :hidden false) (inc i))
+                (= c 29) (recur (assoc state :strike false) (inc i))
+                (= c 39) (recur (assoc state :fg nil) (inc i))
+                (= c 49) (recur (assoc state :bg nil) (inc i))
+                (or (and (>= c 30) (<= c 37)) (and (>= c 90) (<= c 97)))
+                (recur (assoc state :fg (str c)) (inc i))
+                (or (and (>= c 40) (<= c 47)) (and (>= c 100) (<= c 107)))
+                (recur (assoc state :bg (str c)) (inc i))
+                :else (recur state (inc i))))))))))
+
+(defn- active-sgr-codes
+  "Minimal SGR code string reproducing STATE (pi: getActiveCodes), or \"\"
+   when the default style is active."
+  [state]
+  (let [codes (cond-> []
+                (:bold state) (conj "1")
+                (:dim state) (conj "2")
+                (:italic state) (conj "3")
+                (:underline state) (conj "4")
+                (:blink state) (conj "5")
+                (:inverse state) (conj "7")
+                (:hidden state) (conj "8")
+                (:strike state) (conj "9")
+                (:fg state) (conj (:fg state))
+                (:bg state) (conj (:bg state)))]
+    (if (seq codes)
+      (str "\u001b[" (str/join ";" codes) "m")
+      "")))
+
+(defn sgr-state-at
+  "The SGR style active at visible column COL of LINE, as a minimal SGR
+   code string (\"\" for the default style). Used to inherit styling past
+   an overlay region (pi: extractSegments)."
+  [line col]
+  (let [n (count line)]
+    (loop [i 0, current-col 0, prev-w 0, state (reset-sgr-state)]
+      (if (>= i n)
+        (active-sgr-codes state)
+        (if-let [[_ clen] (ansi-code-at line i)]
+          (recur (+ i clen) current-col prev-w
+                 (apply-sgr-code state (subs line i (+ i clen))))
+          (let [[w next-i] (grapheme-width-and-next line i n prev-w)]
+            (if (>= current-col col)
+              (active-sgr-codes state)
+              (recur next-i (+ current-col w) w state))))))))
+
+(defn composite-line
+  "Overlay OVERLAY-LINE onto BASE-LINE at visible column START-COL with
+   OVERLAY-WIDTH and TOTAL-WIDTH (pi: compositeTuiLine). ANSI-aware: the
+   base's styling is preserved before and after the overlay region, the
+   overlay's own codes are kept, and the after segment inherits the base
+   style active at the overlay boundary. Kitty image lines pass through
+   untouched so the protocol stream is never corrupted (pi: isImageLine).
+   Returns the composited line."
+  [base overlay start-col overlay-width total-width]
+  (if (img/is-image-line base)
+    base
+    (let [after-start (+ start-col overlay-width)
+          base-before (slice-with-width base 0 start-col :strict? true)
+          base-after (slice-with-width base after-start (- total-width after-start) :strict? true)
+          overlay-slice (slice-with-width overlay 0 overlay-width :strict? true)
+          before-pad (max 0 (- start-col (:width base-before)))
+          overlay-pad (max 0 (- overlay-width (:width overlay-slice)))
+          actual-before-w (max start-col (:width base-before))
+          actual-overlay-w (max overlay-width (:width overlay-slice))
+          after-target (max 0 (- total-width actual-before-w actual-overlay-w))
+          after-pad (max 0 (- after-target (:width base-after)))]
+      (str (:text base-before)
+           (apply str (repeat before-pad \space))
+           (:text overlay-slice)
+           (apply str (repeat overlay-pad \space))
+           (sgr-state-at base after-start)
+           (:text base-after)
+           (apply str (repeat after-pad \space))))))
 
 ;; ─── Visual line truncation ────────────────────────────────────────────────
 

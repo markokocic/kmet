@@ -1030,19 +1030,24 @@
           ;; the fixed header/dock, so total rendered content never exceeds the
           ;; screen and streaming tool output doesn't trigger full-screen
           ;; redraws (pi: transcriptScrollView in interactive-mode.ts).
-          ch-scroll (tui/make-scroll-view ch :follow-end true)]
+          ch-scroll (tui/make-scroll-view ch :follow-end true)
+          ;; Pi: the fixed bottom region is a VStack dock
+          ;; (interactive-mode.ts: new TuiLayouts.VStack([...dock children...]))
+          ;; — pending messages, status indicator, editor and footer compose
+          ;; as one fixed component under the chat scroll view.
+          dock (tui/make-v-stack
+                [(:pending-bash-container cs)
+                 si
+                 sp2
+                 ed
+                 sp3
+                 ftr])]
 
-      ;; Add components (pending bash container between chat and status indicator)
-      ;; Pi: pendingMessagesContainer sits between chatContainer and footer
+      ;; Add components (header + chat scroll view + VStack dock)
       (tui/tui-add-child t hdr)
       (tui/tui-add-child t sp1)
       (tui/tui-add-child t ch-scroll)
-      (tui/tui-add-child t (:pending-bash-container cs))
-      (tui/tui-add-child t si)
-      (tui/tui-add-child t sp2)
-      (tui/tui-add-child t ed)
-      (tui/tui-add-child t sp3)
-      (tui/tui-add-child t ftr)
+      (tui/tui-add-child t dock)
 
       ;; Wire editor submit
       (editor/editor-set-on-submit! ed

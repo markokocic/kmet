@@ -1,12 +1,15 @@
 (ns kmet.tui.components.container
   "Container component - groups child components vertically.
-   Port of @earendil-works/pi-tui Container."
+   Port of @earendil-works/pi-tui Container. Like pi, a Container does not
+   receive input: the TUI dispatches keys to the focused leaf component
+   only (pi: focusedComponent?.handleInput)."
   (:require [kmet.tui.protocols :as protocols]))
 
 (defrecord Container [children]
   protocols/IComponent
   (render [_this width] (into [] (mapcat #(protocols/render % width)) @children))
-  (handle-input [_this data] (some #(protocols/handle-input % data) @children))
+  ;; pi: no handleInput on containers — input routes via TUI focus
+  (handle-input [_this _data] nil)
   (invalidate [_this] (doseq [c @children] (protocols/invalidate c))))
 
 (defn make-container

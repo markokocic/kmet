@@ -83,3 +83,20 @@
   (t/is (k/matches-key? "\u001b[H" "home"))
   (t/is (k/matches-key? "\u001b[3~" "delete"))
   (t/is (not (k/matches-key? "a" "b"))))
+
+(t/deftest test-key-release-repeat-detection
+  ;; kitty protocol off → no detection (gated by @kitty-active)
+  (k/set-kitty-active! false)
+  (t/is (nil? (k/is-key-release? "\u001b[97;1:3u")))
+  (t/is (nil? (k/is-key-repeat? "\u001b[97;1:2u")))
+  ;; protocol on → release (:3) / repeat (:2) detected
+  (k/set-kitty-active! true)
+  (try
+    (t/is (true? (k/is-key-release? "\u001b[97;1:3u")))
+    (t/is (true? (k/is-key-repeat? "\u001b[97;1:2u")))
+    (t/is (nil? (k/is-key-release? "\u001b[97;1u")) "press is not a release")
+    (t/is (nil? (k/is-key-repeat? "\u001b[97;1u")))
+    ;; bracketed paste content is never a release/repeat (pi: ":3F" in MACs)
+    (t/is (nil? (k/is-key-release? "\u001b[200~90:62:3F:A5\u001b[201~")))
+    (t/is (nil? (k/is-key-repeat? "\u001b[200~x:2u\u001b[201~")))
+    (finally (k/set-kitty-active! false))))

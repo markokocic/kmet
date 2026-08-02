@@ -16,6 +16,17 @@
   (t/is (= "" (u/truncate-to-width "" 5)))
   (t/is (<= (u/visible-width (u/truncate-to-width "hello world" 5)) 5)))
 
+(t/deftest test-truncate-to-width-pi-parity
+  ;; pi: truncateToWidth guards on max-width — fitting text is never
+  ;; truncated even when an ellipsis is requested
+  (t/is (= "abcdef" (u/truncate-to-width "abcdef" 6 "...")))
+  (t/is (= "a very ..." (u/truncate-to-width "a very long line here" 10 "..."))
+        "kept prefix + ellipsis = max-width")
+  (t/is (= "hello..." (u/truncate-to-width "hello world foo" 8 "...")))
+  ;; pi: truncateFragmentToWidth — an ellipsis wider than max-width is clipped
+  (t/is (= ".." (u/truncate-to-width "hello world" 2 "...")))
+  (t/is (= "" (u/truncate-to-width "hello world" 0 "..."))))
+
 (t/deftest test-wrap-long-unbreakable-word
   ;; A single word longer than the width wraps across lines (pi: breakLongWord)
   ;; instead of being clipped — every character is preserved.
@@ -46,3 +57,59 @@
     (t/is (= [22 22 16] (mapv u/visible-width lines))
           "wide characters counted as 2 columns")
     (t/is (= 60 (apply + (map u/visible-width lines))))))
+
+;; ─── ANSI-aware slicing + compositing (HStack support) ─────────────────────
+
+(t/deftest test-slice-with-width-plain
+  (t/is (= {:text "hello" :width 5} (u/slice-with-width "hello world" 0 5 :strict? true)))
+  (t/is (= {:text "world" :width 5} (u/slice-with-width "hello world" 6 5 :strict? true)))
+  (t/is (= {:text "" :width 0} (u/slice-with-width "hello" 0 0 :strict? true))))
+
+(t/deftest test-slice-with-width-ansi
+  ;; ANSI codes before the window are prepended to the first kept character
+  (let [styled (str "\u001b[31m" "red" "\u001b[39m" "tail")
+        s (u/slice-with-width styled 0 3 :strict? true)]
+    (t/is (= 3 (:width s)))
+    (t/is (str/includes? (:text s) "red"))))
+
+(t/deftest test-slice-with-width-strict
+  ;; strict? excludes a wide char crossing the end boundary
+  (let [s (u/slice-with-width "中文x" 0 3 :strict? true)]
+    (t/is (= 2 (:width s)) "second 2-wide char would cross col 3 → excluded")))
+
+(t/deftest test-composite-line-plain
+  (t/is (= "...X......" (u/composite-line ".........." "X" 3 1 10)))
+  (t/is (= "ab cd" (str/trim (u/composite-line "ab        " "cd" 3 2 10)))))
+
+(t/deftest test-composite-line-ansi-overlay
+  (let [out (u/composite-line ".........." (str "\u001b[31m" "XX" "\u001b[39m") 3 2 10)]
+    (t/is (= 10 (u/visible-width out)))
+    (t/is (str/includes? out "\u001b[31m") "overlay styling kept")))
+
+(t/deftest test-composite-line-inherits-base-style
+  ;; The after segment keeps the base's background across the overlay region
+  (let [bg (str "\u001b[41m" "abcdefghij" "\u001b[49m")
+        out (u/composite-line bg "XX" 3 2 10)]
+    (t/is (= 10 (u/visible-width out)))
+    (t/is (str/includes? out "abc"))
+    (t/is (str/includes? out "fghij"))
+    (t/is (str/includes? out "\u001b[41m") "after content restyled with the base bg")))
+
+(t/deftest test-sgr-state-at
+  (t/is (= "" (u/sgr-state-at "plain" 0)))
+  (let [styled (str "\u001b[31m" "ab" "\u001b[39m" "cd")]
+    (t/is (= "\u001b[31m" (u/sgr-state-at styled 0)))
+    (t/is (= "\u001b[31m" (u/sgr-state-at styled 1)))
+    (t/is (= "" (u/sgr-state-at styled 2)) "reset applied at col 2")))
+
+(t/deftest test-composite-line-image-passthrough
+  ;; pi: compositeTuiLine returns kitty image lines untouched
+  (let [img-line (str "\u001b_Gf=100,m=0;" "aGVsbG8=" "\u001b\\" "rest")]
+    (t/is (= img-line (u/composite-line img-line "XX" 3 2 10)))))
+
+(t/deftest test-slice-with-width-graphemes-agree-with-visible-width
+  ;; skin-tone cluster and flag pair measure 2 columns in both
+  (let [s "👍🏽"]
+    (t/is (= 2 (:width (u/slice-with-width s 0 10 :strict? true))))
+    (t/is (= (u/visible-width s) (:width (u/slice-with-width s 0 10 :strict? true)))))
+  (t/is (= 2 (:width (u/slice-with-width "🇺🇸" 0 10 :strict? true)))))

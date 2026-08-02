@@ -16,9 +16,10 @@
 (defcomponent StatusIndicator nil [spinner active-atom]
   (render [this width]
     (if @active-atom
-      ;; Pi-style: one blank line above + one spinner line (with output-pad indentation)
+      ;; The Spinner renders the pi Loader shape itself (leading blank +
+      ;; animated line); indent only the content line for chat alignment.
       (let [lines (protocols/render (:spinner this) width)]
-        (into [""] (mapv #(str " " %) lines)))
+        (into [(first lines)] (mapv #(str " " %) (rest lines))))
       ;; Pi: IdleStatus — always occupy the same two rows so the editor and
       ;; footer below don't jump when the indicator appears/disappears.
       ["" ""]))

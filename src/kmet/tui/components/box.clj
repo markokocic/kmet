@@ -1,6 +1,7 @@
 (ns kmet.tui.components.box
   "Box component - a container that applies padding and background to all children.
-   Port of @earendil-works/pi-tui Box."
+   Port of @earendil-works/pi-tui Box. Like pi, a Box does not receive input:
+   the TUI dispatches keys to the focused leaf component only."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]))
 
@@ -40,8 +41,7 @@
             (reset! cache {:width width :bg-sample bg-sample
                            :child-lines child-lines :lines result})
             result)))))
-  (handle-input [_this data]
-    (some #(protocols/handle-input % data) @children))
+  (handle-input [_this _data] nil)
   (invalidate [this]
     (reset! (:cache this) nil)
     (doseq [c @children] (protocols/invalidate c))))

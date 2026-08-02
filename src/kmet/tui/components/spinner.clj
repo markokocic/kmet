@@ -1,7 +1,8 @@
 (ns kmet.tui.components.spinner
   "Animated spinner component — shows a cycling frame animation with a text message.
-   Renders nothing when inactive, one animated line when active.
-   Equivalent to Pi's Loader component.
+   Equivalent to Pi's Loader component. When active, renders a leading blank
+   line above the animated line (pi Loader: a blank line then the text lines);
+   renders nothing when inactive.
    Supports theme-aware color functions for spinner frame and message text."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]))
@@ -26,7 +27,8 @@
             msg-fn (or @message-color-fn-atom identity)
             prefix @prefix-atom
             line (str prefix (spinner-fn frame) " " (msg-fn @text-atom))]
-        [(u/truncate-to-width line width)])))
+        ;; pi Loader: leading blank line above the animated line
+        ["" (u/truncate-to-width line width)])))
   (handle-input [_this _data] nil)
   (invalidate [_this] nil))
 

@@ -1,25 +1,58 @@
 (ns kmet.tui.components.v-stack
-  "Stub for pi's VStack (components/v-stack.ts).
+  "VStack — vertical stack layout component (pi: components/v-stack.ts).
+   Renders children top-to-bottom, each at its natural height and the full
+   viewport width, with an optional gap of blank lines between them.
+   Children may be bare components or stack entry maps
+   {:component c :visible (fn [viewport] bool) :basis/:grow/:shrink
+   :min-size/:max-size} — the sizing options are accepted for parity with
+   pi; the height distribution itself is done by the host layout
+   (stack/render-stack in the TUI render loop). Like pi, a VStack does not
+   receive input — the TUI dispatches keys to the focused leaf component
+   only."
+  (:require [kmet.tui.protocols :as protocols]
+            [kmet.tui.components.stack :as stack]))
 
-   NOT IMPLEMENTED — implement upon first use. A vertical stack layout
-   component rendering children top-to-bottom with an optional gap. kmet's
-   tui.components.stack covers the render-loop layout for the app's fixed
-   header/dock; implement VStack when a reusable stacked component is
-   needed."
-  (:require [kmet.tui.protocols :as protocols]))
-
-(defn- not-implemented []
-  (throw (ex-info "VStack is not implemented yet; implement upon first use."
-                  {:component :v-stack})))
+(defn- render-entries
+  "Render VISIBLE children at WIDTH, inserting GAP blank lines between them."
+  [entries width gap]
+  (let [viewport {:width (max 1 width) :height Long/MAX_VALUE}
+        safe-width (max 1 width)
+        entries (stack/visible-stack-entries entries viewport)]
+    (loop [entries entries, first? true, acc []]
+      (if-let [e (first entries)]
+        (recur (rest entries) false
+               (into acc
+                     (concat (when (not first?) (repeat gap ""))
+                             (protocols/render (stack/entry-component e) safe-width))))
+        acc))))
 
 (defrecord VStack [entries-atom gap-atom]
   protocols/IComponent
-  (render [_this _width] (not-implemented))
+  (render [_this width]
+    (render-entries @entries-atom width @gap-atom))
   (handle-input [_this _data] nil)
-  (invalidate [_this] nil))
+  (invalidate [_this]
+    (doseq [e @entries-atom] (protocols/invalidate (stack/entry-component e)))))
+
+;; ─── Construction & API ────────────────────────────────────────────────────
 
 (defn make-v-stack
-  "Stub — see ns docstring."
+  "Create a VStack. CHILDREN: components or stack entry maps. Options:
+     :gap — blank lines between children (default 0, clamped to ≥ 0 like
+            pi's normalizeSize)"
   [children & {:keys [gap] :or {gap 0}}]
   (map->VStack {:entries-atom (atom (vec children))
-                :gap-atom (atom gap)}))
+                :gap-atom (atom (max 0 (long (Math/floor (double (or gap 0))))))}))
+
+(defn v-stack-add-child! [vs child]
+  (swap! (:entries-atom vs) conj child))
+
+(defn v-stack-remove-child! [vs child]
+  (swap! (:entries-atom vs)
+         (fn [v] (vec (remove #(identical? (stack/entry-component %) child) v)))))
+
+(defn v-stack-clear! [vs]
+  (reset! (:entries-atom vs) []))
+
+(defn v-stack-set-gap! [vs gap]
+  (reset! (:gap-atom vs) (max 0 (long (Math/floor (double (or gap 0)))))))

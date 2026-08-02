@@ -19,7 +19,7 @@
             [kmet.tui.components.spinner :as spinner]
             [kmet.tui.components.scroll-view :as scroll-view]
             [kmet.tui.components.stack :as stack]
-            ;; pi-parity stubs (not yet implemented — throw on use)
+            ;; pi-parity components (previously stubs — now implemented)
             [kmet.tui.components.alt-screen-flash :as alt-screen-flash]
             [kmet.tui.components.cancellable-loader :as cancellable-loader]
             [kmet.tui.components.truncated-text :as truncated-text]
@@ -42,7 +42,7 @@
 ;; Overlay
 ;; ═══════════════════════════════════════════════════════════════════════════
 
-(defrecord Overlay [component x y width height focused?])
+(defrecord Overlay [component x y width height focused? previous-focus])
 
 (defn- extract-cursor-position
   "Find CURSOR-MARKER in rendered lines (viewport only), strip it from output,
@@ -79,22 +79,32 @@
                 input-listeners previous-lines
                 previous-width render-requested?
                 running? stopped? overlays
-                render-loop input-reader current-reader])
+                render-loop input-reader current-reader
+                flashes])
+
+(declare tui-request-render tui-stop)
 
 (defn create-tui [terminal]
-  (map->TUI {:terminal (atom terminal)
-             :components (atom [])
-             :focused-component (atom nil)
-             :input-listeners (atom [])
-             :previous-lines (atom [])
-             :previous-width (atom 0)
-             :render-requested? (atom false)
-             :running? (atom false)
-             :stopped? (atom false)
-             :overlays (atom [])
-             :render-loop (atom nil)
-             :input-reader (atom nil)
-             :current-reader (atom nil)}))
+  (let [tui (map->TUI {:terminal (atom terminal)
+                       :components (atom [])
+                       :focused-component (atom nil)
+                       :input-listeners (atom [])
+                       :previous-lines (atom [])
+                       :previous-width (atom 0)
+                       :render-requested? (atom false)
+                       :running? (atom false)
+                       :stopped? (atom false)
+                       :overlays (atom [])
+                       :render-loop (atom nil)
+                       :input-reader (atom nil)
+                       :current-reader (atom nil)
+                       :flashes (atom nil)})]
+    ;; AltScreenFlashContainer owned by the TUI (pi: TuiAltScreen owns its
+    ;; flash container) — the render loop composites flash lines over the
+    ;; screen window; tui-flash! / tui-flash-dispose! are the public API.
+    (reset! (:flashes tui)
+            (alt-screen-flash/make-alt-screen-flash #(tui-request-render tui)))
+    tui))
 
 (defn tui-add-child [tui c] (swap! (:components tui) conj c))
 (defn tui-remove-child [tui c]
@@ -113,15 +123,28 @@
 (defn tui-remove-input-listener [tui f]
   (swap! (:input-listeners tui) (fn [v] (vec (remove #(= % f) v)))))
 
-(declare tui-request-render tui-stop)
+;; ─── Flashes (pi: TuiAltScreen.flash — transient messages) ─────────────────
+
+(defn tui-flash!
+  "Show a transient inverse-video message over the bottom of the screen for
+   DURATION-MS (default 1000), then remove it (pi: flash)."
+  [tui message & {:keys [duration-ms]}]
+  (alt-screen-flash/alt-screen-flash! @(:flashes tui) message :duration-ms duration-ms))
+
+(defn tui-flash-dispose!
+  "Clear all pending flashes immediately."
+  [tui]
+  (alt-screen-flash/alt-screen-flash-dispose! @(:flashes tui)))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Overlays
 ;; ═══════════════════════════════════════════════════════════════════════════
 
 (defn tui-show-overlay [tui component & {:keys [x y width height]}]
+  ;; Capture the pre-overlay focus so hiding restores it (pi: overlayFocusRestore)
   (let [o (map->Overlay {:component component :x x :y y
-                         :width width :height height :focused? true})]
+                         :width width :height height :focused? true
+                         :previous-focus @(:focused-component tui)})]
     (swap! (:overlays tui) conj o)
     (tui-set-focus tui component)
     o))
@@ -131,9 +154,17 @@
     (swap! (:overlays tui) pop)
     (when (:focused? o)
       (if-let [next-o (:component (peek @(:overlays tui)))]
+        ;; An overlay below exists — it owns focus now
         (tui-set-focus tui next-o)
-        (when-let [last (last @(:components tui))]
-          (tui-set-focus tui last))))
+        ;; Back at the base layout: restore the component focused before
+        ;; the overlay was shown (pi: restore the saved focus target).
+        ;; Only restore when it is still a live component (pi:
+        ;; isComponentMounted); otherwise fall back to the last component.
+        (let [prev (:previous-focus o)]
+          (if (and prev (some #(identical? prev %) @(:components tui)))
+            (tui-set-focus tui prev)
+            (when-let [last (last @(:components tui))]
+              (tui-set-focus tui last))))))
     (tui-request-render tui)))
 
 (defn tui-has-overlay? [tui] (pos? (count @(:overlays tui))))
@@ -152,6 +183,36 @@
               (str line (apply str (repeat (- width vis) \space))))))
         lines))
 
+(defn- composite-flashes
+  "Overlay transient flash lines (AltScreenFlashContainer) onto the screen
+   window — the bottom HEIGHT content rows — right-aligned, one flash per
+   row (pi: compositeFlashes). Takes the LAST HEIGHT flash lines so a flash
+   flood stays on-screen (pi: .slice(-height)). Returns LINES unchanged
+   when nothing flashes."
+  [flashes lines width height]
+  (let [flash-lines (protocols/render flashes width)
+        flash-lines (if (> (count flash-lines) height)
+                      (vec (take-last height flash-lines))
+                      flash-lines)
+        n (count flash-lines)
+        top (max 0 (- (count lines) height))]
+    (if (zero? n)
+      lines
+      (loop [row 0, lines lines]
+        (if (>= row n)
+          lines
+          (let [line (nth flash-lines row)
+                fw (utils/visible-width line)]
+            (if (pos? fw)
+              (let [idx (+ top row)
+                    out (utils/composite-line (if (< idx (count lines)) (nth lines idx) "")
+                                              line (- width fw) fw width)]
+                (recur (inc row)
+                       (if (< idx (count lines))
+                         (assoc lines idx out)
+                         (conj lines out))))
+              (recur (inc row) lines))))))))
+
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Input reader
 ;; ═══════════════════════════════════════════════════════════════════════════
@@ -163,13 +224,16 @@
 (def ^:private ESC-WAIT-STEP 3)
 
 (defn- dispatch-input!
-  "Dispatch a complete input sequence to listeners and focused component."
+  "Dispatch a complete input sequence to listeners and the focused component."
   [tui data]
   (doseq [l @(:input-listeners tui)] (l data))
-  (if-let [fc @(:focused-component tui)]
-    (handle-input fc data)
-    (when-let [c (first @(:components tui))]
-      (handle-input c data)))
+  (when-let [fc @(:focused-component tui)]
+    ;; pi: input goes only to the focused leaf; key release events are
+    ;; filtered unless the component opts in via a :wants-key-release?
+    ;; field (pi: Component.wantsKeyRelease)
+    (when (or (not (keys/is-key-release? data))
+              (:wants-key-release? fc))
+      (handle-input fc data)))
   (tui-request-render tui))
 
 (defn- process-input-buffer!
@@ -255,7 +319,9 @@
 
 (defn tui-stop [tui]
   (reset! (:stopped? tui) true)
-  (reset! (:running? tui) false))
+  (reset! (:running? tui) false)
+  ;; pi: TuiAltScreen.dispose() clears pending flashes on close
+  (tui-flash-dispose! tui))
 
 (defn- run-render-loop!
   "Start the terminal (raw mode) and run the render loop until the TUI is
@@ -301,6 +367,7 @@
                     cursor (:cursor cursor-result)
                     lines (:lines cursor-result)
                     lines (pad-lines-to-width lines w)
+                    lines (composite-flashes @(:flashes tui) lines w h)
                     prev @(:previous-lines tui)
                     prev-w @(:previous-width tui)
                     prev-count (count prev)
@@ -623,14 +690,38 @@
 (def scroll-view-follows-end? scroll-view/follows-end?)
 (def render-stack stack/render-stack)
 
-;; pi-parity stubs (not yet implemented — throw on use)
+;; AltScreenFlash — transient messages composited over the screen bottom
 (def make-alt-screen-flash alt-screen-flash/make-alt-screen-flash)
 (def alt-screen-flash! alt-screen-flash/alt-screen-flash!)
 (def alt-screen-flash-dispose! alt-screen-flash/alt-screen-flash-dispose!)
+
+;; CancellableLoader — Loader cancellable with Escape (pi: BorderedLoader)
 (def make-cancellable-loader cancellable-loader/make-cancellable-loader)
 (def cancellable-loader-aborted? cancellable-loader/cancellable-loader-aborted?)
+(def cancellable-loader-signal cancellable-loader/cancellable-loader-signal)
+(def cancellable-loader-set-on-abort! cancellable-loader/cancellable-loader-set-on-abort!)
 (def cancellable-loader-dispose! cancellable-loader/cancellable-loader-dispose!)
+
+;; TruncatedText — single-line truncating text
 (def make-truncated-text truncated-text/make-truncated-text)
+(def truncated-text-set-text! truncated-text/truncated-text-set-text!)
+
+;; HStack / VStack — flexbox-style horizontal / vertical stacks
 (def make-h-stack h-stack/make-h-stack)
+(def h-stack-add-child! h-stack/h-stack-add-child!)
+(def h-stack-remove-child! h-stack/h-stack-remove-child!)
+(def h-stack-clear! h-stack/h-stack-clear!)
+(def h-stack-set-gap! h-stack/h-stack-set-gap!)
+(def h-stack-set-align! h-stack/h-stack-set-align!)
 (def make-v-stack v-stack/make-v-stack)
+(def v-stack-add-child! v-stack/v-stack-add-child!)
+(def v-stack-remove-child! v-stack/v-stack-remove-child!)
+(def v-stack-clear! v-stack/v-stack-clear!)
+(def v-stack-set-gap! v-stack/v-stack-set-gap!)
+
+;; Stack sizing (pi: allocateStackSizes) — shared by HStack/VStack
+(def stack-entry? stack/stack-entry?)
+(def entry-component stack/entry-component)
+(def visible-stack-entries stack/visible-stack-entries)
+(def allocate-stack-sizes stack/allocate-stack-sizes)
 

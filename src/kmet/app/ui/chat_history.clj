@@ -10,6 +10,7 @@
             [kmet.tui.theme :as theme]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.text :as text]
+            [kmet.tui.components.truncated-text :as truncated-text]
             [kmet.tui.components.markdown :as md]
             [kmet.tui.components.container :as container]
             [kmet.app.ui.user-message :as um]
@@ -376,7 +377,9 @@
 
 ;; ─── Status message (pi: showStatus) ────────────────────────────────────────
 
-;; StatusLine — bottom-of-chat status line: a dim text under a Spacer(1).
+;; StatusLine — bottom-of-chat status line: a dim single-line message under
+;; a Spacer(1). The message uses TruncatedText (pi's one-line hint component)
+;; so long statuses truncate with an ellipsis instead of wrapping.
 ;; No component kind — kind-based dispatch (toggles, theme application)
 ;; returns nil for it.
 (defcomponent StatusLine nil [spacer-atom text-atom]
@@ -393,10 +396,12 @@
    place instead of appending, so repeated toggles don't accumulate status."
   [ch message]
   (if-let [line @(:status-line-atom ch)]
-    (text/text-set! @(:text-atom line) (theme/dim message))
+    (truncated-text/truncated-text-set-text! @(:text-atom line) (theme/dim message))
     (reset! (:status-line-atom ch)
             (map->StatusLine {:spacer-atom (atom (spacer/make-spacer 1))
-                              :text-atom (atom (text/make-text (theme/dim message) 1 0))})))
+                              :text-atom (atom (truncated-text/make-truncated-text
+                                                (theme/dim message)
+                                                :padding-x 1 :padding-y 0))})))
   nil)
 
 ;; ─── Misc ─────────────────────────────────────────────────────────────────

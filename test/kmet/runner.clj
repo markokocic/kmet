@@ -26,6 +26,7 @@
             [kmet.test-editing]
             [kmet.tui.test-fuzzy]
             [kmet.tui.test-autocomplete]
+            [kmet.tui.test-core]
             [kmet.tui.components.test-text]
             [kmet.tui.components.test-spacer]
             [kmet.tui.components.test-container]
@@ -37,6 +38,12 @@
             [kmet.tui.components.test-markdown]
             [kmet.tui.components.test-track]
             [kmet.tui.components.test-scroll-view]
+            [kmet.tui.components.test-stack]
+            [kmet.tui.components.test-v-stack]
+            [kmet.tui.components.test-h-stack]
+            [kmet.tui.components.test-truncated-text]
+            [kmet.tui.components.test-alt-screen-flash]
+            [kmet.tui.components.test-cancellable-loader]
             [kmet.libs.test-self-contained]
             [kmet.libs.test-terminal-image]
             [kmet.libs.test-yaml-lite]
@@ -69,6 +76,7 @@
     kmet.test-editing
     kmet.tui.test-fuzzy
     kmet.tui.test-autocomplete
+    kmet.tui.test-core
     kmet.tui.components.test-text
     kmet.tui.components.test-spacer
     kmet.tui.components.test-container
@@ -80,6 +88,12 @@
     kmet.tui.components.test-markdown
     kmet.tui.components.test-track
     kmet.tui.components.test-scroll-view
+    kmet.tui.components.test-stack
+    kmet.tui.components.test-v-stack
+    kmet.tui.components.test-h-stack
+    kmet.tui.components.test-truncated-text
+    kmet.tui.components.test-alt-screen-flash
+    kmet.tui.components.test-cancellable-loader
     kmet.libs.test-self-contained
     kmet.libs.test-terminal-image
     kmet.libs.test-yaml-lite

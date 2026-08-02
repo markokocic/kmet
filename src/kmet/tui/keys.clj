@@ -156,24 +156,29 @@
 ;; ─── Sequence helpers ───────────────────────────────────────────────────────
 
 (defn is-key-release?
-  "Check if the data looks like a key release event (Kitty protocol)"
+  "Check if the data looks like a key release event (Kitty protocol, event
+   type 3). Bracketed paste content is never a release event (pi: bluetooth
+   MAC addresses like \"90:62:3F:A5\" contain \":3F\")."
   [data]
-  (when kitty-active
-    (when (and (str/includes? data ":3")
-               (or (str/includes? data "u") (str/includes? data "~")
-                   (str/includes? data "A") (str/includes? data "B")
-                   (str/includes? data "C") (str/includes? data "D")))
-      true)))
+  (when-not (str/includes? data "\u001b[200~")
+    (when @kitty-active
+      (when (and (str/includes? data ":3")
+                 (or (str/includes? data "u") (str/includes? data "~")
+                     (str/includes? data "A") (str/includes? data "B")
+                     (str/includes? data "C") (str/includes? data "D")))
+        true))))
 
 (defn is-key-repeat?
-  "Check if the data looks like a key repeat event (Kitty protocol)"
+  "Check if the data looks like a key repeat event (Kitty protocol, event
+   type 2). Bracketed paste content is never a repeat event."
   [data]
-  (when kitty-active
-    (when (and (str/includes? data ":2")
-               (or (str/includes? data "u") (str/includes? data "~")
-                   (str/includes? data "A") (str/includes? data "B")
-                   (str/includes? data "C") (str/includes? data "D")))
-      true)))
+  (when-not (str/includes? data "\u001b[200~")
+    (when @kitty-active
+      (when (and (str/includes? data ":2")
+                 (or (str/includes? data "u") (str/includes? data "~")
+                     (str/includes? data "A") (str/includes? data "B")
+                     (str/includes? data "C") (str/includes? data "D")))
+        true))))
 
 ;; ─── Escape sequence prefix detection ──────────────────────────────────────
 
