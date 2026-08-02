@@ -18,6 +18,15 @@
           lines (mapv strip-ansi (core/render c 40))]
       (is (some #(re-find #"Hello world" %) lines)))))
 
+(deftest test-render-markdown-highlight
+  (testing "assistant text renders markdown with syntax-highlighted fences"
+    (let [c (am/make-assistant-message :text "```clojure\n(defn f [] 1)\n```")
+          lines (core/render c 40)]
+      (is (some #(.contains % "\u001b[38;2;86;156;214mdefn\u001b[39m") lines)
+          "code fence keywords get syntax colors")
+      (is (some #(re-find #"\(defn f \[\] 1\)" %) (mapv strip-ansi lines))
+          "fence content renders as markdown, not raw backticks"))))
+
 (deftest test-render-thinking
   (testing "renders thinking text in italic"
     (let [c (am/make-assistant-message :text "response" :thinking "reasoning...")

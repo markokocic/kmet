@@ -147,17 +147,20 @@
   "Render a :table token: box-drawn borders, bold header, width-aware columns
    with cell wrapping (pi's renderTable port). Falls back to the raw markdown
    when the table cannot fit."
-  [result t theme content-width left-pad]
+  [result t theme content-width left-pad default-style]
   (let [num-cols (count (:header t))
         border-fn (or (:table-border theme) identity)
         border-overhead (inc (* 3 num-cols))
-        available-for-cells (- content-width border-overhead)]
+        available-for-cells (- content-width border-overhead)
+        cell-style (fn [c]
+                     (let [s (render-inlines c theme)]
+                       (if default-style (default-style s) s)))]
     (if (< available-for-cells num-cols)
       ;; Too narrow — fall back to the raw markdown, wrapped
       (doseq [line (u/wrap-text-with-ansi (:raw t) content-width)]
-        (vswap! result conj (pad-right content-width (str left-pad line))))
-      (let [header-styled (mapv #(render-inlines % theme) (:header t))
-            row-styled (mapv #(mapv (fn [c] (render-inlines c theme)) %) (:rows t))
+        (vswap! result conj (pad-right content-width (str left-pad (if default-style (default-style line) line)))))
+      (let [header-styled (mapv cell-style (:header t))
+            row-styled (mapv #(mapv cell-style %) (:rows t))
             max-unbroken 30
             natural (reduce (fn [ws row]
                               (mapv (fn [w c] (max w (u/visible-width c))) ws row))
@@ -217,8 +220,9 @@
    render their :content lines (first gets the bullet, rest are continuations
    aligned to the marker column), wrap long lines to the item width, then
    render any :blocks (:ul/:ol at depth+1, :code at depth+1) and :blank
-   pseudo-items as empty lines. Ordered items number from 1 across real items."
-  [result t theme depth content-width left-pad]
+   pseudo-items as empty lines. Ordered items number from 1 across real items.
+   DEFAULT-STYLE tints item text only."
+  [result t theme depth content-width left-pad default-style]
   (let [indent (apply str (repeat (* 4 depth) \space))
         indent-w (count indent)
         num (volatile! 0)]
@@ -235,6 +239,7 @@
               first-line? (volatile! true)]
           (doseq [line (:content item)]
             (let [styled (render-inlines line theme)
+                  styled (if default-style (default-style styled) styled)
                   segs (if (<= (u/visible-width styled) item-width)
                          [styled]
                          (u/wrap-text-with-ansi styled item-width))]
@@ -247,8 +252,8 @@
                   (vreset! first-line? false)))))
           (doseq [b (:blocks item)]
             (case (:type b)
-              :ul (render-list result b theme (inc depth) content-width left-pad)
-              :ol (render-list result b theme (inc depth) content-width left-pad)
+              :ul (render-list result b theme (inc depth) content-width left-pad default-style)
+              :ol (render-list result b theme (inc depth) content-width left-pad default-style)
               :code (render-code result b theme content-width left-pad
                                  (apply str (repeat (* 4 (inc depth)) \space)))
               nil)))))))
@@ -256,8 +261,10 @@
 (defn- render-block
   "Render one block token into RESULT (a volatile vector of lines).
    Each line is left-padded and right-padded to the content width, matching
-   the original line-oriented renderer's output exactly."
-  [result t theme content-width left-pad]
+   the original line-oriented renderer's output exactly. DEFAULT-STYLE tints
+   text content (paragraphs, list items, table cells) but not code blocks,
+   headings, quotes, or hr — mirroring pi's defaultTextStyle."
+  [result t theme content-width left-pad default-style]
   (case (:type t)
     :blank
     (vswap! result conj (str left-pad (apply str (repeat content-width \space))))
@@ -282,7 +289,7 @@
     (render-code result t theme content-width left-pad "")
 
     :table
-    (render-table result t theme content-width left-pad)
+    (render-table result t theme content-width left-pad default-style)
 
     :quote
     (let [border ((:quote-border theme) "▎")
@@ -292,13 +299,14 @@
                    (apply str (repeat (max 0 (- content-width (inc (u/visible-width styled)))) \space)))))
 
     :ul
-    (render-list result t theme 0 content-width left-pad)
+    (render-list result t theme 0 content-width left-pad default-style)
 
     :ol
-    (render-list result t theme 0 content-width left-pad)
+    (render-list result t theme 0 content-width left-pad default-style)
 
     :paragraph
     (let [styled (render-inlines (:content t) theme)
+          styled (if default-style (default-style styled) styled)
           line-width (u/visible-width styled)]
       (if (<= line-width content-width)
         (vswap! result conj (pad-right content-width (str left-pad styled)))
@@ -311,6 +319,7 @@
 ;; ─── Markdown component ───────────────────────────────────────────────────
 
 (defrecord Markdown [text-atom theme-atom padding-x-atom
+                     default-style-atom
                      cache-atom]
   protocols/IComponent
 
@@ -319,6 +328,7 @@
       (let [text @text-atom
             theme @theme-atom
             padding-x @padding-x-atom
+            default-style @default-style-atom
             content-width (max 1 (- width (* 2 padding-x)))
             left-pad (apply str (repeat padding-x \space))
             result (volatile! [])]
@@ -328,7 +338,7 @@
                        (update tokens (dec (count tokens)) trim-code-fence)
                        tokens)]
           (doseq [t tokens]
-            (render-block result t theme content-width left-pad)))
+            (render-block result t theme content-width left-pad default-style)))
         @result)))
 
   (handle-input [_this _data] nil)
@@ -340,12 +350,16 @@
 
 (defn make-markdown
   "Create a Markdown display component.
-   Options: :theme (default-theme), :padding-x (default 1)"
-  [text & {:keys [theme padding-x] :or {padding-x 1}}]
+   Options: :theme (default-theme), :padding-x (default 1),
+   :default-style — per-line base style fn applied to text content
+   (paragraphs, list items, table cells) but NOT block-level styled elements
+   (code blocks, headings, quotes, hr), mirroring pi's defaultTextStyle."
+  [text & {:keys [theme padding-x default-style] :or {padding-x 1}}]
   (let [t (or theme default-theme)]
     (map->Markdown {:text-atom (atom text)
                     :theme-atom (atom t)
                     :padding-x-atom (atom padding-x)
+                    :default-style-atom (atom default-style)
                     :cache-atom (atom nil)})))
 
 (defn markdown-set-text! [md text]
@@ -356,6 +370,9 @@
 
 (defn markdown-set-theme! [md theme]
   (reset! (:theme-atom md) theme))
+
+(defn markdown-set-default-style! [md f]
+  (reset! (:default-style-atom md) f))
 
 (defn markdown-set-padding-x! [md n]
   (reset! (:padding-x-atom md) n))

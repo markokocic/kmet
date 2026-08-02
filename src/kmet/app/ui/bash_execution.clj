@@ -80,11 +80,11 @@
         (when (seq display-lines)
           (if expanded?
                 ;; Full output
-            (let [styled (mapv #(theme/fg t :muted %) display-lines)
+            (let [styled (mapv #(theme/fg t :tool-output %) display-lines)
                   output-text (text/make-text (str "\n" (str/join "\n" styled)) 1 0)]
               (container/container-add-child content-container output-text))
                 ;; Collapsed preview: last N lines with visual line truncation
-            (let [styled-preview (mapv #(theme/fg t :muted %) preview-logical-lines)
+            (let [styled-preview (mapv #(theme/fg t :tool-output %) preview-logical-lines)
                   preview-text (str "\n" (str/join "\n" styled-preview))]
               (container/container-add-child content-container
                                              (->BashPreview preview-text content-pad)))))

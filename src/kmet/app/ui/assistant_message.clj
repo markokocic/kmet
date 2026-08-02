@@ -10,32 +10,41 @@
    StatusIndicator in a dedicated layout layer between chat and editor (Pi-style)."
   (:require [clojure.string :as str]
             [kmet.tui.protocols :as protocols]
-            [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.markdown :as md]
             [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
-(defn- wrap-text-to-width
-  "Wrap text to width, apply left-padding and theme-fg."
+(defn- render-text-to-width
+  "Render assistant text as markdown (pi: Markdown + getMarkdownTheme, which
+   includes syntax-highlighting the code fences). Plain text is left unstyled
+   — terminal default, exactly like pi's assistant messages."
   [text cw left-pad theme]
   (when (seq text)
-    (let [wrapped (u/wrap-text-with-ansi text cw)]
-      (mapv #(str left-pad (theme/fg theme :text %)) wrapped))))
+    (let [mc (md/make-markdown text
+                               :theme (theme/get-markdown-theme theme)
+                               :padding-x 0)
+          md-lines (protocols/render mc cw)]
+      (mapv #(str left-pad %) md-lines))))
 
 (defn- render-thinking-to-width
-  "Render thinking text as markdown, wrap, apply italic + theme-fg."
+  "Render thinking text as markdown tinted thinkingText + italic (pi:
+   Markdown with defaultTextStyle {color: thinkingText, italic: true}). Code
+   fences inside thinking highlight, like pi."
   [text cw left-pad theme hide?]
   (if (not (seq text))
     []
     (if hide?
       [(str left-pad (theme/fg theme :thinking-text (theme/italic "Thinking...")))]
-      (let [mc (md/make-markdown text :padding-x 0)
+      (let [mc (md/make-markdown text
+                                 :theme (theme/get-markdown-theme theme)
+                                 :default-style (fn [s]
+                                                  (theme/fg theme :thinking-text
+                                                            (theme/italic s)))
+                                 :padding-x 0)
             md-lines (protocols/render mc cw)]
-        (mapv (fn [line]
-                (str left-pad (theme/fg theme :thinking-text (theme/italic line))))
-              md-lines)))))
+        (mapv #(str left-pad %) md-lines)))))
 
 (declare reflow-all!)
 
@@ -102,7 +111,7 @@
         text (str/trim (or @(:text-atom comp) ""))
         thinking (str/trim (or @(:thinking-text-atom comp) ""))]
     (reset! (:rendered-text-lines-atom comp)
-            (wrap-text-to-width text cw left-pad theme))
+            (render-text-to-width text cw left-pad theme))
     (reset! (:rendered-thinking-lines-atom comp)
             (render-thinking-to-width thinking cw left-pad theme hide?))
     (reset! (:rendered-text-atom comp) text)

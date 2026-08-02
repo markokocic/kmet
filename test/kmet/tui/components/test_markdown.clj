@@ -178,6 +178,21 @@
         lines (mapv strip-ansi (core/render m 30))]
     (t/is (some #(.contains % "HL[clj]") lines))))
 
+(t/deftest test-markdown-default-style
+  ;; pi's defaultTextStyle: tints text content (paragraphs, list items,
+  ;; table cells) but NOT block-level styled elements (code, headings, hr)
+  (let [tint (fn [s] (str "T[" s "]"))
+        m (md/make-markdown "para\n\n- item\n\n```clj\n(x)\n```\n\n# head"
+                            :theme (assoc md/default-theme
+                                          :highlight-code (fn [code _] [code]))
+                            :default-style tint
+                            :padding-x 0)
+        lines (mapv strip-ansi (core/render m 30))]
+    (t/is (some #(.contains % "T[para]") lines))
+    (t/is (some #(.contains % "T[item]") lines))
+    (t/is (not-any? #(re-find #"T\[" %) (filter #(re-find #"```|\(x\)|head" %) lines))
+          "code blocks and headings are not tinted")))
+
 (t/deftest test-markdown-theme-syntax-highlight
   ;; get-markdown-theme wires the lib tokenizer: known lang → syntax colors,
   ;; unknown lang → mdCodeBlock color (pi behavior)

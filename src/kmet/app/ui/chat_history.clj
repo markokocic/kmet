@@ -10,6 +10,7 @@
             [kmet.tui.theme :as theme]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.text :as text]
+            [kmet.tui.components.markdown :as md]
             [kmet.tui.components.container :as container]
             [kmet.app.ui.user-message :as um]
             [kmet.app.ui.assistant-message :as am]
@@ -126,6 +127,19 @@
     (container/container-add-child c (text/make-text text 1 0))
     c))
 
+(defn- make-plain-md-msg
+  "Spacer(1) + Markdown tinted with DEFAULT-STYLE-FN — pi's compaction
+   summaries and unknown-role content render as Markdown."
+  [text theme default-style-fn]
+  (let [c (container/make-container)]
+    (container/container-add-child c (spacer/make-spacer 1))
+    (container/container-add-child c
+                                   (md/make-markdown text
+                                                     :theme (theme/get-markdown-theme theme)
+                                                     :default-style default-style-fn
+                                                     :padding-x 0))
+    c))
+
 (defn- make-component-for-msg
   "Create the appropriate component for a message map.
    For tool messages, looks up render functions from the tool registry.
@@ -168,9 +182,10 @@
     :error (make-plain-msg (theme/fg theme :error (str "Error: " (:content msg ""))))
     :warning (make-plain-msg (theme/fg theme :warning (str "Warning: " (:content msg ""))))
     ;; Fallback for roles with no dedicated component (e.g. :system compaction
-    ;; summaries, unknown roles from session data): render content as plain
-    ;; text rather than silently dropping the message.
-    (make-plain-msg (theme/fg theme :text (content->display-text (:content msg ""))))))
+    ;; summaries, unknown roles from session data): render content as markdown
+    ;; (pi renders compaction summaries via Markdown) rather than dropping it.
+    (make-plain-md-msg (content->display-text (:content msg "")) theme
+                       (fn [s] (theme/fg theme :text s)))))
 
 (defn chat-history-add-message!
   "Add a message to the chat history.

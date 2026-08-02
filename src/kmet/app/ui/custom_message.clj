@@ -6,6 +6,7 @@
             [kmet.tui.theme :as theme]
             [kmet.tui.components.box :as box]
             [kmet.tui.components.text :as text]
+            [kmet.tui.components.markdown :as md]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.macros :refer [defsetter defgetter defcomponent]]))
@@ -45,7 +46,9 @@
       :else @(:content-atom comp))))
 
 (defn- rebuild-content!
-  "Rebuild the Text children inside the inner container with current content/theme."
+  "Rebuild the children inside the inner container with current content/theme.
+   Label is plain Text (pi: Text), content is Markdown tinted
+   custom-message-text (pi: Markdown with {color: customMessageText})."
   [comp]
   (let [theme @(:theme-atom comp)
         label @(:label-atom comp)
@@ -57,9 +60,12 @@
         (container/container-add-child container
                                        (text/make-text label-str 0 0))))
     (when (seq content)
-      (let [colored (theme/fg theme :custom-message-text content)]
-        (container/container-add-child container
-                                       (text/make-text colored 0 0))))))
+      (container/container-add-child container
+                                     (md/make-markdown content
+                                                       :theme (theme/get-markdown-theme theme)
+                                                       :default-style (fn [s]
+                                                                        (theme/fg theme :custom-message-text s))
+                                                       :padding-x 0)))))
 
 ;; ─── Public API (defined before make- to avoid forward ref) ──────────────
 
