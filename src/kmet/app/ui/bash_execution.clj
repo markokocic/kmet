@@ -71,8 +71,8 @@
         (container/container-clear content-container)
 
             ;; ── Command header ─────────────────────────────────────────
-        (let [header-text (str (theme/fg t color-key
-                                         (theme/bold (str "$ " command))))
+        (let [header-text (theme/fg t color-key
+                                    (theme/bold (str "$ " command)))
               header (text/make-text header-text 1 0)]
           (container/container-add-child content-container header))
 

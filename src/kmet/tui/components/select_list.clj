@@ -73,7 +73,7 @@
                        0 filtered)
         target (+ widest PRIMARY-COLUMN-GAP)
         lo (max 1 (min min-col max-col))
-        hi (max 1 (max min-col max-col))]
+        hi (max 1 min-col max-col)]
     (max lo (min target hi))))
 
 (defn- render-item

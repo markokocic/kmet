@@ -197,7 +197,7 @@
                                         "Successfully replaced 1 block(s) in target/test-tools-edit-resultdiff.txt.")
         (te/tool-execution-set-error! c false)
         (te/tool-execution-set-details! c
-                                        {:diff (str " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma\n 4 delta")})
+                                        {:diff " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma\n 4 delta"})
         ;; this pass still shows the stale preview; the result corrects the cache
         (let [plain (mapv strip-ansi (core/render c 60))]
           (is (some #(re-find #"\+2 BETA" %) plain)))
@@ -214,7 +214,7 @@
              :args {:path "target/test-tools-edit-replay.txt"
                     :old-text "beta" :new-text "BETA"}
              :content "Successfully replaced 1 block(s) in target/test-tools-edit-replay.txt."
-             :details {:diff (str " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma")})]
+             :details {:diff " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma"})]
       (te/tool-execution-set-error! c false)
       ;; first pass: render-result corrects the preview from details
       (core/render c 60)
@@ -236,7 +236,7 @@
                                         "Successfully replaced 1 block(s) in target/test-tools-edit-match.txt.")
         (te/tool-execution-set-error! c false)
         (te/tool-execution-set-details! c
-                                        {:diff (str " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma")})
+                                        {:diff " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma"})
         (let [after2 (mapv strip-ansi (core/render c 60))]
           ;; identical diff: no correction, no stale-file error
           (is (= before after2))

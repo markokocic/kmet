@@ -1167,9 +1167,9 @@
           ;; input falls through to normal editing (which refreshes it)
           (and @(:autocomplete-state this) @(:autocomplete-list this)
                (or (keys/matches-key? data "escape")
-                   (or (keys/matches-key? data "up") (keys/matches-key? data (keys/ctrl "p"))
-                       (keys/matches-key? data "down") (keys/matches-key? data (keys/ctrl "n")))
-                   (or (keys/matches-key? data "tab") (keys/matches-key? data (keys/ctrl "i")))
+                   (keys/matches-key? data "up") (keys/matches-key? data (keys/ctrl "p"))
+                   (keys/matches-key? data "down") (keys/matches-key? data (keys/ctrl "n"))
+                   (keys/matches-key? data "tab") (keys/matches-key? data (keys/ctrl "i"))
                    (and (keys/matches-key? data "enter") (not @disable-submit))))
           (let [sl @(:autocomplete-list this)
                 prefix @(:autocomplete-prefix this)]

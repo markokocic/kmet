@@ -141,7 +141,7 @@
                         wrapped column-widths)]
         (vswap! result conj (str left-pad (border-fn "│ ")
                                  (str/join (str " " (border-fn "│") " ") cells)
-                                 (str " " (border-fn "│"))))))))
+                                 " " (border-fn "│")))))))
 
 (defn- render-table
   "Render a :table token: box-drawn borders, bold header, width-aware columns

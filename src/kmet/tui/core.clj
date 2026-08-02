@@ -16,10 +16,7 @@
             [kmet.tui.components.select-list :as select-list]
             [kmet.tui.components.settings-list :as settings-list]
             [kmet.tui.components.markdown :as markdown]
-            [kmet.tui.components.spinner :as spinner])
-  ;; Protocols are re-exported into this namespace so that implementors
-  ;; can do (ns ... (:require [kmet.tui.core :as tui]) ... (tui/IComponent ...))
-  (:refer-clojure :exclude [render]))
+            [kmet.tui.components.spinner :as spinner]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Protocol re-exports

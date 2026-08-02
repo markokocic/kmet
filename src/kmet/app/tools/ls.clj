@@ -22,6 +22,6 @@
                                           (str type " " (format "%10d" size) " " name)
                                           name)))
                                     sorted))]
-          {:content (str "Contents of " (str (fs/canonicalize dir)) ":\n" result)})))
+          {:content (str "Contents of " (fs/canonicalize dir) ":\n" result)})))
     (catch Exception e
       {:content (str "Error listing: " (ex-message e)) :is-error true})))

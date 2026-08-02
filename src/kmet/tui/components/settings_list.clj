@@ -18,7 +18,7 @@
                          (str "\u001b[36m" s "\u001b[39m")
                          (str "\u001b[2m" s "\u001b[22m")))
     :description (fn [s] (str "\u001b[2m" s "\u001b[22m"))
-    :cursor (str "\u001b[36m→ \u001b[39m")
+    :cursor "\u001b[36m→ \u001b[39m"
     :hint (fn [s] (str "\u001b[2m" s "\u001b[22m"))}))
 
 ;; ─── SettingsList component ─────────────────────────────────────────────────

@@ -34,7 +34,7 @@
         (spit b-file "# b rules")
         (let [files (context/load-project-context-files agent-dir dir-b)]
           ;; take 3: ancestors above the temp tree may add more files
-          (t/is (= [(str agent-file) (str b-file) (str a-file)]
+          (t/is (= [agent-file b-file a-file]
                    (take 3 (map :path files)))))
         (finally (fs/delete-tree tmp)))))
   (t/testing "missing context files contribute nothing (pi)"
@@ -53,6 +53,6 @@
         (io/make-parents f)
         (spit f "# rules")
         (let [files (context/load-project-context-files agent-dir agent-dir)]
-          (t/is (= (str f) (first (map :path files))))
+          (t/is (= f (first (map :path files))))
           (t/is (= 1 (count (filter #(under-tmp? tmp %) (map :path files))))))
         (finally (fs/delete-tree tmp))))))
