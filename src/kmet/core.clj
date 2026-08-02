@@ -48,6 +48,16 @@
             (recur (rest rest-args) (assoc opts :model (first rest-args)))
             (recur rest-args opts))
 
+          (#{"--system-prompt"} arg)
+          (if (seq rest-args)
+            (recur (rest rest-args) (assoc opts :system-prompt (first rest-args)))
+            (recur rest-args opts))
+
+          (#{"--append-system-prompt"} arg)
+          (if (seq rest-args)
+            (recur (rest rest-args) (update opts :append-system-prompt (fnil conj []) (first rest-args)))
+            (recur rest-args opts))
+
           (#{"--provider"} arg)
           (if (seq rest-args)
             (let [p (keyword (first rest-args))]
@@ -82,6 +92,8 @@
   (println "  -r, --resume          Browse sessions")
   (println "  --model <id>          Model to use")
   (println "  --provider <name>     Provider (openai, anthropic, opencode-go)")
+  (println "  --system-prompt <txt> Replace the system prompt (or path to a file)")
+  (println "  --append-system-prompt <txt> Append to the system prompt (repeatable)")
   (println "  -t, --thinking <level> Thinking level (off, low, medium, high)")
   (println "  -h, --help            Show this help")
   (println)

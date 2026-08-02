@@ -2,7 +2,8 @@
   (:require [clojure.test :as t]
             [clojure.string :as str]
             [clojure.java.io :as io]
-            [kmet.app.skills :as skills]))
+            [kmet.app.skills :as skills]
+            [kmet.app.tools.core :as tools]))
 
 ;; ─── Skills ────────────────────────────────────────────────────────────────
 
@@ -19,17 +20,58 @@
   (t/is (nil? (skills/get-skill "nonexistent"))))
 
 (t/deftest test-build-system-prompt
-  (t/testing "build-system-prompt starts with base prompt and appends skills"
-    (let [result (skills/build-system-prompt "Base prompt")]
-      (t/is (str/starts-with? result "Base prompt"))))
+  (t/testing "default prompt mirrors pi structure"
+    (let [result (skills/build-system-prompt :cwd "/tmp")]
+      (t/is (str/starts-with? result
+              "You are an expert coding assistant operating inside kmet, a coding agent harness."))
+      (t/is (str/includes? result "Available tools:"))
+      (t/is (str/includes? result "In addition to the tools above, you may have access to other custom tools depending on the project."))
+      (t/is (str/includes? result "Guidelines:"))
+      (t/is (str/includes? result "- Be concise in your responses"))
+      (t/is (str/includes? result "- Show file paths clearly when working with files"))
+      (t/is (str/ends-with? result "Current working directory: /tmp"))))
+  (t/testing "tools are listed with one-line snippets"
+    (let [result (skills/build-system-prompt :cwd "/tmp")]
+      (t/is (str/includes? result "- read: Read file contents"))
+      (t/is (str/includes? result "- bash: Execute bash commands (ls, grep, find, etc.)"))))
+  (t/testing "tool guidelines appear in the Guidelines list (pi)"
+    (let [result (skills/build-system-prompt :cwd "/tmp")]
+      (t/is (str/includes? result "- Use read to examine files instead of cat or sed."))
+      (t/is (str/includes? result "- Use write only for new files or complete rewrites."))
+      (t/is (str/includes? result "- Use edit for precise changes (edits[].oldText must match exactly)"))
+      (t/is (str/includes? result "- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions."))))
   (t/testing "skills are listed as available_skills XML"
     (let [name "test-prompt-skill"
           description "Prompt skill description."
           _ (skills/register-skill! name description)
-          result (skills/build-system-prompt "Base prompt")]
+          result (skills/build-system-prompt :cwd "/tmp")]
       (t/is (str/includes? result "<available_skills>"))
       (t/is (str/includes? result name))
-      (t/is (str/includes? result description)))))
+      (t/is (str/includes? result description))))
+  (t/testing "custom-prompt replaces the default base prompt (pi)"
+    (let [result (skills/build-system-prompt :custom-prompt "Custom base" :cwd "/tmp")]
+      (t/is (str/starts-with? result "Custom base"))
+      (t/is (not (str/includes? result "Available tools:")))))
+  (t/testing "append-prompt is appended after the main prompt (pi)"
+    (let [result (skills/build-system-prompt :cwd "/tmp"
+                   :append-prompt "Extra instructions.")]
+      (t/is (str/includes? result "Extra instructions."))))
+  (t/testing "context files are wrapped in <project_context> (pi)"
+    (let [result (skills/build-system-prompt :cwd "/tmp"
+                   :context-files [{:path "/x/AGENTS.md" :content "# Rules"}])]
+      (t/is (str/includes? result "<project_context>"))
+      (t/is (str/includes? result "<project_instructions path=\"/x/AGENTS.md\">"))
+      (t/is (str/includes? result "# Rules"))))
+  (t/testing "tools without a snippet are hidden, list shows (none) (pi)"
+    (let [result (skills/build-system-prompt :cwd "/tmp"
+                   :tools [(tools/make-tool :name "no-snippet" :description "d")])]
+      (t/is (str/includes? result "(none)"))
+      (t/is (not (str/includes? result "no-snippet")))))
+  (t/testing "skills block is omitted when read tool is not available (pi)"
+    (let [result (skills/build-system-prompt :cwd "/tmp"
+                   :tools [(tools/make-tool :name "bash" :description "d"
+                                            :prompt-snippet "Execute bash commands")])]
+      (t/is (not (str/includes? result "<available_skills>"))))))
 
 (t/deftest test-get-skills-returns-list
   (let [name "test-gs"
@@ -173,3 +215,8 @@
       (t/is (str/includes? prompt "<location>/skills/xml-skill/SKILL.md</location>")))
     (t/testing "empty input yields empty output"
       (t/is (= "" (skills/format-skills-for-prompt []))))))
+
+(t/deftest test-clear-skills
+  (skills/register-skill! "clear-me" "Will be cleared.")
+  (skills/clear-skills!)
+  (t/is (nil? (skills/get-skill "clear-me"))))

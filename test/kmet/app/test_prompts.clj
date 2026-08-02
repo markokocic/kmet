@@ -159,3 +159,13 @@
     (t/is (= [{:name "comp" :description "Create" :argument-hint "<name>"}
               {:name "plain" :description "No hint"}]
              (prompts/as-command-maps tpls)))))
+
+(t/deftest test-clear-prompt-templates
+  (let [tmp-dir (str "target/test-prompts-clear-" (System/currentTimeMillis))
+        f (str tmp-dir "/clear-me.md")]
+    (io/make-parents f)
+    (spit f "---\ndescription: Template to clear.\n---\nBody.")
+    (prompts/load-prompt-templates-from-dir tmp-dir)
+    (t/is (some? (prompts/get-prompt-template "clear-me")))
+    (prompts/clear-prompt-templates!)
+    (t/is (nil? (prompts/get-prompt-template "clear-me")))))

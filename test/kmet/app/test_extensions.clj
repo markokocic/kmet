@@ -153,3 +153,12 @@
             (extensions/apply-before-agent-start-hooks "hi" "base"))]
     (t/is (nil? (:system-prompt r)))
     (t/is (empty? (:messages r)))))
+
+(t/deftest test-clear-extensions
+  (t/testing "clear-extensions! removes registered hooks"
+    (extensions/register-input-hook! (fn [ctx] (assoc ctx :action :transform :text (str (:text ctx) "!"))))
+    (extensions/register-before-agent-start-hook! (fn [ctx] ctx))
+    (extensions/clear-extensions!)
+    (let [r (extensions/apply-input-hooks "hello" :interactive)]
+      (t/is (= :pass (:action r)))
+      (t/is (= "hello" (:text r))))))

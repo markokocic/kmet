@@ -200,3 +200,24 @@
       (t/is (= 2 (count entries)) "Should skip blank lines")
       (t/is (= "1" (:id (first entries))))
       (t/is (= "4" (:id (second entries)))))))
+
+(t/deftest test-compact-with-summary
+  (let [dir (str "target/test-sess-cws-" (System/currentTimeMillis))
+        sess (s/create-session dir)]
+    (try
+      (doseq [i (range 6)]
+        (s/append-entry sess {:role :user :content [{:type :text :text (str "msg " i)}]}))
+      (let [entries (s/get-branch sess)
+            first-kept-id (:id (nth entries 3))
+            summary-entry (s/compact-with-summary! sess "SUMMARY" first-kept-id)
+            branch (s/get-branch sess)]
+        (t/is (some? summary-entry))
+        (t/is (= "SUMMARY" (:summary summary-entry)))
+        (t/is (= 4 (count branch)) "summary + 3 kept entries")
+        (t/is (= :system (:role (first branch))) "summary entry is the branch root")
+        (t/is (= "SUMMARY" (-> branch first :content first :text)))
+        (t/is (= first-kept-id (:id (second branch))) "first kept entry follows the summary")
+        ;; file rewritten and reloadable
+        (let [loaded (s/load-session (:file sess))]
+          (t/is (= (count branch) (count @(:entries loaded))))))
+      (finally (fs/delete-tree dir)))))

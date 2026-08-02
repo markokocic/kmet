@@ -11,12 +11,14 @@
             [kmet.test-utils]
             [kmet.test-keys]
             [kmet.app.test-session]
+            [kmet.app.test-compaction]
             [kmet.app.test-tools]
             [kmet.app.test-llm]
             [kmet.app.test-loop]
             [kmet.test-theme]
             [kmet.test-config]
             [kmet.app.test-skills]
+            [kmet.app.test-context]
             [kmet.app.test-prompts]
             [kmet.app.test-extensions]
             [kmet.app.test-event-bus]
@@ -50,11 +52,13 @@
    metadata, so no namespace is excluded from either run."
   '[kmet.test-utils kmet.test-keys
     kmet.app.test-session
+    kmet.app.test-compaction
     kmet.app.test-tools
     kmet.app.test-llm
     kmet.app.test-loop
     kmet.test-theme kmet.test-config
     kmet.app.test-skills
+    kmet.app.test-context
     kmet.app.test-prompts
     kmet.app.test-extensions
     kmet.app.test-event-bus

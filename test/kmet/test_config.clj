@@ -197,3 +197,64 @@
   (let [c (assoc cfg/default-config :theme "light")
         t (cfg/get-theme c)]
     (t/is (= "light" (:name t)))))
+
+;; ─── System prompt sources (pi: SYSTEM.md / APPEND_SYSTEM.md) ─────────────
+
+(t/deftest test-get-custom-prompt
+  (t/testing "config value wins over files"
+    (t/is (= "Custom" (cfg/get-custom-prompt {:system-prompt "Custom"}))))
+  (t/testing "config value naming an existing file is read as content (pi resolvePromptInput)"
+    (let [tmp (str (fs/absolutize (fs/file "target" (str "test-prompt-" (System/currentTimeMillis)))))
+          f (str tmp "/prompt.md")]
+      (io/make-parents f)
+      (spit f "From file")
+      (try
+        (t/is (= "From file" (cfg/get-custom-prompt {:system-prompt f})))
+        (finally (fs/delete-tree tmp)))))
+  (t/testing "no config value, no files yields nil"
+    (with-redefs [cfg/prompt-file-candidates (fn [_] [])]
+      (t/is (nil? (cfg/get-custom-prompt {}))))))
+
+(t/deftest test-get-custom-prompt-file-discovery
+  (t/testing "project file wins over global file (pi order)"
+    (let [tmp (str (fs/absolutize (fs/file "target" (str "test-prompt-dir-" (System/currentTimeMillis)))))
+          project-file (str tmp "/.kmet/SYSTEM.md")
+          global-file (str tmp "/agent/SYSTEM.md")]
+      (io/make-parents project-file)
+      (io/make-parents global-file)
+      (spit project-file "Project prompt")
+      (spit global-file "Global prompt")
+      (try
+        (with-redefs [cfg/prompt-file-candidates (fn [_] [project-file global-file])]
+          (t/is (= "Project prompt" (cfg/get-custom-prompt {}))))
+        (finally (fs/delete-tree tmp)))))
+  (t/testing "global file used when no project file"
+    (let [tmp (str (fs/absolutize (fs/file "target" (str "test-prompt-dir2-" (System/currentTimeMillis)))))
+          global-file (str tmp "/agent/SYSTEM.md")]
+      (io/make-parents global-file)
+      (spit global-file "Global prompt")
+      (try
+        (with-redefs [cfg/prompt-file-candidates (fn [_] [global-file])]
+          (t/is (= "Global prompt" (cfg/get-custom-prompt {}))))
+        (finally (fs/delete-tree tmp))))))
+
+(t/deftest test-get-append-system-prompt
+  (t/testing "config value wins"
+    (t/is (= "Extra" (cfg/get-append-system-prompt {:append-system-prompt "Extra"}))))
+  (t/testing "no config value, no files yields nil"
+    (with-redefs [cfg/prompt-file-candidates (fn [_] [])]
+      (t/is (nil? (cfg/get-append-system-prompt {}))))))
+
+(t/deftest test-apply-cli-overrides
+  (let [base {:model "a" :provider :openai}
+        opts {:model "b"
+              :provider :anthropic
+              :system-prompt "Custom"
+              :append-system-prompt ["One" "Two"]}]
+    (t/is (= "b" (:model (cfg/apply-cli-overrides base opts))))
+    (t/is (= :anthropic (:provider (cfg/apply-cli-overrides base opts))))
+    (t/is (= "Custom" (:system-prompt (cfg/apply-cli-overrides base opts))))
+    (t/testing "repeatable append-system-prompt joins with newlines (pi)"
+      (t/is (= "One\n\nTwo" (:append-system-prompt (cfg/apply-cli-overrides base opts)))))
+    (t/testing "absent keys pass through untouched"
+      (t/is (= base (cfg/apply-cli-overrides base {}))))))

@@ -2,27 +2,28 @@
   "Print mode — non-interactive: send message, print response, exit.
    pi: modes/print-mode.ts."
   (:require [clojure.string :as str]
+            [babashka.fs :as fs]
             [kmet.app.loop :as agent]
-            [kmet.app.tools.core :as tools]
             [kmet.app.skills :as skills]
+            [kmet.app.context :as context]
             [kmet.app.prompts :as prompts]
             [kmet.config :as cfg]))
 
 (defn run
   "Run in non-interactive mode: send message, print response, exit.
-   opts: :model, :provider, :messages, :config"
-  [{:keys [model provider messages config]}]
-  (let [config (or config (cfg/load-config :no-env? true))
+   opts: :model, :provider, :messages, :system-prompt, :append-system-prompt, :config"
+  [opts]
+  (let [{:keys [model provider messages config]} opts
+        config (cfg/apply-cli-overrides (or config (cfg/load-config :no-env? true)) opts)
         _ (doseq [d (cfg/resource-dirs config :skills-dir ".kmet/skills")]
             (skills/load-skills-from-dir d))
         _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
             (prompts/load-prompt-templates-from-dir d))
-        base-prompt (or (:system-prompt config)
-                        "You are kmet, a minimal coding agent. Help the user with their tasks.
-Use the available tools to read, write, edit files, and execute commands.
-Be precise and concise in your responses.")
-        system-prompt (skills/build-system-prompt base-prompt
-                        :tools (vals (tools/get-all-tools)))
+        system-prompt (skills/build-system-prompt
+                        :custom-prompt (cfg/get-custom-prompt config)
+                        :append-prompt (cfg/get-append-system-prompt config)
+                        :context-files (context/load-project-context-files
+                                         (cfg/get-agent-dir) (str (fs/cwd))))
         resolved-provider (or provider (cfg/get-provider config))
         resolved-model (or model (cfg/get-model config))
         ag (agent/make-agent-state

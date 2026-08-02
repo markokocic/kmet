@@ -105,7 +105,9 @@
       (mapv build-node root-children))))
 
 (defn compact!
-  "Summarize older entries beyond a threshold by replacing them with a summary."
+  "Count-based fallback compaction: summarize older entries beyond a threshold
+   by replacing them with a placeholder summary (used when LLM summarization is
+   unavailable — see compact-with-summary!)."
   [session max-entries]
   (let [entries @(:entries session)
         n (count entries)]
@@ -118,15 +120,41 @@
                                   (last summarize) "]")
                 summary-entry {:role :system
                                :content [{:type :text :text summary-text}]
+                               :summary summary-text
                                :id (generate-id)
-                               :parent-id (or (:parent-id (first summarize)) nil)
+                               :parent-id nil
                                :timestamp (str (timestamp))}
-                new-entries (vec (concat [summary-entry] keep))]
+                keep (assoc-in keep [0 :parent-id] (:id summary-entry))
+                new-entries (into [summary-entry] keep)]
             (reset! (:entries session) new-entries)
             (reset! (:leaf-id session) (:id (last new-entries)))
             ;; Rewrite file
             (spit (:file session) (apply str (map prn-str new-entries))))))
       @(:leaf-id session))))
+
+(defn compact-with-summary!
+  "Replace all entries before first-kept-id with a single summary entry (pi:
+   the session manager saves a compaction entry and reloads from
+   firstKeptEntryId; kmet physically removes the summarized entries). The
+   first kept entry is re-parented to the summary entry so the active branch
+   includes it. Returns the summary entry, or nil when first-kept-id is not
+   found."
+  [session summary first-kept-id]
+  (let [entries @(:entries session)
+        idx (first (keep-indexed (fn [i e] (when (= (:id e) first-kept-id) i)) entries))]
+    (when idx
+      (let [summary-entry {:role :system
+                           :content [{:type :text :text summary}]
+                           :summary summary
+                           :id (generate-id)
+                           :parent-id nil
+                           :timestamp (str (timestamp))}
+            keep (assoc-in (vec (subvec entries idx)) [0 :parent-id] (:id summary-entry))
+            new-entries (into [summary-entry] keep)]
+        (reset! (:entries session) new-entries)
+        (reset! (:leaf-id session) (:id (last new-entries)))
+        (spit (:file session) (apply str (map prn-str new-entries)))
+        summary-entry))))
 
 (defn fork-session
   "Create a new session forked at the given entry-id."

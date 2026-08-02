@@ -37,7 +37,10 @@
 
    Compaction (pi: auto-compaction): the session is compacted proactively
    (entry-count / token-estimate thresholds) and reactively after a
-   context-overflow error (compact once, then retry).
+   context-overflow error (compact once, then retry). Compaction summarizes
+   the pre-cut conversation via the LLM (kmet.app.compaction, pi:
+   core/compaction) and replaces it with a summary entry; falls back to
+   count-based truncation when summarization is unavailable.
 
    Model management (pi: setModel / cycleModel): set-models! sets the scoped
    model list; cycle-model! moves through it emitting :model-select.
@@ -63,6 +66,7 @@
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [kmet.app.llm :as llm]
+            [kmet.app.compaction :as compaction]
             [kmet.app.tools.core :as tools]
             [kmet.app.session :as session]
             [kmet.app.extensions :as extensions]
@@ -100,7 +104,8 @@
                        get-api-key            ;; atom of (fn [provider]) → key | nil (dynamic auth)
                        models                 ;; atom of vector of model ids (scoped list for cycling)
                        overflow-recovered     ;; atom of bool: context-overflow compacted once this run
-                       compact-token-threshold]) ;; int or nil: compact when estimated tokens exceed this
+                       compact-token-threshold ;; int or nil: compact when estimated tokens exceed this
+                       keep-recent-tokens])    ;; int: cut-point budget in tokens (pi: keepRecentTokens, default 20000)
 
 (defn make-agent-state
   "Create a new agent state.
@@ -109,8 +114,9 @@
          :max-retries (default 3), :base-delay-ms (default 2000),
          :before-tool-call, :after-tool-call, :system-prompt-override,
          :transform-context, :prepare-next-turn, :should-stop-after-turn,
-         :get-api-key, :models (default []), :compact-token-threshold"
-  [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key models compact-token-threshold]
+         :get-api-key, :models (default []), :compact-token-threshold,
+         :keep-recent-tokens (default 20000, pi: keepRecentTokens)"
+  [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key models compact-token-threshold keep-recent-tokens]
       :or {provider :openai
            thinking :off
            steering-mode :all
@@ -118,6 +124,7 @@
            max-retries 3
            base-delay-ms 2000
            models []
+           keep-recent-tokens 20000
            system "You are kmet, a minimal coding agent. Help the user with their tasks.
 Use the available tools to read, write, edit files, and execute commands.
 Be precise and concise in your responses."}}]
@@ -150,7 +157,8 @@ Be precise and concise in your responses."}}]
                     :get-api-key (atom get-api-key)
                     :models (atom models)
                     :overflow-recovered (atom false)
-                    :compact-token-threshold compact-token-threshold}))
+                    :compact-token-threshold compact-token-threshold
+                    :keep-recent-tokens keep-recent-tokens}))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -700,34 +708,65 @@ Be precise and concise in your responses."}}]
 
 ;; ─── Agent run ─────────────────────────────────────────────────────────────
 
-(defn- estimate-tokens
-  "Rough token estimate from message content (approx 4 chars/token).
-   Counts string content directly, or the :text of content blocks."
-  [messages]
-  (let [chars (reduce + 0
-                (for [m messages
-                      :let [c (or (:content m) "")]]
-                  (if (string? c)
-                    (count c)
-                    (reduce + 0
-                      (for [b c
-                            :when (= :text (:type b))]
-                        (count (or (:text b) "")))))))]
-    (quot chars 4)))
+(declare resolve-api-key)
 
 (defn- truncate-context!
   "Keep only the last n messages in the in-memory context, aligned with a
-   session compaction."
+   count-based session compaction."
   [agent n]
   (swap! (:messages agent) #(vec (take-last n %))))
 
-(defn- compact-session!
-  "Compact the session and align the in-memory context. Returns true if a
-   compaction actually reduced the session, false otherwise."
-  [agent max-entries]
+(defn- summarize!
+  "LLM summarization of the pre-cut entries (pi: generateSummaryWithUsage).
+   Returns the summary text, or nil when no API key is available or the call
+   fails/times out/returns empty."
+  [agent prep & [custom-instructions]]
+  (let [provider @(:provider agent)
+        api-key (resolve-api-key agent)]
+    (when api-key
+      (let [done (promise)
+            text-buf (atom "")
+            msgs (compaction/summarization-messages
+                   (:messages prep) (:previous-summary prep) custom-instructions)]
+        (llm/send-message
+          {:provider provider
+           :api-type (or (:api-type agent) (cfg/get-provider-api-type provider))
+           :model @(:model agent)
+           :api-key api-key
+           :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
+           :messages msgs
+           :signal (atom false)
+           :on-text (fn [t] (swap! text-buf str t))
+           :on-done (fn [_] (deliver done @text-buf))
+           :on-error (fn [_] (deliver done nil))})
+        (let [result (deref done 120000 :timeout)]
+          (when (and (string? result) (seq result)) result))))))
+
+(defn- sync-context-after-compaction!
+  "Rebuild the in-memory context from the compacted session branch: the
+   summary entry (as a :user message so both providers accept it) followed by
+   the kept context-visible entries (pi: the agent context is rebuilt from the
+   session after compaction)."
+  [agent]
+  (when-let [sess (:session agent)]
+    (let [branch (session/get-branch sess)
+          summary-entry (first branch)
+          context (into [{:role :user :content (:content summary-entry)}]
+                        (keep (fn [e]
+                                (case (:role e)
+                                  (:user :assistant :tool) e
+                                  nil)))
+                        (rest branch))]
+      (reset! (:messages agent) context))))
+
+(defn- count-based-compact!
+  "Fallback: count-based compaction (previous behavior). Keeps the most
+   recent half of the session entries and aligns the in-memory context.
+   Returns true when compaction happened."
+  [agent]
   (if-let [sess (:session agent)]
     (let [n (count @(:entries sess))
-          _ (session/compact! sess max-entries)
+          _ (session/compact! sess (quot n 2))
           new-n (count @(:entries sess))]
       (when (< new-n n)
         (truncate-context! agent new-n)
@@ -736,36 +775,54 @@ Be precise and concise in your responses."}}]
       (< new-n n))
     false))
 
+(defn compact-context!
+  "LLM-based compaction (pi: prepareCompaction → compact): summarize the
+   pre-cut entries, replace the session with [summary, kept...], and rebuild
+   the in-memory context to mirror it. Falls back to count-based truncation
+   when summarization is unavailable or fails. Also the manual /compact path
+   (pi: session.compact) — custom-instructions are appended to the
+   summarization prompt. Returns true when a compaction happened."
+  [agent & [custom-instructions]]
+  (if-let [sess (:session agent)]
+    (let [entries (session/get-branch sess)
+          prep (compaction/prepare entries (or (:keep-recent-tokens agent) 20000))]
+      (if (or (nil? prep) (empty? (:messages prep)))
+        false
+        (if-let [summary (summarize! agent prep custom-instructions)]
+          (do (session/compact-with-summary! sess summary (:first-kept-id prep))
+              (sync-context-after-compaction! agent)
+              (println "Compacted session with LLM summary")
+              true)
+          (do (binding [*out* *err*]
+                (println "Warning: summarization failed; falling back to count-based compaction"))
+              (count-based-compact! agent)))))
+    false))
+
 (defn- maybe-compact!
-  "Proactively compact if the session exceeds the entry-count threshold, or
-   if the estimated token count exceeds :compact-token-threshold (when set).
-   Token-triggered compaction halves the current entry count. Returns true
-   if a compaction happened."
+  "Proactively compact before a run (pi: _checkCompaction — threshold case).
+   Triggers on entry count (:compact-threshold) or estimated tokens
+   (:compact-token-threshold). Returns true when compaction happened."
   [agent]
-  (let [threshold (:compact-threshold agent)
-        token-threshold (:compact-token-threshold agent)]
-    (cond
-      (and threshold
-           (:session agent)
-           (>= (count @(:entries (:session agent))) threshold))
-      (compact-session! agent (quot threshold 2))
-
-      (and token-threshold
-           (:session agent)
-           (>= (estimate-tokens @(:messages agent)) token-threshold))
-      (compact-session! agent (quot (count @(:entries (:session agent))) 2))
-
-      :else false)))
+  (if-let [sess (:session agent)]
+    (let [entries (session/get-branch sess)
+          n (count entries)
+          threshold (:compact-threshold agent)
+          token-threshold (:compact-token-threshold agent)
+          tokens (reduce + 0 (map compaction/estimate-tokens entries))]
+      (if (or (and threshold (>= n threshold))
+              (and token-threshold (>= tokens token-threshold)))
+        (boolean (compact-context! agent))
+        false))
+    false))
 
 (defn- compact-for-overflow!
-  "Force-compact after a context-overflow error so the retried call fits.
-   Returns true if a compaction happened."
+  "Force-compact after a context-overflow error so the retried call fits
+   (pi: _checkCompaction — overflow case). Returns true when compaction
+   happened."
   [agent]
   (when-let [sess (:session agent)]
-    (when-let [threshold (:compact-threshold agent)]
-      (when (pos? (count @(:entries sess)))
-        (compact-session! agent (max 4 (quot threshold 2)))
-        true))))
+    (when (pos? (count @(:entries sess)))
+      (compact-context! agent))))
 
 (defn- replace-context!
   "Replace the in-memory conversation, rebuild the session file to match, and

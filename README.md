@@ -119,9 +119,37 @@ Example `~/.kmet/agent/settings.edn`:
  :theme "dark"
  :thinking :off
  :session-dir "~/.kmet/sessions"
+ :system-prompt "You are a helpful assistant."   ; replaces the default system prompt
+ :append-system-prompt "Follow the project conventions." ; appended after it
  :providers {:openai {:model "gpt-4o"}
              :anthropic {:model "claude-sonnet-4-20250514"}}}
 ```
+
+The system prompt (pi-compatible) is built from: the default (or `:system-prompt`)
+base, the active tools with one-line snippets, guidelines, `:append-system-prompt`,
+the project context (`AGENTS.md`/`CLAUDE.md` from `~/.kmet/agent` and the cwd's
+ancestors), the `<available_skills>` block, and the current working directory.
+
+Like pi, prompt files are discovered when the config keys are unset:
+
+- `.kmet/SYSTEM.md` or `~/.kmet/agent/SYSTEM.md` — replaces the system prompt
+- `.kmet/APPEND_SYSTEM.md` or `~/.kmet/agent/APPEND_SYSTEM.md` — appended to it
+
+Config values win over files; a config value naming an existing file is read as
+content. CLI flags `--system-prompt <txt>` and `--append-system-prompt <txt>`
+(repeatable) override everything.
+
+`/reload` re-reads settings, reloads extensions/skills/prompts/themes, re-discovers
+context files, and rebuilds the system prompt (pi: `session.reload`). It refuses
+while a response is streaming.
+
+Compaction (pi-compatible): `:compact-threshold` (entry count, default 400) and
+`:compact-token-threshold` (estimated tokens, default off) trigger proactive
+compaction before a run; context-overflow errors compact once then retry. The
+pre-cut conversation is summarized via the LLM (structured Goal/Progress/Next-
+Steps checkpoint, updated on subsequent compactions) and replaced with a summary
+entry; `:keep-recent-tokens` (default 20000) sets how many recent tokens to keep.
+`/compact [instructions]` triggers it manually.
 
 ## Themes
 

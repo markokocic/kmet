@@ -1109,13 +1109,16 @@
 
 (t/deftest test-loop-overflow-compact-retry
   (let [events (atom [])
-        call-count (atom 0)
+        main-call-count (atom 0)
         dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
         sess (session/create-session (str dir))
         agent (loop/make-agent-state
                 :on-event (fn [e] (swap! events conj e))
                 :session sess
-                :compact-threshold 10)]
+                ;; high entry threshold so the proactive check never fires;
+                ;; only the overflow path compacts
+                :compact-threshold 100
+                :keep-recent-tokens 5)]
     (try
       (dotimes [i 12]
         (session/append-entry sess {:role :user :content [{:type :text :text (str "msg " i)}]}))
@@ -1123,17 +1126,24 @@
                     llm/send-message
                     (fn [opts]
                       (future
-                        (case (swap! call-count inc)
-                          1 (when-let [on-error (:on-error opts)]
-                              (on-error "prompt is too long: 500000 tokens > 200000 maximum"))
+                        (if (seq (:tools opts))
+                          ;; main agent call
+                          (case (swap! main-call-count inc)
+                            1 (when-let [on-error (:on-error opts)]
+                                (on-error "prompt is too long: 500000 tokens > 200000 maximum"))
+                            (do (when-let [on-text (:on-text opts)]
+                                  (on-text "recovered"))
+                                (when-let [on-done (:on-done opts)]
+                                  (on-done :stop))))
+                          ;; summarization call (no tools)
                           (do (when-let [on-text (:on-text opts)]
-                                (on-text "recovered"))
+                                (on-text "summary of the old conversation"))
                               (when-let [on-done (:on-done opts)]
                                 (on-done :stop))))
                         :done))]
         (binding [*err* (java.io.StringWriter.)]
           @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])})))
-      (t/is (= 2 @call-count) "overflow triggers one compaction then a retry")
+      (t/is (= 2 @main-call-count) "overflow triggers one compaction then a retry")
       (t/is (< (count @(:entries sess)) 12) "session was compacted")
       (t/is (some #(and (= :message-end (:type %))
                         (= "recovered" (get-in % [:message :content 0 :text])))
@@ -1164,7 +1174,8 @@
         agent (loop/make-agent-state
                 :session sess
                 :compact-token-threshold 10
-                :compact-threshold 1000)]
+                :compact-threshold 1000
+                :keep-recent-tokens 40)]
     (try
       (doseq [i (range 10)]
         (let [m {:role :user

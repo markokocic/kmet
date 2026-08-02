@@ -138,6 +138,12 @@
   []
   @templates)
 
+(defn clear-prompt-templates!
+  "Remove all loaded prompt templates (pi: resourceLoader.reload re-discovers
+   from scratch). Used by /reload."
+  []
+  (reset! templates []))
+
 (defn get-prompt-template
   [name]
   (first (filter #(= name (:name %)) @templates)))

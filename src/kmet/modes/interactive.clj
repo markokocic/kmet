@@ -19,6 +19,7 @@
             [kmet.tui.keybindings :as tui-kb]
             [kmet.config :as cfg]
             [kmet.app.skills :as skills]
+            [kmet.app.context :as context]
             [kmet.app.prompts :as prompts]
             [kmet.app.commands :as commands]
             [kmet.app.extensions :as extensions]
@@ -159,6 +160,8 @@
     (str "Available tools (" (count tool-list) "):\n"
          (str/join "\n" tool-lines))))
 
+(declare handle-reload)
+
 (defn- register-builtin-commands!
   "Register kmet's builtin slash commands. Handlers receive [cs args];
    argument completions feed the editor autocomplete dropdown."
@@ -228,6 +231,28 @@
      :handler (fn [cs _]
                 (show-session-tree cs))})
   (commands/register-command!
+    {:name "reload"
+     :description "Reload keybindings, extensions, skills, prompts, themes, and context files"
+     :handler handle-reload})
+  (commands/register-command!
+    {:name "compact"
+     :description "Manually compact the session context"
+     :argument-hint "<instructions>"
+     :handler (fn [cs args]
+                (let [{:keys [agent-state chat-history]} cs
+                      instructions (when (seq args) args)]
+                  (if-not (= :idle (agent/get-status agent-state))
+                    (ui/chat-history-add-message! chat-history
+                      {:role :info :label "Compact"
+                       :content "Wait for the current response to finish before compacting."})
+                    (if (agent/compact-context! agent-state instructions)
+                      (ui/chat-history-add-message! chat-history
+                        {:role :info :label "Compact"
+                         :content "Session compacted."})
+                      (ui/chat-history-add-message! chat-history
+                        {:role :info :label "Compact"
+                         :content "Nothing to compact (session too small)."})))))})
+  (commands/register-command!
     {:name "theme"
      :description "Switch theme"
      :argument-hint "<name>"
@@ -253,6 +278,48 @@
     {:role :assistant
      :content (str "Command /" name " is not implemented in kmet yet.")}))
 
+(defn- handle-reload
+  "Reload settings, extensions, skills, prompts, themes, context files, and
+   rebuild the system prompt (pi: interactive-mode handleReloadCommand →
+   session.reload → _rebuildSystemPrompt). Refuses while the agent is
+   running (pi warns to wait for the current response)."
+  [cs _]
+  (let [{:keys [agent-state chat-history]} cs]
+    (if-not (= :idle (agent/get-status agent-state))
+      (ui/chat-history-add-message! chat-history
+        {:role :info :label "Reload"
+         :content "Wait for the current response to finish before reloading."})
+      (try
+        ;; pi: settingsManager.reload() + theme re-registration
+        (let [config (cfg/init!)
+              ;; pi: session.reload → extension shutdown/start
+              _ (extensions/clear-extensions!)
+              _ (doseq [d (cfg/resource-dirs config :extensions-dir ".kmet/extensions")]
+                  (extensions/load-extensions-from-dir d))
+              ;; pi: resourceLoader.reload (skills, prompts)
+              _ (skills/clear-skills!)
+              _ (doseq [d (cfg/resource-dirs config :skills-dir ".kmet/skills")]
+                  (skills/load-skills-from-dir d))
+              _ (prompts/clear-prompt-templates!)
+              _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
+                  (prompts/load-prompt-templates-from-dir d))
+              ;; pi: _rebuildSystemPrompt with new sources
+              system-prompt (skills/build-system-prompt
+                              :custom-prompt (cfg/get-custom-prompt config)
+                              :append-prompt (cfg/get-append-system-prompt config)
+                              :context-files (context/load-project-context-files
+                                               (cfg/get-agent-dir) (str (fs/cwd))))]
+          (reset! global-config config)
+          (agent/set-system-prompt! agent-state system-prompt)
+          (update-header-footer! cs)
+          (ui/chat-history-add-message! chat-history
+            {:role :info :label "Reload"
+             :content "Reloaded keybindings, extensions, skills, prompts, themes, and context files."}))
+        (catch Exception e
+          (ui/chat-history-add-message! chat-history
+            {:role :info :label "Reload"
+             :content (str "Reload failed: " (ex-message e))}))))))
+
 (defn- register-not-implemented-commands!
   "Register pi's builtin slash commands that kmet does not implement yet,
    all bound to the command-not-implemented handler. Keeps the command list
@@ -276,9 +343,7 @@
            {:name "trust" :description "Save project trust decision for future sessions"}
            {:name "login" :description "Configure provider authentication"
             :argument-hint "<provider>"}
-           {:name "logout" :description "Remove provider authentication"}
-           {:name "compact" :description "Manually compact the session context"}
-           {:name "reload" :description "Reload keybindings, extensions, skills, prompts, themes, and context files"}]]
+           {:name "logout" :description "Remove provider authentication"}]]
     (commands/register-command!
       {:name name
        :description description
@@ -800,11 +865,11 @@
             (skills/load-skills-from-dir d))
         _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
             (prompts/load-prompt-templates-from-dir d))
-        base-prompt (or (:system-prompt config)
-                        "You are kmet, a minimal coding agent. Help the user with their tasks.
-Use the available tools to read, write, edit files, and execute commands.
-Be precise and concise in your responses.")
-        system-prompt (skills/build-system-prompt base-prompt)
+        system-prompt (skills/build-system-prompt
+                        :custom-prompt (cfg/get-custom-prompt config)
+                        :append-prompt (cfg/get-append-system-prompt config)
+                        :context-files (context/load-project-context-files
+                                         (cfg/get-agent-dir) (str (fs/cwd))))
 
         ;; Initialize keybindings (global singleton for key-hint + input handling)
         _ (let [kmgr (app-kb/make-agent-keybindings-manager)]
@@ -827,6 +892,8 @@ Be precise and concise in your responses.")
              :system system-prompt
              :session session
              :compact-threshold (:compact-threshold config)
+             :compact-token-threshold (:compact-token-threshold config)
+             :keep-recent-tokens (or (:keep-recent-tokens config) 20000)
              :thinking (:thinking config :off)
              :on-event (fn [evt]
                          (case (:type evt)
@@ -1074,10 +1141,7 @@ Be precise and concise in your responses.")
         (extensions/load-extensions-from-dir ext-dir))
 
       ;; Apply command-line overrides
-      (let [config (cond-> config
-                     (:model opts) (assoc :model (:model opts))
-                     (:provider opts) (assoc :provider (:provider opts))
-                     (:thinking opts) (assoc :thinking (:thinking opts)))
+      (let [config (cfg/apply-cli-overrides config opts)
             _ (reset! global-config config)
             session (cond
                       (:resume opts) nil

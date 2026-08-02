@@ -126,6 +126,14 @@
 
 (defonce ^:private extensions (atom []))
 
+(defn clear-extensions!
+  "Remove all loaded extensions and their hooks (pi: session.reload emits
+   session_shutdown, then re-loads extensions). Used by /reload."
+  []
+  (reset! extensions [])
+  (clear-input-hooks!)
+  (clear-before-agent-start-hooks!))
+
 (defn load-extensions-from-dir
   "Load all .clj extension files from a directory.
    Each file is loaded with load-string for side effects."

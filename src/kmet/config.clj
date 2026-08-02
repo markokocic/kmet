@@ -17,8 +17,11 @@
    :session-dir "~/.kmet/sessions"
    :max-session-entries 500
    :compact-threshold 400
+   :compact-token-threshold nil
+   :keep-recent-tokens 20000
    :models []
    :system-prompt nil
+   :append-system-prompt nil
    :thinking :off
    :extensions-dir "~/.kmet/agent/extensions"
    :skills-dir "~/.kmet/agent/skills"
@@ -175,6 +178,68 @@
 
 (defn get-session-dir [config]
   (expand-path (:session-dir config)))
+
+(defn get-agent-dir
+  "The global agent directory (~/.kmet/agent), home-expanded."
+  []
+  (expand-path "~/.kmet/agent"))
+
+;; ─── System prompt sources (pi: resolvePromptInput + discoverSystemPromptFile) ──
+
+(defn- resolve-prompt-input
+  "pi: resolvePromptInput — a value naming an existing file is read as
+   content; anything else is used inline."
+  [input]
+  (when (seq input)
+    (let [p (str input)]
+      (if (fs/exists? p)
+        (try (slurp p) (catch Exception _ p))
+        p))))
+
+(defn- prompt-file-candidates
+  "Absolute candidate paths for a prompt file: project (.kmet) first, then
+   global (~/.kmet/agent) — pi checks the project before the agent dir."
+  [filename]
+  [(str (fs/path (fs/cwd) ".kmet" filename))
+   (str (fs/path (expand-path "~/.kmet/agent") filename))])
+
+(defn- discover-prompt-file
+  "First existing candidate for a prompt file, or nil."
+  [filename]
+  (some #(when (fs/exists? %) %) (prompt-file-candidates filename)))
+
+(defn get-custom-prompt
+  "Custom system prompt source (pi: systemPromptSource ??
+   discoverSystemPromptFile, then resolvePromptInput): the :system-prompt
+   config value (read as a file when it names an existing one), else
+   .kmet/SYSTEM.md, else ~/.kmet/agent/SYSTEM.md.
+   Deviations from pi: no project-trust gate."
+  [config]
+  (resolve-prompt-input (or (:system-prompt config)
+                            (discover-prompt-file "SYSTEM.md"))))
+
+(defn get-append-system-prompt
+  "Append system prompt source (pi: appendSystemPromptSource ??
+   discoverAppendSystemPromptFile): the :append-system-prompt config value
+   (read as a file when it names an existing one), else .kmet/APPEND_SYSTEM.md,
+   else ~/.kmet/agent/APPEND_SYSTEM.md.
+   Deviations from pi: no project-trust gate."
+  [config]
+  (resolve-prompt-input (or (:append-system-prompt config)
+                            (discover-prompt-file "APPEND_SYSTEM.md"))))
+
+(defn apply-cli-overrides
+  "Apply CLI opts onto a config map (pi: CLI flags override settings).
+   Handles :model, :provider, :thinking, :system-prompt (last wins), and
+   :append-system-prompt (repeatable, joined with newlines like pi)."
+  [config opts]
+  (cond-> config
+    (:model opts) (assoc :model (:model opts))
+    (:provider opts) (assoc :provider (:provider opts))
+    (:thinking opts) (assoc :thinking (:thinking opts))
+    (:system-prompt opts) (assoc :system-prompt (:system-prompt opts))
+    (:append-system-prompt opts) (assoc :append-system-prompt
+                                        (str/join "\n\n" (:append-system-prompt opts)))))
 
 (defn get-theme-name [config]
   (:theme config "dark"))
