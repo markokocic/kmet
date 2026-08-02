@@ -118,7 +118,9 @@
           skill-file (str skill-dir "/SKILL.md")]
       (io/make-parents skill-file)
       (spit skill-file "---\nname: no-desc-skill\n---\n# No description")
-      (skills/load-skills-from-dir tmp-dir)
+      ;; missing-description diagnostic is printed to stderr — suppress it.
+      (binding [*err* (java.io.StringWriter.)]
+        (skills/load-skills-from-dir tmp-dir))
       (t/is (nil? (skills/get-skill "no-desc-skill"))))))
 
 (t/deftest test-load-skills-name-fallback
@@ -140,7 +142,8 @@
           skill-file (str skill-dir "/SKILL.md")]
       (io/make-parents skill-file)
       (spit skill-file "---\n---\n# Empty frontmatter")
-      (let [diags (skills/load-skills-from-dir tmp-dir)]
+      (let [diags (binding [*err* (java.io.StringWriter.)]
+                    (skills/load-skills-from-dir tmp-dir))]
         (t/is (some #(= "description is required" (:message %)) diags)))
       (t/is (nil? (skills/get-skill "empty-fm"))))))
 
@@ -167,7 +170,8 @@
       (io/make-parents f2)
       (spit f1 "---\nname: collision-skill\ndescription: First version.\n---\n# One")
       (spit f2 "---\nname: collision-skill\ndescription: Second version.\n---\n# Two")
-      (let [diags (skills/load-skills-from-dir tmp-dir)
+      (let [diags (binding [*err* (java.io.StringWriter.)]
+                    (skills/load-skills-from-dir tmp-dir))
             loaded (skills/get-skill "collision-skill")]
         (t/is (= "First version." (:description loaded)))
         (t/is (some #(= "collision" (:type %)) diags))))))
