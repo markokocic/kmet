@@ -8,6 +8,14 @@
 (def ^:private update-throttle-ms 100)  ;; pi: BASH_UPDATE_THROTTLE_MS
 (def ^:private max-live-bytes (* 50 1024))  ;; pi: DEFAULT_MAX_BYTES
 
+(def ^:dynamic *cancel-signal*
+  "Cancel-signal atom for bash execution (pi passes an AbortSignal to tool
+   execute). Bound by kmet.app.loop around each agent run and by the interactive
+   ! flow around the user-bash emit, so Escape cancels bash everywhere — the
+   loop's own tool futures AND extension code (custom tool executes, event
+   handlers) that calls execute-tool. nil outside those paths."
+  nil)
+
 (defn- byte-length
   "UTF-8 byte length (pi: Buffer.byteLength)."
   [s]
@@ -44,6 +52,7 @@
                     {:command command
                      :cwd (or (System/getProperty "user.dir") ".")
                      :timeout timeout  ;; nil = no timeout (pi: optional, no default)
+                     :signal *cancel-signal*  ;; agent-loop cancel (pi: AbortSignal)
                      :on-chunk (fn [chunk]
                                  (swap! live-chunks conj chunk)
                                  (swap! live-bytes + (byte-length chunk))

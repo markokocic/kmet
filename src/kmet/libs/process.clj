@@ -15,9 +15,8 @@
    on macOS)."
   [pid]
   (try
-    (let [p (proc/process ["ps" "-eo" "pid=,ppid="] {:out :pipe :err :ignore})
-          _ @p
-          lines (str/split-lines (slurp (:out p)))
+    (let [result @(proc/process ["ps" "-eo" "pid=,ppid="] {:out :string :err :discard})
+          lines (str/split-lines (:out result))
           parent-map (into {}
                            (keep (fn [line]
                                    (when-let [[_ c pp] (re-find #"^\s*(\d+)\s+(\d+)" line)]
@@ -46,9 +45,8 @@
   (delay
     (when-not windows-os?
       (try
-        (let [p (proc/process ["sh" "-c" "command -v setsid"] {:out :pipe :err :ignore})
-              _ @p
-              path (str/trim (slurp (:out p)))]
+        (let [result @(proc/process ["sh" "-c" "command -v setsid"] {:out :string :err :discard})
+              path (str/trim (:out result))]
           (when (seq path) path))
         (catch Exception _ nil)))))
 
@@ -58,7 +56,7 @@
   [pid]
   (try
     (:exit @(proc/process ["kill" "-9" (str "-" pid)]
-                          {:out :inherit :err :ignore}))
+                          {:out :discard :err :discard}))
     (catch Exception _ -1)))
 
 (defn kill-process-tree!
@@ -76,13 +74,13 @@
     ;; Windows: taskkill /T kills the tree natively
     (try
       @(proc/process ["taskkill" "/F" "/T" "/PID" (str pid)]
-                     {:out :inherit :err :ignore})
+                     {:out :discard :err :discard})
       (catch Exception _e nil))
     (if (zero? (group-kill pid))
       nil
       (doseq [p (concat (reverse (collect-descendant-pids pid)) [pid])]
         (try
-          @(proc/process ["kill" "-9" (str p)] {:out :inherit :err :ignore})
+          @(proc/process ["kill" "-9" (str p)] {:out :discard :err :discard})
           (catch Exception _e nil))))))
 
 ;; ─── Pid registry ──────────────────────────────────────────────────────────

@@ -30,6 +30,7 @@
             [babashka.fs :as fs]
             [babashka.process :as proc]
             [kmet.app.bash-executor :as bash-exec]
+            [kmet.app.tools.bash :as bash-tool]
             [kmet.app.ui.bash-execution :as be]
             [kmet.libs.process :as process]))
 
@@ -594,11 +595,14 @@
                 (and tl (not= tl :off)) (assoc "KMET_REASONING_LEVEL" (name tl))))
 
             ;; ── Emit user-bash event for extensions (pi: emitUserBash) ──
-            _ (event-bus/emit-event!
-               {:type :user-bash
-                :command command
-                :exclude-from-context? exclude-from-context?
-                :cwd (System/getProperty "user.dir")})
+            ;; Bind the ! cancel signal so extension handlers reacting to
+            ;; user-bash can run cancellable bash via execute-tool.
+            _ (binding [bash-tool/*cancel-signal* (:bash-signal cs)]
+                (event-bus/emit-event!
+                 {:type :user-bash
+                  :command command
+                  :exclude-from-context? exclude-from-context?
+                  :cwd (System/getProperty "user.dir")}))
 
             ;; ── Spawn hook (pi: BashSpawnHook) — extensions can modify command ──
             spawn-hook nil]

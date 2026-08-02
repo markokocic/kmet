@@ -79,7 +79,17 @@
            :total-lines total-lines :total-bytes total-bytes
            :output-lines (count tail-lines) :output-bytes tail-bytes
            :max-lines max-lines :max-bytes max-bytes}
-          (let [truncated-content (subs tail-content (max 0 (- (count tail-content) max-bytes)))
+          (let [start (max 0 (- (count tail-content) max-bytes))
+                ;; If the cut lands between a surrogate pair (a non-BMP char
+                ;; like emoji), the tail would start with a lone surrogate —
+                ;; include the whole pair instead (sanitize-output filters
+                ;; lone surrogates pi-style, but they must not be produced).
+                start (if (and (pos? start)
+                               (re-find #"[\udc00-\udfff]"
+                                        (subs tail-content start (inc start))))
+                        (dec start)
+                        start)
+                truncated-content (subs tail-content start)
                 truncated-lines (str/split-lines truncated-content)]
             {:content (str/join "\n" truncated-lines) :truncated true :truncated-by :bytes
              :total-lines total-lines :total-bytes total-bytes
@@ -100,9 +110,14 @@
     (let [cmd (if process/windows-os?
                 ["cmd.exe" "/c" "where bash.exe"]
                 ["sh" "-c" "command -v bash"])
-          p (proc/process cmd {:out :pipe :err :inherit})
-          _ @p
-          output (str/trim (slurp (:out p)))
+          ;; Same class as the main spawn: this probe runs inside the TUI
+          ;; process, so it must never inherit the TTY (a failed `where`
+          ;; would garble the screen; stdin is never read but redirecting
+          ;; it keeps the invariant). Note: babashka has no `:ignore` —
+          ;; stderr must be `:discard` (unread pipe would block on output).
+          result @(proc/process cmd {:out :string :err :discard
+                                     :in (fs/file (if process/windows-os? "NUL" "/dev/null"))})
+          output (str/trim (:out result))
           ;; Pi: where can return non-existent paths on Windows — verify the file exists
           first-match (first (str/split-lines output))]
       (when (and first-match
@@ -146,8 +161,14 @@
                                  [setsid shell "-c" command]
                                  [shell "-c" command]))
             proc-opts {:dir cwd :err :pipe :out :pipe :env env
-                       ;; Pi: stdin pipe when using -s transport
-                       :in (if use-stdin? :pipe :inherit)}
+                       ;; Pi: stdio [pipe|ignore, pipe, pipe] — stdin is a pipe
+                       ;; only for the -s transport (the command is written to
+                       ;; it); otherwise it's redirected from /dev/null so a
+                       ;; command that reads stdin (e.g. bare `cat`) hits EOF
+                       ;; instead of inheriting the TTY and deadlocking the TUI.
+                       :in (if use-stdin?
+                             :pipe
+                             (fs/file (if process/windows-os? "NUL" "/dev/null")))}
             p (proc/process shell-args proc-opts)
             ;; Pi: write command to stdin for WSL -s transport
             _ (when (and use-stdin? (:in p))
@@ -159,34 +180,79 @@
             ;; babashka.process's :timeout reports exit 0 on kill, so a
             ;; timed-out command wouldn't be distinguishable from success.
             timed-out (atom false)
-            timeout-watcher (when (and (number? timeout) (pos? timeout) pid)
-                              (future
-                                (Thread/sleep (* timeout 1000))
-                                (reset! timed-out true)
-                                (process/kill-process-tree! pid)))
+            ;; `done` is shared by both watchers below: it becomes true once
+            ;; the process has exited, so each watcher can stop itself instead
+            ;; of sleeping out its full window (future-cancel can't stop a
+            ;; running future). Binding it here, before the watchers, keeps
+            ;; the loop bodies able to see it.
+            done (atom false)
+            _ (when (and (number? timeout) (pos? timeout) pid)
+                (let [deadline (+ (System/currentTimeMillis)
+                                  (* timeout 1000))]
+                  (future
+                    (loop []
+                      (when (and (not @done)
+                                 (< (System/currentTimeMillis) deadline))
+                        (Thread/sleep 100)
+                        (recur)))
+                    (when-not @done
+                      (reset! timed-out true)
+                      (process/kill-process-tree! pid)))))
             read-stream (fn [stream]
                           (let [buf (byte-array 8192)]
                             (loop [] (let [n (.read stream buf)]
                                        (when (pos? n) (on-data buf 0 n) (recur))))))
             out-future (future (try (read-stream (:out p))
                                     (catch Exception e (debug/log "ops stdout: " e))))
-            _ (when-let [err-stream (:err p)]
-                (future (try (read-stream err-stream)
-                             (catch Exception e (debug/log "ops stderr: " e)))))]
-        (when signal
-          (future (loop [] (when-not @signal (Thread/sleep 200) (recur)))
-                  (when pid (process/kill-process-tree! pid))))
-        (let [result (try (deref p) (catch Exception _ nil)) exit-code (:exit result)]
-          (when timeout-watcher (future-cancel timeout-watcher))
-          (try (deref out-future 5000 nil) (catch Exception _ nil))
-          (when pid (process/untrack-pid! pid))
-          (cond
+            err-future (when-let [err-stream (:err p)]
+                         (future (try (read-stream err-stream)
+                                      (catch Exception e (debug/log "ops stderr: " e)))))
+            ;; Pi: cancel signal — a poller that kills the process tree when the
+            ;; signal fires mid-run. `done` lets the poller exit on normal
+            ;; completion; without it the future spins until the next cancel
+            ;; (thread leak per bash call). future-cancel can't stop an
+            ;; already-running loop, so the flag is the exit mechanism.
+            _ (when (and signal pid)
+                (future (loop []
+                          (when-not (or @signal @done)
+                            (Thread/sleep 200)
+                            (recur)))
+                        (when @signal (process/kill-process-tree! pid))))
+            ;; Wait for the process here, in binding order, so the watchers
+            ;; above are already polling while we block. The watchers kill the
+            ;; tree on timeout/cancel, so deref returns on every path — and
+            ;; `done` below is only reset after this, which is what lets the
+            ;; signal poller keep killing while the process is still running.
+            result (try (deref p) (catch Exception _ nil))
+            exit-code (:exit result)]
+          ;; done stops both watchers (signal + timeout) within their next
+          ;; sleep cycle. Set only after the process has exited; resetting
+          ;; earlier would tell the watchers we are done while the process is
+          ;; still running, so cancel/timeout would never kill it.
+        (reset! done true)
+        (when pid (process/untrack-pid! pid))
+        (cond
               ;; Pi: after the process exits, re-check abort/timeout — the kill
               ;; itself returns normally (SIGKILL exit code), so cancelled/timeout
               ;; must be inferred from the signal/flag, not the exit code.
-            @timed-out (throw (ex-info (str "timeout:" timeout) {}))
-            (and signal @signal) (throw (ex-info "aborted" {}))
-            :else {:exit-code exit-code}))))))
+          @timed-out (throw (ex-info (str "timeout:" timeout) {}))
+          (and signal @signal) (throw (ex-info "aborted" {}))
+          :else {:exit-code exit-code
+                 :cleanup (fn []
+                            ;; Pi: waitForChildProcess finalize. Java
+                            ;; process-pipe reads can't be unblocked (close and
+                            ;; interrupt are no-ops on a blocked
+                            ;; FileInputStream.read), so the join is a short
+                            ;; settle: readers that already EOF'd join
+                            ;; instantly, while a reader blocked on a pipe held
+                            ;; open by a detached descendant is abandoned — it
+                            ;; terminates on its own when the descendant exits.
+                            (doseq [stream [(:out p) (:err p)]]
+                              (when stream
+                                (try (.close stream) (catch Exception _ nil))))
+                            (doseq [f [out-future err-future]]
+                              (when f
+                                (try (deref f 250 nil) (catch Exception _ nil)))))})))))
 
 (defn execute-bash
   [{:keys [command cwd env on-chunk signal timeout spawn-hook
@@ -208,7 +274,6 @@
         tail-starts-at-line-boundary (atom true)
         temp-file-path (atom nil)
         temp-file-stream (atom nil)
-        signal-watcher (atom nil)
 
         handle-text
         (fn [text]
@@ -286,9 +351,6 @@
 
         finalize
         (fn []
-          (when-let [watcher @signal-watcher]
-            (future-cancel watcher)
-            (reset! signal-watcher nil))
           (when @temp-file-stream
             (try (.close @temp-file-stream) (catch Exception _ nil))
             (reset! temp-file-stream nil))
@@ -344,12 +406,15 @@
                 (recur current-bytes (+ (System/currentTimeMillis) 100))
                 (do (Thread/sleep 10)
                     (recur last-bytes deadline))))))
+        ;; Pi: waitForChildProcess finalize — once the output has gone idle,
+        ;; destroy the streams so a detached descendant holding the pipe open
+        ;; can't keep the reader thread alive (pi destroys child.stdout/stderr).
+        (when-let [cleanup (:cleanup ops-result)]
+          (try (cleanup) (catch Exception _ nil)))
         (assoc (finalize) :exit-code exit-code))
 
       (catch Exception e
         (debug/log "bash execute error: " e)
-        (when-let [watcher @signal-watcher]
-          (future-cancel watcher))
         (let [raw-output (apply str @tail-buf)
               clean-output (if @tail-starts-at-line-boundary
                              raw-output

@@ -1,7 +1,9 @@
 (ns kmet.app.test-tools
   (:require [clojure.string :as str]
             [clojure.test :as t]
-            [kmet.app.tools.core :as tools]))
+            [kmet.app.tools.core :as tools]
+            [kmet.app.tools.bash :as bash-tool]
+            [kmet.app.bash-executor :as bash-exec]))
 
 ;; ─── Tool registry ─────────────────────────────────────────────────────────
 
@@ -203,7 +205,49 @@
     (t/is (.contains (:content result) "hello"))
     (t/is (.contains (:content result) "world"))))
 
+(t/deftest ^:slow test-tool-bash-stdin-eof
+  (t/testing "commands that read stdin get EOF, not the TTY (pi stdio ignore)"
+    ;; Regression: `cat` with no args inherited the TTY stdin and deadlocked
+    ;; the TUI (kmet spawns with stdin redirected from /dev/null instead).
+    (let [result (tools/execute-tool "bash" {:command "cat; echo FINISHED"
+                                             :timeout 15})]
+      (t/is (not (:is-error result)) "stdin must be EOF, not the TTY")
+      (t/is (.contains (:content result) "FINISHED")))))
+
+(t/deftest ^:slow test-tool-bash-background-pipe-closed
+  (t/testing "detached child holding the pipe open doesn't stall the tool (pi waitForChildProcess)"
+    (let [start (System/currentTimeMillis)
+          result (tools/execute-tool "bash" {:command "sleep 2 &"})
+          elapsed (- (System/currentTimeMillis) start)]
+      (t/is (not (:is-error result)))
+      (t/is (< elapsed 3000)
+            (str "tool should return at bash exit, took " elapsed "ms")))))
+
+(t/deftest ^:slow test-tool-bash-cancel-signal
+  (t/testing "setting the bound cancel signal kills the process (pi AbortSignal)"
+    (let [sig (atom false)
+          f (binding [bash-tool/*cancel-signal* sig]
+              (future (tools/execute-tool "bash" {:command "sleep 30"})))]
+      (Thread/sleep 500)
+      (reset! sig true)
+      (let [result (deref f 5000 ::timeout)]
+        (t/is (not= ::timeout result) "cancelled bash must return promptly")
+        (t/is (:is-error result))
+        (t/is (str/includes? (:content result) "aborted"))))))
+
 ;; ─── Unknown tool ─────────────────────────────────────────────────────────
+
+(t/deftest test-truncate-tail-surrogate-boundary
+  (t/testing "byte-cut landing mid-surrogate keeps the whole char (no lone surrogate)"
+    (let [s (str (apply str (repeat 9 "x")) "😀" (apply str (repeat 9 "y")))
+          ;; count = 9 + 2 + 9 = 20; max-bytes 10 → start lands on the low
+          ;; surrogate of the emoji
+          result (bash-exec/truncate-tail s :max-bytes 10)
+          content (:content result)]
+      (t/is (:truncated result))
+      (t/is (not (re-find #"[\udc00-\udfff]" content))
+            "no lone low surrogate in truncated output")
+      (t/is (str/includes? content "😀") "the full emoji survives"))))
 
 (t/deftest test-tool-unknown
   (let [result (tools/execute-tool "unknown-tool" {})]
