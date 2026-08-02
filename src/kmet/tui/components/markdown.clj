@@ -1,18 +1,21 @@
 (ns kmet.tui.components.markdown
   "Markdown to ANSI-styled terminal output.
    Port of @earendil-works/pi-tui Markdown.
-   Minimal CommonMark renderer for terminal display."
+   The tokenizer is kmet.libs.markdown/parse (pure data, no ANSI); this
+   component walks the token AST and applies theme, padding, and word-wrap."
   (:require [clojure.string :as str]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
-            [kmet.tui.macros :refer [track!]]))
+            [kmet.tui.macros :refer [track!]]
+            [kmet.libs.markdown :as md]))
 
 ;; ─── Theme ──────────────────────────────────────────────────────────────────
 ;; Matches pi's MarkdownTheme interface.
 
 (defrecord MarkdownTheme [heading link link-url code code-block
                           code-block-border quote quote-border hr
-                          list-bullet bold italic underline strikethrough])
+                          list-bullet bold italic underline strikethrough
+                          table-border code-block-indent highlight-code])
 
 (def ^:private rst "\u001b[0m")
 (def ^:private bold-ansi "\u001b[1m")
@@ -37,77 +40,273 @@
     :bold (fn [s] (str bold-ansi s "\u001b[22m"))
     :italic (fn [s] (str italic-ansi s "\u001b[23m"))
     :underline (fn [s] (str ul-ansi s "\u001b[24m"))
-    :strikethrough (fn [s] (str strike-ansi s "\u001b[29m"))}))
+    :strikethrough (fn [s] (str strike-ansi s "\u001b[29m"))
+    :table-border (fn [s] (str dim-ansi s rst))
+    :code-block-indent "  "
+    :highlight-code nil}))
 
-;; ─── Minimal inline parser ─────────────────────────────────────────────────
+;; ─── AST rendering ──────────────────────────────────────────────────────────
 
-(defn- parse-inlines
-  "Parse inline formatting from a line text, returning ANSI-styled output."
-  [line theme]
-  (if (or (empty? line) (nil? line))
-    ""
-    (loop [i 0, n (count line), result []]
-      (if (>= i n)
-        (apply str result)
-        (let [c (subs line i (inc i))
-              remaining (subs line i)]
-          (cond
-            ;; Code span: `code`
-            (= c "`")
-            (let [end (or (clojure.string/index-of remaining "`" 1) -1)]
-              (if (>= end 0)
-                (let [code ((:code theme) (subs line (inc i) (+ i end)))]
-                  (recur (+ i end 1) n (conj result code)))
-                (recur (inc i) n (conj result c))))
-            ;; Bold: **text**
-            (and (= c "*") (< (inc i) n) (= (nth line (inc i)) \*))
-            (let [end (or (clojure.string/index-of remaining "**" 2) -1)]
-              (if (>= end 0)
-                (let [inner ((:bold theme) (parse-inlines (subs line (+ i 2) (+ i end)) theme))]
-                  (recur (+ i end 2) n (conj result inner)))
-                (recur (inc i) n (conj result c))))
-            ;; Italic: *text*
-            (= c "*")
-            (let [end (or (clojure.string/index-of remaining "*" 1) -1)]
-              (if (>= end 0)
-                (let [inner ((:italic theme) (parse-inlines (subs line (inc i) (+ i end)) theme))]
-                  (recur (+ i end 1) n (conj result inner)))
-                (recur (inc i) n (conj result c))))
-            ;; Strikethrough: ~~text~~ (GitHub flavored)
-            (and (= c "~") (>= n (+ i 2)) (= (subs line (inc i) (+ i 2)) "~"))
-            (let [end (or (clojure.string/index-of remaining "~~" 2) -1)]
-              (if (>= end 0)
-                (let [inner (str "\u001b[9m" (parse-inlines (subs line (+ i 2) (+ i end)) theme) "\u001b[29m")]
-                  (recur (+ i end 2) n (conj result inner)))
-                (recur (inc i) n (conj result c))))
-            ;; Link: [text](url)
-            (= c "[")
-            (let [close-b (or (clojure.string/index-of remaining "]") -1)]
-              (if (>= close-b 0)
-                (let [paren (or (clojure.string/index-of remaining "(" close-b) -1)]
-                  (if (and (>= paren 0) (= paren (inc close-b)))
-                    (let [close-p (or (clojure.string/index-of remaining ")" paren) -1)]
-                      (if (>= close-p 0)
-                        (let [text (subs line (inc i) (+ i close-b))
-                              url (subs line (+ i paren 1) (+ i close-p))
-                              link-text ((:link theme) (parse-inlines text theme))
-                              url-text ((:link-url theme) url)]
-                          (recur (+ i close-p 1) n (conj result link-text url-text)))
-                        (recur (inc i) n (conj result c))))
-                    (recur (inc i) n (conj result c))))
-                (recur (inc i) n (conj result c))))
-            :else
-            (recur (inc i) n (conj result c))))))))
+(defn- pad-right
+  "Append spaces so the visible width of S reaches CW."
+  [cw s]
+  (str s (apply str (repeat (max 0 (- cw (u/visible-width s))) \space))))
 
-;; ─── Line type detection ───────────────────────────────────────────────────
+(declare render-inlines)
 
-(def ^:private heading-re #"^(#{1,6})\s+(.*)$")
-(def ^:private code-fence-re #"^```(\w*)$")
-(def ^:private quote-re #"^>\s?(.*)$")
-(def ^:private ul-re #"^[\s]*[-*+]\s+(.*)$")
-(def ^:private ol-re #"^[\s]*\d+\.\s+(.*)$")
-(def ^:private hr-re #"^[-*_]{3,}$")
-(def ^:private empty-re #"^\s*$")
+(defn- render-inline
+  "Render one inline token to a styled string."
+  [tok theme]
+  (case (:type tok)
+    :text (:s tok)
+    :strong ((:bold theme) (render-inlines (:content tok) theme))
+    :em ((:italic theme) (render-inlines (:content tok) theme))
+    :del ((:strikethrough theme) (render-inlines (:content tok) theme))
+    :code ((:code theme) (:s tok))
+    :link (str ((:link theme) (render-inlines (:text tok) theme))
+               ((:link-url theme) (:url tok)))
+    ""))
+
+(defn- render-inlines
+  "Render a vector of inline tokens to one styled string."
+  [tokens theme]
+  (apply str (map #(render-inline % theme) tokens)))
+
+(defn- render-code
+  "Render a :code token: styled fence lines (with lang), interior lines with
+   the code-block theme and indent (or a :highlight-code hook when set).
+   EXTRA-INDENT prefixes code nested inside list items. Trailing interior
+   blank lines are preserved."
+  [result t theme content-width left-pad extra-indent]
+  (let [indent (or (:code-block-indent theme) "  ")
+        prefix (str left-pad extra-indent)
+        lang (:lang t "")
+        text (:text t)
+        interior (if (str/blank? text) [] (str/split text #"\n" -1))]
+    (vswap! result conj (str prefix ((:code-block-border theme) (str "```" lang))))
+    (if-let [hl (:highlight-code theme)]
+      (doseq [l (hl text lang)]
+        (vswap! result conj (pad-right content-width (str prefix indent l))))
+      (doseq [line interior]
+        (vswap! result conj (pad-right content-width (str prefix indent ((:code-block theme) line))))))
+    (vswap! result conj (str prefix ((:code-block-border theme) "```")))))
+
+(defn- longest-word-width
+  "Visible width of TEXT's longest word, capped at LIMIT (0 when empty)."
+  [text limit]
+  (min limit (reduce max 0 (map u/visible-width (filter seq (str/split text #"\s+"))))))
+
+(defn- partial-fence-line?
+  "A line of 1-2 backticks: a fragment of a closing fence mid-stream."
+  [line]
+  (let [n (count line)]
+    (and (pos? n) (<= n 2) (every? #(= \` %) line))))
+
+(defn- trim-code-fence
+  "Streaming fix (pi #5825): strip trailing partial closing-fence lines from
+   a :code token's text so fence fragments never show while the closing fence
+   is being typed. Recurses into the last list item's last :blocks entry."
+  [token]
+  (case (:type token)
+    :code (loop [text (:text token)]
+            (let [lines (str/split text #"\n" -1)]
+              (if (and (seq lines) (partial-fence-line? (peek lines)))
+                (recur (str/join "\n" (pop lines)))
+                (assoc token :text text))))
+    (:ul :ol)
+    (let [items (:items token)]
+      (loop [i (dec (count items))]
+        (cond
+          (neg? i) token
+          (= :blank (:type (nth items i))) (recur (dec i))
+          :else (update-in token [:items i :blocks]
+                           (fn [blocks]
+                             (if (seq blocks)
+                               (update blocks (dec (count blocks)) trim-code-fence)
+                               blocks))))))
+    token))
+
+(defn- emit-table-row!
+  "Push the visual lines of one table ROW onto RESULT: each cell wrapped to
+   its COLUMN-WIDTHS entry, padded, joined with themed │ separators. Header
+   cells render bold when BOLD?."
+  [result row column-widths theme border-fn bold? left-pad]
+  (let [wrapped (mapv (fn [c w] (u/wrap-text-with-ansi c (max 1 w))) row column-widths)
+        height (reduce max 1 (map count wrapped))]
+    (dotimes [i height]
+      (let [cells (mapv (fn [wl w]
+                          (let [s (nth wl i "")
+                                padded (str s (apply str (repeat (max 0 (- w (u/visible-width s))) \space)))]
+                            (if bold? ((:bold theme) padded) padded)))
+                        wrapped column-widths)]
+        (vswap! result conj (str left-pad (border-fn "│ ")
+                                 (str/join (str " " (border-fn "│") " ") cells)
+                                 (str " " (border-fn "│"))))))))
+
+(defn- render-table
+  "Render a :table token: box-drawn borders, bold header, width-aware columns
+   with cell wrapping (pi's renderTable port). Falls back to the raw markdown
+   when the table cannot fit."
+  [result t theme content-width left-pad]
+  (let [num-cols (count (:header t))
+        border-fn (or (:table-border theme) identity)
+        border-overhead (inc (* 3 num-cols))
+        available-for-cells (- content-width border-overhead)]
+    (if (< available-for-cells num-cols)
+      ;; Too narrow — fall back to the raw markdown, wrapped
+      (doseq [line (u/wrap-text-with-ansi (:raw t) content-width)]
+        (vswap! result conj (pad-right content-width (str left-pad line))))
+      (let [header-styled (mapv #(render-inlines % theme) (:header t))
+            row-styled (mapv #(mapv (fn [c] (render-inlines c theme)) %) (:rows t))
+            max-unbroken 30
+            natural (reduce (fn [ws row]
+                              (mapv (fn [w c] (max w (u/visible-width c))) ws row))
+                            (mapv u/visible-width header-styled)
+                            row-styled)
+            min-word (reduce (fn [ws row]
+                               (mapv (fn [w c] (max w (longest-word-width c max-unbroken))) ws row))
+                             (mapv #(max 1 (longest-word-width % max-unbroken)) header-styled)
+                             row-styled)
+            min-cols (if (> (reduce + min-word) available-for-cells)
+                       (let [remaining (- available-for-cells num-cols)
+                             total-weight (reduce + (map #(max 0 (dec %)) min-word))
+                             growth (mapv (fn [w] (if (pos? total-weight)
+                                                    (Math/floorDiv (* (max 0 (dec w)) remaining) total-weight)
+                                                    0))
+                                          min-word)
+                             base (mapv inc growth)
+                             allocated (reduce + growth)]
+                         (reduce (fn [cs i] (update cs i inc))
+                                 base (range (min (- remaining allocated) num-cols))))
+                       min-word)
+            total-natural (+ (reduce + natural) border-overhead)
+            column-widths (if (<= total-natural content-width)
+                            (mapv max natural min-cols)
+                            (let [total-grow (reduce + (map (fn [n m] (max 0 (- n m))) natural min-cols))
+                                  extra (max 0 (- available-for-cells (reduce + min-cols)))
+                                  grown (mapv (fn [n m] (+ m (if (pos? total-grow)
+                                                               (Math/floorDiv (* (max 0 (- n m)) extra) total-grow)
+                                                               0)))
+                                              natural min-cols)
+                                  remaining (- available-for-cells (reduce + grown))]
+                              (loop [ws grown, rem remaining]
+                                (if (pos? rem)
+                                  (let [[ws' grew? rem'] (loop [ws' ws, i 0, grew? false, r rem]
+                                                           (if (or (= i (count ws')) (zero? r))
+                                                             [ws' grew? r]
+                                                             (if (< (nth ws' i) (nth natural i))
+                                                               (recur (update ws' i inc) (inc i) true (dec r))
+                                                               (recur ws' (inc i) grew? r))))]
+                                    (if grew?
+                                      (recur ws' rem')
+                                      ws'))
+                                  ws))))
+            top (str "┌─" (str/join "─┬─" (map #(apply str (repeat % "─")) column-widths)) "─┐")
+            sep (str "├─" (str/join "─┼─" (map #(apply str (repeat % "─")) column-widths)) "─┤")
+            bot (str "└─" (str/join "─┴─" (map #(apply str (repeat % "─")) column-widths)) "─┘")]
+        (vswap! result conj (str left-pad (border-fn top)))
+        (emit-table-row! result header-styled column-widths theme border-fn true left-pad)
+        (vswap! result conj (str left-pad (border-fn sep)))
+        (doseq [row row-styled]
+          (emit-table-row! result row column-widths theme border-fn false left-pad))
+        (vswap! result conj (str left-pad (border-fn bot)))))))
+
+(defn- render-list
+  "Render a :ul/:ol token at nesting DEPTH (0 = root), pushing lines onto
+   RESULT. Nested lists indent 4 columns per depth (pi's convention); items
+   render their :content lines (first gets the bullet, rest are continuations
+   aligned to the marker column), wrap long lines to the item width, then
+   render any :blocks (:ul/:ol at depth+1, :code at depth+1) and :blank
+   pseudo-items as empty lines. Ordered items number from 1 across real items."
+  [result t theme depth content-width left-pad]
+  (let [indent (apply str (repeat (* 4 depth) \space))
+        indent-w (count indent)
+        num (volatile! 0)]
+    (doseq [item (:items t)]
+      (if (= :blank (:type item))
+        (vswap! result conj (str left-pad (apply str (repeat content-width \space))))
+        (let [n (vswap! num inc)
+              marker (if (= :ul (:type t)) "• " (str n ". "))
+              marker-w (u/visible-width marker)
+              bullet ((:list-bullet theme) marker)
+              item-width (max 1 (- content-width indent-w marker-w))
+              first-prefix (str left-pad indent bullet)
+              cont-prefix (str left-pad indent (apply str (repeat marker-w \space)))
+              first-line? (volatile! true)]
+          (doseq [line (:content item)]
+            (let [styled (render-inlines line theme)
+                  segs (if (<= (u/visible-width styled) item-width)
+                         [styled]
+                         (u/wrap-text-with-ansi styled item-width))]
+              (doseq [wl segs]
+                (let [prefix (if @first-line? first-prefix cont-prefix)]
+                  (vswap! result conj
+                          (str prefix wl
+                               (apply str (repeat (max 0 (- content-width indent-w marker-w
+                                                            (u/visible-width wl))) \space))))
+                  (vreset! first-line? false)))))
+          (doseq [b (:blocks item)]
+            (case (:type b)
+              :ul (render-list result b theme (inc depth) content-width left-pad)
+              :ol (render-list result b theme (inc depth) content-width left-pad)
+              :code (render-code result b theme content-width left-pad
+                                 (apply str (repeat (* 4 (inc depth)) \space)))
+              nil)))))))
+
+(defn- render-block
+  "Render one block token into RESULT (a volatile vector of lines).
+   Each line is left-padded and right-padded to the content width, matching
+   the original line-oriented renderer's output exactly."
+  [result t theme content-width left-pad]
+  (case (:type t)
+    :blank
+    (vswap! result conj (str left-pad (apply str (repeat content-width \space))))
+
+    :hr
+    (vswap! result conj (str left-pad ((:hr theme) (apply str (repeat content-width "─")))))
+
+    :heading
+    (let [content (render-inlines (:content t) theme)
+          level (:level t)
+          ;; pi: H3+ deliberately keeps the "### " prefix (visible depth)
+          styled (if (>= level 3)
+                   (str ((:heading theme) (str (apply str (repeat level "#")) " ")) content)
+                   ((:heading theme) content))]
+      (vswap! result conj (pad-right content-width (str left-pad styled)))
+      ;; Add underline for H1/H2
+      (when (<= level 2)
+        (vswap! result conj (str left-pad ((:hr theme)
+                                           (apply str (repeat content-width (if (= level 1) "═" "─"))))))))
+
+    :code
+    (render-code result t theme content-width left-pad "")
+
+    :table
+    (render-table result t theme content-width left-pad)
+
+    :quote
+    (let [border ((:quote-border theme) "▎")
+          styled ((:quote theme) (render-inlines (:content t) theme))]
+      (vswap! result conj
+              (str left-pad border styled
+                   (apply str (repeat (max 0 (- content-width (inc (u/visible-width styled)))) \space)))))
+
+    :ul
+    (render-list result t theme 0 content-width left-pad)
+
+    :ol
+    (render-list result t theme 0 content-width left-pad)
+
+    :paragraph
+    (let [styled (render-inlines (:content t) theme)
+          line-width (u/visible-width styled)]
+      (if (<= line-width content-width)
+        (vswap! result conj (pad-right content-width (str left-pad styled)))
+        ;; Word-wrap long lines
+        (doseq [wl (u/wrap-text-with-ansi styled content-width)]
+          (vswap! result conj (pad-right content-width (str left-pad wl))))))
+
+    nil))
 
 ;; ─── Markdown component ───────────────────────────────────────────────────
 
@@ -122,103 +321,15 @@
             padding-x @padding-x-atom
             content-width (max 1 (- width (* 2 padding-x)))
             left-pad (apply str (repeat padding-x \space))
-            lines (clojure.string/split-lines text)
-            result (volatile! [])
-            in-code-block (volatile! false)
-            code-lang (volatile! "")]
-        (doseq [line lines]
-          (let [trimmed (clojure.string/trim line)]
-            (cond
-                ;; Code block fences
-              (and (not @in-code-block) (re-matches code-fence-re trimmed))
-              (do (vswap! result conj "")
-                  (vswap! in-code-block not)
-                  (let [lang (second (re-find code-fence-re trimmed))]
-                    (vreset! code-lang (or lang ""))))
-
-              @in-code-block
-              (if (re-matches code-fence-re trimmed)
-                (do (vswap! result conj "")
-                    (vswap! in-code-block not)
-                    (vreset! code-lang ""))
-                (let [styled ((:code-block theme) (str "  " line))
-                      padded (str left-pad styled
-                                  (apply str (repeat (max 0 (- content-width (u/visible-width styled))) \space)))]
-                  (vswap! result conj padded)))
-
-                ;; Horizontal rule
-              (re-matches hr-re trimmed)
-              (let [hr ((:hr theme) (apply str (repeat content-width "─")))
-                    padded (str left-pad hr)]
-                (vswap! result conj padded))
-
-                ;; Heading
-              (re-matches heading-re trimmed)
-              (let [[_ level-str content] (re-find heading-re trimmed)
-                    level (count level-str)
-                    styled ((:heading theme) (parse-inlines content theme))
-                    line-width (u/visible-width styled)
-                    padded (str left-pad styled
-                                (apply str (repeat (max 0 (- content-width line-width)) \space)))]
-                (vswap! result conj padded)
-                  ;; Add underline for H1/H2
-                (when (<= level 2)
-                  (let [underline ((:hr theme) (apply str (repeat content-width (if (= level 1) "═" "─"))))
-                        upadded (str left-pad underline)]
-                    (vswap! result conj upadded))))
-
-                ;; Blockquote
-              (re-matches quote-re trimmed)
-              (let [[_ content] (re-find quote-re trimmed)
-                    border ((:quote-border theme) "▎")
-                    styled ((:quote theme) (parse-inlines content theme))
-                    line-width (u/visible-width styled)
-                    padded (str left-pad border styled
-                                (apply str (repeat (max 0 (- content-width (inc line-width))) \space)))]
-                (vswap! result conj padded))
-
-                ;; Unordered list
-              (re-matches ul-re trimmed)
-              (let [[_ content] (re-find ul-re trimmed)
-                    bullet ((:list-bullet theme) "• ")
-                    styled (parse-inlines content theme)
-                    line-width (u/visible-width (str bullet styled))
-                    padded (str left-pad bullet styled
-                                (apply str (repeat (max 0 (- content-width line-width)) \space)))]
-                (vswap! result conj padded))
-
-                ;; Ordered list
-              (re-matches ol-re trimmed)
-              (let [[_ content] (re-find ol-re trimmed)
-                    bullet ((:list-bullet theme) "1. ")
-                    styled (parse-inlines content theme)
-                    line-width (u/visible-width (str bullet styled))
-                    padded (str left-pad bullet styled
-                                (apply str (repeat (max 0 (- content-width line-width)) \space)))]
-                (vswap! result conj padded))
-
-                ;; Empty line
-              (re-matches empty-re line)
-              (vswap! result conj (str left-pad
-                                       (apply str (repeat content-width \space))))
-
-                ;; Regular paragraph
-              :else
-              (let [styled (parse-inlines line theme)
-                    line-width (u/visible-width styled)]
-                (if (<= line-width content-width)
-                  (let [padded (str left-pad styled
-                                    (apply str (repeat (max 0 (- content-width line-width)) \space)))]
-                    (vswap! result conj padded))
-                    ;; Word-wrap long lines
-                  (let [wrapped (u/wrap-text-with-ansi styled content-width)]
-                    (doseq [wl wrapped]
-                      (let [wl-width (u/visible-width wl)
-                            padded (str left-pad wl
-                                        (apply str (repeat (max 0 (- content-width wl-width)) \space)))]
-                        (vswap! result conj padded)))))))))
-        (let [result-lines @result]
-          result-lines))))
+            result (volatile! [])]
+        ;; Trim partial closing-fence fragments from the LAST block (streaming)
+        (let [tokens (md/parse text)
+              tokens (if (seq tokens)
+                       (update tokens (dec (count tokens)) trim-code-fence)
+                       tokens)]
+          (doseq [t tokens]
+            (render-block result t theme content-width left-pad)))
+        @result)))
 
   (handle-input [_this _data] nil)
 

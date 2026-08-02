@@ -54,20 +54,65 @@
         (+ 0x10000 (* (- c 0xD800) 0x400) (- low 0xDC00)))
       c)))
 
+;; Grapheme-aware width: approximates Intl.Segmenter grapheme segmentation
+;; (pi's utils.ts) for the common emoji sequences that terminals render as a
+;; single width-2 glyph — regional-indicator flag pairs, ZWJ chains, and
+;; skin-tone modifiers. Simple emoji (🚀) already measured correctly.
+
+(def ^:private regional-indicator-start 0x1F1E6)
+(def ^:private regional-indicator-end 0x1F1FF)
+(def ^:private skin-tone-start 0x1F3FB)
+(def ^:private skin-tone-end 0x1F3FF)
+(def ^:private zwj-cp 0x200D)
+
+(defn- codepoint-len
+  "Number of chars the code point at index i occupies (2 when astral)."
+  [s i]
+  (if (>= (code-point-at s i) 0x10000) 2 1))
+
+(defn- grapheme-width-and-next
+  "Terminal width of the grapheme cluster starting at index I of S (length N)
+   and the index where the next cluster starts. PREV-W is the preceding
+   cluster's width, used to zero skin-tone modifiers that follow a width-2
+   emoji base."
+  [s i n prev-w]
+  (let [cp (code-point-at s i)
+        len (codepoint-len s i)
+        w (char-width cp)
+        w (if (and (<= skin-tone-start cp skin-tone-end) (>= prev-w 2)) 0 w)
+        j (+ i len)]
+    (cond
+      ;; Flag: two regional indicators form one width-2 glyph
+      (and (<= regional-indicator-start cp regional-indicator-end)
+           (< j n)
+           (<= regional-indicator-start (code-point-at s j) regional-indicator-end))
+      [2 (+ j (codepoint-len s j))]
+
+      ;; ZWJ chain on a width-2 emoji base: base ZWJ member [ZWJ member]* → one glyph
+      (and (>= w 2) (< j n) (= zwj-cp (code-point-at s j)))
+      (let [end (loop [j j]
+                  (if (and (< j n) (= zwj-cp (code-point-at s j)))
+                    (let [k (inc j)]
+                      (if (< k n)
+                        (recur (+ k (codepoint-len s k)))
+                        (inc j)))
+                    j))]
+        [2 end])
+
+      :else
+      [w j])))
+
 (defn- visible-width-plain
   "Visible width of a string that has NO ANSI escape codes.
    Skips the ANSI-stripping step for efficiency."
   [s]
   (if (empty? s) 0
       (if (re-find #"[^\u0020-\u007e]" s)
-        (loop [i 0, n (count s), total 0]
+        (loop [i 0, n (count s), total 0, prev-w 0]
           (if (>= i n) total
-              (let [cp (code-point-at s i)
-                    w (char-width cp)
-                    nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
-                (recur (+ i nchars) n (+ total w)))))
+              (let [[w next-i] (grapheme-width-and-next s i n prev-w)]
+                (recur next-i n (+ total w) w))))
         (count s))))
-
 (defn visible-width
   "Calculate the visible display width of a string in terminal columns.
    Strips ANSI escape codes before measuring.

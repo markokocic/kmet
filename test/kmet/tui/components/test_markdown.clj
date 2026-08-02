@@ -1,7 +1,13 @@
 (ns kmet.tui.components.test-markdown
   (:require [clojure.test :as t]
+            [clojure.string :as str]
             [kmet.tui.core :as core]
+            [kmet.tui.theme :as theme]
+            [kmet.tui.utils :as u]
             [kmet.tui.components.markdown :as md]))
+
+(defn- strip-ansi [s]
+  (clojure.string/replace s #"\u001b\[[0-9;]*m" ""))
 
 ;; ─── Construction ───────────────────────────────────────────────────────────
 
@@ -48,6 +54,15 @@
         lines (core/render m 20)]
     (t/is (>= (count lines) 4))))
 
+(t/deftest test-markdown-heading-h3-keeps-prefix
+  ;; pi keeps the "### " prefix for H3+ (visible depth)
+  (let [m (md/make-markdown "### Sub" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 20))]
+    (t/is (some #(.contains % "### Sub") lines)))
+  (let [m (md/make-markdown "###### Deep" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 20))]
+    (t/is (some #(.contains % "###### Deep") lines))))
+
 ;; ─── Code blocks ───────────────────────────────────────────────────────────
 
 (t/deftest test-markdown-code-block
@@ -55,6 +70,196 @@
         lines (core/render m 40)]
     (t/is (pos? (count lines)))
     (t/is (some #(.contains % "defn") lines))))
+
+(t/deftest test-markdown-code-fence-lines
+  ;; Fences render with their language via the code-block-border theme
+  (let [m (md/make-markdown "```clojure\n(defn f [] 1)\n```" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 30))]
+    (t/is (some #(.contains % "```clojure") lines))
+    (t/is (some #(.contains % "defn") lines))
+    (t/is (some #(.contains % "  (defn f [] 1)") lines))))
+
+(t/deftest test-markdown-code-trailing-blank-preserved
+  (let [m (md/make-markdown "```\na\n\n```" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 10))]
+    (t/is (some #(.contains % "  a") lines))
+    (t/is (some #(clojure.string/blank? %) lines))))
+
+(t/deftest test-markdown-code-unclosed-fence
+  (let [m (md/make-markdown "```\n(defn f [] 1)" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 30))]
+    (t/is (some #(.contains % "defn") lines))))
+
+;; ─── Streaming: incomplete markdown must render gracefully ─────────────────
+
+(t/deftest test-markdown-streaming-partial-closing-fence
+  ;; While the closing fence is being typed (` then `` then ```), its
+  ;; fragments must never show as code content (pi #5825 trimPartialClosingFences)
+  (doseq [frag ["" "`" "``"]]
+    (let [src (str "```clojure\n(defn f [] 1)\n" frag)
+          lines (mapv strip-ansi (core/render (md/make-markdown src :padding-x 0) 30))]
+      (t/is (some #(.contains % "defn") lines) (pr-str src))
+      (t/is (not-any? #(re-matches #"\s*`{1,2}\s*" %) lines) (pr-str src)))))
+
+(t/deftest test-markdown-streaming-partial-fence-in-list
+  ;; Same, for a code block nested in a list item
+  (doseq [frag ["`" "``"]]
+    (let [src (str "- a\n  ```clj\n  (x)\n  " frag)
+          lines (mapv strip-ansi (core/render (md/make-markdown src :padding-x 0) 30))]
+      (t/is (some #(.contains % "(x)") lines) (pr-str src))
+      (t/is (not-any? #(re-matches #"\s*`{1,2}\s*" %) lines) (pr-str src)))))
+
+(t/deftest test-markdown-streaming-partial-fence-after-blank-item
+  (let [src "- a\n\n  ```\n  code\n  `"
+        lines (mapv strip-ansi (core/render (md/make-markdown src :padding-x 0) 30))]
+    (t/is (some #(.contains % "code") lines))
+    (t/is (not-any? #(re-matches #"\s*`{1,2}\s*" %) lines))))
+
+(t/deftest test-markdown-streaming-complete-fence-unaffected
+  ;; A completed fence is never trimmed
+  (let [src "```clojure\n(defn f [] 1)\n```"
+        lines (mapv strip-ansi (core/render (md/make-markdown src :padding-x 0) 30))]
+    (t/is (some #(.contains % "```clojure") lines))
+    (t/is (some #(.contains % "defn") lines))
+    (t/is (some #(.contains % "```") lines))))
+
+(t/deftest test-markdown-streaming-nonfence-fragments-kept
+  ;; Lines that only LOOK like partial fences are trimmed only when they are
+  ;; the trailing lines of the LAST code block — content above stays intact
+  (let [src "```\n`\ncode\n```"
+        lines (mapv strip-ansi (core/render (md/make-markdown src :padding-x 0) 20))]
+    (t/is (some #(.contains % "code") lines))
+    (t/is (some #(.contains % "  `") lines))))
+
+(t/deftest test-markdown-streaming-trailing-backtick-trimmed
+  ;; Documented tradeoff (pi #5825): a trailing lone-backtick line of the LAST
+  ;; code block is treated as a partial closing fence and trimmed — necessary
+  ;; so fence fragments never flash in when the closing fence completes.
+  (let [src "```\ncode\n`\n```"
+        lines (mapv strip-ansi (core/render (md/make-markdown src :padding-x 0) 20))]
+    (t/is (some #(.contains % "code") lines))
+    (t/is (not-any? #(re-matches #"\s*`{1,2}\s*" %) lines))))
+
+(t/deftest test-markdown-streaming-incomplete-table
+  ;; Header + separator mid-stream renders the table as soon as both exist
+  (let [lines (mapv strip-ansi (core/render
+                                (md/make-markdown "| a | b |\n|---|---|\n| 1" :padding-x 0) 20))]
+    (t/is (some #(.contains % "┌") lines))
+    (t/is (some #(.contains % "│ 1") lines)))
+  ;; A lone header row (no separator yet) shows as plain text, then becomes
+  ;; a table when the separator arrives
+  (let [lone (mapv strip-ansi (core/render
+                               (md/make-markdown "| a | b |" :padding-x 0) 20))
+        full (mapv strip-ansi (core/render
+                               (md/make-markdown "| a | b |\n|---|---|" :padding-x 0) 20))]
+    (t/is (not-any? #(.contains % "┌") lone))
+    (t/is (some #(.contains % "┌") full))))
+
+(t/deftest test-markdown-streaming-inline-unclosed
+  ;; Unclosed inline markers show literally until they complete
+  (let [m (md/make-markdown "Some **bold" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 30))]
+    (t/is (some #(.contains % "**bold") lines)))
+  (let [m (md/make-markdown "Some **bold**" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 30))]
+    (t/is (some #(.contains % "bold") lines))
+    (t/is (not-any? #(.contains % "**bold**") lines))))
+
+(t/deftest test-markdown-streaming-unclosed-list
+  (let [m (md/make-markdown "- item one\n  - nested" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 30))]
+    (t/is (some #(.contains % "• item one") lines))
+    (t/is (some #(.contains % "    • nested") lines))))
+
+(t/deftest test-markdown-code-highlight-hook
+  (let [theme (assoc md/default-theme
+                     :highlight-code (fn [code lang] [(str "HL[" lang "]" code)]))
+        m (md/make-markdown "```clj\n(x)\n```" :theme theme :padding-x 0)
+        lines (mapv strip-ansi (core/render m 30))]
+    (t/is (some #(.contains % "HL[clj]") lines))))
+
+(t/deftest test-markdown-code-in-list-item
+  (let [m (md/make-markdown "- a\n  ```clj\n  (defn f [] 1)\n  ```" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 30))]
+    (t/is (some #(.contains % "• a") lines))
+    (t/is (some #(.contains % "    ```clj") lines))
+    (t/is (some #(.contains % "      (defn f [] 1)") lines))))
+
+;; ─── Tables ────────────────────────────────────────────────────────────────
+
+(t/deftest test-markdown-table
+  (let [m (md/make-markdown "| a | b |\n|---|---|\n| 1 | 2 |" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 30))]
+    (t/is (some #(.contains % "┌───") lines))
+    (t/is (some #(.contains % "│ a") lines))
+    (t/is (some #(.contains % "│ 1") lines))
+    (t/is (some #(.contains % "└───") lines))))
+
+(t/deftest test-markdown-table-single-column
+  (let [m (md/make-markdown "| x |\n|---|\n| y |" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 20))]
+    (t/is (some #(.contains % "┌") lines))
+    (t/is (some #(.contains % "│ x") lines))
+    (t/is (some #(.contains % "│ y") lines))
+    (t/is (some #(.contains % "└") lines))))
+
+(t/deftest test-markdown-table-narrow-fallback
+  ;; Too narrow to draw borders: falls back to the raw markdown
+  (let [m (md/make-markdown "| a | b |\n|---|---|\n| 1 | 2 |" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 6))]
+    (t/is (some #(.contains % "|") lines))
+    (t/is (not-any? #(.contains % "┌") lines))))
+
+(t/deftest test-markdown-table-wrap
+  ;; Long cells wrap inside their column
+  (let [m (md/make-markdown "| name |\n|------|\n| a very long cell that wraps |" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 20))]
+    (t/is (some #(.contains % "a very long") lines))
+    (t/is (some #(.contains % "cell that") lines))))
+
+(t/deftest test-markdown-table-header-wrap
+  ;; Long header cells wrap, staying bold
+  (let [m (md/make-markdown "| a very long header |\n|--------------------|\n| x |" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 16))
+        with-ansi (core/render m 16)]
+    (t/is (some #(.contains % "a very") lines))
+    (t/is (some #(.contains % "long header") lines))
+    (t/is (some #(.contains % "\u001b[1m") with-ansi))))
+
+(t/deftest test-markdown-table-cell-formatting
+  (let [m (md/make-markdown "| a |\n|---|\n| **b** |\n| `c` |" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 20))]
+    (t/is (some #(.contains % "b") lines))
+    (t/is (some #(.contains % "c") lines))))
+
+(t/deftest test-markdown-table-themed-border
+  ;; Theme-sourced tables style the border chars (dim) and keep headers bold
+  (let [m (md/make-markdown "| a | b |\n|---|---|\n| 1 | 2 |"
+                            :theme (theme/get-markdown-theme theme/dark-theme)
+                            :padding-x 0)
+        lines (core/render m 20)]
+    (t/is (some #(.contains % "\u001b[38;2;128;128;128m┌") lines))
+    (t/is (some #(.contains % "\u001b[1ma\u001b[22m") lines))
+    (t/is (some #(.contains % "│ 1") (map strip-ansi lines)))))
+
+(t/deftest test-markdown-table-emoji-alignment
+  ;; Emoji graphemes (ZWJ families, flags, skin tones) measure as ONE width-2
+  ;; glyph, so columns size correctly and every table line has the same
+  ;; visible width — the separators align in the terminal.
+  (let [src "| 👨‍👩‍👧 | a |\n|--------|---|\n| b | c |"
+        lines (map strip-ansi (core/render (md/make-markdown src :padding-x 0) 30))
+        widths (mapv u/visible-width lines)]
+    ;; col widths [2 1] + border overhead 7 = 10; the family emoji is 2 wide,
+    ;; not 6 (codepoint summing)
+    (t/is (= 10 (u/visible-width (first lines))))
+    (t/is (apply = widths)))
+  (doseq [src ["| 🇺🇸 | x |\n|------|---|\n| y | 2 |"
+               "| 👍🏽 | x |\n|------|---|\n| y | 2 |"
+               "| 🚀 name |\n|--------|\n| x |"
+               "| 你好 🚀 |\n|--------|\n| 世界 |"]]
+    (let [widths (mapv u/visible-width
+                       (map strip-ansi (core/render (md/make-markdown src :padding-x 0) 30)))]
+      (t/is (apply = widths) (pr-str src)))))
 
 ;; ─── Inline formatting ─────────────────────────────────────────────────────
 
@@ -87,6 +292,185 @@
         lines (core/render m 20)]
     (t/is (some #(.contains % "first") lines))
     (t/is (some #(.contains % "second") lines))))
+
+;; ─── Nested lists ──────────────────────────────────────────────────────────
+
+(t/deftest test-markdown-nested-list-indent
+  (let [m (md/make-markdown "- a\n  - b\n  - c\n- d" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 40))]
+    (t/is (some #(.contains % "• a") lines))
+    (t/is (some #(.contains % "    • b") lines))
+    (t/is (some #(.contains % "    • c") lines))
+    (t/is (some #(.contains % "• d") lines))))
+
+(t/deftest test-markdown-deeply-nested-list-indent
+  (let [m (md/make-markdown "- l1\n  - l2\n    - l3\n      - l4" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 40))]
+    (t/is (some #(.contains % "• l1") lines))
+    (t/is (some #(.contains % "    • l2") lines))
+    (t/is (some #(.contains % "        • l3") lines))
+    (t/is (some #(.contains % "            • l4") lines))))
+
+(t/deftest test-markdown-mixed-nested-list
+  (let [m (md/make-markdown "1. ordered\n   - nested\n   - another\n2. second" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 40))]
+    (t/is (some #(.contains % "1. ordered") lines))
+    (t/is (some #(.contains % "    • nested") lines))
+    (t/is (some #(.contains % "    • another") lines))
+    (t/is (some #(.contains % "2. second") lines))))
+
+(t/deftest test-markdown-list-wraps-long-items
+  ;; Long items wrap; continuation lines align to the marker column
+  ;; (item width = content width 20 - marker width 2 = 18)
+  (let [m (md/make-markdown "- this is a very long item that definitely wraps" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 20))]
+    (t/is (some #(.contains % "• this is a very") lines))
+    (t/is (some #(.contains % "  long item that") lines))
+    (t/is (some #(.contains % "  definitely wraps") lines))))
+
+(t/deftest test-markdown-list-continuation-lines
+  (let [m (md/make-markdown "- first line\n  continuation\n- second" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 40))]
+    (t/is (some #(.contains % "• first line") lines))
+    (t/is (some #(.contains % "  continuation") lines))
+    (t/is (some #(.contains % "• second") lines))))
+
+(t/deftest test-markdown-loose-list-blank-lines
+  ;; A blank between items renders as an empty line, items stay one list
+  (let [m (md/make-markdown "- a\n\n- b" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 40))]
+    (t/is (some #(.contains % "• a") lines))
+    (t/is (some #(.contains % "• b") lines))
+    (t/is (some #(clojure.string/blank? %) lines))))
+
+(t/deftest test-markdown-nested-list-after-blank
+  (let [m (md/make-markdown "- a\n  - b\n\n  - c" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 40))]
+    (t/is (some #(.contains % "• a") lines))
+    (t/is (some #(.contains % "    • b") lines))
+    (t/is (some #(.contains % "    • c") lines))))
+
+(t/deftest test-markdown-ordered-list-numbering
+  ;; Ordered items number 1..n, skipping blank pseudo-items
+  (let [m (md/make-markdown "1. first\n\n2. second" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 40))]
+    (t/is (some #(.contains % "1. first") lines))
+    (t/is (some #(.contains % "2. second") lines))))
+
+(t/deftest test-markdown-ordered-list-multidigit
+  (let [m (md/make-markdown (str/join "\n" (map #(str % ". item") (range 1 11))) :padding-x 0)
+        lines (mapv strip-ansi (core/render m 40))]
+    (t/is (some #(.contains % "10. item") lines))
+    (t/is (some #(.contains % "1. item") lines))))
+
+(t/deftest test-markdown-nested-list-wrap-at-depth
+  ;; A long nested item wraps and aligns under its own marker column
+  (let [m (md/make-markdown "- a\n  - this nested item is very long and wraps" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 20))]
+    (t/is (some #(.contains % "    • this nested") lines))
+    (t/is (some #(.contains % "      item is very") lines))
+    (t/is (some #(.contains % "      long and") lines))
+    (t/is (some #(.contains % "      wraps") lines))))
+
+;; ─── Misc block rendering ──────────────────────────────────────────────────
+
+(t/deftest test-markdown-hr-spaced
+  (let [m (md/make-markdown "* * *" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 20))]
+    (t/is (some #(.contains % "───") lines))))
+
+(t/deftest test-markdown-blockquote-inline-formatting
+  (let [m (md/make-markdown "> **bold** quote" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 30))]
+    (t/is (some #(.contains % "bold") lines))
+    (t/is (some #(.contains % "quote") lines))))
+
+(t/deftest test-markdown-link-url-shown
+  (let [m (md/make-markdown "[text](http://example.com)" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 40))]
+    (t/is (some #(.contains % "text") lines))
+    (t/is (some #(.contains % "(http://example.com)") lines))))
+
+(t/deftest test-markdown-kitchen-sink
+  ;; One document exercising every block type end-to-end
+  (let [src (str/join "\n"
+                      ["# Title"
+                       ""
+                       "Some **bold** and *italic* with `code` and [link](http://x)."
+                       ""
+                       "| col a | col b |"
+                       "|:------|-------:|"
+                       "| 1 | 2 |"
+                       ""
+                       "- item one"
+                       "  - nested"
+                       "- item two"
+                       ""
+                       "> quote"
+                       ""
+                       "```clojure"
+                       "(defn f [] 1)"
+                       "```"
+                       ""
+                       "---"])
+        lines (mapv strip-ansi (core/render (md/make-markdown src :padding-x 0) 30))
+        all (str/join "\n" lines)]
+    (doseq [needle ["Title" "bold" "italic" "code" "link" "(http://x)"
+                    "┌" "col a" "│ 1"
+                    "• item one" "    • nested" "• item two"
+                    "▎quote"
+                    "```clojure" "(defn f [] 1)"
+                    "───"]]
+      (t/is (str/includes? all needle) (str "missing: " needle)))))
+
+;; ─── Robustness: malformed input must never throw ──────────────────────────
+
+(def ^:private nasty-corpus
+  ["" "   " "\t" "\n\n\n" "a\r\nb\r\n"
+   "####### seven" "###### six" "#"
+   "************" "**" "*" "*x" "~~~" "~~~~" "~~~~~~" "~~x~~"
+   "-" "1." "* item" "- " "- [ ] task" "1) item"
+   "|" "||||" "| a || b |" "| `x|y` | 2 |"
+   "> " ">" ">> x" "> > > deep"
+   "```" "````" "```\n```" "```\n\n\n```" "```\ncode" "~~~\nx\n~~~"
+   "[a](b)(c)" "[]()" "![alt](img)" "[x]: url" "`a`b`"
+   "    four spaces indent" "a  b" "\t\ttab tab"
+   (apply str (repeat 300 "x"))
+   "| a | b |\n|---|---|\n| | |"
+   "| 你好 | 🚀 |\n|------|-----|\n| 世界 | x |"
+   "[text](url with spaces)"
+   "- a\n          - b\n                    - c\n                              - d\n                                        - e\n                                                  - f"
+   "1. a\n2. b\n3. c\n4. d\n5. e\n6. f\n7. g\n8. h\n9. i\n10. j\n11. k"
+   "**a**b**c**" "~~strike~~ and ~~ unclosed"
+   "- a\n  ```\n  x\n  ```\n- b"
+   "```clojure\n(defn f [] 1)\n```\n```txt\nraw\n```"
+   "| a |\n|---|\n| 1 | 2 |"
+   "> - list in quote" "- > quote in list"
+   "[**bold link**](https://x.com?q=1&r=2)"])
+
+(t/deftest test-markdown-robustness-never-throws
+  ;; Every malformed input must parse and render without throwing, and the
+  ;; rendered output must be a vector of strings (may be empty for
+  ;; whitespace-only input, matching pi/marked).
+  (doseq [src nasty-corpus]
+    (let [lines (core/render (md/make-markdown src :padding-x 0) 24)]
+      (t/is (vector? lines))
+      (t/is (every? string? lines)))))
+
+(t/deftest test-markdown-robustness-deterministic
+  ;; Same input + width must produce identical output (pure render).
+  (doseq [src nasty-corpus]
+    (let [a (core/render (md/make-markdown src :padding-x 0) 40)
+          b (core/render (md/make-markdown src :padding-x 0) 40)]
+      (t/is (= a b) (pr-str src)))))
+
+(t/deftest test-markdown-robustness-across-widths
+  ;; Render at every width 1..40; must never throw and stay a string vector.
+  (doseq [src nasty-corpus]
+    (doseq [w (range 1 41)]
+      (let [lines (core/render (md/make-markdown src :padding-x 0) w)]
+        (t/is (vector? lines))
+        (t/is (every? string? lines))))))
 
 ;; ─── Blockquotes ───────────────────────────────────────────────────────────
 

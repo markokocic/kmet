@@ -16,7 +16,7 @@
    :tool-title :tool-output
    :md-heading :md-link :md-link-url :md-code
    :md-code-block :md-code-block-border :md-quote :md-quote-border
-   :md-hr :md-list-bullet
+   :md-hr :md-list-bullet :md-table-border
    :tool-diff-added :tool-diff-removed :tool-diff-context
    :syntax-comment :syntax-keyword :syntax-function
    :syntax-variable :syntax-string :syntax-number
@@ -139,6 +139,7 @@
    :quote-border (fn [s] (fg t :md-quote-border s))
    :hr (fn [s] (fg t :md-hr s))
    :list-bullet (fn [s] (fg t :md-list-bullet s))
+   :table-border (fn [s] (fg t :md-table-border s))
    :bold bold
    :italic italic
    :underline underline
@@ -210,6 +211,7 @@
    "mdCodeBlockBorder" :md-code-block-border
    "mdQuote" :md-quote "mdQuoteBorder" :md-quote-border
    "mdHr" :md-hr "mdListBullet" :md-list-bullet
+   "mdTableBorder" :md-table-border
    "toolDiffAdded" :tool-diff-added "toolDiffRemoved" :tool-diff-removed
    "toolDiffContext" :tool-diff-context
    "syntaxComment" :syntax-comment "syntaxKeyword" :syntax-keyword
@@ -289,6 +291,7 @@
                 :md-code-block-border "#808080" :md-quote "#808080"
                 :md-quote-border "#808080" :md-hr "#808080"
                 :md-list-bullet "#8abeb7"
+                :md-table-border "#808080"
                 :tool-diff-added "#b5bd68" :tool-diff-removed "#cc6666"
                 :tool-diff-context "#808080"
                 :syntax-comment "#6A9955" :syntax-keyword "#569CD6"

@@ -39,6 +39,7 @@
             [kmet.libs.test-self-contained]
             [kmet.libs.test-terminal-image]
             [kmet.libs.test-yaml-lite]
+            [kmet.libs.test-markdown]
             [kmet.app.ui.test-chat-history]
             [kmet.app.ui.test-user-message]
             [kmet.app.ui.test-assistant-message]
@@ -79,6 +80,7 @@
     kmet.libs.test-self-contained
     kmet.libs.test-terminal-image
     kmet.libs.test-yaml-lite
+    kmet.libs.test-markdown
     kmet.app.ui.test-chat-history
     kmet.app.ui.test-user-message
     kmet.app.ui.test-assistant-message
