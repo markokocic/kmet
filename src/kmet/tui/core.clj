@@ -80,10 +80,11 @@
                 running? stopped? overlays
                 render-loop input-reader current-reader
                 flashes overlay-focus-restore focus-order-counter
-                show-hardware-cursor?])
+                show-hardware-cursor? keyboard-protocol-pushed?
+                negotiation-buffer negotiation-timer])
 
 (declare tui-request-render tui-stop set-focus-internal
-         overlay-visible? overlay-handle)
+         overlay-visible? overlay-handle process-input-buffer!)
 
 (defn create-tui [terminal]
   (let [tui (map->TUI {:terminal (atom terminal)
@@ -102,7 +103,10 @@
                        :flashes (atom nil)
                        :overlay-focus-restore (atom {:status :inactive})
                        :focus-order-counter (atom 0)
-                       :show-hardware-cursor? (atom (= (System/getenv "KMET_HARDWARE_CURSOR") "1"))})]
+                       :show-hardware-cursor? (atom (= (System/getenv "KMET_HARDWARE_CURSOR") "1"))
+                       :keyboard-protocol-pushed? (atom false)
+                       :negotiation-buffer (atom "")
+                       :negotiation-timer (atom nil)})]
     ;; AltScreenFlashContainer owned by the TUI (pi: TuiAltScreen owns its
     ;; flash container) — the render loop composites flash lines over the
     ;; screen window; tui-flash! / tui-flash-dispose! are the public API.
@@ -621,6 +625,66 @@
 (def ^:private MAX-ESC-WAIT 30)
 (def ^:private ESC-WAIT-STEP 3)
 
+;; ─── Kitty protocol negotiation interception (pi: setupStdinBuffer) ────────
+
+(defn- clear-negotiation-timer!
+  "Cancel a pending negotiation flush timer."
+  [tui]
+  (when-let [t @(:negotiation-timer tui)]
+    (future-cancel t)
+    (reset! (:negotiation-timer tui) nil)))
+
+(defn- schedule-negotiation-flush!
+  "Port of pi's scheduleKeyboardProtocolNegotiationBufferFlush: after
+   NEGOTIATION-FLUSH-TIMEOUT-MS, flush any still-held negotiation fragment
+   back into the input buffer so it is not swallowed forever."
+  [tui reader buf]
+  (when (and (nil? @(:negotiation-timer tui))
+             (seq @(:negotiation-buffer tui)))
+    (reset! (:negotiation-timer tui)
+            (future
+              (try
+                (Thread/sleep terminal/NEGOTIATION-FLUSH-TIMEOUT-MS)
+                (when (seq @(:negotiation-buffer tui))
+                  (swap! buf str @(:negotiation-buffer tui))
+                  (reset! (:negotiation-buffer tui) "")
+                  (process-input-buffer! tui reader buf))
+                (catch Exception _))
+              (reset! (:negotiation-timer tui) nil)))))
+
+(defn- intercept-keyboard-negotiation!
+  "Port of pi's setupStdinBuffer negotiation interception: while the Kitty
+   protocol query is outstanding, hold response fragments in a separate
+   buffer so the response is consumed (never dispatched as input). Returns
+   :consumed / :pending / nil (not negotiation input — proceed normally)."
+  [tui reader buf]
+  (if-not @(:keyboard-protocol-pushed? tui)
+    nil
+    (let [held @(:negotiation-buffer tui)
+          combined (str held @buf)
+          parsed (terminal/parse-negotiation-sequence combined)]
+      (cond
+        parsed
+        (do (clear-negotiation-timer! tui)
+            (reset! (:negotiation-buffer tui) "")
+            (reset! buf "")
+            (terminal/handle-negotiation-sequence! @(:terminal tui) parsed)
+            (tui-request-render tui)
+            :consumed)
+
+        (terminal/negotiation-prefix? combined)
+        (do (reset! (:negotiation-buffer tui) combined)
+            (reset! buf "")
+            (schedule-negotiation-flush! tui reader buf)
+            :pending)
+
+        :else
+        (do (when (seq held)
+              (clear-negotiation-timer! tui)
+              (reset! buf combined)
+              (reset! (:negotiation-buffer tui) ""))
+            nil)))))
+
 (defn- dispatch-input!
   "Port of pi's TUI input routing: listeners first, then overlay focus
    maintenance (focused-overlay visibility redirect + focus-restore
@@ -688,17 +752,20 @@
   "Process buffered input. Tries to complete ESC sequences with
    brief waits, then dispatches the first complete sequence."
   [tui reader buf]
-  (let [s @buf]
-    (cond
+  ;; Kitty protocol negotiation responses are intercepted first and never
+  ;; reach the normal dispatch path (pi: setupStdinBuffer).
+  (when (nil? (intercept-keyboard-negotiation! tui reader buf))
+    (let [s @buf]
+      (cond
       ;; Paste markers — dispatch immediately
-      (and (>= (count s) 6)
-           (or (clojure.string/includes? s PASTE-START)
-               (clojure.string/includes? s PASTE-END)))
-      (let [marker (if (clojure.string/includes? s PASTE-START) PASTE-START PASTE-END)
-            idx (clojure.string/index-of s marker)
-            before (subs s 0 idx)]
-        (reset! buf (or (when (seq before) before) ""))
-        (dispatch-input! tui marker))
+        (and (>= (count s) 6)
+             (or (clojure.string/includes? s PASTE-START)
+                 (clojure.string/includes? s PASTE-END)))
+        (let [marker (if (clojure.string/includes? s PASTE-START) PASTE-START PASTE-END)
+              idx (clojure.string/index-of s marker)
+              before (subs s 0 idx)]
+          (reset! buf (or (when (seq before) before) ""))
+          (dispatch-input! tui marker))
 
       ;; Starts with ESC — try to complete sequence. A lone ESC is NOT
       ;; dispatched yet: it may be the prefix of an arrow/CSI/SS3 sequence,
@@ -706,37 +773,38 @@
       ;; the Escape key (pi: isCompleteSequence returns "incomplete" for a
       ;; single ESC). Without this, "\u001b[A" arrived as ESC then "[A" as
       ;; raw text — arrows and ctrl+arrows never parsed.
-      (= (first s) \u001b)
-      (loop [waited 0]
-        (let [current @buf]
-          (if (and (keys/parse-key current)
-                   (not= current "\u001b"))
-            (do (reset! buf "")
-                (dispatch-input! tui current))
-            (if (and (< waited MAX-ESC-WAIT)
-                     (or (keys/escape-prefix? current) (= current "\u001b"))
-                     (< (count current) 12))
+        (= (first s) \u001b)
+        (loop [waited 0]
+          (let [current @buf]
+            (if (and (keys/parse-key current)
+                     (not= current "\u001b"))
+              (do (reset! buf "")
+                  (dispatch-input! tui current))
+              (if (and (< waited MAX-ESC-WAIT)
+                       (or (keys/escape-prefix? current) (= current "\u001b"))
+                     ;; kitty CSI-u sequences can reach ~24 chars
+                       (< (count current) 32))
               ;; Timed non-blocking read: JLine's NonBlockingReader.read(ms)
               ;; returns the char, -1 on EOF, -2 on timeout. .ready() is not
               ;; reliable here (returned false while data was pending), so the
               ;; old .ready + .read combo starved the accumulation loop.
-              (let [ch (.read reader ESC-WAIT-STEP)]
-                (if (>= ch 0)
-                  (do (swap! buf str (char ch))
-                      (recur 0))
-                  (recur (+ waited ESC-WAIT-STEP))))
+                (let [ch (.read reader ESC-WAIT-STEP)]
+                  (if (>= ch 0)
+                    (do (swap! buf str (char ch))
+                        (recur 0))
+                    (recur (+ waited ESC-WAIT-STEP))))
               ;; Timeout or invalid — dispatch first char, keep rest
-              (let [first-char (subs current 0 1)
-                    rest (subs current 1)]
-                (reset! buf rest)
-                (dispatch-input! tui first-char))))))
+                (let [first-char (subs current 0 1)
+                      rest (subs current 1)]
+                  (reset! buf rest)
+                  (dispatch-input! tui first-char))))))
 
       ;; Non-ESC — dispatch immediately (single char)
-      :else
-      (let [first-char (subs s 0 1)
-            rest (subs s 1)]
-        (reset! buf rest)
-        (dispatch-input! tui first-char)))))
+        :else
+        (let [first-char (subs s 0 1)
+              rest (subs s 1)]
+          (reset! buf rest)
+          (dispatch-input! tui first-char))))))
 
 (defn- start-input-reader [tui]
   (let [jline (.terminal @(:terminal tui))
@@ -785,6 +853,13 @@
     (terminal/hide-cursor! started)
     ;; Pi: no clear-screen on start — preserves prior terminal output above the TUI
     (tui-request-render tui)
+    ;; Kitty keyboard protocol negotiation (pi: queryAndEnableKittyProtocol) —
+    ;; responses are intercepted by the input reader; modifyOtherKeys is the
+    ;; fallback for terminals without Kitty support.
+    (reset! (:keyboard-protocol-pushed? tui) true)
+    (reset! (:negotiation-buffer tui) "")
+    (clear-negotiation-timer! tui)
+    (terminal/query-kitty-protocol! started)
     (try
       (loop []
         (when @(:running? tui)
@@ -929,6 +1004,16 @@
           (recur)))
       (finally
         (reset! (:running? tui) false)
+        ;; Disable the keyboard protocols: drain on final stop so late key
+        ;; release sequences don't leak to the parent shell (pi: drainInput);
+        ;; on suspend only disable so the external program inherits a clean
+        ;; terminal (pi: stop disables, drain is quit-only).
+        (reset! (:keyboard-protocol-pushed? tui) false)
+        (reset! (:negotiation-buffer tui) "")
+        (clear-negotiation-timer! tui)
+        (if @(:stopped? tui)
+          (terminal/drain-input! started)
+          (terminal/disable-kitty-protocol! started))
         ;; Pi: on final stop position the cursor at end of content so the
         ;; shell prompt appears below and the user can scroll up to review
         ;; the session. On suspend the position is left untouched for the

@@ -10,10 +10,10 @@ Analysis of pi's TUI architecture (pi source: `~/src/cvstree/pi/packages/tui/` +
   `app/ui/*` vs `interactive-mode.ts` (layout, dialogs, extension ctx.ui).
 
 Status of the chat-screen layout (previously "Level 1") is DONE; the
-**overlay/focus layer (Phase 3), the extension ctx.ui surface (Phase 7),
-and the write-log + listener-chaining + Loader-indicator + DynamicBorder
-items are DONE** (see the per-phase notes below); the remaining phases are
-planned below.
+**input pipeline (Phase 1), overlay/focus layer (Phase 3), extension
+ctx.ui surface (Phase 7), and the write-log + listener-chaining +
+Loader-indicator + DynamicBorder items are DONE** (see the per-phase
+notes below); the remaining phases are planned below.
 
 ---
 
@@ -22,9 +22,9 @@ planned below.
 | pi module (`packages/tui/src`) | kmet | Status |
 |--------------------------------|------|--------|
 | `tui.ts` — TUI/Container/Component/Focusable, render loop, overlays, IME cursor | `tui/core.clj`, `tui/components/container.clj` | ✅ overlays + focus-restore state machine done (§A.3, §A.2); render-loop items open (§A.4) |
-| `keys.ts` — key parsing (legacy + Kitty), `matchesKey`, event types | `tui/keys.clj` | **gap**: no Kitty parsing, no alt+ESC (§A.1) |
-| `terminal.ts` — ProcessTerminal, Kitty protocol negotiation, write log, progress, drainInput | `tui/terminal.clj` | **gap**: negotiation, drain, title/progress; write log + `set-title!` done (§A.1, §A.5) |
-| `stdin-buffer.ts` — batch splitting, paste re-wrap | (inline in `core.clj` input reader) | **gap**: no batch splitting (§A.1) |
+| `keys.ts` — key parsing (legacy + Kitty), `matchesKey`, event types | `tui/keys.clj` | ✅ full Kitty CSI-u + modifyOtherKeys + legacy parsing, order-insensitive matching (§A.1) |
+| `terminal.ts` — ProcessTerminal, Kitty protocol negotiation, write log, progress, drainInput | `tui/terminal.clj` | ✅ negotiation, drain, write log, `set-title!`; progress/move-by/clear-from-cursor open (§A.1, §A.5) |
+| `stdin-buffer.ts` — batch splitting, paste re-wrap | (inline in `core.clj` input reader) | ✅ per-sequence splitting via the ESC-wait loop (cap raised for CSI-u) |
 | `native-modifiers.ts` | — | missing (Apple Terminal Shift+Enter) (§A.1) |
 | `utils.ts` — visibleWidth/truncateToWidth/wrapTextWithAnsi/sliceByColumn/extractSegments | `tui/utils.clj` | ✅ (verify `extractSegments`/`normalizeTerminalOutput` for §A.3) |
 | `keybindings.ts` — KeybindingsManager, keyText, conflicts | `tui/keybindings.clj` | ✅ (verify conflict reporting + `key-text`) |
@@ -430,9 +430,21 @@ boundary.
 
 ### Phase 1 — Input pipeline (A.1 + A.2.4)
 
-**Status: PARTIAL** — the input-listener chaining item (`{consume, data}`
-transforms, §A.2.4) is DONE (ported into `dispatch-input!`); the key
-parsing, `input_buffer.clj`, and protocol negotiation are open.
+**Status: DONE** — full `keys.clj` parsing (Kitty CSI-u with alternate
+keys + event types, modified arrows/functional keys/home-end, xterm
+modifyOtherKeys `27;mods;code~`, mode-aware legacy `\x1b\r`/`\n` →
+shift+enter under Kitty, the complete legacy table incl. clear/f-key
+variants, ESC-prefixed alt/ctrl+alt forms, space → `space` id) with
+modifier-order-insensitive `matches-key?`; Kitty keyboard protocol
+negotiation (query `\x1b[>7u\x1b[?u\x1b[c` on start, 150 ms fragment
+buffer + flush timer, modifyOtherKeys `\x1b[>4;2m` fallback on zero
+flags/DA sentinel, `\x1b[<u` disable on stop and on suspend);
+`drain-input!` (1 s max / 50 ms idle) on quit so late key releases don't
+leak to the parent shell; input-listener chaining (§A.2.4). The ESC-wait
+loop already provided per-sequence splitting (pi StdinBuffer equivalent),
+with the sequence-length cap raised for long CSI-u forms. Skipped:
+Apple Terminal Shift+Enter probe and Windows VT input helper
+(platform-specific; documented divergences).
 
 **Contents:** `keys.clj` full parsing (Kitty `\x1b[k;m;…u`, `27;m;c~`,
 alternate keys, event types, `alt+x` from ESC prefix, F-keys) →
@@ -614,9 +626,11 @@ Run `bb run` side-by-side with pi after every phase. Items marked ✅ are
 covered by the automated test suites (see the phase notes); the rest need
 a manual side-by-side pass.
 
-- [ ] Kitty protocol: `kitty-active?` true under kitty/ghostty/wezterm;
-      key releases filtered unless `:wants-key-release?`; `alt+x`,
-      `ctrl+shift+p`, F-keys parse identically to pi
+- [ ] Kitty protocol: `kitty-active?` true under kitty/ghostty/wezterm
+      (parsing + negotiation ✅ tested — `test_keys`/`test_negotiation`;
+      the manual pass covers the live terminal); key releases filtered
+      unless `:wants-key-release?`; `alt+x`, `ctrl+shift+p`, F-keys parse
+      identically to pi
 - [ ] Paste: bracketed paste content arrives as one wrapped event
 - [ ] IME: CJK candidate window at the hardware cursor in the editor;
       `set-show-hardware-cursor!` toggles visibility; dialogs hosting an

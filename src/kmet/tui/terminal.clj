@@ -3,7 +3,8 @@
    Port of @earendil-works/pi-tui ProcessTerminal.
    API is backward-compatible with JLine 3; implementation uses FFM/JNI."
   (:require [babashka.fs :as fs]
-            [clojure.java.io :as io]))
+            [clojure.java.io :as io]
+            [kmet.tui.keys :as keys]))
 
 (import '(org.jline.terminal TerminalBuilder Terminal))
 
@@ -29,6 +30,113 @@
       (with-open [w (io/writer write-log-path :append true)]
         (.write w s))
       (catch Exception _))))
+
+;; ─── Kitty keyboard protocol negotiation (pi: terminal.ts) ──────────────────
+;; Requested flags: 1 = disambiguate escape codes, 2 = report event types,
+;; 4 = report alternate keys. The trailing DA query is a sentinel supported
+;; by terminals that do not know Kitty keyboard protocol — receiving DA
+;; before a Kitty response enables the modifyOtherKeys fallback.
+
+(declare write-output)
+(def ^:const DESIRED-KITTY-FLAGS 7)
+(def ^:const KITTY-KEYBOARD-PROTOCOL-QUERY "\u001b[>7u\u001b[?u\u001b[c")
+(def ^:const NEGOTIATION-FLUSH-TIMEOUT-MS 150)
+
+(defonce ^:private modify-other-keys-active (atom false))
+
+(defn parse-negotiation-sequence
+  "Parse a Kitty keyboard protocol negotiation response (pi:
+   parseKeyboardProtocolNegotiationSequence): {:type :kitty-flags
+   :flags n} or {:type :device-attributes}, or nil."
+  [s]
+  (cond
+    (re-matches #"\u001b\[\?(\d+)u" s)
+    {:type :kitty-flags :flags (parse-long (second (re-matches #"\u001b\[\?(\d+)u" s)))}
+
+    (re-matches #"\u001b\[\?[\d;]*c" s)
+    {:type :device-attributes}
+
+    :else nil))
+
+(defn negotiation-prefix?
+  "True when s could still become a negotiation response (pi:
+   isKeyboardProtocolNegotiationSequencePrefix). Note a bare \"\u001b[\"
+   is also an arrow-key prefix — holding it for negotiation adds at most
+   one char of latency."
+  [s]
+  (or (= s "\u001b[")
+      (boolean (re-matches #"\u001b\[\?[\d;]*" s))))
+
+(defn enable-modify-other-keys!
+  "Enable xterm modifyOtherKeys (\u001b[>4;2m) so Ctrl/Alt modified keys
+   arrive as CSI 27;mods;code ~ (pi: enableModifyOtherKeys)."
+  [terminal]
+  (when-not @modify-other-keys-active
+    (write-output terminal "\u001b[>4;2m")
+    (reset! modify-other-keys-active true)))
+
+(defn disable-modify-other-keys!
+  "Disable xterm modifyOtherKeys (pi: disableModifyOtherKeys)."
+  [terminal]
+  (when @modify-other-keys-active
+    (write-output terminal "\u001b[>4;0m")
+    (reset! modify-other-keys-active false)))
+
+(defn query-kitty-protocol!
+  "Send the Kitty keyboard protocol query (pi: queryAndEnableKittyProtocol).
+   Resets the modifyOtherKeys flag first so a fresh negotiation (initial
+   start or resume) starts from a clean state."
+  [terminal]
+  (reset! modify-other-keys-active false)
+  (write-output terminal KITTY-KEYBOARD-PROTOCOL-QUERY))
+
+(defn disable-kitty-protocol!
+  "Disable the Kitty keyboard protocol and modifyOtherKeys (pi: drainInput /
+   stop). Resets the global kitty-active flag."
+  [terminal]
+  (write-output terminal "\u001b[<u")
+  (keys/set-kitty-active! false)
+  (disable-modify-other-keys! terminal))
+
+(defn handle-negotiation-sequence!
+  "Act on a parsed negotiation response (pi: handleKeyboardProtocolNegotiation-
+   Sequence): kitty flags non-zero → enable Kitty protocol; zero flags or a
+   device-attributes report (when kitty is inactive) → modifyOtherKeys
+   fallback."
+  [terminal parsed]
+  (case (:type parsed)
+    :kitty-flags
+    (if (zero? (:flags parsed))
+      (enable-modify-other-keys! terminal)
+      (do (disable-modify-other-keys! terminal)
+          (when-not (keys/kitty-active?)
+            (keys/set-kitty-active! true))))
+
+    :device-attributes
+    (when-not (keys/kitty-active?)
+      (enable-modify-other-keys! terminal))
+
+    nil))
+
+(defn drain-input!
+  "Disable the keyboard protocols and drain pending input so late key
+   release sequences do not leak to the parent shell (pi: drainInput —
+   max 1000ms, exits after 50ms of input idle)."
+  [terminal]
+  (disable-kitty-protocol! terminal)
+  (let [reader (:reader terminal)
+        max-ms 1000
+        idle-ms 50]
+    (loop [last-read (System/nanoTime)
+           waited 0]
+      (when (and (< waited max-ms)
+                 (< (- (System/nanoTime) last-read) (* idle-ms 1000000)))
+        (if (and reader (.ready reader))
+          (do (.read reader)
+              (recur (System/nanoTime) 0))
+          (do (Thread/sleep 10)
+              (recur last-read (+ waited 10)))))))
+  nil)
 
 (defprotocol ITerminal
   (start! [this on-input on-resize] "Enter raw mode, start reading input")
