@@ -23,6 +23,7 @@
             [kmet.app.test-prompts]
             [kmet.app.test-extensions]
             [kmet.app.test-extensions-ui]
+            [kmet.app.test-interactive-ui]
             [kmet.app.test-event-bus]
             [kmet.app.test-commands]
             [kmet.test-editing]
@@ -79,6 +80,7 @@
     kmet.app.test-prompts
     kmet.app.test-extensions
     kmet.app.test-extensions-ui
+    kmet.app.test-interactive-ui
     kmet.app.test-event-bus
     kmet.app.test-commands
     kmet.test-editing

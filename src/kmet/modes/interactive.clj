@@ -315,8 +315,12 @@
           (reset! global-config config)
           (agent/set-system-prompt! agent-state system-prompt)
           (update-header-footer! cs)
-          ;; pi: reload re-emits session_start so extensions re-register UI
-          (event-bus/emit-event! {:type :session-start :reason :reload})
+          ;; pi: reload re-emits session_start so extensions re-register UI.
+          ;; Runs on a future — handlers may block on dialog promises, which
+          ;; must never happen on the input thread.
+          (future
+            (try (event-bus/emit-event! {:type :session-start :reason :reload})
+                 (catch Exception e (debug/log "session-start: " e))))
           (ui/chat-history-add-message! chat-history
                                         {:role :info :label "Reload"
                                          :content "Reloaded keybindings, extensions, skills, prompts, themes, and context files."}))
@@ -1247,57 +1251,39 @@
     (reset! (:keybindings custom-ed) keybindings))
   nil)
 
-(defn- make-extension-autocomplete-provider
-  "Wrap an extension autocomplete factory in the AutocompleteProvider
-   protocol (pi: ctx.ui.addAutocompleteProvider). FACTORY receives the
-   editor state map {:lines :cursor-line :cursor-col :opts} and returns
-   {:items [AutocompleteItem] :prefix string} or nil; completion applies
-   the default prefix-replace (pi default behavior)."
-  [factory]
-  (reify ac/AutocompleteProvider
-    (get-suggestions [_ lines cursor-line cursor-col opts]
-      (factory {:lines lines :cursor-line cursor-line
-                :cursor-col cursor-col :opts opts}))
-    (apply-completion [_ lines cursor-line cursor-col item prefix]
-      (let [line (nth lines cursor-line "")
-            start (max 0 (- cursor-col (count prefix)))
-            new-line (str (subs line 0 start) (:value item) (subs line cursor-col))]
-        {:lines (assoc lines cursor-line new-line)
-         :cursor-line cursor-line
-         :cursor-col (+ start (count (:value item)))}))
-    (should-trigger-file-completion [_ _ _ _] false)
-    (get-trigger-characters [_] [])))
-
-(defn- make-delegating-autocomplete-provider
-  "Try extension providers first, then fall back to the base provider
-   (pi: setupAutocompleteProvider — extension providers wrap the base)."
-  [extension-providers base-provider]
-  (reify ac/AutocompleteProvider
-    (get-suggestions [_ lines cursor-line cursor-col opts]
-      (or (some (fn [p] (ac/get-suggestions p lines cursor-line cursor-col opts))
-                extension-providers)
-          (when base-provider
-            (ac/get-suggestions base-provider lines cursor-line cursor-col opts))))
-    (apply-completion [_ lines cursor-line cursor-col item prefix]
-      (if base-provider
-        (ac/apply-completion base-provider lines cursor-line cursor-col item prefix)
-        {:lines (assoc lines cursor-line
-                       (str (subs (nth lines cursor-line "") 0
-                                  (max 0 (- cursor-col (count prefix))))
-                            (:value item)
-                            (subs (nth lines cursor-line "") cursor-col)))
-         :cursor-line cursor-line
-         :cursor-col (+ (max 0 (- cursor-col (count prefix))) (count (:value item)))}))
-    (should-trigger-file-completion [_ lines cursor-line cursor-col]
-      (or (some #(ac/should-trigger-file-completion % lines cursor-line cursor-col)
-                extension-providers)
-          (boolean (and base-provider
-                        (ac/should-trigger-file-completion base-provider
-                                                           lines cursor-line cursor-col)))))
-    (get-trigger-characters [_]
-      (vec (distinct (concat (mapcat ac/get-trigger-characters extension-providers)
-                             (when base-provider
-                               (ac/get-trigger-characters base-provider))))))))
+(defn- normalize-autocomplete-provider
+  "Accept either an AutocompleteProvider or a duck-typed map with
+   :get-suggestions (fn [state]) and optional :apply-completion,
+   :should-trigger-file-completion, :get-trigger-characters (pi-style
+   object). Returns a provider or nil for anything else."
+  [x]
+  (cond
+    (satisfies? ac/AutocompleteProvider x) x
+    (map? x) (reify ac/AutocompleteProvider
+               (get-suggestions [_ lines cursor-line cursor-col opts]
+                 (when-let [f (:get-suggestions x)]
+                   (f {:lines lines :cursor-line cursor-line
+                       :cursor-col cursor-col :opts opts})))
+               (apply-completion [_ lines cursor-line cursor-col item prefix]
+                 (if-let [f (:apply-completion x)]
+                   (f {:lines lines :cursor-line cursor-line
+                       :cursor-col cursor-col :item item :prefix prefix})
+                   ;; default: replace the prefix with the item value
+                   (let [line (nth lines cursor-line "")
+                         start (max 0 (- cursor-col (count prefix)))
+                         new-line (str (subs line 0 start) (:value item)
+                                       (subs line cursor-col))]
+                     {:lines (assoc lines cursor-line new-line)
+                      :cursor-line cursor-line
+                      :cursor-col (+ start (count (:value item)))})))
+               (should-trigger-file-completion [_ lines cursor-line cursor-col]
+                 (boolean (and (:should-trigger-file-completion x)
+                               ((:should-trigger-file-completion x)
+                                {:lines lines :cursor-line cursor-line
+                                 :cursor-col cursor-col}))))
+               (get-trigger-characters [_]
+                 (vec (:get-trigger-characters x []))))
+    :else nil))
 
 (defn- build-extension-ui-registry
   "Create the ExtensionUIContext implementation for the live layout
@@ -1312,6 +1298,9 @@
         widgets-below (atom {})
         custom-footer-atom (atom nil)
         custom-header-atom (atom nil)
+        ;; the ACTIVE editor — the default or a swapped-in custom editor
+        ;; (pi: this.editor is rebound by setCustomEditorComponent)
+        current-editor-atom (atom ed)
         editor-factory-atom (atom nil)
         extension-autocomplete-factories (atom [])
         terminal-input-unsubscribers (atom [])
@@ -1325,21 +1314,29 @@
                       (tui/tui-request-render t))
         hide-dialog (fn []
                       (container/container-clear editor-container)
-                      (container/container-add-child editor-container ed)
-                      (tui/tui-set-focus t ed)
+                      (container/container-add-child editor-container @current-editor-atom)
+                      (tui/tui-set-focus t @current-editor-atom)
                       (tui/tui-request-render t))
         rebuild-autocomplete-provider! (fn []
-                                         (let [ext-providers
-                                               (mapv make-extension-autocomplete-provider
-                                                     @extension-autocomplete-factories)
-                                               base (ac/make-combined-provider
+                                         ;; pi: setupAutocompleteProvider — each
+                                         ;; extension factory wraps the provider
+                                         ;; chain; nil results keep the base
+                                         (let [base (ac/make-combined-provider
                                                      :commands-fn #(vec (concat
                                                                          (commands/get-commands)
                                                                          (prompts/as-command-maps (prompts/get-prompt-templates))
                                                                          (skills/as-command-maps (skills/get-skills))))
-                                                     :base-path (System/getProperty "user.dir"))]
-                                           (editor/editor-set-autocomplete-provider!
-                                            ed (make-delegating-autocomplete-provider ext-providers base))
+                                                     :base-path (System/getProperty "user.dir"))
+                                               provider (reduce (fn [prov factory]
+                                                                  (or (normalize-autocomplete-provider
+                                                                       (factory prov))
+                                                                      prov))
+                                                                base
+                                                                @extension-autocomplete-factories)]
+                                           (when (contains? @current-editor-atom
+                                                            :autocomplete-provider)
+                                             (editor/editor-set-autocomplete-provider!
+                                              @current-editor-atom provider))
                                            nil))
         footer-data {:get-git-branch get-git-branch
                      :get-extension-statuses (fn []
@@ -1384,7 +1381,7 @@
                    nil)
          :custom (fn [factory {:keys [overlay overlay-options on-handle]}]
                    (let [p (promise)
-                         saved-text (editor/editor-get-text ed)
+                         saved-text (editor/editor-get-text @current-editor-atom)
                          closed (atom false)
                          close (fn [result]
                                  (when-not @closed
@@ -1392,11 +1389,14 @@
                                    (if overlay
                                      (tui/tui-hide-overlay t)
                                      (do (hide-dialog)
-                                         (editor/editor-set-text! ed saved-text)))
+                                         (editor/editor-set-text!
+                                          @current-editor-atom saved-text)))
                                    (deliver p result)))]
                      (try
                        (let [component (normalize-custom-component
                                         (factory t theme (tui-kb/get-global-keybindings) close))]
+                         (when (and (nil? component) (not @closed))
+                           (throw (ex-info "ui-custom factory returned no component" {})))
                          (when-not @closed
                            (if overlay
                              (let [opts (if (fn? overlay-options)
@@ -1456,11 +1456,12 @@
                                 (swap! terminal-input-unsubscribers conj unsub)
                                 unsub))
          :set-editor-text (fn [text]
-                            (editor/editor-set-text! ed text)
+                            (editor/editor-set-text! @current-editor-atom text)
                             (tui/tui-request-render t))
-         :get-editor-text (fn [] (editor/editor-get-text ed))
+         :get-editor-text (fn [] (editor/editor-get-text @current-editor-atom))
          :paste-to-editor (fn [text]
-                            (tui/handle-input ed (str "\u001b[200~" text "\u001b[201~")))
+                            (tui/handle-input @current-editor-atom
+                                              (str "\u001b[200~" text "\u001b[201~")))
          :set-working-indicator (fn [options]
                                   (spinner/spinner-set-indicator!
                                    (:spinner (:status-indicator cs)) options)
@@ -1479,17 +1480,19 @@
                                       (ui/chat-history-set-hidden-thinking-label! ch label)
                                       (tui/tui-request-render t))
          :set-editor-component (fn [factory]
-                                 (let [current-text (editor/editor-get-text ed)]
+                                 (let [current-text (editor/editor-get-text @current-editor-atom)]
                                    (container/container-clear editor-container)
                                    (if factory
                                      (let [new-ed (factory t theme (tui-kb/get-global-keybindings))]
                                        (transfer-editor! ed new-ed (tui-kb/get-global-keybindings))
                                        (editor/editor-set-text! new-ed current-text)
                                        (container/container-add-child editor-container new-ed)
-                                       (tui/tui-set-focus t new-ed))
+                                       (tui/tui-set-focus t new-ed)
+                                       (reset! current-editor-atom new-ed))
                                      (do (editor/editor-set-text! ed current-text)
                                          (container/container-add-child editor-container ed)
-                                         (tui/tui-set-focus t ed)))
+                                         (tui/tui-set-focus t ed)
+                                         (reset! current-editor-atom ed)))
                                    (reset! editor-factory-atom factory)
                                    (tui/tui-request-render t)))
          :add-autocomplete-provider (fn [factory]
@@ -1534,16 +1537,18 @@
                   (reset! extension-autocomplete-factories [])
                   (rebuild-autocomplete-provider!)
                   (when @editor-factory-atom
-                    (let [current-text (editor/editor-get-text ed)]
+                    (let [current-text (editor/editor-get-text @current-editor-atom)]
                       (container/container-clear editor-container)
                       (editor/editor-set-text! ed current-text)
                       (container/container-add-child editor-container ed)
-                      (tui/tui-set-focus t ed))
+                      (tui/tui-set-focus t ed)
+                      (reset! current-editor-atom ed))
                     (reset! editor-factory-atom nil))
                   ;; restore any open dialog
                   (container/container-clear editor-container)
                   (container/container-add-child editor-container ed)
                   (tui/tui-set-focus t ed)
+                  (reset! current-editor-atom ed)
                   (when (tui/tui-has-overlay? t) (tui/tui-hide-overlay t))
                   (tui/tui-request-render t))}]
     (extensions/set-ui-registry! registry)

@@ -301,8 +301,12 @@
   (ui-call :set-editor-component factory))
 
 (defn ui-add-autocomplete-provider
-  "Add an autocomplete provider to the editor (pi:
-   ctx.ui.addAutocompleteProvider)."
+  "Add an autocomplete provider wrapper to the editor (pi:
+   ctx.ui.addAutocompleteProvider). FACTORY — (fn [base-provider]) —
+   receives the current provider chain and returns a wrapped provider
+   (an AutocompleteProvider, or a map with :get-suggestions and optional
+   :apply-completion / :should-trigger-file-completion /
+   :get-trigger-characters); returning nil keeps the chain unchanged."
   [factory]
   (ui-call :add-autocomplete-provider factory))
 

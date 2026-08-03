@@ -646,7 +646,9 @@
                         :else acc))))
                 {:data data :consumed false}
                 @(:input-listeners tui))]
-    (when-not (:consumed chained)
+    ;; pi: a listener chain that transforms data to an empty string drops
+    ;; the event entirely
+    (when-not (or (:consumed chained) (empty? data))
       ;; If the focused component is an overlay that is no longer visible
       ;; (hidden via handle, or the :visible callback went false), redirect
       ;; focus to the topmost visible overlay or back to the pre-focus

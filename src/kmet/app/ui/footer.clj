@@ -18,7 +18,7 @@
       (let [th @theme-atom
             status-text @status-text-atom
             n-msgs @n-msgs-atom
-            ext-statuses (vals @extension-statuses-atom)
+            ext-statuses (->> @extension-statuses-atom (sort-by key) (mapv val))
             ext-line (when (seq ext-statuses)
                        (str (theme/dim (str/join "  " (remove nil? ext-statuses))) " "))
             sep (theme/dim (apply str (repeat width "─")))
