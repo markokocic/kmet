@@ -1412,6 +1412,33 @@
 (defn editor-set-on-change! [editor f]
   (reset! (:on-change editor) f))
 
+(defn editor-set-padding-x!
+  "Set the horizontal padding in columns (pi: EditorComponent.setPaddingX)."
+  [editor n]
+  (reset! (:padding-x editor) n))
+
+(defn editor-insert-text-at-cursor!
+  "Insert text at the current cursor position (pi:
+   EditorComponent.insertTextAtCursor — used by clipboard/image paste).
+   Pushes an undo snapshot and fires the on-change callback."
+  [editor text]
+  (when (seq text)
+    (let [state @(:state-atom editor)
+          lines (:lines state)
+          cursor-line (:cursor-line state)
+          cursor-col (:cursor-col state)
+          line (nth lines cursor-line "")
+          new-line (str (subs line 0 cursor-col) text (subs line cursor-col))
+          new-state (-> state
+                        (assoc :lines (assoc lines cursor-line new-line))
+                        (assoc :cursor-col (+ cursor-col (count text))))]
+      (push-undo-state editor)
+      (reset! (:state-atom editor) new-state)
+      (reset! (:redo-stack editor) [])
+      (reset! (:last-action editor) nil)
+      (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
+  nil)
+
 (defn editor-set-autocomplete-provider!
   "Set the autocomplete provider (an AutocompleteProvider object)."
   [editor provider]
@@ -1483,6 +1510,23 @@
 
 (defn editor-get-text-length [editor]
   (count (editor-get-text editor)))
+
+;; ─── IEditorComponent ───────────────────────────────────────────────────────
+
+(extend-type Editor
+  protocols/IEditorComponent
+  (editor-get-text [this] (editor-get-text this))
+  (editor-set-text! [this text] (editor-set-text! this text))
+  (editor-get-expanded-text [this] (editor-get-expanded-text this))
+  (editor-add-to-history! [this text] (editor-push-history! this text))
+  (editor-insert-text-at-cursor! [this text] (editor-insert-text-at-cursor! this text))
+  (editor-set-autocomplete-provider! [this provider]
+    (editor-set-autocomplete-provider! this provider))
+  (editor-set-autocomplete-max-visible! [this n]
+    (editor-set-autocomplete-max-visible! this n))
+  (editor-set-padding-x! [this n] (editor-set-padding-x! this n))
+  (editor-set-on-submit! [this f] (editor-set-on-submit! this f))
+  (editor-set-on-change! [this f] (editor-set-on-change! this f)))
 
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────
 

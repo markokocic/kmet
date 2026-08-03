@@ -46,14 +46,22 @@
           _ (editor/editor-set-on-submit! app-ed (fn [t] (println t)))
           _ (editor/editor-set-on-action! app-ed "app.interrupt" (fn []))
           _ (editor/editor-set-autocomplete-provider!
-             app-ed (ac/make-combined-provider :commands-fn (constantly [])))]
+             app-ed (ac/make-combined-provider :commands-fn (constantly [])))
+          _ (reset! (:border-fn app-ed) (fn [s] s))
+          _ (reset! (:terminal-rows-atom app-ed) (fn [] 24))
+          _ (reset! (:padding-x app-ed) 3)]
       (transfer-editor! app-ed custom nil)
       (t/is (identical? @(:on-submit app-ed) @(:on-submit custom))
             "on-submit handler copied")
       (t/is (contains? @(:action-handlers custom) "app.interrupt")
             "app action handlers copied")
       (t/is (some? @(:autocomplete-provider custom))
-            "autocomplete provider copied"))))
+            "autocomplete provider copied")
+      (t/is (identical? @(:border-fn app-ed) @(:border-fn custom))
+            "border fn copied (pi: borderColor property)")
+      (t/is (= 3 @(:padding-x custom)) "padding copied")
+      (t/is (some? @(:terminal-rows-atom custom))
+            "dynamic-height source copied"))))
 
 (deftest test-transfer-editor!-non-editor
   (testing "transfer to a non-editor component is a no-op"

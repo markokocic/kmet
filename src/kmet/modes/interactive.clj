@@ -3,6 +3,7 @@
    session browsing, bash commands, external editor.
    pi: modes/interactive/interactive-mode.ts."
   (:require [kmet.tui.core :as tui]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.terminal :as term]
             [kmet.tui.keys :as keys]
             [kmet.tui.theme :as th]
@@ -37,7 +38,8 @@
             [kmet.tui.components.spinner :as spinner]
             [kmet.libs.process :as process]))
 
-(declare resume-session show-session-tree build-extension-ui-registry)
+(declare resume-session show-session-tree build-extension-ui-registry
+         editor-text-get editor-text-set! editor-text-get-expanded)
 
 ;; ─── Global config ref ────────────────────────────────────────────────────
 
@@ -69,6 +71,7 @@
                       agent-state
                       chat-history
                       editor
+                      current-editor-atom
                       header-text
                       anim-timer
                       footer-comp
@@ -824,8 +827,7 @@
    result back into the editor, then resumes the TUI. pi: handleOpenExternalEditor
    in interactive-mode.ts."
   [cs]
-  (let [ed (:editor cs)
-        content (editor/editor-get-expanded-text ed)
+  (let [content (editor-text-get-expanded @(:current-editor-atom cs))
         tmp-dir (or (System/getenv "TMPDIR")
                     (System/getProperty "java.io.tmpdir")
                     "/tmp")
@@ -863,7 +865,7 @@
                                          (str/ends-with? new-content "\n"))
                                   (subs new-content 0 (dec (count new-content)))
                                   new-content)]
-                (editor/editor-set-text! ed new-content)
+                (editor-text-set! @(:current-editor-atom cs) new-content)
                 (debug/log "external editor content: " (pr-str new-content)))))))
       (finally
         (try (fs/delete-if-exists tmp-file) (catch Exception _ nil))
@@ -1009,6 +1011,7 @@
                             :agent-state ag
                             :chat-history ch
                             :editor ed
+                            :current-editor-atom (atom ed)
                             :header-text hdr
                             :anim-timer (atom nil)
                             :footer-comp ftr
@@ -1267,11 +1270,26 @@
 
 (defn- transfer-editor!
   "Copy the app editor's wiring onto a custom editor component (pi:
-   setCustomEditorComponent — duck-typed transfer of text callbacks,
-   appearance, autocomplete provider, and app action handlers)."
+   setCustomEditorComponent). Components implementing IEditorComponent get
+   the method-based transfer (pi: setText/setPaddingX/setAutocomplete…);
+   others get pi's duck-typed property copy of the record fields, plus the
+   CustomEditor action-handler/keybinding extras in both cases."
   [app-ed custom-ed keybindings]
-  (doseq [field [:on-submit :on-change :padding-x :border-fn
-                 :autocomplete-provider :terminal-rows-atom]]
+  (if (satisfies? protocols/IEditorComponent custom-ed)
+    (do (protocols/editor-set-on-submit! custom-ed @(:on-submit app-ed))
+        (protocols/editor-set-on-change! custom-ed @(:on-change app-ed))
+        (protocols/editor-set-padding-x! custom-ed @(:padding-x app-ed))
+        (protocols/editor-set-autocomplete-max-visible!
+         custom-ed @(:autocomplete-max-visible app-ed))
+        (when-let [p @(:autocomplete-provider app-ed)]
+          (protocols/editor-set-autocomplete-provider! custom-ed p)))
+    (doseq [field [:on-submit :on-change :padding-x
+                   :autocomplete-provider :terminal-rows-atom]]
+      (when (contains? custom-ed field)
+        (reset! (get custom-ed field) @(get app-ed field)))))
+  ;; pi: appearance properties are assigned whenever the target has them,
+  ;; regardless of protocol (borderColor, kmet's dynamic-height source)
+  (doseq [field [:border-fn :terminal-rows-atom]]
     (when (contains? custom-ed field)
       (reset! (get custom-ed field) @(get app-ed field))))
   (when (contains? custom-ed :action-handlers)
@@ -1280,6 +1298,32 @@
   (when (contains? custom-ed :keybindings)
     (reset! (:keybindings custom-ed) keybindings))
   nil)
+
+(defn- editor-text-get
+  "Read the editor text through IEditorComponent when available, falling
+   back to the field-based editor fn (duck-typed custom editors)."
+  [ed]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-get-text ed)
+    (editor/editor-get-text ed)))
+
+(defn- editor-text-set!
+  "Replace the editor text through IEditorComponent when available, falling
+   back to the field-based editor fn (duck-typed custom editors)."
+  [ed text]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-set-text! ed text)
+    (editor/editor-set-text! ed text))
+  nil)
+
+(defn- editor-text-get-expanded
+  "Read the editor text with paste markers expanded through IEditorComponent
+   when available, falling back to the field-based editor fn (pi:
+   getEditorText = getExpandedText ?? getText)."
+  [ed]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-get-expanded-text ed)
+    (editor/editor-get-expanded-text ed)))
 
 (defn- normalize-autocomplete-provider
   "Accept either an AutocompleteProvider or a duck-typed map with
@@ -1329,8 +1373,10 @@
         custom-footer-atom (atom nil)
         custom-header-atom (atom nil)
         ;; the ACTIVE editor — the default or a swapped-in custom editor
-        ;; (pi: this.editor is rebound by setCustomEditorComponent)
-        current-editor-atom (atom ed)
+        ;; (pi: this.editor is rebound by setCustomEditorComponent); the atom
+        ;; lives on CoreState so action handlers outside this closure (e.g.
+        ;; the external-editor flow) see the active editor too
+        current-editor-atom (:current-editor-atom cs)
         editor-factory-atom (atom nil)
         extension-autocomplete-factories (atom [])
         terminal-input-unsubscribers (atom [])
@@ -1411,7 +1457,7 @@
                    nil)
          :custom (fn [factory {:keys [overlay overlay-options on-handle]}]
                    (let [p (promise)
-                         saved-text (editor/editor-get-text @current-editor-atom)
+                         saved-text (editor-text-get @current-editor-atom)
                          closed (atom false)
                          close (fn [result]
                                  (when-not @closed
@@ -1419,7 +1465,7 @@
                                    (if overlay
                                      (tui/tui-hide-overlay t)
                                      (do (hide-dialog)
-                                         (editor/editor-set-text!
+                                         (editor-text-set!
                                           @current-editor-atom saved-text)))
                                    (deliver p result)))]
                      (try
@@ -1486,9 +1532,9 @@
                                 (swap! terminal-input-unsubscribers conj unsub)
                                 unsub))
          :set-editor-text (fn [text]
-                            (editor/editor-set-text! @current-editor-atom text)
+                            (editor-text-set! @current-editor-atom text)
                             (tui/tui-request-render t))
-         :get-editor-text (fn [] (editor/editor-get-text @current-editor-atom))
+         :get-editor-text (fn [] (editor-text-get-expanded @current-editor-atom))
          :paste-to-editor (fn [text]
                             (tui/handle-input @current-editor-atom
                                               (str "\u001b[200~" text "\u001b[201~")))
@@ -1510,16 +1556,16 @@
                                       (ui/chat-history-set-hidden-thinking-label! ch label)
                                       (tui/tui-request-render t))
          :set-editor-component (fn [factory]
-                                 (let [current-text (editor/editor-get-text @current-editor-atom)]
+                                 (let [current-text (editor-text-get @current-editor-atom)]
                                    (container/container-clear editor-container)
                                    (if factory
                                      (let [new-ed (factory t (th/get-current-theme) (tui-kb/get-global-keybindings))]
                                        (transfer-editor! ed new-ed (tui-kb/get-global-keybindings))
-                                       (editor/editor-set-text! new-ed current-text)
+                                       (editor-text-set! new-ed current-text)
                                        (container/container-add-child editor-container new-ed)
                                        (tui/tui-set-focus t new-ed)
                                        (reset! current-editor-atom new-ed))
-                                     (do (editor/editor-set-text! ed current-text)
+                                     (do (editor-text-set! ed current-text)
                                          (container/container-add-child editor-container ed)
                                          (tui/tui-set-focus t ed)
                                          (reset! current-editor-atom ed)))
@@ -1575,9 +1621,9 @@
                   (reset! extension-autocomplete-factories [])
                   (rebuild-autocomplete-provider!)
                   (when @editor-factory-atom
-                    (let [current-text (editor/editor-get-text @current-editor-atom)]
+                    (let [current-text (editor-text-get @current-editor-atom)]
                       (container/container-clear editor-container)
-                      (editor/editor-set-text! ed current-text)
+                      (editor-text-set! ed current-text)
                       (container/container-add-child editor-container ed)
                       (tui/tui-set-focus t ed)
                       (reset! current-editor-atom ed))

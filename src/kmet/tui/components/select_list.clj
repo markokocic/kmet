@@ -76,19 +76,36 @@
         hi (max 1 min-col max-col)]
     (max lo (min target hi))))
 
+(defn- truncate-primary
+  "Pi: truncatePrimary — apply the layout's truncatePrimary callback (or the
+   default truncate-to-width) with the SelectListTruncatePrimaryContext, then
+   clamp the result to max-width (pi re-truncates the callback output)."
+  [item is-selected? max-width column-width truncate-fn]
+  (let [text (display-value item)
+        truncated (if truncate-fn
+                    (truncate-fn {:text text
+                                  :max-width max-width
+                                  :column-width column-width
+                                  :item item
+                                  :is-selected is-selected?})
+                    (u/truncate-to-width text max-width))]
+    (u/truncate-to-width truncated max-width)))
+
 (defn- render-item
-  "Pi: renderItem — `→ ` prefix for the selection, primary value truncated to
-   the column width, description aligned in a second column when it fits."
-  [item selected? width desc theme primary-width]
+  "Pi: renderItem — `→ ` prefix for the selection, primary value truncated via
+   truncate-primary to the column width, description aligned in a second
+   column when it fits."
+  [item selected? width desc theme primary-width truncate-fn]
   (let [prefix (if selected? "→ " "  ")
-        value (display-value item)
-        primary-width (min primary-width (max 1 (- width 2 4)))]
+        prefix-width (u/visible-width prefix)]
     (if (and desc (> width 40))
-      (let [max-primary (max 1 (- primary-width PRIMARY-COLUMN-GAP))
-            truncated-value (u/truncate-to-width value max-primary)
-            vw (u/visible-width truncated-value)
-            spacing (apply str (repeat (max 1 (- primary-width vw)) \space))
-            desc-start (+ 2 vw (count spacing))
+      (let [effective-col (max 1 (min primary-width (- width prefix-width 4)))
+            max-primary (max 1 (- effective-col PRIMARY-COLUMN-GAP))
+            truncated-value (truncate-primary item selected? max-primary
+                                              effective-col truncate-fn)
+            truncated-width (u/visible-width truncated-value)
+            spacing (apply str (repeat (max 1 (- effective-col truncated-width)) \space))
+            desc-start (+ prefix-width truncated-width (count spacing))
             remaining (- width desc-start 2)]
         (if (> remaining MIN-DESCRIPTION-WIDTH)
           (let [truncated-desc (u/truncate-to-width desc remaining)]
@@ -99,19 +116,29 @@
           (if selected?
             ((:selected-text theme) (str prefix truncated-value))
             (str prefix truncated-value))))
-      (let [max-width (- width 2 2)
-            truncated-value (u/truncate-to-width value max-width)]
+      (let [max-width (- width prefix-width 2)
+            truncated-value (truncate-primary item selected? max-width
+                                              max-width truncate-fn)]
         (if selected?
           ((:selected-text theme) (str prefix truncated-value))
           (str prefix truncated-value))))))
 
+(defn- notify-selection-change!
+  "Pi: notifySelectionChange — fire :on-selection-change with the item now
+   selected after a navigation key moves the selection."
+  [sl filtered n]
+  (when-let [cb @(:on-selection-change sl)]
+    (when (pos? n)
+      (cb (nth filtered (min @(:selected-idx-atom sl) (dec n)))))))
+
 ;; ─── SelectList component ───────────────────────────────────────────────────
 
 (defrecord SelectList [items-atom selected-idx-atom filter-atom
-                       on-select on-escape
+                       on-select on-escape on-selection-change
                        focused? theme-atom height-atom cache-atom
-                       scroll-offset-atom header-atom
-                       min-primary-column-atom max-primary-column-atom]
+                       header-atom
+                       min-primary-column-atom max-primary-column-atom
+                       truncate-primary-atom]
   protocols/IComponent
 
   (render [this width]
@@ -123,6 +150,7 @@
             header @header-atom
             min-col @min-primary-column-atom
             max-col @max-primary-column-atom
+            truncate-fn @truncate-primary-atom
             filtered (if (empty? filter-str)
                        items
                        (vec (->> items
@@ -131,16 +159,11 @@
             n (count filtered)
             selected (min @selected-idx-atom (max 0 (dec n)))
             _ (reset! selected-idx-atom selected)
-            ;; Adjust scroll offset
-            scroll-offset @scroll-offset-atom
-            new-offset (cond
-                         (< selected scroll-offset) selected
-                         (>= selected (+ scroll-offset height))
-                         (- selected height -1)
-                         :else scroll-offset)
-            _ (reset! scroll-offset-atom (max 0 (min new-offset (max 0 (- n height)))))
-            visible (subvec filtered scroll-offset
-                            (min (+ scroll-offset height) n))
+            ;; Pi: viewport is centered on the selection
+            ;; (startIndex = max(0, min(selected - floor(height/2), n - height)))
+            start-idx (max 0 (min (- selected (quot height 2)) (- n height)))
+            visible (subvec filtered start-idx
+                            (min (+ start-idx height) n))
             lines (volatile! [])]
         ;; Optional header (kmet extension — pi's SelectList renders items only)
         (when (seq header)
@@ -150,17 +173,22 @@
           (vswap! lines conj ((:no-match theme) "  No matching commands"))
           (let [col-width (primary-column-width filtered min-col max-col)]
             (doseq [[idx item] (map-indexed vector visible)]
-              (let [global-idx (+ idx scroll-offset)
+              (let [global-idx (+ idx start-idx)
                     desc (when (:description item)
                            (normalize-single-line (:description item)))]
                 (vswap! lines conj
-                        (render-item item (= global-idx selected) width desc theme col-width))))))
-        ;; Scroll info — pi: `  (N/M)` only when items overflow the visible area
-        (when (and (> n (+ scroll-offset height)) (pos? n))
-          (vswap! lines conj ((:scroll-info theme) (str "  (" (inc selected) "/" n ")"))))
+                        (render-item item (= global-idx selected) width desc theme
+                                     col-width truncate-fn))))))
+        ;; Scroll info — pi: shown when the viewport is clipped at either end,
+        ;; truncated to the terminal width (pi: truncateToWidth(text, width-2))
+        (when (or (pos? start-idx) (< (+ start-idx height) n))
+          (let [scroll-text (str "  (" (inc selected) "/" n ")")]
+            (vswap! lines conj
+                    ((:scroll-info theme)
+                     (u/truncate-to-width scroll-text (max 1 (- width 2)))))))
         @lines)))
 
-  (handle-input [_this data]
+  (handle-input [this data]
     (let [items @items-atom
           filter-str @filter-atom
           filtered (if (empty? filter-str)
@@ -180,36 +208,51 @@
         (do (when-let [cb @on-escape] (cb))
             nil)
 
-        ;; Down
+        ;; Down — pi wraps to the top at the bottom
         (or (keys/matches-key? data "down")
             (keys/matches-key? data (keys/ctrl "n")))
         (do (when (pos? n)
-              (swap! selected-idx-atom #(min (inc %) (dec n))))
+              (if (= selected (dec n))
+                (reset! selected-idx-atom 0)
+                (swap! selected-idx-atom inc))
+              (notify-selection-change! this filtered n))
             nil)
 
-        ;; Up
+        ;; Up — pi wraps to the bottom at the top
         (or (keys/matches-key? data "up")
             (keys/matches-key? data (keys/ctrl "p")))
-        (do (swap! selected-idx-atom #(max 0 (dec %)))
+        (do (when (pos? n)
+              (if (zero? selected)
+                (reset! selected-idx-atom (dec n))
+                (swap! selected-idx-atom dec))
+              (notify-selection-change! this filtered n))
             nil)
 
         ;; Page down
         (keys/matches-key? data "pageDown")
-        (do (swap! selected-idx-atom #(min (+ % @height-atom) (max 0 (dec n))))
+        (do (when (pos? n)
+              (swap! selected-idx-atom #(min (+ % @height-atom) (max 0 (dec n))))
+              (notify-selection-change! this filtered n))
             nil)
 
         ;; Page up
         (keys/matches-key? data "pageUp")
         (do (swap! selected-idx-atom #(max 0 (- % @height-atom)))
+            (notify-selection-change! this filtered n)
             nil)
 
         ;; Home
         (keys/matches-key? data "home")
-        (do (reset! selected-idx-atom 0) nil)
+        (do (reset! selected-idx-atom 0)
+            (notify-selection-change! this filtered n)
+            nil)
 
         ;; End
         (keys/matches-key? data "end")
-        (do (reset! selected-idx-atom (max 0 (dec n))) nil)
+        (do (when (pos? n)
+              (reset! selected-idx-atom (dec n))
+              (notify-selection-change! this filtered n))
+            nil)
 
         ;; Backspace — remove last filter char
         (or (keys/matches-key? data "backspace")
@@ -242,34 +285,48 @@
      :theme                   — SelectListTheme map (default default-theme)
      :header                  — optional title line above the items
      :min-primary-column-width / :max-primary-column-width — description
-                               column bounds (pi defaults: 32)"
+                               column bounds (pi defaults: 32)
+     :truncate-primary        — fn of {:text :max-width :column-width :item
+                               :is-selected} returning the (possibly
+                               truncated) primary value (pi
+                               SelectListLayoutOptions.truncatePrimary)
+     :on-selection-change     — fn called with the newly selected item after
+                               a navigation key moves the selection (pi
+                               SelectList.onSelectionChange)"
   [items & {:keys [height theme header
                    min-primary-column-width max-primary-column-width
-                   on-select on-escape]
-            :or {height 10 theme default-theme
-                 min-primary-column-width DEFAULT-PRIMARY-COLUMN-WIDTH
-                 max-primary-column-width DEFAULT-PRIMARY-COLUMN-WIDTH}}]
-  (map->SelectList {:items-atom (atom items)
-                    :selected-idx-atom (atom 0)
-                    :filter-atom (atom "")
-                    :on-select (atom on-select)
-                    :on-escape (atom on-escape)
-                    :focused? (atom false)
-                    :theme-atom (atom theme)
-                    :height-atom (atom height)
-                    :cache-atom (atom nil)
-                    :scroll-offset-atom (atom 0)
-                    :header-atom (atom header)
-                    :min-primary-column-atom (atom min-primary-column-width)
-                    :max-primary-column-atom (atom max-primary-column-width)}))
+                   truncate-primary
+                   on-select on-escape on-selection-change]
+            :or {height 10 theme default-theme}}]
+  ;; pi: getPrimaryColumnBounds — a single provided bound applies to both
+  ;; sides (min ?? max ?? 32); neither defaults to 32
+  (let [min-w (or min-primary-column-width
+                  max-primary-column-width
+                  DEFAULT-PRIMARY-COLUMN-WIDTH)
+        max-w (or max-primary-column-width
+                  min-primary-column-width
+                  DEFAULT-PRIMARY-COLUMN-WIDTH)]
+    (map->SelectList {:items-atom (atom items)
+                      :selected-idx-atom (atom 0)
+                      :filter-atom (atom "")
+                      :on-select (atom on-select)
+                      :on-escape (atom on-escape)
+                      :on-selection-change (atom on-selection-change)
+                      :focused? (atom false)
+                      :theme-atom (atom theme)
+                      :height-atom (atom height)
+                      :cache-atom (atom nil)
+                      :header-atom (atom header)
+                      :min-primary-column-atom (atom min-w)
+                      :max-primary-column-atom (atom max-w)
+                      :truncate-primary-atom (atom truncate-primary)})))
 
 ;; ─── Public helpers ─────────────────────────────────────────────────────────
 
 (defn select-list-set-items! [sl items]
   (reset! (:items-atom sl) items)
   (reset! (:selected-idx-atom sl) 0)
-  (reset! (:filter-atom sl) "")
-  (reset! (:scroll-offset-atom sl) 0))
+  (reset! (:filter-atom sl) ""))
 
 (defn select-list-get-selected [sl]
   (let [items @(:items-atom sl)
@@ -283,6 +340,12 @@
 
 (defn select-list-set-theme! [sl theme]
   (reset! (:theme-atom sl) theme))
+
+(defn select-list-set-truncate-primary! [sl f]
+  (reset! (:truncate-primary-atom sl) f))
+
+(defn select-list-set-on-selection-change! [sl f]
+  (reset! (:on-selection-change sl) f))
 
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────
 

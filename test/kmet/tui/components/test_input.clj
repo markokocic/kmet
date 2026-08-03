@@ -207,3 +207,28 @@
     (doseq [c "hello"] (core/handle-input inp (str c)))
     (core/handle-input inp (str (char 11)))
     (t/is (= "hello" (input/input-get-value inp)))))
+
+;; ─── Paste (bracketed paste markers) ────────────────────────────────────────
+
+(t/deftest test-input-paste-basic
+  (let [inp (input/make-input)]
+    (core/handle-input inp (str "\u001b[200~" "hello" "\u001b[201~"))
+    (t/is (= "hello" (input/input-get-value inp)))))
+
+(t/deftest test-input-paste-removes-newlines
+  ;; pi: handlePaste removes \r\n / \r / \n (single-line input)
+  (let [inp (input/make-input)]
+    (core/handle-input inp (str "\u001b[200~" "a\r\nb\nc" "\u001b[201~"))
+    (t/is (= "abc" (input/input-get-value inp)))))
+
+(t/deftest test-input-paste-tabs-to-spaces
+  (let [inp (input/make-input)]
+    (core/handle-input inp (str "\u001b[200~" "a\tb" "\u001b[201~"))
+    (t/is (= "a    b" (input/input-get-value inp)))))
+
+(t/deftest test-input-paste-at-cursor
+  (let [inp (input/make-input)]
+    (doseq [c "hello"] (core/handle-input inp (str c)))
+    (core/handle-input inp (str (char 2)))  ;; ctrl+b — cursor left
+    (core/handle-input inp (str "\u001b[200~" "X" "\u001b[201~"))
+    (t/is (= "hellXo" (input/input-get-value inp)))))

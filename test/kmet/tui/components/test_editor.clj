@@ -756,3 +756,105 @@
     (t/is (= "" (editor/editor-get-text e)))
     (core/handle-input e (ctrl 31))
     (t/is (= "msg" (editor/editor-get-text e)) "cleared text restored by undo")))
+
+;; ─── IEditorComponent protocol ───────────────────────────────────────────────
+
+(t/deftest test-editor-implements-ieditorcomponent
+  (let [e (editor/make-editor)]
+    (t/is (satisfies? core/IEditorComponent e))
+    (t/is (satisfies? core/IComponent e))))
+
+(t/deftest test-ieditorcomponent-text-access
+  (let [e (editor/make-editor)]
+    (core/editor-set-text! e "line1\nline2")
+    (t/is (= "line1\nline2" (core/editor-get-text e)))
+    (t/is (= "line1\nline2" (core/editor-get-expanded-text e)))))
+
+(t/deftest test-ieditorcomponent-expanded-text
+  ;; paste markers are expanded (pi: getExpandedText) while getText is raw
+  (let [e (editor/make-editor)]
+    (core/editor-set-text! e "see [paste #1] here")
+    (swap! (:paste-store e) assoc 1 "the content")
+    (t/is (clojure.string/includes? (core/editor-get-text e) "[paste #1]"))
+    (t/is (= "see the content here" (core/editor-get-expanded-text e)))))
+
+(t/deftest test-ieditorcomponent-callbacks
+  (let [e (editor/make-editor)
+        submitted (atom nil)
+        changed (atom nil)]
+    (core/editor-set-on-submit! e (fn [t] (reset! submitted t)))
+    (core/editor-set-on-change! e (fn [t] (reset! changed t)))
+    (doseq [c "hi"] (core/handle-input e (str c)))
+    (t/is (= "hi" @changed))
+    (core/handle-input e "\r")
+    (t/is (= "hi" @submitted))))
+
+(t/deftest test-ieditorcomponent-appearance
+  (let [e (editor/make-editor)]
+    (core/editor-set-padding-x! e 4)
+    (t/is (= 4 @(:padding-x e)))
+    (core/editor-set-autocomplete-max-visible! e 9)
+    (t/is (= 9 @(:autocomplete-max-visible e)))))
+
+(t/deftest test-ieditorcomponent-history
+  (let [e (editor/make-editor)]
+    (core/editor-add-to-history! e "one")
+    (core/editor-add-to-history! e "two")
+    (t/is (= ["one" "two"] (editor/editor-get-history e)))))
+
+(t/deftest test-ieditorcomponent-insert-at-cursor
+  (let [e (editor/make-editor)]
+    (core/editor-set-text! e "abc")
+    ;; cursor is at the end after set-text; move left, then insert
+    (core/handle-input e K-LEFT)
+    (core/editor-insert-text-at-cursor! e "X")
+    (t/is (= "abXc" (editor/editor-get-text e)))
+    (t/is (= 3 (:cursor-col @(:state-atom e))))))
+
+(t/deftest test-custom-ieditorcomponent-component
+  ;; an extension-style editor implementing the protocol must be drivable
+  ;; through protocol dispatch (the swap path uses these methods)
+  (let [state-atom (atom {:text "" :cursor 0})
+        custom (reify core/IEditorComponent
+                 core/IComponent
+                 (render [_ _] [])
+                 (handle-input [_ _] nil)
+                 (invalidate [_] nil)
+                 (editor-get-text [_] (:text @state-atom))
+                 (editor-set-text! [_ t] (swap! state-atom assoc :text t))
+                 (editor-get-expanded-text [_] (:text @state-atom))
+                 (editor-add-to-history! [_ _] nil)
+                 (editor-insert-text-at-cursor! [_ t]
+                   (swap! state-atom assoc :text (str (:text @state-atom) t)))
+                 (editor-set-autocomplete-provider! [_ _] nil)
+                 (editor-set-autocomplete-max-visible! [_ _] nil)
+                 (editor-set-padding-x! [_ _] nil)
+                 (editor-set-on-submit! [_ _] nil)
+                 (editor-set-on-change! [_ _] nil))]
+    (core/editor-set-text! custom "hello")
+    (t/is (= "hello" (core/editor-get-text custom)))
+    (core/editor-insert-text-at-cursor! custom "!")
+    (t/is (= "hello!" (core/editor-get-text custom)))))
+
+(t/deftest test-ieditorcomponent-insert-undoable
+  ;; insert-text-at-cursor! pushes an undo snapshot and clears redo
+  (let [e (editor/make-editor)]
+    (core/editor-set-text! e "abc")
+    (core/handle-input e K-LEFT)
+    (core/editor-insert-text-at-cursor! e "X")
+    (core/handle-input e (str (char 31)))  ;; ctrl+- undo
+    (t/is (= "abc" (editor/editor-get-text e)) "insert undone")))
+
+(t/deftest test-core-re-exports-duck-fallback
+  ;; the core re-exports fall back to the field-based fns for records that
+  ;; do not implement the protocol (Editor-shaped duck-typing)
+  (let [e (editor/make-editor)]
+    (t/is (satisfies? core/IEditorComponent e))
+    (core/editor-set-text! e "x")
+    (t/is (= "x" (core/editor-get-text e)))
+    (core/editor-add-to-history! e "h")
+    (t/is (= ["h"] (editor/editor-get-history e)))
+    (core/editor-set-padding-x! e 2)
+    (t/is (= 2 @(:padding-x e)))
+    (core/editor-insert-text-at-cursor! e "y")
+    (t/is (= "xy" (core/editor-get-text e)))))

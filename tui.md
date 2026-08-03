@@ -10,11 +10,12 @@ Analysis of pi's TUI architecture (pi source: `~/src/cvstree/pi/packages/tui/` +
   `app/ui/*` vs `interactive-mode.ts` (layout, dialogs, extension ctx.ui).
 
 Status of the chat-screen layout (previously "Level 1") is DONE; the
-**input pipeline (Phase 1), overlay/focus layer (Phase 3), extension
-ctx.ui surface (Phase 7), render loop + terminal queries (Phase 2), theme
-controller + validation (Phase 4), and the write-log + listener-chaining +
-Loader-indicator + DynamicBorder items are DONE** (see the per-phase notes
-below); the remaining phases are planned below.
+**input pipeline (Phase 1), render loop + terminal queries (Phase 2),
+overlay/focus layer (Phase 3), theme controller + validation (Phase 4),
+components (Phase 5 — incl. the `IEditorComponent` protocol),
+extension ctx.ui surface (Phase 7), and the write-log +
+listener-chaining + Loader-indicator + DynamicBorder items are DONE**
+(see the per-phase notes below); Phase 6 remains planned below.
 
 ---
 
@@ -33,13 +34,13 @@ below); the remaining phases are planned below.
 | `fuzzy.ts` | `tui/fuzzy.clj` | ✅ |
 | `terminal-colors.ts` — OSC 11, color scheme report | `libs/terminal.clj` | ✅ OSC 11 parse/query, `?997n` report + `?2031h/l` notifications (§A.4, §A.6) |
 | `terminal-image.ts` | `libs/terminal_image.clj` | ✅ (diff-loop integration partial, §A.4) |
-| `editor-component.ts` — EditorComponent interface | — | missing (§A.7); custom-editor swap uses duck-typing like pi (§B.5 done) |
+| `editor-component.ts` — EditorComponent interface | `tui/protocols.clj` (`IEditorComponent`) | ✅ protocol added (Phase 5) — method-based contract, implemented by Editor + wired into the custom-editor swap; properties (onSubmit/onChange/borderColor) stay duck-typed fields like pi |
 | `kill-ring.ts` / `undo-stack.ts` / `word-navigation.ts` | inside `editor.clj` | ✅ for Editor; **gap**: Input lacks them (§A.7) |
 | `components/text|box|spacer|truncated-text.ts` | `tui/components/*` | ✅ |
-| `components/input.ts` | `tui/components/input.clj` | gap: kill-ring/undo/paste parity (§A.7) |
+| `components/input.ts` | `tui/components/input.clj` | ✅ kill-ring/undo/word-nav/paste parity (§A.7; paste newline removal fixed Phase 5) |
 | `components/editor.ts` | `tui/components/editor.clj` | ✅ (verify against §A.7 list) |
 | `components/markdown.ts` | `tui/components/markdown.clj` | ✅ |
-| `components/select-list.ts` | `tui/components/select_list.clj` | gap: layout options (§A.7) |
+| `components/select-list.ts` | `tui/components/select_list.clj` | ✅ `truncatePrimary` + layout options (§A.7) |
 | `components/settings-list.ts` | `tui/components/settings_list.clj` | ✅ |
 | `components/loader.ts` + `cancellable-loader.ts` | `tui/components/spinner.clj` + `cancellable_loader.clj` | ✅ `set-indicator!` done (verbatim frames, empty-frames hide, nil restores) |
 | `components/image.ts` | `tui/components/image.clj` | ✅ (cell-size query, §A.4) |
@@ -310,13 +311,13 @@ dark fallback for missing tokens, `get-markdown-theme`/`get-select-list-theme`
 | Component | pi | kmet | Work |
 |-----------|----|------|------|
 | Text / Box / Container / Spacer / TruncatedText | ✅ | ✅ | — |
-| Input | kill-ring, undo stack, yank/yank-pop, paste buffer, word navigation | minimal (value/cursor/submit/escape) | port kill-ring/undo/word-nav/paste into `input.clj` (reuse editor.clj internals) |
+| Input | kill-ring, undo stack, yank/yank-pop, paste buffer, word navigation | ✅ full parity (kill-ring/undo/word-nav/paste; pi-faithful paste newline removal) | — |
 | Editor | full | ✅ comprehensive | verify: undo/redo, kill ring, paste, autocomplete, scroll borders, dynamic height (see B.5) |
-| EditorComponent interface | `editor-component.ts` | — | add `IEditorComponent` protocol (set-text/get-text/get-expanded-text, on-submit/on-change, action-handlers map, on-escape/on-ctrl-d/on-paste-image, border-color, set-padding-x, set-autocomplete-provider) — needed by B.9 `set-editor-component` |
+| EditorComponent interface | `editor-component.ts` | `IEditorComponent` in `tui/protocols.clj` | ✅ protocol added (Phase 5): get-text/set-text!/get-expanded-text/add-to-history!/insert-text-at-cursor!/set-autocomplete-provider!/set-autocomplete-max-visible!/set-padding-x!/set-on-submit!/set-on-change!; implemented by Editor; core re-exports dispatch through it (custom components may implement it); properties (onSubmit/onChange/borderColor) stay duck-typed fields like pi. Placed in `kmet.tui.protocols` rather than `app/ui/editor_component.clj` — the protocol is generic TUI (pi: tui package) and `kmet.tui.components.editor` (tui layer) must implement it, which app→tui layering would forbid |
 | Markdown | ✅ | ✅ | — |
-| SelectList | `SelectListLayoutOptions` (min/maxPrimaryColumnWidth + `truncatePrimary` callback) | min/max column bounds ✅ | add `truncatePrimary` callback (context: text/maxWidth/columnWidth/item/isSelected) |
+| SelectList | `SelectListLayoutOptions` (min/maxPrimaryColumnWidth + `truncatePrimary` callback) + wrap-around navigation, centered viewport, `onSelectionChange` | ✅ (min/max bounds, `truncatePrimary` with pi's context + re-clamp, pi wrap up/down, centered `startIndex`, scroll-info on either-end clipping, `onSelectionChange`) | — |
 | SettingsList | ✅ | ✅ | — |
-| Loader | `setIndicator({frames, intervalMs})`, verbatim mode, `render()` = `["", ...text]` | spinner (no set-indicator!) | add `spinner-set-indicator!` (frames/interval/verbatim) matching pi Loader semantics |
+| Loader | `setIndicator({frames, intervalMs})`, verbatim mode, `render()` = `["", ...text]` | ✅ `spinner-set-indicator!` (frames/interval/verbatim, empty-frames hide, nil restores) | — |
 | CancellableLoader | ✅ | ✅ | — |
 | Image | cell-size query integration | ✅ render | wire cell-size query (A.4.6) + invalidate on dimensions change |
 | Autocomplete | ✅ | ✅ | — |
@@ -372,9 +373,11 @@ Files: `app/ui/status_indicator.clj`, `tui/components/spinner.clj`,
   `editor-container`, wire `onSubmit`/`onChange`, copy text + padding +
   border color + autocomplete provider + action handlers (pi copies the
   default editor's actionHandlers map into the custom editor), restore on
-  `undefined`. Requires the `IEditorComponent` protocol (A.7).
-Files: `tui/components/editor.clj`, `app/ui/editor_component.clj` (new),
-`modes/interactive.clj`.
+  `undefined`. Done via the `IEditorComponent` protocol (A.7/Phase 5) when
+  the custom component implements it, with pi's duck-typed field copy as
+  the fallback (`transfer-editor!` in `modes/interactive.clj`).
+Files: `tui/components/editor.clj`, `kmet.tui.protocols`
+(`IEditorComponent`), `modes/interactive.clj`.
 
 ## B.6 Footer
 
@@ -493,7 +496,10 @@ scheme report (`\u001b[?996n` query, `\u001b[?997;Nn` consumed ungated —
 covers unsolicited `?2031h/l` notifications — `tui-on-terminal-color-scheme-
 change`, `tui-query-terminal-color-scheme`, `tui-set-terminal-color-scheme-
 notifications`), and `set-progress!` (OSC 9;4 with 1 s keepalive) /
-`move-by!` / `clear-from-cursor!` on the terminal. Responses are
+`move-by!` / `clear-from-cursor!` on the terminal. OSC 11 settle fns now
+clear the pending flag *before* resolving the promise (the old order raced
+— a deref could observe a stale flag after deliver; fixed the flaky
+`test-intercept-osc-11`). Responses are
 intercepted in `process-input-buffer!` (like the negotiation) so they never
 dispatch as keys; fragments are held with a flush timer.
 Skipped: `applyLineResets` (kmet lines are self-contained via
@@ -599,22 +605,39 @@ report; no stale colors after switching.
 
 ### Phase 5 — Components (A.7)
 
-**Status: PARTIAL** — Loader `set-indicator!` (verbatim frames, interval,
-empty-frames hide, nil restores) and `DynamicBorder` are DONE; SelectList
-`truncatePrimary`, Input kill-ring/undo/word-nav parity, and the
-`IEditorComponent` protocol remain (the custom-editor swap uses pi's
-duck-typing instead — see §B.5).
+**Status: DONE** — Loader `set-indicator!` (verbatim frames, interval,
+empty-frames hide, nil restores), `DynamicBorder`, SelectList
+`truncatePrimary` (pi context map + re-clamp + scroll-info truncation) +
+navigation parity (wrap-around up/down incl. ctrl+n/p, centered viewport
+`startIndex = selected − ⌊height/2⌋`, scroll-info on either-end clipping,
+`onSelectionChange` callback),
+Input kill-ring/undo/word-nav parity (already present; paste newline
+handling aligned to pi — newlines are removed, tabs → 4 spaces), and the
+`IEditorComponent` protocol. The protocol lives in `kmet.tui.protocols`
+(pi puts `editor-component.ts` in the tui package; `app/ui/editor_component.clj`
+would invert kmet's layering since the tui-layer Editor must implement it)
+and is implemented by the app `Editor`. The custom-editor swap
+(`transfer-editor!` + `editor-text-get`/`editor-text-set!`/
+`editor-text-get-expanded` in `interactive.clj`) dispatches through the
+protocol when the custom component implements it — custom components may
+implement any tui protocol — and falls back to pi's duck-typed field copy
+otherwise. `core.clj` re-exports dispatch through the protocol too. The
+active-editor atom now lives on `CoreState` (`:current-editor-atom`), so the
+Ctrl+G external-editor flow reads/writes the *active* editor like pi's
+`handleOpenExternalEditor` (`this.editor`), not just the default one.
 
 **Contents:** Loader `setIndicator!` (frames/interval/verbatim) → SelectList
 `truncatePrimary` callback → Input kill-ring/undo/word-nav/paste parity
 (reuse `editor.clj` internals) → `IEditorComponent` protocol
-(`app/ui/editor_component.clj`, new).
+(`kmet.tui.protocols`, implemented by Editor; swap-path dispatch).
 
 **Why here:** all independent; small effort; `IEditorComponent` must land
 before B.5.
 
-**Gate:** `bb test` for each component; `setIndicator!` frames/interval/
-verbatim match pi; Input editing feels identical (yank/yank-pop, undo).
+**Gate:** `bb test` for each component (`test_select_list` truncate-primary
+cases, `test_input` paste cases, `test_editor` protocol cases);
+`setIndicator!` frames/interval/verbatim match pi; Input editing feels
+identical (yank/yank-pop, undo).
 
 ### Phase 6 — App behavior (B.5 → B.6 → B.1 → B.3 → B.2 → B.4 → B.8)
 
@@ -722,7 +745,10 @@ a manual side-by-side pass.
       `test_theme` + `test_theme_controller`; live-terminal pass needed)
 - [x] `KMET_TUI_WRITE_LOG` captures the raw ANSI stream
 - [x] Custom editor swap preserves text, padding, autocomplete, actions
-      (✅ duck-typed transfer, §B.5)
+      (✅ `IEditorComponent` protocol dispatch + duck-typed fallback, §B.5)
+- [x] SelectList `truncatePrimary` callback + wrap-around navigation,
+      centered viewport, `onSelectionChange`, Input paste/kill-ring/undo/
+      word-nav parity (✅ `test_select_list` / `test_input` / `test_editor`)
 - [x] Extension `ui.custom` overlay + non-overlay modes resolve
       `done(value)` and restore the editor (✅ `test_extensions_ui` +
       registry integration)

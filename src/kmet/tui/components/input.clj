@@ -226,7 +226,9 @@
                   end-idx (clojure.string/index-of buf "\u001b[201~")]
               (when (>= end-idx 0)
                 (let [paste-text (subs buf 0 end-idx)
-                      clean (clojure.string/replace paste-text #"\r\n|\r|\n" " ")
+                      ;; pi: handlePaste removes newlines (single-line input),
+                      ;; tabs become 4 spaces
+                      clean (clojure.string/replace paste-text #"\r\n|\r|\n" "")
                       clean (clojure.string/replace clean "\t" "    ")]
                   (undo-push undo-stack {:value value :cursor cursor})
                   (reset! last-action nil)

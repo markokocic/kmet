@@ -35,6 +35,7 @@
 
 (def IComponent protocols/IComponent)
 (def IFocusable protocols/IFocusable)
+(def IEditorComponent protocols/IEditorComponent)
 (def render protocols/render)
 (def handle-input protocols/handle-input)
 (def invalidate protocols/invalidate)
@@ -847,31 +848,38 @@
 
 (defn- settle-osc-11-query!
   "Settle the OSC 11 query identified by PROMISE with COLOR (nil on
-   timeout). Drops already-settled queries; clears the pending flag when
-   none remain."
+   timeout). Drops already-settled queries; clears the pending flag before
+   resolving so observers never see a stale flag after the promise settles."
   [tui color promise]
-  (swap! (:osc-11-queries tui)
-         (fn [qs]
-           (if-let [q (first (filter #(identical? (:promise %) promise) qs))]
-             (do (when (compare-and-set! (:settled? q) false true)
-                   (deliver (:promise q) color)
-                   (future-cancel (:timer q)))
-                 (vec (remove #(identical? (:promise %) promise) qs)))
-             qs)))
-  (when (empty? @(:osc-11-queries tui))
-    (reset! (:pending-osc-11? tui) false)))
+  (let [settled? (volatile! false)]
+    (swap! (:osc-11-queries tui)
+           (fn [qs]
+             (if-let [q (first (filter #(identical? (:promise %) promise) qs))]
+               (do (when (compare-and-set! (:settled? q) false true)
+                     (future-cancel (:timer q))
+                     (vreset! settled? true))
+                   (vec (remove #(identical? (:promise %) promise) qs)))
+               qs)))
+    (when (empty? @(:osc-11-queries tui))
+      (reset! (:pending-osc-11? tui) false))
+    (when @settled?
+      (deliver promise color))))
 
 (defn- settle-osc-11-response!
   "Settle the oldest unsettled OSC 11 query with COLOR (pi: shift + resolve)."
   [tui color]
-  (when-let [q (first (filter #(not @(:settled? %)) @(:osc-11-queries tui)))]
-    (when (compare-and-set! (:settled? q) false true)
-      (deliver (:promise q) color)
-      (future-cancel (:timer q)))
-    (swap! (:osc-11-queries tui)
-           (fn [qs] (vec (remove #(identical? (:promise %) (:promise q)) qs)))))
-  (when (empty? @(:osc-11-queries tui))
-    (reset! (:pending-osc-11? tui) false)))
+  (let [settled? (volatile! false)
+        q (first (filter #(not @(:settled? %)) @(:osc-11-queries tui)))]
+    (when q
+      (when (compare-and-set! (:settled? q) false true)
+        (future-cancel (:timer q))
+        (vreset! settled? true))
+      (swap! (:osc-11-queries tui)
+             (fn [qs] (vec (remove #(identical? (:promise %) (:promise q)) qs)))))
+    (when (empty? @(:osc-11-queries tui))
+      (reset! (:pending-osc-11? tui) false))
+    (when (and q @settled?)
+      (deliver (:promise q) color))))
 
 (defn- intercept-terminal-response!
   "Consume terminal query responses — cell size (\u001b[6;h;wt), OSC 11
@@ -1623,15 +1631,51 @@
 (def input-set-on-submit! input/input-set-on-submit!)
 (def input-set-on-escape! input/input-set-on-escape!)
 (def make-editor editor/make-editor)
-(def editor-set-text! editor/editor-set-text!)
-(def editor-get-text editor/editor-get-text)
-(def editor-set-on-submit! editor/editor-set-on-submit!)
-(def editor-set-on-change! editor/editor-set-on-change!)
+;; IEditorComponent members dispatch through the protocol when the target
+;; implements it (custom editors from extensions), else the field-based fn
+;; (Editor-shaped records). `ed` avoids shadowing the `editor` ns alias.
+(defn editor-set-text! [ed text]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-set-text! ed text)
+    (editor/editor-set-text! ed text)))
+(defn editor-get-text [ed]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-get-text ed)
+    (editor/editor-get-text ed)))
+(defn editor-set-on-submit! [ed f]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-set-on-submit! ed f)
+    (editor/editor-set-on-submit! ed f)))
+(defn editor-set-on-change! [ed f]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-set-on-change! ed f)
+    (editor/editor-set-on-change! ed f)))
+(defn editor-get-expanded-text [ed]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-get-expanded-text ed)
+    (editor/editor-get-expanded-text ed)))
+(defn editor-set-autocomplete-provider! [ed provider]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-set-autocomplete-provider! ed provider)
+    (editor/editor-set-autocomplete-provider! ed provider)))
+(defn editor-set-autocomplete-max-visible! [ed n]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-set-autocomplete-max-visible! ed n)
+    (editor/editor-set-autocomplete-max-visible! ed n)))
+(defn editor-set-padding-x! [ed n]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-set-padding-x! ed n)
+    (editor/editor-set-padding-x! ed n)))
+(defn editor-insert-text-at-cursor! [ed text]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-insert-text-at-cursor! ed text)
+    (editor/editor-insert-text-at-cursor! ed text)))
+(defn editor-add-to-history! [ed text]
+  (if (satisfies? protocols/IEditorComponent ed)
+    (protocols/editor-add-to-history! ed text)
+    (editor/editor-push-history! ed text)))
 (def editor-set-on-action! editor/editor-set-on-action!)
-(def editor-get-expanded-text editor/editor-get-expanded-text)
 (def editor-set-on-tab! editor/editor-set-on-tab!)
-(def editor-set-autocomplete-provider! editor/editor-set-autocomplete-provider!)
-(def editor-set-autocomplete-max-visible! editor/editor-set-autocomplete-max-visible!)
 (def editor-set-autocomplete-theme! editor/editor-set-autocomplete-theme!)
 (def editor-autocomplete-active? editor/editor-autocomplete-active?)
 (def editor-push-history! editor/editor-push-history!)
