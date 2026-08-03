@@ -165,11 +165,12 @@ development. Run the full gate once before wrapping up:
 `bb lint` + `bb format-check` + `bb test` + `bb test-ext`.
 
 ## Platform
-- **Target**: cross-platform (any system with Babashka and a terminal)
+- **Fully supported**: Linux, WSL, Windows, Termux (Android)
+- **macOS**: supported too, but no way to test there — expect untested rough edges
 - **Primary dev environment**: Termux on Android — glibc babashka via `ld-linux-aarch64.so.1 --library-path`.
   Do not set `LD_LIBRARY_PATH` globally; use the glibc linker directly when on Termux.
 - **Shell resolution** (`kmet.app.bash-executor`): `/bin/bash` → `which bash` → `sh`.
-  Works on any Unix-like system. Windows support requires Git Bash or WSL (not tested).
+  On Windows this resolves through Git Bash; under WSL the WSL shell is used.
 
 ## Error handling
 - Use `ex-info` with a `:cause` or `:type` key for structured errors
