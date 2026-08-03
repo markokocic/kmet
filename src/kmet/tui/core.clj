@@ -771,7 +771,7 @@
   "Port of pi's scheduleKeyboardProtocolNegotiationBufferFlush: after
    NEGOTIATION-FLUSH-TIMEOUT-MS, flush any still-held negotiation fragment
    back into the input buffer so it is not swallowed forever."
-  [tui reader buf]
+  [tui read-fn buf]
   (when (and (nil? @(:negotiation-timer tui))
              (seq @(:negotiation-buffer tui)))
     (reset! (:negotiation-timer tui)
@@ -781,7 +781,7 @@
                 (when (seq @(:negotiation-buffer tui))
                   (swap! buf str @(:negotiation-buffer tui))
                   (reset! (:negotiation-buffer tui) "")
-                  (process-input-buffer! tui reader buf))
+                  (process-input-buffer! tui read-fn buf))
                 (catch Exception _))
               (reset! (:negotiation-timer tui) nil)))))
 
@@ -790,7 +790,7 @@
    protocol query is outstanding, hold response fragments in a separate
    buffer so the response is consumed (never dispatched as input). Returns
    :consumed / :pending / nil (not negotiation input — proceed normally)."
-  [tui reader buf]
+  [tui read-fn buf]
   (if-not @(:keyboard-protocol-pushed? tui)
     nil
     (let [held @(:negotiation-buffer tui)
@@ -808,7 +808,7 @@
         (terminal/negotiation-prefix? combined)
         (do (reset! (:negotiation-buffer tui) combined)
             (reset! buf "")
-            (schedule-negotiation-flush! tui reader buf)
+            (schedule-negotiation-flush! tui read-fn buf)
             :pending)
 
         :else
@@ -832,7 +832,7 @@
   "Flush a held terminal-response fragment back into the input buffer after
    the flush timeout so it is never swallowed forever (mirrors the
    negotiation flush)."
-  [tui reader buf]
+  [tui read-fn buf]
   (when (and (nil? @(:terminal-response-timer tui))
              (seq @(:terminal-response-buffer tui)))
     (reset! (:terminal-response-timer tui)
@@ -842,7 +842,7 @@
                 (when (seq @(:terminal-response-buffer tui))
                   (swap! buf str @(:terminal-response-buffer tui))
                   (reset! (:terminal-response-buffer tui) "")
-                  (process-input-buffer! tui reader buf))
+                  (process-input-buffer! tui read-fn buf))
                 (catch Exception _))
               (reset! (:terminal-response-timer tui) nil)))))
 
@@ -888,7 +888,7 @@
    ungated (pi: consumeCellSizeResponse has no pending query); OSC 11 is
    gated on an outstanding query. Returns :consumed (handled), :pending
    (fragment held), or nil (not a response)."
-  [tui reader buf]
+  [tui read-fn buf]
   (let [held @(:terminal-response-buffer tui)
         combined (str held @buf)
         cell-size (terminal/parse-cell-size-response combined)
@@ -930,7 +930,7 @@
           (terminal/color-scheme-report-prefix? combined))
       (do (reset! (:terminal-response-buffer tui) combined)
           (reset! buf "")
-          (schedule-terminal-response-flush! tui reader buf)
+          (schedule-terminal-response-flush! tui read-fn buf)
           :pending)
 
       :else
@@ -1005,14 +1005,16 @@
 
 (defn- process-input-buffer!
   "Process buffered input. Tries to complete ESC sequences with
-   brief waits, then dispatches the first complete sequence."
-  [tui reader buf]
+   brief waits, then dispatches the first complete sequence.
+   READ-FN — (fn [timeout-ms]) returning the next char (int), -2 on
+   timeout, -1 on EOF (JLine NonBlockingReader semantics)."
+  [tui read-fn buf]
   ;; Kitty protocol negotiation responses are intercepted first and never
   ;; reach the normal dispatch path (pi: setupStdinBuffer); terminal query
   ;; responses (cell size / OSC 11 / color scheme) are consumed next (pi:
   ;; handleInput consumes them before listeners).
-  (when (nil? (intercept-keyboard-negotiation! tui reader buf))
-    (when (nil? (intercept-terminal-response! tui reader buf))
+  (when (nil? (intercept-keyboard-negotiation! tui read-fn buf))
+    (when (nil? (intercept-terminal-response! tui read-fn buf))
       (let [s @buf]
         (cond
         ;; Paste markers — dispatch immediately
@@ -1034,28 +1036,42 @@
           (= (first s) \u001b)
           (loop [waited 0]
             (let [current @buf]
-              (if (and (keys/parse-key current)
-                       (not= current "\u001b"))
+              ;; Terminal responses are re-checked on every accumulation: a
+              ;; response arriving split across reads must be held (or
+              ;; consumed) before key parsing sees it. Without this, the
+              ;; ESC-wait loop would parse "\u001b[" as alt+[ and leak the
+              ;; remaining response chars (e.g. the DA body "?1;2;4c") as
+              ;; raw text into the focused editor (pi: the negotiation
+              ;; interception runs on the full buffered sequence).
+              (cond
+                (intercept-keyboard-negotiation! tui read-fn buf) nil
+                (intercept-terminal-response! tui read-fn buf) nil
+
+                (and (keys/parse-key current)
+                     (not= current "\u001b"))
                 (do (reset! buf "")
                     (dispatch-input! tui current))
-                (if (and (< waited MAX-ESC-WAIT)
-                         (or (keys/escape-prefix? current) (= current "\u001b"))
-                       ;; kitty CSI-u sequences can reach ~24 chars
-                         (< (count current) 32))
+
+                (and (< waited MAX-ESC-WAIT)
+                     (or (keys/escape-prefix? current) (= current "\u001b"))
+                     ;; kitty CSI-u sequences can reach ~24 chars
+                     (< (count current) 32))
                 ;; Timed non-blocking read: JLine's NonBlockingReader.read(ms)
                 ;; returns the char, -1 on EOF, -2 on timeout. .ready() is not
                 ;; reliable here (returned false while data was pending), so the
                 ;; old .ready + .read combo starved the accumulation loop.
-                  (let [ch (.read reader ESC-WAIT-STEP)]
-                    (if (>= ch 0)
-                      (do (swap! buf str (char ch))
-                          (recur 0))
-                      (recur (+ waited ESC-WAIT-STEP))))
+                (let [ch (read-fn ESC-WAIT-STEP)]
+                  (if (>= ch 0)
+                    (do (swap! buf str (char ch))
+                        (recur 0))
+                    (recur (+ waited ESC-WAIT-STEP))))
+
                 ;; Timeout or invalid — dispatch first char, keep rest
-                  (let [first-char (subs current 0 1)
-                        rest (subs current 1)]
-                    (reset! buf rest)
-                    (dispatch-input! tui first-char))))))
+                :else
+                (let [first-char (subs current 0 1)
+                      rest (subs current 1)]
+                  (reset! buf rest)
+                  (dispatch-input! tui first-char)))))
 
         ;; Non-ESC — dispatch immediately (single char)
           :else
@@ -1066,7 +1082,8 @@
 
 (defn- start-input-reader [tui]
   (let [jline (.terminal @(:terminal tui))
-        reader (.reader jline)]
+        reader (.reader jline)
+        read-fn (fn [timeout-ms] (.read reader timeout-ms))]
     ;; Track the current reader so a stale reader (from a suspended TUI
     ;; session) exits as soon as a fresh reader is installed by resume.
     (reset! (:current-reader tui) reader)
@@ -1077,7 +1094,7 @@
                   (try (let [ch (.read reader)]
                          (when (>= ch 0)
                            (swap! buf str (char ch))
-                           (process-input-buffer! tui reader buf)))
+                           (process-input-buffer! tui read-fn buf)))
                        (catch Exception e
                          (when (and @(:running? tui)
                                     (identical? reader @(:current-reader tui)))
@@ -1186,21 +1203,32 @@
    suspended (tui-suspend!) or stopped (tui-stop). Restores and closes the
    terminal on exit; tui-resume! creates a fresh one."
   [tui]
+  ;; Activate the negotiation interception BEFORE the terminal starts: the
+  ;; reader thread may process the terminal's response to JLine's own DA
+  ;; query (written inside start!) before the query below is sent — the flag
+  ;; must already be set or those bytes would be parsed as keys (pi sets
+  ;; keyboardProtocolPushed before writing the query).
+  (reset! (:keyboard-protocol-pushed? tui) true)
+  (reset! (:negotiation-buffer tui) "")
+  (clear-negotiation-timer! tui)
   (let [started (terminal/start! @(:terminal tui)
                                  (fn [_] nil)
                                  (fn [] (tui-request-render tui)))
         jline (.terminal started)
         hardware-cursor-row (atom 0)
         viewport-top (atom 0)]
+    ;; Make the started record (with the live writer) visible to the input
+    ;; path: negotiation / OSC 11 / color-scheme handlers write through
+    ;; @(:terminal tui), and the unstarted record's writer is nil — writes
+    ;; would be silently dropped.
+    (reset! (:terminal tui) started)
     (terminal/hide-cursor! started)
     ;; Pi: no clear-screen on start — preserves prior terminal output above the TUI
     (tui-request-render tui)
     ;; Kitty keyboard protocol negotiation (pi: queryAndEnableKittyProtocol) —
     ;; responses are intercepted by the input reader; modifyOtherKeys is the
-    ;; fallback for terminals without Kitty support.
-    (reset! (:keyboard-protocol-pushed? tui) true)
-    (reset! (:negotiation-buffer tui) "")
-    (clear-negotiation-timer! tui)
+    ;; fallback for terminals without Kitty support. The flag was set before
+    ;; start! so even JLine's own DA response is intercepted.
     (terminal/query-kitty-protocol! started)
     (when @(:color-scheme-notifications-enabled? tui)
       (terminal/set-color-scheme-notifications! started true))

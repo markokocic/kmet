@@ -105,8 +105,13 @@
 
 ;; ─── Input-reader interception (pi: setupStdinBuffer) ──────────────────────
 
+(defn- stub-read-fn
+  "A read-fn that never yields more input (immediate timeout)."
+  [_timeout-ms]
+  -2)
+
 (defn- intercept [tui buf]
-  ((var core/intercept-keyboard-negotiation!) tui nil buf))
+  ((var core/intercept-keyboard-negotiation!) tui stub-read-fn buf))
 
 (deftest test-intercept-consumes-response
   (testing "a complete response is consumed, never dispatched as input"
@@ -148,3 +153,52 @@
           buf (atom "\u001b[?7u")]
       (t/is (nil? (intercept tui buf)))
       (t/is (= "\u001b[?7u" @buf)))))
+
+;; ─── ESC-wait loop interception (regression: DA response leaking into the
+;;      editor as "?1;2;4c") ────────────────────────────────────────────────
+
+(defn- process-chars
+  "Drive process-input-buffer! the way the app reader loop does: one char per
+   read (the next char of CHARS available immediately to the ESC-wait loop's
+   timed reads), then assert the final state."
+  [tui chars]
+  (let [pending (atom (seq chars))
+        read-fn (fn [_timeout-ms]
+                  (if-let [c (first @pending)]
+                    (do (swap! pending rest) (int c))
+                    -2))
+        dispatched (atom [])
+        buf (atom "")]
+    (swap! (:input-listeners tui)
+           conj (fn [data] (swap! dispatched conj data) nil))
+    (reset! (:keyboard-protocol-pushed? tui) true)
+    (doseq [_ (range (count chars))]
+      ;; the ESC-wait loop may have consumed some chars already, so reads
+      ;; can time out (-2) before the loop finishes
+      (let [ch (read-fn 0)]
+        (when (>= ch 0)
+          (swap! buf str (char ch))
+          ((var core/process-input-buffer!) tui read-fn buf))))
+    {:dispatched @dispatched :buf @buf}))
+
+(deftest test-esc-loop-consumes-split-da-response
+  (testing "a device-attributes response arriving char-by-char through the
+            ESC-wait loop is held and consumed — never dispatched as keys
+            (regression: the loop parsed \"\u001b[\" as alt+[ and leaked the
+            remaining \"?1;2;4c\" into the focused editor)"
+    (let [{:keys [dispatched buf]} (process-chars (core/create-tui (recording-terminal))
+                                                  "\u001b[?1;2;4c")]
+      (t/is (= [] dispatched) "no response char reaches the input path")
+      (t/is (= "" buf) "response fully consumed")
+      (t/is (false? (keys/kitty-active?)) "DA fallback: kitty stays off")))
+  (testing "a complete kitty-flags response is consumed the same way"
+    (let [{:keys [dispatched buf]} (process-chars (core/create-tui (recording-terminal))
+                                                  "\u001b[?7u")]
+      (t/is (= [] dispatched))
+      (t/is (= "" buf))
+      (t/is (true? (keys/kitty-active?)) "kitty enabled from the ESC path")))
+  (testing "an arrow key is NOT held by the interception — it dispatches"
+    (let [{:keys [dispatched buf]} (process-chars (core/create-tui (recording-terminal))
+                                                  "\u001b[A")]
+      (t/is (= ["\u001b[A"] dispatched) "arrow key reaches the input path")
+      (t/is (= "" buf)))))
