@@ -86,7 +86,7 @@
                 show-hardware-cursor? keyboard-protocol-pushed?
                 negotiation-buffer negotiation-timer
                 previous-height max-lines-rendered clear-on-shrink?
-                full-redraw-count previous-kitty-image-ids prev-image-blocks
+                full-redraw-count previous-kitty-image-ids
                 pending-osc-11? osc-11-queries
                 color-scheme-listeners terminal-response-buffer
                 terminal-response-timer color-scheme-notifications-enabled?
@@ -121,7 +121,6 @@
                        :clear-on-shrink? (atom (= (System/getenv "KMET_CLEAR_ON_SHRINK") "1"))
                        :full-redraw-count (atom 0)
                        :previous-kitty-image-ids (atom #{})
-                       :prev-image-blocks (atom nil)
                        :pending-osc-11? (atom false)
                        :osc-11-queries (atom [])
                        :color-scheme-listeners (atom #{})
@@ -1121,7 +1120,6 @@
     (reset! (:previous-width tui) -1)
     (reset! (:previous-height tui) -1)
     (reset! (:max-lines-rendered tui) 0)
-    (reset! (:prev-image-blocks tui) nil)
     (reset! (:previous-kitty-image-ids tui) #{}))
   (reset! (:render-requested? tui) true))
 
@@ -1283,8 +1281,11 @@
                                               (max 0 (- prev-buffer-length h))
                                               @previous-viewport-top))
                     viewport-top (atom @prev-viewport-top)
-                    sb (StringBuilder.)
-                    emit! (fn [s] (.append sb s))
+                    ;; The frame buffer is an atom so a mid-diff full-redraw
+                    ;; fallback can discard the partial diff output (pi: the
+                    ;; diff buffer is a local that fullRender replaces).
+                    sb (atom (StringBuilder.))
+                    emit! (fn [s] (.append @sb s))
                     debug-redraw? @(:debug-redraw? tui)
                     log-redraw! (fn [reason]
                                   (when debug-redraw?
@@ -1510,9 +1511,9 @@
                   (main-diff))
                 (reset! previous-viewport-top @viewport-top)
                 (when @(:tui-debug? tui)
-                  (tui-debug-dump! prev lines (str sb) w h @viewport-top @hardware-cursor-row))
-                (when (pos? (.length sb))
-                  (terminal/write-output started (str sb)))
+                  (tui-debug-dump! prev lines (str @sb) w h @viewport-top @hardware-cursor-row))
+                (when (pos? (.length @sb))
+                  (terminal/write-output started (str @sb)))
                 (reset! (:previous-lines tui) lines)
                 (reset! (:previous-width tui) w)
                 (reset! (:previous-height tui) h)
@@ -1607,7 +1608,6 @@
   (reset! (:previous-width tui) 0)
   (reset! (:previous-height tui) 0)
   (reset! (:max-lines-rendered tui) 0)
-  (reset! (:prev-image-blocks tui) nil)
   (reset! (:previous-kitty-image-ids tui) #{})
   (start-input-reader tui)
   (reset! (:render-loop tui) (future (run-render-loop! tui)))
