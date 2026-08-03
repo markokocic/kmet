@@ -53,6 +53,8 @@ src/kmet/
 ├── app/                — App-level business logic (pi: dist/core/)
 │   ├── bash_executor.clj — Bash command execution (raw byte streaming, truncation, temp file)
 │   ├── llm.clj         — LLM API calls
+│   ├── proxy.clj      — Proxy env vars (HTTPS_PROXY/ALL_PROXY/NO_PROXY) + transport;
+│   │                     SOCKS & https-scheme proxies via curl (java.net.http is HTTP-proxy-only)
 │   ├── loop.clj        — Agent conversation loop
 │   ├── session.clj     — Session persistence
 │   ├── skills.clj      — Skills loading + system prompt

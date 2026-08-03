@@ -1,9 +1,9 @@
 (ns kmet.app.llm
   "LLM API client supporting OpenAI and Anthropic with streaming."
-  (:require [babashka.http-client :as http]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [cheshire.core :as json]
             [kmet.libs.sse :as sse]
+            [kmet.app.proxy :as proxy]
             [kmet.app.tools.core :as tools]))
 
 ;; ─── Configuration ─────────────────────────────────────────────────────────
@@ -192,12 +192,13 @@
                     (assoc payload :tools (mapv tools/tool->openai-schema tools))
                     payload)]
       (try
-        (let [response (http/post url
-                                  {:headers {"Authorization" (str "Bearer " api-key)
-                                             "Content-Type" "application/json"}
-                                   :body (json/generate-string payload)
-                                   :as :stream
-                                   :timeout 120000})]
+        (let [response (proxy/post-stream url
+                                          {:headers {"Authorization" (str "Bearer " api-key)
+                                                     "Content-Type" "application/json"}
+                                           :body (json/generate-string payload)
+                                           :as :stream
+                                           :timeout 120000}
+                                          signal)]
           (sse/process-openai-stream response
                                      (fn [event]
                                        (case (:type event)
@@ -214,9 +215,10 @@
                                          :done (when on-done (on-done (:stop-reason event)))
                                          :error (when on-error (on-error (:message event)))
                                          nil))
-                                     signal))
+                                     signal)
+          (proxy/finish-curl! response signal on-error))
         (catch Exception e
-          (when on-error (on-error (ex-message e))))))))
+          (when on-error (on-error (or (ex-message e) (str "Request failed: " (.getSimpleName (class e)))))))))))
 
 ;; ─── Anthropic request ─────────────────────────────────────────────────────
 
@@ -241,13 +243,18 @@
                     (seq tools) (assoc :tools (mapv tools/tool->anthropic-schema tools))
                     thinking-cfg (assoc :thinking thinking-cfg))]
       (try
-        (let [response (http/post anthropic-url
-                                  {:headers {"x-api-key" api-key
-                                             "anthropic-version" default-anthropic-version
-                                             "Content-Type" "application/json"}
-                                   :body (json/generate-string payload)
-                                   :as :stream
-                                   :timeout 120000})]
+        (let [response (proxy/post-stream anthropic-url
+                                          {:headers {"x-api-key" api-key
+                                                     "anthropic-version" default-anthropic-version
+                                                     "Content-Type" "application/json"}
+                                           :body (json/generate-string payload)
+                                           :as :stream
+                                           :timeout 120000}
+                                          signal)
+              ;; curl-backed (SOCKS) responses: EOF without a message_stop is
+              ;; a transport failure reported by finish-curl! — don't let it
+              ;; surface as a fake :connection-closed success.
+              curl-backed (some? (:proc response))]
           (sse/process-anthropic-stream response
                                         (fn [event]
                                           (case (:type event)
@@ -256,12 +263,16 @@
                                                          (on-tool-call {:id (:id event)
                                                                         :name (:name event)
                                                                         :arguments (:arguments event)}))
-                                            :done (when on-done (on-done (:stop-reason event)))
+                                            :done (when (and on-done
+                                                             (or (not curl-backed)
+                                                                 (not= :connection-closed (:stop-reason event))))
+                                                    (on-done (:stop-reason event)))
                                             :error (when on-error (on-error (:message event)))
                                             nil))
-                                        signal))
+                                        signal)
+          (proxy/finish-curl! response signal on-error))
         (catch Exception e
-          (when on-error (on-error (ex-message e))))))))
+          (when on-error (on-error (or (ex-message e) (str "Request failed: " (.getSimpleName (class e)))))))))))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 
