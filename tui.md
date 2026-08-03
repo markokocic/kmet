@@ -31,7 +31,7 @@ are DONE** (see the per-phase notes below).
 | `terminal.ts` — ProcessTerminal, Kitty protocol negotiation, write log, progress, drainInput | `tui/terminal.clj` | ✅ negotiation, drain, write log, `set-title!`, `set-progress!` (OSC 9;4 + keepalive), `move-by!`, `clear-from-cursor!` (§A.1, §A.5) |
 | `stdin-buffer.ts` — batch splitting, paste re-wrap | (inline in `core.clj` input reader) | ✅ per-sequence splitting via the ESC-wait loop (cap raised for CSI-u) |
 | `native-modifiers.ts` | — | missing (Apple Terminal Shift+Enter) (§A.1) |
-| `utils.ts` — visibleWidth/truncateToWidth/wrapTextWithAnsi/sliceByColumn/extractSegments | `tui/utils.clj` | ✅ (verify `extractSegments`/`normalizeTerminalOutput` for §A.3) |
+| `utils.ts` — visibleWidth/truncateToWidth/wrapTextWithAnsi/sliceByColumn/extractSegments | `tui/utils.clj` | ✅ `normalizeTerminalOutput` (Thai/Lao AM + tab→3sp) + `SEGMENT_RESET` landed with the applyLineResets follow-up; overlay compositing uses `sgr-state-at` rather than pi's raw `SEGMENT_RESET` (equivalent: re-applies the base's active style after the overlay — see §A.4 note) |
 | `keybindings.ts` — KeybindingsManager, keyText, conflicts | `tui/keybindings.clj` | ✅ (verify conflict reporting + `key-text`) |
 | `autocomplete.ts` | `tui/autocomplete.clj` | ✅ (extension-provider delegation added with §B.9) |
 | `fuzzy.ts` | `tui/fuzzy.clj` | ✅ |
@@ -225,13 +225,15 @@ mounted check exists), no `nonCapturing`, no hidden state.
 - Frame pacing: `MIN_RENDER_INTERVAL_MS = 16` with `setTimeout` batching
   (kmet's fixed 16 ms sleep is equivalent).
 
-**kmet today:** screen-row diff (scroll-aware, scrollback-preserving —
-arguably stronger than pi's content diff for the unbounded chat), CSI 2026
-sync, single write per frame, 16 ms loop, first-render/width-change full
-redraws, viewport-top tracking, hardware cursor positioning, kitty image
-rendering in `libs/terminal_image.clj` but no diff-loop integration, no
-force render, no height-change redraw, no clearOnShrink, no crash/debug
-logs, no cell-size query, no OSC 11 / color scheme.
+**kmet today:** **pi-identical content-index diff** (the port landed after
+Phase 2 — see the Phase 2 status note): changed range by prev[i] vs new[i],
+per-line `\x1b[2K` pre-clears, scroll only when the first changed line is
+below the previous viewport bottom, full-render fallbacks, `previousViewportTop`
+tracking, clamped cursor positioning), CSI 2026
+sync, single write per frame, 16 ms loop, first-render/width/height/clearOnShrink
+full redraws, force render, kitty image diff integration
+(`expandChangedRangeForKittyImages`/`deleteChangedKittyImages`/reserved-row
+placement), crash/debug logs, cell-size query, OSC 11 / color scheme.
 
 **Plan (files: `tui/core.clj`, `tui/terminal.clj`, `libs/terminal_image.clj`):**
 
@@ -511,9 +513,13 @@ clear the pending flag *before* resolving the promise (the old order raced
 `test-intercept-osc-11`). Responses are
 intercepted in `process-input-buffer!` (like the negotiation) so they never
 dispatch as keys; fragments are held with a flush timer.
-Skipped: `applyLineResets` (kmet lines are self-contained via
-attribute-specific resets — no SGR/OSC-8 state to clear; documented
-divergence).
+Skipped: none — `applyLineResets` landed with the Phase 2 follow-up
+(SEGMENT_RESET `\x1b[0m\x1b]8;;\x07` appended to every non-image line, plus
+`normalizeTerminalOutput`: Thai/Lao AM decomposition + tab → 3 spaces,
+ANSI-preserving). The old note about self-contained lines was wrong about
+one thing: a line truncated by `truncateToWidth` can lose its trailing
+attribute-specific reset, and the catch-all line-end reset guards the
+diff's partial rewrites against that (pi's exact rationale).
 
 **Contents:** `requestRender(force)` → height-change full redraw (non-Termux)
 → `clearOnShrink` high-water mark (env + runtime setter) → Kitty-image diff
@@ -841,8 +847,10 @@ a manual side-by-side pass.
 ## Decision record: unbounded vs windowed chat
 
 **Stay unbounded** (pi parity). The chat renders all lines; the terminal's
-own scrollback is the history; kmet's screen-row diff already handles
-mid-document growth without full redraws. The `ScrollView` port stays for
+own scrollback is the history; the content-index diff (pi-identical) keeps
+mid-document growth cheap: only the changed range is rewritten with 2K
+pre-clears, and the viewport only scrolls when the first changed line falls
+below the screen. The `ScrollView` port stays for
 modal/embedded uses only. Revisit only if scrollback fidelity becomes a
 problem on a target platform.
 

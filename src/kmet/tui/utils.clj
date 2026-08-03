@@ -16,6 +16,31 @@
 (def ^:private ANSI-CODE-RE
   #"\u001b\[[0-9;]*[a-zA-Z]|\u001b\][^\u0007\u001b\u009c]*(?:\u001b\\|\u0007|\u009c)")
 
+;; pi: SEGMENT_RESET — full SGR + OSC 8 reset appended to every non-image line
+;; by applyLineResets so a truncated line can never leave active attributes
+;; or an open hyperlink bleeding into the next line.
+(def ^:const SEGMENT-RESET "\u001b[0m\u001b]8;;\u0007")
+
+;; ANSI sequences (CSI, OSC, APC) recognized while expanding tabs (pi:
+;; extractAnsiCode). The cursor marker is an APC (ESC _ ... BEL).
+(def ^:private ANSI-OR-TAB-RE
+  #"\u001b\[[0-9;]*[a-zA-Z]|\u001b\][^\u0007\u001b\u009c]*(?:\u001b\\|\u0007|\u009c)|\u001b_[^\u0007\u001b\u009c]*(?:\u001b\\|\u0007|\u009c)|\t")
+
+(defn normalize-terminal-output
+  "Port of pi's normalizeTerminalOutput: decompose the Thai/Lao AM vowel
+   (precomposed \u0e33/\u0eb3 have ambiguous width; the decomposed form
+   renders correctly) and expand tabs to 3 spaces, preserving ANSI
+   sequences. Tabs would otherwise render at the terminal's own tab stops,
+   breaking the width math (pi expands to 3 spaces)."
+  [s]
+  (let [s (-> s
+              (clojure.string/replace "\u0e33" "\u0e4d\u0e32")
+              (clojure.string/replace "\u0eb3" "\u0ecd\u0eb2"))]
+    (if (clojure.string/includes? s "\t")
+      (clojure.string/replace s ANSI-OR-TAB-RE
+                              (fn [m] (if (= m "\t") "   " m)))
+      s)))
+
 ;; ─── Width calculation ─────────────────────────────────────────────────────
 
 (def ^:const CJK-START 0x2E80)
@@ -40,7 +65,7 @@
 
 (defn- char-width [cp]
   (cond
-    (= cp 9) 4                                ;; Tab
+    (= cp 9) 3                                ;; Tab (pi normalizes tabs to 3 spaces)
     (< cp 32) 0                                ;; Control chars
     ;; Zero-width characters
     (or (== cp 0x200B) (== cp 0x200C) (== cp 0x200D) (== cp 0x200E) (== cp 0x200F)

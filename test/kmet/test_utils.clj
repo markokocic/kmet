@@ -9,7 +9,7 @@
   (t/is (= 4 (u/visible-width "中文")))
   (t/is (= 2 (u/visible-width "🍎")))
   (t/is (= 6 (u/visible-width "中文🍎")))   ;; 2+2+2=6
-  (t/is (= 7 (u/visible-width "ab\tc"))))   ;; 1+1+4+1=7
+  (t/is (= 6 (u/visible-width "ab\tc"))))   ;; tab expands to 3 spaces (pi)
 
 (t/deftest test-truncate-to-width
   (t/is (= "hello" (u/truncate-to-width "hello" 10)))

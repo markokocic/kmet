@@ -1259,8 +1259,24 @@
                     cursor-result (extract-cursor-position raw-lines h)
                     cursor (:cursor cursor-result)
                     lines (:lines cursor-result)
+                    ;; pi: normalizeTerminalOutput — Thai/Lao AM decomposition +
+                    ;; tab expansion — runs before padding so the tab width is
+                    ;; accounted for (pi normalizes in applyLineResets, after
+                    ;; cursor extraction; kmet pads to full width, so the
+                    ;; normalization must precede the padding).
+                    lines (mapv utils/normalize-terminal-output lines)
                     lines (pad-lines-to-width lines w)
                     lines (composite-flashes @(:flashes tui) lines w h)
+                    ;; pi: applyLineResets — every non-image line ends with a
+                    ;; full SGR + OSC 8 reset (SEGMENT_RESET) so a truncated
+                    ;; line can never leave active attributes or an open
+                    ;; hyperlink bleeding into the next line; the diff's
+                    ;; partial rewrites rely on each line being self-cleaning.
+                    lines (mapv (fn [line]
+                                  (if (img/is-image-line line)
+                                    line
+                                    (str line utils/SEGMENT-RESET)))
+                                lines)
                     prev @(:previous-lines tui)
                     prev-w @(:previous-width tui)
                     prev-h @(:previous-height tui)
