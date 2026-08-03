@@ -4,7 +4,9 @@
   (:require [clojure.string :as str]
             [clojure.test :as t :refer [deftest testing]]
             [kmet.tui.core :as core]
+            [kmet.tui.keybindings :as kb]
             [kmet.tui.theme :as theme]
+            [kmet.app.keybindings :as app-kb]
             [kmet.app.ui.extension-dialogs :as d]))
 
 (defn- strip-ansi [s]
@@ -74,3 +76,34 @@
       (core/set-focused! comp true)
       (core/handle-input comp "\r")
       (t/is (= "hello" @result) "submit fires with the prefill text"))))
+
+(deftest test-editor-dialog-external-editor
+  (testing "ctrl+g dispatches app.editor.external to the on-external-editor
+            handler with the dialog editor (pi: ExtensionEditorComponent)"
+    (kb/set-global-keybindings! (app-kb/make-agent-keybindings-manager))
+    (let [opened (atom nil)
+          comp (d/make-extension-editor "Edit" "hello" (fn [_] nil) (fn [])
+                                        theme/dark-theme (constantly 30)
+                                        (fn [ed] (reset! opened ed)))]
+      (core/set-focused! comp true)
+      (core/handle-input comp "\u0007")  ;; ctrl+g (BEL)
+      (t/is (identical? (:editor-comp comp) @opened)
+            "handler receives the dialog editor"))
+    (testing "no handler wired leaves the text untouched"
+      (let [comp (d/make-extension-editor "Edit" "x" (fn [_] nil) (fn [])
+                                          theme/dark-theme (constantly 30))]
+        (core/set-focused! comp true)
+        (core/handle-input comp "\u0007")
+        (t/is (= "x" (core/editor-get-text (:editor-comp comp))))))))
+
+(deftest test-editor-dialog-dynamic-height
+  (testing "dialog editor height follows terminal rows (pi: 30% of rows, min 5)"
+    (let [prefill (str/join "\n" (map #(str "line" %) (range 20)))
+          ed-30 (:editor-comp (d/make-extension-editor
+                               "Edit" prefill (fn [_] nil) (fn [])
+                               theme/dark-theme (constantly 30)))
+          ed-50 (:editor-comp (d/make-extension-editor
+                               "Edit" prefill (fn [_] nil) (fn [])
+                               theme/dark-theme (constantly 50)))]
+      (t/is (= 11 (count (render-plain ed-30 40))) "rows 30 → 9 visible lines")
+      (t/is (= 17 (count (render-plain ed-50 40))) "rows 50 → 15 visible lines"))))

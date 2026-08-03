@@ -92,6 +92,9 @@ batch splitting, no alt+ESC, no drain, no write log.
 1. `tui/input_buffer.clj` (new): port `StdinBuffer` — accumulate raw
    reads, split into sequences (escape-prefix wait with 10 ms timeout;
    paste markers re-wrap). Replace the `process-input-buffer!` loop.
+   (Resolved: the existing ESC-wait loop in `core.clj process-input-buffer!`
+   was extended instead — equivalent per-sequence splitting; no separate
+   file was created, see Phase 1 status.)
 2. `keys.clj`: full Kitty parse — `\x1b[key;mods;…u` (incl. `27;mods;code~`
    and `mods;code~` variants), event-type suffix, alternate-key ids
    (`shift+tab` etc.), `alt+x` from `\x1b x` prefix, F-keys. Keep the
@@ -398,14 +401,16 @@ registry; `render-widgets!` with pi's container rules (above: leading
 Spacer + widgets, bare Spacer when empty; below: widgets only);
 `MAX_WIDGET_LINES = 10` truncation with `… (widget truncated)` line.
 Widgets get theme + `request-render`.
-Files: `app/extensions.clj`, `app/ui/widgets.clj` (new),
-`modes/interactive.clj`.
+Files: `app/extensions.clj`, `modes/interactive.clj` (widget rendering
+stays inline in the mode — like pi, which has no widgets module either;
+`render-widgets!` lives in `interactive.clj`, registry access in
+`app/extensions.clj`).
 
 ## B.8 Changelog (optional)
 
 First-run `Spacer + DynamicBorder + "What's New" Markdown + Spacer +
 DynamicBorder` in the chat container. Requires `DynamicBorder`
-(`app/ui/dynamic_border.clj`, pi `dynamic-border.ts` — top/bottom border
+(`tui/components/dynamic_border.clj`, pi `dynamic-border.ts` — top/bottom border
 lines with a color fn).
 
 ## B.9 Extension ctx.ui surface (the missing API)
@@ -461,7 +466,8 @@ Apple Terminal Shift+Enter probe and Windows VT input helper
 
 **Contents:** `keys.clj` full parsing (Kitty `\x1b[k;m;…u`, `27;m;c~`,
 alternate keys, event types, `alt+x` from ESC prefix, F-keys) →
-`tui/input_buffer.clj` (new; stdin batch splitting + paste re-wrap) →
+stdin batch splitting + paste re-wrap (folded into the ESC-wait loop in
+`core.clj` — the planned `tui/input_buffer.clj` was not created) →
 `terminal.clj` protocol negotiation (query, 150 ms response buffer,
 modifyOtherKeys fallback, disable on stop/drain) → input-listener chaining
 (`{consume, data}` transforms).
@@ -738,9 +744,17 @@ set/get-editor-text, paste-to-editor, set-editor-component,
 add-autocomplete-provider, get-theme/get-all-themes,
 get/set-tools-expanded, reset!); `:session-start` event (startup/reload)
 emitted by the interactive mode; dialogs hosted in the editor container
-with DynamicBorder framing and IME focus propagation. Remaining: the
-extension-editor dialog's Ctrl+G external-editor support (kmet's dialog
-omits it; `set-theme` landed with Phase 4).
+with DynamicBorder framing and IME focus propagation. The extension-editor
+dialog's Ctrl+G external-editor support (pi: ExtensionEditorComponent
+`app.editor.external`) landed here too: the dialog wires
+`app.editor.external` to a handler that runs the same suspend-edit-resume
+flow as the main editor against the dialog's own editor, the hint line
+shows submit/newline/cancel/external-editor (pi's `tui.select.confirm` /
+`tui.input.newLine` / `tui.select.cancel` / `app.editor.external` ids —
+which also fixed the pre-existing empty-hint bug from literal
+"enter"/"escape" ids), and the vestigial fixed `:height 8` was dropped
+(the dialog editor uses the terminal-driven dynamic height like pi's
+Editor default).
 
 **Contents:** extension widgets (`register-widget!`/`unregister-widget!`,
 `render-widgets!`, `MAX_WIDGET_LINES = 10` truncation) → the full

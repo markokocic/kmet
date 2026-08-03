@@ -984,13 +984,14 @@
 ;; ─── External editor (pi: handleOpenExternalEditor) ────────────────────────
 
 (defn- handle-external-editor
-  "Open the current editor content in $EDITOR (default vi).
-   Suspends the TUI (terminal restored to normal mode, input reader paused),
-   spawns the external editor on a temp file with inherited stdio, reads the
-   result back into the editor, then resumes the TUI. pi: handleOpenExternalEditor
-   in interactive-mode.ts."
-  [cs]
-  (let [content (editor-text-get-expanded @(:current-editor-atom cs))
+  "Open TARGET-EDITOR's content in $EDITOR (default nano). Suspends the TUI
+   (terminal restored to normal mode, input reader paused), spawns the external
+   editor on a temp file with inherited stdio, reads the result back into the
+   editor, then resumes the TUI. TARGET-EDITOR defaults to the active editor.
+   pi: handleOpenExternalEditor in interactive-mode.ts."
+  [cs & [target-editor]]
+  (let [target-editor (or target-editor @(:current-editor-atom cs))
+        content (editor-text-get-expanded target-editor)
         tmp-dir (or (System/getenv "TMPDIR")
                     (System/getProperty "java.io.tmpdir")
                     "/tmp")
@@ -1028,7 +1029,7 @@
                                          (str/ends-with? new-content "\n"))
                                   (subs new-content 0 (dec (count new-content)))
                                   new-content)]
-                (editor-text-set! @(:current-editor-atom cs) new-content)
+                (editor-text-set! target-editor new-content)
                 (debug/log "external editor content: " (pr-str new-content)))))))
       (finally
         (try (fs/delete-if-exists tmp-file) (catch Exception _ nil))
@@ -1697,7 +1698,11 @@
                                    (fn [v] (hide-dialog) (deliver p v))
                                    (fn [] (hide-dialog) (deliver p nil))
                                    (th/get-current-theme)
-                                   (fn [] (term/rows @(:terminal t)))))
+                                   (fn [] (term/rows @(:terminal t)))
+                                   ;; pi: ExtensionEditorComponent wires
+                                   ;; app.editor.external (ctrl+g) to its own
+                                   ;; external-editor flow
+                                   (fn [ed] (handle-external-editor cs ed))))
                      p))
          :notify (fn [message _type]
                    (tui/tui-flash! t message)

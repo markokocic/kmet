@@ -107,7 +107,8 @@
         _ (input/input-set-on-escape! inp on-cancel)]
     (map->ExtensionInputDialog
      {:container (frame th title inp
-                        :hint-keys [["enter" "submit"] ["escape" "cancel"]])
+                        :hint-keys [["tui.select.confirm" "submit"]
+                                    ["tui.select.cancel" "cancel"]])
       :input-comp inp
       :focused?-atom (atom false)})))
 
@@ -127,18 +128,27 @@
 (defn make-extension-editor
   "Create a multi-line editor dialog. TITLE — dialog title; PREFILL — initial
    text; ON-SUBMIT receives the entered text; ON-CANCEL fires on escape
-   (app.interrupt). TH — theme map; TERMINAL-ROWS — (fn [] rows) for the
-   editor's dynamic height."
-  [title prefill on-submit on-cancel th terminal-rows]
-  (let [ed (editor/make-editor :height 8 :padding-x 0
+   (app.interrupt). TH — theme map; TERMINAL-ROWS — (fn [] rows) driving the
+   editor's dynamic height (pi: Editor default, 30% of rows, min 5);
+   ON-EXTERNAL-EDITOR — (fn [editor-comp]) invoked on ctrl+g (app.editor.external),
+   nil disables (pi: ExtensionEditorComponent.handleOpenExternalEditor)."
+  [title prefill on-submit on-cancel th terminal-rows & [on-external-editor]]
+  (let [ed (editor/make-editor :padding-x 0
                                :terminal-rows terminal-rows
                                :border-fn (fn [c] (theme/fg th :dim c)))
         _ (editor/editor-set-text! ed (or prefill ""))
         _ (editor/editor-set-on-submit! ed on-submit)
         ;; pi: escape cancels the dialog (the app's interrupt action)
-        _ (editor/editor-set-on-action! ed "app.interrupt" on-cancel)]
+        _ (editor/editor-set-on-action! ed "app.interrupt" on-cancel)
+        ;; pi: ctrl+g opens the external editor on the dialog's content
+        _ (when on-external-editor
+            (editor/editor-set-on-action! ed "app.editor.external"
+                                          (fn [] (on-external-editor ed))))]
     (map->ExtensionEditorDialog
      {:container (frame th title ed
-                        :hint-keys [["enter" "submit"] ["escape" "cancel"]])
+                        :hint-keys [["tui.select.confirm" "submit"]
+                                    ["tui.input.newLine" "newline"]
+                                    ["tui.select.cancel" "cancel"]
+                                    ["app.editor.external" "external editor"]])
       :editor-comp ed
       :focused?-atom (atom false)})))
