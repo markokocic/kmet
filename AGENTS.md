@@ -125,6 +125,8 @@ src/kmet/
 │       │                  (pi AltScreenFlashContainer; tui-flash!)
 │       ├── cancellable_loader.clj — spinner cancellable with Escape + abort
 │       │                  signal (pi CancellableLoader)
+│       ├── dynamic_border.clj — theme-colored border line spanning the
+│       │                  render width (pi DynamicBorder)
 │       └── truncated_text.clj — single-line truncating text (pi TruncatedText;
 │                              used for the chat status line)
 ```

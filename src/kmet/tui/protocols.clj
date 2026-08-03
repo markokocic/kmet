@@ -3,6 +3,10 @@
    Extracted from core.clj to avoid circular dependencies.")
 
 (defprotocol IComponent
+  "Component interface (pi: Component). Implement render/handle-input/
+   invalidate. Records may optionally carry a :wants-key-release? field
+   (pi: Component.wantsKeyRelease) — when true, Kitty protocol key release
+   events are delivered to handle-input (filtered otherwise)."
   (render [this width] "Render component to lines (seq of strings)")
   (handle-input [this data] "Handle keyboard input")
   (invalidate [this] "Clear cached render state"))

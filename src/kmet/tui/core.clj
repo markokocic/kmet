@@ -24,7 +24,8 @@
             [kmet.tui.components.cancellable-loader :as cancellable-loader]
             [kmet.tui.components.truncated-text :as truncated-text]
             [kmet.tui.components.h-stack :as h-stack]
-            [kmet.tui.components.v-stack :as v-stack]))
+            [kmet.tui.components.v-stack :as v-stack]
+            [kmet.tui.components.dynamic-border :as dynamic-border]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Protocol re-exports
@@ -39,10 +40,8 @@
 (def set-focused! protocols/set-focused!)
 
 ;; ═══════════════════════════════════════════════════════════════════════════
-;; Overlay
+;; Cursor
 ;; ═══════════════════════════════════════════════════════════════════════════
-
-(defrecord Overlay [component x y width height focused? previous-focus])
 
 (defn- extract-cursor-position
   "Find CURSOR-MARKER in rendered lines (viewport only), strip it from output,
@@ -80,9 +79,11 @@
                 previous-width render-requested?
                 running? stopped? overlays
                 render-loop input-reader current-reader
-                flashes])
+                flashes overlay-focus-restore focus-order-counter
+                show-hardware-cursor?])
 
-(declare tui-request-render tui-stop)
+(declare tui-request-render tui-stop set-focus-internal
+         overlay-visible? overlay-handle)
 
 (defn create-tui [terminal]
   (let [tui (map->TUI {:terminal (atom terminal)
@@ -98,7 +99,10 @@
                        :render-loop (atom nil)
                        :input-reader (atom nil)
                        :current-reader (atom nil)
-                       :flashes (atom nil)})]
+                       :flashes (atom nil)
+                       :overlay-focus-restore (atom {:status :inactive})
+                       :focus-order-counter (atom 0)
+                       :show-hardware-cursor? (atom (= (System/getenv "KMET_HARDWARE_CURSOR") "1"))})]
     ;; AltScreenFlashContainer owned by the TUI (pi: TuiAltScreen owns its
     ;; flash container) — the render loop composites flash lines over the
     ;; screen window; tui-flash! / tui-flash-dispose! are the public API.
@@ -112,11 +116,23 @@
 (defn tui-clear [tui] (reset! (:components tui) []))
 
 (defn tui-set-focus [tui component]
-  (when-let [prev @(:focused-component tui)]
-    (when (satisfies? IFocusable prev) (set-focused! prev false)))
-  (reset! (:focused-component tui) component)
-  (when (satisfies? IFocusable component) (set-focused! component true))
-  nil)
+  ;; pi: public setFocus — clears any pending overlay restore state
+  (set-focus-internal tui component :clear))
+
+(defn tui-get-show-hardware-cursor
+  "Whether the hardware terminal cursor is visible (pi: getShowHardwareCursor)."
+  [tui]
+  @(:show-hardware-cursor? tui))
+
+(defn tui-set-show-hardware-cursor!
+  "Enable/disable the visible hardware cursor (pi: setShowHardwareCursor).
+   Disabling hides the cursor immediately; both paths request a re-render."
+  [tui enabled?]
+  (when (not= enabled? @(:show-hardware-cursor? tui))
+    (reset! (:show-hardware-cursor? tui) enabled?)
+    (when-not enabled?
+      (when-let [term @(:terminal tui)] (terminal/hide-cursor! term)))
+    (tui-request-render tui)))
 
 (defn tui-add-input-listener [tui f]
   (swap! (:input-listeners tui) conj f))
@@ -140,34 +156,416 @@
 ;; Overlays
 ;; ═══════════════════════════════════════════════════════════════════════════
 
-(defn tui-show-overlay [tui component & {:keys [x y width height]}]
-  ;; Capture the pre-overlay focus so hiding restores it (pi: overlayFocusRestore)
-  (let [o (map->Overlay {:component component :x x :y y
-                         :width width :height height :focused? true
-                         :previous-focus @(:focused-component tui)})]
-    (swap! (:overlays tui) conj o)
-    (tui-set-focus tui component)
-    o))
+;; Overlay stack entry. Mutable fields hold atoms so the handle keeps
+;; identity across set-hidden!/focus/retarget mutations (kmet convention:
+;; atoms for mutable state).
+(defrecord Overlay [component options pre-focus hidden? focus-order])
 
-(defn tui-hide-overlay [tui]
-  (when-let [o (peek @(:overlays tui))]
+;; ─── Layout resolution (pi: resolveOverlayLayout + anchors) ────────────────
+
+(defn- parse-size-value
+  "Parse a size value: absolute number or percentage string (\"50%\") of
+   REFERENCE-SIZE (pi: parseSizeValue). Unparseable values → nil."
+  [v reference-size]
+  (cond
+    (nil? v) nil
+    (number? v) v
+    (string? v) (if-let [[_ pct] (re-matches #"(\d+(?:\.\d+)?)%" v)]
+                  (int (Math/floor (* reference-size (/ (Double/parseDouble pct) 100.0))))
+                  nil)
+    :else nil))
+
+(defn- resolve-anchor-row
+  "Anchor → top row offset (pi: resolveAnchorRow)."
+  [anchor height avail-height margin-top]
+  (case anchor
+    (:top-left :top-center :top-right) margin-top
+    (:bottom-left :bottom-center :bottom-right) (+ margin-top (- avail-height height))
+    ;; :left-center / :center / :right-center
+    (+ margin-top (int (Math/floor (/ (- avail-height height) 2))))))
+
+(defn- resolve-anchor-col
+  "Anchor → left column offset (pi: resolveAnchorCol)."
+  [anchor width avail-width margin-left]
+  (case anchor
+    (:top-left :left-center :bottom-left) margin-left
+    (:top-right :right-center :bottom-right) (+ margin-left (- avail-width width))
+    ;; :top-center / :center / :bottom-center
+    (+ margin-left (int (Math/floor (/ (- avail-width width) 2))))))
+
+(defn- resolve-overlay-layout
+  "Resolve overlay sizing and position from OPTIONS (pi: resolveOverlayLayout).
+   Returns {:width w :row r :col c :max-height mh-or-nil}."
+  [options overlay-height term-width term-height]
+  (let [opt (or options {})
+        margin (if (number? (:margin opt))
+                 {:top (:margin opt) :right (:margin opt)
+                  :bottom (:margin opt) :left (:margin opt)}
+                 (:margin opt))
+        margin-top (max 0 (:top margin 0))
+        margin-right (max 0 (:right margin 0))
+        margin-bottom (max 0 (:bottom margin 0))
+        margin-left (max 0 (:left margin 0))
+        avail-width (max 1 (- term-width margin-left margin-right))
+        avail-height (max 1 (- term-height margin-top margin-bottom))
+        width (or (parse-size-value (:width opt) term-width) (min 80 avail-width))
+        width (if (some? (:min-width opt)) (max width (:min-width opt)) width)
+        width (max 1 (min width avail-width))
+        max-height (parse-size-value (:max-height opt) term-height)
+        max-height (when (some? max-height) (max 1 (min max-height avail-height)))
+        effective-height (if (some? max-height) (min overlay-height max-height) overlay-height)
+        row (if (some? (:row opt))
+              (if (string? (:row opt))
+                (if-let [[_ pct] (re-matches #"(\d+(?:\.\d+)?)%" (:row opt))]
+                  (let [max-row (max 0 (- avail-height effective-height))]
+                    (+ margin-top (int (Math/floor (* max-row (/ (Double/parseDouble pct) 100.0))))))
+                  (resolve-anchor-row :center effective-height avail-height margin-top))
+                (:row opt))
+              (resolve-anchor-row (:anchor opt :center) effective-height avail-height margin-top))
+        col (if (some? (:col opt))
+              (if (string? (:col opt))
+                (if-let [[_ pct] (re-matches #"(\d+(?:\.\d+)?)%" (:col opt))]
+                  (let [max-col (max 0 (- avail-width width))]
+                    (+ margin-left (int (Math/floor (* max-col (/ (Double/parseDouble pct) 100.0))))))
+                  (resolve-anchor-col :center width avail-width margin-left))
+                (:col opt))
+              (resolve-anchor-col (:anchor opt :center) width avail-width margin-left))
+        row (+ row (or (:offset-y opt) 0))
+        col (+ col (or (:offset-x opt) 0))
+        row (max margin-top (min row (- term-height margin-bottom effective-height)))
+        col (max margin-left (min col (- term-width margin-right width)))]
+    {:width width :row row :col col :max-height max-height}))
+
+(defn- normalize-overlay-options
+  "Map legacy kmet option keys (:x :y :height) onto pi OverlayOptions
+   (:col :row :max-height). Other keys pass through unchanged."
+  [options]
+  (cond-> (dissoc options :x :y :height)
+    (contains? options :x) (assoc :col (:x options))
+    (contains? options :y) (assoc :row (:y options))
+    (contains? options :height) (assoc :max-height (:height options))))
+
+(defn tui-show-overlay
+  "Show an overlay component with configurable positioning and sizing
+   (pi: TUI.showOverlay). OPTIONS (pi: OverlayOptions):
+     :width / :min-width / :max-height — number or percentage string
+       (e.g. \"50%\"); width defaults to min(80, available)
+     :anchor — :center :top-left :top-center :top-right :left-center
+       :right-center :bottom-left :bottom-center :bottom-right (default :center)
+     :offset-x / :offset-y — offsets from the anchor position
+     :row / :col — absolute number or percentage string (overrides :anchor)
+     :margin — number (all sides) or {:top :right :bottom :left}
+     :visible — (fn [term-width term-height]) responsive visibility
+     :non-capturing — true to render without taking keyboard focus
+   Legacy kmet keys :x / :y / :height map to :col / :row / :max-height.
+   Returns an OverlayHandle map (pi: OverlayHandle): :hide, :set-hidden!,
+   :is-hidden?, :focus, :unfocus (with {:target comp} or nil), :is-focused?."
+  [tui component & {:as options}]
+  (let [options (normalize-overlay-options options)
+        entry (map->Overlay {:component component
+                             :options options
+                             :pre-focus (atom @(:focused-component tui))
+                             :hidden? (atom false)
+                             :focus-order (atom (swap! (:focus-order-counter tui) inc))})]
+    (swap! (:overlays tui) conj entry)
+    (when-not (:non-capturing options)
+      (when (overlay-visible? tui entry)
+        (tui-set-focus tui component)))
+    (when-let [term @(:terminal tui)] (terminal/hide-cursor! term))
+    (tui-request-render tui)
+    (overlay-handle tui entry)))
+
+;; ─── Visibility + focus restore state machine (pi) ─────────────────────────
+
+(defn- overlay-visible?
+  "True when an overlay entry is not hidden and its :visible callback (when
+   provided) passes for the current terminal size (pi: isOverlayVisible)."
+  [tui entry]
+  (and (not @(:hidden? entry))
+       (if-let [visible-fn (:visible (:options entry))]
+         (if-let [term @(:terminal tui)]
+           (visible-fn (terminal/columns term) (terminal/rows term))
+           true)
+         true)))
+
+(defn- get-topmost-visible-overlay
+  "Visual-frontmost visible capturing overlay by focus order
+   (pi: getTopmostVisibleOverlay)."
+  [tui]
+  (reduce (fn [top o]
+            (if (and (not (:non-capturing (:options o)))
+                     (overlay-visible? tui o)
+                     (or (nil? top) (> @(:focus-order o) @(:focus-order top))))
+              o
+              top))
+          nil
+          @(:overlays tui)))
+
+(defn- get-visible-overlay-focus-restore
+  "The overlay focus restore state, unless its overlay left the stack or
+   became invisible (pi: getVisibleOverlayFocusRestore)."
+  [tui]
+  (let [state @(:overlay-focus-restore tui)]
+    (if (and (not= :inactive (:status state))
+             (some #(identical? (:overlay state) %) @(:overlays tui))
+             (overlay-visible? tui (:overlay state)))
+      state
+      {:status :inactive})))
+
+(defn- clear-overlay-focus-restore! [tui]
+  (reset! (:overlay-focus-restore tui) {:status :inactive}))
+
+(defn- clear-overlay-focus-restore-for!
+  "Drop restore state belonging to OVERLAY (pi: clearOverlayFocusRestoreFor)."
+  [tui overlay]
+  (let [state @(:overlay-focus-restore tui)]
+    (when (and (not= :inactive (:status state))
+               (identical? (:overlay state) overlay))
+      (reset! (:overlay-focus-restore tui) {:status :inactive}))))
+
+(defn- resolve-blocked-overlay-focus-resume
+  "Resolve a blocked restore: re-focus the overlay (restore-overlay) or the
+   explicit target (focus-target, pi: resolveBlockedOverlayFocusResume)."
+  [tui restore-state]
+  (if (= :restore-overlay (:status (:resume restore-state)))
+    (:component (:overlay restore-state))
+    (do (clear-overlay-focus-restore! tui)
+        (:target (:resume restore-state)))))
+
+(defn- is-overlay-focus-ancestor?
+  "True when COMPONENT is reachable via the preFocus chain of ENTRY
+   (pi: isOverlayFocusAncestor)."
+  [tui entry component]
+  (loop [visited #{}
+         current @(:pre-focus entry)]
+    (cond
+      (or (nil? current) (contains? visited current)) false
+      (identical? current component) true
+      :else (let [next-prev (some (fn [o]
+                                    (when (identical? (:component o) current)
+                                      @(:pre-focus o)))
+                                  @(:overlays tui))]
+              (recur (conj visited current) next-prev)))))
+
+(defn- retarget-overlay-pre-focus!
+  "When an overlay is removed, overlays that pointed at it as pre-focus are
+   retargeted to its own pre-focus (pi: retargetOverlayPreFocus)."
+  [tui removed]
+  (doseq [o @(:overlays tui)]
+    (when (and (not (identical? o removed))
+               (identical? @(:pre-focus o) (:component removed)))
+      (reset! (:pre-focus o) @(:pre-focus removed)))))
+
+(defn- contains-component?
+  [root target]
+  (or (identical? root target)
+      (when (instance? clojure.lang.IRef (:children root))
+        (boolean (some #(contains-component? % target) @(:children root))))))
+
+(defn- is-component-mounted?
+  "True when COMPONENT is still reachable from the base layout
+   (pi: isComponentMounted)."
+  [tui component]
+  (boolean (some #(contains-component? % component) @(:components tui))))
+
+(defn- set-focus-internal
+  "Port of pi's TUI.setFocusInternal — switches focus while maintaining the
+   overlay focus restore state machine (eligible/blocked/inactive).
+   OVERLAY-FOCUS-RESTORE-POLICY: :clear drops pending restore state on a
+   null target (public setFocus), :preserve keeps it (input dispatch
+   redirect of a no-longer-visible focused overlay)."
+  [tui component overlay-focus-restore-policy]
+  (let [previous-focus @(:focused-component tui)
+        previous-focused-overlay (some #(when (and (identical? (:component %) previous-focus)
+                                                   (overlay-visible? tui %))
+                                          %)
+                                       @(:overlays tui))
+        next-focus-is-overlay? (boolean (some #(identical? (:component %) component)
+                                              @(:overlays tui)))
+        restore-state (get-visible-overlay-focus-restore tui)
+        next-focus (atom component)]
+    (cond
+      (and (some? component) (not next-focus-is-overlay?))
+      (if (and (= :blocked (:status restore-state))
+               (identical? (:blocked-by restore-state) previous-focus))
+        (if (or (= :focus-target (:status (:resume restore-state)))
+                (not (is-component-mounted? tui (:blocked-by restore-state))))
+          (reset! next-focus (resolve-blocked-overlay-focus-resume tui restore-state))
+          (reset! (:overlay-focus-restore tui)
+                  {:status :blocked :overlay (:overlay restore-state)
+                   :blocked-by component :resume (:resume restore-state)}))
+        (when (and previous-focused-overlay
+                   (not= :inactive (:status restore-state))
+                   (identical? (:overlay restore-state) previous-focused-overlay)
+                   (not (is-overlay-focus-ancestor? tui previous-focused-overlay component)))
+          (reset! (:overlay-focus-restore tui)
+                  {:status :blocked :overlay previous-focused-overlay
+                   :blocked-by component :resume {:status :restore-overlay}})))
+
+      (nil? component)
+      (if (and (= :blocked (:status restore-state))
+               (identical? (:blocked-by restore-state) previous-focus))
+        (reset! next-focus (resolve-blocked-overlay-focus-resume tui restore-state))
+        (when (= :clear overlay-focus-restore-policy)
+          (clear-overlay-focus-restore! tui)))
+
+      ;; next focus is an overlay component — restore state unchanged
+      :else nil)
+    (when (satisfies? IFocusable previous-focus)
+      (set-focused! previous-focus false))
+    (reset! (:focused-component tui) @next-focus)
+    (when (satisfies? IFocusable @next-focus)
+      (set-focused! @next-focus true))
+    (when-let [focused-overlay (some #(when (and (identical? (:component %) @next-focus)
+                                                 (overlay-visible? tui %))
+                                        %)
+                                     @(:overlays tui))]
+      (reset! (:overlay-focus-restore tui)
+              {:status :eligible :overlay focused-overlay}))
+    nil))
+
+;; ─── OverlayHandle (pi: OverlayHandle) ─────────────────────────────────────
+
+(defn- overlay-handle
+  "Return the OverlayHandle map for ENTRY: {:hide :set-hidden! :is-hidden?
+   :focus :unfocus :is-focused?} (pi: OverlayHandle)."
+  [tui entry]
+  {:hide (fn []
+           (when (some #(identical? % entry) @(:overlays tui))
+             (clear-overlay-focus-restore-for! tui entry)
+             (retarget-overlay-pre-focus! tui entry)
+             (swap! (:overlays tui) (fn [v] (vec (remove #(identical? % entry) v))))
+             (when (identical? (:component entry) @(:focused-component tui))
+               (if-let [top (get-topmost-visible-overlay tui)]
+                 (tui-set-focus tui (:component top))
+                 (tui-set-focus tui @(:pre-focus entry))))
+             (when (empty? @(:overlays tui))
+               (when-let [term @(:terminal tui)] (terminal/hide-cursor! term)))
+             (tui-request-render tui)))
+   :set-hidden! (fn [hidden?]
+                  (when (not= hidden? @(:hidden? entry))
+                    (reset! (:hidden? entry) hidden?)
+                    (if hidden?
+                      (do (clear-overlay-focus-restore-for! tui entry)
+                          (when (identical? (:component entry) @(:focused-component tui))
+                            (if-let [top (get-topmost-visible-overlay tui)]
+                              (tui-set-focus tui (:component top))
+                              (tui-set-focus tui @(:pre-focus entry)))))
+                      (when (and (not (:non-capturing (:options entry)))
+                                 (overlay-visible? tui entry))
+                        (reset! (:focus-order entry) (swap! (:focus-order-counter tui) inc))
+                        (tui-set-focus tui (:component entry))))
+                    (tui-request-render tui)))
+   :is-hidden? (fn [] @(:hidden? entry))
+   :focus (fn []
+            (when (and (some #(identical? % entry) @(:overlays tui))
+                       (overlay-visible? tui entry))
+              (reset! (:focus-order entry) (swap! (:focus-order-counter tui) inc))
+              (tui-set-focus tui (:component entry))
+              (tui-request-render tui)))
+   :unfocus (fn [& [unfocus-options]]
+              (let [is-focused? (identical? (:component entry) @(:focused-component tui))
+                    restore-state @(:overlay-focus-restore tui)
+                    has-pending-restore? (and (not= :inactive (:status restore-state))
+                                              (identical? (:overlay restore-state) entry))]
+                (when (or is-focused? has-pending-restore?)
+                  (if (and (= :blocked (:status restore-state))
+                           (identical? (:overlay restore-state) entry)
+                           (identical? (:blocked-by restore-state) @(:focused-component tui)))
+                    (do (if (some? unfocus-options)
+                          (reset! (:overlay-focus-restore tui)
+                                  {:status :blocked :overlay entry
+                                   :blocked-by (:blocked-by restore-state)
+                                   :resume {:status :focus-target :target (:target unfocus-options)}})
+                          (clear-overlay-focus-restore! tui))
+                        (tui-request-render tui))
+                    (do (clear-overlay-focus-restore-for! tui entry)
+                        (when (or is-focused? (some? unfocus-options))
+                          (let [top (get-topmost-visible-overlay tui)
+                                fallback (if (and top (not (identical? top entry)))
+                                           (:component top)
+                                           @(:pre-focus entry))]
+                            (tui-set-focus tui (if (some? unfocus-options)
+                                                 (:target unfocus-options)
+                                                 fallback))))
+                        (tui-request-render tui))))))
+   :is-focused? (fn [] (identical? (:component entry) @(:focused-component tui)))})
+
+(defn tui-hide-overlay
+  "Hide the topmost overlay and restore focus — topmost visible overlay, or
+   the pre-overlay focus when still mounted, else the last component
+   (pi: TUI.hideOverlay)."
+  [tui]
+  (when-let [overlay (peek @(:overlays tui))]
+    (clear-overlay-focus-restore-for! tui overlay)
+    (retarget-overlay-pre-focus! tui overlay)
     (swap! (:overlays tui) pop)
-    (when (:focused? o)
-      (if-let [next-o (:component (peek @(:overlays tui)))]
-        ;; An overlay below exists — it owns focus now
-        (tui-set-focus tui next-o)
-        ;; Back at the base layout: restore the component focused before
-        ;; the overlay was shown (pi: restore the saved focus target).
-        ;; Only restore when it is still a live component (pi:
-        ;; isComponentMounted); otherwise fall back to the last component.
-        (let [prev (:previous-focus o)]
-          (if (and prev (some #(identical? prev %) @(:components tui)))
+    (when (identical? (:component overlay) @(:focused-component tui))
+      (if-let [top (get-topmost-visible-overlay tui)]
+        (tui-set-focus tui (:component top))
+        (let [prev @(:pre-focus overlay)]
+          (if (and prev (is-component-mounted? tui prev))
             (tui-set-focus tui prev)
             (when-let [last (last @(:components tui))]
               (tui-set-focus tui last))))))
+    (when (empty? @(:overlays tui))
+      (when-let [term @(:terminal tui)] (terminal/hide-cursor! term)))
     (tui-request-render tui)))
 
-(defn tui-has-overlay? [tui] (pos? (count @(:overlays tui))))
+(defn tui-has-overlay?
+  "True when any visible overlay is on the stack (pi: TUI.hasOverlay)."
+  [tui]
+  (boolean (some #(overlay-visible? tui %) @(:overlays tui))))
+
+(defn- composite-overlays
+  "Composite all visible overlays (sorted by focus order, later = on top)
+   onto the rendered base LINES (pi: TUI.compositeOverlays). Each overlay is
+   positioned by resolve-overlay-layout; content rows are padded so overlay
+   rows land in the terminal viewport; overlay lines are truncated to their
+   declared width before compositing."
+  [tui lines term-width term-height]
+  (let [visible-entries (->> @(:overlays tui)
+                             (filter #(overlay-visible? tui %))
+                             (sort-by #(deref (:focus-order %))))]
+    (if (empty? visible-entries)
+      lines
+      (let [rendered (mapv (fn [entry]
+                             (let [options (:options entry)
+                                   layout0 (resolve-overlay-layout options 0 term-width term-height)
+                                   width (:width layout0)
+                                   max-height (:max-height layout0)
+                                   overlay-lines (vec (render (:component entry) width))
+                                   overlay-lines (if (and max-height (> (count overlay-lines) max-height))
+                                                   (subvec overlay-lines 0 max-height)
+                                                   overlay-lines)
+                                   layout (resolve-overlay-layout options
+                                                                  (count overlay-lines)
+                                                                  term-width term-height)]
+                               {:lines overlay-lines
+                                :row (:row layout)
+                                :col (:col layout)
+                                :width width}))
+                           visible-entries)
+            min-lines-needed (reduce (fn [m {:keys [row lines]}]
+                                       (max m (+ row (count lines))))
+                                     (count lines) rendered)
+            working-height (max (count lines) term-height min-lines-needed)
+            result (into (vec lines) (repeat (max 0 (- working-height (count lines))) ""))
+            viewport-start (max 0 (- working-height term-height))]
+        (reduce (fn [acc {:keys [lines row col width]}]
+                  (reduce (fn [acc2 [i overlay-line]]
+                            (let [idx (+ viewport-start row i)]
+                              (if (and (>= idx 0) (< idx (count acc2)))
+                                (let [line (if (> (utils/visible-width overlay-line) width)
+                                             (:text (utils/slice-with-width overlay-line 0 width :strict? true))
+                                             overlay-line)]
+                                  (assoc acc2 idx
+                                         (utils/composite-line (nth acc2 idx) line col width term-width)))
+                                acc2)))
+                          acc
+                          (map-indexed vector lines)))
+                result
+                rendered)))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Diff
@@ -224,9 +622,39 @@
 (def ^:private ESC-WAIT-STEP 3)
 
 (defn- dispatch-input!
-  "Dispatch a complete input sequence to listeners and the focused component."
+  "Port of pi's TUI input routing: listeners first, then overlay focus
+   maintenance (focused-overlay visibility redirect + focus-restore
+   reclaim), then delivery to the focused component. Key release events
+   are filtered unless the component opts in via a :wants-key-release?
+   field (pi: Component.wantsKeyRelease)."
   [tui data]
   (doseq [l @(:input-listeners tui)] (l data))
+  ;; If the focused component is an overlay that is no longer visible
+  ;; (hidden via handle, or the :visible callback went false), redirect
+  ;; focus to the topmost visible overlay or back to the pre-focus
+  ;; (pi: handleInput overlay visibility check).
+  (let [fc @(:focused-component tui)
+        focused-overlay (some #(when (identical? (:component %) fc) %) @(:overlays tui))]
+    (when (and focused-overlay (not (overlay-visible? tui focused-overlay)))
+      (if-let [top (get-topmost-visible-overlay tui)]
+        (tui-set-focus tui (:component top))
+        (set-focus-internal tui @(:pre-focus focused-overlay) :preserve))))
+  ;; Focus is not an overlay: reclaim input for the focused visible overlay
+  ;; (pi: eligible → reclaim; blocked → resolve the resume, unless the
+  ;; current focus is the blocker itself).
+  (let [fc @(:focused-component tui)
+        focus-is-overlay? (boolean (some #(identical? (:component %) fc) @(:overlays tui)))]
+    (when-not focus-is-overlay?
+      (let [rs (get-visible-overlay-focus-restore tui)]
+        (cond
+          (= :eligible (:status rs))
+          (tui-set-focus tui (:component (:overlay rs)))
+
+          (and (= :blocked (:status rs)) (not (identical? (:blocked-by rs) fc)))
+          (if (= :restore-overlay (:status (:resume rs)))
+            (tui-set-focus tui (:component (:overlay rs)))
+            (do (clear-overlay-focus-restore! tui)
+                (tui-set-focus tui (:target (:resume rs)))))))))
   (when-let [fc @(:focused-component tui)]
     ;; pi: input goes only to the focused leaf; key release events are
     ;; filtered unless the component opts in via a :wants-key-release?
@@ -333,8 +761,7 @@
                                  (fn [] (tui-request-render tui)))
         jline (.terminal started)
         hardware-cursor-row (atom 0)
-        viewport-top (atom 0)
-        show-hardware-cursor? (= (System/getenv "KMET_HARDWARE_CURSOR") "1")]
+        viewport-top (atom 0)]
     (terminal/hide-cursor! started)
     ;; Pi: no clear-screen on start — preserves prior terminal output above the TUI
     (tui-request-render tui)
@@ -345,24 +772,14 @@
                 h (.getHeight jline)]
             (when @(:render-requested? tui)
               (reset! (:render-requested? tui) false)
-              (let [overlays @(:overlays tui)
-                    raw-lines (if (seq overlays)
-                                ;; Render top overlay component
-                                (let [o (peek overlays)
-                                      ow (or (:width o) w)
-                                      ox (or (:x o) 0)
-                                      oy (or (:y o) 0)
-                                      comp-lines (vec (render (:component o) ow))]
-                                  (vec (concat
-                                        (repeat oy "")
-                                        (mapv #(str (apply str (repeat ox " ")) %) comp-lines)
-                                        (repeat (max 0 (- h oy (count comp-lines))) ""))))
-                                ;; Main content: the stack layout bounds the ScrollView
-                                ;; (chat) to the space left by the fixed components, so
-                                ;; the total never exceeds the screen and mid-document
-                                ;; growth doesn't trigger full-screen redraws.
-                                (stack/render-stack @(:components tui) w h
-                                                    #(tui-request-render tui)))
+              ;; Base content: the stack layout bounds the ScrollView (chat) to
+              ;; the space left by the fixed components, so the total never
+              ;; exceeds the screen and mid-document growth doesn't trigger
+              ;; full-screen redraws. Visible overlays are then composited on
+              ;; top (pi: compositeOverlays).
+              (let [base-lines (stack/render-stack @(:components tui) w h
+                                                   #(tui-request-render tui))
+                    raw-lines (composite-overlays tui base-lines w h)
                     cursor-result (extract-cursor-position raw-lines h)
                     cursor (:cursor cursor-result)
                     lines (:lines cursor-result)
@@ -479,7 +896,7 @@
                     (when (seq buf)
                       (emit! buf))
                     (reset! hardware-cursor-row target-row)
-                    (if show-hardware-cursor?
+                    (if @(:show-hardware-cursor? tui)
                       (emit! "\u001b[?25h")
                       (emit! "\u001b[?25l")))
                   (emit! "\u001b[?25l"))
@@ -706,6 +1123,9 @@
 ;; TruncatedText — single-line truncating text
 (def make-truncated-text truncated-text/make-truncated-text)
 (def truncated-text-set-text! truncated-text/truncated-text-set-text!)
+
+;; DynamicBorder — theme-colored border line (pi: DynamicBorder)
+(def make-dynamic-border dynamic-border/make-dynamic-border)
 
 ;; HStack / VStack — flexbox-style horizontal / vertical stacks
 (def make-h-stack h-stack/make-h-stack)

@@ -45,6 +45,8 @@
             [kmet.tui.components.test-truncated-text]
             [kmet.tui.components.test-alt-screen-flash]
             [kmet.tui.components.test-cancellable-loader]
+            [kmet.tui.components.test-dynamic-border]
+            [kmet.tui.test-overlay]
             [kmet.libs.test-self-contained]
             [kmet.libs.test-terminal-image]
             [kmet.libs.test-yaml-lite]
@@ -96,6 +98,8 @@
     kmet.tui.components.test-truncated-text
     kmet.tui.components.test-alt-screen-flash
     kmet.tui.components.test-cancellable-loader
+    kmet.tui.components.test-dynamic-border
+    kmet.tui.test-overlay
     kmet.libs.test-self-contained
     kmet.libs.test-terminal-image
     kmet.libs.test-yaml-lite
