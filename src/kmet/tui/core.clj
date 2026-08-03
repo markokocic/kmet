@@ -645,12 +645,16 @@
 
 (defn- kitty-image-reserved-rows
   "Rows the image at INDEX occupies: the declared rows, bounded by the
-   consecutive blank rows after it (pi: getKittyImageReservedRows). Must be
-   computed on the raw, unpadded lines — padded spaces would terminate the
-   walk immediately."
-  [lines index]
+   consecutive blank rows after it and by MAX-INDEX (pi:
+   getKittyImageReservedRows). Must be computed on the raw, unpadded lines —
+   padded spaces would terminate the walk immediately."
+  [lines index & [max-index]]
   (let [rows (img/extract-kitty-image-rows (or (nth lines index nil) ""))
-        max-rows (min rows (- (count lines) index))]
+        max-rows (min rows
+                      (if max-index
+                        (- max-index index -1)
+                        (count lines))
+                      (- (count lines) index))]
     (if (<= rows 1)
       1
       (loop [reserved 1]
@@ -661,36 +665,38 @@
               reserved
               (recur (inc reserved)))))))))
 
-(defn- build-image-blocks
-  "Map content row → {:start row :rows n} for every Kitty image block in
-   LINES (pi: expandChangedRangeForKittyImages' block model)."
-  [lines]
-  (reduce (fn [m [i line]]
-            (if (img/is-image-line line)
-              (assoc m i {:start i :rows (kitty-image-reserved-rows lines i)})
-              m))
-          {}
-          (map-indexed vector lines)))
-
 (defn- collect-kitty-image-ids
   "All Kitty image ids referenced by LINES (pi: collectKittyImageIds)."
   [lines]
   (reduce (fn [acc line] (reduce conj acc (img/extract-kitty-image-ids line)))
           #{} lines))
 
-(defn- kitty-image-overflow?
-  "True when a changed image block in the viewport extends past the screen
-   bottom — placing it would scroll (pi: kitty image pre-clear would scroll
-   → full render fallback)."
-  [image-blocks prev prev-count lines new-vt h]
-  (boolean
-   (some (fn [[s {:keys [rows]}]]
-           (and (>= s new-vt)
-                (< s (+ new-vt h))
-                (> (+ s rows) (+ new-vt h))
-                (not= (if (< s prev-count) (nth prev s) "")
-                      (if (< s (count lines)) (nth lines s) ""))))
-         image-blocks)))
+(defn- expand-changed-range-for-kitty-images
+  "Port of pi's expandChangedRangeForKittyImages: widen the changed range so it
+   covers every image block that touches it in either prev or new lines."
+  [first-changed last-changed prev lines]
+  (let [expanded (volatile! [first-changed last-changed])
+        expand-for (fn [ls]
+                     (doseq [i (range (count ls))]
+                       (when (seq (img/extract-kitty-image-ids (nth ls i)))
+                         (let [block-end (+ i (kitty-image-reserved-rows ls i) -1)]
+                           (when (or (>= i first-changed)
+                                     (and (<= i last-changed) (>= block-end first-changed)))
+                             (vswap! expanded
+                                     (fn [[f l]] [(min f i) (max l block-end)])))))))]
+    (expand-for prev)
+    (expand-for lines)
+    @expanded))
+
+(defn- delete-changed-kitty-images
+  "Port of pi's deleteChangedKittyImages: the delete sequence for all image ids
+   in PREV within the changed range."
+  [first-changed last-changed prev]
+  (let [ids (reduce (fn [acc i]
+                      (reduce conj acc (img/extract-kitty-image-ids (nth prev i ""))))
+                    #{}
+                    (range first-changed (min (inc last-changed) (count prev))))]
+    (apply str (map img/delete-kitty-image ids))))
 
 ;; ─── Crash + debug logs (pi: pi-crash.log / PI_DEBUG_REDRAW / PI_TUI_DEBUG)
 
@@ -1216,7 +1222,7 @@
                                  (fn [] (tui-request-render tui)))
         jline (.terminal started)
         hardware-cursor-row (atom 0)
-        viewport-top (atom 0)]
+        previous-viewport-top (atom 0)]
     ;; Make the started record (with the live writer) visible to the input
     ;; path: negotiation / OSC 11 / color-scheme handlers write through
     ;; @(:terminal tui), and the unstarted record's writer is nil — writes
@@ -1255,13 +1261,6 @@
                     cursor-result (extract-cursor-position raw-lines h)
                     cursor (:cursor cursor-result)
                     lines (:lines cursor-result)
-                    ;; Image blocks are computed on the raw, unpadded lines —
-                    ;; padding turns the blank reserved rows into spaces, which
-                    ;; would terminate the reserved-row walk immediately.
-                    image-blocks (if (or (seq @(:prev-image-blocks tui))
-                                         (some img/is-image-line lines))
-                                   (build-image-blocks lines)
-                                   nil)
                     lines (pad-lines-to-width lines w)
                     lines (composite-flashes @(:flashes tui) lines w h)
                     prev @(:previous-lines tui)
@@ -1277,15 +1276,15 @@
                                        (not height-changed))
                     ;; One write per frame: the whole frame's output (sync markers,
                     ;; cursor moves, line rewrites, cursor hide) accumulates into SB
-                    ;; and is written+flushed once. Flushing per diff entry made the
-                    ;; terminal paint each erase+rewrite separately — visible flicker
-                    ;; at 60fps, especially on terminals without CSI 2026 sync
-                    ;; support (e.g. Termux).
+                    ;; and is written+flushed once (pi: one write per render).
+                    ;; Pi-state: the viewport top persists across frames
+                    prev-buffer-length (if (pos? prev-h) (+ @previous-viewport-top prev-h) h)
+                    prev-viewport-top (atom (if height-changed
+                                              (max 0 (- prev-buffer-length h))
+                                              @previous-viewport-top))
+                    viewport-top (atom @prev-viewport-top)
                     sb (StringBuilder.)
                     emit! (fn [s] (.append sb s))
-                    old-vt @viewport-top
-                    new-vt (max 0 (- new-count h))
-                    scroll (- new-vt old-vt)
                     debug-redraw? @(:debug-redraw? tui)
                     log-redraw! (fn [reason]
                                   (when debug-redraw?
@@ -1294,26 +1293,37 @@
                                      (str "[" (java.time.LocalDateTime/now) "] fullRender: "
                                           reason " (prev=" prev-count ", new=" new-count
                                           ", height=" h ")\n"))))
-                    ;; Pi-style full redraw: optionally clear screen, home, then
-                    ;; clear scrollback ([3J) so stale lines above don't show as
-                    ;; duplicates (pi: fullRender uses "\u001b[2J\u001b[H\u001b[3J").
-                    ;; Old image ids are deleted first (text erasure has no effect
-                    ;; on graphics — the delete must be explicit, pi:
-                    ;; deleteKittyImages). Image lines spanning multiple rows are
-                    ;; placed with a cursor dance so the reserved rows are never
-                    ;; written (pi's reserved-row dance).
+                    compute-line-diff (fn [target-row]
+                                        (- (- target-row @viewport-top)
+                                           (- @hardware-cursor-row @prev-viewport-top)))
+                    position-hardware-cursor (fn [cursor-pos total-lines]
+                                               (if (or (nil? cursor-pos) (<= total-lines 0))
+                                                 (emit! "\u001b[?25l")
+                                                 (let [target-row (max 0 (min (:row cursor-pos) (dec total-lines)))
+                                                       target-col (max 0 (:col cursor-pos))
+                                                       row-delta (- target-row @hardware-cursor-row)
+                                                       buf (str (cond
+                                                                  (pos? row-delta) (str "\u001b[" row-delta "B")
+                                                                  (neg? row-delta) (str "\u001b[" (- row-delta) "A")
+                                                                  :else "")
+                                                                "\u001b[" (inc target-col) "G")]
+                                                   (when (seq buf) (emit! buf))
+                                                   (reset! hardware-cursor-row target-row)
+                                                   (if @(:show-hardware-cursor? tui)
+                                                     (emit! "\u001b[?25h")
+                                                     (emit! "\u001b[?25l")))))
                     do-full-redraw (fn do-full-redraw [clear?]
                                      (swap! (:full-redraw-count tui) inc)
+                                     (emit! CSI-2026-H)
                                      (when clear?
                                        (doseq [id @(:previous-kitty-image-ids tui)]
                                          (emit! (img/delete-kitty-image id)))
                                        (emit! "\u001b[2J\u001b[H\u001b[3J"))
-                                     (emit! CSI-2026-H)
                                      (loop [i 0]
                                        (when (< i new-count)
                                          (when (pos? i) (emit! "\r\n"))
                                          (let [rows (if (img/is-image-line (nth lines i))
-                                                      (get-in image-blocks [i :rows] 1)
+                                                      (kitty-image-reserved-rows lines i)
                                                       1)]
                                            (if (and (> rows 1) (<= rows h))
                                              (do (dotimes [_ (dec rows)] (emit! "\r\n"))
@@ -1324,186 +1334,193 @@
                                              (do (emit! (nth lines i))
                                                  (recur (inc i)))))))
                                      (emit! CSI-2026-L)
-                                     (reset! hardware-cursor-row (dec new-count))
-                                     (reset! viewport-top new-vt)
+                                     (reset! hardware-cursor-row (max 0 (dec new-count)))
+                                     (reset! viewport-top (max 0 (- (max h new-count) h)))
                                      (if clear?
                                        (reset! (:max-lines-rendered tui) new-count)
-                                       (swap! (:max-lines-rendered tui) max new-count)))
-                    ;; Screen-row diff. The terminal screen shows the last h rows of
-                    ;; the buffer, which holds every content row written so far — so
-                    ;; the "current" screen content is old rows [old-vt .. old-vt+h-1]
-                    ;; ("" beyond prev-count). When the viewport moved down (content
-                    ;; grew), the rows entering the viewport were already written in
-                    ;; earlier frames, so scrolling the screen down exposes them
-                    ;; without a full redraw — the terminal scrolls its own buffer.
-                    ;; This keeps the screen stable while mid-document boxes (streaming
-                    ;; bash/tool output) grow or shift above the viewport: only the
-                    ;; screen rows that actually changed are rewritten in place.
-                    ;; Content-row diffs can't do this — a one-line insert above the
-                    ;; viewport shifts every content row below it, so the old code
-                    ;; fell back to "\u001b[2J\u001b[H\u001b[3J" + full repaint every
-                    ;; chunk, which flashes on terminals without CSI 2026 sync
-                    ;; support (e.g. Termux).
-                    ;;
-                    ;; Kitty images: rows whose old content held an image get the
-                    ;; old image ids deleted before the rewrite (pi:
-                    ;; deleteChangedKittyImages), including ids of an image block
-                    ;; covering the row (pi: expandChangedRangeForKittyImages). New
-                    ;; image rows are pre-cleared (\u001b[2K per reserved row) and
-                    ;; placed with C=1 so the padding rows stay untouched; a changed
-                    ;; block that would extend past the screen bottom falls back to
-                    ;; a full redraw instead of scrolling (pi: kitty image pre-clear
-                    ;; would scroll).
-                    do-screen-diff (fn do-screen-diff []
-                                     (let [cursor-row (atom (- @hardware-cursor-row old-vt))
-                                           old-blocks @(:prev-image-blocks tui)
-                                           old-ids-at (fn [idx]
-                                                        (let [ids (atom (if (< idx prev-count)
-                                                                          (img/extract-kitty-image-ids (nth prev idx))
-                                                                          []))]
-                                                          (doseq [[s {:keys [rows]}] old-blocks]
-                                                            (when (and (<= s idx) (< idx (+ s rows)))
-                                                              (swap! ids into (img/extract-kitty-image-ids (nth prev s)))))
-                                                          @ids))]
-                                       (when (pos? scroll)
-                                         (let [bottom (dec h)]
-                                           (when (< @cursor-row bottom)
-                                             (emit! (str "\u001b[" (- bottom @cursor-row) "B")))
-                                           (reset! cursor-row bottom)
-                                           (emit! (apply str (repeat scroll "\r\n")))))
-                                       (loop [r 0]
-                                         (if (>= r h)
-                                           (reset! hardware-cursor-row (+ @cursor-row new-vt))
-                                           (let [idx (+ new-vt r)
-                                                 cur (if (< idx prev-count) (nth prev idx) "")
-                                                 exp (if (< idx new-count) (nth lines idx) "")
-                                                 block (get image-blocks idx)]
-                                             (if (= cur exp)
-                                               (recur (inc r))
-                                               (let [delta (- r @cursor-row)
-                                                     move (cond
-                                                            (pos? delta) (str "\u001b[" delta "B")
-                                                            (neg? delta) (str "\u001b[" (- delta) "A")
-                                                            :else "")]
-                                                 (doseq [id (old-ids-at idx)]
-                                                   (emit! (img/delete-kitty-image id)))
-                                                 (if (and block (> (:rows block) 1))
-                                                   ;; Image placement: pre-clear the reserved rows,
-                                                   ;; place with C=1, then skip the padding rows.
-                                                   (let [n (:rows block)]
-                                                     (emit! (str move "\r"))
-                                                     (emit! "\u001b[2K")
-                                                     (dotimes [_ (dec n)] (emit! "\r\n\u001b[2K"))
-                                                     (emit! (str "\u001b[" (dec n) "A"))
-                                                     (emit! exp)
-                                                     (emit! (str "\u001b[" (dec n) "B"))
-                                                     (reset! cursor-row (+ r (dec n)))
-                                                     (recur (+ r n)))
-                                                   (let [;; Rows beyond the new content must be cleared:
-                                                         ;; a bare "" would leave the old text visible.
-                                                         out (if (empty? exp)
-                                                               (apply str (repeat w \space))
-                                                               exp)
-                                                         vw (utils/visible-width out)]
-                                                     ;; Final safeguard against width overflow (pi: crash
-                                                     ;; log + throw with truncateToWidth guidance). Image
-                                                     ;; lines are exempt — their payload counts as text.
-                                                     (when (and (not (img/is-image-line exp))
-                                                                (> vw w))
-                                                       (write-crash-log! lines w idx vw)
-                                                       (tui-stop tui)
-                                                       (throw (ex-info
-                                                               (str "Rendered line " idx
-                                                                    " exceeds terminal width (" vw " > " w ").\n\n"
-                                                                    "This is likely caused by a custom TUI component not "
-                                                                    "truncating its output.\n"
-                                                                    "Use visibleWidth() to measure and truncateToWidth() "
-                                                                    "to truncate lines.\n\n"
-                                                                    "Debug log written to: " (log-path "kmet-crash.log"))
-                                                               {:type :width-overflow})))
-                                                     (emit! (str move "\r" out))
-                                                     (reset! cursor-row r)
-                                                     (recur (inc r)))))))))))]
+                                       (swap! (:max-lines-rendered tui) max new-count))
+                                     (position-hardware-cursor cursor new-count))
+                    main-diff (fn main-diff []
+                                (let [max-lines (max new-count prev-count)
+                                      [first-changed last-changed]
+                                      (loop [i 0, fc -1, lc -1]
+                                        (if (< i max-lines)
+                                          (let [old-line (if (< i prev-count) (nth prev i) "")
+                                                new-line (if (< i new-count) (nth lines i) "")]
+                                            (if (not= old-line new-line)
+                                              (recur (inc i) (if (neg? fc) i fc) i)
+                                              (recur (inc i) fc lc)))
+                                          [fc lc]))
+                                      appended? (> new-count prev-count)
+                                      [first-changed last-changed]
+                                      (if appended?
+                                        [(if (neg? first-changed) prev-count first-changed)
+                                         (dec new-count)]
+                                        [first-changed last-changed])
+                                      [first-changed last-changed]
+                                      (if (not (neg? first-changed))
+                                        (expand-changed-range-for-kitty-images
+                                         first-changed last-changed prev lines)
+                                        [first-changed last-changed])
+                                      append-start? (and appended?
+                                                         (= first-changed prev-count)
+                                                         (pos? first-changed))
+                                      mid-full-redraw! (fn [reason]
+                                                         (log-redraw! reason)
+                                                         (reset! sb (StringBuilder.))
+                                                         (do-full-redraw true))]
+                                  (cond
+                                    (neg? first-changed)
+                                    (do (position-hardware-cursor cursor new-count)
+                                        (reset! viewport-top @prev-viewport-top))
+
+                                    (>= first-changed new-count)
+                                    (if (> prev-count new-count)
+                                      (let [target-row (max 0 (dec new-count))]
+                                        (if (< target-row @prev-viewport-top)
+                                          (mid-full-redraw! (str "deleted lines moved viewport up ("
+                                                                 target-row " < " @prev-viewport-top ")"))
+                                          (let [line-diff (compute-line-diff target-row)
+                                                extra-lines (- prev-count new-count)]
+                                            (if (> extra-lines h)
+                                              (mid-full-redraw! (str "extraLines > height ("
+                                                                     extra-lines " > " h ")"))
+                                              (let [clear-start-offset (if (zero? new-count) 0 1)
+                                                    move-back (max 0 (- (+ extra-lines clear-start-offset) 1))]
+                                                (emit! CSI-2026-H)
+                                                (emit! (delete-changed-kitty-images
+                                                        first-changed last-changed prev))
+                                                (when (pos? line-diff)
+                                                  (emit! (str "\u001b[" line-diff "B")))
+                                                (when (neg? line-diff)
+                                                  (emit! (str "\u001b[" (- line-diff) "A")))
+                                                (emit! "\r")
+                                                (when (and (pos? extra-lines) (pos? clear-start-offset))
+                                                  (emit! (str "\u001b[" clear-start-offset "B")))
+                                                (dotimes [i extra-lines]
+                                                  (emit! "\r\u001b[2K")
+                                                  (when (< i (dec extra-lines))
+                                                    (emit! "\u001b[1B")))
+                                                (when (pos? move-back)
+                                                  (emit! (str "\u001b[" move-back "A")))
+                                                (emit! CSI-2026-L)
+                                                (reset! hardware-cursor-row target-row)
+                                                (position-hardware-cursor cursor new-count)
+                                                (reset! viewport-top @prev-viewport-top))))))
+                                      (do (position-hardware-cursor cursor new-count)
+                                          (reset! viewport-top @prev-viewport-top)))
+
+                                    (< first-changed @prev-viewport-top)
+                                    (mid-full-redraw! (str "firstChanged < viewportTop ("
+                                                           first-changed " < " @prev-viewport-top ")"))
+
+                                    :else
+                                    (let [prev-viewport-bottom (+ @prev-viewport-top h -1)
+                                          move-target-row (if append-start? (dec first-changed) first-changed)]
+                                      (when (> move-target-row prev-viewport-bottom)
+                                        (let [current-screen-row (max 0 (min (dec h)
+                                                                             (- @hardware-cursor-row @prev-viewport-top)))
+                                              move-to-bottom (- (dec h) current-screen-row)
+                                              scroll (- move-target-row prev-viewport-bottom)]
+                                          (when (pos? move-to-bottom)
+                                            (emit! (str "\u001b[" move-to-bottom "B")))
+                                          (emit! (apply str (repeat scroll "\r\n")))
+                                          (swap! prev-viewport-top + scroll)
+                                          (reset! viewport-top @prev-viewport-top)
+                                          (reset! hardware-cursor-row move-target-row)))
+                                      (let [line-diff (compute-line-diff move-target-row)
+                                            render-end (min last-changed (dec new-count))
+                                            final-cursor-row (volatile! render-end)]
+                                        (emit! CSI-2026-H)
+                                        (emit! (delete-changed-kitty-images
+                                                first-changed last-changed prev))
+                                        (when (pos? line-diff)
+                                          (emit! (str "\u001b[" line-diff "B")))
+                                        (when (neg? line-diff)
+                                          (emit! (str "\u001b[" (- line-diff) "A")))
+                                        (emit! (if append-start? "\r\n" "\r"))
+                                        (loop [i first-changed]
+                                          (when (<= i render-end)
+                                            (when (> i first-changed) (emit! "\r\n"))
+                                            (let [line (nth lines i)
+                                                  is-image (img/is-image-line line)
+                                                  rows (if is-image
+                                                         (kitty-image-reserved-rows lines i render-end)
+                                                         1)]
+                                              (if (> rows 1)
+                                                (let [image-start-screen-row (- i @viewport-top)]
+                                                  (if (or (< image-start-screen-row 0)
+                                                          (> (+ image-start-screen-row rows) h))
+                                                    (mid-full-redraw! (str "kitty image pre-clear would scroll ("
+                                                                           image-start-screen-row " + " rows " > " h ")"))
+                                                    (do (emit! "\u001b[2K")
+                                                        (dotimes [_ (dec rows)] (emit! "\r\n\u001b[2K"))
+                                                        (emit! (str "\u001b[" (dec rows) "A"))
+                                                        (emit! line)
+                                                        (emit! (str "\u001b[" (dec rows) "B"))
+                                                        (recur (+ i rows)))))
+                                                (do (emit! "\u001b[2K")
+                                                    (when (and (not is-image)
+                                                               (> (utils/visible-width line) w))
+                                                      (write-crash-log! lines w i (utils/visible-width line))
+                                                      (tui-stop tui)
+                                                      (throw (ex-info
+                                                              (str "Rendered line " i
+                                                                   " exceeds terminal width (" (utils/visible-width line) " > " w ").\n\n"
+                                                                   "This is likely caused by a custom TUI component not "
+                                                                   "truncating its output.\n"
+                                                                   "Use visibleWidth() to measure and truncateToWidth() "
+                                                                   "to truncate lines.\n\n"
+                                                                   "Debug log written to: " (log-path "kmet-crash.log"))
+                                                              {:type :width-overflow})))
+                                                    (emit! line)
+                                                    (recur (inc i)))))))
+                                        (when (> prev-count new-count)
+                                          (when (< render-end (dec new-count))
+                                            (emit! (str "\u001b[" (- (dec new-count) render-end) "B"))
+                                            (vreset! final-cursor-row (dec new-count)))
+                                          (let [extra-lines (- prev-count new-count)]
+                                            (dotimes [_ extra-lines]
+                                              (emit! "\r\n\u001b[2K"))
+                                            (emit! (str "\u001b[" extra-lines "A"))))
+                                        (emit! CSI-2026-L)
+                                        (reset! hardware-cursor-row @final-cursor-row)
+                                        (swap! (:max-lines-rendered tui) max new-count)
+                                        (reset! viewport-top
+                                                (max @prev-viewport-top
+                                                     (- @final-cursor-row h -1)))
+                                        (position-hardware-cursor cursor new-count))))))]
                 (cond
-                ;; First render: output everything without clearing (assumes a
-                ;; clean screen — pi: fullRender(false)).
                   first-render?
                   (do (log-redraw! "first render")
                       (do-full-redraw false))
-
-                ;; Width changes always need a full re-render because wrapping
-                ;; changes (pi).
                   width-changed
                   (do (log-redraw! (str "terminal width changed (" prev-w " -> " w ")"))
                       (do-full-redraw true))
-
-                ;; Height changes normally need a full re-render to keep the
-                ;; visible viewport aligned, but Termux changes height when the
-                ;; software keyboard shows or hides — a full redraw would replay
-                ;; the history on every toggle (pi).
                   (and height-changed (not termux?))
                   (do (log-redraw! (str "terminal height changed (" prev-h " -> " h ")"))
                       (do-full-redraw true))
-
-                ;; Content shrunk below the working area with no overlays —
-                ;; re-render to clear the empty rows (pi: clearOnShrink;
-                ;; KMET_CLEAR_ON_SHRINK=1, default off like pi).
                   (and @(:clear-on-shrink? tui)
                        (< new-count @(:max-lines-rendered tui))
                        (empty? @(:overlays tui)))
                   (do (log-redraw! (str "clearOnShrink (maxLinesRendered="
                                         @(:max-lines-rendered tui) ")"))
                       (do-full-redraw true))
-
-                ;; Everything else: scroll the screen (if the viewport moved down) and
-                ;; rewrite only the screen rows that changed. A changed image block
-                ;; that would scroll falls back to a full redraw.
-                  (or (pos? scroll) (not= prev lines))
-                  (if (kitty-image-overflow? image-blocks prev prev-count lines new-vt h)
-                    (do (log-redraw! "kitty image pre-clear would scroll")
-                        (do-full-redraw true))
-                    (let [before (.length sb)]
-                      (emit! CSI-2026-H)
-                      (do-screen-diff)
-                      (when (> (.length sb) before)
-                        (emit! CSI-2026-L))
-                      (reset! viewport-top new-vt)
-                      (swap! (:max-lines-rendered tui) max new-count)))
-
-                ;; No changes
-                  :else nil)
-              ;; Position hardware cursor (Pi-style: relative movement from tracked position)
-              ;; Both hardware-cursor-row and cursor :row are content rows (0-indexed).
-              ;; Since viewport is stable during cursor positioning, content-row delta
-              ;; equals screen-row delta.
-                (if cursor
-                  (let [target-row (min (:row cursor) (dec new-count))
-                        target-col (min (:col cursor) (dec w))
-                        row-delta (- target-row @hardware-cursor-row)
-                        buf (str (cond
-                                   (pos? row-delta) (str "\u001b[" row-delta "B")
-                                   (neg? row-delta) (str "\u001b[" (- row-delta) "A")
-                                   :else "")
-                                 "\u001b[" (inc target-col) "G")]
-                    (when (seq buf)
-                      (emit! buf))
-                    (reset! hardware-cursor-row target-row)
-                    (if @(:show-hardware-cursor? tui)
-                      (emit! "\u001b[?25h")
-                      (emit! "\u001b[?25l")))
-                  (emit! "\u001b[?25l"))
-              ;; KMET_TUI_DEBUG: dump the frame to /tmp/tui/ (pi: PI_TUI_DEBUG)
+                  :else
+                  (main-diff))
+                (reset! previous-viewport-top @viewport-top)
                 (when @(:tui-debug? tui)
-                  (tui-debug-dump! prev lines (str sb) w h new-vt @hardware-cursor-row))
-              ;; Single write + flush per frame (no-op frames write nothing)
+                  (tui-debug-dump! prev lines (str sb) w h @viewport-top @hardware-cursor-row))
                 (when (pos? (.length sb))
                   (terminal/write-output started (str sb)))
                 (reset! (:previous-lines tui) lines)
                 (reset! (:previous-width tui) w)
                 (reset! (:previous-height tui) h)
                 (reset! (:previous-kitty-image-ids tui)
-                        (if image-blocks (collect-kitty-image-ids lines) #{}))
-                (reset! (:prev-image-blocks tui) image-blocks))))
+                        (if (some img/is-image-line lines)
+                          (collect-kitty-image-ids lines)
+                          #{})))))
+
           (Thread/sleep 16)
           (recur)))
       (finally

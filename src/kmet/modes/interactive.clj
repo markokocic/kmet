@@ -1228,8 +1228,8 @@
                               (tui/tui-request-render t))
                           :context-replaced
                            ;; Rebuild the chat history to mirror the replaced context
-                          (ui/chat-history-rebuild! ch (:messages evt))
-                          (tui/tui-request-render t)
+                          (do (ui/chat-history-rebuild! ch (:messages evt))
+                              (tui/tui-request-render t))
                           :message-start
                            ;; before-agent-start injected messages (role :info)
                            ;; display as labeled info boxes above the incoming
