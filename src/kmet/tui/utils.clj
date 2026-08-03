@@ -8,6 +8,14 @@
 ;; TUI finds this marker and positions the hardware cursor there.
 (def ^:const CURSOR-MARKER "\u001b_km:c\u0007")
 
+;; ─── ANSI escape sequences ────────────────────────────────────────────────
+;; CSI (ESC [...) and OSC (ESC ] ... ST) sequences. OSC 8 hyperlinks
+;; (ESC ]8;;url ESC\) are zero-width metadata but must be recognized so they
+;; don't count toward visible width. OSC is terminated by BEL, ESC\ or 0x9C
+;; (pi: ansi-regex).
+(def ^:private ANSI-CODE-RE
+  #"\u001b\[[0-9;]*[a-zA-Z]|\u001b\][^\u0007\u001b\u009c]*(?:\u001b\\|\u0007|\u009c)")
+
 ;; ─── Width calculation ─────────────────────────────────────────────────────
 
 (def ^:const CJK-START 0x2E80)
@@ -120,7 +128,7 @@
    Fast path for plain ASCII (no CJK/emoji) — just returns count."
   [s]
   (if (empty? s) 0
-      (let [clean (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" "")]
+      (let [clean (clojure.string/replace s ANSI-CODE-RE "")]
         (visible-width-plain clean))))
 
 ;; ─── Truncation ─────────────────────────────────────────────────────────────
@@ -145,7 +153,8 @@
          ;; The ellipsis alone doesn't fit — clip it to max-width
          (let [clipped (truncate-to-width ellipsis max-width)]
            (if (pos? (visible-width clipped)) clipped ""))
-         (if-not (clojure.string/includes? s "\u001b[")
+         (if-not (or (clojure.string/includes? s "\u001b[")
+                     (clojure.string/includes? s "\u001b]"))
            ;; Fast path: plain text — truncate by codepoint, never letting
            ;; the kept prefix cross target (pi: keptWidth + width <= target)
            (let [sb (atom "")
@@ -165,7 +174,7 @@
            ;; pending (unflushed) codes are dropped once truncation starts
            (let [sb (StringBuilder.)
                  n (count s)
-                 ansi-re #"\u001b\[[0-9;]*[a-zA-Z]"
+                 ansi-re ANSI-CODE-RE
                  ansi-at (fn [i]
                            (let [m (re-matcher ansi-re s)]
                              (when (and (.find m i) (= (.start m) i))
@@ -189,7 +198,7 @@
 (defn- leading-ansi-codes
   "All ANSI escape sequences at the very start of s (pi: active codes)."
   [s]
-  (let [ansi-re #"\u001b\[[0-9;]*[a-zA-Z]"]
+  (let [ansi-re ANSI-CODE-RE]
     (loop [s s acc ""]
       (let [m (re-find ansi-re s)]
         (if (and m (clojure.string/starts-with? s m))
@@ -208,7 +217,7 @@
    tokens under SCI where per-char interop is slow."
   [word max-width]
   (let [n (count word)
-        ansi-re #"\u001b\[[0-9;]*[a-zA-Z]"
+        ansi-re ANSI-CODE-RE
         lead (leading-ansi-codes word)]
     (if (not (re-find #"[^\u0020-\u007e]" word))
       ;; ASCII fast path: char count == visible width
@@ -254,7 +263,7 @@
   [line max-width]
   (if (or (empty? line) (<= max-width 0))
     [""]
-    (let [clean (clojure.string/replace line #"\u001b\[[0-9;]*[a-zA-Z]" "")]
+    (let [clean (clojure.string/replace line ANSI-CODE-RE "")]
       (if (<= (visible-width-plain clean) max-width)
         [line]
         (let [words (clojure.string/split line #"(?<=\s)" -1)
@@ -313,7 +322,7 @@
 ;; ─── ANSI helpers ───────────────────────────────────────────────────────────
 
 (defn strip-ansi-codes [s]
-  (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))
+  (clojure.string/replace s ANSI-CODE-RE ""))
 
 (defn sgr
   ([code] (str "\u001b[" code "m"))
@@ -351,13 +360,11 @@
 
 ;; ─── ANSI-aware window slicing ──────────────────────────────────────────────
 
-(def ^:private ANSI-RE #"\u001b\[[0-9;]*[a-zA-Z]")
-
 (defn- ansi-code-at
   "Return [code length] when an ANSI escape sequence starts at index I of S."
   [s i]
   (when (and (< i (count s)) (= \u001b (nth s i)))
-    (let [m (re-matcher ANSI-RE s)]
+    (let [m (re-matcher ANSI-CODE-RE s)]
       (when (and (.find m i) (= (.start m) i))
         [(.group m) (- (.end m) i)]))))
 

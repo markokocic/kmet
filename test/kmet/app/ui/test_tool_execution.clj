@@ -2,10 +2,12 @@
   (:require [clojure.test :as t :refer [deftest is testing]]
             [clojure.string :as str]
             [kmet.tui.core :as core]
+            [kmet.tui.utils :as utils]
+            [kmet.libs.terminal-image :as timg]
             [kmet.app.ui.tool-execution :as te]))
 
 (defn- strip-ansi [s]
-  (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))
+  (utils/strip-ansi-codes s))
 
 (deftest test-create
   (testing "create tool execution component"
@@ -90,6 +92,18 @@
     ;; component (kmet interactive.clj tool-execution-start handler)
     (te/tool-execution-set-args-complete! c)
     (mapv strip-ansi (core/render c 60))))
+
+(deftest test-read-render-hyperlink-path
+  (testing "OSC 8 hyperlinked path stays on one line with contiguous visible text (pi linkPath)"
+    (let [prev (timg/get-capabilities)]
+      (timg/set-capabilities! {:images nil :true-color true :hyperlinks true})
+      (try
+        (let [plain (render-tool :name "read" :args {:path "src/a.clj" :offset 5 :limit 3})]
+          (is (some #(re-find #"read src/a\.clj:5-7" %) plain))
+          (is (not-any? #(re-find #"^ read +$" %) plain)
+              "path must not wrap onto its own line"))
+        (finally
+          (timg/set-capabilities! prev))))))
 
 (deftest test-read-render-call-range
   (testing "read call shows line range suffix"

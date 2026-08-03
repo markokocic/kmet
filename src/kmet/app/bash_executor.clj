@@ -25,7 +25,8 @@
       (< b (* 1024 1024)) (str (format "%.1f" (float (/ b 1024))) "KB")
       :else (str (format "%.1f" (float (/ b 1024 1024))) "MB"))))
 
-(def ^:private ANSI-PATTERN #"\u001b\[[0-9;]*[a-zA-Z]")
+(def ^:private ANSI-PATTERN
+  #"\u001b\[[0-9;]*[a-zA-Z]|\u001b\][^\u0007\u001b\u009c]*(?:\u001b\\|\u0007|\u009c)")
 (defn- strip-ansi [s] (str/replace s ANSI-PATTERN ""))
 (defn- sanitize-output
   "Pi: sanitizeBinaryOutput() — strips control chars (except \\t \\n \\r)

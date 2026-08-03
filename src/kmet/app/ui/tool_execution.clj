@@ -44,7 +44,7 @@
    (except \t \n \r) before display."
   [text]
   (-> text
-      (str/replace #"\u001b\[[0-9;]*[a-zA-Z]" "")
+      (utils/strip-ansi-codes)
       (str/replace #"\r\n" "\n")
       (str/replace #"\r" "\n")
       (str/replace #"[^\t\n\r\u0020-\uFFF8\uFFFC-\uFFFF]" "")))
