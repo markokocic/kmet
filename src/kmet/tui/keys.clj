@@ -4,7 +4,8 @@
    Port of @earendil-works/pi-tui keys.ts — parseKey covers Kitty CSI-u
    (with alternate keys + event types), modifyOtherKeys, mode-aware
    legacy sequences, and the full legacy table."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [kmet.libs.terminal :as lib]))
 
 ;; ─── Key constants ──────────────────────────────────────────────────────────
 
@@ -29,12 +30,10 @@
 (defn alt [k] (str "alt+" k))
 (defn ctrl-shift [k] (str "ctrl+shift+" k))
 
-;; ─── Kitty protocol state ───────────────────────────────────────────────────
+;; ─── Kitty protocol state (owned by kmet.libs.terminal) ────────────────────
 
-(defonce ^:private kitty-active (atom false))
-
-(defn set-kitty-active! [v] (reset! kitty-active v))
-(defn kitty-active? [] @kitty-active)
+(defn set-kitty-active! [v] (lib/set-kitty-active! v))
+(defn kitty-active? [] (lib/kitty-active?))
 
 ;; ─── Kitty key decoding (pi: keys.ts formatParsedKey) ──────────────────────
 
@@ -309,7 +308,7 @@
 
    ;; Mode-aware legacy sequences (pi): with Kitty active, \u001b\r and \n
    ;; are shift+enter (custom terminal mappings), not alt+enter/ctrl+j.
-   (when @kitty-active
+   (when (lib/kitty-active?)
      (case data
        "\u001b\r" "shift+enter"
        "\n" "shift+enter"
@@ -330,7 +329,7 @@
 
    ;; ESC + ctrl char → ctrl+alt+letter; ESC + printable → alt+key
    ;; (pi legacy alt/modifier handling, skipped when Kitty is active)
-   (when (and (not @kitty-active)
+   (when (and (not (lib/kitty-active?))
               (= (count data) 2)
               (= (first data) \u001b))
      (let [code (int (nth data 1))]
@@ -393,7 +392,7 @@
    MAC addresses like \"90:62:3F:A5\" contain \":3F\")."
   [data]
   (when-not (str/includes? data "\u001b[200~")
-    (when @kitty-active
+    (when (lib/kitty-active?)
       (when (and (str/includes? data ":3")
                  (or (str/includes? data "u") (str/includes? data "~")
                      (str/includes? data "A") (str/includes? data "B")
@@ -405,7 +404,7 @@
    type 2). Bracketed paste content is never a repeat event."
   [data]
   (when-not (str/includes? data "\u001b[200~")
-    (when @kitty-active
+    (when (lib/kitty-active?)
       (when (and (str/includes? data ":2")
                  (or (str/includes? data "u") (str/includes? data "~")
                      (str/includes? data "A") (str/includes? data "B")

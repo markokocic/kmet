@@ -67,8 +67,8 @@
 ;; CSI 2026 sync
 ;; ═══════════════════════════════════════════════════════════════════════════
 
-(def CSI-2026-H "\u001b[?2026h")
-(def CSI-2026-L "\u001b[?2026l")
+(def CSI-2026-H terminal/CSI-2026-SYNC-ON)
+(def CSI-2026-L terminal/CSI-2026-SYNC-OFF)
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; TUI
@@ -619,8 +619,8 @@
 ;; Input reader
 ;; ═══════════════════════════════════════════════════════════════════════════
 
-(def ^:private PASTE-START "\u001b[200~")
-(def ^:private PASTE-END "\u001b[201~")
+(def ^:private PASTE-START terminal/PASTE-START)
+(def ^:private PASTE-END terminal/PASTE-END)
 
 (def ^:private MAX-ESC-WAIT 30)
 (def ^:private ESC-WAIT-STEP 3)

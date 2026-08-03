@@ -5,30 +5,36 @@
   (:require [clojure.test :as t :refer [deftest testing]]
             [kmet.tui.core :as core]
             [kmet.tui.keys :as keys]
+            [kmet.libs.terminal :as lib]
             [kmet.tui.terminal :as term]))
 
-(defn- recording-terminal
-  "ITerminal stub recording written output."
+(defn- recording-writer
+  "Returns a write-fn recording written output plus the writes atom."
   []
   (let [writes (atom [])]
-    {:term (reify term/ITerminal
-             (start! [_ _ _] nil)
-             (stop! [_] nil)
-             (write-output [_ s] (swap! writes conj s))
-             (columns [_] 80)
-             (rows [_] 24)
-             (hide-cursor! [_] nil)
-             (show-cursor! [_] nil)
-             (clear-line! [_] nil)
-             (clear-screen! [_] nil)
-             (set-title! [_ _] nil))
+    {:write-fn #(swap! writes conj %)
      :writes writes}))
+
+(defn- recording-terminal
+  "ITerminal stub for the reader-interception tests."
+  []
+  (reify term/ITerminal
+    (start! [_ _ _] nil)
+    (stop! [_] nil)
+    (write-output [_ _] nil)
+    (columns [_] 80)
+    (rows [_] 24)
+    (hide-cursor! [_] nil)
+    (show-cursor! [_] nil)
+    (clear-line! [_] nil)
+    (clear-screen! [_] nil)
+    (set-title! [_ _] nil)))
 
 (defn- reset-protocol-state!
   "Reset the module-level protocol flags between tests."
   []
   (keys/set-kitty-active! false)
-  (term/query-kitty-protocol! (:term (recording-terminal))))
+  (lib/query-kitty-protocol! (fn [_])))
 
 (t/use-fixtures :each (fn [f] (reset-protocol-state!) (f)))
 
@@ -36,23 +42,23 @@
 
 (deftest test-parse-negotiation-sequence
   (testing "kitty flags, device attributes, and garbage"
-    (t/is (= {:type :kitty-flags :flags 7} (term/parse-negotiation-sequence "\u001b[?7u")))
-    (t/is (= {:type :kitty-flags :flags 0} (term/parse-negotiation-sequence "\u001b[?0u")))
-    (t/is (= {:type :device-attributes} (term/parse-negotiation-sequence "\u001b[?1;2c")))
-    (t/is (= {:type :device-attributes} (term/parse-negotiation-sequence "\u001b[?c")))
-    (t/is (nil? (term/parse-negotiation-sequence "a")))
-    (t/is (nil? (term/parse-negotiation-sequence "\u001b[A")) "arrow keys are not negotiation responses")
-    (t/is (nil? (term/parse-negotiation-sequence "\u001b[?7u\u001b[?1;2c"))
+    (t/is (= {:type :kitty-flags :flags 7} (lib/parse-negotiation-sequence "\u001b[?7u")))
+    (t/is (= {:type :kitty-flags :flags 0} (lib/parse-negotiation-sequence "\u001b[?0u")))
+    (t/is (= {:type :device-attributes} (lib/parse-negotiation-sequence "\u001b[?1;2c")))
+    (t/is (= {:type :device-attributes} (lib/parse-negotiation-sequence "\u001b[?c")))
+    (t/is (nil? (lib/parse-negotiation-sequence "a")))
+    (t/is (nil? (lib/parse-negotiation-sequence "\u001b[A")) "arrow keys are not negotiation responses")
+    (t/is (nil? (lib/parse-negotiation-sequence "\u001b[?7u\u001b[?1;2c"))
           "multi-sequence chunks never parse (split by the char reader)")))
 
 (deftest test-negotiation-prefix
   (testing "fragments that could still become a response"
-    (t/is (true? (term/negotiation-prefix? "\u001b[")))
-    (t/is (true? (term/negotiation-prefix? "\u001b[?")))
-    (t/is (true? (term/negotiation-prefix? "\u001b[?7")))
-    (t/is (true? (term/negotiation-prefix? "\u001b[?1;2")))
-    (t/is (false? (term/negotiation-prefix? "\u001b[A")) "arrow prefix is not negotiation")
-    (t/is (false? (term/negotiation-prefix? "\u001b[?7u")) "complete responses are not prefixes")))
+    (t/is (true? (lib/negotiation-prefix? "\u001b[")))
+    (t/is (true? (lib/negotiation-prefix? "\u001b[?")))
+    (t/is (true? (lib/negotiation-prefix? "\u001b[?7")))
+    (t/is (true? (lib/negotiation-prefix? "\u001b[?1;2")))
+    (t/is (false? (lib/negotiation-prefix? "\u001b[A")) "arrow prefix is not negotiation")
+    (t/is (false? (lib/negotiation-prefix? "\u001b[?7u")) "complete responses are not prefixes")))
 
 ;; ─── Protocol handling (pi: handleKeyboardProtocolNegotiationSequence) ─────
 
@@ -60,10 +66,10 @@
   (testing "non-zero flags enable the Kitty protocol"
     (try
       (keys/set-kitty-active! false)
-      (let [{:keys [term writes]} (recording-terminal)]
+      (let [{:keys [write-fn writes]} (recording-writer)]
         ;; fallback enabled first, then kitty wins → fallback disabled
-        (term/handle-negotiation-sequence! term {:type :device-attributes})
-        (term/handle-negotiation-sequence! term {:type :kitty-flags :flags 7})
+        (lib/handle-negotiation-sequence! write-fn {:type :device-attributes})
+        (lib/handle-negotiation-sequence! write-fn {:type :kitty-flags :flags 7})
         (t/is (true? (keys/kitty-active?)))
         (t/is (= ["\u001b[>4;2m" "\u001b[>4;0m"] @writes)
               "modifyOtherKeys enabled then disabled when kitty wins"))
@@ -71,24 +77,24 @@
 
 (deftest test-handle-zero-flags-falls-back
   (testing "zero flags enable the modifyOtherKeys fallback"
-    (let [{:keys [term writes]} (recording-terminal)]
-      (term/handle-negotiation-sequence! term {:type :kitty-flags :flags 0})
+    (let [{:keys [write-fn writes]} (recording-writer)]
+      (lib/handle-negotiation-sequence! write-fn {:type :kitty-flags :flags 0})
       (t/is (false? (keys/kitty-active?)))
       (t/is (= ["\u001b[>4;2m"] @writes) "modifyOtherKeys fallback enabled"))))
 
 (deftest test-handle-device-attributes-fallback
   (testing "a device-attributes report (DA sentinel) enables the fallback
             when kitty is not active"
-    (let [{:keys [term writes]} (recording-terminal)]
-      (term/handle-negotiation-sequence! term {:type :device-attributes})
+    (let [{:keys [write-fn writes]} (recording-writer)]
+      (lib/handle-negotiation-sequence! write-fn {:type :device-attributes})
       (t/is (= ["\u001b[>4;2m"] @writes) "DA sentinel enables the fallback"))))
 
 (deftest test-disable-kitty-protocol
   (testing "disable writes the disable sequence and clears state"
     (try
       (keys/set-kitty-active! true)
-      (let [{:keys [term writes]} (recording-terminal)]
-        (term/disable-kitty-protocol! term)
+      (let [{:keys [write-fn writes]} (recording-writer)]
+        (lib/disable-kitty-protocol! write-fn)
         (t/is (= ["\u001b[<u"] @writes)
               "modifyOtherKeys was never enabled here, so only the kitty disable is written")
         (t/is (false? (keys/kitty-active?))))
@@ -103,7 +109,7 @@
   (testing "a complete response is consumed, never dispatched as input"
     (keys/set-kitty-active! false)
     (try
-      (let [tui (core/create-tui (:term (recording-terminal)))
+      (let [tui (core/create-tui (recording-terminal))
             buf (atom "\u001b[?7u")]
         (reset! (:keyboard-protocol-pushed? tui) true)
         (t/is (= :consumed (intercept tui buf)))
@@ -113,7 +119,7 @@
 
 (deftest test-intercept-holds-fragments
   (testing "split responses are held across reads, then consumed"
-    (let [tui (core/create-tui (:term (recording-terminal)))
+    (let [tui (core/create-tui (recording-terminal))
           buf (atom "\u001b[?")]
       (reset! (:keyboard-protocol-pushed? tui) true)
       (t/is (= :pending (intercept tui buf)))
@@ -125,7 +131,7 @@
 (deftest test-intercept-flushes-non-negotiation
   (testing "held fragments flush back into the buffer when input stops
             matching the response shape"
-    (let [tui (core/create-tui (:term (recording-terminal)))
+    (let [tui (core/create-tui (recording-terminal))
           buf (atom "\u001b[?")]
       (reset! (:keyboard-protocol-pushed? tui) true)
       (t/is (= :pending (intercept tui buf)))
@@ -135,7 +141,7 @@
 
 (deftest test-intercept-inactive-when-not-pushed
   (testing "no interception before the query is sent"
-    (let [tui (core/create-tui (:term (recording-terminal)))
+    (let [tui (core/create-tui (recording-terminal))
           buf (atom "\u001b[?7u")]
       (t/is (nil? (intercept tui buf)))
       (t/is (= "\u001b[?7u" @buf)))))

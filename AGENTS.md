@@ -43,6 +43,9 @@ src/kmet/
 │   ├── diff.clj        — Myers O(ND) line diff
 │   ├── process.clj     — Process tree management (descendant collection, tree kill, pid registry)
 │   ├── sse.clj         — SSE line parsing + LLM stream processing
+│   ├── terminal.clj    — Terminal protocol knowledge: Kitty keyboard
+│   │                     negotiation, escape sequences, raw-ANSI write log
+│   │                     (pi terminal.ts; writer-fn based)
 │   ├── yaml_lite.clj   — Minimal YAML subset parser (frontmatter; babashka-compatible)
 │   └── terminal_image.clj — Kitty terminal image protocol + image dimension parsing
 │                           (native PNG/JPEG/GIF via f= codes — no conversion)
@@ -91,7 +94,10 @@ src/kmet/
 │       └── footer.clj
 ├── tui/                — Generic TUI library (Pi's @earendil-works/pi-tui)
 │   ├── core.clj        — TUI class, render loop, overlays
-│   ├── terminal.clj    — JLine 4.x wrapper
+│   ├── terminal.clj    — JLine 4.x wrapper: ITerminal protocol + the
+│   │                     record-taking wrappers over kmet.libs.terminal
+│   │                     (negotiation, drain); portable protocol code
+│   │                     lives in the lib
 │   ├── keys.clj        — key parsing/matching
 │   ├── keybindings.clj — TUI keybindings
 │   ├── fuzzy.clj       — fuzzy matching (select-list filter)
@@ -148,7 +154,9 @@ src/kmet/
 - **`kmet.core`** — entry only: args + dispatch. Never contains app logic.
 
 ### ANSI escape codes
-- **Never use raw ANSI escape codes (`\u001b[...`) outside `src/kmet/tui/`.**
+- **Never use raw ANSI escape codes (`\u001b[...`) outside `src/kmet/tui/` and
+  `src/kmet/libs/terminal.clj`** (the protocol library, where they belong by
+  design).
   All terminal styling goes through `kmet.tui.theme` functions (`theme/fg`, `theme/bg`,
   `theme/bold`, `theme/dim`, `theme/italic`, etc.) which use attribute-specific resets
   (`\u001b[22m` for bold/dim, `\u001b[23m` for italic, `\u001b[39m` for fg, `\u001b[49m` for bg)
