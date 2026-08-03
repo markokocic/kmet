@@ -47,6 +47,9 @@
           {:type :text :content (get delta :content)}
           (get delta :reasoning_content)
           {:type :thinking :content (get delta :reasoning_content)}
+          (get chunk :usage)
+          ;; Final chunk with include_usage: no choices, only usage totals
+          {:type :usage :usage (get chunk :usage)}
           :else {:type :delta :chunk chunk}))
       (catch Exception e
         {:type :error :message (str "Parse error: " (ex-message e))}))))
@@ -57,6 +60,10 @@
    :content-block-start, or :unknown."
   [event data]
   (case event
+    "message_start"
+    (when data
+      (let [d (json/parse-string data true)]
+        {:type :usage :usage (get-in d [:message :usage])}))
     "content_block_start"
     (when data
       (let [block (json/parse-string data true)

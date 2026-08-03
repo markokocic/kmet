@@ -1286,3 +1286,61 @@
       (t/is (seq evs) ":context-replaced emitted on context replacement")
       (t/is (= "replacement" (get-in (last evs) [:messages 0 :content 0 :text]))
             "event carries the new conversation"))))
+
+(t/deftest ^:slow test-loop-compaction-cancelled
+  (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
+        sess (session/create-session (str dir))
+        events (atom [])
+        agent (loop/make-agent-state
+               :session sess
+               :compact-threshold 1000
+               :keep-recent-tokens 40
+               :on-event (fn [e] (swap! events conj e)))]
+    (try
+      (doseq [i (range 6)]
+        (let [m {:role :user :content [{:type :text :text
+                                        (str "This is message body number " i
+                                             " with plenty of words so the estimated token count "
+                                             "easily exceeds the small test threshold.")}]}]
+          (swap! (:messages agent) conj m)
+          (session/append-entry sess m)))
+      (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                    ;; A summarization stream that never finishes on its own —
+                    ;; only the cancel signal (via summarize!'s watch) ends it.
+                    llm/send-message (fn [_] (promise))]
+        (let [fut (future (loop/compact-context! agent nil :threshold))]
+          (Thread/sleep 300) ;; let summarization "start"
+          (loop/cancel-turn agent)
+          (t/is (= :aborted @fut) "compact-context! reports :aborted on cancel")))
+      (t/is (some #(and (= :compaction-start (:type %)) (= :threshold (:reason %))) @events)
+            "compaction-start emitted with the threshold reason")
+      (t/is (some #(and (= :compaction-end (:type %)) (:aborted %)) @events)
+            "compaction-end carries :aborted")
+      (t/is (= 6 (count @(:entries sess))) "session untouched by aborted compaction")
+      (t/is (= 6 (count @(:messages agent))) "in-memory context untouched")
+      (finally
+        (fs/delete-tree dir)))))
+
+(t/deftest test-loop-compaction-refuses-when-active
+  (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
+        sess (session/create-session (str dir))
+        agent (loop/make-agent-state :session sess :compact-threshold 1000
+                                     :keep-recent-tokens 40)]
+    (try
+      (doseq [i (range 6)]
+        (let [m {:role :user :content [{:type :text :text
+                                        (str "This is message body number " i
+                                             " with plenty of words so the estimated token count "
+                                             "easily exceeds the small test threshold.")}]}]
+          (swap! (:messages agent) conj m)
+          (session/append-entry sess m)))
+      (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                    llm/send-message (fn [_] (promise))]
+        (let [fut (future (loop/compact-context! agent))]
+          (Thread/sleep 200)
+          (t/is (false? (loop/compact-context! agent))
+                "second compaction refused while one is in flight")
+          (loop/cancel-turn agent)
+          (t/is (= :aborted @fut))))
+      (finally
+        (fs/delete-tree dir)))))

@@ -113,8 +113,11 @@
       (t/is (.contains (first lines) "bye")))))
 
 (t/deftest test-footer-reactive
+  ;; the footer's render cache must invalidate when a tracked atom changes —
+  ;; here the extension-statuses atom (provider atoms are read inside helper
+  ;; fns, so callers invalidate explicitly; this tests the lexical tracking)
   (let [f (footer/make-footer)]
     (core/render f 40)
-    (footer/footer-set-status! f "working...")
-    (let [line (second (core/render f 40))]
-      (t/is (.contains line "working...")))))
+    (footer/footer-set-extension-status! f "ext" "● active")
+    (let [lines (core/render f 40)]
+      (t/is (some #(.contains % "● active") lines)))))

@@ -126,6 +126,12 @@
 
 (defonce ^:private extensions (atom []))
 
+(defn get-loaded-extensions
+  "Vector of loaded extension maps {:name str :file str} (pi:
+   resourceLoader.getExtensions)."
+  []
+  @extensions)
+
 (defn clear-extensions!
   "Remove all loaded extensions and their hooks (pi: session.reload emits
    session_shutdown, then re-loads extensions). Used by /reload."

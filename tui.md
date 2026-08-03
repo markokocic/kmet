@@ -13,9 +13,12 @@ Status of the chat-screen layout (previously "Level 1") is DONE; the
 **input pipeline (Phase 1), render loop + terminal queries (Phase 2),
 overlay/focus layer (Phase 3), theme controller + validation (Phase 4),
 components (Phase 5 — incl. the `IEditorComponent` protocol),
-extension ctx.ui surface (Phase 7), and the write-log +
-listener-chaining + Loader-indicator + DynamicBorder items are DONE**
-(see the per-phase notes below); Phase 6 remains planned below.
+app behavior (Phase 6 — two-line footer + FooterDataProvider, ExpandableText
+header, loaded resources, pending-messages display + follow-up/dequeue,
+status-indicator swap model with retry countdown + cancellable compaction,
+editor dynamic height), extension ctx.ui surface (Phase 7), and the
+write-log + listener-chaining + Loader-indicator + DynamicBorder items
+are DONE** (see the per-phase notes below).
 
 ---
 
@@ -641,12 +644,57 @@ identical (yank/yank-pop, undo).
 
 ### Phase 6 — App behavior (B.5 → B.6 → B.1 → B.3 → B.2 → B.4 → B.8)
 
-**Status: PARTIAL** — B.5 custom-editor swap (duck-typed, preserving text/
-padding/border/autocomplete/actions), B.4 `setWorkingIndicator`/
-`setWorkingMessage`/`setWorkingVisible`, B.6 footer extension statuses
-(keyed `setStatus`), and B.8's `DynamicBorder` are DONE; the two-line
-footer, `ExpandableText` header, pending-messages display, loaded-resources
-layer, and the full status-indicator swap model are open.
+**Status: DONE** — B.5 dynamic editor height (fixed `:height 8` dropped;
+`:terminal-rows` drives `max(5, rows*0.3)` per render, default fallback 12)
++ custom-editor swap (from the earlier pass), B.6 two-line footer +
+`FooterDataProvider` (cwd home-substituted + git branch on line 1; usage
+stats ↑in/↓out/R/W/CH + context % colored + right-aligned
+`(provider) model • thinking` on line 2; extension statuses on line 3 —
+no `─` separator), B.1 `ExpandableText` header (`tui/components/expandable_text.clj`;
+compact/full welcome with keybinding hints from the registry; the chat
+info-message welcome was removed; toggled by `app.tools.expand` together
+with tool output and the loaded-resources sections), B.3 pending-messages
+display (`app/ui/pending_messages.clj`; `:queue-update` →
+`update-pending-messages!`; `app.message.followUp` Alt+Enter queues a
+follow-up while streaming / submits when idle; `app.message.dequeue`
+Alt+Up restores queued messages to the editor), B.2 loaded resources
+(`app/ui/loaded_resources.clj`; Context/Skills/Prompts/Extensions sections
+between header and chat; rebuilt on `/reload`), B.4 status-indicator swap
+model (`show-status-indicator!`/`clear-status-indicator!` over the
+`status-container`; working/retry-countdown/compaction kinds — Retry and
+Compaction indicators self-animate from elapsed time; `:auto-retry-start`/
+`:auto-retry-end` and new `:compaction-start`/`:compaction-end` events wired
+— the latter emitted by `compact-context!` with `:reason`
+`:manual`/`:threshold`/`:overflow`). B.8 changelog skipped (marked
+optional in the plan).
+
+Also landed along the way: usage tracking end-to-end (`libs/sse.clj`
+`:usage` events for OpenAI include_usage chunks + Anthropic message_start;
+`llm.clj` `:on-usage`; `session.clj` `entry-usage`/`usage-totals`; assistant
+messages carry `:usage` into session entries — the footer accumulates from
+all entries like pi) and a latent-bug fix: `CoreState :session` is now a
+`session-atom` (`/new` and `/resume` were `reset!`-ing a plain record field,
+which threw at runtime).
+
+Divergences: footer context shows `{tokens} tokens` when no
+`:context-window` is configured (kmet has no model context-window data);
+no session name in the footer (kmet has no `/name`); the retry countdown
+is computed from elapsed time on each render (the anim timer drives
+renders) instead of a JS `CountdownTimer`.
+
+**Compaction cancellation** (pi: onEscape → `session.abortCompaction()`):
+escape aborts a compaction in progress — `summarize!` now drives the
+summarization with the run's cancel signal (plus a signal watch that
+resolves the summarization promise immediately, so cancellation doesn't
+wait for the killed stream), `compact-context!` checks the signal before
+and after summarization (leaving the session untouched on cancel) and
+emits `:compaction-end` with `:aborted true`, the `CompactionStatusIndicator`
+shows the "(Esc to cancel)" hint, `handle-cancel` sets the signal while
+`:compacting?` is set, and the manual `/compact` handler runs on a future
+so the input thread stays live during the summarization (with a
+`:compacting?` guard refusing concurrent compactions). An aborted
+compaction reports "Compaction cancelled" / "Auto-compaction cancelled"
+(pi parity, split by `:reason` :manual vs auto).
 
 **Contents:**
 - B.5 editor dynamic height (`max(5, rows*0.3)` per render) + custom editor
@@ -669,7 +717,15 @@ unblocks B.1; B.5 needs Phase 5).
 blank, chat; bottom: pending → status → blank → editor → footer); editor
 grows to 30% of height; footer shows cwd/branch/session/tokens/context%/
 model; queued messages appear with the dequeue hint; compaction/retry show
-dedicated indicators; `app.tools.expand` toggles the header.
+dedicated indicators; `app.tools.expand` toggles the header. Automated
+coverage: `test_footer` (two-line layout, home substitution, provider
+prefix, thinking level, context % + auto indicator, extension statuses,
+truncation, format-tokens/cwd), `test_footer_data_provider` (usage totals,
+context tokens, cache hit rate, model/provider/thinking), `test_pending_messages`,
+`test_loaded_resources`, `test_expandable_text`, `test_session` usage
+helpers, and the `test_loop` compaction/retry event coverage. Manual
+side-by-side with pi remains for the live layout feel (the gate's manual
+pass).
 
 ### Phase 7 — Capstone: extension ctx.ui (B.7 + B.9)
 
@@ -752,6 +808,21 @@ a manual side-by-side pass.
 - [x] Extension `ui.custom` overlay + non-overlay modes resolve
       `done(value)` and restore the editor (✅ `test_extensions_ui` +
       registry integration)
+- [ ] Phase 6 layout: header (welcome/ExpandableText) + loaded resources +
+      chat + pending (queued msgs + bash) + status + widgets + editor +
+      footer side-by-side with pi; `app.tools.expand` expands header +
+      loaded resources + tool output together (✅ components/logic:
+      `test_expandable_text`, `test_loaded_resources`, `test_pending_messages`,
+      `test_footer`; the live pass needs a terminal)
+- [ ] Footer stats reflect real usage: ↑in ↓out R/W CH from streamed usage
+      (✅ `test_footer_data_provider`/`test_session` usage helpers; needs a
+      live LLM call to observe real numbers)
+- [ ] Alt+Enter queues a follow-up while streaming; Alt+Up restores queued
+      messages to the editor (✅ logic in `interactive.clj`; manual pass)
+- [ ] Retry countdown counts down during backoff; compaction shows its own
+      indicator and Escape cancels it (✅ `test_loop` retry/compaction +
+      cancellation events — `test-loop-compaction-cancelled`,
+      `test-loop-compaction-refuses-when-active`; live pass needed)
 
 ## Decision record: unbounded vs windowed chat
 

@@ -95,6 +95,15 @@
    "Fired when retries finish — success, exhausted, or cancelled.
     Payload: :success, :attempt, :final-error (on failure)."
 
+   :compaction-start
+   "Fired before session compaction begins (pi: compaction_start).
+    Payload: :reason (:manual | :threshold | :overflow | :auto)."
+
+   :compaction-end
+   "Fired when compaction finishes (pi: compaction_end).
+    Payload: :reason, :result (true when compaction happened), :aborted
+    (true when the user cancelled mid-compaction — session untouched)."
+
    :agent-settled
    "Fired when the agent run is fully settled — immediately after :agent-end
     on every run exit (success, error, timeout, or cancel). The agent is idle

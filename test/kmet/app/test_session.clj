@@ -221,3 +221,33 @@
         (let [loaded (s/load-session (:file sess))]
           (t/is (= (count branch) (count @(:entries loaded))))))
       (finally (fs/delete-tree dir)))))
+
+;; ─── Usage tracking ────────────────────────────────────────────────────────
+
+(t/deftest test-entry-usage
+  (t/testing "OpenAI usage shape"
+    (t/is (= {:input 100 :output 20 :cache-read 30 :cache-write 0}
+             (s/entry-usage {:prompt_tokens 100 :completion_tokens 20
+                             :prompt_tokens_details {:cached_tokens 30}}))))
+  (t/testing "Anthropic usage shape"
+    (t/is (= {:input 100 :output 20 :cache-read 30 :cache-write 10}
+             (s/entry-usage {:input_tokens 100 :output_tokens 20
+                             :cache_read_input_tokens 30
+                             :cache_creation_input_tokens 10}))))
+  (t/testing "unknown shape returns nil"
+    (t/is (nil? (s/entry-usage {:foo 1})))
+    (t/is (nil? (s/entry-usage nil)))))
+
+(t/deftest test-usage-totals
+  (let [dir (str "target/test-sess-usage-" (System/currentTimeMillis))
+        sess (s/create-session dir)]
+    (try
+      (s/append-entry sess {:role :user :content "hi"})
+      (s/append-entry sess {:role :assistant :content "a"
+                            :usage {:prompt_tokens 10 :completion_tokens 2}})
+      (s/append-entry sess {:role :assistant :content "b"
+                            :usage {:prompt_tokens 20 :completion_tokens 4
+                                    :prompt_tokens_details {:cached_tokens 6}}})
+      (t/is (= {:input 30 :output 6 :cache-read 6 :cache-write 0}
+               (s/usage-totals sess)))
+      (finally (fs/delete-tree dir)))))

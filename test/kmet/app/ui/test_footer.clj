@@ -2,78 +2,126 @@
   (:require [clojure.string :as str]
             [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
-            [kmet.app.ui.footer :as ft]))
+            [kmet.app.ui.footer :as ft]
+            [kmet.app.ui.footer-data-provider :as fdp]))
 
 (defn- strip-ansi [s]
   (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))
 
+(defn- render-plain [c width]
+  (mapv strip-ansi (core/render c width)))
+
+(defn- make-footer-with-session [& {:keys [session cwd context-window provider-count model provider thinking auto-compact]}]
+  (let [p (fdp/make-footer-data-provider
+           :session session
+           :cwd (or cwd "/home/user/project")
+           :provider-count (or provider-count 1)
+           :context-window context-window
+           :model (or model "gpt-4o")
+           :provider (or provider :openai)
+           :thinking thinking)]
+    (ft/make-footer :provider p :auto-compact auto-compact)))
+
 (deftest test-create
   (testing "create footer component"
-    (let [c (ft/make-footer :status "idle" :n-msgs 5)]
-      (is (some? c)))))
+    (is (some? (ft/make-footer)))))
 
-(deftest test-render-shows-kmet
-  (testing "renders kmet in the footer"
-    (let [c (ft/make-footer :status "idle" :n-msgs 3)
-          plain (mapv strip-ansi (core/render c 40))]
-      (is (some #(re-find #"kmet" %) plain)
-          "FooterComponent should show app name")
-      (is (some #(re-find #"msgs:3" %) plain)
-          "FooterComponent should show message count"))))
+(deftest test-cwd-line
+  (testing "first line shows the cwd"
+    (let [c (make-footer-with-session :cwd "/some/project")
+          plain (render-plain c 50)]
+      (is (some #(re-find #"/some/project" %) plain)
+          "footer should show the cwd")
+      (is (= 2 (count plain))
+          "two content lines, no separator"))))
 
-(deftest test-render-status
-  (testing "renders status text"
-    (let [c (ft/make-footer :status "● thinking" :n-msgs 2)
-          plain (mapv strip-ansi (core/render c 40))]
-      (is (some #(re-find #"thinking" %) plain)))))
+(deftest test-home-substitution
+  (testing "cwd inside home renders as ~"
+    (let [home (System/getProperty "user.home")
+          c (make-footer-with-session :cwd (str home "/project"))
+          plain (render-plain c 50)]
+      (is (some #(re-find #"^~/project" %) plain)
+          "cwd under HOME renders home-substituted"))))
 
-(deftest test-set-status
-  (testing "set-status! updates status"
-    (let [c (ft/make-footer :status "idle" :n-msgs 0)]
-      (ft/footer-set-status! c "● working")
-      (let [plain (mapv strip-ansi (core/render c 40))]
-        (is (some #(re-find #"working" %) plain))
-        (is (not-any? #(re-find #"idle" %) plain))))))
+(deftest test-git-branch
+  (testing "git branch renders after the cwd when resolved"
+    ;; In a non-git test environment the branch resolves to nil — the footer
+    ;; must still render. The branch suffix is covered by the provider test.
+    (let [c (make-footer-with-session)
+          plain (render-plain c 50)]
+      (is (= 2 (count plain))))))
 
-(deftest test-set-n-msgs
-  (testing "set-n-msgs! updates message count"
-    (let [c (ft/make-footer :status "" :n-msgs 0)]
-      (ft/footer-set-n-msgs! c 42)
-      (let [plain (mapv strip-ansi (core/render c 40))]
-        (is (some #(re-find #"msgs:42" %) plain))))))
+(deftest test-model-right-aligned
+  (testing "model renders on the right side of the stats line"
+    (let [c (make-footer-with-session :model "gpt-4o" :provider-count 1)
+          plain (render-plain c 60)]
+      (is (some #(re-find #"gpt-4o" %) plain)))))
 
-(deftest test-empty-status
-  (testing "empty status renders without extra space"
-    (let [c (ft/make-footer :status "" :n-msgs 0)
-          plain (mapv strip-ansi (core/render c 40))]
-      (is (some #(re-find #"kmet" %) plain)))))
+(deftest test-provider-prefix-when-multiple
+  (testing "(provider) prefix only when more than one provider is configured"
+    (let [c (make-footer-with-session :model "gpt-4o" :provider :openai :provider-count 1)
+          plain (render-plain c 60)]
+      (is (not-any? #(re-find #"\(openai\)" %) plain)))
+    (let [c (make-footer-with-session :model "gpt-4o" :provider :openai :provider-count 3)
+          plain (render-plain c 60)]
+      (is (some #(re-find #"\(openai\) gpt-4o" %) plain)))))
+
+(deftest test-thinking-level
+  (testing "thinking level renders after the model when not off"
+    (let [c (make-footer-with-session :model "claude" :thinking :high)
+          plain (render-plain c 60)]
+      (is (some #(re-find #"claude • thinking high" %) plain)))
+    (let [c (make-footer-with-session :model "claude" :thinking :off)
+          plain (render-plain c 60)]
+      (is (not-any? #(re-find #"thinking" %) plain)))))
+
+(deftest test-context-percent
+  (testing "context percent renders with the window and auto indicator"
+    (let [c (make-footer-with-session :context-window 200000 :auto-compact true)
+          plain (render-plain c 60)]
+      (is (some #(re-find #"200k" %) plain))
+      (is (some #(re-find #"\(auto\)" %) plain)))))
 
 (deftest test-extension-statuses
-  (testing "keyed extension statuses render dim in the footer line"
-    (let [c (ft/make-footer :status "idle" :n-msgs 0)]
-      (ft/footer-set-extension-status! c "ext-a" "● active")
+  (testing "keyed extension statuses render dim on a third line, sorted by key"
+    (let [c (make-footer-with-session)]
       (ft/footer-set-extension-status! c "ext-b" "✓ ready")
-      (let [plain (mapv strip-ansi (core/render c 60))]
+      (ft/footer-set-extension-status! c "ext-a" "● active")
+      (let [plain (render-plain c 60)]
+        (is (= 3 (count plain)))
         (is (some #(re-find #"● active" %) plain))
         (is (some #(re-find #"✓ ready" %) plain))))
     (testing "nil text clears the key"
-      (let [c (ft/make-footer :status "" :n-msgs 0)]
+      (let [c (make-footer-with-session)]
         (ft/footer-set-extension-status! c "ext-a" "● active")
         (ft/footer-set-extension-status! c "ext-a" nil)
-        (let [plain (mapv strip-ansi (core/render c 60))]
+        (let [plain (render-plain c 60)]
+          (is (= 2 (count plain)))
           (is (not-any? #(re-find #"● active" %) plain)))))))
-(deftest test-separator-line
-  (testing "first line is a separator"
-    (let [c (ft/make-footer :status "" :n-msgs 0)
-          lines (core/render c 40)]
-      (is (>= (count lines) 2) "FooterComponent should have at least 2 lines")
-      (let [plain (mapv strip-ansi lines)]
-          ;; First line should be dashes
-        (is (re-find #"^─+" (first plain)))))))
 
 (deftest test-wide-footer
   (testing "footer handles wide terminal"
-    (let [c (ft/make-footer :status "idle" :n-msgs 100)
+    (let [c (make-footer-with-session :model "gpt-4o" :provider :openai :provider-count 3)
           lines (core/render c 120)]
-        ;; Should not crash on wide terminal
       (is (pos? (count lines))))))
+
+(deftest test-narrow-footer
+  (testing "footer truncates instead of overflowing on narrow terminals"
+    (let [c (make-footer-with-session :model "some-very-long-model-name-here" :provider-count 3)
+          plain (render-plain c 20)]
+      (is (every? #(<= (count %) 20) plain)
+          "every rendered line fits the width"))))
+
+(deftest test-format-tokens
+  (testing "pi formatTokens scaling"
+    (is (= "999" (ft/format-tokens 999)))
+    (is (= "1.2k" (ft/format-tokens 1234)))
+    (is (= "12k" (ft/format-tokens 12345)))
+    (is (= "1.2M" (ft/format-tokens 1234567)))
+    (is (= "12M" (ft/format-tokens 12345678)))))
+
+(deftest test-format-cwd
+  (testing "pi formatCwdForFooter home substitution"
+    (is (= "~" (ft/format-cwd-for-footer "/home/user" "/home/user")))
+    (is (= "~/project" (ft/format-cwd-for-footer "/home/user/project" "/home/user")))
+    (is (= "/opt/other" (ft/format-cwd-for-footer "/opt/other" "/home/user")))))

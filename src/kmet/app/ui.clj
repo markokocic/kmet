@@ -7,6 +7,9 @@
             [kmet.app.ui.tool-execution :as tool-execution]
             [kmet.app.ui.custom-message :as custom-message]
             [kmet.app.ui.footer :as footer]
+            [kmet.app.ui.footer-data-provider :as footer-data-provider]
+            [kmet.app.ui.pending-messages :as pending-messages]
+            [kmet.app.ui.loaded-resources :as loaded-resources]
             [kmet.app.ui.chat-history :as chat-history]
             [kmet.app.ui.status-indicator :as status-indicator]
             [kmet.app.ui.bash-execution :as bash-execution]))
@@ -61,10 +64,25 @@
 
 ;; Footer
 (def make-footer footer/make-footer)
-(def footer-set-status! footer/footer-set-status!)
-(def footer-set-n-msgs! footer/footer-set-n-msgs!)
 (def footer-set-extension-status! footer/footer-set-extension-status!)
 (def footer-set-theme! footer/footer-set-theme!)
+(def footer-set-provider! footer/footer-set-provider!)
+(def footer-set-auto-compact! footer/footer-set-auto-compact!)
+
+;; FooterDataProvider
+(def make-footer-data-provider footer-data-provider/make-footer-data-provider)
+(def fdp-set-session! footer-data-provider/fdp-set-session!)
+
+;; PendingMessages
+(def make-pending-messages pending-messages/make-pending-messages)
+(def pending-messages-set-queues! pending-messages/pending-messages-set-queues!)
+(def pending-messages-set-hint! pending-messages/pending-messages-set-hint!)
+
+;; LoadedResources
+(def make-loaded-resources loaded-resources/make-loaded-resources)
+(def loaded-resources-set-sections! loaded-resources/loaded-resources-set-sections!)
+(def loaded-resources-set-expanded! loaded-resources/loaded-resources-set-expanded!)
+(def loaded-resources-set-theme! loaded-resources/loaded-resources-set-theme!)
 
 ;; StatusIndicator
 (def make-status-indicator status-indicator/make-status-indicator)
@@ -72,6 +90,8 @@
 (def status-indicator-stop! status-indicator/status-indicator-stop!)
 (def status-indicator-set-text! status-indicator/status-indicator-set-text!)
 (def status-indicator-set-theme! status-indicator/status-indicator-set-theme!)
+(def make-retry-status-indicator status-indicator/make-retry-status-indicator)
+(def make-compaction-status-indicator status-indicator/make-compaction-status-indicator)
 
 ;; ChatHistoryComponent
 (def make-chat-history chat-history/make-chat-history)

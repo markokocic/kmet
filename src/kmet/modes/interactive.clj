@@ -10,8 +10,10 @@
             [kmet.tui.components.text :as text]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.editor :as editor]
+            [kmet.tui.components.expandable-text :as expandable-text]
             [kmet.tui.components.container :as container]
             [kmet.app.ui :as ui]
+            [kmet.app.ui.footer-data-provider :as fdp]
             [kmet.app.theme-controller :as theme-ctrl]
             [kmet.tui.components.select-list :as select-list]
             [kmet.app.loop :as agent]
@@ -39,7 +41,8 @@
             [kmet.libs.process :as process]))
 
 (declare resume-session show-session-tree build-extension-ui-registry
-         editor-text-get editor-text-set! editor-text-get-expanded)
+         editor-text-get editor-text-set! editor-text-get-expanded
+         build-loaded-resource-sections)
 
 ;; ─── Global config ref ────────────────────────────────────────────────────
 
@@ -72,11 +75,15 @@
                       chat-history
                       editor
                       current-editor-atom
-                      header-text
+                      header-comp
+                      loaded-resources-comp
                       anim-timer
                       footer-comp
+                      footer-provider
                       status-indicator
-                      session
+                      status-container
+                      pending-messages-comp
+                      session-atom
                       running-turn?
                       config
                       pending-tool-comp
@@ -91,33 +98,72 @@
 (defn- fmt-model [provider model]
   (str (name provider) ":" model))
 
-(defn- fmt-status-str [cs]
-  (let [bash-running @(:bash-running? cs)
-        status (name (agent/get-status (:agent-state cs)))]
-    (if bash-running
-      (th/fg th/dark-theme :bash-mode "$ bash")
-      (case status
-        "idle" (th/dim "idle")
-        "thinking" (th/fg th/dark-theme :warning "● thinking")
-        "executing" (th/fg th/dark-theme :warning "● executing")
-        "error" (th/fg th/dark-theme :error "● error")
-        (th/dim status)))))
+(defn- fmt-key-hint
+  "Pi: keyHint — dim key + muted description, from the live keybindings."
+  [id desc]
+  (app-kb/key-hint id desc))
 
-(defn- fmt-header [cs]
-  (let [provider @(:provider (:agent-state cs))
-        model @(:model (:agent-state cs))
-        sess-id (some-> (:session cs) :id (subs 0 8) (str "..."))
-        cwd (System/getProperty "user.dir")
-        short-cwd (if (> (count cwd) 30) (str "..." (subs cwd (- (count cwd) 27))) cwd)]
-    (str (th/bold (th/fg th/dark-theme :accent " kmet")) " "
-         (th/dim (fmt-model provider model))
-         " │ " (th/dim "session:") " " (or sess-id "none")
-         " │ " (fmt-status-str cs)
-         " │ " (th/dim short-cwd))))
+(defn- fmt-raw-hint
+  "Pi: rawKeyHint — dim literal key text + muted description."
+  [key desc]
+  (str (th/dim key) (th/fg (th/get-current-theme) :muted (str " " desc))))
 
-(defn- update-header-footer! [cs]
-  (text/text-set! (:header-text cs) (fmt-header cs))
-  (ui/footer-set-status! (:footer-comp cs) (fmt-status-str cs))
+(defn- fmt-header-logo
+  "Pi: logo — bold accent app name."
+  []
+  (th/bold (th/fg (th/get-current-theme) :accent "kmet")))
+
+(defn- fmt-header-compact
+  "Compact welcome header (pi: compactInstructions + compactOnboarding)."
+  []
+  (let [expand-key (or (app-kb/key-text "app.tools.expand") "Ctrl+O")
+        compact-instructions
+        (str/join (th/dim " · ")
+                  [(fmt-key-hint "app.interrupt" "interrupt")
+                   (fmt-raw-hint (str (or (app-kb/key-text "app.clear") "Ctrl+C")
+                                      "/" (or (app-kb/key-text "app.exit") "Ctrl+D"))
+                                 "clear/exit")
+                   (fmt-raw-hint "/" "commands")
+                   (fmt-raw-hint "!" "bash")
+                   (fmt-key-hint "app.tools.expand" "more")])
+        compact-onboarding (th/dim (str "Press " expand-key " to show full startup help and loaded resources."))]
+    (str (fmt-header-logo) "\n" compact-instructions "\n" compact-onboarding)))
+
+(defn- fmt-header-full
+  "Full welcome header (pi: expandedInstructions)."
+  []
+  (let [clear-key (or (app-kb/key-text "app.clear") "Ctrl+C")
+        expanded-instructions
+        (str/join "\n"
+                  [(fmt-key-hint "app.interrupt" "to interrupt")
+                   (fmt-key-hint "app.clear" "to clear")
+                   (fmt-raw-hint (str clear-key " twice") "to exit")
+                   (fmt-key-hint "app.exit" "to exit (empty)")
+                   (fmt-key-hint "app.thinking.cycle" "to cycle thinking level")
+                   (fmt-key-hint "app.model.cycleForward" "to cycle models")
+                   (fmt-key-hint "app.model.select" "to select model")
+                   (fmt-key-hint "app.tools.expand" "to expand tools")
+                   (fmt-key-hint "app.thinking.toggle" "to expand thinking")
+                   (fmt-key-hint "app.editor.external" "for external editor")
+                   (fmt-raw-hint "/" "for commands")
+                   (fmt-raw-hint "!" "to run bash")
+                   (fmt-raw-hint "!!" "to run bash (no context)")
+                   (fmt-key-hint "app.message.followUp" "to queue follow-up")
+                   (fmt-key-hint "app.message.dequeue" "to edit all queued messages")])
+        onboarding (th/dim "kmet can explain its own features. Ask it how to use or extend kmet.")]
+    (str (fmt-header-logo) "\n" expanded-instructions "\n\n" onboarding)))
+
+(defn- update-footer!
+  "Sync the footer's data source (session) and request a re-render. The
+   header is static (ExpandableText welcome — rebuilt on theme change by the
+   theme callback); the footer reads the agent's model/provider/thinking
+   atoms live, so only session changes need wiring here."
+  [cs]
+  (ui/fdp-set-session! (:footer-provider cs) @(:session-atom cs))
+  ;; Provider atoms are read inside helper fns — not lexically tracked by
+  ;; track! — so invalidate explicitly on every sync.
+  (protocols/invalidate (:footer-comp cs))
+  (tui/tui-request-render (:tui cs))
   nil)
 
 ;; ─── Command handling ──────────────────────────────────────────────────────
@@ -220,7 +266,7 @@
                (let [new-session (session/create-session (ensure-session-dir))]
                  (debug/log "new session created: " (:id new-session))
                  (ui/chat-history-clear! (:chat-history cs))
-                 (reset! (:session cs) new-session)
+                 (reset! (:session-atom cs) new-session)
                  (let [old-ag (:agent-state cs)
                        new-ag (assoc old-ag :session new-session)]
                    (reset! (:agent-state cs) new-ag))
@@ -248,17 +294,31 @@
     :handler (fn [cs args]
                (let [{:keys [agent-state chat-history]} cs
                      instructions (when (seq args) args)]
-                 (if-not (= :idle (agent/get-status agent-state))
+                 (cond
+                   (not= :idle (agent/get-status agent-state))
                    (ui/chat-history-add-message! chat-history
                                                  {:role :info :label "Compact"
                                                   :content "Wait for the current response to finish before compacting."})
-                   (if (agent/compact-context! agent-state instructions)
-                     (ui/chat-history-add-message! chat-history
-                                                   {:role :info :label "Compact"
-                                                    :content "Session compacted."})
-                     (ui/chat-history-add-message! chat-history
-                                                   {:role :info :label "Compact"
-                                                    :content "Nothing to compact (session too small)."})))))})
+
+                   @(:compacting? agent-state)
+                   (ui/chat-history-add-message! chat-history
+                                                 {:role :info :label "Compact"
+                                                  :content "Compaction already in progress."})
+
+                   :else
+                   ;; Runs on a future so the input thread stays live and
+                   ;; escape can cancel the compaction (pi: session.compact
+                   ;; is async). The :compaction-end event reports an
+                   ;; aborted compaction; only the result replies go here.
+                   (future
+                     (let [result (agent/compact-context! agent-state instructions)]
+                       (when-not (= :aborted result)
+                         (ui/chat-history-add-message!
+                          chat-history
+                          {:role :info :label "Compact"
+                           :content (if result
+                                      "Session compacted."
+                                      "Nothing to compact (session too small).")})))))))})
   (commands/register-command!
    {:name "theme"
     :description "Switch theme"
@@ -328,7 +388,9 @@
           (reset! global-config config)
           (theme-ctrl/set-config! (:theme-controller cs) config)
           (agent/set-system-prompt! agent-state system-prompt)
-          (update-header-footer! cs)
+          (ui/loaded-resources-set-sections!
+           (:loaded-resources-comp cs) (build-loaded-resource-sections))
+          (update-footer! cs)
           ;; pi: reload re-emits session_start so extensions re-register UI.
           ;; Runs on a future — handlers may block on dialog promises, which
           ;; must never happen on the input thread.
@@ -398,7 +460,7 @@
                                    fname (str/replace (:value sel) #".*/" "")
                                    short-id (subs fname 0 (min 8 (count fname)))]
                                (ui/chat-history-clear! (:chat-history cs))
-                               (reset! (:session cs) sess)
+                               (reset! (:session-atom cs) sess)
                                (let [new-ag (assoc (:agent-state cs) :session sess)]
                                  (reset! (:agent-state cs) new-ag))
                                (doseq [e entries]
@@ -423,7 +485,7 @@
                                                              {:role :assistant
                                                               :content (str "Resumed session " short-id ".")})
                                (tui/tui-hide-overlay (:tui cs))
-                               (update-header-footer! cs)
+                               (update-footer! cs)
                                (tui/tui-request-render (:tui cs)))))
             sl (select-list/make-select-list items
                                              :height (min (count items) 15)
@@ -441,7 +503,7 @@
 (defn- show-session-tree
   "Browse the current session's entry tree via SelectList overlay."
   [cs]
-  (let [sess (:session cs)]
+  (let [sess @(:session-atom cs)]
     (if (nil? sess)
       (ui/chat-history-add-message! (:chat-history cs)
                                     {:role :assistant :content "No active session."})
@@ -475,7 +537,7 @@
                                                                         (when (= role :tool)
                                                                           {:name (or (:name entry) "tool")})))
                                    (tui/tui-hide-overlay (:tui cs))
-                                   (update-header-footer! cs)
+                                   (update-footer! cs)
                                    (tui/tui-request-render (:tui cs)))))
                 sl (select-list/make-select-list items
                                                  :height (min (count items) 20)
@@ -516,6 +578,61 @@
     (future-cancel t)
     (reset! (:anim-timer cs) nil)))
 
+;; ─── Status indicator swap model (pi: showStatusIndicator/clearStatusIndicator) ──
+;; The status container holds one indicator at a time. The default child is
+;; the working StatusIndicator (renders the idle two rows when inactive);
+;; retry/compaction indicators are transient swaps. All indicators render
+;; the same two-row shape so the editor and footer never jump.
+
+(defn- show-status-indicator!
+  "Replace the status container child with the given indicator (pi:
+   showStatusIndicator — disposes the active indicator)."
+  [cs indicator]
+  (ui/status-indicator-stop! (:status-indicator cs))
+  (container/container-clear (:status-container cs))
+  (container/container-add-child (:status-container cs) indicator)
+  (tui/tui-request-render (:tui cs)))
+
+(defn- clear-status-indicator!
+  "Restore the idle two-row status (pi: clearStatusIndicator → idleStatus)."
+  [cs]
+  (container/container-clear (:status-container cs))
+  (container/container-add-child (:status-container cs) (:status-indicator cs))
+  (ui/status-indicator-stop! (:status-indicator cs))
+  (tui/tui-request-render (:tui cs)))
+
+;; ─── Pending messages display (pi: updatePendingMessagesDisplay) ──────────
+
+(defn- fmt-key-display
+  "Pi: formatKeyText capitalize — 'alt+up' → 'Alt+Up'."
+  [k]
+  (->> (str/split (or k "") #"\+")
+       (map (fn [part]
+              (if (seq part)
+                (str (str/upper-case (subs part 0 1)) (subs part 1))
+                part)))
+       (str/join "+")))
+
+(defn- update-pending-messages!
+  "Refresh the queued steering/follow-up display (pi:
+   updatePendingMessagesDisplay)."
+  [cs]
+  (let [{:keys [steering follow-up]} (agent/queued-messages (:agent-state cs))]
+    (ui/pending-messages-set-queues! (:pending-messages-comp cs)
+                                     steering follow-up))
+  (tui/tui-request-render (:tui cs)))
+
+(defn- compaction-status-message
+  "Pi: CompactionStatusIndicator label — reason-specific, with the cancel
+   hint (escape aborts compaction)."
+  [reason]
+  (let [cancel (str " (" (fmt-key-display (app-kb/key-text "app.interrupt"))
+                    " to cancel)")]
+    (case reason
+      :manual (str "Compacting context..." cancel)
+      :overflow (str "Context overflow detected, auto-compacting..." cancel)
+      (str "Auto-compacting..." cancel))))
+
 ;; ─── Agent response handler ────────────────────────────────────────────────
 
 (defn- on-agent-text
@@ -545,11 +662,11 @@
   [cs]
   (try
     (stop-anim-timer! cs)
-    (ui/status-indicator-stop! (:status-indicator cs))
+    (clear-status-indicator! cs)
     (ui/chat-history-finalize-streaming! (:chat-history cs))
     (ui/chat-history-finalize-thinking! (:chat-history cs))
     (reset! (:running-turn? cs) false)
-    (update-header-footer! cs)
+    (update-footer! cs)
     (tui/tui-request-render (:tui cs))
     (debug/log "agent turn completed")
     (catch Exception e
@@ -561,7 +678,7 @@
   [cs error-msg]
   (try
     (stop-anim-timer! cs)
-    (ui/status-indicator-stop! (:status-indicator cs))
+    (clear-status-indicator! cs)
     ;; If streaming placeholder is still empty, remove it
     ;; so we don't get a blank assistant entry before the error message.
     (let [ch (:chat-history cs)
@@ -576,7 +693,7 @@
     (ui/chat-history-add-message! (:chat-history cs)
                                   {:role :assistant :content (th/fg th/dark-theme :error (str "Error: " error-msg))})
     (reset! (:running-turn? cs) false)
-    (update-header-footer! cs)
+    (update-footer! cs)
     (tui/tui-request-render (:tui cs))
     (debug/log "agent turn error: " error-msg)
     (catch Exception e
@@ -614,7 +731,7 @@
             (let [tl @(:thinking ag)]
               (cond-> {"KMET_PROVIDER" (name @(:provider ag))
                        "KMET_MODEL" @(:model ag)}
-                (:session cs) (assoc "KMET_SESSION_ID" (:id (:session cs)))
+                (:session-atom cs) (assoc "KMET_SESSION_ID" (:id @(:session-atom cs)))
                 (and tl (not= tl :off)) (assoc "KMET_REASONING_LEVEL" (name tl))))
 
             ;; ── Emit user-bash event for extensions (pi: emitUserBash) ──
@@ -640,7 +757,7 @@
                                         {:role :bash :command command
                                          :component bash-comp}))
 
-        (update-header-footer! cs)
+        (update-footer! cs)
         (tui/tui-request-render (:tui cs))
 
         ;; Execute in background
@@ -665,7 +782,7 @@
                                                :full-output-path full-output-path)
 
               ;; Record in session
-              (when-let [sess (:session cs)]
+              (when-let [sess @(:session-atom cs)]
                 (session/record-bash-result! sess command result exclude-from-context?))
 
               ;; Move pending bash from pending container to chat (pi: pendingMessagesContainer)
@@ -679,7 +796,7 @@
                     (reset! pending []))))
 
               (reset! (:bash-running? cs) false)
-              (update-header-footer! cs)
+              (update-footer! cs)
               (tui/tui-request-render (:tui cs)))
 
             (catch Exception e
@@ -688,7 +805,7 @@
                 (be/bash-execution-set-complete! bash-comp nil false)
                 (ui/show-error! (:chat-history cs) err-msg)
                 (reset! (:bash-running? cs) false)
-                (update-header-footer! cs)
+                (update-footer! cs)
                 (tui/tui-request-render (:tui cs))))))))))
 
 ;; ─── Message submission (pi: session.prompt input event + agent run) ──────
@@ -709,7 +826,7 @@
       (ui/chat-history-add-message! (:chat-history cs)
                                     {:role :user :content text})
       (agent/steer! (:agent-state cs) text)
-      (update-header-footer! cs)
+      (update-footer! cs)
       (tui/tui-request-render (:tui cs)))
     (do
       (reset! (:running-turn? cs) true)
@@ -720,7 +837,7 @@
                                     {:role :user :content text})
       ;; Create streaming placeholder for incoming LLM response.
       (ui/chat-history-start-streaming! (:chat-history cs))
-      (update-header-footer! cs)
+      (update-footer! cs)
       (tui/tui-request-render (:tui cs))
       (agent/run-agent-turn (:agent-state cs)
                             {:message text
@@ -760,7 +877,7 @@
               args (if (nil? space) "" (str/trim (subs trimmed (inc space))))]
           (if-let [c (commands/find-command cmd)]
             (do ((:handler c) cs args)
-                (update-header-footer! cs))
+                (update-footer! cs))
             ;; pi: input hooks → skill command → prompt template → fall
             ;; through to the agent (unknown /cmd is sent as a message)
             (when-let [text (apply-hooks cs trimmed)]
@@ -791,19 +908,65 @@
         :else
         (submit-message cs trimmed)))))
 
-(defn- handle-cancel
-  "Cancel the current agent turn or bash command."
+(defn- handle-follow-up
+  "Pi: handleFollowUp — Alt+Enter. While the agent is running, queue the
+   editor text as a follow-up (processed after the run settles); when idle,
+   submit like regular Enter."
   [cs]
+  (let [ed @(:current-editor-atom cs)
+        text (str/trim (editor-text-get ed))]
+    (when (seq text)
+      (editor/editor-push-history! ed text)
+      (editor-text-set! ed "")
+      (if @(:running-turn? cs)
+        (do (agent/follow-up! (:agent-state cs) text)
+            (ui/chat-history-add-message! (:chat-history cs)
+                                          {:role :user :content text})
+            (update-pending-messages! cs))
+        (handle-submit cs text))
+      (tui/tui-request-render (:tui cs)))))
+
+(defn- handle-dequeue
+  "Pi: handleDequeue — Alt+Up. Restore all queued steering/follow-up
+   messages to the editor, combined with the current text."
+  [cs]
+  (let [{:keys [steering follow-up]} (agent/queued-messages (:agent-state cs))
+        all (into (vec steering) follow-up)]
+    (if (seq all)
+      (let [ed @(:current-editor-atom cs)
+            current (editor-text-get ed)
+            queued-text (str/join "\n\n" all)
+            combined (str/join "\n\n" (remove str/blank? [queued-text current]))]
+        (agent/clear-queues! (:agent-state cs))
+        (editor-text-set! ed combined)
+        (ui/chat-history-show-status!
+         (:chat-history cs)
+         (str "Restored " (count all) " queued message"
+              (when (> (count all) 1) "s") " to editor")))
+      (ui/chat-history-show-status! (:chat-history cs)
+                                    "No queued messages to restore"))
+    (tui/tui-request-render (:tui cs))))
+
+(defn- handle-cancel
+  "Cancel the current agent turn, bash command, or in-progress compaction."
+  [cs]
+  (when @(:compacting? (:agent-state cs))
+    ;; Escape during compaction aborts the summarization (pi: onEscape →
+    ;; abortCompaction). The compaction-end event clears the indicator and
+    ;; reports the cancellation.
+    (debug/log "compaction cancelled by user")
+    (reset! (:signal (:agent-state cs)) true)
+    (tui/tui-request-render (:tui cs)))
   (when @(:bash-running? cs)
     (debug/log "bash command cancelled by user")
     (reset! (:bash-signal cs) true)
     (reset! (:bash-running? cs) false)
-    (update-header-footer! cs)
+    (update-footer! cs)
     (tui/tui-request-render (:tui cs)))
   (when @(:running-turn? cs)
     (debug/log "agent turn cancelled by user")
     (stop-anim-timer! cs)
-    (ui/status-indicator-stop! (:status-indicator cs))
+    (clear-status-indicator! cs)
     (agent/cancel-turn (:agent-state cs))
     ;; Remove empty streaming placeholder if present
     (let [ch (:chat-history cs)]
@@ -815,7 +978,7 @@
     (ui/chat-history-add-message! (:chat-history cs)
                                   {:role :assistant :content (th/dim "(cancelled)")})
     (reset! (:running-turn? cs) false)
-    (update-header-footer! cs)
+    (update-footer! cs)
     (tui/tui-request-render (:tui cs))))
 
 ;; ─── External editor (pi: handleOpenExternalEditor) ────────────────────────
@@ -872,6 +1035,50 @@
         (tui/tui-resume! (:tui cs))))
     nil))
 
+;; ─── Loaded resources (pi: showLoadedResources) ────────────────────────────
+
+(defn- display-path
+  "Home-relative display path for a loaded resource (pi: formatDisplayPath)."
+  [p]
+  (let [p (str p)
+        home (System/getProperty "user.home")]
+    (if (and (seq home) (str/starts-with? p home))
+      (str "~" (subs p (count home)))
+      p)))
+
+(defn- build-loaded-resource-sections
+  "Pi: showLoadedResources — one section per loaded resource group (Context,
+   Skills, Prompts, Extensions). Sections carry raw items; styling happens
+   in the LoadedResources component render."
+  []
+  (let [context-files (context/load-project-context-files
+                       (cfg/get-agent-dir) (str (fs/cwd)))
+        skills (skills/get-skills)
+        templates (prompts/get-prompt-templates)
+        extensions (extensions/get-loaded-extensions)
+        sections (cond-> []
+                   (seq context-files)
+                   (conj {:name "Context"
+                          :items (mapv (comp display-path :path) context-files)
+                          :expanded-items (mapv #(str "  " (display-path (:path %))) context-files)})
+                   (seq skills)
+                   (conj {:name "Skills"
+                          :items (mapv :name skills)
+                          :expanded-items (mapv (fn [s]
+                                                  (str "  " (or (:file-path s) (:name s))))
+                                                skills)})
+                   (seq templates)
+                   (conj {:name "Prompts"
+                          :items (mapv #(str "/" (:name %)) templates)
+                          :expanded-items (mapv (fn [t] (str "  /" (:name t))) templates)})
+                   (seq extensions)
+                   (conj {:name "Extensions"
+                          :items (mapv :name extensions)
+                          :expanded-items (mapv (fn [e]
+                                                  (str "  " (display-path (:file e))))
+                                                extensions)}))]
+    sections))
+
 ;; ─── Layout setup ──────────────────────────────────────────────────────────
 
 (defn- build-layout
@@ -904,7 +1111,6 @@
              #(th/fg (cfg/get-theme config) :muted %)))
 
         ;; Components (define before agent state so on-event can reference them)
-        hdr (text/make-text "" 1 0)
         sp1 (spacer/make-spacer 1)
         ch (ui/make-chat-history :theme (cfg/get-theme config))
         pending-tool-comp (atom nil)  ;; Pi: component ref for in-place updates
@@ -964,17 +1170,61 @@
                               (reset! pending-tool-comp nil)
                               (tui/tui-request-render t)))
                           :status
-                           ;; Pi: agent status (thinking/executing/idle/error) drives the
-                           ;; header/footer status text — kept in sync via the :status event
-                           ;; so the yellow "● thinking" / "● executing" indicator appears
-                           ;; while the agent is working.
+                           ;; Pi: agent status changes keep the footer/status
+                           ;; layer in sync via the :status event
                           (do (when-let [cs @cs-ref]
-                                (update-header-footer! cs))
+                                (update-footer! cs))
+                              (tui/tui-request-render t))
+                          :queue-update
+                           ;; Queued steering/follow-up messages changed (pi:
+                           ;; queue_update → updatePendingMessagesDisplay)
+                          (do (when-let [cs @cs-ref]
+                                (update-pending-messages! cs))
                               (tui/tui-request-render t))
                           :auto-retry-start
-                           ;; Clear partial streaming text so the retried stream starts fresh
-                          (ui/chat-history-clear-streaming! ch)
-                          (tui/tui-request-render t)
+                           ;; Clear partial streaming text so the retried stream
+                           ;; starts fresh, and show the retry countdown (pi:
+                           ;; auto_retry_start → RetryStatusIndicator)
+                          (do (ui/chat-history-clear-streaming! ch)
+                              (when-let [cs @cs-ref]
+                                (show-status-indicator!
+                                 cs
+                                 (ui/make-retry-status-indicator
+                                  (:attempt evt) (:max-attempts evt) (:delay-ms evt)
+                                  :cancel-hint (fmt-key-display
+                                                (app-kb/key-text "app.interrupt")))))
+                              (tui/tui-request-render t))
+                          :auto-retry-end
+                           ;; Retry finished — restore the idle status (pi:
+                           ;; auto_retry_end → clearStatusIndicator("retry"))
+                          (do (when-let [cs @cs-ref]
+                                (clear-status-indicator! cs))
+                              (tui/tui-request-render t))
+                          :compaction-start
+                           ;; Session compaction in progress (pi:
+                           ;; compaction_start → CompactionStatusIndicator);
+                           ;; the hint is truthful — escape aborts it
+                          (do (when-let [cs @cs-ref]
+                                (show-status-indicator!
+                                 cs (ui/make-compaction-status-indicator
+                                     :message (compaction-status-message
+                                               (:reason evt)))))
+                              (tui/tui-request-render t))
+                          :compaction-end
+                           ;; Compaction done — restore the idle status (pi:
+                           ;; compaction_end → clearStatusIndicator). For the
+                           ;; manual path the /compact future skips its reply
+                           ;; on abort, so the status is the only feedback;
+                           ;; an in-loop abort is already reported by the
+                           ;; full turn cancel ("(cancelled)") — no double
+                           ;; report.
+                          (do (when-let [cs @cs-ref]
+                                (clear-status-indicator! cs)
+                                (when (and (:aborted evt)
+                                           (= :manual (:reason evt)))
+                                  (ui/chat-history-show-status!
+                                   ch "Compaction cancelled")))
+                              (tui/tui-request-render t))
                           :context-replaced
                            ;; Rebuild the chat history to mirror the replaced context
                           (ui/chat-history-rebuild! ch (:messages evt))
@@ -1001,32 +1251,60 @@
             ;; Scoped model list for cycle-model! (pi: _scopedModels)
             (agent/set-models! ag (:models config)))
         sp2 (spacer/make-spacer 1)
-        ed (tui/make-editor :height 8 :padding-x 0
+        ;; B.1: welcome header — ExpandableText with compact/full variants
+        ;; (pi: builtInHeader), toggled by app.tools.expand
+        hdr (expandable-text/make-expandable-text
+             fmt-header-compact fmt-header-full
+             :expanded? false :padding-x 1 :padding-y 0)
+        ;; B.2: loaded resources between header and chat (pi: showLoadedResources)
+        lr (ui/make-loaded-resources :theme (cfg/get-theme config))
+        ;; B.3: queued steering/follow-up display (pi: updatePendingMessagesDisplay)
+        pm (ui/make-pending-messages
+            :hint (fmt-key-display (app-kb/key-text "app.message.dequeue")))
+        ;; B.5: editor dynamic height — max(5, rows*0.3) via :terminal-rows;
+        ;; the fixed :height fallback stays at the default 12
+        ed (tui/make-editor :padding-x 0
                             :terminal-rows (fn [] (term/rows @(:terminal t)))
                             :border-fn (fn [c] (th/dim c)))
-        ftr (ui/make-footer :status "" :n-msgs 0 :theme (cfg/get-theme config))
+        ;; B.6: footer data provider + two-line footer (pi: FooterComponent)
+        fdp (ui/make-footer-data-provider
+             :session session
+             :provider-count (count (keys (:providers config)))
+             :context-window (:context-window config)
+             :model @(:model ag) :provider @(:provider ag) :thinking @(:thinking ag))
+        ftr (ui/make-footer :theme (cfg/get-theme config)
+                            :provider fdp
+                            :auto-compact (boolean (or (:compact-threshold config)
+                                                       (:compact-token-threshold config))))
 
-        ;; Core state (status-indicator filled in after layout)
+        ;; Core state (status-indicator/status-container filled in after layout)
         cs (map->CoreState {:tui t
                             :agent-state ag
                             :chat-history ch
                             :editor ed
                             :current-editor-atom (atom ed)
-                            :header-text hdr
+                            :header-comp hdr
+                            :loaded-resources-comp lr
                             :anim-timer (atom nil)
                             :footer-comp ftr
+                            :footer-provider fdp
                             :status-indicator nil
-                            :session session
+                            :status-container nil
+                            :pending-messages-comp pm
+                            :session-atom (atom session)
                             :running-turn? (atom false)
                             :config config
                             :pending-tool-comp pending-tool-comp
                             :bash-running? (atom false)
                             :bash-signal (atom false)
                             :pending-bash-components (atom [])
-                            :pending-messages-container (container/make-container)})]
+                            :pending-messages-container (container/make-container [pm])})]
 
     ;; Expose CoreState to the agent on-event handler (for :status events)
     (reset! cs-ref cs)
+
+    ;; Initial loaded-resources sections (rebuilt on /reload)
+    (ui/loaded-resources-set-sections! lr (build-loaded-resource-sections))
 
     ;; Focus editor
     (tui/tui-set-focus t ed)
@@ -1057,7 +1335,7 @@
           ;; the terminal's own scrollback is the chat history, so scrolling
           ;; up (swipe/mouse wheel) shows earlier messages exactly like pi.
           header-container (container/make-container [sp1 hdr sp1])
-          loaded-resources-container (container/make-container)
+          loaded-resources-container (container/make-container [lr])
           chat-container (container/make-container [ch])
           pending-messages-container (:pending-messages-container cs)
           status-container (container/make-container [si])
@@ -1065,7 +1343,8 @@
           ;; default spacer when no extension widgets are registered
           widget-container-above (container/make-container [sp2])
           editor-container (container/make-container [ed])
-          widget-container-below (container/make-container)]
+          widget-container-below (container/make-container)
+          cs (assoc cs :status-container status-container)]
 
       ;; Add components in pi's addChild order (header, loaded resources,
       ;; chat, pending messages, status, widgets above, editor, widgets
@@ -1109,11 +1388,13 @@
                                                 (tui/tui-request-render t)))))))
       (editor/editor-set-on-action! ed "app.tools.expand"
                                     (fn []
-          ;; pi: showStatus feedback on toggle
+          ;; pi: the same toggle drives tool expansion, the builtInHeader, and
+          ;; the loaded-resources sections (getStartupExpansionState)
                                       (let [expanded? (ui/chat-history-toggle-tool-expanded! ch)]
+                                        (expandable-text/expandable-text-set-expanded! hdr expanded?)
+                                        (ui/loaded-resources-set-expanded! lr expanded?)
                                         (ui/chat-history-show-status! ch
                                                                       (str "Tool output: " (if expanded? "expanded" "collapsed")))
-                                        (update-header-footer! cs)
                                         (tui/tui-request-render t))))
       (editor/editor-set-on-action! ed "app.thinking.toggle"
                                     (fn []
@@ -1121,10 +1402,15 @@
                                       (let [hidden? (ui/chat-history-toggle-thinking-hidden! ch)]
                                         (ui/chat-history-show-status! ch
                                                                       (str "Thinking blocks: " (if hidden? "hidden" "visible")))
-                                        (update-header-footer! cs)
                                         (tui/tui-request-render t))))
       (editor/editor-set-on-action! ed "app.editor.external"
                                     (fn [] (handle-external-editor cs)))
+      ;; B.3: Alt+Enter queues a follow-up (pi: handleFollowUp); Alt+Up
+      ;; restores queued messages to the editor (pi: handleDequeue)
+      (editor/editor-set-on-action! ed "app.message.followUp"
+                                    (fn [] (handle-follow-up cs)))
+      (editor/editor-set-on-action! ed "app.message.dequeue"
+                                    (fn [] (handle-dequeue cs)))
 
       ;; Global input listeners — only truly global keys stay here (pi: keep
       ;; app actions in the editor; the TUI keeps only global keys). Chat
@@ -1137,9 +1423,9 @@
                                       (tui/tui-request-render t))
                                     nil))
 
-      ;; Initialize header/footer
-      (text/text-set! hdr (fmt-header cs))
-      (ui/footer-set-status! ftr (fmt-status-str cs))
+      ;; Initialize footer (header content is produced lazily by the
+      ;; ExpandableText fns on first render)
+      (update-footer! cs)
 
       ;; Theme controller (pi: InteractiveThemeController) — applies the
       ;; configured theme, drives auto light/dark sync via color-scheme
@@ -1150,48 +1436,25 @@
                 (fn [msg] (tui/tui-flash! t msg :duration-ms 3000))
                 (fn []
                   (let [current-theme (th/get-current-theme)]
+                    ;; key-hint theme fns first — the header rebuild re-runs
+                    ;; the content fns that use them
+                    (app-kb/set-key-hint-theme-fns!
+                     #(th/dim %) #(th/fg current-theme :muted %))
                     (ui/chat-history-set-theme! ch current-theme)
                     (ui/footer-set-theme! ftr current-theme)
                     (ui/status-indicator-set-theme! si current-theme)
+                    (ui/loaded-resources-set-theme! lr current-theme)
+                    (expandable-text/expandable-text-rebuild! hdr)
                     (editor/editor-set-autocomplete-theme!
                      ed (th/get-select-list-theme current-theme))
-                    (app-kb/set-key-hint-theme-fns!
-                     #(th/dim %) #(th/fg current-theme :muted %))
                     (tui/tui-request-render t))))
             cs (assoc cs :theme-controller tc)]
-
-      ;; Pi-style info message on top (expandable with ctrl+o, pi: builtInHeader)
-        (let [kmgr (tui-kb/get-global-keybindings)
-              expand-key (or (tui-kb/key-text kmgr "app.tools.expand") "Ctrl+O")
-              thinking-key (or (tui-kb/key-text kmgr "app.thinking.toggle") "Ctrl+T")
-              compact (str "Welcome to " (th/bold "kmet") " — minimal coding agent.\n"
-                           (th/dim (str "Press " expand-key " to show full startup help.")))
-              full (str "Welcome to " (th/bold "kmet") " — minimal coding agent.\n\n"
-                        "Shortcuts:\n"
-                        "  " (th/dim "Enter")        " — submit message\n"
-                        "  " (th/dim "Escape")       " — cancel current turn / bash\n"
-                        "  " (th/dim "Ctrl+C")       " — clear editor (twice to quit)\n"
-                        "  " (th/dim "Ctrl+D")       " — exit when editor is empty\n"
-                        "  " (th/dim "Ctrl+G")       " — open external editor\n"
-                        "  " (th/dim expand-key)     " — toggle tool output\n"
-                        "  " (th/dim thinking-key)   " — toggle thinking blocks\n"
-                        "  " (th/dim "Ctrl+P")       " — cycle to next model\n"
-                        "  " (th/dim "Ctrl+L")       " — clear terminal\n"
-                        "  " (th/dim "Alt+Enter")    " — queue follow-up message\n"
-                        "  " (th/dim "/") " — commands   " (th/dim "!") " — bash   "
-                        "  " (th/dim "!!") " — bash (no context)\n\n"
-                        (th/dim "Type a message, or use /help for all commands."))]
-          (ui/chat-history-set-info-msg! ch
-                                         {:label "kmet"
-                                          :content compact
-                                          :collapsed-content compact
-                                          :expanded-content full}))
 
       ;; Extension UI registry (pi: ExtensionUIContext) — installed after the
       ;; layout is live so extensions can drive the UI from event handlers
         (build-extension-ui-registry cs
                                      {:ed ed :ftr ftr :hdr hdr :ch ch
-                                      :sp1 sp1
+                                      :sp1 sp1 :fdp fdp
                                       :header-container header-container
                                       :editor-container editor-container
                                       :widget-container-above widget-container-above
@@ -1206,22 +1469,6 @@
 ;; closures capture the layout pieces they mutate.
 
 (def ^:private MAX-WIDGET-LINES 10)
-
-(defonce ^:private git-branch-cache (atom nil))
-
-(defn- get-git-branch
-  "Lazily resolve the current git branch for the footer data provider
-   (pi: FooterDataProvider.getGitBranch). One-shot, cached; nil outside a
-   git repository."
-  []
-  (or @git-branch-cache
-      (let [r (try (proc/shell {:out :string :err :string}
-                               "git" "branch" "--show-current")
-                   (catch Exception _ nil))]
-        (reset! git-branch-cache
-                (when (and r (str/blank? (:err r)))
-                  (let [b (str/trim (:out r))]
-                    (when (seq b) b)))))))
 
 (defn- render-extension-widgets!
   "Rebuild the widget containers (pi: renderWidgets): the above-editor
@@ -1364,7 +1611,7 @@
    (pi: createExtensionUIContext). Returns the capability map installed via
    extensions/set-ui-registry!."
   [{:keys [tui cs]}
-   {:keys [ed ftr hdr ch sp1 header-container editor-container
+   {:keys [ed ftr hdr ch sp1 fdp header-container editor-container
            widget-container-above widget-container-below]}
    theme-controller]
   (let [t tui
@@ -1414,7 +1661,7 @@
                                              (editor/editor-set-autocomplete-provider!
                                               @current-editor-atom provider))
                                            nil))
-        footer-data {:get-git-branch get-git-branch
+        footer-data {:get-git-branch (fn [] (fdp/fdp-get-git-branch fdp))
                      :get-extension-statuses (fn []
                                                @(:extension-statuses-atom ftr))
                      :on-branch-change (fn [_f] (fn []))}
@@ -1522,7 +1769,7 @@
                          (container/container-add-child header-container child)
                          (container/container-add-child header-container sp1)
                          (when-not factory
-                           (text/text-set! hdr (fmt-header cs)))
+                           (expandable-text/expandable-text-rebuild! hdr))
                          (tui/tui-request-render t)))
          :set-title (fn [title]
                       (when-let [term @(:terminal t)] (term/set-title! term title)))
@@ -1609,7 +1856,7 @@
                     (container/container-add-child header-container sp1)
                     (container/container-add-child header-container hdr)
                     (container/container-add-child header-container sp1)
-                    (text/text-set! hdr (fmt-header cs)))
+                    (expandable-text/expandable-text-rebuild! hdr))
                   (doseq [unsub @terminal-input-unsubscribers]
                     (try (unsub) (catch Exception _)))
                   (reset! terminal-input-unsubscribers [])

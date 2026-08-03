@@ -194,6 +194,36 @@
                :full-output-path (:full-output-path result)}]
     (append-entry session entry)))
 
+;; ─── Usage tracking ────────────────────────────────────────────────────────
+
+(defn entry-usage
+  "Normalize a message :usage map (OpenAI or Anthropic shapes) into
+   {:input :output :cache-read :cache-write}. Returns nil when the map has
+   no recognizable token fields."
+  [usage]
+  (when (and usage (map? usage))
+    (let [input (or (:prompt_tokens usage) (:input_tokens usage))
+          output (or (:completion_tokens usage) (:output_tokens usage))
+          cache-read (or (get-in usage [:prompt_tokens_details :cached_tokens])
+                         (:cache_read_input_tokens usage))
+          cache-write (:cache_creation_input_tokens usage)]
+      (when (or input output cache-read cache-write)
+        {:input (long (or input 0))
+         :output (long (or output 0))
+         :cache-read (long (or cache-read 0))
+         :cache-write (long (or cache-write 0))}))))
+
+(defn usage-totals
+  "Sum normalized usage across session entries carrying :usage (pi:
+   FooterComponent accumulates usage from all session entries)."
+  [session]
+  (reduce (fn [totals e]
+            (if-let [u (entry-usage (:usage e))]
+              (merge-with + totals u)
+              totals))
+          {:input 0 :output 0 :cache-read 0 :cache-write 0}
+          @(:entries session)))
+
 ;; ─── Convenience ───────────────────────────────────────────────────────────
 
 (defn list-sessions

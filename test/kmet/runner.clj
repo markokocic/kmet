@@ -50,6 +50,7 @@
             [kmet.tui.components.test-cancellable-loader]
             [kmet.tui.components.test-dynamic-border]
             [kmet.tui.components.test-spinner]
+            [kmet.tui.components.test-expandable-text]
             [kmet.tui.test-overlay]
             [kmet.tui.test-negotiation]
             [kmet.tui.test-terminal-response]
@@ -65,7 +66,10 @@
             [kmet.app.ui.test-custom-message]
             [kmet.app.ui.test-bash-execution]
             [kmet.app.ui.test-extension-dialogs]
-            [kmet.app.ui.test-footer]))
+            [kmet.app.ui.test-footer]
+            [kmet.app.ui.test-footer-data-provider]
+            [kmet.app.ui.test-pending-messages]
+            [kmet.app.ui.test-loaded-resources]))
 
 (def all-namespaces
   "Every test namespace. The slow/fast split happens per test var via ^:slow
@@ -110,6 +114,7 @@
     kmet.tui.components.test-cancellable-loader
     kmet.tui.components.test-dynamic-border
     kmet.tui.components.test-spinner
+    kmet.tui.components.test-expandable-text
     kmet.tui.test-overlay
     kmet.tui.test-negotiation
     kmet.tui.test-terminal-response
@@ -125,7 +130,10 @@
     kmet.app.ui.test-custom-message
     kmet.app.ui.test-bash-execution
     kmet.app.ui.test-extension-dialogs
-    kmet.app.ui.test-footer])
+    kmet.app.ui.test-footer
+    kmet.app.ui.test-footer-data-provider
+    kmet.app.ui.test-pending-messages
+    kmet.app.ui.test-loaded-resources])
 
 (defn- selected-vars
   "All test vars whose :slow metadata matches the requested selection."

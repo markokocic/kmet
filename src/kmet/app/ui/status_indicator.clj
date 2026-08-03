@@ -1,17 +1,26 @@
 (ns kmet.app.ui.status-indicator
-  "StatusIndicatorComponent — standalone working indicator that sits between
-   the chat history and the editor, Pi-style. Shows a spinner when the agent
-   is active, renders nothing when idle.
-
-   Pi equivalent: WorkingStatusIndicator / IdleStatus in interactive-mode's
-   statusContainer — a dedicated layer between chat and editor."
+  "Status indicators — the layer between the chat history and the editor
+   (pi: status-indicator.ts + interactive-mode statusContainer).
+   The default working indicator (StatusIndicator) shows a spinner while the
+   agent is active and renders the idle two rows otherwise; Retry and
+   Compaction indicators are transient swaps shown via show-status-indicator!
+   / clear-status-indicator! (pi: showStatusIndicator/clearStatusIndicator).
+   All indicators render the same two-row shape (leading blank + content) so
+   the editor and footer below never jump."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
+            [kmet.tui.utils :as u]
             [kmet.tui.components.spinner :as spinner]
             [kmet.tui.macros :refer [defcomponent]]))
 
 (def ^:private SPINNER-FRAMES
   ["⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"])
+
+(defn- frame-at
+  "Braille frame for the given elapsed millis — self-animating on re-render
+   (no timer needed; the interactive mode's anim timer drives renders)."
+  [elapsed]
+  (nth SPINNER-FRAMES (mod (quot (max 0 elapsed) 100) (count SPINNER-FRAMES))))
 
 (defcomponent StatusIndicator nil [spinner active-atom]
   (render [this width]
@@ -29,9 +38,9 @@
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-status-indicator
-  "Create a StatusIndicator.
+  "Create the default working StatusIndicator.
    When active, shows a spinner with the given message.
-   When inactive, renders nothing.
+   When inactive, renders nothing (the idle two rows).
    Options key-value pairs:
      :text  — message text (default \"Working...\")
      :theme — theme map (default dark-theme)"
@@ -56,7 +65,7 @@
   (reset! (:active-atom indicator) true))
 
 (defn status-indicator-stop!
-  "Deactivate the status indicator — hides the spinner."
+  "Deactivate the status indicator — hides the spinner (idle two rows)."
   [indicator]
   (spinner/spinner-stop! (:spinner indicator))
   (reset! (:active-atom indicator) false))
@@ -68,8 +77,57 @@
 
 (defn status-indicator-set-theme!
   "Update the theme colors on the underlying spinner."
-  [indicator theme]
+  [indicator th]
   (spinner/spinner-set-spinner-color-fn! (:spinner indicator)
-                                         #(theme/fg theme :accent %))
+                                         #(theme/fg th :accent %))
   (spinner/spinner-set-message-color-fn! (:spinner indicator)
-                                         #(theme/fg theme :muted %)))
+                                         #(theme/fg th :muted %)))
+
+;; ─── Transient indicators (pi: Retry/CompactionStatusIndicator) ───────────
+;; Self-animating from elapsed time; colors read from the current theme at
+;; render time (the interactive mode re-renders continuously while active).
+
+(defcomponent RetryStatusIndicator nil [start-atom attempt-atom max-attempts-atom
+                                        delay-ms-atom cancel-hint-atom cache-atom]
+  (render [_this width]
+    (let [elapsed (- (System/currentTimeMillis) @start-atom)
+          remaining (max 0 (long (Math/ceil (/ (- @delay-ms-atom elapsed) 1000.0))))
+          th (theme/get-current-theme)
+          frame (frame-at elapsed)
+          message (str "Retrying (" @attempt-atom "/" @max-attempts-atom ") in "
+                       remaining "s... (" @cancel-hint-atom " to cancel)")
+          line (str (theme/fg th :warning frame) " " (theme/fg th :muted message))]
+      ["" (u/truncate-to-width line width)]))
+  (handle-input [_this _data] nil)
+  (invalidate [this] (reset! (:cache-atom this) nil)))
+
+(defn make-retry-status-indicator
+  "Retry countdown indicator (pi: RetryStatusIndicator + CountdownTimer —
+   the countdown is computed from elapsed time on each render instead of a
+   timer). cancel-hint — key display text (e.g. \"Escape\")."
+  [attempt max-attempts delay-ms & {:keys [cancel-hint]
+                                    :or {cancel-hint "Escape"}}]
+  (map->RetryStatusIndicator {:start-atom (atom (System/currentTimeMillis))
+                              :attempt-atom (atom attempt)
+                              :max-attempts-atom (atom max-attempts)
+                              :delay-ms-atom (atom delay-ms)
+                              :cancel-hint-atom (atom cancel-hint)
+                              :cache-atom (atom nil)}))
+
+(defcomponent CompactionStatusIndicator nil [start-atom message-atom cache-atom]
+  (render [_this width]
+    (let [elapsed (- (System/currentTimeMillis) @start-atom)
+          th (theme/get-current-theme)
+          frame (frame-at elapsed)
+          line (str (theme/fg th :accent frame) " " (theme/fg th :muted @message-atom))]
+      ["" (u/truncate-to-width line width)]))
+  (handle-input [_this _data] nil)
+  (invalidate [this] (reset! (:cache-atom this) nil)))
+
+(defn make-compaction-status-indicator
+  "Compaction progress indicator (pi: CompactionStatusIndicator). kmet's
+   compaction is not cancellable, so no cancel hint is shown."
+  [& {:keys [message] :or {message "Compacting context..."}}]
+  (map->CompactionStatusIndicator {:start-atom (atom (System/currentTimeMillis))
+                                   :message-atom (atom message)
+                                   :cache-atom (atom nil)}))

@@ -72,6 +72,7 @@
             [kmet.app.session :as session]
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
+            [kmet.debug :as debug]
             [kmet.config :as cfg]))
 
 ;; ─── Agent state ───────────────────────────────────────────────────────────
@@ -106,7 +107,8 @@
                        models                 ;; atom of vector of model ids (scoped list for cycling)
                        overflow-recovered     ;; atom of bool: context-overflow compacted once this run
                        compact-token-threshold ;; int or nil: compact when estimated tokens exceed this
-                       keep-recent-tokens])    ;; int: cut-point budget in tokens (pi: keepRecentTokens, default 20000)
+                       keep-recent-tokens     ;; int: cut-point budget in tokens (pi: keepRecentTokens, default 20000)
+                       compacting?])           ;; atom of bool: a compaction is in progress (escape cancels it)
 
 (defn make-agent-state
   "Create a new agent state.
@@ -159,7 +161,8 @@ Be precise and concise in your responses."}}]
                     :models (atom models)
                     :overflow-recovered (atom false)
                     :compact-token-threshold compact-token-threshold
-                    :keep-recent-tokens keep-recent-tokens}))
+                    :keep-recent-tokens keep-recent-tokens
+                    :compacting? (atom false)}))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -181,10 +184,11 @@ Be precise and concise in your responses."}}]
    :content (into [{:type :text :text text}]
                   (or images []))})
 
-(defn- assistant-message [text tool-calls]
+(defn- assistant-message [text tool-calls usage]
   (let [content (if (seq text) [{:type :text :text text}] [])]
     (cond-> {:role :assistant :content content}
-      (seq tool-calls) (assoc :tool-calls tool-calls))))
+      (seq tool-calls) (assoc :tool-calls tool-calls)
+      usage (assoc :usage usage))))
 
 (defn- tool-result-message [tc-id _tc-name result]
   (cond-> {:role :tool
@@ -344,8 +348,8 @@ Be precise and concise in your responses."}}]
 (defn- add-assistant-message!
   "Add a final assistant message to context and session, emitting
    :message-end. Returns the message."
-  [agent text tool-calls]
-  (let [assistant-msg (assistant-message text tool-calls)]
+  [agent text tool-calls usage]
+  (let [assistant-msg (assistant-message text tool-calls usage)]
     (swap! (:messages agent) conj assistant-msg)
     (when (:session agent)
       (session/append-entry (:session agent) assistant-msg))
@@ -618,6 +622,7 @@ Be precise and concise in your responses."}}]
   [agent api-key text-buf on-text on-thinking]
   (let [done-promise (promise)
         thinking-buf (atom "")
+        usage-buf (atom nil)
         [tc-add tc-flush] (make-tc-accumulator)
         provider @(:provider agent)
         system (or @(:system-prompt-override agent) @(:system agent))
@@ -665,11 +670,16 @@ Be precise and concise in your responses."}}]
                                    :message {:role :assistant :content []}
                                    :delta (assoc (select-keys tc [:id :name :arguments :index])
                                                  :type :tool-call)}))
+      :on-usage (fn [usage]
+                  ;; Provider-native usage map — stored on the assistant
+                  ;; message for session persistence (pi: message.usage).
+                  (reset! usage-buf usage))
       :on-done (fn [reason]
                  (let [tool-calls (tc-flush)]
                    (deliver done-promise
                             {:text @text-buf
                              :tool-calls tool-calls
+                             :usage @usage-buf
                              :stop-reason reason})))
       :on-error (fn [e]
                   (deliver done-promise {:error e}))})
@@ -731,14 +741,17 @@ Be precise and concise in your responses."}}]
 
 (defn- summarize!
   "LLM summarization of the pre-cut entries (pi: generateSummaryWithUsage).
-   Returns the summary text, or nil when no API key is available or the call
-   fails/times out/returns empty."
+   Returns the summary text, or nil when no API key is available, the call
+   fails/times out/returns empty, or the run's cancel signal fired mid-call
+   (the signal watcher delivers nil so cancellation doesn't wait for the
+   stream to die)."
   [agent prep & [custom-instructions]]
   (let [provider @(:provider agent)
         api-key (resolve-api-key agent)]
     (when api-key
       (let [done (promise)
             text-buf (atom "")
+            signal (:signal agent)
             msgs (compaction/summarization-messages
                   (:messages prep) (:previous-summary prep) custom-instructions)]
         (llm/send-message
@@ -748,11 +761,18 @@ Be precise and concise in your responses."}}]
           :api-key api-key
           :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
           :messages msgs
-          :signal (atom false)
+          :signal signal
           :on-text (fn [t] (swap! text-buf str t))
           :on-done (fn [_] (deliver done @text-buf))
           :on-error (fn [_] (deliver done nil))})
-        (let [result (deref done 120000 :timeout)]
+        ;; Cancel watch: abort the deref the moment the signal fires. The
+        ;; stream may not deliver an event on cancel (killed curl), so this
+        ;; is what makes escape abort compaction promptly.
+        (add-watch signal :kmet/summarize-cancel
+                   (fn [_ _ _ v] (when v (deliver done nil))))
+        (when @signal (deliver done nil))
+        (let [result (try (deref done 120000 :timeout)
+                          (finally (remove-watch signal :kmet/summarize-cancel)))]
           (when (and (string? result) (seq result)) result))))))
 
 (defn- sync-context-after-compaction!
@@ -783,8 +803,7 @@ Be precise and concise in your responses."}}]
           new-n (count @(:entries sess))]
       (when (< new-n n)
         (truncate-context! agent new-n)
-        (binding [*out* *err*]
-          (println "Compacted session:" n "→" new-n "entries")))
+        (debug/log "compacted session: " n " → " new-n " entries"))
       (< new-n n))
     false))
 
@@ -794,22 +813,52 @@ Be precise and concise in your responses."}}]
    the in-memory context to mirror it. Falls back to count-based truncation
    when summarization is unavailable or fails. Also the manual /compact path
    (pi: session.compact) — custom-instructions are appended to the
-   summarization prompt. Returns true when a compaction happened."
-  [agent & [custom-instructions]]
-  (if-let [sess (:session agent)]
-    (let [entries (session/get-branch sess)
-          prep (compaction/prepare entries (or (:keep-recent-tokens agent) 20000))]
-      (if (or (nil? prep) (empty? (:messages prep)))
-        false
-        (if-let [summary (summarize! agent prep custom-instructions)]
-          (do (session/compact-with-summary! sess summary (:first-kept-id prep))
-              (sync-context-after-compaction! agent)
-              (println "Compacted session with LLM summary")
-              true)
-          (do (binding [*out* *err*]
-                (println "Warning: summarization failed; falling back to count-based compaction"))
-              (count-based-compact! agent)))))
-    false))
+   summarization prompt.
+
+   Emits :compaction-start/:compaction-end around the work (pi:
+   compaction_start/compaction_end); the end event carries :aborted true
+   when the run's cancel signal fired mid-compaction (escape), in which
+   case the session is left untouched.
+
+   Returns true when a compaction happened, false when there was nothing to
+   compact (or compaction is already in progress), and :aborted when the
+   user cancelled mid-compaction."
+  [agent & [custom-instructions reason]]
+  (if @(:compacting? agent)
+    false
+    (let [reason (if custom-instructions :manual (or reason :auto))]
+      (emit agent {:type :compaction-start :reason reason})
+      (reset! (:compacting? agent) true)
+      (try
+        (let [result
+              (if-let [sess (:session agent)]
+                (if @(:signal agent)
+                  :aborted
+                  (let [entries (session/get-branch sess)
+                        prep (compaction/prepare entries (or (:keep-recent-tokens agent) 20000))]
+                    (if (or (nil? prep) (empty? (:messages prep)))
+                      false
+                      (if-let [summary (summarize! agent prep custom-instructions)]
+                        (if @(:signal agent)
+                          ;; cancelled during summarization — session unchanged
+                          :aborted
+                          (do (session/compact-with-summary! sess summary (:first-kept-id prep))
+                              (sync-context-after-compaction! agent)
+                              (debug/log "compacted session with LLM summary")
+                              true))
+                        (if @(:signal agent)
+                          :aborted
+                          (do (debug/log "Warning: summarization failed; falling back to count-based compaction")
+                              (count-based-compact! agent)))))))
+                false)]
+          (emit agent {:type :compaction-end
+                       :reason reason
+                       :aborted (= result :aborted)
+                       :result (and (not= result :aborted) result)
+                       :will-retry false})
+          result)
+        (finally
+          (reset! (:compacting? agent) false))))))
 
 (defn maybe-compact!
   "Proactively compact before a run (pi: _checkCompaction — threshold case).
@@ -824,7 +873,8 @@ Be precise and concise in your responses."}}]
           tokens (reduce + 0 (map compaction/estimate-tokens entries))]
       (if (or (and threshold (>= n threshold))
               (and token-threshold (>= tokens token-threshold)))
-        (boolean (compact-context! agent))
+        (let [result (compact-context! agent nil :threshold)]
+          (and (not= :aborted result) result))
         false))
     false))
 
@@ -835,7 +885,7 @@ Be precise and concise in your responses."}}]
   [agent]
   (when-let [sess (:session agent)]
     (when (pos? (count @(:entries sess)))
-      (compact-context! agent))))
+      (compact-context! agent nil :overflow))))
 
 (defn- replace-context!
   "Replace the in-memory conversation, rebuild the session file to match, and
@@ -1092,10 +1142,11 @@ Be precise and concise in your responses."}}]
                                                   ;; A non-error message ends overflow recovery (pi resets on success)
                                                     (reset! (:overflow-recovered agent) false))
                                                   (let [text (:text result)
-                                                        tool-calls (:tool-calls result)]
+                                                        tool-calls (:tool-calls result)
+                                                        usage (:usage result)]
                                                     (if (seq tool-calls)
                                                     ;; Execute tool calls
-                                                      (let [assistant-msg (add-assistant-message! agent text tool-calls)]
+                                                      (let [assistant-msg (add-assistant-message! agent text tool-calls usage)]
                                                         (reset! (:status agent) :executing)
                                                         (emit agent {:type :status :status :executing
                                                                      :tool-calls tool-calls})
@@ -1111,7 +1162,7 @@ Be precise and concise in your responses."}}]
                                                             {:settled (inc t)}
                                                             (recur (inc t) tool-calls false))))
                                                     ;; Final response
-                                                      (let [assistant-msg (add-assistant-message! agent text nil)
+                                                      (let [assistant-msg (add-assistant-message! agent text nil (:usage result))
                                                             tool-results []]
                                                         (emit agent {:type :turn-end
                                                                      :message assistant-msg

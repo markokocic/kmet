@@ -181,7 +181,7 @@
 
 (defn- openai-request
   [{:keys [api-key model messages tools signal base-url
-           on-text on-thinking on-tool-call on-done on-error]}]
+           on-text on-thinking on-tool-call on-done on-error on-usage]}]
   (future
     (let [url (or base-url default-openai-url)
           payload {:model (or model "gpt-4o")
@@ -213,6 +213,7 @@
                                                            (on-tool-call {:arguments (:arguments event)
                                                                           :index (:index event)}))
                                          :done (when on-done (on-done (:stop-reason event)))
+                                         :usage (when on-usage (on-usage (:usage event)))
                                          :error (when on-error (on-error (:message event)))
                                          nil))
                                      signal)
@@ -233,7 +234,7 @@
 
 (defn- anthropic-request
   [{:keys [api-key model messages tools signal thinking
-           on-text on-tool-call on-done on-error]}]
+           on-text on-tool-call on-done on-error on-usage]}]
   (future
     (let [thinking-cfg (anthropic-thinking-config thinking)
           payload (cond-> {:model (or model "claude-sonnet-4-20250514")
@@ -267,6 +268,7 @@
                                                              (or (not curl-backed)
                                                                  (not= :connection-closed (:stop-reason event))))
                                                     (on-done (:stop-reason event)))
+                                            :usage (when on-usage (on-usage (:usage event)))
                                             :error (when on-error (on-error (:message event)))
                                             nil))
                                         signal)
@@ -293,6 +295,8 @@
      :on-tool-call — (fn [{:keys [id name arguments]}])
      :on-done     — (fn [stop-reason])
      :on-error    — (fn [message])
+     :on-usage    — (fn [usage-map]) — provider-native usage from the final
+                     stream chunk (OpenAI) or message_start (Anthropic).
 
    Returns: future that completes when the stream ends."
   [{:keys [provider api-type api-key] :or {provider :openai} :as opts}]
