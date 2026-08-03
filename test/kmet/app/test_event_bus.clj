@@ -12,7 +12,7 @@
   (t/is (every? string? (vals event-bus/event-types))))
 
 (t/deftest test-events-core-types-known
-  (doseq [t [:agent-start :agent-end :turn-start :turn-end
+  (doseq [t [:agent-start :agent-end :agent-settled :turn-start :turn-end
              :message-start :message-update :message-end
              :tool-execution-start :tool-execution-update :tool-execution-end
              :status :error :user-bash]]

@@ -978,10 +978,14 @@ Be precise and concise in your responses."}}]
 
               (let [text-buf (atom "")
                     max-turns 20
-                    agent-end (fn [error]
+                    agent-end (fn [& [error]]
                                 (emit agent {:type :agent-end
                                              :messages (subvec @(:messages agent) msg-count-before)
-                                             :error error}))]
+                                             :error error})
+                                ;; pi: agent_settled fires in a finally block after
+                                ;; every run — success, error, timeout, or abort —
+                                ;; the agent is fully idle (agent-session.js).
+                                (emit agent {:type :agent-settled}))]
               ;; Outer loop: follow-up
                 (loop [turn 0]
                   (if (>= turn max-turns)
@@ -999,8 +1003,7 @@ Be precise and concise in your responses."}}]
                                     (if @(:signal agent)
                                       (do (reset! (:status agent) :idle)
                                           (emit agent {:type :status :status :idle})
-                                          (emit agent {:type :agent-end
-                                                       :messages (subvec @(:messages agent) msg-count-before)})
+                                          (agent-end)
                                           {:aborted true}) ;; cancelled — exit quietly
                                       {:settled t})
                                     (let [steer-msgs (drain-queue! (:steering agent)
@@ -1014,8 +1017,7 @@ Be precise and concise in your responses."}}]
                                         (let [result (deref promise 120000 :timeout)]
                                           (reset! (:active-call agent) nil)
                                           (if (:cancelled result)
-                                            (do (emit agent {:type :agent-end
-                                                             :messages (subvec @(:messages agent) msg-count-before)})
+                                            (do (agent-end)
                                                 {:aborted true})
                                             (if (= :timeout result)
                                               (do (reset! (:signal agent) true)
@@ -1062,8 +1064,7 @@ Be precise and concise in your responses."}}]
                                                             (reset! (:retry-count agent) 0)
                                                             (reset! (:status agent) :idle)
                                                             (emit agent {:type :status :status :idle})
-                                                            (emit agent {:type :agent-end
-                                                                         :messages (subvec @(:messages agent) msg-count-before)})
+                                                            (agent-end)
                                                             {:aborted true})))
 
                                                   ;; Terminal error (non-retryable or retries exhausted)
@@ -1132,8 +1133,7 @@ Be precise and concise in your responses."}}]
                                 (recur turn'))
                             (do (reset! (:status agent) :idle)
                                 (emit agent {:type :status :status :idle})
-                                (emit agent {:type :agent-end
-                                             :messages (subvec @(:messages agent) msg-count-before)})
+                                (agent-end)
                                 (when on-done (on-done @text-buf)))))))))))
 
             (catch Exception e

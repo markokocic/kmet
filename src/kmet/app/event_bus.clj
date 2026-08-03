@@ -10,8 +10,8 @@
 
 (def event-types
   "Map of event type keyword → description. The canonical vocabulary.
-   Events marked \"reserved\" are defined for future phases and not yet
-   emitted by the loop."
+   Every listed event is emitted by the loop, the interactive mode, or the
+   app — see each entry's description for the emitting path."
   {:agent-start
    "Fired once per user submission, before the first LLM call."
 
@@ -88,9 +88,11 @@
    "Fired when retries finish — success, exhausted, or cancelled.
     Payload: :success, :attempt, :final-error (on failure)."
 
-   ;; ─── Reserved for future phases ───────────────────────────────────────
    :agent-settled
-   "Agent is fully idle. Reserved."})
+   "Fired when the agent run is fully settled — immediately after :agent-end
+    on every run exit (success, error, timeout, or cancel). The agent is idle
+    and no further events for this run will be emitted (pi: agent_settled,
+    emitted from a finally block after the run)."})
 
 (defn known-event-type?
   "True if the keyword is part of the documented vocabulary."

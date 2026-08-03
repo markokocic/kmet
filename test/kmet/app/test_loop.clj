@@ -227,8 +227,13 @@
     (let [types (mapv :type @events)]
       (doseq [t [:agent-start :turn-start :message-start
                  :message-update :message-end :turn-end
-                 :agent-end :status]]
+                 :agent-end :agent-settled :status]]
         (t/is (some #{t} types) (str "expected event " t " to be emitted")))
+      (let [ae-idx (first (keep-indexed #(when (= :agent-end (:type %2)) %1) @events))
+            as-idx (first (keep-indexed #(when (= :agent-settled (:type %2)) %1) @events))]
+        (t/is (some? ae-idx) ":agent-end emitted")
+        (t/is (some? as-idx) ":agent-settled emitted")
+        (t/is (< ae-idx as-idx) ":agent-settled follows :agent-end"))
       (t/is (some #(= :idle (:status %))
                   (filter #(= :status (:type %)) @events))
             "final status should be :idle")
@@ -539,7 +544,8 @@
 (t/deftest test-loop-cancel-delivers-promise
   (let [errors (atom [])
         dones (atom 0)
-        agent (loop/make-agent-state)]
+        events (atom [])
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   ;; hangs forever: on-done/on-error never fire
@@ -560,7 +566,12 @@
                 "run ends promptly after cancel (no 120s timeout wait)")
           (t/is (empty? @errors) "no error callback on cancel")
           (t/is (zero? @dones) "no done callback on cancel")
-          (t/is (= :idle @(:status agent)) "status idle after cancel"))))))
+          (t/is (= :idle @(:status agent)) "status idle after cancel")
+          (let [ae-idx (first (keep-indexed #(when (= :agent-end (:type %2)) %1) @events))
+                as-idx (first (keep-indexed #(when (= :agent-settled (:type %2)) %1) @events))]
+            (t/is (some? ae-idx) ":agent-end emitted on cancel")
+            (t/is (some? as-idx) ":agent-settled emitted on cancel")
+            (t/is (< ae-idx as-idx) ":agent-settled follows :agent-end on cancel")))))))
 
 ;; ─── Error events ─────────────────────────────────────────────────────────
 
@@ -581,7 +592,9 @@
     (let [types (mapv :type @events)]
       (t/is (some #{:error} types) ":error event emitted on LLM error")
       (t/is (some #(and (= :agent-end (:type %)) (= "boom" (:error %))) @events)
-            ":agent-end carries the error"))))
+            ":agent-end carries the error")
+      (t/is (some #{:agent-settled} types)
+            ":agent-settled emitted after an errored run"))))
 
 (t/deftest ^:slow test-loop-cancel-during-tool-execution
   (let [errors (atom [])
