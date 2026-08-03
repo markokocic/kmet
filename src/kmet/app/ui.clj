@@ -63,6 +63,7 @@
 (def make-footer footer/make-footer)
 (def footer-set-status! footer/footer-set-status!)
 (def footer-set-n-msgs! footer/footer-set-n-msgs!)
+(def footer-set-extension-status! footer/footer-set-extension-status!)
 
 ;; StatusIndicator
 (def make-status-indicator status-indicator/make-status-indicator)
@@ -95,6 +96,7 @@
 (def chat-history-toggle-thinking-hidden! chat-history/chat-history-toggle-thinking-hidden!)
 (def chat-history-get-tool-expanded chat-history/chat-history-get-tool-expanded)
 (def chat-history-get-thinking-hidden chat-history/chat-history-get-thinking-hidden)
+(def chat-history-set-hidden-thinking-label! chat-history/chat-history-set-hidden-thinking-label!)
 (def chat-history-show-status! chat-history/chat-history-show-status!)
 (def chat-history-set-output-pad! chat-history/chat-history-set-output-pad!)
 

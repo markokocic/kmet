@@ -434,3 +434,23 @@
             "tool_result content extracted from the block")
         (is (not-any? #(re-find #"tool_result|PersistentVector" %) lines)
             "raw block vector must not render")))))
+
+(deftest test-hidden-thinking-label
+  (testing "chat-history-set-hidden-thinking-label! applies to existing and
+            new assistant messages (pi: setHiddenThinkingLabel)"
+    (let [ch (ch/make-chat-history)
+          _ (ch/chat-history-add-message! ch {:role :assistant
+                                              :content "resp"
+                                              :thinking "secret"})
+          _ (ch/chat-history-toggle-thinking-hidden! ch)
+          _ (ch/chat-history-set-hidden-thinking-label! ch "Thoughts hidden")
+          lines (plain-lines ch 40)]
+      (is (some #(re-find #"Thoughts hidden" %) lines)
+          "existing hidden message shows the custom label")
+      (is (not-any? #(re-find #"secret" %) lines)
+          "thinking content stays hidden")
+      ;; nil restores the default
+      (ch/chat-history-set-hidden-thinking-label! ch nil)
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"Thinking\.\.\." %) lines)
+            "nil restores the default label")))))

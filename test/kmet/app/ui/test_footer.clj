@@ -48,6 +48,20 @@
           plain (mapv strip-ansi (core/render c 40))]
       (is (some #(re-find #"kmet" %) plain)))))
 
+(deftest test-extension-statuses
+  (testing "keyed extension statuses render dim in the footer line"
+    (let [c (ft/make-footer :status "idle" :n-msgs 0)]
+      (ft/footer-set-extension-status! c "ext-a" "● active")
+      (ft/footer-set-extension-status! c "ext-b" "✓ ready")
+      (let [plain (mapv strip-ansi (core/render c 60))]
+        (is (some #(re-find #"● active" %) plain))
+        (is (some #(re-find #"✓ ready" %) plain))))
+    (testing "nil text clears the key"
+      (let [c (ft/make-footer :status "" :n-msgs 0)]
+        (ft/footer-set-extension-status! c "ext-a" "● active")
+        (ft/footer-set-extension-status! c "ext-a" nil)
+        (let [plain (mapv strip-ansi (core/render c 60))]
+          (is (not-any? #(re-find #"● active" %) plain)))))))
 (deftest test-separator-line
   (testing "first line is a separator"
     (let [c (ft/make-footer :status "" :n-msgs 0)

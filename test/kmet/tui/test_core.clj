@@ -143,3 +143,29 @@
         (t/is (= ["\u001b[97;1:3u"] @log)
               "opt-in component receives the release event"))
       (finally (keys/set-kitty-active! false)))))
+
+(t/deftest test-dispatch-listener-chain
+  (testing "input listeners chain: :data transforms feed later listeners,
+            :consume stops dispatch (pi: InputListener chain)"
+    (let [tui (core/create-tui nil)
+          got (atom [])
+          c (reify core/IComponent
+              (render [_ _] [""])
+              (handle-input [_ data] (swap! got conj data))
+              (invalidate [_]))]
+      (core/tui-add-child tui c)
+      (core/tui-set-focus tui c)
+      (core/tui-add-input-listener tui (fn [data] {:data (str data "!")}))
+      (core/tui-add-input-listener tui (fn [data] (swap! got conj [:l2 data])))
+      (dispatch! tui "x")
+      (t/is (= [:l2 "x!"] (first @got))
+            "second listener sees the transformed data")
+      (t/is (= "x!" (second @got))
+            "focused component receives the final transformed data")
+      ;; consume stops later listeners AND focus delivery (pi semantics:
+      ;; earlier listeners already ran)
+      (reset! got [])
+      (core/tui-add-input-listener tui (fn [_] {:consume true}))
+      (dispatch! tui "y")
+      (t/is (= [[:l2 "y!"]] @got)
+            "consume drops the event for later listeners and focus"))))

@@ -9,8 +9,11 @@ Analysis of pi's TUI architecture (pi source: `~/src/cvstree/pi/packages/tui/` +
 - **Part B — app-level usage parity**: `modes/interactive.clj` +
   `app/ui/*` vs `interactive-mode.ts` (layout, dialogs, extension ctx.ui).
 
-Status of the chat-screen layout (previously "Level 1") is DONE; everything
-else is planned below.
+Status of the chat-screen layout (previously "Level 1") is DONE; the
+**overlay/focus layer (Phase 3), the extension ctx.ui surface (Phase 7),
+and the write-log + listener-chaining + Loader-indicator + DynamicBorder
+items are DONE** (see the per-phase notes below); the remaining phases are
+planned below.
 
 ---
 
@@ -18,18 +21,18 @@ else is planned below.
 
 | pi module (`packages/tui/src`) | kmet | Status |
 |--------------------------------|------|--------|
-| `tui.ts` — TUI/Container/Component/Focusable, render loop, overlays, IME cursor | `tui/core.clj`, `tui/components/container.clj` | partial (§A.2–A.4) |
+| `tui.ts` — TUI/Container/Component/Focusable, render loop, overlays, IME cursor | `tui/core.clj`, `tui/components/container.clj` | ✅ overlays + focus-restore state machine done (§A.3, §A.2); render-loop items open (§A.4) |
 | `keys.ts` — key parsing (legacy + Kitty), `matchesKey`, event types | `tui/keys.clj` | **gap**: no Kitty parsing, no alt+ESC (§A.1) |
-| `terminal.ts` — ProcessTerminal, Kitty protocol negotiation, write log, progress, drainInput | `tui/terminal.clj` | **gap**: negotiation, drain, title/progress, write log (§A.1, §A.5) |
+| `terminal.ts` — ProcessTerminal, Kitty protocol negotiation, write log, progress, drainInput | `tui/terminal.clj` | **gap**: negotiation, drain, title/progress; write log + `set-title!` done (§A.1, §A.5) |
 | `stdin-buffer.ts` — batch splitting, paste re-wrap | (inline in `core.clj` input reader) | **gap**: no batch splitting (§A.1) |
 | `native-modifiers.ts` | — | missing (Apple Terminal Shift+Enter) (§A.1) |
 | `utils.ts` — visibleWidth/truncateToWidth/wrapTextWithAnsi/sliceByColumn/extractSegments | `tui/utils.clj` | ✅ (verify `extractSegments`/`normalizeTerminalOutput` for §A.3) |
 | `keybindings.ts` — KeybindingsManager, keyText, conflicts | `tui/keybindings.clj` | ✅ (verify conflict reporting + `key-text`) |
-| `autocomplete.ts` | `tui/autocomplete.clj` | ✅ |
+| `autocomplete.ts` | `tui/autocomplete.clj` | ✅ (extension-provider delegation added with §B.9) |
 | `fuzzy.ts` | `tui/fuzzy.clj` | ✅ |
 | `terminal-colors.ts` — OSC 11, color scheme report | — | missing (§A.4, §A.6) |
 | `terminal-image.ts` | `libs/terminal_image.clj` | ✅ (diff-loop integration partial, §A.4) |
-| `editor-component.ts` — EditorComponent interface | — | missing (§A.7) |
+| `editor-component.ts` — EditorComponent interface | — | missing (§A.7); custom-editor swap uses duck-typing like pi (§B.5 done) |
 | `kill-ring.ts` / `undo-stack.ts` / `word-navigation.ts` | inside `editor.clj` | ✅ for Editor; **gap**: Input lacks them (§A.7) |
 | `components/text|box|spacer|truncated-text.ts` | `tui/components/*` | ✅ |
 | `components/input.ts` | `tui/components/input.clj` | gap: kill-ring/undo/paste parity (§A.7) |
@@ -37,7 +40,7 @@ else is planned below.
 | `components/markdown.ts` | `tui/components/markdown.clj` | ✅ |
 | `components/select-list.ts` | `tui/components/select_list.clj` | gap: layout options (§A.7) |
 | `components/settings-list.ts` | `tui/components/settings_list.clj` | ✅ |
-| `components/loader.ts` + `cancellable-loader.ts` | `tui/components/spinner.clj` + `cancellable_loader.clj` | gap: `setIndicator` (§A.7) |
+| `components/loader.ts` + `cancellable-loader.ts` | `tui/components/spinner.clj` + `cancellable_loader.clj` | ✅ `set-indicator!` done (verbatim frames, empty-frames hide, nil restores) |
 | `components/image.ts` | `tui/components/image.clj` | ✅ (cell-size query, §A.4) |
 | coding-agent `theme/theme.ts` + `theme-controller.ts` | `tui/theme.clj` + `config.clj` | gap: controller, validation, auto light/dark (§A.6) |
 
@@ -427,6 +430,10 @@ boundary.
 
 ### Phase 1 — Input pipeline (A.1 + A.2.4)
 
+**Status: PARTIAL** — the input-listener chaining item (`{consume, data}`
+transforms, §A.2.4) is DONE (ported into `dispatch-input!`); the key
+parsing, `input_buffer.clj`, and protocol negotiation are open.
+
 **Contents:** `keys.clj` full parsing (Kitty `\x1b[k;m;…u`, `27;m;c~`,
 alternate keys, event types, `alt+x` from ESC prefix, F-keys) →
 `tui/input_buffer.clj` (new; stdin batch splitting + paste re-wrap) →
@@ -444,6 +451,9 @@ F-keys against pi's `keys.ts` cases); manual: kitty vs non-kitty terminal,
 paste as one wrapped event, releases filtered unless `:wants-key-release?`.
 
 ### Phase 2 — Render loop & terminal (A.4 + A.5)
+
+**Status: PARTIAL** — `KMET_TUI_WRITE_LOG` (write log) and `set-title!`
+are DONE; the rest is open.
 
 **Contents:** `requestRender(force)` → height-change full redraw (non-Termux)
 → `clearOnShrink` high-water mark (env + runtime setter) → Kitty-image diff
@@ -465,6 +475,16 @@ pixels; `kmet-crash.log` on width overflow; `KMET_TUI_WRITE_LOG` captures
 the ANSI stream.
 
 ### Phase 3 — Focus & overlays (A.2 + A.3)
+
+**Status: DONE** — `set-show-hardware-cursor!`/`get-show-hardware-cursor`,
+full `OverlayOptions` (SizeValue, anchors, margins, offsets, `visible`,
+`nonCapturing`), `OverlayHandle` (hide/set-hidden!/focus/unfocus({target})/
+is-focused?), multi-overlay compositing by focus order with working-height
+padding, the focus-restore state machine (eligible/blocked/inactive,
+retarget-overlay-pre-focus, is-overlay-focus-ancestor, mounted check),
+input redirect for invisible focused overlays, input listener chaining
+(`{consume, data}` transforms, §A.2.4), and the IME focus-propagation
+convention (implemented by the extension dialogs, §B.9).
 
 **Contents:** `set-show-hardware-cursor!`/`get-show-hardware-cursor` →
 overlay focus-restore state machine (`set-focus-internal`, eligible/blocked/
@@ -504,6 +524,12 @@ report; no stale colors after switching.
 
 ### Phase 5 — Components (A.7)
 
+**Status: PARTIAL** — Loader `set-indicator!` (verbatim frames, interval,
+empty-frames hide, nil restores) and `DynamicBorder` are DONE; SelectList
+`truncatePrimary`, Input kill-ring/undo/word-nav parity, and the
+`IEditorComponent` protocol remain (the custom-editor swap uses pi's
+duck-typing instead — see §B.5).
+
 **Contents:** Loader `setIndicator!` (frames/interval/verbatim) → SelectList
 `truncatePrimary` callback → Input kill-ring/undo/word-nav/paste parity
 (reuse `editor.clj` internals) → `IEditorComponent` protocol
@@ -516,6 +542,13 @@ before B.5.
 verbatim match pi; Input editing feels identical (yank/yank-pop, undo).
 
 ### Phase 6 — App behavior (B.5 → B.6 → B.1 → B.3 → B.2 → B.4 → B.8)
+
+**Status: PARTIAL** — B.5 custom-editor swap (duck-typed, preserving text/
+padding/border/autocomplete/actions), B.4 `setWorkingIndicator`/
+`setWorkingMessage`/`setWorkingVisible`, B.6 footer extension statuses
+(keyed `setStatus`), and B.8's `DynamicBorder` are DONE; the two-line
+footer, `ExpandableText` header, pending-messages display, loaded-resources
+layer, and the full status-indicator swap model are open.
 
 **Contents:**
 - B.5 editor dynamic height (`max(5, rows*0.3)` per render) + custom editor
@@ -542,6 +575,19 @@ dedicated indicators; `app.tools.expand` toggles the header.
 
 ### Phase 7 — Capstone: extension ctx.ui (B.7 + B.9)
 
+**Status: DONE** — extension widgets (`set-widget`, above/below editor,
+`MAX_WIDGET_LINES = 10` truncation) and the full `ExtensionUIContext` port
+in `kmet.app.extensions` (ui-custom/select/confirm/input/editor/notify,
+on-terminal-input, set-status, set-working-indicator/message/visible,
+set-hidden-thinking-label, set-widget, set-footer, set-header, set-title,
+set/get-editor-text, paste-to-editor, set-editor-component,
+add-autocomplete-provider, get-theme/get-all-themes,
+get/set-tools-expanded, reset!); `:session-start` event (startup/reload)
+emitted by the interactive mode; dialogs hosted in the editor container
+with DynamicBorder framing and IME focus propagation. Remaining: `set-theme`
+(deferred to Phase 4's ThemeController) and the extension-editor dialog's
+Ctrl+G external-editor support (kmet's dialog omits it).
+
 **Contents:** extension widgets (`register-widget!`/`unregister-widget!`,
 `render-widgets!`, `MAX_WIDGET_LINES = 10` truncation) → the full
 `ExtensionUIContext` port: `ui.custom(factory, {overlay?, overlayOptions?,
@@ -564,7 +610,9 @@ reload leaves no stale widgets/listeners.
 
 ### Master checklist
 
-Run `bb run` side-by-side with pi after every phase:
+Run `bb run` side-by-side with pi after every phase. Items marked ✅ are
+covered by the automated test suites (see the phase notes); the rest need
+a manual side-by-side pass.
 
 - [ ] Kitty protocol: `kitty-active?` true under kitty/ghostty/wezterm;
       key releases filtered unless `:wants-key-release?`; `alt+x`,
@@ -572,10 +620,12 @@ Run `bb run` side-by-side with pi after every phase:
 - [ ] Paste: bracketed paste content arrives as one wrapped event
 - [ ] IME: CJK candidate window at the hardware cursor in the editor;
       `set-show-hardware-cursor!` toggles visibility; dialogs hosting an
-      Input propagate focus (candidate window follows)
-- [ ] Overlays: anchor/margin/percentage placement identical to pi
+      Input propagate focus (candidate window follows) — propagation
+      ✅ tested (`test_extension_dialogs`)
+- [x] Overlays: anchor/margin/percentage placement identical to pi
       (`overlay-qa-tests` cases); focus reclaim after nested custom UI
       closes; `unfocus({target})`; hidden overlays don't capture input
+      (✅ `test_overlay`)
 - [ ] Resize: height change → full redraw (non-Termux); width change →
       full redraw; no flicker under Termux keyboard toggle
 - [ ] Shrink: content shrink clears rows (default on), disabled via env
@@ -586,10 +636,12 @@ Run `bb run` side-by-side with pi after every phase:
 - [ ] Theme: missing-token error lists all missing colors; `set-theme`
       via extension re-themes live (components rebuild on invalidate);
       auto light/dark follows the terminal scheme report
-- [ ] `KMET_TUI_WRITE_LOG` captures the raw ANSI stream
-- [ ] Custom editor swap preserves text, padding, autocomplete, actions
-- [ ] Extension `ui.custom` overlay + non-overlay modes resolve
-      `done(value)` and restore the editor
+- [x] `KMET_TUI_WRITE_LOG` captures the raw ANSI stream
+- [x] Custom editor swap preserves text, padding, autocomplete, actions
+      (✅ duck-typed transfer, §B.5)
+- [x] Extension `ui.custom` overlay + non-overlay modes resolve
+      `done(value)` and restore the editor (✅ `test_extensions_ui` +
+      registry integration)
 
 ## Decision record: unbounded vs windowed chat
 

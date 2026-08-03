@@ -39,7 +39,8 @@
   (hide-cursor! [this])
   (show-cursor! [this])
   (clear-line! [this])
-  (clear-screen! [this]))
+  (clear-screen! [this])
+  (set-title! [this title] "Set the terminal window title (OSC 0)"))
 
 (defrecord JLineTerminal [^Terminal terminal ^java.io.Reader reader ^java.io.Writer writer
                           input-handler resize-handler running?]
@@ -78,7 +79,8 @@
   (hide-cursor! [this] (write-output this "\u001b[?25l"))
   (show-cursor! [this] (write-output this "\u001b[?25h"))
   (clear-line! [this] (write-output this "\u001b[2K"))
-  (clear-screen! [this] (write-output this "\u001b[2J\u001b[H")))
+  (clear-screen! [this] (write-output this "\u001b[2J\u001b[H"))
+  (set-title! [this title] (write-output this (str "\u001b]0;" title "\u0007"))))
 
 (defn create-terminal []
   (let [t (TerminalBuilder/terminal)]

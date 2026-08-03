@@ -460,6 +460,12 @@
       (get @themes "dark")
       dark-theme))
 
+(defn get-all-themes
+  "All registered themes as a name → theme map (pi: getAvailableThemesWithPaths
+   without the file paths — those come from the loaders)."
+  []
+  @themes)
+
 (defn- load-edn-file [path]
   (let [basename (str/replace (fs/file-name path) #"\.edn$" "")]
     (try

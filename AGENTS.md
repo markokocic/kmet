@@ -60,7 +60,8 @@ src/kmet/
 │   ├── skills.clj      — Skills loading + system prompt
 │   ├── prompts.clj     — Prompt template loading + /name expansion (pi: core/prompt-templates.js)
 │   ├── frontmatter.clj — YAML frontmatter parsing shared by skills/prompts (pi: utils/frontmatter.js)
-│   ├── extensions.clj  — Extension loading, input/before-agent-start hooks
+│   ├── extensions.clj  — Extension loading, input/before-agent-start hooks,
+│   │                     UI registry + ui-* API (pi: ExtensionUIContext)
 │   ├── event_bus.clj   — Event vocabulary + extension event bus
 │   ├── commands.clj    — Slash command registry (builtins, skills, extensions)
 │   ├── keybindings.clj — App keybindings
@@ -84,6 +85,8 @@ src/kmet/
 │       ├── assistant_message.clj
 │       ├── tool_execution.clj
 │       ├── custom_message.clj
+│       ├── extension_dialogs.clj  — ui.select/input/editor dialogs (DynamicBorder
+│       │                  framing + IME focus propagation)
 │       ├── status_indicator.clj
 │       └── footer.clj
 ├── tui/                — Generic TUI library (Pi's @earendil-works/pi-tui)

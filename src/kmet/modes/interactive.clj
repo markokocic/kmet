@@ -32,9 +32,11 @@
             [kmet.app.bash-executor :as bash-exec]
             [kmet.app.tools.bash :as bash-tool]
             [kmet.app.ui.bash-execution :as be]
+            [kmet.app.ui.extension-dialogs :as dialogs]
+            [kmet.tui.components.spinner :as spinner]
             [kmet.libs.process :as process]))
 
-(declare resume-session show-session-tree)
+(declare resume-session show-session-tree build-extension-ui-registry)
 
 ;; ─── Global config ref ────────────────────────────────────────────────────
 
@@ -292,7 +294,8 @@
       (try
         ;; pi: settingsManager.reload() + theme re-registration
         (let [config (cfg/init!)
-              ;; pi: session.reload → extension shutdown/start
+        ;; pi: session.reload → extension shutdown/start
+              _ (extensions/ui-reset!)
               _ (extensions/clear-extensions!)
               _ (doseq [d (cfg/resource-dirs config :extensions-dir ".kmet/extensions")]
                   (extensions/load-extensions-from-dir d))
@@ -312,6 +315,8 @@
           (reset! global-config config)
           (agent/set-system-prompt! agent-state system-prompt)
           (update-header-footer! cs)
+          ;; pi: reload re-emits session_start so extensions re-register UI
+          (event-bus/emit-event! {:type :session-start :reason :reload})
           (ui/chat-history-add-message! chat-history
                                         {:role :info :label "Reload"
                                          :content "Reloaded keybindings, extensions, skills, prompts, themes, and context files."}))
@@ -1145,7 +1150,404 @@
                                         :collapsed-content compact
                                         :expanded-content full}))
 
+      ;; Extension UI registry (pi: ExtensionUIContext) — installed after the
+      ;; layout is live so extensions can drive the UI from event handlers
+      (build-extension-ui-registry cs
+                                   {:ed ed :ftr ftr :hdr hdr :ch ch
+                                    :sp1 sp1
+                                    :header-container header-container
+                                    :editor-container editor-container
+                                    :widget-container-above widget-container-above
+                                    :widget-container-below widget-container-below}
+                                   (cfg/get-theme config))
+
       cs)))
+
+;; ─── Extension UI registry (pi: ExtensionUIContext) ────────────────────────
+;; build-layout installs this registry after the layout is live; extensions
+;; call the kmet.app.extensions ui-* fns, which dispatch through it. All
+;; closures capture the layout pieces they mutate.
+
+(def ^:private MAX-WIDGET-LINES 10)
+
+(defonce ^:private git-branch-cache (atom nil))
+
+(defn- get-git-branch
+  "Lazily resolve the current git branch for the footer data provider
+   (pi: FooterDataProvider.getGitBranch). One-shot, cached; nil outside a
+   git repository."
+  []
+  (or @git-branch-cache
+      (let [r (try (proc/shell {:out :string :err :string}
+                               "git" "branch" "--show-current")
+                   (catch Exception _ nil))]
+        (reset! git-branch-cache
+                (when (and r (str/blank? (:err r)))
+                  (let [b (str/trim (:out r))]
+                    (when (seq b) b)))))))
+
+(defn- render-extension-widgets!
+  "Rebuild the widget containers (pi: renderWidgets): the above-editor
+   container gets a leading Spacer + widgets (bare Spacer when empty); the
+   below-editor container gets widgets only."
+  [t widget-above widget-below widgets-above widgets-below]
+  (container/container-clear widget-above)
+  (container/container-clear widget-below)
+  (container/container-add-child widget-above (spacer/make-spacer 1))
+  (doseq [w (vals @widgets-above)]
+    (container/container-add-child widget-above w))
+  (doseq [w (vals @widgets-below)]
+    (container/container-add-child widget-below w))
+  (tui/tui-request-render t))
+
+(defn- make-extension-widget-component
+  "pi: string arrays wrap in a Container of Text lines truncated to
+   MAX_WIDGET_LINES with a '... (widget truncated)' tail; factory functions
+   produce the component directly."
+  [t theme content]
+  (if (vector? content)
+    (let [c (container/make-container)]
+      (doseq [line (take MAX-WIDGET-LINES content)]
+        (container/container-add-child c (text/make-text line 1 0)))
+      (when (> (count content) MAX-WIDGET-LINES)
+        (container/container-add-child c
+                                       (text/make-text
+                                        (th/fg theme :muted "... (widget truncated)")
+                                        1 0)))
+      c)
+    (content t theme)))
+
+(defn- normalize-custom-component
+  "Accept either an IComponent or a plain render map {:render :handle-input
+   :invalidate} from an extension factory (pi: custom() accepts both a
+   Component and a duck-typed object)."
+  [x]
+  (if (satisfies? tui/IComponent x)
+    x
+    (when (and (map? x) (fn? (:render x)))
+      (let [m x]
+        (reify tui/IComponent
+          (render [_ width] ((:render m) width))
+          (handle-input [_ data] (when-let [f (:handle-input m)] (f data)))
+          (invalidate [_] (when-let [f (:invalidate m)] (f))))))))
+
+(defn- transfer-editor!
+  "Copy the app editor's wiring onto a custom editor component (pi:
+   setCustomEditorComponent — duck-typed transfer of text callbacks,
+   appearance, autocomplete provider, and app action handlers)."
+  [app-ed custom-ed keybindings]
+  (doseq [field [:on-submit :on-change :padding-x :border-fn
+                 :autocomplete-provider :terminal-rows-atom]]
+    (when (contains? custom-ed field)
+      (reset! (get custom-ed field) @(get app-ed field))))
+  (when (contains? custom-ed :action-handlers)
+    (doseq [[action-id f] @(:action-handlers app-ed)]
+      (swap! (:action-handlers custom-ed) assoc action-id f)))
+  (when (contains? custom-ed :keybindings)
+    (reset! (:keybindings custom-ed) keybindings))
+  nil)
+
+(defn- make-extension-autocomplete-provider
+  "Wrap an extension autocomplete factory in the AutocompleteProvider
+   protocol (pi: ctx.ui.addAutocompleteProvider). FACTORY receives the
+   editor state map {:lines :cursor-line :cursor-col :opts} and returns
+   {:items [AutocompleteItem] :prefix string} or nil; completion applies
+   the default prefix-replace (pi default behavior)."
+  [factory]
+  (reify ac/AutocompleteProvider
+    (get-suggestions [_ lines cursor-line cursor-col opts]
+      (factory {:lines lines :cursor-line cursor-line
+                :cursor-col cursor-col :opts opts}))
+    (apply-completion [_ lines cursor-line cursor-col item prefix]
+      (let [line (nth lines cursor-line "")
+            start (max 0 (- cursor-col (count prefix)))
+            new-line (str (subs line 0 start) (:value item) (subs line cursor-col))]
+        {:lines (assoc lines cursor-line new-line)
+         :cursor-line cursor-line
+         :cursor-col (+ start (count (:value item)))}))
+    (should-trigger-file-completion [_ _ _ _] false)
+    (get-trigger-characters [_] [])))
+
+(defn- make-delegating-autocomplete-provider
+  "Try extension providers first, then fall back to the base provider
+   (pi: setupAutocompleteProvider — extension providers wrap the base)."
+  [extension-providers base-provider]
+  (reify ac/AutocompleteProvider
+    (get-suggestions [_ lines cursor-line cursor-col opts]
+      (or (some (fn [p] (ac/get-suggestions p lines cursor-line cursor-col opts))
+                extension-providers)
+          (when base-provider
+            (ac/get-suggestions base-provider lines cursor-line cursor-col opts))))
+    (apply-completion [_ lines cursor-line cursor-col item prefix]
+      (if base-provider
+        (ac/apply-completion base-provider lines cursor-line cursor-col item prefix)
+        {:lines (assoc lines cursor-line
+                       (str (subs (nth lines cursor-line "") 0
+                                  (max 0 (- cursor-col (count prefix))))
+                            (:value item)
+                            (subs (nth lines cursor-line "") cursor-col)))
+         :cursor-line cursor-line
+         :cursor-col (+ (max 0 (- cursor-col (count prefix))) (count (:value item)))}))
+    (should-trigger-file-completion [_ lines cursor-line cursor-col]
+      (or (some #(ac/should-trigger-file-completion % lines cursor-line cursor-col)
+                extension-providers)
+          (boolean (and base-provider
+                        (ac/should-trigger-file-completion base-provider
+                                                           lines cursor-line cursor-col)))))
+    (get-trigger-characters [_]
+      (vec (distinct (concat (mapcat ac/get-trigger-characters extension-providers)
+                             (when base-provider
+                               (ac/get-trigger-characters base-provider))))))))
+
+(defn- build-extension-ui-registry
+  "Create the ExtensionUIContext implementation for the live layout
+   (pi: createExtensionUIContext). Returns the capability map installed via
+   extensions/set-ui-registry!."
+  [{:keys [tui cs]}
+   {:keys [ed ftr hdr ch sp1 header-container editor-container
+           widget-container-above widget-container-below]}
+   theme]
+  (let [t tui
+        widgets-above (atom {})
+        widgets-below (atom {})
+        custom-footer-atom (atom nil)
+        custom-header-atom (atom nil)
+        editor-factory-atom (atom nil)
+        extension-autocomplete-factories (atom [])
+        terminal-input-unsubscribers (atom [])
+        show-dialog (fn [dialog]
+                      ;; pi: extension dialogs replace the editor container
+                      ;; content and take focus (IME propagation handled by
+                      ;; the dialog records)
+                      (container/container-clear editor-container)
+                      (container/container-add-child editor-container dialog)
+                      (tui/tui-set-focus t dialog)
+                      (tui/tui-request-render t))
+        hide-dialog (fn []
+                      (container/container-clear editor-container)
+                      (container/container-add-child editor-container ed)
+                      (tui/tui-set-focus t ed)
+                      (tui/tui-request-render t))
+        rebuild-autocomplete-provider! (fn []
+                                         (let [ext-providers
+                                               (mapv make-extension-autocomplete-provider
+                                                     @extension-autocomplete-factories)
+                                               base (ac/make-combined-provider
+                                                     :commands-fn #(vec (concat
+                                                                         (commands/get-commands)
+                                                                         (prompts/as-command-maps (prompts/get-prompt-templates))
+                                                                         (skills/as-command-maps (skills/get-skills))))
+                                                     :base-path (System/getProperty "user.dir"))]
+                                           (editor/editor-set-autocomplete-provider!
+                                            ed (make-delegating-autocomplete-provider ext-providers base))
+                                           nil))
+        footer-data {:get-git-branch get-git-branch
+                     :get-extension-statuses (fn []
+                                               @(:extension-statuses-atom ftr))
+                     :on-branch-change (fn [_f] (fn []))}
+        registry
+        {:select (fn [title options]
+                   (let [p (promise)]
+                     (show-dialog (dialogs/make-extension-selector
+                                   title options
+                                   (fn [opt] (hide-dialog) (deliver p opt))
+                                   (fn [] (hide-dialog) (deliver p nil))
+                                   theme))
+                     p))
+         :confirm (fn [title message]
+                    (let [p (promise)]
+                      (show-dialog (dialogs/make-extension-selector
+                                    (str title "\n" message) ["Yes" "No"]
+                                    (fn [opt] (hide-dialog) (deliver p (= opt "Yes")))
+                                    (fn [] (hide-dialog) (deliver p false))
+                                    theme))
+                      p))
+         :input (fn [title _placeholder]
+                  (let [p (promise)]
+                    (show-dialog (dialogs/make-extension-input
+                                  title
+                                  (fn [v] (hide-dialog) (deliver p v))
+                                  (fn [] (hide-dialog) (deliver p nil))
+                                  theme))
+                    p))
+         :editor (fn [title prefill]
+                   (let [p (promise)]
+                     (show-dialog (dialogs/make-extension-editor
+                                   title prefill
+                                   (fn [v] (hide-dialog) (deliver p v))
+                                   (fn [] (hide-dialog) (deliver p nil))
+                                   theme
+                                   (fn [] (term/rows @(:terminal t)))))
+                     p))
+         :notify (fn [message _type]
+                   (tui/tui-flash! t message)
+                   nil)
+         :custom (fn [factory {:keys [overlay overlay-options on-handle]}]
+                   (let [p (promise)
+                         saved-text (editor/editor-get-text ed)
+                         closed (atom false)
+                         close (fn [result]
+                                 (when-not @closed
+                                   (reset! closed true)
+                                   (if overlay
+                                     (tui/tui-hide-overlay t)
+                                     (do (hide-dialog)
+                                         (editor/editor-set-text! ed saved-text)))
+                                   (deliver p result)))]
+                     (try
+                       (let [component (normalize-custom-component
+                                        (factory t theme (tui-kb/get-global-keybindings) close))]
+                         (when-not @closed
+                           (if overlay
+                             (let [opts (if (fn? overlay-options)
+                                          (overlay-options)
+                                          overlay-options)
+                                   handle (tui/tui-show-overlay t component opts)]
+                               (when on-handle (on-handle handle)))
+                             (do (container/container-clear editor-container)
+                                 (container/container-add-child editor-container component)
+                                 (tui/tui-set-focus t component)
+                                 (tui/tui-request-render t)))))
+                       (catch Exception e
+                         (when-not @closed
+                           (reset! closed true)
+                           (when-not overlay (hide-dialog))
+                           (tui/tui-flash! t (str "Extension UI error: " (ex-message e)))
+                           (deliver p nil))))
+                     p))
+         :set-status (fn [key text]
+                       (ui/footer-set-extension-status! ftr key text)
+                       (tui/tui-request-render t))
+         :set-widget (fn [key content options]
+                       (let [placement (or (:placement options) :above-editor)
+                             m (if (= :below-editor placement) widgets-below widgets-above)]
+                         (swap! m dissoc key)
+                         (when content
+                           (swap! m assoc key
+                                  (make-extension-widget-component t theme content)))
+                         (render-extension-widgets! t widget-container-above
+                                                    widget-container-below
+                                                    widgets-above widgets-below)))
+         :set-footer (fn [factory]
+                       (when-let [cf @custom-footer-atom]
+                         (tui/tui-remove-child t cf))
+                       (tui/tui-remove-child t ftr)
+                       (if factory
+                         (let [cf (factory t theme footer-data)]
+                           (reset! custom-footer-atom cf)
+                           (tui/tui-add-child t cf))
+                         (do (reset! custom-footer-atom nil)
+                             (tui/tui-add-child t ftr)))
+                       (tui/tui-request-render t))
+         :set-header (fn [factory]
+                       (let [child (if factory (factory t theme) hdr)]
+                         (container/container-clear header-container)
+                         (container/container-add-child header-container sp1)
+                         (container/container-add-child header-container child)
+                         (container/container-add-child header-container sp1)
+                         (when-not factory
+                           (text/text-set! hdr (fmt-header cs)))
+                         (tui/tui-request-render t)))
+         :set-title (fn [title]
+                      (when-let [term @(:terminal t)] (term/set-title! term title)))
+         :on-terminal-input (fn [handler]
+                              (tui/tui-add-input-listener t handler)
+                              (let [unsub (fn [] (tui/tui-remove-input-listener t handler))]
+                                (swap! terminal-input-unsubscribers conj unsub)
+                                unsub))
+         :set-editor-text (fn [text]
+                            (editor/editor-set-text! ed text)
+                            (tui/tui-request-render t))
+         :get-editor-text (fn [] (editor/editor-get-text ed))
+         :paste-to-editor (fn [text]
+                            (tui/handle-input ed (str "\u001b[200~" text "\u001b[201~")))
+         :set-working-indicator (fn [options]
+                                  (spinner/spinner-set-indicator!
+                                   (:spinner (:status-indicator cs)) options)
+                                  (tui/tui-request-render t))
+         :set-working-message (fn [message]
+                                (ui/status-indicator-set-text! (:status-indicator cs)
+                                                               (or message "Working..."))
+                                (tui/tui-request-render t))
+         :set-working-visible (fn [visible?]
+                                (if visible?
+                                  (when @(:running-turn? cs)
+                                    (ui/status-indicator-start! (:status-indicator cs)))
+                                  (ui/status-indicator-stop! (:status-indicator cs)))
+                                (tui/tui-request-render t))
+         :set-hidden-thinking-label (fn [label]
+                                      (ui/chat-history-set-hidden-thinking-label! ch label)
+                                      (tui/tui-request-render t))
+         :set-editor-component (fn [factory]
+                                 (let [current-text (editor/editor-get-text ed)]
+                                   (container/container-clear editor-container)
+                                   (if factory
+                                     (let [new-ed (factory t theme (tui-kb/get-global-keybindings))]
+                                       (transfer-editor! ed new-ed (tui-kb/get-global-keybindings))
+                                       (editor/editor-set-text! new-ed current-text)
+                                       (container/container-add-child editor-container new-ed)
+                                       (tui/tui-set-focus t new-ed))
+                                     (do (editor/editor-set-text! ed current-text)
+                                         (container/container-add-child editor-container ed)
+                                         (tui/tui-set-focus t ed)))
+                                   (reset! editor-factory-atom factory)
+                                   (tui/tui-request-render t)))
+         :add-autocomplete-provider (fn [factory]
+                                      (swap! extension-autocomplete-factories conj factory)
+                                      (rebuild-autocomplete-provider!))
+         :get-theme (fn [] theme)
+         :get-all-themes (fn [] (th/get-all-themes))
+         :get-tools-expanded (fn [] (ui/chat-history-get-tool-expanded ch))
+         :set-tools-expanded (fn [expanded?]
+                               (let [current? (ui/chat-history-get-tool-expanded ch)]
+                                 (when (not= current? expanded?)
+                                   (ui/chat-history-toggle-tool-expanded! ch)))
+                               (tui/tui-request-render t))
+         :reset (fn []
+                  ;; pi: resetExtensionUI — dispose widgets, restore
+                  ;; footer/header/editor, clear statuses + working
+                  ;; customization, drop terminal input listeners
+                  (reset! widgets-above {})
+                  (reset! widgets-below {})
+                  (render-extension-widgets! t widget-container-above
+                                             widget-container-below
+                                             widgets-above widgets-below)
+                  (when @custom-footer-atom
+                    (tui/tui-remove-child t @custom-footer-atom)
+                    (reset! custom-footer-atom nil)
+                    (tui/tui-add-child t ftr))
+                  (when @custom-header-atom
+                    (reset! custom-header-atom nil)
+                    (container/container-clear header-container)
+                    (container/container-add-child header-container sp1)
+                    (container/container-add-child header-container hdr)
+                    (container/container-add-child header-container sp1)
+                    (text/text-set! hdr (fmt-header cs)))
+                  (doseq [unsub @terminal-input-unsubscribers]
+                    (try (unsub) (catch Exception _)))
+                  (reset! terminal-input-unsubscribers [])
+                  (doseq [key (keys @(:extension-statuses-atom ftr))]
+                    (ui/footer-set-extension-status! ftr key nil))
+                  (spinner/spinner-set-indicator! (:spinner (:status-indicator cs)) nil)
+                  (ui/status-indicator-set-text! (:status-indicator cs) "Working...")
+                  (ui/chat-history-set-hidden-thinking-label! ch nil)
+                  (reset! extension-autocomplete-factories [])
+                  (rebuild-autocomplete-provider!)
+                  (when @editor-factory-atom
+                    (let [current-text (editor/editor-get-text ed)]
+                      (container/container-clear editor-container)
+                      (editor/editor-set-text! ed current-text)
+                      (container/container-add-child editor-container ed)
+                      (tui/tui-set-focus t ed))
+                    (reset! editor-factory-atom nil))
+                  ;; restore any open dialog
+                  (container/container-clear editor-container)
+                  (container/container-add-child editor-container ed)
+                  (tui/tui-set-focus t ed)
+                  (when (tui/tui-has-overlay? t) (tui/tui-hide-overlay t))
+                  (tui/tui-request-render t))}]
+    (extensions/set-ui-registry! registry)
+    registry))
 
 ;; ─── Run ───────────────────────────────────────────────────────────────────
 
@@ -1172,6 +1574,26 @@
             cs (build-layout config session)]
         (reset! tui-ref (:tui cs))
         (when (:resume opts) (resume-session cs ensure-session-dir))
+        ;; pi: start the UI before initializing extensions so session_start
+        ;; handlers can use interactive dialogs — kmet loads extensions
+        ;; earlier, so the event fires once the layout + UI registry are
+        ;; live and the render loop is running (the future waits for it).
+        (future
+          (try
+            (loop []
+              (when-not (or @(:running? (:tui cs))
+                            @(:stopped? (:tui cs)))
+                (Thread/sleep 20)
+                (recur)))
+            ;; skipped entirely when the TUI already stopped (immediate quit)
+            (when @(:running? (:tui cs))
+              (event-bus/emit-event!
+               {:type :session-start
+                :reason (cond (:resume opts) :resume
+                              (:continue opts) :continue
+                              :else :new)}))
+            (catch Exception e
+              (debug/log "session-start: " e))))
         (tui/tui-start (:tui cs))
         (process/kill-tracked-children!)
         (println "kmet session ended.")

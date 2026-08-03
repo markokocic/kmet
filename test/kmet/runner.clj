@@ -22,6 +22,7 @@
             [kmet.app.test-context]
             [kmet.app.test-prompts]
             [kmet.app.test-extensions]
+            [kmet.app.test-extensions-ui]
             [kmet.app.test-event-bus]
             [kmet.app.test-commands]
             [kmet.test-editing]
@@ -46,6 +47,7 @@
             [kmet.tui.components.test-alt-screen-flash]
             [kmet.tui.components.test-cancellable-loader]
             [kmet.tui.components.test-dynamic-border]
+            [kmet.tui.components.test-spinner]
             [kmet.tui.test-overlay]
             [kmet.libs.test-self-contained]
             [kmet.libs.test-terminal-image]
@@ -58,6 +60,7 @@
             [kmet.app.ui.test-tool-execution]
             [kmet.app.ui.test-custom-message]
             [kmet.app.ui.test-bash-execution]
+            [kmet.app.ui.test-extension-dialogs]
             [kmet.app.ui.test-footer]))
 
 (def all-namespaces
@@ -75,6 +78,7 @@
     kmet.app.test-context
     kmet.app.test-prompts
     kmet.app.test-extensions
+    kmet.app.test-extensions-ui
     kmet.app.test-event-bus
     kmet.app.test-commands
     kmet.test-editing
@@ -99,6 +103,7 @@
     kmet.tui.components.test-alt-screen-flash
     kmet.tui.components.test-cancellable-loader
     kmet.tui.components.test-dynamic-border
+    kmet.tui.components.test-spinner
     kmet.tui.test-overlay
     kmet.libs.test-self-contained
     kmet.libs.test-terminal-image
@@ -111,6 +116,7 @@
     kmet.app.ui.test-tool-execution
     kmet.app.ui.test-custom-message
     kmet.app.ui.test-bash-execution
+    kmet.app.ui.test-extension-dialogs
     kmet.app.ui.test-footer])
 
 (defn- selected-vars

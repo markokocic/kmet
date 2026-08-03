@@ -46,6 +46,18 @@
       (is (some #(re-find #"Thinking" %) plain)
           "Should show Thinking... label"))))
 
+(deftest test-custom-hidden-label
+  (testing "set-hidden-label! replaces the hidden-thinking label (pi:
+            setHiddenThinkingLabel)"
+    (let [c (am/make-assistant-message :text "response" :thinking "secret"
+                                       :hide-thinking? true)
+          _ (am/assistant-message-set-hidden-label! c "Thoughts hidden")
+          plain (mapv strip-ansi (core/render c 40))]
+      (is (some #(re-find #"Thoughts hidden" %) plain)
+          "custom label shown")
+      (is (not-any? #(re-find #"Thinking\.\.\." %) plain)
+          "default label replaced"))))
+
 (deftest test-append-text
   (testing "append-text! updates content during streaming"
     (let [c (am/make-assistant-message)]

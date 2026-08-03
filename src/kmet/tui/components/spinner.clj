@@ -14,7 +14,8 @@
 (def ^:private RST "\u001b[0m")
 
 (defrecord Spinner [active-atom text-atom start-atom frames-atom interval-ms-atom
-                    prefix-atom spinner-color-fn-atom message-color-fn-atom]
+                    prefix-atom spinner-color-fn-atom message-color-fn-atom
+                    verbatim-atom]
   protocols/IComponent
   (render [_this width]
     (if-not @active-atom
@@ -22,11 +23,19 @@
       (let [elapsed (- (System/nanoTime) @start-atom)
             interval-ms @interval-ms-atom
             frame-idx (long (/ elapsed (* interval-ms 1000000)))
-            frame (nth @frames-atom (mod frame-idx (count @frames-atom)))
+            frames @frames-atom
+            frame (if (seq frames)
+                    (nth frames (mod frame-idx (count frames)))
+                    "")
+            ;; pi Loader: verbatim mode renders custom frames as-is (no color
+            ;; fn); empty frames hide the indicator and show the message only
             spinner-fn (or @spinner-color-fn-atom (fn [s] (str CYN s RST)))
+            rendered-frame (if @verbatim-atom frame (spinner-fn frame))
             msg-fn (or @message-color-fn-atom identity)
             prefix @prefix-atom
-            line (str prefix (spinner-fn frame) " " (msg-fn @text-atom))]
+            line (str prefix
+                      (when (seq rendered-frame) (str rendered-frame " "))
+                      (msg-fn @text-atom))]
         ;; pi Loader: leading blank line above the animated line
         ["" (u/truncate-to-width line width)])))
   (handle-input [_this _data] nil)
@@ -53,7 +62,8 @@
                  :interval-ms-atom (atom interval-ms)
                  :prefix-atom (atom prefix)
                  :spinner-color-fn-atom (atom spinner-color-fn)
-                 :message-color-fn-atom (atom message-color-fn)}))
+                 :message-color-fn-atom (atom message-color-fn)
+                 :verbatim-atom (atom false)}))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 
@@ -97,3 +107,26 @@
   "Set the color function for the message text (fn msg → colored-msg)."
   [spinner f]
   (reset! (:message-color-fn-atom spinner) f))
+
+(defn spinner-set-indicator!
+  "Set the animated indicator frames and interval (pi:
+   Loader.setIndicator({frames, intervalMs})). Options map with
+   :frames (vector of frame strings) and/or :interval-ms. When options
+   are provided the indicator renders VERBATIM — custom frames are used
+   as-is without the spinner color fn, and an empty frames vector hides
+   the indicator (message only). nil options restore the default frames,
+   interval, and color-fn rendering. Returns the spinner."
+  [spinner & [options]]
+  (if (nil? options)
+    (do (reset! (:verbatim-atom spinner) false)
+        (reset! (:frames-atom spinner) DEFAULT-FRAMES)
+        (reset! (:interval-ms-atom spinner) 100)
+        spinner)
+    (let [{:keys [frames interval-ms]} options]
+      (reset! (:verbatim-atom spinner) true)
+      (when (some? frames)
+        (reset! (:frames-atom spinner) (vec frames)))
+      (when (and (some? interval-ms) (pos? interval-ms))
+        (reset! (:interval-ms-atom spinner) interval-ms))
+      (reset! (:start-atom spinner) (System/nanoTime))
+      spinner)))

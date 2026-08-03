@@ -134,6 +134,206 @@
   (clear-input-hooks!)
   (clear-before-agent-start-hooks!))
 
+;; ─── Extension UI registry (pi: ExtensionUIContext) ────────────────────────
+;; The interactive mode installs the live UI implementations after building
+;; the layout; extensions call the ui-* fns below, which dispatch through
+;; the registry. Before the layout exists the registry is empty and every
+;; call is a no-op returning nil (matching pi, where ui methods called
+;; before startup are inert). The registry is cleared on reload; extensions
+;; re-register via session_start handlers.
+
+(defonce ^:private ui-registry (atom {}))
+
+(defn set-ui-registry!
+  "Install the interactive mode's UI implementations: a map of capability
+   keyword → (fn [& args]). Called by build-layout; replaced on reload."
+  [registry]
+  (reset! ui-registry registry)
+  nil)
+
+(defn clear-ui-registry!
+  "Drop the UI registry (no-op ui calls afterwards)."
+  []
+  (reset! ui-registry {})
+  nil)
+
+(defn ui-call
+  "Dispatch a UI capability call through the registry. No-op (nil) when the
+   interactive mode has not installed the registry yet (pi: ui methods are
+   inert before startup)."
+  [capability & args]
+  (when-let [f (get @ui-registry capability)]
+    (apply f args)))
+
+;; ─── Extension-facing UI API (pi: ctx.ui.*) ────────────────────────────────
+;; Each fn mirrors one ExtensionUIContext method. Dialogs return a Clojure
+;; promise (pi: Promise) — deref it on a worker/agent thread to get the
+;; result (nil on cancel). NOTE: derefing from the TUI input thread
+;; deadlocks input (same constraint as blocking pi's single-threaded loop);
+;; event handlers and command handlers that run off the input thread are
+;; safe.
+
+(defn ui-custom
+  "Show a custom extension component (pi: ctx.ui.custom).
+   FACTORY — (fn [tui theme keybindings done]) returning a component (or
+   render map). DONE is (fn [result]) — call it to close the UI and resolve
+   the returned promise with RESULT.
+   Options: :overlay true to show as an overlay (pi overlay mode;
+   default false replaces the editor area); :overlay-options — map or
+   (fn [] map) passed to tui-show-overlay; :on-handle — (fn [handle])
+   receiving the OverlayHandle map."
+  [factory & [{:keys [overlay overlay-options on-handle]}]]
+  (ui-call :custom factory {:overlay overlay
+                            :overlay-options overlay-options
+                            :on-handle on-handle}))
+
+(defn ui-select
+  "Show a list selector dialog (pi: ctx.ui.select). Returns a promise of
+   the chosen string, or nil when cancelled."
+  [title options & [_opts]]
+  (ui-call :select title options))
+
+(defn ui-confirm
+  "Show a Yes/No confirmation (pi: ctx.ui.confirm). Returns a promise of
+   a boolean."
+  [title message & [_opts]]
+  (ui-call :confirm title message))
+
+(defn ui-input
+  "Show a one-line input dialog (pi: ctx.ui.input). Returns a promise of
+   the entered string, or nil when cancelled."
+  [title placeholder & [_opts]]
+  (ui-call :input title placeholder))
+
+(defn ui-notify
+  "Show a transient notification (pi: ctx.ui.notify). Type: :info |
+   :warning | :error (all rendered as a bottom flash in kmet)."
+  [message & [type]]
+  (ui-call :notify message type))
+
+(defn ui-on-terminal-input
+  "Register a raw terminal input listener (pi: ctx.ui.onTerminalInput).
+   HANDLER — (fn [data]) returning nil, or a map with :consume true to
+   stop dispatch and/or :data to transform the data for later listeners.
+   Returns a deregister function."
+  [handler]
+  (ui-call :on-terminal-input handler))
+
+(defn ui-set-status
+  "Set/clear a keyed status shown in the footer (pi: ctx.ui.setStatus).
+   Pass nil text to clear the key."
+  [key text]
+  (ui-call :set-status key text))
+
+(defn ui-set-widget
+  "Set/clear a persistent widget above (default) or below the editor
+   (pi: ctx.ui.setWidget). CONTENT — vector of lines, or a factory
+   (fn [tui theme]) returning a component; nil clears the widget.
+   Options: :placement :above-editor | :below-editor."
+  [key content & [{:keys [placement]}]]
+  (ui-call :set-widget key content {:placement placement}))
+
+(defn ui-set-footer
+  "Replace the footer with a custom component (pi: ctx.ui.setFooter).
+   FACTORY — (fn [tui theme footer-data]) returning a component; nil
+   restores the built-in footer. FOOTER-DATA — map with :get-git-branch,
+   :get-extension-statuses, :on-branch-change."
+  [factory]
+  (ui-call :set-footer factory))
+
+(defn ui-set-header
+  "Replace the header with a custom component (pi: ctx.ui.setHeader).
+   FACTORY — (fn [tui theme]) returning a component; nil restores the
+   built-in header."
+  [factory]
+  (ui-call :set-header factory))
+
+(defn ui-set-title
+  "Set the terminal window title (pi: ctx.ui.setTitle)."
+  [title]
+  (ui-call :set-title title))
+
+(defn ui-set-editor-text
+  "Replace the editor content (pi: ctx.ui.setEditorText)."
+  [text]
+  (ui-call :set-editor-text text))
+
+(defn ui-get-editor-text
+  "Current editor content (pi: ctx.ui.getEditorText)."
+  []
+  (ui-call :get-editor-text))
+
+(defn ui-paste-to-editor
+  "Paste text into the editor as if bracketed-pasted (pi:
+   ctx.ui.pasteToEditor)."
+  [text]
+  (ui-call :paste-to-editor text))
+
+(defn ui-set-working-indicator
+  "Customize the streaming working indicator (pi: ctx.ui.setWorkingIndicator).
+   Options map with :frames (vector of frame strings, rendered verbatim)
+   and/or :interval-ms; empty frames hide the indicator; nil restores the
+   default spinner."
+  [options]
+  (ui-call :set-working-indicator options))
+
+(defn ui-set-working-message
+  "Set the working indicator message (pi: ctx.ui.setWorkingMessage)."
+  [message]
+  (ui-call :set-working-message message))
+
+(defn ui-set-working-visible
+  "Show/hide the working indicator (pi: ctx.ui.setWorkingVisible)."
+  [visible?]
+  (ui-call :set-working-visible visible?))
+
+(defn ui-set-hidden-thinking-label
+  "Set the label shown in place of hidden thinking blocks (pi:
+   ctx.ui.setHiddenThinkingLabel)."
+  [label]
+  (ui-call :set-hidden-thinking-label label))
+
+(defn ui-set-editor-component
+  "Replace the editor with a custom component (pi: ctx.ui.setEditorComponent).
+   FACTORY — (fn [tui theme keybindings]) returning a component; nil
+   restores the default editor, preserving text."
+  [factory]
+  (ui-call :set-editor-component factory))
+
+(defn ui-add-autocomplete-provider
+  "Add an autocomplete provider to the editor (pi:
+   ctx.ui.addAutocompleteProvider)."
+  [factory]
+  (ui-call :add-autocomplete-provider factory))
+
+(defn ui-get-theme
+  "The active theme map (pi: ctx.ui.theme)."
+  []
+  (ui-call :get-theme))
+
+(defn ui-get-all-themes
+  "All registered themes as a name → theme map (pi: ctx.ui.getAllThemes)."
+  []
+  (ui-call :get-all-themes))
+
+(defn ui-get-tools-expanded
+  "Whether tool output is expanded (pi: ctx.ui.getToolsExpanded)."
+  []
+  (ui-call :get-tools-expanded))
+
+(defn ui-set-tools-expanded
+  "Expand/collapse all tool output (pi: ctx.ui.setToolsExpanded)."
+  [expanded?]
+  (ui-call :set-tools-expanded expanded?))
+
+(defn ui-reset!
+  "Reset all extension UI back to defaults (pi: resetExtensionUI). Called
+   on reload: disposes widgets, restores footer/header/editor, clears
+   statuses and working-indicator customization, drops terminal input
+   listeners."
+  []
+  (ui-call :reset))
+
 (defn load-extensions-from-dir
   "Load all .clj extension files from a directory.
    Each file is loaded with load-string for side effects."

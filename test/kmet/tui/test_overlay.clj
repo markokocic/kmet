@@ -45,7 +45,8 @@
     (hide-cursor! [_] nil)
     (show-cursor! [_] nil)
     (clear-line! [_] nil)
-    (clear-screen! [_] nil)))
+    (clear-screen! [_] nil)
+    (set-title! [_ _] nil)))
 
 (defn- composite [tui lines w h]
   ((var kmet.tui.core/composite-overlays) tui lines w h))

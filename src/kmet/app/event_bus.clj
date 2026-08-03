@@ -62,6 +62,13 @@
     Payload: :message."
 
    ;; ─── App-level events (emitted by the interactive mode, not the loop) ──
+   :session-start
+   "Fired once after the interactive TUI is built and the extension UI
+    registry is live, before the render loop starts (pi: session_start).
+    Payload: :reason (:new | :resume | :continue), :previous-session-file
+    (optional). Extensions use this to set up widgets, statuses, footers,
+    and custom editors."
+
    :user-bash
    "Fired when the user runs a bash command (!/!!).
     Payload: :command, :exclude-from-context?, :cwd."

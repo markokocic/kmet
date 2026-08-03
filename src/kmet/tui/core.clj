@@ -628,41 +628,59 @@
    are filtered unless the component opts in via a :wants-key-release?
    field (pi: Component.wantsKeyRelease)."
   [tui data]
-  (doseq [l @(:input-listeners tui)] (l data))
-  ;; If the focused component is an overlay that is no longer visible
-  ;; (hidden via handle, or the :visible callback went false), redirect
-  ;; focus to the topmost visible overlay or back to the pre-focus
-  ;; (pi: handleInput overlay visibility check).
-  (let [fc @(:focused-component tui)
-        focused-overlay (some #(when (identical? (:component %) fc) %) @(:overlays tui))]
-    (when (and focused-overlay (not (overlay-visible? tui focused-overlay)))
-      (if-let [top (get-topmost-visible-overlay tui)]
-        (tui-set-focus tui (:component top))
-        (set-focus-internal tui @(:pre-focus focused-overlay) :preserve))))
-  ;; Focus is not an overlay: reclaim input for the focused visible overlay
-  ;; (pi: eligible → reclaim; blocked → resolve the resume, unless the
-  ;; current focus is the blocker itself).
-  (let [fc @(:focused-component tui)
-        focus-is-overlay? (boolean (some #(identical? (:component %) fc) @(:overlays tui)))]
-    (when-not focus-is-overlay?
-      (let [rs (get-visible-overlay-focus-restore tui)]
-        (cond
-          (= :eligible (:status rs))
-          (tui-set-focus tui (:component (:overlay rs)))
+  ;; pi: input listeners run as a chain — each may :consume (stop dispatch)
+  ;; or return transformed :data for the later listeners and the focused
+  ;; component (pi: handleInput listener loop).
+  (let [{:keys [data] :as chained}
+        (reduce (fn [{:keys [data] :as acc} l]
+                  (if (:consumed acc)
+                    acc
+                    (let [result (try (l data)
+                                      (catch Exception e
+                                        (binding [*out* *err*]
+                                          (println "input listener error:" (ex-message e)))
+                                        nil))]
+                      (cond
+                        (:consume result) (assoc acc :consumed true)
+                        (map? result) (assoc acc :data (:data result data))
+                        :else acc))))
+                {:data data :consumed false}
+                @(:input-listeners tui))]
+    (when-not (:consumed chained)
+      ;; If the focused component is an overlay that is no longer visible
+      ;; (hidden via handle, or the :visible callback went false), redirect
+      ;; focus to the topmost visible overlay or back to the pre-focus
+      ;; (pi: handleInput overlay visibility check).
+      (let [fc @(:focused-component tui)
+            focused-overlay (some #(when (identical? (:component %) fc) %) @(:overlays tui))]
+        (when (and focused-overlay (not (overlay-visible? tui focused-overlay)))
+          (if-let [top (get-topmost-visible-overlay tui)]
+            (tui-set-focus tui (:component top))
+            (set-focus-internal tui @(:pre-focus focused-overlay) :preserve))))
+      ;; Focus is not an overlay: reclaim input for the focused visible overlay
+      ;; (pi: eligible → reclaim; blocked → resolve the resume, unless the
+      ;; current focus is the blocker itself).
+      (let [fc @(:focused-component tui)
+            focus-is-overlay? (boolean (some #(identical? (:component %) fc) @(:overlays tui)))]
+        (when-not focus-is-overlay?
+          (let [rs (get-visible-overlay-focus-restore tui)]
+            (cond
+              (= :eligible (:status rs))
+              (tui-set-focus tui (:component (:overlay rs)))
 
-          (and (= :blocked (:status rs)) (not (identical? (:blocked-by rs) fc)))
-          (if (= :restore-overlay (:status (:resume rs)))
-            (tui-set-focus tui (:component (:overlay rs)))
-            (do (clear-overlay-focus-restore! tui)
-                (tui-set-focus tui (:target (:resume rs)))))))))
-  (when-let [fc @(:focused-component tui)]
-    ;; pi: input goes only to the focused leaf; key release events are
-    ;; filtered unless the component opts in via a :wants-key-release?
-    ;; field (pi: Component.wantsKeyRelease)
-    (when (or (not (keys/is-key-release? data))
-              (:wants-key-release? fc))
-      (handle-input fc data)))
-  (tui-request-render tui))
+              (and (= :blocked (:status rs)) (not (identical? (:blocked-by rs) fc)))
+              (if (= :restore-overlay (:status (:resume rs)))
+                (tui-set-focus tui (:component (:overlay rs)))
+                (do (clear-overlay-focus-restore! tui)
+                    (tui-set-focus tui (:target (:resume rs)))))))))
+      (when-let [fc @(:focused-component tui)]
+        ;; pi: input goes only to the focused leaf; key release events are
+        ;; filtered unless the component opts in via a :wants-key-release?
+        ;; field (pi: Component.wantsKeyRelease)
+        (when (or (not (keys/is-key-release? data))
+                  (:wants-key-release? fc))
+          (handle-input fc data)))
+      (tui-request-render tui))))
 
 (defn- process-input-buffer!
   "Process buffered input. Tries to complete ESC sequences with

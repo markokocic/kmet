@@ -31,12 +31,13 @@
 (defn- render-thinking-to-width
   "Render thinking text as markdown tinted thinkingText + italic (pi:
    Markdown with defaultTextStyle {color: thinkingText, italic: true}). Code
-   fences inside thinking highlight, like pi."
-  [text cw left-pad theme hide?]
+   fences inside thinking highlight, like pi. When hidden, renders the
+   hidden-thinking label instead (pi: hiddenThinkingLabel)."
+  [text cw left-pad theme hide? hidden-label]
   (if (not (seq text))
     []
     (if hide?
-      [(str left-pad (theme/fg theme :thinking-text (theme/italic "Thinking...")))]
+      [(str left-pad (theme/fg theme :thinking-text (theme/italic hidden-label)))]
       (let [mc (md/make-markdown text
                                  :theme (theme/get-markdown-theme theme)
                                  :default-style (fn [s]
@@ -52,7 +53,7 @@
 
 (defcomponent AssistantMessageComponent :assistant
               [text-atom thinking-text-atom theme-atom
-               output-pad-atom hide-thinking-atom
+               output-pad-atom hide-thinking-atom hidden-label-atom
                rendered-text-lines-atom
                rendered-thinking-lines-atom
                rendered-text-atom        ;; text source of the cached lines (stale check)
@@ -105,6 +106,7 @@
   (let [theme @(:theme-atom comp)
         output-pad @(:output-pad-atom comp)
         hide? @(:hide-thinking-atom comp)
+        hidden-label @(:hidden-label-atom comp)
         pad-x output-pad
         cw (max 1 (- width (* 2 pad-x)))
         left-pad (apply str (repeat pad-x \space))
@@ -113,7 +115,7 @@
     (reset! (:rendered-text-lines-atom comp)
             (render-text-to-width text cw left-pad theme))
     (reset! (:rendered-thinking-lines-atom comp)
-            (render-thinking-to-width thinking cw left-pad theme hide?))
+            (render-thinking-to-width thinking cw left-pad theme hide? hidden-label))
     (reset! (:rendered-text-atom comp) text)
     (reset! (:rendered-thinking-atom comp) thinking)
     (reset! (:last-render-width-atom comp) width)))
@@ -121,14 +123,17 @@
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-assistant-message
-  [& {:keys [text thinking theme output-pad hide-thinking?]
+  [& {:keys [text thinking theme output-pad hide-thinking? hidden-label]
       :or {text "" thinking "" theme theme/dark-theme
            output-pad 1 hide-thinking? false}}]
-  (let [comp (map->AssistantMessageComponent {:text-atom (atom text)
+  ;; explicit nil (callers pass a tracked label) falls back to the default
+  (let [hidden-label (or hidden-label "Thinking...")
+        comp (map->AssistantMessageComponent {:text-atom (atom text)
                                               :thinking-text-atom (atom thinking)
                                               :theme-atom (atom theme)
                                               :output-pad-atom (atom output-pad)
                                               :hide-thinking-atom (atom hide-thinking?)
+                                              :hidden-label-atom (atom hidden-label)
                                               :rendered-text-lines-atom (atom [])
                                               :rendered-thinking-lines-atom (atom [])
                                               :rendered-text-atom (atom nil)
@@ -155,6 +160,10 @@
   (swap! (:thinking-text-atom comp) str text))
 
 (defsetter assistant-message-set-hide-thinking! :hide-thinking-atom comp hide?
+  (when-let [w @(:last-render-width-atom comp)]
+    (reflow-all! comp w)))
+
+(defsetter assistant-message-set-hidden-label! :hidden-label-atom comp label
   (when-let [w @(:last-render-width-atom comp)]
     (reflow-all! comp w)))
 
