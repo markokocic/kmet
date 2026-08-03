@@ -240,14 +240,25 @@
           (and signal @signal) (throw (ex-info "aborted" {}))
           :else {:exit-code exit-code
                  :cleanup (fn []
-                            ;; Pi: waitForChildProcess finalize. Java
+                            ;; Pi: waitForChildProcess finalize. The process
+                            ;; exiting doesn't mean all its output was read: up
+                            ;; to a pipe buffer of data can still be in flight,
+                            ;; so the readers must be allowed to drain it first.
+                            ;; Only close the streams when a reader is genuinely
+                            ;; stuck (a detached descendant holding the pipe
+                            ;; open) — closing early truncates the tail. Java
                             ;; process-pipe reads can't be unblocked (close and
                             ;; interrupt are no-ops on a blocked
-                            ;; FileInputStream.read), so the join is a short
+                            ;; FileInputStream.read), so the join is a bounded
                             ;; settle: readers that already EOF'd join
                             ;; instantly, while a reader blocked on a pipe held
-                            ;; open by a detached descendant is abandoned — it
-                            ;; terminates on its own when the descendant exits.
+                            ;; open by a detached descendant is abandoned after
+                            ;; the grace period and the stream is closed to
+                            ;; release it (it terminates on its own when the
+                            ;; descendant exits).
+                            (doseq [f [out-future err-future]]
+                              (when f
+                                (try (deref f 2000 nil) (catch Exception _ nil))))
                             (doseq [stream [(:out p) (:err p)]]
                               (when stream
                                 (try (.close stream) (catch Exception _ nil))))

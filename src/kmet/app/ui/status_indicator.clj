@@ -44,7 +44,7 @@
             :frames SPINNER-FRAMES
             :interval-ms 100
             :spinner-color-fn #(theme/fg theme :accent %)
-            :message-color-fn #(theme/fg theme :dim %))]
+            :message-color-fn #(theme/fg theme :muted %))]
     (map->StatusIndicator {:spinner sp :active-atom (atom false)})))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
@@ -72,4 +72,4 @@
   (spinner/spinner-set-spinner-color-fn! (:spinner indicator)
                                          #(theme/fg theme :accent %))
   (spinner/spinner-set-message-color-fn! (:spinner indicator)
-                                         #(theme/fg theme :dim %)))
+                                         #(theme/fg theme :muted %)))

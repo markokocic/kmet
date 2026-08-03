@@ -16,18 +16,21 @@
 ;; ═══════════════════════════════════════════════════════════════════════════
 
 (def ^:dynamic *tracked*
-  "During track! execution, an atom holding the set of atoms deref'd so far
-   in the current reactive render pass. nil outside a tracking scope."
+  "During track! execution, a map of the atoms deref'd so far in the
+   current reactive render pass, keyed by atom → value as read. nil outside
+   a tracking scope."
   nil)
 
 (defn tracked-deref
-  "Deref wrapper used by track!. Records A in the active tracking set (when
-   one is bound), then returns (deref A). Only IRef instances (atoms, vars)
-   are tracked — volatiles and delays can't take watches and are skipped."
+  "Deref wrapper used by track!. Records A in the active tracking map (when
+   one is bound) with the value just read, then returns it. Only IRef
+   instances (atoms, vars) are tracked — volatiles and delays can't take
+   watches and are skipped."
   [a]
-  (when (and *tracked* (instance? clojure.lang.IRef a))
-    (swap! *tracked* conj a))
-  (deref a))
+  (let [v (deref a)]
+    (when (and *tracked* (instance? clojure.lang.IRef a))
+      (swap! *tracked* assoc a v))
+    v))
 
 (defn- deref-form? [f]
   ;; Only the 1-arg (deref x) form — @x reads as (clojure.core/deref x).
@@ -69,11 +72,11 @@
 (defn track-render
   "Runtime implementation of track!. Runs RENDER-FN within a tracking scope
    and caches the result under WIDTH. Returns the cached result while every
-   tracked atom still holds the value it was computed from — watches
-   invalidate on actual value changes (equal-value resets are no-ops), and
-   the deref'd values are re-verified on every hit (closing the race where a
-   value changes between the body's deref and its watch registration, which
-   would never fire a notification).
+   tracked atom still holds the value it was read with — watches invalidate
+   on actual value changes (equal-value resets are no-ops), and the cache
+   records the values AS READ (not a post-body snapshot), so an atom that
+   changed mid-render makes the stored values disagree with the current
+   ones on the next hit check and forces a re-render.
    Requires COMPONENT to have a :cache-atom (or legacy :cache) field."
   [component width render-fn]
   (let [cache-atom (component-cache-atom component)
@@ -82,11 +85,11 @@
              (= (:width cache) width)
              (every? (fn [[a v]] (= (deref a) v)) (:values cache)))
       (:result cache)
-      (let [tracked (atom #{})]
+      (let [tracked (atom {})]
         (binding [*tracked* tracked]
           (let [result (render-fn)
-                tracked-set @tracked]
-            (doseq [a tracked-set]
+                tracked-map @tracked]
+            (doseq [a (keys tracked-map)]
               (add-watch a (tracker-key component)
                          (fn [_ _ old new]
                            ;; Skip invalidation when the value didn't actually
@@ -97,7 +100,7 @@
                            (when-not (= old new)
                              (invalidate-cache component)))))
             (reset! cache-atom {:width width
-                                :values (zipmap tracked-set (map deref tracked-set))
+                                :values tracked-map
                                 :result result})
             result))))))
 

@@ -442,12 +442,13 @@
                                                  (reset! cursor-row r)
                                                  (recur (inc r)))))))))]
                 (cond
-                ;; Full redraw: first render, width change, viewport moved up (content
-                ;; shrank), or content first overflowing the screen (crossing into
-                ;; scrollback can't be done incrementally).
-                  (or (empty? prev) width-changed
-                      (< new-vt old-vt)
-                      (and (pos? scroll) (< prev-count h)))
+                ;; Full redraw only on first render and width changes (pi:
+                ;; width changes always re-render; height changes re-render
+                ;; outside Termux). Content growth/shrink is handled by the
+                ;; screen-row diff below — terminal scrolls for growth, in-place
+                ;; rewrites for shrink — so the scrollback (which holds the
+                ;; chat history, pi-style) is never cleared mid-session.
+                  (or (empty? prev) width-changed)
                   (do-full-redraw)
 
                 ;; Everything else: scroll the screen (if the viewport moved down) and

@@ -77,7 +77,7 @@
                       bash-running?
                       bash-signal
                       pending-bash-components
-                      pending-bash-container])
+                      pending-messages-container])
 
 ;; ─── Formatting helpers ────────────────────────────────────────────────────
 
@@ -611,7 +611,7 @@
         ;; Pi: pendingMessagesContainer sits between chat and footer
         (if @(:running-turn? cs)
           (do
-            (container/container-add-child (:pending-bash-container cs) bash-comp)
+            (container/container-add-child (:pending-messages-container cs) bash-comp)
             (swap! (:pending-bash-components cs) conj bash-comp))
           (ui/chat-history-add-message! (:chat-history cs)
                                         {:role :bash :command command
@@ -650,7 +650,7 @@
                 (let [pending (:pending-bash-components cs)]
                   (when (seq @pending)
                     (doseq [comp @pending]
-                      (container/container-remove-child (:pending-bash-container cs) comp)
+                      (container/container-remove-child (:pending-messages-container cs) comp)
                       (ui/chat-history-add-message! (:chat-history cs)
                                                     {:role :bash :command command :component comp}))
                     (reset! pending []))))
@@ -982,7 +982,6 @@
         ed (tui/make-editor :height 8 :padding-x 0
                             :terminal-rows (fn [] (term/rows @(:terminal t)))
                             :border-fn (fn [c] (th/dim c)))
-        sp3 (spacer/make-spacer 1)
         ftr (ui/make-footer :status "" :n-msgs 0 :theme (cfg/get-theme config))
 
         ;; Core state (status-indicator filled in after layout)
@@ -1001,7 +1000,7 @@
                             :bash-running? (atom false)
                             :bash-signal (atom false)
                             :pending-bash-components (atom [])
-                            :pending-bash-container (container/make-container)})]
+                            :pending-messages-container (container/make-container)})]
 
     ;; Expose CoreState to the agent on-event handler (for :status events)
     (reset! cs-ref cs)
@@ -1026,28 +1025,37 @@
     ;; Status indicator (Pi-style: separate layer between chat and editor)
     (let [si (ui/make-status-indicator :theme (cfg/get-theme config))
           cs (assoc cs :status-indicator si)
-          ;; Bounded chat viewport: the ScrollView gets the height left over by
-          ;; the fixed header/dock, so total rendered content never exceeds the
-          ;; screen and streaming tool output doesn't trigger full-screen
-          ;; redraws (pi: transcriptScrollView in interactive-mode.ts).
-          ch-scroll (tui/make-scroll-view ch :follow-end true)
-          ;; Pi: the fixed bottom region is a VStack dock
-          ;; (interactive-mode.ts: new TuiLayouts.VStack([...dock children...]))
-          ;; — pending messages, status indicator, editor and footer compose
-          ;; as one fixed component under the chat scroll view.
-          dock (tui/make-v-stack
-                [(:pending-bash-container cs)
-                 si
-                 sp2
-                 ed
-                 sp3
-                 ftr])]
+          ;; Pi layout (interactive-mode.ts setupUiLayout): the TUI root
+          ;; renders children top-to-bottom; Containers are layout-neutral
+          ;; grouping handles (pi: Container class) — the hierarchy mirrors
+          ;; pi's addChild order exactly: header, loaded resources, chat,
+          ;; pending messages, status, widgets above the editor, editor,
+          ;; widgets below, footer. Like pi, the chat renders unbounded —
+          ;; the terminal's own scrollback is the chat history, so scrolling
+          ;; up (swipe/mouse wheel) shows earlier messages exactly like pi.
+          header-container (container/make-container [sp1 hdr sp1])
+          loaded-resources-container (container/make-container)
+          chat-container (container/make-container [ch])
+          pending-messages-container (:pending-messages-container cs)
+          status-container (container/make-container [si])
+          ;; pi: renderWidgets initializes the above-editor container with a
+          ;; default spacer when no extension widgets are registered
+          widget-container-above (container/make-container [sp2])
+          editor-container (container/make-container [ed])
+          widget-container-below (container/make-container)]
 
-      ;; Add components (header + chat scroll view + VStack dock)
-      (tui/tui-add-child t hdr)
-      (tui/tui-add-child t sp1)
-      (tui/tui-add-child t ch-scroll)
-      (tui/tui-add-child t dock)
+      ;; Add components in pi's addChild order (header, loaded resources,
+      ;; chat, pending messages, status, widgets above, editor, widgets
+      ;; below, footer)
+      (tui/tui-add-child t header-container)
+      (tui/tui-add-child t loaded-resources-container)
+      (tui/tui-add-child t chat-container)
+      (tui/tui-add-child t pending-messages-container)
+      (tui/tui-add-child t status-container)
+      (tui/tui-add-child t widget-container-above)
+      (tui/tui-add-child t editor-container)
+      (tui/tui-add-child t widget-container-below)
+      (tui/tui-add-child t ftr)
 
       ;; Wire editor submit
       (editor/editor-set-on-submit! ed
@@ -1096,22 +1104,15 @@
                                     (fn [] (handle-external-editor cs)))
 
       ;; Global input listeners — only truly global keys stay here (pi: keep
-      ;; app actions in the editor; the TUI keeps only global keys)
+      ;; app actions in the editor; the TUI keeps only global keys). Chat
+      ;; scrolling is the terminal's own scrollback (pi parity), so there are
+      ;; no chat scroll keys.
       (tui/tui-add-input-listener t
                                   (fn [data]
-                                    (let [kmgr (tui-kb/get-global-keybindings)]
-                                      (cond
-                                        (keys/matches-key? data (keys/ctrl "l"))
-                                        (do (term/clear-screen! @(:terminal t))
-                                            (tui/tui-request-render t))
-                                        ;; Scroll the chat viewport (pi: altScreen
-                                        ;; pageUp/pageDown; ctrl+arrows here since the
-                                        ;; editor owns pageUp/pageDown).
-                                        (tui-kb/matches-key kmgr data "app.chat.scrollUp")
-                                        (tui/scroll-view-scroll-by! ch-scroll -3)
-                                        (tui-kb/matches-key kmgr data "app.chat.scrollDown")
-                                        (tui/scroll-view-scroll-by! ch-scroll 3)
-                                        :else nil))))
+                                    (when (keys/matches-key? data (keys/ctrl "l"))
+                                      (term/clear-screen! @(:terminal t))
+                                      (tui/tui-request-render t))
+                                    nil))
 
       ;; Initialize header/footer
       (text/text-set! hdr (fmt-header cs))
@@ -1134,7 +1135,6 @@
                       "  " (th/dim thinking-key)   " — toggle thinking blocks\n"
                       "  " (th/dim "Ctrl+P")       " — cycle to next model\n"
                       "  " (th/dim "Ctrl+L")       " — clear terminal\n"
-                      "  " (th/dim "Ctrl+Up/Down") " — scroll chat viewport\n"
                       "  " (th/dim "Alt+Enter")    " — queue follow-up message\n"
                       "  " (th/dim "/") " — commands   " (th/dim "!") " — bash   "
                       "  " (th/dim "!!") " — bash (no context)\n\n"

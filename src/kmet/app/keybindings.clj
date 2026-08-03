@@ -22,9 +22,7 @@
    "app.message.copy"           {:default-keys ["ctrl+x"]                 :description "Copy message to clipboard"}
    "app.message.followUp"       {:default-keys ["alt+enter"]              :description "Queue follow-up message"}
    "app.message.dequeue"        {:default-keys ["alt+up"]                 :description "Restore queued messages"}
-   "app.editor.external"        {:default-keys ["ctrl+g"]                 :description "Open external editor"}
-   "app.chat.scrollUp"          {:default-keys ["ctrl+up"]                :description "Scroll chat viewport up"}
-   "app.chat.scrollDown"        {:default-keys ["ctrl+down"]              :description "Scroll chat viewport down"}})
+   "app.editor.external"        {:default-keys ["ctrl+g"]                 :description "Open external editor"}})
 
 ;; ─── Combined definitions (TUI + App) ─────────────────────────────────────
 
