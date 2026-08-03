@@ -51,6 +51,7 @@
             [kmet.tui.components.test-spinner]
             [kmet.tui.test-overlay]
             [kmet.tui.test-negotiation]
+            [kmet.tui.test-terminal-response]
             [kmet.libs.test-self-contained]
             [kmet.libs.test-terminal-image]
             [kmet.libs.test-yaml-lite]
@@ -109,6 +110,7 @@
     kmet.tui.components.test-spinner
     kmet.tui.test-overlay
     kmet.tui.test-negotiation
+    kmet.tui.test-terminal-response
     kmet.libs.test-self-contained
     kmet.libs.test-terminal-image
     kmet.libs.test-yaml-lite

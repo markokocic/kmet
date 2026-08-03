@@ -2,8 +2,7 @@
   "Kitty terminal image protocol implementation.
    Port of @earendil-works/pi-tui terminal-image.ts. Generic protocol code —
    no app/TUI dependencies."
-  (:require [clojure.string :as str]
-            [babashka.process :as proc])
+  (:require [clojure.string :as str])
   (:import [java.util Base64]))
 
 ;; ─── Capability detection ─────────────────────────────────────────────────
@@ -107,6 +106,41 @@
       (str/includes? line kitty-prefix)
       (str/includes? line "\u001b]1337;File=")))
 
+(defn parse-kitty-image-header
+  "Parse the first Kitty APC sequence's parameters (pi: parseKittyImageHeader).
+   Returns {:ids [..] :rows n} or nil when the line has no complete header.
+   Only the first chunk carries a header — continuation chunks (m=1) are
+   skipped by stopping at the first ';' after the prefix."
+  [line]
+  (let [start (str/index-of line kitty-prefix)]
+    (when start
+      (let [params-start (+ start (count kitty-prefix))
+            params-end (str/index-of line ";" params-start)]
+        (when params-end
+          (let [ids (atom [])
+                rows (atom 1)]
+            (doseq [param (str/split (subs line params-start params-end) #",")]
+              (let [[k v] (str/split param #"=" 2)]
+                (when v
+                  (let [n (parse-long v)]
+                    (when (and n (pos? n) (<= n 0xffffffff))
+                      (case k
+                        "i" (swap! ids conj n)
+                        "r" (reset! rows n)
+                        nil))))))
+            {:ids @ids :rows @rows}))))))
+
+(defn extract-kitty-image-ids
+  "Image IDs referenced by LINE (pi: extractKittyImageIds)."
+  [line]
+  (:ids (parse-kitty-image-header line) []))
+
+(defn extract-kitty-image-rows
+  "Rows the image in LINE occupies; 1 when LINE has no image header
+   (pi: extractKittyImageRows)."
+  [line]
+  (:rows (parse-kitty-image-header line) 1))
+
 ;; ─── Binary helpers ──────────────────────────────────────────────────────
 
 (defn- base64->bytes [s] (.decode (Base64/getDecoder) s))
@@ -208,33 +242,6 @@
         rows (Math/ceil (/ (* img-h scale) cell-h))]
     {:columns (max 1 (min max-w (int cols)))
      :rows (max 1 (if max-h (min max-h (int rows)) (int rows)))}))
-
-;; ─── Query terminal for cell dimensions ──────────────────────────────────
-
-(defn query-cell-dimensions!
-  "Query terminal for cell pixel dimensions via escape sequence.
-   Sends \\x1b[16t and reads response. Falls back to defaults on failure.
-   Returns the cell dimensions map."
-  []
-  (try
-    (let [p (proc/process ["sh" "-c"
-                           "printf '\\033[16t' > /dev/tty; read -t 1 line < /dev/tty"]
-                          {:out :string :err :string})
-          result (deref p 2000 ::timeout)]
-      (if (= result ::timeout)
-        default-cell-dimensions
-        (let [line (str/trim (:out result))]
-          (if-let [[_ _ _] (re-find #"^(\d+);(\d+);(\d+)?t$" line)]
-            (let [[_ _ rows-px cols-px] (re-find #";(\d+);(\d+)t" line)]
-              (when (and rows-px cols-px)
-                (let [dims {:width-px (/ (Integer/parseInt cols-px)
-                                         (or (some-> (System/getenv "COLUMNS") Integer/parseInt) 80))
-                            :height-px (/ (Integer/parseInt rows-px)
-                                          (or (some-> (System/getenv "LINES") Integer/parseInt) 24))}]
-                  (set-cell-dimensions! dims)
-                  dims)))
-            default-cell-dimensions))))
-    (catch Exception _ default-cell-dimensions)))
 
 ;; ─── Render ──────────────────────────────────────────────────────────────
 

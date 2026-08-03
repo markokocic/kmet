@@ -5,7 +5,8 @@
    terminal, so this works with any output stream. Self-contained — no
    kmet.* requires (libs rule); raw ANSI escapes live here by design."
   (:require [babashka.fs :as fs]
-            [clojure.java.io :as io]))
+            [clojure.java.io :as io]
+            [clojure.string :as str]))
 
 ;; ─── Kitty keyboard protocol state (pi: keys.ts global state) ──────────────
 
@@ -54,6 +55,81 @@
 ;; by terminals that do not know Kitty keyboard protocol — receiving DA
 ;; before a Kitty response enables the modifyOtherKeys fallback.
 
+;; ─── Terminal queries + responses (pi: terminal.ts / terminal-colors.ts) ────
+
+(def ^:const OSC-11-BACKGROUND-QUERY "\u001b]11;?\u0007")
+(def ^:const COLOR-SCHEME-QUERY "\u001b[?996n")
+(def ^:const COLOR-SCHEME-NOTIFICATIONS-ON "\u001b[?2031h")
+(def ^:const COLOR-SCHEME-NOTIFICATIONS-OFF "\u001b[?2031l")
+(def ^:const CELL-SIZE-QUERY "\u001b[16t")
+
+;; OSC 9;4 terminal progress (pi: terminal.ts TERMINAL_PROGRESS_*)
+(def ^:const TERMINAL-PROGRESS-ACTIVE-SEQUENCE "\u001b]9;4;3\u0007")
+(def ^:const TERMINAL-PROGRESS-CLEAR-SEQUENCE "\u001b]9;4;0;\u0007")
+(def ^:const TERMINAL-PROGRESS-KEEPALIVE-MS 1000)
+
+(def ^:private osc-11-response-re #"(?i)\u001b\]11;([^\u0007\u001b]*)(?:\u0007|\u001b\\)")
+(def ^:private color-scheme-report-re #"\u001b\[\?997;(1|2)n")
+(def ^:private cell-size-response-re #"\u001b\[6;(\d+);(\d+)t")
+
+(defn- parse-osc-hex-channel
+  "Parse a hex color channel: 2- or 4-digit hex scaled to 0-255
+   (pi: parseOscHexChannel — case-insensitive)."
+  [channel]
+  (when (re-matches #"(?i)[0-9a-f]+" channel)
+    (let [max-v (- (Math/pow 16 (count channel)) 1)]
+      (when (pos? max-v)
+        (int (Math/round (* (/ (Long/parseLong channel 16) max-v) 255)))))))
+
+(defn parse-osc-11-background-response
+  "Parse an OSC 11 background color response (\u001b]11;...\u0007) into
+   {:r r :g g :b b} or nil. Accepts #rrggbb, #rrrrggggbbbb, and rgb:/rgba:
+   channel forms (pi: parseOsc11BackgroundColor)."
+  [s]
+  (when-let [[_ value] (re-matches osc-11-response-re s)]
+    (let [value (str/trim value)]
+      (cond
+        (str/starts-with? value "#")
+        (let [hex (subs value 1)]
+          (cond
+            (re-matches #"(?i)[0-9a-f]{6}" hex)
+            {:r (Long/parseLong (subs hex 0 2) 16)
+             :g (Long/parseLong (subs hex 2 4) 16)
+             :b (Long/parseLong (subs hex 4 6) 16)}
+
+            (re-matches #"(?i)[0-9a-f]{12}" hex)
+            (let [r (parse-osc-hex-channel (subs hex 0 4))
+                  g (parse-osc-hex-channel (subs hex 4 8))
+                  b (parse-osc-hex-channel (subs hex 8 12))]
+              (when (and r g b) {:r r :g g :b b}))
+
+            :else nil))
+
+        :else
+        (let [rgb (str/replace value #"(?i)^rgba?:" "")
+              [r g b] (str/split rgb #"/")]
+          (when (and r g b)
+            (let [r (parse-osc-hex-channel r)
+                  g (parse-osc-hex-channel g)
+                  b (parse-osc-hex-channel b)]
+              (when (and r g b) {:r r :g g :b b}))))))))
+
+(defn parse-terminal-color-scheme-report
+  "Parse a terminal color scheme report (\u001b[?997;1n = dark, ;2 = light)
+   into :dark / :light, or nil (pi: parseTerminalColorSchemeReport)."
+  [s]
+  (when-let [[_ v] (re-matches color-scheme-report-re s)]
+    (if (= v "2") :light :dark)))
+
+(defn parse-cell-size-response
+  "Parse the cell size response to \u001b[16t (\u001b[6;height;widtht) into
+   {:width-px w :height-px h} or nil (pi: consumeCellSizeResponse)."
+  [s]
+  (when-let [[_ h w] (re-matches cell-size-response-re s)]
+    (let [h (Long/parseLong h) w (Long/parseLong w)]
+      (when (and (pos? h) (pos? w))
+        {:width-px w :height-px h}))))
+
 (def ^:const DESIRED-KITTY-FLAGS 7)
 (def ^:const KITTY-KEYBOARD-PROTOCOL-QUERY "\u001b[>7u\u001b[?u\u001b[c")
 (def ^:const NEGOTIATION-FLUSH-TIMEOUT-MS 150)
@@ -82,6 +158,22 @@
   [s]
   (or (= s "\u001b[")
       (boolean (re-matches #"\u001b\[\?[\d;]*" s))))
+
+(defn cell-size-response-prefix?
+  "True when s could still become a cell size response (\u001b[6;h;wt).
+   \u001b[6~ (PageDown) does not match — the required ';' disambiguates."
+  [s]
+  (boolean (re-matches #"\u001b\[6(?:;[\d;]*)?" s)))
+
+(defn osc-11-response-prefix?
+  "True when s could still become an OSC 11 response."
+  [s]
+  (boolean (re-matches #"(?i)\u001b\]11;[^\u0007\u001b]*" s)))
+
+(defn color-scheme-report-prefix?
+  "True when s could still become a color scheme report (\u001b[?997;Nn)."
+  [s]
+  (boolean (re-matches #"\u001b\[\?997(?:;[12]?)?" s)))
 
 (defn enable-modify-other-keys!
   "Enable xterm modifyOtherKeys (\u001b[>4;2m) so Ctrl/Alt modified keys

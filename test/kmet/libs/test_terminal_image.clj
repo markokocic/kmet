@@ -77,6 +77,24 @@
     (is (img/is-image-line "\u001b_Ga=T;data\u001b\\"))
     (is (not (img/is-image-line "regular text")))))
 
+(deftest test-kitty-image-header
+  (testing "parse-kitty-image-header extracts ids and rows (pi: parseKittyImageHeader)"
+    (let [seq (img/encode-kitty "Cg==" :rows 10 :image-id 42)]
+      (is (= {:ids [42] :rows 10} (img/parse-kitty-image-header seq)))
+      (is (= [42] (img/extract-kitty-image-ids seq)))
+      (is (= 10 (img/extract-kitty-image-rows seq)))))
+  (testing "no header on non-image lines"
+    (is (nil? (img/parse-kitty-image-header "plain text")))
+    (is (= [] (img/extract-kitty-image-ids "plain text")))
+    (is (= 1 (img/extract-kitty-image-rows "plain text"))))
+  (testing "multi-chunk sequences parse from the first chunk only"
+    (let [big (img/encode-kitty (apply str (repeat 5000 "A")) :rows 3 :image-id 7)]
+      (is (= [7] (img/extract-kitty-image-ids big)))
+      (is (= 3 (img/extract-kitty-image-rows big)))))
+  (testing "image id embedded in a styled line"
+    (let [line (str "\u001b[1m" (img/encode-kitty "Cg==" :image-id 99) "\u001b[0m")]
+      (is (= [99] (img/extract-kitty-image-ids line))))))
+
 (deftest test-capabilities
   (testing "capability detection returns map with expected keys"
     (let [caps (img/get-capabilities)]

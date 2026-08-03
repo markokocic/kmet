@@ -11,9 +11,10 @@ Analysis of pi's TUI architecture (pi source: `~/src/cvstree/pi/packages/tui/` +
 
 Status of the chat-screen layout (previously "Level 1") is DONE; the
 **input pipeline (Phase 1), overlay/focus layer (Phase 3), extension
-ctx.ui surface (Phase 7), and the write-log + listener-chaining +
-Loader-indicator + DynamicBorder items are DONE** (see the per-phase
-notes below); the remaining phases are planned below.
+ctx.ui surface (Phase 7), render loop + terminal queries (Phase 2), and
+the write-log + listener-chaining + Loader-indicator + DynamicBorder items
+are DONE** (see the per-phase notes below); the remaining phases are
+planned below.
 
 ---
 
@@ -21,16 +22,16 @@ notes below); the remaining phases are planned below.
 
 | pi module (`packages/tui/src`) | kmet | Status |
 |--------------------------------|------|--------|
-| `tui.ts` — TUI/Container/Component/Focusable, render loop, overlays, IME cursor | `tui/core.clj`, `tui/components/container.clj` | ✅ overlays + focus-restore state machine done (§A.3, §A.2); render-loop items open (§A.4) |
+| `tui.ts` — TUI/Container/Component/Focusable, render loop, overlays, IME cursor | `tui/core.clj`, `tui/components/container.clj` | ✅ overlays + focus-restore state machine (§A.3, §A.2); render loop: force render, height-change redraw, clearOnShrink, crash/debug logs, kitty-image diff, cell-size query done (§A.4) |
 | `keys.ts` — key parsing (legacy + Kitty), `matchesKey`, event types | `tui/keys.clj` | ✅ full Kitty CSI-u + modifyOtherKeys + legacy parsing, order-insensitive matching (§A.1) |
-| `terminal.ts` — ProcessTerminal, Kitty protocol negotiation, write log, progress, drainInput | `tui/terminal.clj` | ✅ negotiation, drain, write log, `set-title!`; progress/move-by/clear-from-cursor open (§A.1, §A.5) |
+| `terminal.ts` — ProcessTerminal, Kitty protocol negotiation, write log, progress, drainInput | `tui/terminal.clj` | ✅ negotiation, drain, write log, `set-title!`, `set-progress!` (OSC 9;4 + keepalive), `move-by!`, `clear-from-cursor!` (§A.1, §A.5) |
 | `stdin-buffer.ts` — batch splitting, paste re-wrap | (inline in `core.clj` input reader) | ✅ per-sequence splitting via the ESC-wait loop (cap raised for CSI-u) |
 | `native-modifiers.ts` | — | missing (Apple Terminal Shift+Enter) (§A.1) |
 | `utils.ts` — visibleWidth/truncateToWidth/wrapTextWithAnsi/sliceByColumn/extractSegments | `tui/utils.clj` | ✅ (verify `extractSegments`/`normalizeTerminalOutput` for §A.3) |
 | `keybindings.ts` — KeybindingsManager, keyText, conflicts | `tui/keybindings.clj` | ✅ (verify conflict reporting + `key-text`) |
 | `autocomplete.ts` | `tui/autocomplete.clj` | ✅ (extension-provider delegation added with §B.9) |
 | `fuzzy.ts` | `tui/fuzzy.clj` | ✅ |
-| `terminal-colors.ts` — OSC 11, color scheme report | — | missing (§A.4, §A.6) |
+| `terminal-colors.ts` — OSC 11, color scheme report | `libs/terminal.clj` | ✅ OSC 11 parse/query, `?997n` report + `?2031h/l` notifications (§A.4, §A.6) |
 | `terminal-image.ts` | `libs/terminal_image.clj` | ✅ (diff-loop integration partial, §A.4) |
 | `editor-component.ts` — EditorComponent interface | — | missing (§A.7); custom-editor swap uses duck-typing like pi (§B.5 done) |
 | `kill-ring.ts` / `undo-stack.ts` / `word-navigation.ts` | inside `editor.clj` | ✅ for Editor; **gap**: Input lacks them (§A.7) |
@@ -191,11 +192,13 @@ mounted check exists), no `nonCapturing`, no hidden state.
 **pi (`tui.ts`):**
 
 - `requestRender(force)` — force clears previous lines/width/height and
-  schedules an immediate full render.
+  schedules an immediate full render. ✅
 - Full redraw triggers: first render; width change; **height change
   (except Termux** — keyboard show/hide would replay history);
   `clearOnShrink` when `newLines < maxLinesRendered` and no overlays
-  (env `PI_CLEAR_ON_SHRINK`, default **on**, plus runtime setter).
+  (env `KMET_CLEAR_ON_SHRINK`, default **off** like pi's
+  `PI_CLEAR_ON_SHRINK === "1"` — tui.md's earlier "default on" was wrong;
+  runtime setter). ✅
 - `maxLinesRendered` high-water mark; `previousViewportTop` tracking with
   `finalCursorRow`-based update; `fullRedrawCount`.
 - Kitty images in the diff: `expandChangedRangeForKittyImages`,
@@ -226,31 +229,32 @@ logs, no cell-size query, no OSC 11 / color scheme.
 **Plan (files: `tui/core.clj`, `tui/terminal.clj`, `libs/terminal_image.clj`):**
 
 1. `tui-request-render` with `force` flag (reset previous lines/width, do
-   full render next frame).
+   full render next frame). ✅
 2. Height-change handling: full redraw when height changes and not Termux
    (`TERMUX_VERSION` env check), matching pi — verify against kmet's
    screen-diff behavior first (kmet may already handle resize correctly;
-   keep whichever matches pi's observable behavior).
-3. `clearOnShrink` (`KMET_CLEAR_ON_SHRINK` env, default on, runtime
-   setter) using a `max-lines-rendered` high-water mark; skip when
-   overlays are active.
+   keep whichever matches pi's observable behavior). ✅
+3. `clearOnShrink` (`KMET_CLEAR_ON_SHRINK` env, default **off** like pi,
+   runtime setter) using a `max-lines-rendered` high-water mark; skip when
+   overlays are active. ✅
 4. Kitty image diff integration: port `expandChangedRangeForKittyImages` /
    `deleteChangedKittyImages` / reserved-row pre-clear into both diff
-   paths; `collectKittyImageIds` + delete on full redraw.
+   paths; `collectKittyImageIds` + delete on full redraw. ✅
 5. Crash log + width-overflow throw (write to `kmet-crash.log` in cwd or
-   agent dir); `KMET_DEBUG_REDRAW=1` and `KMET_TUI_DEBUG=1` equivalents.
+   agent dir); `KMET_DEBUG_REDRAW=1` and `KMET_TUI_DEBUG=1` equivalents. ✅
 6. Cell size query on start (`\x1b[16t`) when image capabilities
    detected; parse `\x1b[6;h;wt` response; `set-cell-dimensions!` +
-   `invalidate` all + request render.
+   `invalidate` all + request render. ✅
 7. OSC 11 background query + `CSI ?996n` color scheme report + `?2031h/l`
    notifications; consume responses in `dispatch-input!` before listeners
    (port `consumeOsc11BackgroundResponse`, `consumeTerminalColorSchemeReport`).
 
 ## A.5 Terminal (`tui/terminal.clj`)
 
-Covered by A.1 (negotiation, drain, write log) and A.4 (title, progress).
-Remaining small items: `clear-from-cursor!`, `move-by!`, `clear-screen!`
-exists. Keep the JLine wrapper — no need to switch to raw stdin.
+✅ Covered by A.1 (negotiation, drain, write log) and A.4 (title, progress
+with keepalive, `move-by!`, `clear-from-cursor!`, cell-size / OSC 11 /
+color-scheme queries). Keep the JLine wrapper — no need to switch to raw
+stdin.
 
 ## A.6 Theme
 
@@ -464,8 +468,34 @@ paste as one wrapped event, releases filtered unless `:wants-key-release?`.
 
 ### Phase 2 — Render loop & terminal (A.4 + A.5)
 
-**Status: PARTIAL** — `KMET_TUI_WRITE_LOG` (write log) and `set-title!`
-are DONE; the rest is open.
+**Status: DONE** — `KMET_TUI_WRITE_LOG` (write log) and `set-title!` were
+already in; this pass added `requestRender(force)` (clears previous frame
+state → clearing full redraw), height-change full redraw (non-Termux,
+`TERMUX_VERSION` env check), `clearOnShrink` (high-water mark via
+`max-lines-rendered`, skipped while overlays are active,
+`KMET_CLEAR_ON_SHRINK=1` to enable + `set-clear-on-shrink!` runtime setter;
+**default off — pi's `PI_CLEAR_ON_SHRINK === "1"` is off too; tui.md's
+earlier "default on" was wrong**), full-redraw-count + `KMET_DEBUG_REDRAW`
+(`kmet-debug-render.log` reasons) + `KMET_TUI_DEBUG` (`/tmp/tui/` render
+dumps), width-overflow crash log (`kmet-crash.log` + `truncateToWidth`
+guidance throw, image lines exempt), Kitty-image diff integration
+(per-row old-id deletes incl. covering blocks, reserved-row `\u001b[2K`
+pre-clear + C=1 placement dance that skips the padding rows, full-redraw
+placement dance, previous-id delete on clear, changed-block-overflows-
+screen → full redraw), cell-size query (`\u001b[16t` on start when image
+capabilities detected; `\u001b[6;h;wt` consumed in the input path →
+`set-cell-dimensions!` + `tui-invalidate` + render), OSC 11 background
+query (`tui-query-terminal-background-color`, timeout → nil) + color
+scheme report (`\u001b[?996n` query, `\u001b[?997;Nn` consumed ungated —
+covers unsolicited `?2031h/l` notifications — `tui-on-terminal-color-scheme-
+change`, `tui-query-terminal-color-scheme`, `tui-set-terminal-color-scheme-
+notifications`), and `set-progress!` (OSC 9;4 with 1 s keepalive) /
+`move-by!` / `clear-from-cursor!` on the terminal. Responses are
+intercepted in `process-input-buffer!` (like the negotiation) so they never
+dispatch as keys; fragments are held with a flush timer.
+Skipped: `applyLineResets` (kmet lines are self-contained via
+attribute-specific resets — no SGR/OSC-8 state to clear; documented
+divergence).
 
 **Contents:** `requestRender(force)` → height-change full redraw (non-Termux)
 → `clearOnShrink` high-water mark (env + runtime setter) → Kitty-image diff
@@ -642,11 +672,16 @@ a manual side-by-side pass.
       (✅ `test_overlay`)
 - [ ] Resize: height change → full redraw (non-Termux); width change →
       full redraw; no flicker under Termux keyboard toggle
-- [ ] Shrink: content shrink clears rows (default on), disabled via env
+      (✅ logic: `test_terminal_response` covers force-render state reset;
+      manual pass needed for live resize)
+- [ ] Shrink: content shrink clears rows (default **off** like pi —
+      `KMET_CLEAR_ON_SHRINK=1` enables; runtime `set-clear-on-shrink!`)
 - [ ] Kitty images in mid-document growth: no stale pixels, no scroll
-      artifacts (image pre-clear path)
+      artifacts (✅ id-extraction + reserved-rows tests in
+      `test_terminal_image`/`test_terminal_response`; live terminal pass
+      needed)
 - [ ] Width overflow: `kmet-crash.log` written with all lines, TUI throws
-      with `truncateToWidth` guidance
+      with `truncateToWidth` guidance (✅ parse/log helpers tested)
 - [ ] Theme: missing-token error lists all missing colors; `set-theme`
       via extension re-themes live (components rebuild on invalidate);
       auto light/dark follows the terminal scheme report

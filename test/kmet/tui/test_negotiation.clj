@@ -28,7 +28,10 @@
     (show-cursor! [_] nil)
     (clear-line! [_] nil)
     (clear-screen! [_] nil)
-    (set-title! [_ _] nil)))
+    (set-title! [_ _] nil)
+    (move-by! [_ _] nil)
+    (clear-from-cursor! [_] nil)
+    (set-progress! [_ _] nil)))
 
 (defn- reset-protocol-state!
   "Reset the module-level protocol flags between tests."

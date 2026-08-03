@@ -3,10 +3,12 @@
    Primary entry point for kmet.tui — all public symbols are re-exported
    from this namespace for convenience."
   (:require [clojure.string :as str]
+            [clojure.java.io :as io]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.terminal :as terminal]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as utils]
+            [kmet.libs.terminal-image :as img]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.container :as container]
@@ -81,10 +83,16 @@
                 render-loop input-reader current-reader
                 flashes overlay-focus-restore focus-order-counter
                 show-hardware-cursor? keyboard-protocol-pushed?
-                negotiation-buffer negotiation-timer])
+                negotiation-buffer negotiation-timer
+                previous-height max-lines-rendered clear-on-shrink?
+                full-redraw-count previous-kitty-image-ids prev-image-blocks
+                pending-osc-11? osc-11-queries
+                color-scheme-listeners terminal-response-buffer
+                terminal-response-timer color-scheme-notifications-enabled?
+                debug-redraw? tui-debug?])
 
 (declare tui-request-render tui-stop set-focus-internal
-         overlay-visible? overlay-handle process-input-buffer!)
+         overlay-visible? overlay-handle process-input-buffer! tui-invalidate)
 
 (defn create-tui [terminal]
   (let [tui (map->TUI {:terminal (atom terminal)
@@ -106,7 +114,21 @@
                        :show-hardware-cursor? (atom (= (System/getenv "KMET_HARDWARE_CURSOR") "1"))
                        :keyboard-protocol-pushed? (atom false)
                        :negotiation-buffer (atom "")
-                       :negotiation-timer (atom nil)})]
+                       :negotiation-timer (atom nil)
+                       :previous-height (atom 0)
+                       :max-lines-rendered (atom 0)
+                       :clear-on-shrink? (atom (= (System/getenv "KMET_CLEAR_ON_SHRINK") "1"))
+                       :full-redraw-count (atom 0)
+                       :previous-kitty-image-ids (atom #{})
+                       :prev-image-blocks (atom nil)
+                       :pending-osc-11? (atom false)
+                       :osc-11-queries (atom [])
+                       :color-scheme-listeners (atom #{})
+                       :terminal-response-buffer (atom "")
+                       :terminal-response-timer (atom nil)
+                       :color-scheme-notifications-enabled? (atom false)
+                       :debug-redraw? (atom (= (System/getenv "KMET_DEBUG_REDRAW") "1"))
+                       :tui-debug? (atom (= (System/getenv "KMET_TUI_DEBUG") "1"))})]
     ;; AltScreenFlashContainer owned by the TUI (pi: TuiAltScreen owns its
     ;; flash container) — the render loop composites flash lines over the
     ;; screen window; tui-flash! / tui-flash-dispose! are the public API.
@@ -616,6 +638,116 @@
               (recur (inc row) lines))))))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
+;; Kitty image diff support (pi: expandChangedRangeForKittyImages /
+;; deleteChangedKittyImages / getKittyImageReservedRows)
+;; ═══════════════════════════════════════════════════════════════════════════
+
+(defn- kitty-image-reserved-rows
+  "Rows the image at INDEX occupies: the declared rows, bounded by the
+   consecutive blank rows after it (pi: getKittyImageReservedRows). Must be
+   computed on the raw, unpadded lines — padded spaces would terminate the
+   walk immediately."
+  [lines index]
+  (let [rows (img/extract-kitty-image-rows (or (nth lines index nil) ""))
+        max-rows (min rows (- (count lines) index))]
+    (if (<= rows 1)
+      1
+      (loop [reserved 1]
+        (if (>= reserved max-rows)
+          reserved
+          (let [line (or (nth lines (+ index reserved) nil) "")]
+            (if (or (img/is-image-line line) (pos? (utils/visible-width line)))
+              reserved
+              (recur (inc reserved)))))))))
+
+(defn- build-image-blocks
+  "Map content row → {:start row :rows n} for every Kitty image block in
+   LINES (pi: expandChangedRangeForKittyImages' block model)."
+  [lines]
+  (reduce (fn [m [i line]]
+            (if (img/is-image-line line)
+              (assoc m i {:start i :rows (kitty-image-reserved-rows lines i)})
+              m))
+          {}
+          (map-indexed vector lines)))
+
+(defn- collect-kitty-image-ids
+  "All Kitty image ids referenced by LINES (pi: collectKittyImageIds)."
+  [lines]
+  (reduce (fn [acc line] (reduce conj acc (img/extract-kitty-image-ids line)))
+          #{} lines))
+
+(defn- kitty-image-overflow?
+  "True when a changed image block in the viewport extends past the screen
+   bottom — placing it would scroll (pi: kitty image pre-clear would scroll
+   → full render fallback)."
+  [image-blocks prev prev-count lines new-vt h]
+  (boolean
+   (some (fn [[s {:keys [rows]}]]
+           (and (>= s new-vt)
+                (< s (+ new-vt h))
+                (> (+ s rows) (+ new-vt h))
+                (not= (if (< s prev-count) (nth prev s) "")
+                      (if (< s (count lines)) (nth lines s) ""))))
+         image-blocks)))
+
+;; ─── Crash + debug logs (pi: pi-crash.log / PI_DEBUG_REDRAW / PI_TUI_DEBUG)
+
+(defn- log-path [filename]
+  (str (io/file (System/getProperty "user.dir") filename)))
+
+(defn- append-log!
+  "Append TEXT to a file at PATH, ignoring errors (pi: appendFileSync)."
+  [path text]
+  (try
+    (with-open [w (io/writer path :append true)]
+      (.write w text))
+    (catch Exception _)))
+
+(defn- write-crash-log!
+  "Write all rendered lines + overflow info to kmet-crash.log in the cwd
+   (pi: pi-crash.log)."
+  [lines w idx vw]
+  (let [path (log-path "kmet-crash.log")
+        data (str "Crash at " (java.time.LocalDateTime/now) "\n"
+                  "Terminal width: " w "\n"
+                  "Line " idx " visible width: " vw "\n"
+                  "\n"
+                  "=== All rendered lines ===\n"
+                  (apply str (map-indexed (fn [i l]
+                                            (str "[" i "] (w=" (utils/visible-width l) ") " l "\n"))
+                                          lines))
+                  "\n")]
+    (try
+      (spit path data)
+      (catch Exception _))))
+
+(defn- tui-debug-dump!
+  "Write a render frame dump to /tmp/tui/ when KMET_TUI_DEBUG=1
+   (pi: PI_TUI_DEBUG render dumps)."
+  [prev lines buffer w h viewport-top hardware-cursor-row]
+  (try
+    (let [dir "/tmp/tui"]
+      (.mkdirs (io/file dir))
+      (let [path (str (io/file dir (str "render-" (System/nanoTime) "-"
+                                        (rand-int 0x7fffffff) ".log")))]
+        (spit path (str "viewportTop: " viewport-top "\n"
+                        "hardwareCursorRow: " hardware-cursor-row "\n"
+                        "height: " h "\n"
+                        "width: " w "\n"
+                        "newLines.length: " (count lines) "\n"
+                        "previousLines.length: " (count prev) "\n"
+                        "\n"
+                        "=== newLines ===\n"
+                        (apply str (map-indexed (fn [i l] (str "[" i "] " l "\n")) lines))
+                        "\n"
+                        "=== previousLines ===\n"
+                        (apply str (map-indexed (fn [i l] (str "[" i "] " l "\n")) prev))
+                        "\n"
+                        "=== buffer ===\n" buffer "\n"))))
+    (catch Exception _)))
+
+;; ═══════════════════════════════════════════════════════════════════════════
 ;; Input reader
 ;; ═══════════════════════════════════════════════════════════════════════════
 
@@ -685,6 +817,121 @@
               (reset! (:negotiation-buffer tui) ""))
             nil)))))
 
+;; ─── Terminal response interception (pi: consumeOsc11BackgroundResponse /
+;;      consumeTerminalColorSchemeReport / consumeCellSizeResponse) ──────────
+
+(defn- clear-terminal-response-timer!
+  "Cancel a pending terminal-response flush timer."
+  [tui]
+  (when-let [t @(:terminal-response-timer tui)]
+    (future-cancel t)
+    (reset! (:terminal-response-timer tui) nil)))
+
+(defn- schedule-terminal-response-flush!
+  "Flush a held terminal-response fragment back into the input buffer after
+   the flush timeout so it is never swallowed forever (mirrors the
+   negotiation flush)."
+  [tui reader buf]
+  (when (and (nil? @(:terminal-response-timer tui))
+             (seq @(:terminal-response-buffer tui)))
+    (reset! (:terminal-response-timer tui)
+            (future
+              (try
+                (Thread/sleep terminal/NEGOTIATION-FLUSH-TIMEOUT-MS)
+                (when (seq @(:terminal-response-buffer tui))
+                  (swap! buf str @(:terminal-response-buffer tui))
+                  (reset! (:terminal-response-buffer tui) "")
+                  (process-input-buffer! tui reader buf))
+                (catch Exception _))
+              (reset! (:terminal-response-timer tui) nil)))))
+
+(defn- settle-osc-11-query!
+  "Settle the OSC 11 query identified by PROMISE with COLOR (nil on
+   timeout). Drops already-settled queries; clears the pending flag when
+   none remain."
+  [tui color promise]
+  (swap! (:osc-11-queries tui)
+         (fn [qs]
+           (if-let [q (first (filter #(identical? (:promise %) promise) qs))]
+             (do (when (compare-and-set! (:settled? q) false true)
+                   (deliver (:promise q) color)
+                   (future-cancel (:timer q)))
+                 (vec (remove #(identical? (:promise %) promise) qs)))
+             qs)))
+  (when (empty? @(:osc-11-queries tui))
+    (reset! (:pending-osc-11? tui) false)))
+
+(defn- settle-osc-11-response!
+  "Settle the oldest unsettled OSC 11 query with COLOR (pi: shift + resolve)."
+  [tui color]
+  (when-let [q (first (filter #(not @(:settled? %)) @(:osc-11-queries tui)))]
+    (when (compare-and-set! (:settled? q) false true)
+      (deliver (:promise q) color)
+      (future-cancel (:timer q)))
+    (swap! (:osc-11-queries tui)
+           (fn [qs] (vec (remove #(identical? (:promise %) (:promise q)) qs)))))
+  (when (empty? @(:osc-11-queries tui))
+    (reset! (:pending-osc-11? tui) false)))
+
+(defn- intercept-terminal-response!
+  "Consume terminal query responses — cell size (\u001b[6;h;wt), OSC 11
+   background color, color scheme report (\u001b[?997;Nn) — before key
+   parsing; pi consumes them in handleInput before listeners. Cell size is
+   ungated (pi: consumeCellSizeResponse has no pending query); OSC 11 is
+   gated on an outstanding query. Returns :consumed (handled), :pending
+   (fragment held), or nil (not a response)."
+  [tui reader buf]
+  (let [held @(:terminal-response-buffer tui)
+        combined (str held @buf)
+        cell-size (terminal/parse-cell-size-response combined)
+        osc-11 (when @(:pending-osc-11? tui)
+                 (terminal/parse-osc-11-background-response combined))
+        scheme (terminal/parse-terminal-color-scheme-report combined)]
+    (cond
+      cell-size
+      (do (clear-terminal-response-timer! tui)
+          (reset! (:terminal-response-buffer tui) "")
+          (reset! buf "")
+          (img/set-cell-dimensions! cell-size)
+          ;; Invalidate all components so images re-render at the new size
+          ;; (pi: consumeCellSizeResponse — ungated, no pending query).
+          (tui-invalidate tui)
+          (tui-request-render tui)
+          :consumed)
+
+      osc-11
+      (do (clear-terminal-response-timer! tui)
+          (reset! (:terminal-response-buffer tui) "")
+          (reset! buf "")
+          (settle-osc-11-response! tui osc-11)
+          :consumed)
+
+      scheme
+      (do (clear-terminal-response-timer! tui)
+          (reset! (:terminal-response-buffer tui) "")
+          (reset! buf "")
+          (doseq [l @(:color-scheme-listeners tui)]
+            (try (l scheme)
+                 (catch Exception e
+                   (binding [*out* *err*]
+                     (println "color scheme listener:" (ex-message e))))))
+          :consumed)
+
+      (or (terminal/cell-size-response-prefix? combined)
+          (and @(:pending-osc-11? tui) (terminal/osc-11-response-prefix? combined))
+          (terminal/color-scheme-report-prefix? combined))
+      (do (reset! (:terminal-response-buffer tui) combined)
+          (reset! buf "")
+          (schedule-terminal-response-flush! tui reader buf)
+          :pending)
+
+      :else
+      (do (when (seq held)
+            (clear-terminal-response-timer! tui)
+            (reset! buf combined)
+            (reset! (:terminal-response-buffer tui) ""))
+          nil))))
+
 (defn- dispatch-input!
   "Port of pi's TUI input routing: listeners first, then overlay focus
    maintenance (focused-overlay visibility redirect + focus-restore
@@ -753,58 +1000,61 @@
    brief waits, then dispatches the first complete sequence."
   [tui reader buf]
   ;; Kitty protocol negotiation responses are intercepted first and never
-  ;; reach the normal dispatch path (pi: setupStdinBuffer).
+  ;; reach the normal dispatch path (pi: setupStdinBuffer); terminal query
+  ;; responses (cell size / OSC 11 / color scheme) are consumed next (pi:
+  ;; handleInput consumes them before listeners).
   (when (nil? (intercept-keyboard-negotiation! tui reader buf))
-    (let [s @buf]
-      (cond
-      ;; Paste markers — dispatch immediately
-        (and (>= (count s) 6)
-             (or (clojure.string/includes? s PASTE-START)
-                 (clojure.string/includes? s PASTE-END)))
-        (let [marker (if (clojure.string/includes? s PASTE-START) PASTE-START PASTE-END)
-              idx (clojure.string/index-of s marker)
-              before (subs s 0 idx)]
-          (reset! buf (or (when (seq before) before) ""))
-          (dispatch-input! tui marker))
+    (when (nil? (intercept-terminal-response! tui reader buf))
+      (let [s @buf]
+        (cond
+        ;; Paste markers — dispatch immediately
+          (and (>= (count s) 6)
+               (or (clojure.string/includes? s PASTE-START)
+                   (clojure.string/includes? s PASTE-END)))
+          (let [marker (if (clojure.string/includes? s PASTE-START) PASTE-START PASTE-END)
+                idx (clojure.string/index-of s marker)
+                before (subs s 0 idx)]
+            (reset! buf (or (when (seq before) before) ""))
+            (dispatch-input! tui marker))
 
-      ;; Starts with ESC — try to complete sequence. A lone ESC is NOT
-      ;; dispatched yet: it may be the prefix of an arrow/CSI/SS3 sequence,
-      ;; so we wait up to MAX-ESC-WAIT for the rest before treating it as
-      ;; the Escape key (pi: isCompleteSequence returns "incomplete" for a
-      ;; single ESC). Without this, "\u001b[A" arrived as ESC then "[A" as
-      ;; raw text — arrows and ctrl+arrows never parsed.
-        (= (first s) \u001b)
-        (loop [waited 0]
-          (let [current @buf]
-            (if (and (keys/parse-key current)
-                     (not= current "\u001b"))
-              (do (reset! buf "")
-                  (dispatch-input! tui current))
-              (if (and (< waited MAX-ESC-WAIT)
-                       (or (keys/escape-prefix? current) (= current "\u001b"))
-                     ;; kitty CSI-u sequences can reach ~24 chars
-                       (< (count current) 32))
-              ;; Timed non-blocking read: JLine's NonBlockingReader.read(ms)
-              ;; returns the char, -1 on EOF, -2 on timeout. .ready() is not
-              ;; reliable here (returned false while data was pending), so the
-              ;; old .ready + .read combo starved the accumulation loop.
-                (let [ch (.read reader ESC-WAIT-STEP)]
-                  (if (>= ch 0)
-                    (do (swap! buf str (char ch))
-                        (recur 0))
-                    (recur (+ waited ESC-WAIT-STEP))))
-              ;; Timeout or invalid — dispatch first char, keep rest
-                (let [first-char (subs current 0 1)
-                      rest (subs current 1)]
-                  (reset! buf rest)
-                  (dispatch-input! tui first-char))))))
+        ;; Starts with ESC — try to complete sequence. A lone ESC is NOT
+        ;; dispatched yet: it may be the prefix of an arrow/CSI/SS3 sequence,
+        ;; so we wait up to MAX-ESC-WAIT for the rest before treating it as
+        ;; the Escape key (pi: isCompleteSequence returns "incomplete" for a
+        ;; single ESC). Without this, "\u001b[A" arrived as ESC then "[A" as
+        ;; raw text — arrows and ctrl+arrows never parsed.
+          (= (first s) \u001b)
+          (loop [waited 0]
+            (let [current @buf]
+              (if (and (keys/parse-key current)
+                       (not= current "\u001b"))
+                (do (reset! buf "")
+                    (dispatch-input! tui current))
+                (if (and (< waited MAX-ESC-WAIT)
+                         (or (keys/escape-prefix? current) (= current "\u001b"))
+                       ;; kitty CSI-u sequences can reach ~24 chars
+                         (< (count current) 32))
+                ;; Timed non-blocking read: JLine's NonBlockingReader.read(ms)
+                ;; returns the char, -1 on EOF, -2 on timeout. .ready() is not
+                ;; reliable here (returned false while data was pending), so the
+                ;; old .ready + .read combo starved the accumulation loop.
+                  (let [ch (.read reader ESC-WAIT-STEP)]
+                    (if (>= ch 0)
+                      (do (swap! buf str (char ch))
+                          (recur 0))
+                      (recur (+ waited ESC-WAIT-STEP))))
+                ;; Timeout or invalid — dispatch first char, keep rest
+                  (let [first-char (subs current 0 1)
+                        rest (subs current 1)]
+                    (reset! buf rest)
+                    (dispatch-input! tui first-char))))))
 
-      ;; Non-ESC — dispatch immediately (single char)
-        :else
-        (let [first-char (subs s 0 1)
-              rest (subs s 1)]
-          (reset! buf rest)
-          (dispatch-input! tui first-char))))))
+        ;; Non-ESC — dispatch immediately (single char)
+          :else
+          (let [first-char (subs s 0 1)
+                rest (subs s 1)]
+            (reset! buf rest)
+            (dispatch-input! tui first-char)))))))
 
 (defn- start-input-reader [tui]
   (let [jline (.terminal @(:terminal tui))
@@ -830,7 +1080,18 @@
 ;; Start / Stop
 ;; ═══════════════════════════════════════════════════════════════════════════
 
-(defn tui-request-render [tui]
+(defn tui-request-render
+  "Request a render on the next frame. With FORCE (pi: requestRender(force)),
+   all previous frame state is cleared so the next frame is a clearing full
+   redraw regardless of diffing."
+  [tui & [force]]
+  (when force
+    (reset! (:previous-lines tui) [])
+    (reset! (:previous-width tui) -1)
+    (reset! (:previous-height tui) -1)
+    (reset! (:max-lines-rendered tui) 0)
+    (reset! (:prev-image-blocks tui) nil)
+    (reset! (:previous-kitty-image-ids tui) #{}))
   (reset! (:render-requested? tui) true))
 
 (defn tui-stop [tui]
@@ -838,6 +1099,79 @@
   (reset! (:running? tui) false)
   ;; pi: TuiAltScreen.dispose() clears pending flashes on close
   (tui-flash-dispose! tui))
+
+(defn tui-invalidate
+  "Invalidate all components and overlays (pi: TUI.invalidate — used after
+   cell-size changes so images re-render at the new dimensions)."
+  [tui]
+  (doseq [c @(:components tui)] (protocols/invalidate c))
+  (doseq [o @(:overlays tui)] (protocols/invalidate (:component o))))
+
+(defn tui-get-clear-on-shrink [tui] @(:clear-on-shrink? tui))
+
+(defn tui-set-clear-on-shrink!
+  "Enable/disable clearing empty rows when content shrinks (pi:
+   setClearOnShrink)."
+  [tui enabled?]
+  (reset! (:clear-on-shrink? tui) enabled?))
+
+(defn tui-get-full-redraw-count
+  "Number of full redraws performed (pi: getFullRedrawCount)."
+  [tui]
+  @(:full-redraw-count tui))
+
+(defn tui-query-terminal-background-color
+  "Query the terminal's default background color via OSC 11; returns a
+   promise resolving to {:r :g :b} or nil on timeout (pi:
+   queryTerminalBackgroundColor)."
+  [tui & {:keys [timeout-ms] :or {timeout-ms 500}}]
+  (let [p (promise)]
+    (swap! (:osc-11-queries tui)
+           conj {:settled? (atom false)
+                 :promise p
+                 :timer (future
+                          (Thread/sleep timeout-ms)
+                          (settle-osc-11-query! tui nil p))})
+    (reset! (:pending-osc-11? tui) true)
+    (when-let [term @(:terminal tui)]
+      (terminal/query-osc-11-background! term))
+    p))
+
+(defn tui-on-terminal-color-scheme-change
+  "Register a listener called with :dark/:light on terminal color scheme
+   reports (CSI ? 997 n). Returns an unsubscribe fn (pi:
+   onTerminalColorSchemeChange)."
+  [tui f]
+  (swap! (:color-scheme-listeners tui) conj f)
+  (fn [] (swap! (:color-scheme-listeners tui) disj f)))
+
+(defn tui-query-terminal-color-scheme
+  "Query the terminal color scheme preference (CSI ? 996 n); returns a
+   promise resolving to :dark / :light or nil on timeout (pi:
+   queryTerminalColorScheme)."
+  [tui & {:keys [timeout-ms] :or {timeout-ms 500}}]
+  (let [p (promise)
+        unsub (tui-on-terminal-color-scheme-change
+               tui (fn [scheme]
+                     (when-not (realized? p)
+                       (deliver p scheme))))]
+    (future
+      (Thread/sleep timeout-ms)
+      (deliver p nil)
+      (unsub))
+    (when-let [term @(:terminal tui)]
+      (terminal/query-color-scheme! term))
+    p))
+
+(defn tui-set-terminal-color-scheme-notifications
+  "Enable/disable unsolicited terminal color scheme reports (CSI ? 2031 h/l),
+   written immediately when the TUI is running (pi:
+   setTerminalColorSchemeNotifications)."
+  [tui enabled?]
+  (reset! (:color-scheme-notifications-enabled? tui) enabled?)
+  (when @(:running? tui)
+    (when-let [term @(:terminal tui)]
+      (terminal/set-color-scheme-notifications! term enabled?))))
 
 (defn- run-render-loop!
   "Start the terminal (raw mode) and run the render loop until the TUI is
@@ -860,6 +1194,13 @@
     (reset! (:negotiation-buffer tui) "")
     (clear-negotiation-timer! tui)
     (terminal/query-kitty-protocol! started)
+    (when @(:color-scheme-notifications-enabled? tui)
+      (terminal/set-color-scheme-notifications! started true))
+    ;; Query the cell size (CSI 16 t) when the terminal supports images — the
+    ;; response is consumed ungated by the input path (pi: queryCellSize /
+    ;; consumeCellSizeResponse).
+    (when (:images (img/get-capabilities))
+      (terminal/query-cell-size! started))
     (try
       (loop []
         (when @(:running? tui)
@@ -878,13 +1219,26 @@
                     cursor-result (extract-cursor-position raw-lines h)
                     cursor (:cursor cursor-result)
                     lines (:lines cursor-result)
+                    ;; Image blocks are computed on the raw, unpadded lines —
+                    ;; padding turns the blank reserved rows into spaces, which
+                    ;; would terminate the reserved-row walk immediately.
+                    image-blocks (if (or (seq @(:prev-image-blocks tui))
+                                         (some img/is-image-line lines))
+                                   (build-image-blocks lines)
+                                   nil)
                     lines (pad-lines-to-width lines w)
                     lines (composite-flashes @(:flashes tui) lines w h)
                     prev @(:previous-lines tui)
                     prev-w @(:previous-width tui)
+                    prev-h @(:previous-height tui)
                     prev-count (count prev)
                     new-count (count lines)
-                    width-changed (and (pos? prev-w) (not= prev-w w))
+                    width-changed (and (not (zero? prev-w)) (not= prev-w w))
+                    height-changed (and (not (zero? prev-h)) (not= prev-h h))
+                    termux? (boolean (System/getenv "TERMUX_VERSION"))
+                    first-render? (and (empty? prev)
+                                       (not width-changed)
+                                       (not height-changed))
                     ;; One write per frame: the whole frame's output (sync markers,
                     ;; cursor moves, line rewrites, cursor hide) accumulates into SB
                     ;; and is written+flushed once. Flushing per diff entry made the
@@ -896,19 +1250,49 @@
                     old-vt @viewport-top
                     new-vt (max 0 (- new-count h))
                     scroll (- new-vt old-vt)
-                    ;; Pi-style full redraw: clear screen, home, then clear
-                    ;; scrollback ([3J) so stale lines above don't show as
+                    debug-redraw? @(:debug-redraw? tui)
+                    log-redraw! (fn [reason]
+                                  (when debug-redraw?
+                                    (append-log!
+                                     (log-path "kmet-debug-render.log")
+                                     (str "[" (java.time.LocalDateTime/now) "] fullRender: "
+                                          reason " (prev=" prev-count ", new=" new-count
+                                          ", height=" h ")\n"))))
+                    ;; Pi-style full redraw: optionally clear screen, home, then
+                    ;; clear scrollback ([3J) so stale lines above don't show as
                     ;; duplicates (pi: fullRender uses "\u001b[2J\u001b[H\u001b[3J").
-                    do-full-redraw (fn do-full-redraw []
-                                     (when (seq prev)
+                    ;; Old image ids are deleted first (text erasure has no effect
+                    ;; on graphics — the delete must be explicit, pi:
+                    ;; deleteKittyImages). Image lines spanning multiple rows are
+                    ;; placed with a cursor dance so the reserved rows are never
+                    ;; written (pi's reserved-row dance).
+                    do-full-redraw (fn do-full-redraw [clear?]
+                                     (swap! (:full-redraw-count tui) inc)
+                                     (when clear?
+                                       (doseq [id @(:previous-kitty-image-ids tui)]
+                                         (emit! (img/delete-kitty-image id)))
                                        (emit! "\u001b[2J\u001b[H\u001b[3J"))
                                      (emit! CSI-2026-H)
-                                     (doseq [i (range new-count)]
-                                       (when (pos? i) (emit! "\r\n"))
-                                       (emit! (nth lines i)))
+                                     (loop [i 0]
+                                       (when (< i new-count)
+                                         (when (pos? i) (emit! "\r\n"))
+                                         (let [rows (if (img/is-image-line (nth lines i))
+                                                      (get-in image-blocks [i :rows] 1)
+                                                      1)]
+                                           (if (and (> rows 1) (<= rows h))
+                                             (do (dotimes [_ (dec rows)] (emit! "\r\n"))
+                                                 (emit! (str "\u001b[" (dec rows) "A"))
+                                                 (emit! (nth lines i))
+                                                 (emit! (str "\u001b[" (dec rows) "B"))
+                                                 (recur (+ i rows)))
+                                             (do (emit! (nth lines i))
+                                                 (recur (inc i)))))))
                                      (emit! CSI-2026-L)
                                      (reset! hardware-cursor-row (dec new-count))
-                                     (reset! viewport-top new-vt))
+                                     (reset! viewport-top new-vt)
+                                     (if clear?
+                                       (reset! (:max-lines-rendered tui) new-count)
+                                       (swap! (:max-lines-rendered tui) max new-count)))
                     ;; Screen-row diff. The terminal screen shows the last h rows of
                     ;; the buffer, which holds every content row written so far — so
                     ;; the "current" screen content is old rows [old-vt .. old-vt+h-1]
@@ -924,8 +1308,27 @@
                     ;; fell back to "\u001b[2J\u001b[H\u001b[3J" + full repaint every
                     ;; chunk, which flashes on terminals without CSI 2026 sync
                     ;; support (e.g. Termux).
+                    ;;
+                    ;; Kitty images: rows whose old content held an image get the
+                    ;; old image ids deleted before the rewrite (pi:
+                    ;; deleteChangedKittyImages), including ids of an image block
+                    ;; covering the row (pi: expandChangedRangeForKittyImages). New
+                    ;; image rows are pre-cleared (\u001b[2K per reserved row) and
+                    ;; placed with C=1 so the padding rows stay untouched; a changed
+                    ;; block that would extend past the screen bottom falls back to
+                    ;; a full redraw instead of scrolling (pi: kitty image pre-clear
+                    ;; would scroll).
                     do-screen-diff (fn do-screen-diff []
-                                     (let [cursor-row (atom (- @hardware-cursor-row old-vt))]
+                                     (let [cursor-row (atom (- @hardware-cursor-row old-vt))
+                                           old-blocks @(:prev-image-blocks tui)
+                                           old-ids-at (fn [idx]
+                                                        (let [ids (atom (if (< idx prev-count)
+                                                                          (img/extract-kitty-image-ids (nth prev idx))
+                                                                          []))]
+                                                          (doseq [[s {:keys [rows]}] old-blocks]
+                                                            (when (and (<= s idx) (< idx (+ s rows)))
+                                                              (swap! ids into (img/extract-kitty-image-ids (nth prev s)))))
+                                                          @ids))]
                                        (when (pos? scroll)
                                          (let [bottom (dec h)]
                                            (when (< @cursor-row bottom)
@@ -937,41 +1340,99 @@
                                            (reset! hardware-cursor-row (+ @cursor-row new-vt))
                                            (let [idx (+ new-vt r)
                                                  cur (if (< idx prev-count) (nth prev idx) "")
-                                                 exp (if (< idx new-count) (nth lines idx) "")]
+                                                 exp (if (< idx new-count) (nth lines idx) "")
+                                                 block (get image-blocks idx)]
                                              (if (= cur exp)
                                                (recur (inc r))
                                                (let [delta (- r @cursor-row)
                                                      move (cond
                                                             (pos? delta) (str "\u001b[" delta "B")
                                                             (neg? delta) (str "\u001b[" (- delta) "A")
-                                                            :else "")
-                                                     ;; Rows beyond the new content must be cleared:
-                                                     ;; a bare "" would leave the old text visible.
-                                                     out (if (empty? exp)
-                                                           (apply str (repeat w \space))
-                                                           exp)]
-                                                 (emit! (str move "\r" out))
-                                                 (reset! cursor-row r)
-                                                 (recur (inc r)))))))))]
+                                                            :else "")]
+                                                 (doseq [id (old-ids-at idx)]
+                                                   (emit! (img/delete-kitty-image id)))
+                                                 (if (and block (> (:rows block) 1))
+                                                   ;; Image placement: pre-clear the reserved rows,
+                                                   ;; place with C=1, then skip the padding rows.
+                                                   (let [n (:rows block)]
+                                                     (emit! (str move "\r"))
+                                                     (emit! "\u001b[2K")
+                                                     (dotimes [_ (dec n)] (emit! "\r\n\u001b[2K"))
+                                                     (emit! (str "\u001b[" (dec n) "A"))
+                                                     (emit! exp)
+                                                     (emit! (str "\u001b[" (dec n) "B"))
+                                                     (reset! cursor-row (+ r (dec n)))
+                                                     (recur (+ r n)))
+                                                   (let [;; Rows beyond the new content must be cleared:
+                                                         ;; a bare "" would leave the old text visible.
+                                                         out (if (empty? exp)
+                                                               (apply str (repeat w \space))
+                                                               exp)
+                                                         vw (utils/visible-width out)]
+                                                     ;; Final safeguard against width overflow (pi: crash
+                                                     ;; log + throw with truncateToWidth guidance). Image
+                                                     ;; lines are exempt — their payload counts as text.
+                                                     (when (and (not (img/is-image-line exp))
+                                                                (> vw w))
+                                                       (write-crash-log! lines w idx vw)
+                                                       (tui-stop tui)
+                                                       (throw (ex-info
+                                                               (str "Rendered line " idx
+                                                                    " exceeds terminal width (" vw " > " w ").\n\n"
+                                                                    "This is likely caused by a custom TUI component not "
+                                                                    "truncating its output.\n"
+                                                                    "Use visibleWidth() to measure and truncateToWidth() "
+                                                                    "to truncate lines.\n\n"
+                                                                    "Debug log written to: " (log-path "kmet-crash.log"))
+                                                               {:type :width-overflow})))
+                                                     (emit! (str move "\r" out))
+                                                     (reset! cursor-row r)
+                                                     (recur (inc r)))))))))))]
                 (cond
-                ;; Full redraw only on first render and width changes (pi:
-                ;; width changes always re-render; height changes re-render
-                ;; outside Termux). Content growth/shrink is handled by the
-                ;; screen-row diff below — terminal scrolls for growth, in-place
-                ;; rewrites for shrink — so the scrollback (which holds the
-                ;; chat history, pi-style) is never cleared mid-session.
-                  (or (empty? prev) width-changed)
-                  (do-full-redraw)
+                ;; First render: output everything without clearing (assumes a
+                ;; clean screen — pi: fullRender(false)).
+                  first-render?
+                  (do (log-redraw! "first render")
+                      (do-full-redraw false))
+
+                ;; Width changes always need a full re-render because wrapping
+                ;; changes (pi).
+                  width-changed
+                  (do (log-redraw! (str "terminal width changed (" prev-w " -> " w ")"))
+                      (do-full-redraw true))
+
+                ;; Height changes normally need a full re-render to keep the
+                ;; visible viewport aligned, but Termux changes height when the
+                ;; software keyboard shows or hides — a full redraw would replay
+                ;; the history on every toggle (pi).
+                  (and height-changed (not termux?))
+                  (do (log-redraw! (str "terminal height changed (" prev-h " -> " h ")"))
+                      (do-full-redraw true))
+
+                ;; Content shrunk below the working area with no overlays —
+                ;; re-render to clear the empty rows (pi: clearOnShrink;
+                ;; KMET_CLEAR_ON_SHRINK=1, default off like pi).
+                  (and @(:clear-on-shrink? tui)
+                       (< new-count @(:max-lines-rendered tui))
+                       (empty? @(:overlays tui)))
+                  (do (log-redraw! (str "clearOnShrink (maxLinesRendered="
+                                        @(:max-lines-rendered tui) ")"))
+                      (do-full-redraw true))
 
                 ;; Everything else: scroll the screen (if the viewport moved down) and
-                ;; rewrite only the screen rows that changed.
+                ;; rewrite only the screen rows that changed. A changed image block
+                ;; that would scroll falls back to a full redraw.
                   (or (pos? scroll) (not= prev lines))
-                  (let [before (.length sb)]
-                    (emit! CSI-2026-H)
-                    (do-screen-diff)
-                    (when (> (.length sb) before)
-                      (emit! CSI-2026-L))
-                    (reset! viewport-top new-vt))
+                  (if (kitty-image-overflow? image-blocks prev prev-count lines new-vt h)
+                    (do (log-redraw! "kitty image pre-clear would scroll")
+                        (do-full-redraw true))
+                    (let [before (.length sb)]
+                      (emit! CSI-2026-H)
+                      (do-screen-diff)
+                      (when (> (.length sb) before)
+                        (emit! CSI-2026-L))
+                      (reset! viewport-top new-vt)
+                      (swap! (:max-lines-rendered tui) max new-count)))
 
                 ;; No changes
                   :else nil)
@@ -995,11 +1456,18 @@
                       (emit! "\u001b[?25h")
                       (emit! "\u001b[?25l")))
                   (emit! "\u001b[?25l"))
+              ;; KMET_TUI_DEBUG: dump the frame to /tmp/tui/ (pi: PI_TUI_DEBUG)
+                (when @(:tui-debug? tui)
+                  (tui-debug-dump! prev lines (str sb) w h new-vt @hardware-cursor-row))
               ;; Single write + flush per frame (no-op frames write nothing)
                 (when (pos? (.length sb))
                   (terminal/write-output started (str sb)))
                 (reset! (:previous-lines tui) lines)
-                (reset! (:previous-width tui) w))))
+                (reset! (:previous-width tui) w)
+                (reset! (:previous-height tui) h)
+                (reset! (:previous-kitty-image-ids tui)
+                        (if image-blocks (collect-kitty-image-ids lines) #{}))
+                (reset! (:prev-image-blocks tui) image-blocks))))
           (Thread/sleep 16)
           (recur)))
       (finally
@@ -1011,6 +1479,11 @@
         (reset! (:keyboard-protocol-pushed? tui) false)
         (reset! (:negotiation-buffer tui) "")
         (clear-negotiation-timer! tui)
+        (clear-terminal-response-timer! tui)
+        (reset! (:terminal-response-buffer tui) "")
+        (reset! (:pending-osc-11? tui) false)
+        (when @(:color-scheme-notifications-enabled? tui)
+          (terminal/set-color-scheme-notifications! started false))
         (if @(:stopped? tui)
           (terminal/drain-input! started)
           (terminal/disable-kitty-protocol! started))
@@ -1029,9 +1502,6 @@
                 (terminal/write-output started "\r\n")))))
         (terminal/show-cursor! started)
         (terminal/stop! started)))))
-
-;; ─── Suspend / Resume ──────────────────────────────────────────────────────
-
 (defn tui-start
   "Start the TUI: enter raw mode, start the input reader and render loop.
    Blocks the calling thread until tui-stop is called."
@@ -1082,6 +1552,10 @@
   ;; Empty previous-lines forces a full redraw on the fresh terminal
   (reset! (:previous-lines tui) [])
   (reset! (:previous-width tui) 0)
+  (reset! (:previous-height tui) 0)
+  (reset! (:max-lines-rendered tui) 0)
+  (reset! (:prev-image-blocks tui) nil)
+  (reset! (:previous-kitty-image-ids tui) #{})
   (start-input-reader tui)
   (reset! (:render-loop tui) (future (run-render-loop! tui)))
   (tui-request-render tui)
