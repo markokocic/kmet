@@ -1,0 +1,125 @@
+(ns kmet.app.test-theme-controller
+  "ThemeController tests (pi: InteractiveThemeController) — theme switching,
+   auto light/dark sync state, and the on-changed notification."
+  (:require [clojure.test :as t]
+            [clojure.string :as str]
+            [kmet.tui.core :as core]
+            [kmet.tui.terminal :as term]
+            [kmet.tui.theme :as theme]
+            [kmet.app.theme-controller :as tc]))
+
+(defn- recording-terminal
+  "ITerminal stub recording written output."
+  []
+  (let [writes (atom [])]
+    {:terminal (reify term/ITerminal
+                 (start! [_ _ _] nil)
+                 (stop! [_] nil)
+                 (write-output [_ s] (swap! writes conj s))
+                 (columns [_] 80)
+                 (rows [_] 24)
+                 (hide-cursor! [_] nil)
+                 (show-cursor! [_] nil)
+                 (clear-line! [_] nil)
+                 (clear-screen! [_] nil)
+                 (set-title! [_ _] nil)
+                 (move-by! [_ _] nil)
+                 (clear-from-cursor! [_] nil)
+                 (set-progress! [_ _] nil))
+     :writes writes}))
+
+(defn- restore-theme-state!
+  []
+  (theme/on-theme-change nil)
+  (theme/set-theme-instance! theme/dark-theme)
+  (theme/init-theme! "dark"))
+
+(t/use-fixtures :each (fn [f] (f) (restore-theme-state!)))
+
+(defn- make-ctrl
+  "Controller over a stub TUI; captures on-changed invocations."
+  [config]
+  (let [{:keys [terminal writes]} (recording-terminal)
+        tui (core/create-tui terminal)
+        changed (atom 0)]
+    {:tui tui
+     :writes writes
+     :changed changed
+     :ctrl (tc/make-theme-controller tui config
+                                     (fn [_])  ;; show-error
+                                     (fn [] (swap! changed inc)))}))
+
+(t/deftest test-constructor-applies-config-theme
+  (t/testing "the :theme config setting is applied at construction"
+    (let [{:keys [ctrl]} (make-ctrl {:theme "light"})]
+      (t/is (= "light" (:name (theme/get-current-theme))))
+      (t/is (= "light" (tc/get-active-theme-name ctrl))))))
+
+(t/deftest test-set-theme-name
+  (t/testing "switching themes updates state and notifies"
+    (let [{:keys [ctrl changed]} (make-ctrl {:theme "dark"})]
+      (reset! changed 0)
+      (let [result (tc/set-theme-name! ctrl "light")]
+        (t/is (true? (:success result)))
+        (t/is (= "light" (:name (theme/get-current-theme))))
+        (t/is (= "light" (tc/get-active-theme-name ctrl)))
+        (t/is (= 2 @changed)
+              "notified twice — pi parity: setTheme fires the onThemeChange
+              callback and applyThemeName fires notifyChanged"))))
+  (t/testing "unknown names fall back to dark and report the error"
+    (let [{:keys [ctrl changed]} (make-ctrl {:theme "dark"})]
+      (reset! changed 0)
+      (let [result (tc/set-theme-name! ctrl "no-such-theme")]
+        (t/is (false? (:success result)))
+        (t/is (str/includes? (:error result) "Theme not found"))
+        (t/is (= "dark" (tc/get-active-theme-name ctrl)))
+        (t/is (= 1 @changed) "the fallback still notifies")))))
+
+(t/deftest test-set-theme-instance
+  (t/testing "in-memory instances bypass the registry"
+    (let [{:keys [ctrl]} (make-ctrl {:theme "dark"})]
+      (tc/set-theme-instance! ctrl theme/light-theme)
+      (t/is (identical? theme/light-theme (theme/get-current-theme)))
+      (t/is (= "<in-memory>" (tc/get-active-theme-name ctrl))))))
+
+(t/deftest test-get-terminal-theme
+  (t/testing "the env-detected terminal theme is exposed"
+    (let [{:keys [ctrl]} (make-ctrl {:theme "dark"})]
+      (t/is (contains? #{:dark :light} (tc/get-terminal-theme ctrl))))))
+
+(t/deftest test-apply-from-settings-explicit
+  (t/testing "an explicit setting is applied (deterministic)"
+    (let [{:keys [ctrl]} (make-ctrl {:theme "light"})]
+      (tc/apply-from-settings! ctrl)
+      (t/is (= "light" (:name (theme/get-current-theme))))
+      (t/is (false? @(:auto-sync-enabled-atom ctrl))
+            "explicit setting disables auto-sync"))))
+
+(t/deftest test-apply-from-settings-auto
+  (t/testing "an auto setting enables auto-sync and applies one side; the
+            notification sequence is written (CSI ? 2031 h)"
+    (let [{:keys [tui ctrl writes]} (make-ctrl {:theme "light/dark"})]
+      ;; notifications are written only while the TUI is running
+      (reset! (:running? tui) true)
+      (tc/apply-from-settings! ctrl)
+      ;; detection falls back to the environment on the stub (no OSC 11
+      ;; response) — one of the two sides must be active
+      (t/is (contains? #{"light" "dark"} (tc/get-active-theme-name ctrl)))
+      (t/is (true? @(:auto-sync-enabled-atom ctrl)) "auto-sync enabled")
+      (t/is (some #(str/includes? % "\u001b[?2031h") @writes)
+            "color-scheme notifications requested"))))
+
+(t/deftest test-auto-sync-toggles-on-scheme-report
+  (t/testing "a color scheme report switches themes while auto-sync is on"
+    (let [{:keys [ctrl]} (make-ctrl {:theme "light/dark"})]
+      (tc/apply-from-settings! ctrl)
+      (let [before (tc/get-active-theme-name ctrl)
+            _ (tc/apply-terminal-theme! ctrl (if (= before "light") :dark :light))]
+        (t/is (not= before (tc/get-active-theme-name ctrl))
+              "the other side of the auto setting becomes active"))))
+  (t/testing "reports are ignored while auto-sync is off"
+    (let [{:keys [ctrl]} (make-ctrl {:theme "dark"})]
+      (tc/apply-from-settings! ctrl)
+      (let [before (tc/get-active-theme-name ctrl)]
+        (tc/apply-terminal-theme! ctrl :light)
+        (t/is (= before (tc/get-active-theme-name ctrl)) "no switch")))))

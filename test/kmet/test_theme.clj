@@ -23,6 +23,51 @@
     (t/is (= "light" (:name t)))
     (t/is (string? (get-in t [:fg-colors :accent])))))
 
+;; ─── API accessors (pi: getFgAnsi / getColorMode / getThinkingBorderColor) ─
+
+(t/deftest test-api-accessors
+  (let [t theme/dark-theme]
+    (t/is (= (get-in t [:fg-colors :accent]) (theme/get-fg-ansi t :accent)))
+    (t/is (= (get-in t [:bg-colors :selected-bg]) (theme/get-bg-ansi t :selected-bg)))
+    (t/is (= :truecolor (theme/get-color-mode t)))
+    (t/is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"Unknown theme color"
+           (theme/get-fg-ansi t :no-such-token)))
+    (t/is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"Unknown theme background"
+           (theme/get-bg-ansi t :no-such-token)))
+    (t/testing "get-thinking-border-color maps every level to its token"
+      (doseq [[level token] [[:off :thinking-off] [:minimal :thinking-minimal]
+                             [:low :thinking-low] [:medium :thinking-medium]
+                             [:high :thinking-high] [:xhigh :thinking-xhigh]
+                             [:max :thinking-max]]]
+        (let [f (theme/get-thinking-border-color t level)]
+          (t/is (= (theme/fg t token "x") (f "x")))))
+      (t/is (= (theme/fg t :thinking-off "x")
+               ((theme/get-thinking-border-color t :unknown-level) "x"))
+            "unknown levels map to :thinking-off like pi"))
+    (t/testing "get-bash-mode-border-color"
+      (t/is (= (theme/fg t :bash-mode "x")
+               ((theme/get-bash-mode-border-color t) "x"))))))
+
+(t/deftest test-thinking-max-falls-back-to-xhigh
+  (t/testing "pi-schema: thinkingMax ?? thinkingXhigh (Type.Optional)"
+    (let [colors (into {} (map (fn [k] [(name k) "#111111"]))
+                       (concat theme/FG-TOKENS theme/BG-TOKENS))
+          colors (assoc colors "thinkingXhigh" "#abcdef")
+          colors (dissoc colors "thinking-max")
+          t (theme/make-theme {:name "no-max" :colors colors})]
+      (t/is (= (theme/get-fg-ansi t :thinking-xhigh)
+               (theme/get-fg-ansi t :thinking-max))
+            "thinkingMax falls back to thinkingXhigh, not the dark default")))
+  (t/testing "flat schema"
+    (let [t (theme/make-theme
+             {:name "flat-no-max"
+              :thinking-xhigh "#abcdef"
+              :text "#ffffff"})]
+      (t/is (= (theme/get-fg-ansi t :thinking-xhigh)
+               (theme/get-fg-ansi t :thinking-max))))))
+
 ;; ─── Make theme ────────────────────────────────────────────────────────────
 
 (t/deftest test-make-theme
@@ -132,12 +177,19 @@
   (t/testing "Loading from non-existent dir should not throw"
     (t/is (nil? (theme/load-themes-from-dir "/nonexistent/themes")))))
 
+(defn- complete-theme-edn
+  "A theme map with every required color token (pi schema requires them
+   all except :thinking-max)."
+  [theme-name]
+  (let [colors (into {} (map (fn [k] [(name k) "#000000"]))
+                     (concat theme/FG-TOKENS theme/BG-TOKENS))]
+    {:name theme-name :colors colors}))
+
 (t/deftest test-load-themes-from-dir
   (let [tmp-dir (str "target/test-themes-" (System/currentTimeMillis))]
     (io/make-parents (str tmp-dir "/test.edn"))
-    ;; Write a valid theme file
-    (spit (str tmp-dir "/test.edn")
-          "{:name \"test\" :text \"#00ff00\" :accent \"#00ffff\" :border \"#505050\"}")
+    ;; Write a valid (complete) theme file
+    (spit (str tmp-dir "/test.edn") (pr-str (complete-theme-edn "test")))
     ;; Write a non-edn file (should be ignored)
     (spit (str tmp-dir "/not-a-theme.txt") "hello")
     (theme/load-themes-from-dir tmp-dir)
@@ -149,3 +201,93 @@
     (doseq [f (file-seq d)]
       (when (str/ends-with? (.getName f) ".edn")
         (.delete f)))))
+
+(t/deftest test-load-themes-from-dir-rejects-partial
+  (t/testing "a theme missing required tokens fails with the sorted list
+              (pi: Missing required color tokens)"
+    (let [tmp-dir (str "target/test-themes-partial-" (System/currentTimeMillis))
+          out (java.io.StringWriter.)]
+      (io/make-parents (str tmp-dir "/partial.edn"))
+      (spit (str tmp-dir "/partial.edn") "{:name \"partial\" :text \"#000000\"}")
+      (binding [*out* out *err* out]
+        (theme/load-themes-from-dir tmp-dir))
+      (t/is (not= "partial" (:name (theme/get-theme "partial")))
+            "rejected — falls back to dark")
+      (let [msg (str out)]
+        (t/is (str/includes? msg "Missing required color tokens:") "reports the missing-token header")
+        (t/is (str/includes? msg "- accent") "sorted list includes the first missing token")
+        (t/is (str/includes? msg "- tool-error-bg") "sorted list includes the last missing token")))
+    ;; Cleanup
+    (let [d (io/file "target")]
+      (doseq [f (file-seq d)]
+        (when (str/ends-with? (.getName f) ".edn")
+          (.delete f))))))
+
+;; ─── Terminal theme detection (pi: detection section) ──────────────────────
+
+(t/deftest test-get-theme-for-rgb-color
+  (t/is (= :dark (theme/get-theme-for-rgb-color {:r 0 :g 0 :b 0})) "black → dark")
+  (t/is (= :light (theme/get-theme-for-rgb-color {:r 255 :g 255 :b 255})) "white → light")
+  (t/is (= :dark (theme/get-theme-for-rgb-color {:r 128 :g 128 :b 128})) "mid-gray luminance ≈ 0.216 < 0.5")
+  (t/is (= :dark (theme/get-theme-for-rgb-color {:r 100 :g 100 :b 100}))))
+
+(t/deftest test-detect-terminal-background-from-env
+  (t/testing "COLORFGBG background index drives the theme"
+    (t/is (= :dark (:theme (theme/detect-terminal-background-from-env {"COLORFGBG" "15;0"})))
+          "bg index 0 (black) → dark")
+    (t/is (= :light (:theme (theme/detect-terminal-background-from-env {"COLORFGBG" "15;15"})))
+          "bg index 15 (white) → light")
+    (t/is (= :high (:confidence (theme/detect-terminal-background-from-env {"COLORFGBG" "15;7"})))))
+  (t/testing "no hint → dark fallback with low confidence"
+    (let [det (theme/detect-terminal-background-from-env {})]
+      (t/is (= :dark (:theme det)))
+      (t/is (= :low (:confidence det))))))
+
+;; ─── Auto light/dark setting (pi: parseAutoThemeSetting) ───────────────────
+
+(t/deftest test-parse-auto-theme-setting
+  (t/is (= {:light-theme "light" :dark-theme "dark"}
+           (theme/parse-auto-theme-setting "light/dark")))
+  (t/is (= {:light-theme "paper" :dark-theme "midnight"}
+           (theme/parse-auto-theme-setting " paper / midnight ")))
+  (t/is (nil? (theme/parse-auto-theme-setting "dark")) "no slash")
+  (t/is (nil? (theme/parse-auto-theme-setting "a/b/c")) "two slashes")
+  (t/is (nil? (theme/parse-auto-theme-setting "/dark")) "empty light side")
+  (t/is (nil? (theme/parse-auto-theme-setting "light/")) "empty dark side")
+  (t/is (nil? (theme/parse-auto-theme-setting nil))))
+
+(t/deftest test-resolve-theme-setting
+  (t/is (= "dark" (theme/resolve-theme-setting "light/dark" :dark)))
+  (t/is (= "light" (theme/resolve-theme-setting "light/dark" :light)))
+  (t/is (= "paper" (theme/resolve-theme-setting "paper" :dark)) "plain name passes through")
+  (t/is (nil? (theme/resolve-theme-setting "a/b/c" :dark)) "invalid auto setting → nil")
+  (t/is (nil? (theme/resolve-theme-setting nil :dark))))
+
+;; ─── Current theme state (pi: initTheme / setTheme / setThemeInstance) ─────
+
+(t/deftest test-theme-state
+  (let [orig-name (theme/get-current-theme-name)
+        orig-theme (theme/get-current-theme)]
+    (try
+      (t/testing "init-theme! switches with dark fallback"
+        (theme/init-theme! "light")
+        (t/is (= "light" (:name (theme/get-current-theme)))))
+      (t/testing "set-theme! reports unknown names"
+        (let [result (theme/set-theme! "no-such-theme")]
+          (t/is (false? (:success result)))
+          (t/is (= "Theme not found: no-such-theme" (:error result)))
+          (t/is (= "dark" (theme/get-current-theme-name)) "falls back to dark")))
+      (t/testing "set-theme-instance! switches in-memory and stops the watcher"
+        (theme/set-theme-instance! theme/light-theme)
+        (t/is (= "<in-memory>" (theme/get-current-theme-name)))
+        (t/is (identical? theme/light-theme (theme/get-current-theme))))
+      (t/testing "on-theme-change fires after set-theme!"
+        (let [changes (atom [])]
+          (theme/on-theme-change #(swap! changes conj (theme/get-current-theme-name)))
+          (theme/set-theme! "light")
+          (t/is (= ["light"] @changes))
+          (theme/on-theme-change nil)))
+      (finally
+        (theme/on-theme-change nil)
+        (theme/set-theme-instance! orig-theme)
+        (theme/init-theme! orig-name)))))

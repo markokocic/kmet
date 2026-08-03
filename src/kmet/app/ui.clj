@@ -64,6 +64,7 @@
 (def footer-set-status! footer/footer-set-status!)
 (def footer-set-n-msgs! footer/footer-set-n-msgs!)
 (def footer-set-extension-status! footer/footer-set-extension-status!)
+(def footer-set-theme! footer/footer-set-theme!)
 
 ;; StatusIndicator
 (def make-status-indicator status-indicator/make-status-indicator)

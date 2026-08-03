@@ -25,6 +25,7 @@
             [kmet.app.test-extensions-ui]
             [kmet.app.test-interactive-ui]
             [kmet.app.test-event-bus]
+            [kmet.app.test-theme-controller]
             [kmet.app.test-commands]
             [kmet.test-editing]
             [kmet.tui.test-fuzzy]
@@ -84,6 +85,7 @@
     kmet.app.test-extensions-ui
     kmet.app.test-interactive-ui
     kmet.app.test-event-bus
+    kmet.app.test-theme-controller
     kmet.app.test-commands
     kmet.test-editing
     kmet.tui.test-fuzzy

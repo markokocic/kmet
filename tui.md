@@ -11,10 +11,10 @@ Analysis of pi's TUI architecture (pi source: `~/src/cvstree/pi/packages/tui/` +
 
 Status of the chat-screen layout (previously "Level 1") is DONE; the
 **input pipeline (Phase 1), overlay/focus layer (Phase 3), extension
-ctx.ui surface (Phase 7), render loop + terminal queries (Phase 2), and
-the write-log + listener-chaining + Loader-indicator + DynamicBorder items
-are DONE** (see the per-phase notes below); the remaining phases are
-planned below.
+ctx.ui surface (Phase 7), render loop + terminal queries (Phase 2), theme
+controller + validation (Phase 4), and the write-log + listener-chaining +
+Loader-indicator + DynamicBorder items are DONE** (see the per-phase notes
+below); the remaining phases are planned below.
 
 ---
 
@@ -43,7 +43,7 @@ planned below.
 | `components/settings-list.ts` | `tui/components/settings_list.clj` | ✅ |
 | `components/loader.ts` + `cancellable-loader.ts` | `tui/components/spinner.clj` + `cancellable_loader.clj` | ✅ `set-indicator!` done (verbatim frames, empty-frames hide, nil restores) |
 | `components/image.ts` | `tui/components/image.clj` | ✅ (cell-size query, §A.4) |
-| coding-agent `theme/theme.ts` + `theme-controller.ts` | `tui/theme.clj` + `config.clj` | gap: controller, validation, auto light/dark (§A.6) |
+| coding-agent `theme/theme.ts` + `theme-controller.ts` | `tui/theme.clj` + `app/theme_controller.clj` | ✅ accessors, validation (sorted missing tokens), auto light/dark, watcher (poll), controller (§A.6) |
 
 ---
 
@@ -287,20 +287,23 @@ dark fallback for missing tokens, `get-markdown-theme`/`get-select-list-theme`
    accessors; `get-thinking-border-color` and `get-bash-mode-border-color`
    helpers (kebab-cased, pi behavior); `thinkingMax` → `thinkingXhigh`
    fallback in `make-theme` (pi `??` semantics, not dark-defaults
-   substitution).
+   substitution). ✅
 2. Validation parity: when a theme is missing tokens, report the sorted
    list of missing required colors (pi's `Missing required color tokens`)
-   instead of the generic warning.
+   instead of the generic warning. ✅
 3. **ThemeController port** (`app/theme_controller.clj` or in
    `config.clj`): auto light/dark via the A.4 color-scheme detection;
    `set-theme-name!`/`set-theme-instance!`; on change call
    `tui-invalidate-all` (children + overlays) + `tui-request-render`
-   (force). File watching on `source-path` (Theme already carries it).
+   (force). File watching on `source-path` (Theme already carries it). ✅
 4. Component contract: audit components that pre-bake theme strings
    (Text children created with `theme/fg` in `app/ui/*`) — they must
    rebuild in `invalidate()` (pi's "rebuild on invalidate" pattern). The
    `track!` cache handles atom-driven renders; themed-string holders do
-   not — add an audit checklist to the verification section.
+   not — add an audit checklist to the verification section. ✅ (the
+   on-changed wiring re-sets chat-history (propagating to children),
+   footer, status-indicator, editor autocomplete + key-hint fns; dialogs
+   are created per-call with the current theme)
 
 ## A.7 Components
 
@@ -549,6 +552,36 @@ convention).
 
 ### Phase 4 — Theme (A.6)
 
+**Status: DONE** — API accessors (`get-fg-ansi`/`get-bg-ansi` with pi's
+unknown-color throw, `get-color-mode`, `get-thinking-border-color`,
+`get-bash-mode-border-color`); `thinkingMax` → `thinkingXhigh` fallback in
+both resolvers (pi `??` semantics); missing-token validation at load — the
+warning now lists the sorted missing required colors (pi: `Missing required
+color tokens`; `:thinking-max` optional like pi's schema) + the pi name
+check (no `/`); current-theme state (`get-current-theme`/`-name`,
+`on-theme-change`, `init-theme!`, `set-theme!` with dark fallback,
+`set-theme-instance!`, `get-theme-by-name`); custom-theme file watcher
+(1 s mtime poll of `<name>.edn` in the themes dir — babashka.fs has no
+watcher and java.nio is out per AGENTS.md; keeps the last good theme;
+debounce-free by construction); terminal-theme detection (`get-theme-for-rgb-
+color` with pi's luminance, `detect-terminal-background-from-env` via
+COLORFGBG, `parse-auto-theme-setting`/`resolve-theme-setting` for
+`"light/dark"` settings); the `ThemeController` in
+`app/theme_controller.clj` (constructor resolves + applies the setting with
+the watcher, `apply-from-settings!` — auto setting → color-scheme detection
++ auto-sync via `?2031h/l` notifications, explicit setting → apply, none →
+OSC 11 detection with env fallback, `set-theme-name!`, `set-theme-instance!`,
+`preview`, `apply-terminal-theme!` on scheme reports); live re-theme wiring
+in `interactive.clj` (the on-changed callback re-sets chat-history/footer/
+status-indicator/editor-autocomplete/key-hint theme fns + re-render), the
+`/theme` command (switch + completions from the registry), and the
+extension `ui.setTheme` (Theme instance → in-memory; name → controller,
+disabling auto-sync).
+Divergences: no settings persistence (kmet config is read-only EDN — a
+high-confidence detection is applied without saving); partial themes are
+rejected at load (pi parity) — the old dark-fallback fill remains for
+`make-theme` callers.
+
 **Contents:** API accessors (`get-fg-ansi`/`get-bg-ansi`/`get-color-mode`,
 `get-thinking-border-color`, `get-bash-mode-border-color`) → `thinkingMax`→
 `thinkingXhigh` fallback → missing-token validation errors (sorted list) →
@@ -626,9 +659,9 @@ set/get-editor-text, paste-to-editor, set-editor-component,
 add-autocomplete-provider, get-theme/get-all-themes,
 get/set-tools-expanded, reset!); `:session-start` event (startup/reload)
 emitted by the interactive mode; dialogs hosted in the editor container
-with DynamicBorder framing and IME focus propagation. Remaining: `set-theme`
-(deferred to Phase 4's ThemeController) and the extension-editor dialog's
-Ctrl+G external-editor support (kmet's dialog omits it).
+with DynamicBorder framing and IME focus propagation. Remaining: the
+extension-editor dialog's Ctrl+G external-editor support (kmet's dialog
+omits it; `set-theme` landed with Phase 4).
 
 **Contents:** extension widgets (`register-widget!`/`unregister-widget!`,
 `render-widgets!`, `MAX_WIDGET_LINES = 10` truncation) → the full
@@ -685,6 +718,8 @@ a manual side-by-side pass.
 - [ ] Theme: missing-token error lists all missing colors; `set-theme`
       via extension re-themes live (components rebuild on invalidate);
       auto light/dark follows the terminal scheme report
+      (✅ logic: accessors/fallback/validation/detection/controller tests in
+      `test_theme` + `test_theme_controller`; live-terminal pass needed)
 - [x] `KMET_TUI_WRITE_LOG` captures the raw ANSI stream
 - [x] Custom editor swap preserves text, padding, autocomplete, actions
       (✅ duck-typed transfer, §B.5)

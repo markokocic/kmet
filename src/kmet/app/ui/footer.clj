@@ -57,6 +57,11 @@
 
 (defsetter footer-set-status! :status-text-atom comp text)
 (defsetter footer-set-n-msgs! :n-msgs-atom comp n)
+(defn footer-set-theme!
+  "Switch the footer's theme (live re-theme on theme changes)."
+  [comp theme]
+  (reset! (:theme-atom comp) theme)
+  (protocols/invalidate comp))
 
 (defn footer-set-extension-status!
   "Set/clear a keyed extension status shown in the footer (pi:

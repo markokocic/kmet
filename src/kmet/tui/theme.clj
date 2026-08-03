@@ -2,6 +2,7 @@
   "Theme system — identical structure to pi's theme.ts.
    EDN-only loading with same :vars/:colors schema as pi's JSON."
   (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.libs.highlight :as hl]))
@@ -122,6 +123,44 @@
 (defn underline [text] (str "\u001b[4m" text "\u001b[24m"))
 (defn inverse [text] (str "\u001b[7m" text "\u001b[27m"))
 (defn strikethrough [text] (str "\u001b[9m" text "\u001b[29m"))
+
+(defn get-fg-ansi
+  "The ANSI escape that sets COLOR-KEY as foreground (pi: getFgAnsi — throws
+   on unknown colors)."
+  [theme color-key]
+  (or (get (:fg-colors theme) color-key)
+      (throw (ex-info (str "Unknown theme color: " color-key)
+                      {:type :unknown-theme-color :color color-key}))))
+
+(defn get-bg-ansi
+  "The ANSI escape that sets COLOR-KEY as background (pi: getBgAnsi — throws
+   on unknown colors)."
+  [theme color-key]
+  (or (get (:bg-colors theme) color-key)
+      (throw (ex-info (str "Unknown theme background color: " color-key)
+                      {:type :unknown-theme-color :color color-key}))))
+
+(defn get-color-mode
+  "The theme's color mode (:truecolor or :256color) (pi: getColorMode)."
+  [theme]
+  (:color-mode theme))
+
+(defn get-thinking-border-color
+  "A color fn for the thinking border at LEVEL (:off :minimal :low :medium
+   :high :xhigh :max) (pi: getThinkingBorderColor). Unknown levels map to
+   :thinking-off like pi."
+  [theme level]
+  (let [k (case level
+            :off :thinking-off :minimal :thinking-minimal :low :thinking-low
+            :medium :thinking-medium :high :thinking-high :xhigh :thinking-xhigh
+            :max :thinking-max
+            :thinking-off)]
+    (fn [s] (fg theme k s))))
+
+(defn get-bash-mode-border-color
+  "A color fn for the bash-mode border (pi: getBashModeBorderColor)."
+  [theme]
+  (fn [s] (fg theme :bash-mode s)))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Syntax highlighting — mirroring pi's getCliHighlightTheme() + highlightCode()
@@ -269,6 +308,14 @@
    "thinkingMax" :thinking-max
    "bashMode" :bash-mode})
 
+(defn- normalize-color-keys
+  "Normalize a colors map to kebab-case keyword keys (accepts pi camelCase
+   string keys and kmet kebab keywords)."
+  [raw]
+  (into {} (map (fn [[k v]]
+                  [(if (keyword? k) k (camel->kebab k)) v]))
+        raw))
+
 (defn- is-pi-schema?
   "Check if data uses pi's {:name :vars :colors} schema."
   [data]
@@ -279,12 +326,11 @@
    :colors keys can be camelCase strings (pi JSON style) or kebab-case keywords."
   [data color-mode]
   (let [vars (get data :vars {})
-        raw (:colors data {})
-        ;; Accept both camelCase string keys and kebab-case keywords
-        raw-map (into {} (map (fn [[k v]]
-                                (let [kw (if (keyword? k) k (camel->kebab k))]
-                                  [kw v]))
-                              raw))
+        raw (normalize-color-keys (:colors data {}))
+        ;; pi: thinkingMax ?? thinkingXhigh (Type.Optional in the schema)
+        raw (if (contains? raw :thinking-max)
+              raw
+              (assoc raw :thinking-max (get raw :thinking-xhigh)))
         resolve (fn [v]
                   (cond
                     (number? v) v
@@ -294,7 +340,7 @@
                       (let [var-val (get vars v)]
                         (if var-val var-val v)))
                     :else nil))
-        get-color (fn [k] (when-let [v (get raw-map k)] (resolve v)))
+        get-color (fn [k] (when-let [v (get raw k)] (resolve v)))
         fg-map (into {} (keep (fn [k] (when-let [v (get-color k)] [k (fg-ansi v color-mode)])) FG-TOKENS))
         bg-map (into {} (keep (fn [k] (when-let [v (get-color k)] [k (bg-ansi v color-mode)])) BG-TOKENS))]
     {:fg-map fg-map :bg-map bg-map}))
@@ -302,7 +348,10 @@
 (defn- resolve-colors-from-flat-map
   "Resolve colors from a flat kebab-case keyword → value map (legacy format)."
   [data color-mode]
-  (let [fg-map (into {} (keep (fn [k] (when-let [v (get data k)] [k (fg-ansi v color-mode)])) FG-TOKENS))
+  (let [data (if (contains? data :thinking-max)
+               data
+               (assoc data :thinking-max (get data :thinking-xhigh)))
+        fg-map (into {} (keep (fn [k] (when-let [v (get data k)] [k (fg-ansi v color-mode)])) FG-TOKENS))
         bg-map (into {} (keep (fn [k] (when-let [v (get data k)] [k (bg-ansi v color-mode)])) BG-TOKENS))]
     {:fg-map fg-map :bg-map bg-map}))
 
@@ -444,6 +493,7 @@
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Registry & Loading — EDN only, same schema as pi's JSON
+(declare load-theme-from-path get-default-theme)
 ;; ═══════════════════════════════════════════════════════════════════════════
 
 (defonce ^:private themes (atom {"dark" dark-theme "light" light-theme}))
@@ -467,17 +517,11 @@
   @themes)
 
 (defn- load-edn-file [path]
-  (let [basename (str/replace (fs/file-name path) #"\.edn$" "")]
-    (try
-      (let [data (edn/read-string (slurp path))
-            ;; If data uses pi schema with :name, use it; otherwise derive from filename
-            theme (if (string? (:name data))
-                    (make-theme data path)
-                    (make-theme (assoc data :name basename) path))]
-        (register-theme! theme))
-      (catch Exception e
-        (binding [*out* *err*]
-          (println "Warning: Failed to load theme" (fs/file-name path) ":" (ex-message e)))))))
+  (try
+    (register-theme! (load-theme-from-path path))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "Warning: Failed to load theme" (fs/file-name path) ":" (ex-message e))))))
 
 (defn load-themes-from-dir
   "Load all .edn theme files from a directory."
@@ -487,3 +531,266 @@
       (when (and (fs/regular-file? f)
                  (str/ends-with? (fs/file-name f) ".edn"))
         (load-edn-file (str f))))))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Validation (pi: parseThemeJson — required color tokens + name check)
+;; ═══════════════════════════════════════════════════════════════════════════
+
+(def ^:private optional-color-tokens
+  "Tokens not required by pi's schema (Type.Optional)."
+  #{:thinking-max})
+
+(defn- missing-color-tokens
+  "Required color tokens missing from the theme's :colors map (pi: required
+   schema properties, minus :thinking-max)."
+  [data]
+  (let [raw (if (is-pi-schema? data) (:colors data {}) data)
+        keys (set (keys (normalize-color-keys raw)))]
+    (->> (concat FG-TOKENS BG-TOKENS)
+         (remove optional-color-tokens)
+         (remove keys)
+         (sort-by str)
+         vec)))
+
+(defn- validate-theme-data!
+  "Throw when the theme data misses required color tokens or has an invalid
+   name (pi: parseThemeJson). The error lists the sorted missing tokens."
+  [data]
+  (let [missing (missing-color-tokens data)]
+    (when (seq missing)
+      (throw (ex-info (str "Missing required color tokens:\n"
+                           (apply str (map #(str "  - " (name %) "\n") missing))
+                           "\nPlease add these colors to your theme's :colors map.\n"
+                           "See the built-in themes (dark, light) for reference values.")
+                      {:type :theme-validation :missing missing}))))
+  (when (and (string? (:name data)) (str/includes? (:name data) "/"))
+    (throw (ex-info (str "Invalid theme name \"" (:name data)
+                         "\": theme names cannot contain \"/\" because it is reserved "
+                         "for automatic light/dark theme settings.")
+                    {:type :theme-validation}))))
+
+(defn load-theme-from-path
+  "Load a theme from an EDN file at PATH; throws on parse errors or missing
+   required color tokens (pi: loadThemeFromPath)."
+  [path]
+  (let [data (edn/read-string (slurp path))]
+    (validate-theme-data! data)
+    (let [basename (str/replace (fs/file-name path) #"\.edn$" "")]
+      (if (string? (:name data))
+        (make-theme data path)
+        (make-theme (assoc data :name basename) path)))))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+
+;; ─── Current theme state (pi: global Theme instance + setTheme machinery) ───
+(defonce ^:private current-theme (atom dark-theme))
+(defonce ^:private current-theme-name (atom nil))
+(defonce ^:private theme-change-callback (atom nil))
+
+(defn- notify-theme-change!
+  []
+  (when-let [f @theme-change-callback]
+    (try (f) (catch Exception _))))
+
+;; ─── Custom-theme file watcher (pi: startThemeWatcher) ─────────────────────
+
+(defonce ^:private custom-themes-dir (atom nil))
+(defonce ^:private theme-watcher (atom nil))
+(defonce ^:private theme-watch-mtime (atom nil))
+
+(defn set-custom-themes-dir!
+  "Set the custom themes directory (config :themes-dir) used by the
+   watcher."
+  [dir]
+  (reset! custom-themes-dir dir))
+
+(defn- get-custom-themes-dir [] @custom-themes-dir)
+
+(defn stop-theme-watcher!
+  []
+  (when-let [f @theme-watcher]
+    (future-cancel f)
+    (reset! theme-watcher nil)))
+
+(defn start-theme-watcher!
+  "Poll the current theme's file in DIR every second and reload on change
+   (pi: startThemeWatcher — a polling equivalent: babashka.fs has no watcher,
+   and java.nio is out per AGENTS.md). Keeps the last good theme on parse
+   errors and notifies the change callback after reload. No-op when DIR is
+   nil or the theme file doesn't exist."
+  [dir]
+  (stop-theme-watcher!)
+  (let [name @current-theme-name]
+    (when (and dir name (not (contains? #{"dark" "light" "<in-memory>"} name)))
+      (let [f (io/file dir (str name ".edn"))]
+        (when (fs/exists? f)
+          (reset! theme-watch-mtime (fs/last-modified-time f))
+          (reset! theme-watcher
+                  (future
+                    (try
+                      (loop []
+                        (Thread/sleep 1000)
+                        (when (and (= name @current-theme-name)
+                                   (fs/exists? f))
+                          (let [m (fs/last-modified-time f)]
+                            (when (not= m @theme-watch-mtime)
+                              (reset! theme-watch-mtime m)
+                              (try
+                                (let [t (load-theme-from-path (str f))]
+                                  (register-theme! t)
+                                  (reset! current-theme t)
+                                  (notify-theme-change!))
+                                (catch Exception _ "keep the last good theme")))))
+                        (recur))
+                      (catch InterruptedException _)))))))))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Terminal theme detection (pi: theme.ts detection section)
+;; ═══════════════════════════════════════════════════════════════════════════
+
+(defn get-current-theme
+  "The active theme instance (pi: the global theme getter)."
+  []
+  @current-theme)
+
+(defn get-current-theme-name
+  "The active theme's name (pi: currentThemeName)."
+  []
+  @current-theme-name)
+
+(defn on-theme-change
+  "Register the callback invoked after every applied theme change (pi:
+   onThemeChange — the app uses it to invalidate + re-theme components)."
+  [f]
+  (reset! theme-change-callback f))
+
+(defn init-theme!
+  "Set the current theme to NAME (default: environment detection), falling
+   back to dark when unknown (pi: initTheme). ENABLE-WATCHER? starts the
+   custom-theme file watcher."
+  ([name] (init-theme! name false))
+  ([name enable-watcher?]
+   (let [name (or name (get-default-theme))]
+     (reset! current-theme-name name)
+     (reset! current-theme (get-theme name))
+     (when enable-watcher? (start-theme-watcher! (get-custom-themes-dir))))))
+
+(defn set-theme!
+  "Switch the current theme to NAME, falling back to dark on failure (pi:
+   setTheme). Returns {:success bool :error msg?}."
+  ([name] (set-theme! name false))
+  ([name enable-watcher?]
+   (let [t (get @themes (str name))]
+     (if (nil? t)
+       (do (reset! current-theme-name "dark")
+           (reset! current-theme dark-theme)
+           {:success false :error (str "Theme not found: " name)})
+       (do (reset! current-theme-name (str name))
+           (reset! current-theme t)
+           (when enable-watcher? (start-theme-watcher! (get-custom-themes-dir)))
+           (notify-theme-change!)
+           {:success true})))))
+
+(defn set-theme-instance!
+  "Switch to an in-memory Theme instance; stops the file watcher (pi:
+   setThemeInstance — can't watch a direct instance)."
+  [t]
+  (stop-theme-watcher!)
+  (reset! current-theme-name "<in-memory>")
+  (reset! current-theme t)
+  (notify-theme-change!))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+
+(defn- ansi256->hex
+  "ANSI 256-color index → hex string (pi: ansi256ToHex)."
+  [index]
+  (let [basic ["#000000" "#800000" "#008000" "#808000"
+               "#000080" "#800080" "#008080" "#c0c0c0"
+               "#808080" "#ff0000" "#00ff00" "#ffff00"
+               "#0000ff" "#ff00ff" "#00ffff" "#ffffff"]]
+    (cond
+      (< index 16) (nth basic index)
+      (< index 232)
+      (let [cube-index (- index 16)
+            r (quot cube-index 36)
+            g (quot (mod cube-index 36) 6)
+            b (mod cube-index 6)
+            to-hex (fn [n] (format "%02x" (if (zero? n) 0 (+ 55 (* n 40)))))]
+        (str "#" (to-hex r) (to-hex g) (to-hex b)))
+      :else
+      (let [gray (+ 8 (* (- index 232) 10))]
+        (str "#" (format "%02x" gray) (format "%02x" gray) (format "%02x" gray))))))
+
+(defn- get-rgb-luminance
+  "Relative luminance of an RGB color (pi: getRgbColorLuminance)."
+  [{:keys [r g b]}]
+  (let [to-linear (fn [c]
+                    (let [v (/ c 255)]
+                      (if (<= v 0.03928)
+                        (/ v 12.92)
+                        (Math/pow (/ (+ v 0.055) 1.055) 2.4))))]
+    (+ (* 0.2126 (to-linear r))
+       (* 0.7152 (to-linear g))
+       (* 0.0722 (to-linear b)))))
+
+(defn get-theme-for-rgb-color
+  ":light when the RGB's luminance >= 0.5, else :dark (pi:
+   getThemeForRgbColor)."
+  [rgb]
+  (if (>= (get-rgb-luminance rgb) 0.5) :light :dark))
+
+(defn detect-terminal-background-from-env
+  "Detect the terminal theme from the COLORFGBG environment variable
+   (background index → luminance); falls back to :dark with low confidence
+   (pi: detectTerminalBackgroundFromEnv). Returns
+   {:theme :dark|:light :source ... :detail ... :confidence :high|:low}."
+  ([] (detect-terminal-background-from-env (System/getenv)))
+  ([env]
+   (let [colorfgbg (or (get env "COLORFGBG") "")]
+     (if-let [bg (some (fn [part]
+                         (let [n (parse-long (str/trim part))]
+                           (when (and n (<= 0 n 255)) n)))
+                       (reverse (str/split colorfgbg #";")))]
+       {:theme (if (>= (get-rgb-luminance (hex->rgb (ansi256->hex bg))) 0.5)
+                 :light :dark)
+        :source "COLORFGBG"
+        :detail (str "background color index " bg)
+        :confidence :high}
+       {:theme :dark
+        :source "fallback"
+        :detail "no terminal background hint found"
+        :confidence :low}))))
+
+(defn get-default-theme
+  "The default theme name from environment detection (pi: getDefaultTheme)."
+  []
+  (name (:theme (detect-terminal-background-from-env))))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Auto light/dark setting (pi: parseAutoThemeSetting / resolveThemeSetting)
+;; ═══════════════════════════════════════════════════════════════════════════
+
+(defn parse-auto-theme-setting
+  "Parse an auto theme setting \"light-theme/dark-theme\" (exactly one
+   slash) into {:light-theme ... :dark-theme ...} or nil (pi:
+   parseAutoThemeSetting)."
+  [setting]
+  (when (and setting (string? setting))
+    (let [slash (str/index-of setting "/")]
+      (when (and slash (not (str/includes? (subs setting (inc slash)) "/")))
+        (let [light (str/trim (subs setting 0 slash))
+              dark (str/trim (subs setting (inc slash)))]
+          (when (and (seq light) (seq dark))
+            {:light-theme light :dark-theme dark}))))))
+
+(defn resolve-theme-setting
+  "Resolve a theme setting against the terminal theme: auto settings
+   (\"light/dark\") pick by terminal theme; plain names pass through;
+   anything with '/' that is not a valid auto setting → nil (pi:
+   resolveThemeSetting)."
+  [setting terminal-theme]
+  (if-let [auto (parse-auto-theme-setting setting)]
+    (if (= terminal-theme :light) (:light-theme auto) (:dark-theme auto))
+    (when (and (string? setting) (not (str/includes? setting "/")))
+      setting)))

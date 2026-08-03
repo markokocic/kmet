@@ -320,6 +320,13 @@
   []
   (ui-call :get-all-themes))
 
+(defn ui-set-theme
+  "Switch the active theme: a Theme instance replaces it in-memory; a name
+   is loaded from the registry, disabling auto light/dark sync (pi:
+   ctx.ui.setTheme). Returns {:success bool :error msg?}."
+  [theme-or-name]
+  (ui-call :set-theme theme-or-name))
+
 (defn ui-get-tools-expanded
   "Whether tool output is expanded (pi: ctx.ui.getToolsExpanded)."
   []

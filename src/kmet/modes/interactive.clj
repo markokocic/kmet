@@ -11,6 +11,7 @@
             [kmet.tui.components.editor :as editor]
             [kmet.tui.components.container :as container]
             [kmet.app.ui :as ui]
+            [kmet.app.theme-controller :as theme-ctrl]
             [kmet.tui.components.select-list :as select-list]
             [kmet.app.loop :as agent]
             [kmet.app.session :as session]
@@ -79,7 +80,8 @@
                       bash-running?
                       bash-signal
                       pending-bash-components
-                      pending-messages-container])
+                      pending-messages-container
+                      theme-controller])
 
 ;; ─── Formatting helpers ────────────────────────────────────────────────────
 
@@ -260,18 +262,26 @@
     :argument-hint "<name>"
     :get-argument-completions
     (fn [_]
-      (mapv (fn [t] {:value t :label t}) ["dark" "light"]))
+      (mapv (fn [t] {:value t :label t})
+            (sort (keys (th/get-all-themes)))))
     :handler (fn [cs args]
-               (if (seq args)
-                 (ui/chat-history-add-message! (:chat-history cs)
-                                               {:role :assistant
-                                                :content (str "Theme switching not yet implemented. "
-                                                              "Available themes: dark, light. "
-                                                              "Current theme: " (cfg/get-theme-name (:config cs)))})
-                 (ui/chat-history-add-message! (:chat-history cs)
-                                               {:role :assistant
-                                                :content (str "Current theme: " (cfg/get-theme-name (:config cs))
-                                                              "\nUsage: /theme <name>")})))}))
+               (let [tc (:theme-controller cs)]
+                 (if (seq args)
+                   (let [name (first args)
+                         result (theme-ctrl/set-theme-name! tc name)]
+                     (ui/chat-history-add-message! (:chat-history cs)
+                                                   {:role :assistant
+                                                    :content (if (:success result)
+                                                               (str "Switched to theme \"" name "\".")
+                                                               (str "Failed to load theme \"" name "\": "
+                                                                    (:error result)))}))
+                   (ui/chat-history-add-message! (:chat-history cs)
+                                                 {:role :assistant
+                                                  :content (str "Current theme: "
+                                                                (theme-ctrl/get-active-theme-name tc)
+                                                                "\nAvailable themes: "
+                                                                (str/join ", " (sort (keys (th/get-all-themes))))
+                                                                "\nUsage: /theme <name>")}))))}))
 
 (defn- command-not-implemented
   "In-chat reply for pi slash commands kmet does not implement yet."
@@ -313,6 +323,7 @@
                              :context-files (context/load-project-context-files
                                              (cfg/get-agent-dir) (str (fs/cwd))))]
           (reset! global-config config)
+          (theme-ctrl/set-config! (:theme-controller cs) config)
           (agent/set-system-prompt! agent-state system-prompt)
           (update-header-footer! cs)
           ;; pi: reload re-emits session_start so extensions re-register UI.
@@ -592,7 +603,7 @@
       (let [bash-comp (be/make-bash-execution
                        :command command
                        :exclude-from-context? exclude-from-context?
-                       :theme (cfg/get-theme (:config cs)))
+                       :theme (th/get-current-theme))
 
             ;; ── Build session env (pi: resolveSpawnContext) ─────────────
             ag (:agent-state cs)
@@ -1127,45 +1138,64 @@
       (text/text-set! hdr (fmt-header cs))
       (ui/footer-set-status! ftr (fmt-status-str cs))
 
+      ;; Theme controller (pi: InteractiveThemeController) — applies the
+      ;; configured theme, drives auto light/dark sync via color-scheme
+      ;; notifications, and re-themes the app components live on change
+      ;; (the on-changed callback — pi: notifyChanged → onChanged).
+      (let [tc (theme-ctrl/make-theme-controller
+                t config
+                (fn [msg] (tui/tui-flash! t msg :duration-ms 3000))
+                (fn []
+                  (let [current-theme (th/get-current-theme)]
+                    (ui/chat-history-set-theme! ch current-theme)
+                    (ui/footer-set-theme! ftr current-theme)
+                    (ui/status-indicator-set-theme! si current-theme)
+                    (editor/editor-set-autocomplete-theme!
+                     ed (th/get-select-list-theme current-theme))
+                    (app-kb/set-key-hint-theme-fns!
+                     #(th/dim %) #(th/fg current-theme :muted %))
+                    (tui/tui-request-render t))))
+            cs (assoc cs :theme-controller tc)]
+
       ;; Pi-style info message on top (expandable with ctrl+o, pi: builtInHeader)
-      (let [kmgr (tui-kb/get-global-keybindings)
-            expand-key (or (tui-kb/key-text kmgr "app.tools.expand") "Ctrl+O")
-            thinking-key (or (tui-kb/key-text kmgr "app.thinking.toggle") "Ctrl+T")
-            compact (str "Welcome to " (th/bold "kmet") " — minimal coding agent.\n"
-                         (th/dim (str "Press " expand-key " to show full startup help.")))
-            full (str "Welcome to " (th/bold "kmet") " — minimal coding agent.\n\n"
-                      "Shortcuts:\n"
-                      "  " (th/dim "Enter")        " — submit message\n"
-                      "  " (th/dim "Escape")       " — cancel current turn / bash\n"
-                      "  " (th/dim "Ctrl+C")       " — clear editor (twice to quit)\n"
-                      "  " (th/dim "Ctrl+D")       " — exit when editor is empty\n"
-                      "  " (th/dim "Ctrl+G")       " — open external editor\n"
-                      "  " (th/dim expand-key)     " — toggle tool output\n"
-                      "  " (th/dim thinking-key)   " — toggle thinking blocks\n"
-                      "  " (th/dim "Ctrl+P")       " — cycle to next model\n"
-                      "  " (th/dim "Ctrl+L")       " — clear terminal\n"
-                      "  " (th/dim "Alt+Enter")    " — queue follow-up message\n"
-                      "  " (th/dim "/") " — commands   " (th/dim "!") " — bash   "
-                      "  " (th/dim "!!") " — bash (no context)\n\n"
-                      (th/dim "Type a message, or use /help for all commands."))]
-        (ui/chat-history-set-info-msg! ch
-                                       {:label "kmet"
-                                        :content compact
-                                        :collapsed-content compact
-                                        :expanded-content full}))
+        (let [kmgr (tui-kb/get-global-keybindings)
+              expand-key (or (tui-kb/key-text kmgr "app.tools.expand") "Ctrl+O")
+              thinking-key (or (tui-kb/key-text kmgr "app.thinking.toggle") "Ctrl+T")
+              compact (str "Welcome to " (th/bold "kmet") " — minimal coding agent.\n"
+                           (th/dim (str "Press " expand-key " to show full startup help.")))
+              full (str "Welcome to " (th/bold "kmet") " — minimal coding agent.\n\n"
+                        "Shortcuts:\n"
+                        "  " (th/dim "Enter")        " — submit message\n"
+                        "  " (th/dim "Escape")       " — cancel current turn / bash\n"
+                        "  " (th/dim "Ctrl+C")       " — clear editor (twice to quit)\n"
+                        "  " (th/dim "Ctrl+D")       " — exit when editor is empty\n"
+                        "  " (th/dim "Ctrl+G")       " — open external editor\n"
+                        "  " (th/dim expand-key)     " — toggle tool output\n"
+                        "  " (th/dim thinking-key)   " — toggle thinking blocks\n"
+                        "  " (th/dim "Ctrl+P")       " — cycle to next model\n"
+                        "  " (th/dim "Ctrl+L")       " — clear terminal\n"
+                        "  " (th/dim "Alt+Enter")    " — queue follow-up message\n"
+                        "  " (th/dim "/") " — commands   " (th/dim "!") " — bash   "
+                        "  " (th/dim "!!") " — bash (no context)\n\n"
+                        (th/dim "Type a message, or use /help for all commands."))]
+          (ui/chat-history-set-info-msg! ch
+                                         {:label "kmet"
+                                          :content compact
+                                          :collapsed-content compact
+                                          :expanded-content full}))
 
       ;; Extension UI registry (pi: ExtensionUIContext) — installed after the
       ;; layout is live so extensions can drive the UI from event handlers
-      (build-extension-ui-registry cs
-                                   {:ed ed :ftr ftr :hdr hdr :ch ch
-                                    :sp1 sp1
-                                    :header-container header-container
-                                    :editor-container editor-container
-                                    :widget-container-above widget-container-above
-                                    :widget-container-below widget-container-below}
-                                   (cfg/get-theme config))
+        (build-extension-ui-registry cs
+                                     {:ed ed :ftr ftr :hdr hdr :ch ch
+                                      :sp1 sp1
+                                      :header-container header-container
+                                      :editor-container editor-container
+                                      :widget-container-above widget-container-above
+                                      :widget-container-below widget-container-below}
+                                     tc)
 
-      cs)))
+        cs))))
 
 ;; ─── Extension UI registry (pi: ExtensionUIContext) ────────────────────────
 ;; build-layout installs this registry after the layout is live; extensions
@@ -1208,7 +1238,7 @@
   "pi: string arrays wrap in a Container of Text lines truncated to
    MAX_WIDGET_LINES with a '... (widget truncated)' tail; factory functions
    produce the component directly."
-  [t theme content]
+  [t content]
   (if (vector? content)
     (let [c (container/make-container)]
       (doseq [line (take MAX-WIDGET-LINES content)]
@@ -1216,10 +1246,10 @@
       (when (> (count content) MAX-WIDGET-LINES)
         (container/container-add-child c
                                        (text/make-text
-                                        (th/fg theme :muted "... (widget truncated)")
+                                        (th/fg (th/get-current-theme) :muted "... (widget truncated)")
                                         1 0)))
       c)
-    (content t theme)))
+    (content t (th/get-current-theme))))
 
 (defn- normalize-custom-component
   "Accept either an IComponent or a plain render map {:render :handle-input
@@ -1292,7 +1322,7 @@
   [{:keys [tui cs]}
    {:keys [ed ftr hdr ch sp1 header-container editor-container
            widget-container-above widget-container-below]}
-   theme]
+   theme-controller]
   (let [t tui
         widgets-above (atom {})
         widgets-below (atom {})
@@ -1349,7 +1379,7 @@
                                    title options
                                    (fn [opt] (hide-dialog) (deliver p opt))
                                    (fn [] (hide-dialog) (deliver p nil))
-                                   theme))
+                                   (th/get-current-theme)))
                      p))
          :confirm (fn [title message]
                     (let [p (promise)]
@@ -1357,7 +1387,7 @@
                                     (str title "\n" message) ["Yes" "No"]
                                     (fn [opt] (hide-dialog) (deliver p (= opt "Yes")))
                                     (fn [] (hide-dialog) (deliver p false))
-                                    theme))
+                                    (th/get-current-theme)))
                       p))
          :input (fn [title _placeholder]
                   (let [p (promise)]
@@ -1365,7 +1395,7 @@
                                   title
                                   (fn [v] (hide-dialog) (deliver p v))
                                   (fn [] (hide-dialog) (deliver p nil))
-                                  theme))
+                                  (th/get-current-theme)))
                     p))
          :editor (fn [title prefill]
                    (let [p (promise)]
@@ -1373,7 +1403,7 @@
                                    title prefill
                                    (fn [v] (hide-dialog) (deliver p v))
                                    (fn [] (hide-dialog) (deliver p nil))
-                                   theme
+                                   (th/get-current-theme)
                                    (fn [] (term/rows @(:terminal t)))))
                      p))
          :notify (fn [message _type]
@@ -1394,7 +1424,7 @@
                                    (deliver p result)))]
                      (try
                        (let [component (normalize-custom-component
-                                        (factory t theme (tui-kb/get-global-keybindings) close))]
+                                        (factory t (th/get-current-theme) (tui-kb/get-global-keybindings) close))]
                          (when (and (nil? component) (not @closed))
                            (throw (ex-info "ui-custom factory returned no component" {})))
                          (when-not @closed
@@ -1424,7 +1454,7 @@
                          (swap! m dissoc key)
                          (when content
                            (swap! m assoc key
-                                  (make-extension-widget-component t theme content)))
+                                  (make-extension-widget-component t content)))
                          (render-extension-widgets! t widget-container-above
                                                     widget-container-below
                                                     widgets-above widgets-below)))
@@ -1433,14 +1463,14 @@
                          (tui/tui-remove-child t cf))
                        (tui/tui-remove-child t ftr)
                        (if factory
-                         (let [cf (factory t theme footer-data)]
+                         (let [cf (factory t (th/get-current-theme) footer-data)]
                            (reset! custom-footer-atom cf)
                            (tui/tui-add-child t cf))
                          (do (reset! custom-footer-atom nil)
                              (tui/tui-add-child t ftr)))
                        (tui/tui-request-render t))
          :set-header (fn [factory]
-                       (let [child (if factory (factory t theme) hdr)]
+                       (let [child (if factory (factory t (th/get-current-theme)) hdr)]
                          (container/container-clear header-container)
                          (container/container-add-child header-container sp1)
                          (container/container-add-child header-container child)
@@ -1483,7 +1513,7 @@
                                  (let [current-text (editor/editor-get-text @current-editor-atom)]
                                    (container/container-clear editor-container)
                                    (if factory
-                                     (let [new-ed (factory t theme (tui-kb/get-global-keybindings))]
+                                     (let [new-ed (factory t (th/get-current-theme) (tui-kb/get-global-keybindings))]
                                        (transfer-editor! ed new-ed (tui-kb/get-global-keybindings))
                                        (editor/editor-set-text! new-ed current-text)
                                        (container/container-add-child editor-container new-ed)
@@ -1498,8 +1528,16 @@
          :add-autocomplete-provider (fn [factory]
                                       (swap! extension-autocomplete-factories conj factory)
                                       (rebuild-autocomplete-provider!))
-         :get-theme (fn [] theme)
+         :get-theme (fn [] (th/get-current-theme))
          :get-all-themes (fn [] (th/get-all-themes))
+         :set-theme (fn [theme-or-name]
+                      ;; pi: setTheme — Theme instances go through
+                      ;; setThemeInstance; names through setThemeName (which
+                      ;; disables auto-sync). kmet has no settings write
+                      ;; path — the switch is applied live only.
+                      (if (instance? kmet.tui.theme.Theme theme-or-name)
+                        (theme-ctrl/set-theme-instance! theme-controller theme-or-name)
+                        (theme-ctrl/set-theme-name! theme-controller theme-or-name true)))
          :get-tools-expanded (fn [] (ui/chat-history-get-tool-expanded ch))
          :set-tools-expanded (fn [expanded?]
                                (let [current? (ui/chat-history-get-tool-expanded ch)]
@@ -1599,6 +1637,20 @@
                               :else :new)}))
             (catch Exception e
               (debug/log "session-start: " e))))
+        ;; Theme detection + application (pi: startup applyFromSettings) —
+        ;; waits for the render loop so OSC 11 / color-scheme responses are
+        ;; consumed by the input path.
+        (future
+          (try
+            (loop []
+              (when-not (or @(:running? (:tui cs))
+                            @(:stopped? (:tui cs)))
+                (Thread/sleep 20)
+                (recur)))
+            (when @(:running? (:tui cs))
+              (theme-ctrl/apply-from-settings! (:theme-controller cs)))
+            (catch Exception e
+              (debug/log "theme detection: " e))))
         (tui/tui-start (:tui cs))
         (process/kill-tracked-children!)
         (println "kmet session ended.")
