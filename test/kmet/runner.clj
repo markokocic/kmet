@@ -27,6 +27,7 @@
             [kmet.app.test-event-bus]
             [kmet.app.test-theme-controller]
             [kmet.app.test-commands]
+            [kmet.app.test-keybindings]
             [kmet.test-editing]
             [kmet.tui.test-fuzzy]
             [kmet.tui.test-autocomplete]
@@ -91,6 +92,7 @@
     kmet.app.test-event-bus
     kmet.app.test-theme-controller
     kmet.app.test-commands
+    kmet.app.test-keybindings
     kmet.test-editing
     kmet.tui.test-fuzzy
     kmet.tui.test-autocomplete

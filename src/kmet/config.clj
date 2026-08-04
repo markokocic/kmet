@@ -184,6 +184,126 @@
   []
   (expand-path "~/.kmet/agent"))
 
+;; ─── Settings persistence (pi: SettingsManager setters) ───────────────────
+;; The config module reads settings.edn at load; these fns persist individual
+;; fields back to the global file (pi: setHideThinkingBlock etc. write to
+;; ~/.pi/agent/settings.json via SettingsManager.save).
+
+(defn global-settings-path
+  "Path of the global settings file (~/.kmet/agent/settings.edn)."
+  []
+  (expand-path "~/.kmet/agent/settings.edn"))
+
+(def ^:private lock-stale-ms 10000)
+(def ^:private lock-acquire-attempts 10)
+(def ^:private lock-acquire-delay-ms 20)
+
+(defn- pretty-edn
+  "Format a settings map as EDN with each top-level entry on its own line and
+   the closing brace on its own line (pi: JSON.stringify(settings, null, 2))."
+  [m]
+  (str "{" (str/join "\n " (for [[k v] m] (str (pr-str k) " " (pr-str v)))) "\n}\n"))
+
+(defn- safe-parse-settings
+  "Parse settings text as a map, nil when malformed or not a map."
+  [text]
+  (when-let [parsed (try (edn/read-string text) (catch Exception _ nil))]
+    (when (map? parsed) parsed)))
+
+(defn- acquire-lock!
+  "Acquire the settings lock via atomic directory creation (pi:
+   proper-lockfile.lockSync — brief retry; locks older than 10s left by
+   crashed writers are broken)."
+  [lock-path]
+  (loop [attempt 1]
+    (cond
+      (try (fs/create-dir lock-path) true (catch Exception _ false)) :ok
+      (try (> (- (System/currentTimeMillis) (.toMillis (fs/last-modified-time lock-path)))
+              lock-stale-ms)
+           (catch Exception _ false))
+      (do (fs/delete-tree lock-path) (Thread/sleep lock-acquire-delay-ms) (recur attempt))
+      (< attempt lock-acquire-attempts)
+      (do (Thread/sleep lock-acquire-delay-ms) (recur (inc attempt)))
+      :else (throw (ex-info "Timed out acquiring settings lock"
+                            {:type :settings-lock-timeout :path lock-path})))))
+
+(defn- with-settings-lock
+  "Run F with the settings lock held (pi: SettingsStorage.withLock)."
+  [f]
+  (let [lock-path (str (global-settings-path) ".lock")]
+    (acquire-lock! lock-path)
+    (try (f)
+         (finally (fs/delete-tree lock-path)))))
+
+(defn- setting-line
+  "EDN text for one pretty settings entry, e.g. \" :hide-thinking-block true\"."
+  [key value]
+  (str " " (pr-str key) " " (pr-str value)))
+
+(defn- top-level-key-line?
+  "True when LINE is a top-level KEY entry of an EDN settings map (key at
+   line start, possibly indented)."
+  [key line]
+  (boolean (re-matches (re-pattern (str "^\\s*" (java.util.regex.Pattern/quote (pr-str key)) "\\s+.*"))
+                       line)))
+
+(defn- update-setting-text
+  "Return settings text with the top-level KEY entry set to VALUE, preserving
+   unrelated lines (hand-written comments): the key's line is replaced when
+   present, otherwise a new line is inserted with the closing brace on its own
+   line (canonical pretty format), so later updates stay in-place."
+  [text key value]
+  (let [line (setting-line key value)
+        lines (str/split-lines text)
+        idx (first (keep-indexed (fn [i l] (when (top-level-key-line? key l) i)) lines))
+        trailing-nl? (str/ends-with? text "\n")]
+    (if idx
+      (str (str/join "\n" (assoc (vec lines) idx line))
+           (when trailing-nl? "\n"))
+      (when-let [i (str/last-index-of text "}")]
+        (if (= \newline (get text (dec i)))
+          (str (subs text 0 (dec i)) "\n" line "\n}" (subs text (inc i)))
+          (str (subs text 0 i) "\n" line "\n}" (subs text (inc i))))))))
+
+(defn save-setting!
+  "Persist a setting to the global settings.edn (pi: SettingsManager.save —
+   only the given field is merged into the current file content, nested keys
+   merged leaf-wise). PATH is a key path (e.g. [:hide-thinking-block]); only
+   that leaf is merged, so unrelated keys survive. Hand-written comments are
+   preserved via line surgery; the file is rewritten in a canonical pretty
+   format when surgery is unsafe (malformed or one-line files, nested paths)."
+  [path value]
+  (let [path (if (vector? path) path [path])
+        file (io/file (global-settings-path))]
+    (fs/create-dirs (fs/parent (global-settings-path)))
+    (with-settings-lock
+      (fn []
+        (if-not (fs/exists? file)
+          (spit (global-settings-path) (pretty-edn (assoc-in {} path value)))
+          (let [text (slurp (global-settings-path))
+                base (or (safe-parse-settings text) {})
+                edited (when (= 1 (count path))
+                         (update-setting-text text (peek path) value))
+                edited-ok? (and edited
+                                (let [parsed (safe-parse-settings edited)]
+                                  (and parsed
+                                       (= parsed (assoc-in base path value)))))]
+            (if edited-ok?
+              (spit (global-settings-path) edited)
+              (spit (global-settings-path)
+                    (pretty-edn (assoc-in base path value))))))))))
+
+(defn get-hide-thinking-block
+  "Pi: getHideThinkingBlock — whether thinking blocks are hidden by default."
+  [config]
+  (boolean (:hide-thinking-block config)))
+
+(defn set-hide-thinking-block!
+  "Pi: setHideThinkingBlock — persist the thinking-block hidden flag to the
+   global settings file (applied by Ctrl+T / app.thinking.toggle)."
+  [hidden?]
+  (save-setting! [:hide-thinking-block] (boolean hidden?)))
+
 ;; ─── System prompt sources (pi: resolvePromptInput + discoverSystemPromptFile) ──
 
 (defn- resolve-prompt-input

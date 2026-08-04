@@ -88,10 +88,12 @@
 (defn make-chat-history
   "Create a ChatHistoryComponent.
    Options:
-     :theme       — Theme record (default dark-theme)
-     :output-pad  — horizontal padding for boxed messages (default 1)"
-  [& {:keys [theme output-pad]
-      :or {theme theme/dark-theme output-pad 1}}]
+     :theme            — Theme record (default dark-theme)
+     :output-pad       — horizontal padding for boxed messages (default 1)
+     :thinking-hidden  — initial thinking-blocks hidden flag (default false;
+                         pi: hideThinkingBlock loaded from settings at startup)"
+  [& {:keys [theme output-pad thinking-hidden]
+      :or {theme theme/dark-theme output-pad 1 thinking-hidden false}}]
   (map->ChatHistoryComponent {:messages-atom (atom [])
                               :info-comp-atom (atom nil)
                               :theme-atom (atom theme)
@@ -99,7 +101,7 @@
                               :streaming-atom (atom nil)
                               :status-line-atom (atom nil)
                               :tools-expanded-atom (atom false)
-                              :thinking-hidden-atom (atom false)
+                              :thinking-hidden-atom (atom (boolean thinking-hidden))
                               :hidden-label-atom (atom "Thinking...")}))
 
 ;; ─── Adding messages ──────────────────────────────────────────────────────
@@ -365,17 +367,24 @@
   [ch]
   @(:tools-expanded-atom ch))
 
-(defn chat-history-toggle-thinking-hidden!
-  "Toggle thinking block visibility on all AssistantMessageComponent children.
-   Tracks a single flag (pi: hideThinkingBlock) applied to existing messages;
-   new assistant messages inherit it. Returns the new hidden state."
-  [ch]
-  (let [hidden? (not @(:thinking-hidden-atom ch))]
+(defn chat-history-set-thinking-hidden!
+  "Set thinking block visibility on all assistant messages (pi:
+   setHideThinkingBlock — applied to existing children; new assistant
+   messages inherit the flag). Returns the value set."
+  [ch hidden?]
+  (let [hidden? (boolean hidden?)]
     (reset! (:thinking-hidden-atom ch) hidden?)
     (doseq [m @(:messages-atom ch)]
       (when (= (kind-of (:component m)) :assistant)
         (am/assistant-message-set-hide-thinking! (:component m) hidden?)))
     hidden?))
+
+(defn chat-history-toggle-thinking-hidden!
+  "Toggle thinking block visibility on all AssistantMessageComponent children.
+   Tracks a single flag (pi: hideThinkingBlock) applied to existing messages;
+   new assistant messages inherit it. Returns the new hidden state."
+  [ch]
+  (chat-history-set-thinking-hidden! ch (not @(:thinking-hidden-atom ch))))
 
 (defn chat-history-get-thinking-hidden
   "Check if thinking blocks are hidden (the tracked hidden flag)."

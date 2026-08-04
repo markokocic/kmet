@@ -1,5 +1,6 @@
 (ns kmet.test-config
   (:require [clojure.test :as t]
+            [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
@@ -258,3 +259,101 @@
       (t/is (= "One\n\nTwo" (:append-system-prompt (cfg/apply-cli-overrides base opts)))))
     (t/testing "absent keys pass through untouched"
       (t/is (= base (cfg/apply-cli-overrides base {}))))))
+
+;; ─── hide-thinking-block (pi: hideThinkingBlock in settings.json) ─────────
+
+(t/deftest test-get-hide-thinking-block
+  (t/is (false? (cfg/get-hide-thinking-block {})))
+  (t/is (false? (cfg/get-hide-thinking-block {:hide-thinking-block false})))
+  (t/is (true? (cfg/get-hide-thinking-block {:hide-thinking-block true}))))
+
+(t/deftest test-set-hide-thinking-block!
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-settings-" (System/currentTimeMillis)))))
+        settings-file (str tmp "/settings.edn")]
+    (fs/create-dirs tmp)
+    (try
+      (with-redefs [cfg/global-settings-path (fn [] settings-file)]
+        (t/testing "writes to global settings file, merging existing keys"
+          (spit settings-file "{:provider :openai}\n")
+          (cfg/set-hide-thinking-block! true)
+          (t/is (= {:provider :openai :hide-thinking-block true}
+                   (edn/read-string (slurp settings-file))))
+          (t/testing "second toggle updates the same key"
+            (cfg/set-hide-thinking-block! false)
+            (t/is (= {:provider :openai :hide-thinking-block false}
+                     (edn/read-string (slurp settings-file))))))
+        (t/testing "creates the file when missing"
+          (fs/delete-tree tmp)
+          (cfg/set-hide-thinking-block! true)
+          (t/is (= {:hide-thinking-block true} (edn/read-string (slurp settings-file)))))
+        (t/testing "non-map file content is replaced, not merged"
+          (spit settings-file "[1 2 3]\n")
+          (cfg/set-hide-thinking-block! true)
+          (t/is (= {:hide-thinking-block true} (edn/read-string (slurp settings-file))))))
+      (finally (fs/delete-tree tmp)))))
+
+(t/deftest test-save-setting-pretty-format
+  (t/testing "one entry per line, closing brace on its own line (pi: JSON.stringify(,2))"
+    (let [tmp (str (fs/absolutize (fs/file "target" (str "test-settings-pretty-" (System/currentTimeMillis)))))
+          settings-file (str tmp "/settings.edn")]
+      (fs/create-dirs tmp)
+      (try
+        (with-redefs [cfg/global-settings-path (fn [] settings-file)]
+          (cfg/save-setting! [:provider] :opencode-go)
+          (t/is (= "{:provider :opencode-go\n}\n" (slurp settings-file))))
+        (finally (fs/delete-tree tmp))))))
+
+(t/deftest test-save-setting-preserves-comments
+  (t/testing "in-place update keeps unrelated lines"
+    (let [tmp (str (fs/absolutize (fs/file "target" (str "test-settings-comments-" (System/currentTimeMillis)))))
+          settings-file (str tmp "/settings.edn")]
+      (fs/create-dirs tmp)
+      (try
+        (with-redefs [cfg/global-settings-path (fn [] settings-file)]
+          (spit settings-file "{:provider :opencode-go\n ;; keep me\n :hide-thinking-block true\n}\n")
+          (cfg/set-hide-thinking-block! false)
+          (t/is (= "{:provider :opencode-go\n ;; keep me\n :hide-thinking-block false\n}\n"
+                   (slurp settings-file))))
+        (finally (fs/delete-tree tmp)))))
+  (t/testing "inserting a new key preserves comments, and later updates stay in-place"
+    (let [tmp (str (fs/absolutize (fs/file "target" (str "test-settings-comments2-" (System/currentTimeMillis)))))
+          settings-file (str tmp "/settings.edn")]
+      (fs/create-dirs tmp)
+      (try
+        (with-redefs [cfg/global-settings-path (fn [] settings-file)]
+          (spit settings-file "{:provider :opencode-go\n ;; keep me\n}\n")
+          (cfg/set-hide-thinking-block! true)
+          (t/is (= "{:provider :opencode-go\n ;; keep me\n :hide-thinking-block true\n}\n"
+                   (slurp settings-file)))
+          (t/testing "second toggle updates in place, comment still there"
+            (cfg/set-hide-thinking-block! false)
+            (t/is (= "{:provider :opencode-go\n ;; keep me\n :hide-thinking-block false\n}\n"
+                     (slurp settings-file)))))
+        (finally (fs/delete-tree tmp))))))
+
+(t/deftest test-save-setting-nested-merge
+  (t/testing "nested fields merge leaf-wise, other nested keys survive (pi: persistScopedSettings)"
+    (let [tmp (str (fs/absolutize (fs/file "target" (str "test-settings-nested-" (System/currentTimeMillis)))))
+          settings-file (str tmp "/settings.edn")]
+      (fs/create-dirs tmp)
+      (try
+        (with-redefs [cfg/global-settings-path (fn [] settings-file)]
+          (cfg/save-setting! [:terminal :show-images] false)
+          (cfg/save-setting! [:terminal :image-width-cells] 80)
+          (t/is (= {:terminal {:show-images false :image-width-cells 80}}
+                   (edn/read-string (slurp settings-file)))))
+        (finally (fs/delete-tree tmp))))))
+
+(t/deftest test-concurrent-setting-saves
+  (t/testing "lock serializes writes — no lost update (pi: proper-lockfile)"
+    (let [tmp (str (fs/absolutize (fs/file "target" (str "test-settings-lock-" (System/currentTimeMillis)))))
+          settings-file (str tmp "/settings.edn")]
+      (fs/create-dirs tmp)
+      (try
+        (with-redefs [cfg/global-settings-path (fn [] settings-file)]
+          (let [futs (doall (for [[k v] [[:hide-thinking-block true] [:provider :anthropic]]]
+                              (future (cfg/save-setting! k v))))]
+            (doseq [f futs] @f))
+          (t/is (= {:hide-thinking-block true :provider :anthropic}
+                   (edn/read-string (slurp settings-file)))))
+        (finally (fs/delete-tree tmp))))))

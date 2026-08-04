@@ -115,6 +115,7 @@
 (def chat-history-clear-info-msg! chat-history/chat-history-clear-info-msg!)
 (def chat-history-toggle-tool-expanded! chat-history/chat-history-toggle-tool-expanded!)
 (def chat-history-toggle-thinking-hidden! chat-history/chat-history-toggle-thinking-hidden!)
+(def chat-history-set-thinking-hidden! chat-history/chat-history-set-thinking-hidden!)
 (def chat-history-get-tool-expanded chat-history/chat-history-get-tool-expanded)
 (def chat-history-get-thinking-hidden chat-history/chat-history-get-thinking-hidden)
 (def chat-history-set-hidden-thinking-label! chat-history/chat-history-set-hidden-thinking-label!)

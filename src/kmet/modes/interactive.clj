@@ -367,6 +367,8 @@
       (try
         ;; pi: settingsManager.reload() + theme re-registration
         (let [config (cfg/init!)
+              ;; pi: keybindings.reload() — re-read keybindings.edn
+              _ (app-kb/reload-agent-keybindings!)
         ;; pi: session.reload → extension shutdown/start
               _ (extensions/ui-reset!)
               _ (extensions/clear-extensions!)
@@ -387,6 +389,10 @@
                                              (cfg/get-agent-dir) (str (fs/cwd))))]
           (reset! global-config config)
           (theme-ctrl/set-config! (:theme-controller cs) config)
+          ;; pi: restoreChatBeforeSessionStart — re-apply hideThinkingBlock
+          ;; from settings to existing chat messages
+          (ui/chat-history-set-thinking-hidden! chat-history
+                                                (cfg/get-hide-thinking-block config))
           (agent/set-system-prompt! agent-state system-prompt)
           (ui/loaded-resources-set-sections!
            (:loaded-resources-comp cs) (build-loaded-resource-sections))
@@ -1104,8 +1110,14 @@
                        :context-files (context/load-project-context-files
                                        (cfg/get-agent-dir) (str (fs/cwd))))
 
-        ;; Initialize keybindings (global singleton for key-hint + input handling)
-        _ (let [kmgr (app-kb/make-agent-keybindings-manager)]
+        ;; Migrate legacy keybinding ids in keybindings.edn (pi: migrations
+        ;; runner calls migrateKeybindingsConfigFile at startup)
+        _ (app-kb/migrate-keybindings-config-file!)
+
+        ;; Initialize keybindings (global singleton for key-hint + input
+        ;; handling); persisted overrides load from keybindings.edn
+        ;; (pi: KeybindingsManager.create)
+        _ (let [kmgr (app-kb/create-agent-keybindings-manager)]
             (tui-kb/set-global-keybindings! kmgr)
             (app-kb/set-key-hint-theme-fns!
              #(th/dim %)
@@ -1113,7 +1125,8 @@
 
         ;; Components (define before agent state so on-event can reference them)
         sp1 (spacer/make-spacer 1)
-        ch (ui/make-chat-history :theme (cfg/get-theme config))
+        ch (ui/make-chat-history :theme (cfg/get-theme config)
+                                 :thinking-hidden (cfg/get-hide-thinking-block config))
         pending-tool-comp (atom nil)  ;; Pi: component ref for in-place updates
         cs-ref (atom nil)             ;; CoreState, filled after layout (for :status events)
 
@@ -1399,8 +1412,13 @@
                                         (tui/tui-request-render t))))
       (editor/editor-set-on-action! ed "app.thinking.toggle"
                                     (fn []
-          ;; pi: showStatus feedback on toggle
+          ;; pi: showStatus feedback on toggle + persist hideThinkingBlock to
+          ;; settings so the state survives restarts (SettingsManager.save;
+          ;; write errors are recorded — the toggle still applies)
                                       (let [hidden? (ui/chat-history-toggle-thinking-hidden! ch)]
+                                        (try (cfg/set-hide-thinking-block! hidden?)
+                                             (catch Exception e
+                                               (debug/log "Failed to persist hide-thinking-block: " e)))
                                         (ui/chat-history-show-status! ch
                                                                       (str "Thinking blocks: " (if hidden? "hidden" "visible")))
                                         (tui/tui-request-render t))))
