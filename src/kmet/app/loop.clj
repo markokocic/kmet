@@ -1060,6 +1060,12 @@ Be precise and concise in your responses."}}]
                                                                    (:steering-mode agent))]
                                       (doseq [m steer-msgs]
                                         (add-user-message! agent m))
+                                      ;; Consumed messages left the queue — refresh the
+                                      ;; pending display (pi: message_start → queue_update)
+                                      (when (seq steer-msgs)
+                                        (emit agent {:type :queue-update
+                                                     :steering @(:steering agent)
+                                                     :follow-up @(:follow-up agent)}))
                                       (emit agent {:type :turn-start :turn-index t})
                                       (let [promise (do (reset! text-buf "")
                                                         (call-llm agent (resolve-api-key agent) text-buf on-text on-thinking))]
@@ -1179,6 +1185,9 @@ Be precise and concise in your responses."}}]
                           (if (seq follow-ups)
                             (do (doseq [m follow-ups]
                                   (add-user-message! agent m))
+                                (emit agent {:type :queue-update
+                                             :steering @(:steering agent)
+                                             :follow-up @(:follow-up agent)})
                                 (reset! (:status agent) :thinking)
                                 (emit agent {:type :status :status :thinking})
                                 (recur turn'))

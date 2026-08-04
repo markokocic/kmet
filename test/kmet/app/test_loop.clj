@@ -398,7 +398,8 @@
 
 (t/deftest test-loop-steer-injects-mid-run
   (let [calls (atom 0)
-        agent (loop/make-agent-state)]
+        events (atom [])
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
@@ -431,12 +432,22 @@
     (t/is (= "ok" (get-in (last (loop/get-context agent)) [:content 0 :text]))
           "final response should see the steered message")
     (t/is (empty? @(:steering agent)) "steering queue drained")
+    (let [queue-updates (filter #(= :queue-update (:type %)) @events)]
+      (t/is (= 2 (count queue-updates))
+            "one :queue-update from steer!, one from consumption")
+      (t/is (= {:steering ["steered"] :follow-up []}
+               (select-keys (first queue-updates) [:steering :follow-up]))
+            "steer! reports the queued message")
+      (t/is (= {:steering [] :follow-up []}
+               (select-keys (last queue-updates) [:steering :follow-up]))
+            "consumption reports the drained queue"))
     (t/is (= :idle @(:status agent)) "agent idle after run")))
 
 (t/deftest test-loop-followup-continues-run
   (let [calls (atom 0)
         done-count (atom 0)
-        agent (loop/make-agent-state)]
+        events (atom [])
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
@@ -469,6 +480,15 @@
       (t/is (some #(and (= :assistant (:role %))
                         (= "third" (get-in % [:content 0 :text]))) ctx)))
     (t/is (empty? @(:follow-up agent)) "follow-up queue drained")
+    (let [queue-updates (filter #(= :queue-update (:type %)) @events)]
+      (t/is (= 2 (count queue-updates))
+            "one :queue-update from follow-up!, one from consumption")
+      (t/is (= {:steering [] :follow-up ["followup"]}
+               (select-keys (first queue-updates) [:steering :follow-up]))
+            "follow-up! reports the queued message")
+      (t/is (= {:steering [] :follow-up []}
+               (select-keys (last queue-updates) [:steering :follow-up]))
+            "consumption reports the drained queue"))
     (t/is (= :idle @(:status agent)) "agent idle after run")))
 
 (t/deftest test-loop-steer-one-at-a-time
