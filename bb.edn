@@ -24,15 +24,24 @@
            :requires ([kmet.core])
            :task (println "All source namespaces compile successfully.")
            :override-builtin true}
-  lint    {:doc "Lint src/test with clj-kondo"
+  lint    {:doc "Lint src/test with clj-kondo (optionally: specific files/dirs)"
            :requires ([babashka.process :as p])
-           :task (p/shell "clj-kondo" "--lint" "src" "test")}
-  format  {:doc "Format src/test with cljfmt (fix in place)"
+           :task (let [paths (if (seq *command-line-args*)
+                               *command-line-args*
+                               ["src" "test"])]
+                   (apply p/shell "clj-kondo" "--lint" paths))}
+  format  {:doc "Format src/test with cljfmt (fix in place; optionally: specific files/dirs)"
            :requires ([cljfmt.tool :as fmt])
-           :task (fmt/fix {:paths ["src" "test"]})}
-  format-check {:doc "Check src/test formatting with cljfmt (no changes)"
+           :task (let [paths (if (seq *command-line-args*)
+                               *command-line-args*
+                               ["src" "test"])]
+                   (fmt/fix {:paths paths}))}
+  format-check {:doc "Check src/test formatting with cljfmt (no changes; optionally: specific files/dirs)"
                 :requires ([cljfmt.tool :as fmt])
-                :task (fmt/check {:paths ["src" "test"]})}
+                :task (let [paths (if (seq *command-line-args*)
+                                    *command-line-args*
+                                    ["src" "test"])]
+                        (fmt/check {:paths paths}))}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests)\n  test-ext      Run ONLY slow (^:slow) test suites (pre-commit validation)\n  check         Verify compilation\n  lint          Lint src/test with clj-kondo\n  format        Format src/test with cljfmt (fix in place)\n  format-check  Check src/test formatting with cljfmt (no changes)")
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests)\n  test-ext      Run ONLY slow (^:slow) test suites (pre-commit validation)\n  check         Verify compilation\n  lint          Lint src/test with clj-kondo (args: files/dirs)\n  format        Format src/test with cljfmt (fix in place; args: files/dirs)\n  format-check  Check src/test formatting with cljfmt (no changes; args: files/dirs)")
            :override-builtin true}}}
