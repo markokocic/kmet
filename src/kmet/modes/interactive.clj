@@ -1360,8 +1360,12 @@
                                   document-container
                                   :follow-end true :primary true :overscroll :chain
                                   :scrollbar :auto
+                                  ;; Read the ACTIVE theme at paint time (not the
+                                  ;; config setting) so the thumb follows theme
+                                  ;; switches — unlike the other components the
+                                  ;; scroll view has no re-theme callback.
                                   :scrollbar-style (fn [text]
-                                                     (th/bg (cfg/get-theme config)
+                                                     (th/bg (th/get-current-theme)
                                                             :scrollbar-thumb text)))
           pending-messages-container (:pending-messages-container cs)
           status-container (container/make-container [si])

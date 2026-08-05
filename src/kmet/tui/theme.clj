@@ -402,7 +402,14 @@
                 :bash-mode "#b5bd68"}
                color-mode)
          complete-fg (merge (:fg-map dark) fg-map)
-         complete-bg (merge (:bg-map dark) bg-map)]
+         complete-bg (let [cb (merge (:bg-map dark) bg-map)]
+                       ;; pi: scrollbarThumb ?? selectedBg — a theme that does
+                       ;; not set scrollbarThumb inherits its OWN selectedBg
+                       ;; (not the dark fallback) so light themes get a light
+                       ;; thumb.
+                       (if (contains? bg-map :scrollbar-thumb)
+                         cb
+                         (assoc cb :scrollbar-thumb (get cb :selected-bg))))]
      (map->Theme
       {:name name
        :fg-colors complete-fg
