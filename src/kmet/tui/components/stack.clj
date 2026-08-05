@@ -147,23 +147,39 @@
   "Render a vertical stack of COMPONENTS at WIDTH x HEIGHT.
    The single IScrollView component (if any) gets all remaining height and
    renders its child at the scroll view's content width; every other
-   component renders at its natural height. Returns a flat vector of lines."
-  [components width height request-render]
-  (let [sv-idx (first (keep-indexed (fn [i c] (when (satisfies? sv/IScrollView c) i))
-                                    components))]
-    (if (nil? sv-idx)
-      (vec (mapcat #(protocols/render % width) components))
-      (let [sv (nth components sv-idx)
-            content-width (sv/get-content-width sv width)
-            rendered (mapv (fn [i c]
-                             (if (= i sv-idx)
-                               (protocols/render c content-width)
-                               (protocols/render c width)))
-                           (range) components)
-            fixed (apply + (keep-indexed (fn [i lines] (when (not= i sv-idx) (count lines)))
-                                         rendered))
-            viewport (max 0 (- height fixed))]
-        (sv/update-layout! sv (count (nth rendered sv-idx)) viewport request-render)
-        (vec (apply concat (map-indexed
-                            (fn [i lines] (if (= i sv-idx) (sv/render-window sv lines) lines))
-                            rendered)))))))
+   component renders at its natural height. Returns a flat vector of lines.
+   When GEOMETRY-ATOM is provided it is reset! to the scroll view's frame
+   geometry {:scroll-view :top :height :width :full-lines} — the top row in
+   the composed frame, the viewport height, the content width, and the
+   scroll view's FULL rendered lines (for selection copy) — or nil when no
+   IScrollView is present."
+  ([components width height request-render]
+   (render-stack components width height request-render nil))
+  ([components width height request-render geometry-atom]
+   (let [sv-idx (first (keep-indexed (fn [i c] (when (satisfies? sv/IScrollView c) i))
+                                     components))]
+     (if (nil? sv-idx)
+       (do (when geometry-atom (reset! geometry-atom nil))
+           (vec (mapcat #(protocols/render % width) components)))
+       (let [sv (nth components sv-idx)
+             content-width (sv/get-content-width sv width)
+             rendered (mapv (fn [i c]
+                              (if (= i sv-idx)
+                                (protocols/render c content-width)
+                                (protocols/render c width)))
+                            (range) components)
+             fixed (apply + (keep-indexed (fn [i lines] (when (not= i sv-idx) (count lines)))
+                                          rendered))
+             viewport (max 0 (- height fixed))
+             top-row (apply + (keep-indexed (fn [i lines] (when (< i sv-idx) (count lines)))
+                                            rendered))]
+         (sv/update-layout! sv (count (nth rendered sv-idx)) viewport request-render)
+         (when geometry-atom
+           (reset! geometry-atom {:scroll-view sv
+                                  :top top-row
+                                  :height viewport
+                                  :width content-width
+                                  :full-lines (nth rendered sv-idx)}))
+         (vec (apply concat (map-indexed
+                             (fn [i lines] (if (= i sv-idx) (sv/render-window sv lines) lines))
+                             rendered))))))))

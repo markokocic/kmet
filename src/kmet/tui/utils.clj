@@ -385,7 +385,7 @@
 
 ;; ─── ANSI-aware window slicing ──────────────────────────────────────────────
 
-(defn- ansi-code-at
+(defn ansi-code-at
   "Return [code length] when an ANSI escape sequence starts at index I of S."
   [s i]
   (when (and (< i (count s)) (= \u001b (nth s i)))

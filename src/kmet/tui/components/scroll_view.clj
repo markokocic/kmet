@@ -78,13 +78,39 @@
         content @(:content-height-atom this)]
     (when (and (pos? track) (pos? content))
       (let [min-thumb (min 2 track)
-            thumb (max min-thumb (min track (Math/round (/ (* track track) content))))
+            thumb (max min-thumb (min track (long (Math/round (double (/ (* track track) content))))))
             max-scroll (max 0 (- content track))
             max-thumb-top (- track thumb)
             thumb-offset (if (zero? max-scroll)
                            0
-                           (Math/round (* (/ @(:scroll-top-atom this) max-scroll) max-thumb-top)))]
+                           (long (Math/round (double (* (/ @(:scroll-top-atom this) max-scroll) max-thumb-top)))))]
         (range thumb-offset (min track (+ thumb-offset thumb)))))))
+
+(defn scrollbar-geometry
+  "Viewport-local scrollbar geometry (pi: getScrollbarGeometry): the thumb
+   row range within the viewport, the scrollbar column (last column of the
+   viewport width), and the track/thumb heights. Returns nil when the
+   scrollbar is not visible or the viewport is empty."
+  [this width]
+  (let [track @(:viewport-height-atom this)
+        content @(:content-height-atom this)
+        mode @(:scrollbar-atom this)]
+    (when (and (pos? track) (pos? content) (is-scrollbar-visible? this))
+      (let [min-thumb (min 2 track)
+            thumb (max min-thumb (min track (long (Math/round (double (/ (* track track) content))))))
+            max-scroll (max 0 (- content track))
+            max-thumb-top (- track thumb)
+            thumb-offset (if (zero? max-scroll)
+                           0
+                           (long (Math/round (double (* (/ @(:scroll-top-atom this) max-scroll) max-thumb-top)))))
+            thumb-rows (range thumb-offset (min track (+ thumb-offset thumb)))]
+        {:column (max 0 (dec (int width)))
+         :track-height track
+         :thumb-height thumb
+         :thumb-rows (set thumb-rows)
+         :thumb-top thumb-offset
+         :max-scroll-top max-scroll
+         :mode mode}))))
 
 (defn- apply-scrollbar
   "Paint the scrollbar column onto WINDOW (pi: paintScrollbar). :always mode

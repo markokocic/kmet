@@ -29,7 +29,8 @@
 
 (def ^:const BG-TOKENS
   [:selected-bg :user-message-bg :custom-message-bg
-   :tool-pending-bg :tool-success-bg :tool-error-bg])
+   :tool-pending-bg :tool-success-bg :tool-error-bg
+   :scrollbar-thumb])
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Theme record — wraps fg/bg ANSI maps with API matching pi's Theme class
@@ -283,6 +284,7 @@
    "muted" :muted "dim" :dim "text" :text
    "thinkingText" :thinking-text
    "selectedBg" :selected-bg
+   "scrollbarThumb" :scrollbar-thumb
    "userMessageBg" :user-message-bg "userMessageText" :user-message-text
    "customMessageBg" :custom-message-bg "customMessageText" :custom-message-text
    "customMessageLabel" :custom-message-label
@@ -373,7 +375,8 @@
                 :border-muted "#505050" :success "#b5bd68" :error "#cc6666"
                 :warning "#ffff00" :muted "#808080" :dim "#666666"
                 :text "#d4d4d4" :thinking-text "#808080"
-                :selected-bg "#3a3a4a" :user-message-bg "#343541"
+                :selected-bg "#3a3a4a" :scrollbar-thumb "#3a3a4a"
+                :user-message-bg "#343541"
                 :user-message-text "#d4d4d4" :custom-message-bg "#2d2838"
                 :custom-message-text "#d4d4d4" :custom-message-label "#9575cd"
                 :tool-pending-bg "#282832" :tool-success-bg "#283228"

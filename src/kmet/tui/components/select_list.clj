@@ -228,15 +228,16 @@
               (notify-selection-change! this filtered n))
             nil)
 
-        ;; Page down
-        (keys/matches-key? data "pageDown")
+        ;; Page down — shift+pageDown (the select-list's own key; plain
+        ;; pageDown is the viewport transcript scroll, pi parity)
+        (keys/matches-key? data (keys/shift "pageDown"))
         (do (when (pos? n)
               (swap! selected-idx-atom #(min (+ % @height-atom) (max 0 (dec n))))
               (notify-selection-change! this filtered n))
             nil)
 
         ;; Page up
-        (keys/matches-key? data "pageUp")
+        (keys/matches-key? data (keys/shift "pageUp"))
         (do (swap! selected-idx-atom #(max 0 (- % @height-atom)))
             (notify-selection-change! this filtered n)
             nil)

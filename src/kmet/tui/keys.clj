@@ -30,6 +30,124 @@
 (defn alt [k] (str "alt+" k))
 (defn ctrl-shift [k] (str "ctrl+shift+" k))
 
+;; ─── Mouse event parsing (pi: tui-alt-screen.ts parseWheelEvent /
+;;      parseSgrMouseEvent / isMouseSequence) ─────────────────────────────────
+
+(defn parse-sgr-mouse
+  "Parse an SGR mouse event (\u001b[<b;x;yM/m) into {:button :x :y :release?}.
+   Coordinates are 0-based. Returns nil for non-mouse data."
+  [data]
+  (when-let [[_ b x y fin] (re-matches #"\u001b\[<(\d+);(\d+);(\d+)([Mm])" data)]
+    {:button (parse-long b)
+     :x (dec (parse-long x))
+     :y (dec (parse-long y))
+     :release? (= fin "m")}))
+
+(defn parse-legacy-mouse
+  "Parse an X10 mouse event (\u001b[Mabc, exactly 6 chars) into
+   {:button :x :y}. Returns nil for non-mouse data."
+  [data]
+  (when (and (= (count data) 6) (str/starts-with? data "\u001b[M"))
+    {:button (- (int (nth data 3)) 32)
+     :x (- (int (nth data 4)) 33)
+     :y (- (int (nth data 5)) 33)}))
+
+(defn parse-mouse-event
+  "Parse any supported mouse event encoding (SGR or legacy X10)."
+  [data]
+  (or (parse-sgr-mouse data) (parse-legacy-mouse data)))
+
+(defn parse-wheel-event
+  "Parse a mouse-wheel event into {:direction -1|1 :x :y}. The wheel flag
+   is button bit 6 (64); the direction is bits 0-1 (0 = up, 1 = down)."
+  [data]
+  (let [ev (parse-mouse-event data)]
+    (when (and ev (pos? (bit-and (:button ev) 64)))
+      (let [d (bit-and (:button ev) 3)]
+        (when (or (== d 0) (== d 1))
+          {:direction (if (== d 0) -1 1)
+           :x (:x ev)
+           :y (:y ev)})))))
+
+(defn mouse-sequence?
+  "True when DATA is a complete mouse event sequence (SGR or legacy X10)."
+  [data]
+  (or (boolean (re-matches #"\u001b\[<(\d+);(\d+);(\d+)[Mm]" data))
+      (boolean (re-matches #"\u001b\[M.{3}" data))))
+
+(defn focus-sequence?
+  "True when DATA is a terminal focus event (\u001b[I focus in, \u001b[O focus
+   out, sent when mode 1004 is enabled)."
+  [data]
+  (or (= data "\u001b[I") (= data "\u001b[O")))
+
+;; ─── Sequence completeness (pi: stdin-buffer.ts isCompleteSequence) ─────────
+;; A sequence is structurally complete based on its final byte (CSI/OSC/DCS/
+;; APC/SS3/meta rules) — NOT on parseKey success — so prefixes like "\u001b["
+;; (which parse as alt+[) are never dispatched early and swallow the rest of
+;; a mouse event. SGR mouse sequences have their own rule (pi: the '<' case).
+
+(defn- complete-csi-sequence?
+  [data]
+  (if-not (str/starts-with? data "\u001b[")
+    true
+    (if (< (count data) 3)
+      false
+      (let [payload (subs data 2)
+            last-char (last payload)]
+        (if (and (>= (int last-char) 0x40) (<= (int last-char) 0x7e))
+          (if (str/starts-with? payload "<")
+            ;; SGR mouse: <digits;digits;digits[Mm]
+            (or (boolean (re-matches #"<\d+;\d+;\d+[Mm]" payload))
+                (and (contains? #{"M" "m"} (str last-char))
+                     (let [parts (str/split (subs payload 1 (dec (count payload))) #";")]
+                       (and (= (count parts) 3)
+                            (every? #(re-matches #"\d+" %) parts)))))
+            true)
+          false)))))
+
+(defn- complete-osc-sequence?
+  "OSC sequences end with BEL or ST (ESC \\) — pi: isCompleteOscSequence."
+  [data]
+  (if-not (str/starts-with? data "\u001b]")
+    true
+    (if (< (count data) 3)
+      false
+      (or (str/ends-with? data "\u0007")
+          (str/ends-with? data "\u001b\\")))))
+
+(defn complete-sequence?
+  "True when DATA is a structurally complete escape sequence (pi:
+   isCompleteSequence returns \"complete\"). Non-escape data is complete."
+  [data]
+  (if-not (str/starts-with? data "\u001b")
+    true
+    (let [after-esc (subs data 1)]
+      (cond
+        (= (count data) 1) false
+        (str/starts-with? after-esc "[")
+        (if (str/starts-with? after-esc "[M")
+          ;; old-style mouse: ESC[M + 3 bytes = 6 total
+          (>= (count data) 6)
+          (complete-csi-sequence? data))
+        (str/starts-with? after-esc "]") (complete-osc-sequence? data)
+        (str/starts-with? after-esc "P")
+        ;; DCS: ESC P ... ESC \ (XTVersion responses)
+        (if (< (count data) 4)
+          false
+          (str/ends-with? data "\u001b\\"))
+        (str/starts-with? after-esc "_")
+        ;; APC: ESC _ ... ESC \ (Kitty graphics responses)
+        (if (< (count data) 4)
+          false
+          (str/ends-with? data "\u001b\\"))
+        (str/starts-with? after-esc "O")
+        ;; SS3: ESC O + single character
+        (>= (count after-esc) 2)
+        ;; Unknown escape sequence — treat as complete (pi: a lone ESC + any
+        ;; other single char is a meta key)
+        :else true))))
+
 ;; ─── Kitty protocol state (owned by kmet.libs.terminal) ────────────────────
 
 (defn set-kitty-active! [v] (lib/set-kitty-active! v))
@@ -411,34 +529,4 @@
                      (str/includes? data "C") (str/includes? data "D")))
         true))))
 
-;; ─── Escape sequence prefix detection ──────────────────────────────────────
 
-(defn- csi-prefix?
-  "True if s is a valid prefix of a CSI sequence (ESC [ ... final byte)."
-  [s]
-  (and (str/starts-with? s "\u001b[")
-       (let [payload (subs s 2)]
-         (or (empty? payload)
-             (and (not (re-find #"[\u0040-\u007e]$" payload))
-                  (not (re-find #"[\u0000-\u001f]" payload)))))))
-
-(defn- ss3-prefix?
-  "True if s is a valid prefix of an SS3 sequence (ESC O + 1 char)."
-  [s]
-  (and (str/starts-with? s "\u001bO")
-       (< (count s) 3)))
-
-(defn escape-prefix?
-  "Check if string s could be the prefix of a known escape sequence.
-   Returns true if more characters might complete a valid sequence."
-  [s]
-  (or (= s "\u001b")
-      (= s "\u001b\u001b")
-      (csi-prefix? s)
-      (ss3-prefix? s)
-      ;; ESC + single char that could be alt/modifier prefix
-      (and (str/starts-with? s "\u001b")
-           (= (count s) 2)
-           (let [c (int (nth s 1))]
-             (or (and (>= c 32) (<= c 126))
-                 (= c 27))))))
