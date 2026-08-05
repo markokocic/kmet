@@ -117,3 +117,17 @@
     ;; the transient scrollbar hides again after the delay
     (Thread/sleep 120)
     (t/is (not (sv/is-scrollbar-visible? sv)))))
+
+(t/deftest test-scrollbar-geometry
+  ;; The thumb tracks the scroll position (pi: getScrollbarGeometry).
+  (let [lines (mapv #(str "line" %) (range 20))
+        sv (sv/make-scroll-view (fake-child lines) :scrollbar :auto)]
+    (sv/update-layout! sv 20 5 (fn [] nil))
+    (t/is (nil? (sv/scrollbar-geometry sv 80))
+          "no geometry while the transient scrollbar is hidden")
+    (sv/scroll-by! sv -5)
+    (let [g (sv/scrollbar-geometry sv 80)]
+      (t/is (= 79 (:column g)) "thumb sits in the last column")
+      (t/is (= 5 (:track-height g)))
+      (t/is (= 15 (:max-scroll-top g)))
+      (t/is (pos? (:thumb-top g)) "scrolled up → thumb moved down"))))

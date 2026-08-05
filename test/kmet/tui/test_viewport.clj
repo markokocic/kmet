@@ -195,3 +195,36 @@
     (feed! "2M")
     (t/is (= (dec initial) (sv/scroll-top scroll-view))
           "completing the sequence dispatches it")))
+
+;; ─── Selection (pi: press/drag/release → highlight + copy) ─────────────────
+
+(t/deftest test-click-drag-produces-selection-highlight
+  (let [{:keys [tui]} (make-scrollable-tui)
+        lines (vec (repeat 24 "the quick brown fox jumps over the lazy dog"))
+        plain (count (filter #(not (str/includes? % "\u001b[7m")) lines))]
+    ;; press at (10, 12), drag to (20, 13) — both inside the scroll view
+    (dispatch! tui "\u001b[<0;11;13M")
+    (dispatch! tui "\u001b[<32;21;14M")
+    (let [out ((var kmet.tui.core/composite-selection) tui lines)]
+      (t/is (some #(str/includes? % "\u001b[7m") out)
+            "the drag highlights the selected row range")
+      (t/is (some #(str/includes? % "\u001b[27m") out)
+            "the highlight closes with reverse-off")
+      (t/is (<= (count (filter #(not (str/includes? % "\u001b[7m")) out)) plain)
+            "no lines are lost")))
+  ;; a plain click (no drag) never highlights
+  (let [{:keys [tui]} (make-scrollable-tui)
+        lines (vec (repeat 24 "plain"))]
+    (dispatch! tui "\u001b[<0;11;13M")
+    (dispatch! tui "\u001b[<0;11;13m")
+    (let [out ((var kmet.tui.core/composite-selection) tui lines)]
+      (t/is (not-any? #(str/includes? % "\u001b[7m") out)
+            "a click without drag leaves no selection"))))
+
+(t/deftest test-selection-release-clears-state
+  (let [{:keys [tui]} (make-scrollable-tui)]
+    (dispatch! tui "\u001b[<0;11;13M")
+    (t/is @(:selection-press-active? tui))
+    (dispatch! tui "\u001b[<0;11;13m")
+    (t/is (not @(:selection-press-active? tui)))
+    (t/is (nil? @(:selection-anchor tui)))))

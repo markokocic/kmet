@@ -266,7 +266,7 @@
   [tui x y]
   (let [sv (or (:scroll-view @(:selection-anchor tui))
                (first (scroll-views-at tui x y)))]
-    (if sv
+    (if (and sv @(:scroll-layout tui))
       (let [g @(:scroll-layout tui)
             top (:top g)
             content-rows (count (:full-lines g))
@@ -349,8 +349,9 @@
    coordinates."
   [tui lines]
   (if-let [sel (selection-bounds tui)]
-    (let [g @(:scroll-layout tui)]
-      (if-let [sv (:scroll-view (:start sel))]
+    (if-let [sv (:scroll-view (:start sel))]
+      ;; selection inside the scroll view — requires the current layout
+      (when-let [g @(:scroll-layout tui)]
         (let [top (:top g)
               viewport (:height g)
               scroll-top (scroll-view/scroll-top sv)]
@@ -366,17 +367,17 @@
                               (assoc lines screen-row
                                      (highlight-selection-line screen-line start end)))
                             lines)]
-                (recur (inc row) lines)))))
-        ;; screen-coordinate selection (outside any scroll view)
-        (loop [row (:row (:start sel)) lines lines]
-          (if (> row (:row (:end sel)))
-            lines
-            (let [lines (if (and (>= row 0) (< row (count lines)))
-                          (let [line (nth lines row)
-                                {:keys [start end]} (selection-columns line row sel)]
-                            (assoc lines row (highlight-selection-line line start end)))
-                          lines)]
-              (recur (inc row) lines))))))
+                (recur (inc row) lines))))))
+      ;; screen-coordinate selection (outside any scroll view)
+      (loop [row (:row (:start sel)) lines lines]
+        (if (> row (:row (:end sel)))
+          lines
+          (let [lines (if (and (>= row 0) (< row (count lines)))
+                        (let [line (nth lines row)
+                              {:keys [start end]} (selection-columns line row sel)]
+                          (assoc lines row (highlight-selection-line line start end)))
+                        lines)]
+            (recur (inc row) lines)))))
     lines))
 
 (defn- selection-source-lines
@@ -2054,6 +2055,10 @@
   (reset! (:previous-height tui) 0)
   (reset! (:max-lines-rendered tui) 0)
   (reset! (:previous-kitty-image-ids tui) #{})
+  ;; Drop any stale selection / scrollbar state and pending input flush from
+  ;; before the suspend (pi: beforeTerminalStart resets selection state).
+  (clear-viewport-state! tui)
+  (clear-incomplete-flush! tui)
   (start-input-reader tui)
   (reset! (:render-loop tui) (future (run-render-loop! tui)))
   (tui-request-render tui)
