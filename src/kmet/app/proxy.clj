@@ -175,12 +175,19 @@
   "Full curl argv for the request. Prefixed with setsid when available so the
    process is its own group leader — kill-process-tree!'s group kill then
    works reliably (same pattern as the bash tool; without it, a kill(1) that
-   reports success without signaling a non-leader leaves curl alive)."
+   reports success without signaling a non-leader leaves curl alive).
+   --max-time follows the request's :timeout (ms → s) when set; a nil request
+   timeout (disabled) omits it; callers without a :timeout get the
+   curl-timeout-seconds default."
   [url opts p]
-  (let [args (into ["curl" "-sS" "-N" "--fail-with-body"
-                    "--max-time" (str curl-timeout-seconds)
-                    "--noproxy" ""
-                    "--proxy" (:url p)]
+  (let [max-time (if (contains? opts :timeout)
+                   (when-let [t (:timeout opts)]
+                     (max 1 (quot t 1000)))
+                   curl-timeout-seconds)
+        args (into (cond-> ["curl" "-sS" "-N" "--fail-with-body"
+                            "--noproxy" ""
+                            "--proxy" (:url p)]
+                     max-time (conj "--max-time" (str max-time)))
                    (concat
                     (mapcat (fn [[k v]] ["-H" (str k ": " v)]) (:headers opts))
                     ["--data-binary" "@-" url]))]

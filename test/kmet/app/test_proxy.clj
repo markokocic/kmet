@@ -110,3 +110,28 @@
     (t/is (not (-> p :proc .isAlive)))
     (proxy/finish-curl! resp sig (fn [e] (swap! errs conj e)))
     (t/is (empty? @errs))))
+
+;; ─── curl --max-time follows the request :timeout (pi: timeoutMs) ─────────
+
+(t/deftest test-proxy-curl-argv-max-time
+  (let [p {:scheme "socks5" :host "127.0.0.1" :port 1080
+           :url "socks5://127.0.0.1:1080"}
+        ;; argv may be prefixed with setsid when available — ignore it
+        strip-setsid (fn [argv] (if (= (first argv) "setsid") (rest argv) argv))]
+    (t/is (some #{"--max-time" "120"}
+                (strip-setsid (@#'proxy/curl-argv "https://api.example.com/"
+                                                  {:headers {"Authorization" "Bearer x"}}
+                                                  p)))
+          "no :timeout in opts → curl-timeout-seconds default")
+    (t/is (some #{"--max-time" "300"}
+                (strip-setsid (@#'proxy/curl-argv "https://api.example.com/"
+                                                  {:headers {}
+                                                   :timeout 300000}
+                                                  p)))
+          "request :timeout (ms) drives --max-time (s)")
+    (t/is (not-any? #{"--max-time"}
+                    (strip-setsid (@#'proxy/curl-argv "https://api.example.com/"
+                                                      {:headers {}
+                                                       :timeout nil}
+                                                      p)))
+          "nil request :timeout (disabled) omits --max-time")))

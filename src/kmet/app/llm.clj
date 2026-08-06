@@ -226,7 +226,9 @@
                                                      "Content-Type" "application/json"}
                                            :body (json/generate-string payload)
                                            :as :stream
-                                           :timeout 120000}
+                                           ;; Total request deadline = the idle timeout (pi: SDK
+                                           ;; timeoutMs ?? httpIdleTimeoutMs); nil when disabled
+                                           :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
                                           signal)]
           (sse/process-openai-stream response
                                      (fn [event]
@@ -280,7 +282,9 @@
                                                      "Content-Type" "application/json"}
                                            :body (json/generate-string payload)
                                            :as :stream
-                                           :timeout 120000}
+                                           ;; Total request deadline = the idle timeout (pi: SDK
+                                           ;; timeoutMs ?? httpIdleTimeoutMs); nil when disabled
+                                           :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
                                           signal)
               ;; curl-backed (SOCKS) responses: EOF without a message_stop is
               ;; a transport failure reported by finish-curl! — don't let it

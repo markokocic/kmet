@@ -255,6 +255,7 @@ Be precise and concise in your responses."}}]
                               "websocket.?closed"
                               "websocket.?error"
                               "ended without"
+                              "header parser received no bytes"
                               "stream ended before message_stop"
                               "stream ended before a terminal response event"
                               "http2 request did not get a response"

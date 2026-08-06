@@ -119,6 +119,7 @@ Example `~/.kmet/agent/settings.edn`:
  :theme "dark"
  :thinking :off
  :session-dir "~/.kmet/sessions"
+ :http-idle-timeout-ms 300000   ; LLM stream idle + total deadline in ms; 0 disables
  :system-prompt "You are a helpful assistant."   ; replaces the default system prompt
  :append-system-prompt "Follow the project conventions." ; appended after it
  :providers {:openai {:model "gpt-4o"}
@@ -138,6 +139,11 @@ Like pi, prompt files are discovered when the config keys are unset:
 Config values win over files; a config value naming an existing file is read as
 content. CLI flags `--system-prompt <txt>` and `--append-system-prompt <txt>`
 (repeatable) override everything.
+
+`:http-idle-timeout-ms` (default 300000, pi: `httpIdleTimeoutMs`) is the LLM
+stream deadline: a stream that receives no bytes for this long errors retryably
+(undici bodyTimeout semantics), and the same value bounds the total request
+(SDK `timeoutMs`). `0` disables both.
 
 `/reload` re-reads settings, reloads extensions/skills/prompts/themes, re-discovers
 context files, and rebuilds the system prompt (pi: `session.reload`). It refuses
