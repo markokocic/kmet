@@ -248,7 +248,8 @@
                                          :error (when on-error (on-error (:message event)))
                                          nil))
                                      signal
-                                     idle-timeout-ms)
+                                     idle-timeout-ms
+                                     (fn [] (proxy/abort-stream! response)))
           (proxy/finish-curl! response signal on-error))
         (catch Exception e
           (when on-error (on-error (or (ex-message e) (str "Request failed: " (.getSimpleName (class e)))))))))))
@@ -306,7 +307,8 @@
                                             :error (when on-error (on-error (:message event)))
                                             nil))
                                         signal
-                                        idle-timeout-ms)
+                                        idle-timeout-ms
+                                        (fn [] (proxy/abort-stream! response)))
           (proxy/finish-curl! response signal on-error))
         (catch Exception e
           (when on-error (on-error (or (ex-message e) (str "Request failed: " (.getSimpleName (class e)))))))))))

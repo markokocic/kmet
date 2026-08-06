@@ -690,7 +690,11 @@ Be precise and concise in your responses."}}]
                              :usage @usage-buf
                              :stop-reason reason})))
       :on-error (fn [e]
-                  (deliver done-promise {:error e}))})
+                  ;; Guard against double delivery: on the curl path the
+                  ;; stream error and finish-curl!'s exit-code report can both
+                  ;; fire for one failure (e.g. abort-stream! on idle timeout)
+                  (when-not (realized? done-promise)
+                    (deliver done-promise {:error e})))})
     done-promise))
 
 ;; ─── Queues ────────────────────────────────────────────────────────────────
@@ -805,7 +809,7 @@ Be precise and concise in your responses."}}]
           :idle-timeout-ms (:http-idle-timeout-ms agent)
           :on-text (fn [t] (swap! text-buf str t))
           :on-done (fn [_] (deliver done @text-buf))
-          :on-error (fn [_] (deliver done nil))})
+          :on-error (fn [_] (when-not (realized? done) (deliver done nil)))})
         ;; Cancel watch: abort the deref the moment the signal fires. The
         ;; stream may not deliver an event on cancel (killed curl), so this
         ;; is what makes escape abort compaction promptly.

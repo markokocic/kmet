@@ -155,6 +155,14 @@
                                   (cond-> {:user (:user p)}
                                     (:pass p) (assoc :pass (:pass p)))))))
 
+(defn abort-stream!
+  "Kill the underlying transport of a stream response (curl-backed only) so
+   a concurrent read releases — interrupts don't unblock process pipes.
+   No-op for java.net.http responses."
+  [response]
+  (when-let [pid (:pid response)]
+    (process/kill-process-tree! pid)))
+
 (defn watch-cancel!
   "Kill a process tree within ~200ms of the cancel signal firing mid-stream
    (the bash tool's signal-poller pattern — the sse read loop itself only

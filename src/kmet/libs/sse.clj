@@ -99,72 +99,120 @@
    semantics — the clock measures time between received bytes and resets on
    every byte). A daemon thread performs the blocking reads and hands chars
    to a queue; the caller polls with the idle deadline, so a stalled stream
-   yields :timeout while clean EOF still yields -1. Closing the reader
-   (with-open) unblocks the daemon thread, which exits."
-  [rdr idle-ms]
-  (let [q (java.util.concurrent.LinkedBlockingQueue.)]
-    (doto (Thread.
+   yields :timeout while clean EOF still yields -1 (EOF is only observable
+   through a blocking read — ready()/available() stay 0 at EOF on
+   java.net.http streams).
+
+   Returns [read-char stop thread]:
+     read-char — no-arg fn: next char (int), -1 at EOF, :timeout on stall,
+                 :aborted when the cancel signal fired mid-poll
+     stop      — interrupts the daemon so a blocked read releases (required
+                  before closing the reader, which deadlocks while a read is
+                  in flight on java.net.http streams)
+     thread    — the daemon thread, for join-before-close"
+  [rdr idle-ms signal]
+  (let [q (java.util.concurrent.LinkedBlockingQueue.)
+        t (Thread.
            (fn []
              (try
                (loop []
                  (let [c (.read rdr)]
                    (.put q c)
                    (when-not (neg? c) (recur))))
-               (catch Exception _ nil))))
-      (.setDaemon true)
-      (.start))
-    (fn []
-      (let [v (.poll q idle-ms java.util.concurrent.TimeUnit/MILLISECONDS)]
-        (cond
-          (nil? v) :timeout
-          :else (int v))))))
+               (catch Exception _ nil))))]
+    (.setDaemon t true)
+    (.start t)
+    [(fn []
+       (let [deadline (+ (System/currentTimeMillis) idle-ms)]
+         (loop []
+           (let [v (.poll q 100 java.util.concurrent.TimeUnit/MILLISECONDS)]
+             (cond
+               (some? v) (int v)
+               (and signal @signal) :aborted
+               (>= (System/currentTimeMillis) deadline) :timeout
+               :else (recur))))))
+     (fn [] (.interrupt t))
+     t]))
 
 (defn- read-line-from
   "Assemble one line from an idle-char-reader fn. Returns the line string,
-   nil at EOF, or :timeout when the reader stalled."
+   nil at EOF, or the reader's :timeout/:aborted sentinel."
   [read-char]
   (let [sb (StringBuilder.)]
     (loop []
       (let [c (read-char)]
         (cond
-          (= :timeout c) :timeout
+          (or (= :timeout c) (= :aborted c)) c
           (neg? c) (when (pos? (.length sb)) (str sb)) ;; EOF mid-line
           (= c (int \newline)) (str sb)
           :else (do (.append sb (char c)) (recur)))))))
 
 (defn- make-idle-line-reader
   "Line reader with a per-byte idle timeout (undici bodyTimeout semantics).
-   Returns a no-arg fn producing lines; nil at EOF, :timeout on stall."
-  [rdr idle-ms]
+   Returns {:read-line f :stop f :thread t} — f produces lines, nil at EOF,
+   :timeout on stall, :aborted on cancel; stop releases a blocked read;
+   thread is the daemon thread (nil when the idle timeout is disabled)."
+  [rdr idle-ms signal]
   (if (and idle-ms (pos? idle-ms))
-    (let [read-char (make-idle-char-reader rdr idle-ms)]
-      #(read-line-from read-char))
-    #(.readLine rdr)))
+    (let [[read-char stop thread] (make-idle-char-reader rdr idle-ms signal)]
+      {:read-line #(read-line-from read-char)
+       :stop stop
+       :thread thread})
+    {:read-line #(.readLine rdr)
+     :stop (fn [])
+     :thread nil}))
+
+(defn- stream-loop
+  "Shared driver for both stream processors. Reads lines via the idle-aware
+   line reader and calls handle-line per line. On a stall the abort-fn (if
+   any) kills the transport (curl) so the blocked read releases, then the
+   error is reported via error-fn. Cleanup on every exit path: the daemon is
+   interrupted and joined before the reader is closed — closing while a read
+   is in flight deadlocks java.net.http streams, and process pipes (curl)
+   need the abort-fn since interrupts don't unblock them."
+  [rdr idle-timeout-ms signal abort-fn handle-line error-fn]
+  (let [idle (make-idle-line-reader rdr idle-timeout-ms signal)]
+    (try
+      (loop []
+        (let [line ((:read-line idle))]
+          (cond
+            (= :aborted line)
+            (do ((:stop idle)) nil)
+            (= :timeout line)
+            (do ((:stop idle))
+                (when abort-fn (abort-fn))
+                (error-fn))
+            (nil? line) nil
+            (and signal @signal)
+            (do ((:stop idle)) nil)
+            :else
+            (do (handle-line line)
+                (recur)))))
+      (finally
+        ((:stop idle))
+        (when-let [t (:thread idle)]
+          (.join t 2000))
+        (.close rdr)))))
 
 (defn process-openai-stream
   "Read an OpenAI stream response body line by line, calling handler with
    each parsed event. handler receives one arg per event. signal (an atom)
    cancels the loop when set to true. Errors are reported via
    {:type :error} events. idle-timeout-ms — per-byte idle timeout (undici
-   bodyTimeout semantics); nil or non-positive disables it."
-  [response handler signal & [idle-timeout-ms]]
+   bodyTimeout semantics); nil or non-positive disables it. abort-fn (optional)
+   — called on idle timeout to kill the transport so a blocked read releases."
+  [response handler signal & [idle-timeout-ms abort-fn]]
   (try
-    (with-open [rdr (io/reader (:body response))]
-      (let [read-line (make-idle-line-reader rdr idle-timeout-ms)]
-        (loop []
-          (let [line (read-line)]
-            (cond
-              (= :timeout line)
-              (handler {:type :error
-                        :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
-                                      " ms (no data received)")})
-              (nil? line) nil
-              (and signal @signal) nil
-              :else
-              (let [[_ data] (parse-sse-line line)]
-                (when data
-                  (handler (parse-openai-event data)))
-                (recur)))))))
+    (let [rdr (io/reader (:body response))]
+      (stream-loop rdr idle-timeout-ms signal abort-fn
+                   (fn [line]
+                     (let [[_ data] (parse-sse-line line)]
+                       (when data
+                         (handler (parse-openai-event data)))))
+                   (fn []
+                     (handler {:type :error
+                               :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
+                                             " ms (no data received)")}))))
     (catch Exception e
       (handler {:type :error :message (str "Stream error: " (ex-message e))}))))
 
@@ -173,30 +221,27 @@
    Calls handler with each parsed event. signal (an atom) cancels the loop.
    Errors are reported via {:type :error} events. idle-timeout-ms — per-byte
    idle timeout (undici bodyTimeout semantics); nil or non-positive disables
-   it."
-  [response handler signal & [idle-timeout-ms]]
+   it. abort-fn (optional) — called on idle timeout to kill the transport so
+   a blocked read releases."
+  [response handler signal & [idle-timeout-ms abort-fn]]
   (try
-    (with-open [rdr (io/reader (:body response))]
-      (let [read-line (make-idle-line-reader rdr idle-timeout-ms)]
-        (loop [event-name nil buf ""]
-          (let [line (read-line)]
-            (cond
-              (= :timeout line)
-              (handler {:type :error
-                        :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
-                                      " ms (no data received)")})
-              (nil? line)
-              (handler {:type :done :stop-reason :connection-closed})
-              (and signal @signal) nil
-              :else
-              (let [[ev data] (parse-sse-line line)]
-                (cond
-                  ev (recur data buf)
-                  data (recur event-name (str buf data))
-                  (and (empty? line) (seq buf))
-                  (do (when-let [evt (parse-anthropic-event event-name buf)]
-                        (handler evt))
-                      (recur nil ""))
-                  :else (recur event-name buf))))))))
+    (let [rdr (io/reader (:body response))
+          state (atom {:event-name nil :buf ""})]
+      (stream-loop rdr idle-timeout-ms signal abort-fn
+                   (fn [line]
+                     (let [[ev data] (parse-sse-line line)
+                           {:keys [event-name buf]} @state]
+                       (cond
+                         ev (reset! state {:event-name data :buf buf})
+                         data (reset! state {:event-name event-name :buf (str buf data)})
+                         (and (empty? line) (seq buf))
+                         (do (when-let [evt (parse-anthropic-event event-name buf)]
+                               (handler evt))
+                             (reset! state {:event-name nil :buf ""}))
+                         :else nil)))
+                   (fn []
+                     (handler {:type :error
+                               :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
+                                             " ms (no data received)")}))))
     (catch Exception e
       (handler {:type :error :message (str "Stream error: " (ex-message e))}))))

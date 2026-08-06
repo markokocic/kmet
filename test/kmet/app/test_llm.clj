@@ -205,3 +205,41 @@
         (t/is (str/includes? (first @errors) "timed out")))
       (finally
         (.close ss)))))
+
+(t/deftest ^:slow test-llm-body-stall-idle-timeout-completes
+  ;; A server that sends response headers then stalls the body: the SSE idle
+  ;; timeout must fire and the request future must complete promptly. Before
+  ;; the interrupt/join-before-close fix, closing the java.net.http body
+  ;; stream while the daemon read was in flight deadlocked the future.
+  (let [ss (java.net.ServerSocket. 0)
+        port (.getLocalPort ss)
+        _ (doto (Thread.
+                 (fn []
+                   (try
+                     (let [s (.accept ss)
+                           rdr (java.io.BufferedReader.
+                                (java.io.InputStreamReader. (.getInputStream s)))]
+                       (while (seq (.readLine rdr)) nil)
+                       (let [out (.getOutputStream s)]
+                         (.write out (.getBytes "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n"))
+                         (.flush out)
+                         (Thread/sleep 30000))
+                       (.close s))
+                     (catch Exception _ nil))))
+            (.setDaemon true)
+            (.start))
+        errors (atom [])
+        fut (llm/send-message {:provider :openai
+                               :api-key "sk-test"
+                               :base-url (str "http://localhost:" port "/v1/chat/completions")
+                               :model "gpt-4o"
+                               :messages [{:role "user" :content [{:type :text :text "hi"}]}]
+                               :idle-timeout-ms 1000
+                               :on-error (fn [e] (swap! errors conj e))})]
+    (try
+      (t/is (not= :timeout (deref fut 8000 :timeout))
+            "request future completes instead of deadlocking on close")
+      (t/is (= ["Stream idle timeout after 1000 ms (no data received)"]
+               @errors))
+      (finally
+        (.close ss)))))
