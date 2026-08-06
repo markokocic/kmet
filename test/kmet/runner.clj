@@ -56,6 +56,7 @@
             [kmet.tui.test-negotiation]
             [kmet.tui.test-terminal-response]
             [kmet.libs.test-self-contained]
+            [kmet.libs.test-sse]
             [kmet.libs.test-terminal-image]
             [kmet.libs.test-yaml-lite]
             [kmet.libs.test-markdown]
@@ -121,6 +122,7 @@
     kmet.tui.test-negotiation
     kmet.tui.test-terminal-response
     kmet.libs.test-self-contained
+    kmet.libs.test-sse
     kmet.libs.test-terminal-image
     kmet.libs.test-yaml-lite
     kmet.libs.test-markdown

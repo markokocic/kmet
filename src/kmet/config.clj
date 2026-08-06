@@ -20,6 +20,7 @@
    :compact-token-threshold nil
    :keep-recent-tokens 20000
    :models []
+   :http-idle-timeout-ms 300000
    :system-prompt nil
    :append-system-prompt nil
    :thinking :off

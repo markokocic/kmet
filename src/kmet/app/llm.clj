@@ -14,6 +14,21 @@
 
 ;; ─── Message format conversion ─────────────────────────────────────────────
 
+(defn- bash-execution-text
+  "Bash result entry → LLM text (pi: bashExecutionToText)."
+  [{:keys [command output exit-code cancelled truncated full-output-path]}]
+  (let [output (or output "")
+        base (str "Ran `" command "`\n"
+                  (if (seq output)
+                    (str "```\n" output "\n```")
+                    "(no output)"))]
+    (str base
+         (when cancelled "\n\n(command cancelled)")
+         (when (and (not cancelled) (some? exit-code) (not (zero? exit-code)))
+           (str "\n\nCommand exited with code " exit-code))
+         (when (and truncated full-output-path)
+           (str "\n\n[Output truncated. Full output: " full-output-path "]")))))
+
 (defn- content-text
   "Extract plain text from a message content block vector.
    A block has {:type :text :text \"...\"} or {:type \"text\" :text \"...\"}."
@@ -60,29 +75,34 @@
 
 (defn openai-messages
   "Map agent messages to OpenAI chat-completion messages.
-   Tested directly by test_llm, hence public."
+   Bash entries become user messages (pi: convertToLlm bashExecution);
+   excluded ones are dropped. Tested directly by test_llm, hence public."
   [messages]
-  (mapv (fn [m]
-          (let [role (name (:role m))]
-            (case role
-              "tool"
-              {:role "tool"
-               :tool_call_id (-> m :content first :tool_use_id)
-               :content (tool-result-content m)}
-              "assistant"
-              (let [text (content-text (:content m))]
-                (cond-> {:role "assistant" :content text}
-                  (:tool-calls m)
-                  (assoc :tool_calls
-                         (mapv (fn [tc]
-                                 {:id (:id tc)
-                                  :type "function"
-                                  :function {:name (:name tc)
-                                             :arguments (cheshire.core/generate-string
-                                                         (:arguments tc))}})
-                               (:tool-calls m)))))
-              {:role role
-               :content (openai-content (:content m))})))
+  (into []
+        (keep (fn [m]
+                (let [role (name (:role m))]
+                  (case role
+                    "bash"
+                    (when-not (:exclude-from-context? m)
+                      {:role "user" :content (bash-execution-text m)})
+                    "tool"
+                    {:role "tool"
+                     :tool_call_id (-> m :content first :tool_use_id)
+                     :content (tool-result-content m)}
+                    "assistant"
+                    (let [text (content-text (:content m))]
+                      (cond-> {:role "assistant" :content text}
+                        (:tool-calls m)
+                        (assoc :tool_calls
+                               (mapv (fn [tc]
+                                       {:id (:id tc)
+                                        :type "function"
+                                        :function {:name (:name tc)
+                                                   :arguments (cheshire.core/generate-string
+                                                               (:arguments tc))}})
+                                     (:tool-calls m)))))
+                    {:role role
+                     :content (openai-content (:content m))}))))
         messages))
 
 (defn- openai-messages-with-reasoning
@@ -90,31 +110,35 @@
    Some providers (e.g., opencode-go/deepseek-v4-flash) require a
    reasoning_content field on assistant messages even when empty."
   [messages]
-  (mapv (fn [m]
-          (let [role (name (:role m))
-                msg (case role
-                      "tool"
-                      {:role "tool"
-                       :tool_call_id (-> m :content first :tool_use_id)
-                       :content (tool-result-content m)}
-                      "assistant"
-                      (let [text (content-text (:content m))
-                            has-tc (seq (:tool-calls m))
-                            msg (cond-> {:role "assistant"}
-                                  (seq text) (assoc :content text)
-                                  has-tc (assoc :tool_calls
-                                                (mapv (fn [tc]
-                                                        {:id (:id tc)
-                                                         :type "function"
-                                                         :function {:name (:name tc)
-                                                                    :arguments (cheshire.core/generate-string
-                                                                                (:arguments tc))}})
-                                                      (:tool-calls m))))]
-                        ;; opencode-go requires reasoning_content on assistant messages
-                        (assoc msg :reasoning_content ""))
-                      {:role role
-                       :content (openai-content (:content m))})]
-            msg))
+  (into []
+        (keep (fn [m]
+                (let [role (name (:role m))
+                      msg (case role
+                            "bash"
+                            (when-not (:exclude-from-context? m)
+                              {:role "user" :content (bash-execution-text m)})
+                            "tool"
+                            {:role "tool"
+                             :tool_call_id (-> m :content first :tool_use_id)
+                             :content (tool-result-content m)}
+                            "assistant"
+                            (let [text (content-text (:content m))
+                                  has-tc (seq (:tool-calls m))
+                                  msg (cond-> {:role "assistant"}
+                                        (seq text) (assoc :content text)
+                                        has-tc (assoc :tool_calls
+                                                      (mapv (fn [tc]
+                                                              {:id (:id tc)
+                                                               :type "function"
+                                                               :function {:name (:name tc)
+                                                                          :arguments (cheshire.core/generate-string
+                                                                                      (:arguments tc))}})
+                                                            (:tool-calls m))))]
+                              ;; opencode-go requires reasoning_content on assistant messages
+                              (assoc msg :reasoning_content ""))
+                            {:role role
+                             :content (openai-content (:content m))})]
+                  msg)))
         messages))
 
 (defn- anthropic-content-text
@@ -160,27 +184,32 @@
       text)))
 
 (defn- anthropic-messages [messages]
-  (mapv (fn [m]
-          (let [role (name (:role m))
-                content (if (= role "tool")
-                          (anthropic-tool-result-content m)
-                          (anthropic-content (:content m)))]
-            (cond-> {:role role :content content}
-              (and (= role "assistant") (:tool-calls m))
-              (assoc :content
-                     (vec (concat (if (string? (:content m)) [] (:content m))
-                                  (mapv (fn [tc]
-                                          {:type "tool_use"
-                                           :id (:id tc)
-                                           :name (:name tc)
-                                           :input (:arguments tc)})
-                                        (:tool-calls m))))))))
+  (into []
+        (keep (fn [m]
+                (let [role (name (:role m))]
+                  (case role
+                    "bash"
+                    (when-not (:exclude-from-context? m)
+                      {:role "user" :content (bash-execution-text m)})
+                    "tool"
+                    {:role "tool" :content (anthropic-tool-result-content m)}
+                    (let [content (anthropic-content (:content m))]
+                      (cond-> {:role role :content content}
+                        (and (= role "assistant") (:tool-calls m))
+                        (assoc :content
+                               (vec (concat (if (string? (:content m)) [] (:content m))
+                                            (mapv (fn [tc]
+                                                    {:type "tool_use"
+                                                     :id (:id tc)
+                                                     :name (:name tc)
+                                                     :input (:arguments tc)})
+                                                  (:tool-calls m)))))))))))
         messages))
 
 ;; ─── OpenAI request ────────────────────────────────────────────────────────
 
 (defn- openai-request
-  [{:keys [api-key model messages tools signal base-url
+  [{:keys [api-key model messages tools signal base-url idle-timeout-ms
            on-text on-thinking on-tool-call on-done on-error on-usage]}]
   (future
     (let [url (or base-url default-openai-url)
@@ -216,7 +245,8 @@
                                          :usage (when on-usage (on-usage (:usage event)))
                                          :error (when on-error (on-error (:message event)))
                                          nil))
-                                     signal)
+                                     signal
+                                     idle-timeout-ms)
           (proxy/finish-curl! response signal on-error))
         (catch Exception e
           (when on-error (on-error (or (ex-message e) (str "Request failed: " (.getSimpleName (class e)))))))))))
@@ -233,7 +263,7 @@
     nil)) ;; :off or anything else
 
 (defn- anthropic-request
-  [{:keys [api-key model messages tools signal thinking
+  [{:keys [api-key model messages tools signal thinking idle-timeout-ms
            on-text on-tool-call on-done on-error on-usage]}]
   (future
     (let [thinking-cfg (anthropic-thinking-config thinking)
@@ -271,7 +301,8 @@
                                             :usage (when on-usage (on-usage (:usage event)))
                                             :error (when on-error (on-error (:message event)))
                                             nil))
-                                        signal)
+                                        signal
+                                        idle-timeout-ms)
           (proxy/finish-curl! response signal on-error))
         (catch Exception e
           (when on-error (on-error (or (ex-message e) (str "Request failed: " (.getSimpleName (class e)))))))))))
@@ -291,6 +322,9 @@
      :messages    — vector of message maps
      :tools       — vector of Tool records
      :signal      — atom; set to true to cancel
+     :idle-timeout-ms — per-byte idle timeout on the stream in ms (pi:
+                     httpIdleTimeoutMs — undici bodyTimeout semantics); nil
+                     or non-positive disables it
      :on-text     — (fn [text-delta])
      :on-tool-call — (fn [{:keys [id name arguments]}])
      :on-done     — (fn [stop-reason])

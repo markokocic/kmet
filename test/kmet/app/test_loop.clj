@@ -1364,3 +1364,40 @@
           (t/is (= :aborted @fut))))
       (finally
         (fs/delete-tree dir)))))
+
+;; ─── Bash result recording (pi: recordBashResult + _flushPendingBashMessages)
+
+(t/deftest test-loop-add-bash-result-when-idle
+  (let [dir (str (fs/create-temp-dir {:dir (System/getProperty "user.home")}))
+        sess (session/create-session (str (fs/path dir "s")))
+        agent (loop/make-agent-state :session sess)]
+    (try
+      (loop/add-bash-result! agent "git st" {:output "clean\n" :exit-code 0} false)
+      (t/is (= 1 (count (loop/get-context agent))))
+      (t/is (= :bash (:role (first (loop/get-context agent)))))
+      (t/is (= 1 (count @(:entries sess))))
+      (t/is (empty? @(:pending-bash agent)))
+      (finally
+        (fs/delete-tree dir)))))
+
+(t/deftest test-loop-add-bash-result-queued-while-streaming
+  (let [dir (str (fs/create-temp-dir {:dir (System/getProperty "user.home")}))
+        sess (session/create-session (str (fs/path dir "s")))
+        agent (loop/make-agent-state :session sess)]
+    (try
+      (reset! (:status agent) :thinking)
+      (loop/add-bash-result! agent "git st" {:output "clean\n" :exit-code 0} false)
+      (t/is (empty? (loop/get-context agent)) "streaming: not added to context yet")
+      (t/is (empty? @(:entries sess)) "streaming: not appended to session yet")
+      (t/is (= 1 (count @(:pending-bash agent))) "streaming: queued for later flush")
+      (loop/flush-pending-bash-messages! agent)
+      (t/is (= 1 (count (loop/get-context agent))))
+      (t/is (= 1 (count @(:entries sess))))
+      (t/is (empty? @(:pending-bash agent)))
+      (finally
+        (fs/delete-tree dir)))))
+
+(t/deftest test-loop-add-bash-result-excluded
+  (let [agent (loop/make-agent-state)]
+    (loop/add-bash-result! agent "ls" {:output "x" :exit-code 0} true)
+    (t/is (= true (:exclude-from-context? (first (loop/get-context agent)))))))

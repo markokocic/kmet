@@ -787,9 +787,11 @@
                                                :truncation (:truncation result)
                                                :full-output-path full-output-path)
 
-              ;; Record in session
-              (when-let [sess @(:session-atom cs)]
-                (session/record-bash-result! sess command result exclude-from-context?))
+              ;; Record in context + session — deferred while the agent is
+              ;; streaming so tool_use/tool_result ordering is preserved
+              ;; (pi: recordBashResult queues pending bash messages, flushed
+              ;; by run-agent-turn once the run settles)
+              (agent/add-bash-result! (:agent-state cs) command result exclude-from-context?)
 
               ;; Move pending bash from pending container to chat (pi: pendingMessagesContainer)
               (when @(:running-turn? cs)
@@ -1139,6 +1141,7 @@
             :compact-threshold (:compact-threshold config)
             :compact-token-threshold (:compact-token-threshold config)
             :keep-recent-tokens (or (:keep-recent-tokens config) 20000)
+            :http-idle-timeout-ms (:http-idle-timeout-ms config)
             :thinking (:thinking config :off)
             :on-event (fn [evt]
                         (case (:type evt)

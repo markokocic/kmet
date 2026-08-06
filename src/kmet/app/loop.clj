@@ -108,7 +108,9 @@
                        overflow-recovered     ;; atom of bool: context-overflow compacted once this run
                        compact-token-threshold ;; int or nil: compact when estimated tokens exceed this
                        keep-recent-tokens     ;; int: cut-point budget in tokens (pi: keepRecentTokens, default 20000)
-                       compacting?])           ;; atom of bool: a compaction is in progress (escape cancels it)
+                       compacting?           ;; atom of bool: a compaction is in progress (escape cancels it)
+                       pending-bash          ;; atom of vector of bash entries queued while streaming
+                       http-idle-timeout-ms]) ;; int: SSE idle timeout in ms (0 = disabled, pi: httpIdleTimeoutMs)
 
 (defn make-agent-state
   "Create a new agent state.
@@ -118,8 +120,9 @@
          :before-tool-call, :after-tool-call, :system-prompt-override,
          :transform-context, :prepare-next-turn, :should-stop-after-turn,
          :get-api-key, :models (default []), :compact-token-threshold,
-         :keep-recent-tokens (default 20000, pi: keepRecentTokens)"
-  [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key models compact-token-threshold keep-recent-tokens]
+         :keep-recent-tokens (default 20000, pi: keepRecentTokens),
+         :http-idle-timeout-ms (default 300000, pi: httpIdleTimeoutMs; 0 disables)"
+  [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key models compact-token-threshold keep-recent-tokens http-idle-timeout-ms]
       :or {provider :openai
            thinking :off
            steering-mode :all
@@ -128,6 +131,7 @@
            base-delay-ms 2000
            models []
            keep-recent-tokens 20000
+           http-idle-timeout-ms 300000
            system "You are kmet, a minimal coding agent. Help the user with their tasks.
 Use the available tools to read, write, edit files, and execute commands.
 Be precise and concise in your responses."}}]
@@ -162,7 +166,9 @@ Be precise and concise in your responses."}}]
                     :overflow-recovered (atom false)
                     :compact-token-threshold compact-token-threshold
                     :keep-recent-tokens keep-recent-tokens
-                    :compacting? (atom false)}))
+                    :compacting? (atom false)
+                    :pending-bash (atom [])
+                    :http-idle-timeout-ms http-idle-timeout-ms}))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -648,6 +654,7 @@ Be precise and concise in your responses."}}]
       :messages messages
       :tools (vals (tools/get-all-tools))
       :signal (:signal agent)
+      :idle-timeout-ms (:http-idle-timeout-ms agent)
       :thinking @(:thinking agent)
       :on-text (fn [t]
                  (swap! text-buf str t)
@@ -729,6 +736,38 @@ Be precise and concise in your responses."}}]
   (or (seq @(:steering agent))
       (seq @(:follow-up agent))))
 
+;; ─── Bash result recording ────────────────────────────────────────────────
+
+(defn add-bash-result!
+  "Record a !/!! bash execution result in the agent context and session.
+   While the agent is streaming the entry is deferred (pi: recordBashResult
+   queues pending bash messages to preserve tool_use/tool_result ordering)
+   and flushed by run-agent-turn's finally once the run settles."
+  [agent command result exclude-from-context?]
+  (let [entry (session/make-bash-entry command result exclude-from-context?)]
+    (if (contains? #{:thinking :executing} @(:status agent))
+      (swap! (:pending-bash agent) conj entry)
+      (do (swap! (:messages agent) conj entry)
+          (when-let [sess (:session agent)]
+            (session/append-entry sess entry))))
+    nil))
+
+(defn flush-pending-bash-messages!
+  "Add queued bash results (recorded while the agent was streaming) to the
+   agent context and session (pi: _flushPendingBashMessages). Called by
+   run-agent-turn's finally so every exit path — settle, error, timeout, or
+   cancel — flushes them. Drains entries queued mid-flush via CAS."
+  [agent]
+  (loop []
+    (let [pending @(:pending-bash agent)]
+      (when (seq pending)
+        (doseq [entry pending]
+          (swap! (:messages agent) conj entry)
+          (when-let [sess (:session agent)]
+            (session/append-entry sess entry)))
+        (when-not (compare-and-set! (:pending-bash agent) pending [])
+          (recur))))))
+
 ;; ─── Agent run ─────────────────────────────────────────────────────────────
 
 (declare resolve-api-key)
@@ -762,6 +801,7 @@ Be precise and concise in your responses."}}]
           :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
           :messages msgs
           :signal signal
+          :idle-timeout-ms (:http-idle-timeout-ms agent)
           :on-text (fn [t] (swap! text-buf str t))
           :on-done (fn [_] (deliver done @text-buf))
           :on-error (fn [_] (deliver done nil))})
@@ -787,7 +827,7 @@ Be precise and concise in your responses."}}]
           context (into [{:role :user :content (:content summary-entry)}]
                         (keep (fn [e]
                                 (case (:role e)
-                                  (:user :assistant :tool) e
+                                  (:user :assistant :tool :bash) e
                                   nil)))
                         (rest branch))]
       (reset! (:messages agent) context))))
@@ -959,6 +999,17 @@ Be precise and concise in your responses."}}]
             (do (Thread/sleep (min 100 remaining))
                 (recur))))))))
 
+(defn- llm-total-timeout-ms
+  "Total deadline for one LLM call: the configured idle timeout plus a grace
+   period, so a stalled stream always errors via the idle timeout (retryable)
+   before the total deadline. 0 (disabled) means no total deadline (pi:
+   timeoutMs ?? httpIdleTimeoutMs, 0 → effectively disabled)."
+  [agent]
+  (let [idle (:http-idle-timeout-ms agent)]
+    (if (pos? idle)
+      (+ idle 30000)
+      Integer/MAX_VALUE)))
+
 (defn run-agent-turn
   "Run the agent loop until it settles.
    agent    — AgentState record
@@ -1070,18 +1121,19 @@ Be precise and concise in your responses."}}]
                                       (let [promise (do (reset! text-buf "")
                                                         (call-llm agent (resolve-api-key agent) text-buf on-text on-thinking))]
                                         (reset! (:active-call agent) promise)
-                                        (let [result (deref promise 120000 :timeout)]
+                                        (let [result (deref promise (llm-total-timeout-ms agent) :timeout)]
                                           (reset! (:active-call agent) nil)
                                           (if (:cancelled result)
                                             (do (agent-end)
                                                 {:aborted true})
                                             (if (= :timeout result)
                                               (do (reset! (:signal agent) true)
-                                                  (when on-error (on-error "LLM call timed out after 120s"))
-                                                  (reset! (:status agent) :error)
-                                                  (emit agent {:type :error :message "LLM call timed out after 120s"})
-                                                  (agent-end "LLM call timed out after 120s")
-                                                  {:aborted true})
+                                                  (let [timeout-msg (str "LLM call timed out after " (llm-total-timeout-ms agent) "ms")]
+                                                    (when on-error (on-error timeout-msg))
+                                                    (reset! (:status agent) :error)
+                                                    (emit agent {:type :error :message timeout-msg})
+                                                    (agent-end timeout-msg)
+                                                    {:aborted true}))
                                               (if (:error result)
                                                 (let [err (:error result)
                                                       max-retries (:max-retries agent)]
@@ -1199,7 +1251,12 @@ Be precise and concise in your responses."}}]
             (catch Exception e
               (reset! (:status agent) :error)
               (emit agent {:type :error :message (ex-message e)})
-              (when on-error (on-error (ex-message e))))))))))
+              (when on-error (on-error (ex-message e))))
+            (finally
+              ;; pi: _flushPendingBashMessages — bash results recorded while
+              ;; streaming are queued to preserve tool_use/tool_result ordering
+              ;; and land in the context/session once the run settles
+              (flush-pending-bash-messages! agent))))))))
 
 ;; ─── Cancellation ──────────────────────────────────────────────────────────
 

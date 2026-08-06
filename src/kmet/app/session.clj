@@ -179,20 +179,25 @@
 
 ;; ─── Bash result recording ─────────────────────────────────────────────────
 
+(defn make-bash-entry
+  "Build the session entry for a !/!! bash command result.
+   exclude-from-context? mirrors pi's !! behavior (output not sent to the LLM)."
+  [command result exclude-from-context?]
+  {:role :bash
+   :command command
+   :output (:output result "")
+   :exit-code (:exit-code result)
+   :cancelled (:cancelled result false)
+   :exclude-from-context? exclude-from-context?
+   :truncated (:truncated result false)
+   :full-output-path (:full-output-path result)})
+
 (defn record-bash-result!
   "Record the result of a !/!! bash command in the session.
    When exclude-from-context? is true, the output is not included in
    the conversation history visible to the LLM (matching pi's !! behavior)."
   [session command result exclude-from-context?]
-  (let [entry {:role :bash
-               :command command
-               :output (:output result "")
-               :exit-code (:exit-code result)
-               :cancelled (:cancelled result false)
-               :exclude-from-context? exclude-from-context?
-               :truncated (:truncated result false)
-               :full-output-path (:full-output-path result)}]
-    (append-entry session entry)))
+  (append-entry session (make-bash-entry command result exclude-from-context?)))
 
 ;; ─── Usage tracking ────────────────────────────────────────────────────────
 

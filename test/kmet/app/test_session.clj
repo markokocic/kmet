@@ -224,6 +224,33 @@
 
 ;; ─── Usage tracking ────────────────────────────────────────────────────────
 
+;; ─── Bash result recording ─────────────────────────────────────────────────
+
+(t/deftest test-make-bash-entry
+  (let [entry (s/make-bash-entry "echo hi" {:output "hi\n" :exit-code 0} false)]
+    (t/is (= :bash (:role entry)))
+    (t/is (= "echo hi" (:command entry)))
+    (t/is (= "hi\n" (:output entry)))
+    (t/is (= 0 (:exit-code entry)))
+    (t/is (false? (:cancelled entry)))
+    (t/is (false? (:exclude-from-context? entry)))
+    (t/is (false? (:truncated entry)))
+    (t/is (nil? (:full-output-path entry))))
+  (t/is (= true (:exclude-from-context?
+                 (s/make-bash-entry "ls" {:output "" :exit-code 1} true))))
+  (t/is (= "" (:output (s/make-bash-entry "ls" {} false))))
+  (t/is (= true (:cancelled (s/make-bash-entry "ls" {:cancelled true} false)))))
+
+(t/deftest test-record-bash-result
+  (let [session-dir (io/file test-dir "bash")
+        sess (s/create-session (str session-dir))
+        result {:output "clean\n" :exit-code 0}
+        entry (s/record-bash-result! sess "git st" result false)]
+    (t/is (= :bash (:role entry)))
+    (t/is (= "git st" (:command entry)))
+    (t/is (= 1 (count @(:entries sess))))
+    (t/is (= (:id entry) (:id (first @(:entries sess)))))))
+
 (t/deftest test-entry-usage
   (t/testing "OpenAI usage shape"
     (t/is (= {:input 100 :output 20 :cache-read 30 :cache-write 0}

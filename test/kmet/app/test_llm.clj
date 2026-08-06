@@ -1,5 +1,6 @@
 (ns kmet.app.test-llm
   (:require [clojure.test :as t]
+            [clojure.string :as str]
             [kmet.app.llm :as llm]
             [kmet.app.tools.core :as tools]))
 
@@ -127,3 +128,40 @@
           "text-only messages keep string content for OpenAI")
     (t/is (= "hi" (:content (first anthropic)))
           "text-only messages keep string content for Anthropic")))
+
+;; ─── Bash result conversion (pi: convertToLlm bashExecution) ──────────────
+
+(t/deftest test-llm-bash-conversion
+  (let [msgs [{:role :bash :command "git st" :output "clean\n" :exit-code 0
+               :exclude-from-context? false}
+              {:role :bash :command "git st" :output "clean\n" :exit-code 0
+               :exclude-from-context? true}]
+        openai (@#'llm/openai-messages msgs)
+        reasoning (@#'llm/openai-messages-with-reasoning msgs)
+        anthropic (@#'llm/anthropic-messages msgs)]
+    (doseq [converted [openai reasoning anthropic]]
+      (t/is (= 1 (count converted)) "excluded bash entries are dropped")
+      (t/is (= "user" (:role (first converted))) "bash entries become user messages")
+      (let [text (:content (first converted))]
+        (t/is (str/includes? text "Ran `git st`"))
+        (t/is (str/includes? text "clean"))))))
+
+(t/deftest test-llm-bash-conversion-format
+  ;; pi: bashExecutionToText shape — output block, exit code, truncation note
+  (let [msgs [{:role :bash :command "false" :output "" :exit-code 1
+               :exclude-from-context? false
+               :truncated true :full-output-path "/tmp/out"}]
+        openai (@#'llm/openai-messages msgs)
+        text (:content (first openai))]
+    (t/is (str/includes? text "Ran `false`"))
+    (t/is (str/includes? text "(no output)"))
+    (t/is (str/includes? text "Command exited with code 1"))
+    (t/is (str/includes? text "[Output truncated. Full output: /tmp/out]"))))
+
+(t/deftest test-llm-bash-cancelled-no-exit-code
+  (let [msgs [{:role :bash :command "sleep 10" :output "" :exit-code nil
+               :cancelled true :exclude-from-context? false}]
+        openai (@#'llm/openai-messages msgs)
+        text (:content (first openai))]
+    (t/is (str/includes? text "(command cancelled)"))
+    (t/is (not (str/includes? text "Command exited with code")))))
