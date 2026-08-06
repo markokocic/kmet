@@ -668,7 +668,7 @@
               [name-atom args-atom content-atom is-error-atom
                theme-atom output-pad-atom expanded-atom
                custom-render-call-atom custom-render-result-atom
-               started-at-atom ended-at-atom timer-active-atom
+               started-at-atom ended-at-atom
                truncation-atom tool-call-id-atom
                details-atom        ;; result :details map (pi: result.details), e.g. edit diff
                args-complete-atom
@@ -713,12 +713,6 @@
       (if (and (nil? call-comp) (nil? result-comp) (not (seq image-data)))
         []
         (do
-          ;; Schedule periodic re-render while tool is running (Pi: setInterval equivalent)
-          (when (and started-at (not ended-at) (compare-and-set! timer-active-atom false true))
-            (future
-              (Thread/sleep 1000)
-              (reset! timer-active-atom false)
-              (protocols/invalidate this)))
           ;; Build inner container
           (container/container-clear container)
           (container/container-add-child container call-comp)
@@ -774,7 +768,6 @@
                                   :expanded-atom (atom expanded?)
                                   :started-at-atom (atom nil)
                                   :ended-at-atom (atom nil)
-                                  :timer-active-atom (atom false)
                                   :truncation-atom (atom truncation)
                                   :tool-call-id-atom (atom nil)
                                   :details-atom (atom details)

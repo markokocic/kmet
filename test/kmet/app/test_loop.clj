@@ -264,8 +264,12 @@
                               (on-done :stop))))
                       :done))
                   tools/execute-tool
-                  ;; Slow enough that the 200ms poll observes :pending at least once
-                  (fn [_ _ _] (Thread/sleep 250) {:content "ok" :is-error false})]
+                  ;; Streaming tool: emits one partial update via on-update
+                  ;; (live output), then completes after 250ms
+                  (fn [_ _ on-update]
+                    (when on-update (on-update {:content "partial output"}))
+                    (Thread/sleep 250)
+                    {:content "ok" :is-error false})]
       ;; deref inside with-redefs keeps the rebinding until the turn completes
       @(loop/run-agent-turn agent
                             {:message "run tool"
@@ -275,6 +279,11 @@
       (doseq [t [:tool-execution-start :tool-execution-update
                  :tool-execution-end :turn-end]]
         (t/is (some #{t} types) (str "expected event " t " to be emitted")))
+      ;; :tool-execution-update carries the tool's live output (pi: updates
+      ;; flow only from on-update, no periodic pings)
+      (let [upd (first (filter #(= :tool-execution-update (:type %)) @events))]
+        (t/is (= "partial output" (:content upd))
+              "update carries the partial content from on-update"))
       (let [start (first (filter #(= :tool-execution-start (:type %)) @events))
             end (first (filter #(= :tool-execution-end (:type %)) @events))]
         (t/is (= "tc1" (:tool-call-id start)) "start carries the tool call id")

@@ -600,16 +600,6 @@
 ;; Diff
 ;; ═══════════════════════════════════════════════════════════════════════════
 
-(defn- pad-lines-to-width
-  "Ensure all lines are exactly width columns wide."
-  [lines width]
-  (mapv (fn [line]
-          (let [vis (utils/visible-width line)]
-            (if (>= vis width)
-              line
-              (str line (apply str (repeat (- width vis) \space))))))
-        lines))
-
 (defn- composite-flashes
   "Overlay transient flash lines (AltScreenFlashContainer) onto the screen
    window — the bottom HEIGHT content rows — right-aligned, one flash per
@@ -1296,12 +1286,16 @@
                     cursor (:cursor cursor-result)
                     lines (:lines cursor-result)
                     ;; pi: normalizeTerminalOutput — Thai/Lao AM decomposition +
-                    ;; tab expansion — runs before padding so the tab width is
-                    ;; accounted for (pi normalizes in applyLineResets, after
-                    ;; cursor extraction; kmet pads to full width, so the
-                    ;; normalization must precede the padding).
+                    ;; tab expansion — runs before applyLineResets (pi
+                    ;; normalizes in applyLineResets, after cursor extraction).
+                    ;; Lines are written at their natural width like pi (no
+                    ;; global padding): the diff's \x1b[2K clears each rewritten
+                    ;; line before the write, so full-width padding is not
+                    ;; needed for clean rewrites — and it actively broke
+                    ;; kitty-image-reserved-rows, whose blank-row walk must run
+                    ;; on raw unpadded lines (padded spaces terminated it
+                    ;; immediately, collapsing every image block to one row).
                     lines (mapv utils/normalize-terminal-output lines)
-                    lines (pad-lines-to-width lines w)
                     lines (composite-flashes @(:flashes tui) lines w h)
                     ;; pi: applyLineResets — every non-image line ends with a
                     ;; full SGR + OSC 8 reset (SEGMENT_RESET) so a truncated

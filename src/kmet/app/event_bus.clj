@@ -46,8 +46,8 @@
     Payload: :tool-call-id, :tool-name, :args."
 
    :tool-execution-update
-   "Fired periodically while a tool is executing (progress ping).
-    Payload: :tool-call-id."
+   "Fired when a streaming tool emits partial output (e.g. bash live output).
+    Payload: :tool-call-id, :content, :is-partial."
 
    :tool-execution-end
    "Fired when a tool execution completes.

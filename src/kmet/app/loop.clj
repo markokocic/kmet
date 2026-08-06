@@ -395,22 +395,22 @@ Be precise and concise in your responses."}}]
   (boolean (some #(= :sequential (tool-execution-mode (:name %))) tool-calls)))
 
 (defn- run-tool-call!
-  "Await a tool future with 100ms progress pings. Returns the result map."
-  [agent tc-id f]
-  (loop []
-    (let [v (deref f 100 :pending)]
-      (if (= :pending v)
-        (do (emit agent {:type :tool-execution-update :tool-call-id tc-id})
-            (recur))
-        v))))
+  "Await a tool future, returning its result map. The UI updates only on
+   actual tool output events (pi: tool_execution_update carries partial
+   content) — no periodic progress pings, so a long-running tool does not
+   force constant screen updates."
+  [f]
+  @f)
 
 (defn- await-all-tool-results!
-  "Poll all pending tool futures concurrently, emitting progress pings, until
-   every future completes. Returns a map tool-call-id → result in approximate
-   completion order (newest completions discovered per 100ms poll batch).
-   Each cycle blocks on the next pending future (max 100ms) instead of a
-   fixed sleep, so fast tools finish without artificial delay."
-  [agent futures]
+  "Poll all pending tool futures concurrently until every future completes.
+   Returns a map tool-call-id → result in approximate completion order
+   (newest completions discovered per 100ms poll batch). Each cycle blocks
+   on the next pending future (max 100ms) instead of a fixed sleep, so fast
+   tools finish without artificial delay. No progress pings are emitted —
+   the UI updates only on real tool output (pi: agent-loop
+   executePreparedToolCall)."
+  [futures]
   (let [results (atom {})]
     (loop []
       (let [remaining (remove (fn [[id _]] (contains? @results id)) futures)]
@@ -419,13 +419,8 @@ Be precise and concise in your responses."}}]
           (do (doseq [[tc-id f] remaining]
                 (when-not (= :pending (deref f 0 :pending))
                   (swap! results assoc tc-id @f)))
-              (doseq [[tc-id _] remaining]
-                (when-not (contains? @results tc-id)
-                  (emit agent {:type :tool-execution-update :tool-call-id tc-id})))
               (when-let [[_ f] (first (filter (fn [[_ f]] (= :pending (deref f 0 :pending)))
                                               remaining))]
-                ;; Block until this future completes; the 100ms timeout only
-                ;; paces the progress pings for long-running tools.
                 (deref f 100 :pending))
               (recur)))))))
 
@@ -518,7 +513,7 @@ Be precise and concise in your responses."}}]
                                            (swap! completion-order conj [tc-id result])
                                            result))])
                               pending))
-        raw-results (await-all-tool-results! agent futures)
+        raw-results (await-all-tool-results! futures)
         finalized (into {}
                         (map (fn [tc]
                                (let [tc-id (:id tc)
@@ -570,9 +565,9 @@ Be precise and concise in your responses."}}]
               result (if (:block before)
                        {:content (or (:reason before) "Tool execution was blocked")
                         :is-error true}
-                       (run-tool-call! agent tc-id
-                                       (future (tools/execute-tool tc-name tc-args
-                                                                   (tool-on-update agent tc-id)))))
+                       (run-tool-call!
+                        (future (tools/execute-tool tc-name tc-args
+                                                    (tool-on-update agent tc-id)))))
               result (after-tool-hook-result agent tc-id tc-name tc-args result assistant-msg)
               result-msg (tool-result-message tc-id tc-name result)]
           (swap! (:messages agent) conj result-msg)

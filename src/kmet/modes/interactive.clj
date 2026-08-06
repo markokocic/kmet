@@ -1166,8 +1166,9 @@
                               (reset! pending-tool-comp comp))
                             (tui/tui-request-render t))
                           :tool-execution-update
-                           ;; Pi: live partial content from streaming tools (bash),
-                           ;; plus periodic pings that update the elapsed timer
+                           ;; Pi: live partial content from streaming tools (bash);
+                           ;; no periodic pings — the elapsed timer ticks via the
+                           ;; anim-timer renders during the turn
                           (do (when-let [comp @pending-tool-comp]
                                 (when-let [content (:content evt)]
                                   (ui/tool-execution-set-content! comp content)))
