@@ -1,12 +1,11 @@
 (ns kmet.tui.components.scroll-view
   "ScrollView — a bounded viewport over a single child component.
    Port of pi's ScrollView (packages/tui/src/components/scroll-view.ts)
-   with the scrollbar painting from layout.ts's paintScrollbar, adapted to
-   kmet's windowed render (the layout calls update-layout! then windows the
-   child's rendered lines through render-window).
-   Bounding the chat keeps the total rendered content within the screen
-   height, so mid-document growth (streaming bash/tool output) never
-   triggers a full-screen redraw."
+   with the scrollbar painting from layout.ts's paintScrollbar. Self-
+   contained library component: callers render the child's full content
+   (render), feed it to update-layout! with the desired viewport height,
+   and window it through render-window. Not used by the interactive layout
+   (the main screen scrolls natively); exercised by its own unit tests."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]))
 
@@ -37,9 +36,8 @@
                        scrollbar-hide-timer-atom]
   protocols/IComponent
   (render [this width]
-    ;; Pi: render returns the child's FULL content — the layout windows it via
-    ;; update-layout! + render-window. Windowed here would double-window when
-    ;; render-stack renders the child for measuring.
+    ;; Render the child's FULL content — the caller windows it via
+    ;; update-layout! + render-window (render itself never clips).
     (protocols/render child (get-content-width this width)))
   (handle-input [_this _data] nil)
   (invalidate [_this]

@@ -34,7 +34,6 @@
           w (.writer t)]
       (.enterRawMode t)
       (.write w lib/BRACKETED-PASTE-ON)
-      (.write w lib/MOUSE-ON)
       (.flush w)
       (assoc this :reader r :writer w
              :input-handler on-input
@@ -45,7 +44,6 @@
     (when (:running? this)
       (try
         (when-let [w (:writer this)]
-          (.write w lib/MOUSE-OFF)
           (.write w lib/BRACKETED-PASTE-OFF)
           (.flush w))
         (finally
@@ -180,8 +178,6 @@
 (def PASTE-END lib/PASTE-END)
 (def CSI-2026-SYNC-ON lib/CSI-2026-SYNC-ON)
 (def CSI-2026-SYNC-OFF lib/CSI-2026-SYNC-OFF)
-(def MOUSE-ON lib/MOUSE-ON)
-(def MOUSE-OFF lib/MOUSE-OFF)
 (def DESIRED-KITTY-FLAGS lib/DESIRED-KITTY-FLAGS)
 (def KITTY-KEYBOARD-PROTOCOL-QUERY lib/KITTY-KEYBOARD-PROTOCOL-QUERY)
 (def NEGOTIATION-FLUSH-TIMEOUT-MS lib/NEGOTIATION-FLUSH-TIMEOUT-MS)

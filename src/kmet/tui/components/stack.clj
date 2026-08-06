@@ -1,14 +1,11 @@
 (ns kmet.tui.components.stack
   "Stack layout support: the render-loop vertical layout (render-stack) and
    the flexbox-style sizing allocation shared by HStack/VStack (pi: stack.ts).
-   render-stack is the vertical layout for the TUI render loop: the first
-   IScrollView entry (kmet.tui.components.scroll-view/IScrollView) grows to
-   fill the height left over after the fixed components render at their
-   natural heights. The ScrollView windows its child's content, so the total
-   rendered output never exceeds the screen height (unless the fixed parts
-   alone overflow)."
-  (:require [kmet.tui.protocols :as protocols]
-            [kmet.tui.components.scroll-view :as sv]))
+   render-stack renders every component at its natural height — the layout
+   is a single flat document, like pi's main-screen model: when the total
+   exceeds the terminal height the render loop scrolls it natively into the
+   terminal scrollback, keeping the viewport pinned to the document end."
+  (:require [kmet.tui.protocols :as protocols]))
 
 ;; ─── Stack entries ─────────────────────────────────────────────────────────
 
@@ -144,42 +141,9 @@
 ;; ─── Render-loop vertical layout ───────────────────────────────────────────
 
 (defn render-stack
-  "Render a vertical stack of COMPONENTS at WIDTH x HEIGHT.
-   The single IScrollView component (if any) gets all remaining height and
-   renders its child at the scroll view's content width; every other
-   component renders at its natural height. Returns a flat vector of lines.
-   When GEOMETRY-ATOM is provided it is reset! to the scroll view's frame
-   geometry {:scroll-view :top :height :width :full-lines} — the top row in
-   the composed frame, the viewport height, the content width, and the
-   scroll view's FULL rendered lines (for selection copy) — or nil when no
-   IScrollView is present."
-  ([components width height request-render]
-   (render-stack components width height request-render nil))
-  ([components width height request-render geometry-atom]
-   (let [sv-idx (first (keep-indexed (fn [i c] (when (satisfies? sv/IScrollView c) i))
-                                     components))]
-     (if (nil? sv-idx)
-       (do (when geometry-atom (reset! geometry-atom nil))
-           (vec (mapcat #(protocols/render % width) components)))
-       (let [sv (nth components sv-idx)
-             content-width (sv/get-content-width sv width)
-             rendered (mapv (fn [i c]
-                              (if (= i sv-idx)
-                                (protocols/render c content-width)
-                                (protocols/render c width)))
-                            (range) components)
-             fixed (apply + (keep-indexed (fn [i lines] (when (not= i sv-idx) (count lines)))
-                                          rendered))
-             viewport (max 0 (- height fixed))
-             top-row (apply + (keep-indexed (fn [i lines] (when (< i sv-idx) (count lines)))
-                                            rendered))]
-         (sv/update-layout! sv (count (nth rendered sv-idx)) viewport request-render)
-         (when geometry-atom
-           (reset! geometry-atom {:scroll-view sv
-                                  :top top-row
-                                  :height viewport
-                                  :width content-width
-                                  :full-lines (nth rendered sv-idx)}))
-         (vec (apply concat (map-indexed
-                             (fn [i lines] (if (= i sv-idx) (sv/render-window sv lines) lines))
-                             rendered))))))))
+  "Render a vertical stack of COMPONENTS at WIDTH: every component renders
+   at its natural height (pi: Container render). Returns a flat vector of
+   lines — the document may exceed the terminal height; the render loop
+   scrolls the overflow into the native terminal scrollback."
+  [components width]
+  (vec (mapcat #(protocols/render % width) components)))

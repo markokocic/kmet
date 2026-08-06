@@ -91,14 +91,10 @@
                 color-scheme-listeners terminal-response-buffer
                 terminal-response-timer color-scheme-notifications-enabled?
                 debug-redraw? tui-debug?
-                scroll-layout selection-anchor selection-focus
-                selection-press-active? selection-dragged?
-                scrollbar-drag scrollbar-hover
                 input-generation incomplete-flush-timer])
 
 (declare tui-request-render tui-stop set-focus-internal
-         overlay-visible? overlay-handle process-input-buffer! tui-invalidate
-         handle-viewport-input)
+         overlay-visible? overlay-handle process-input-buffer! tui-invalidate)
 
 (defn create-tui [terminal]
   (let [tui (map->TUI {:terminal (atom terminal)
@@ -134,13 +130,6 @@
                        :color-scheme-notifications-enabled? (atom false)
                        :debug-redraw? (atom (= (System/getenv "KMET_DEBUG_REDRAW") "1"))
                        :tui-debug? (atom (= (System/getenv "KMET_TUI_DEBUG") "1"))
-                       :scroll-layout (atom nil)
-                       :selection-anchor (atom nil)
-                       :selection-focus (atom nil)
-                       :selection-press-active? (atom false)
-                       :selection-dragged? (atom false)
-                       :scrollbar-drag (atom nil)
-                       :scrollbar-hover (atom nil)
                        :input-generation (atom 0)
                        :incomplete-flush-timer (atom nil)})]
     ;; AltScreenFlashContainer owned by the TUI (pi: TuiAltScreen owns its
@@ -148,11 +137,6 @@
     ;; screen window; tui-flash! / tui-flash-dispose! are the public API.
     (reset! (:flashes tui)
             (alt-screen-flash/make-alt-screen-flash #(tui-request-render tui)))
-    ;; Viewport input handling (pi: TuiAltScreen.handleViewportInput): mouse
-    ;; wheel/button events and viewport scroll keys are intercepted before
-    ;; the focused component — registered first so it sees all input.
-    (swap! (:input-listeners tui) conj
-           (fn [data] (handle-viewport-input tui data)))
     tui))
 
 (defn tui-add-child [tui c] (swap! (:components tui) conj c))
@@ -196,369 +180,6 @@
   "Clear all pending flashes immediately."
   [tui]
   (alt-screen-flash/alt-screen-flash-dispose! @(:flashes tui)))
-
-;; ═══════════════════════════════════════════════════════════════════════════
-;; Viewport: mouse + scroll keys (pi: TuiAltScreen viewport handling)
-;; ═══════════════════════════════════════════════════════════════════════════
-
-(def ^:private PAGE-SCROLL-OVERLAP 4)
-
-(defn- primary-scroll-view
-  "The primary scroll view — the first IScrollView in the component list
-   (pi: currentLayout.primaryScrollView, fallback implicitScrollView)."
-  [tui]
-  (first (filter #(satisfies? scroll-view/IScrollView %) @(:components tui))))
-
-(defn- scroll-views-at
-  "Scroll views whose frame contains the pointer (x, y) (pi: getScrollViewsAt).
-   Uses the geometry recorded by the last render."
-  [tui x y]
-  (when-let [g @(:scroll-layout tui)]
-    (let [top (:top g) h (:height g) w (:width g)]
-      (if (and (>= y top) (< y (+ top h)) (>= x 0) (< x w))
-        [(:scroll-view g)]
-        []))))
-
-(defn- scrollbar-target-at
-  "The scroll view + thumb geometry when the pointer is over the scrollbar
-   thumb (pi: getScrollbarTargetAt). Screen coordinates."
-  [tui x y]
-  (when-not (seq @(:overlays tui))
-    (when-let [g @(:scroll-layout tui)]
-      (let [sv (:scroll-view g)
-            top (:top g)]
-        (when-let [geom (scroll-view/scrollbar-geometry sv (:width g))]
-          (let [thumb-top (+ top (:thumb-top geom))]
-            (when (and (= x (:column geom))
-                       (<= thumb-top y)
-                       (< y (+ thumb-top (:thumb-height geom))))
-              {:scroll-view sv :geometry geom})))))))
-
-(defn- route-wheel!
-  "Port of pi's routeWheel: scroll the scroll views under the pointer
-   (chaining overscroll), then fall back to the primary scroll view."
-  [tui event]
-  (let [wheel-scroll-lines (max 1 (int (or (:wheel-scroll-lines tui) 1)))
-        primary (primary-scroll-view tui)
-        seen (atom #{})]
-    (loop [remaining (* (:direction event) wheel-scroll-lines)
-           views (scroll-views-at tui (:x event) (:y event))]
-      (if (or (zero? remaining) (empty? views))
-        (when (and primary (not (zero? remaining)) (not (contains? @seen primary)))
-          (scroll-view/scroll-by! primary remaining))
-        (let [sv (first views)
-              remaining' (scroll-view/scroll-by! sv remaining)]
-          (swap! seen conj sv)
-          (when-not (or (zero? remaining')
-                        (= :contain (:overscroll sv)))
-            (recur remaining' (rest views))))))
-    (tui-request-render tui)))
-
-;; ─── Selection (pi: getSelectionPoint / getSelectionBounds /
-;;      copySelectionToClipboard / applySelection) ────────────────────────────
-
-(defn- selection-point
-  "Map a pointer (x, y) to a selection point. Inside a scroll view the point
-   is in CONTENT coordinates (row = scrollTop + y - top, clamped to the
-   content); outside it is a screen coordinate (pi: getSelectionPoint).
-   While a selection is active the anchor's scroll view wins, so dragging
-   beyond the viewport keeps the selection in that view (pi: anchorScrollView)."
-  [tui x y]
-  (let [sv (or (:scroll-view @(:selection-anchor tui))
-               (first (scroll-views-at tui x y)))]
-    (if (and sv @(:scroll-layout tui))
-      (let [g @(:scroll-layout tui)
-            top (:top g)
-            content-rows (count (:full-lines g))
-            max-row (max 0 (dec content-rows))
-            row (max 0 (min max-row (+ (scroll-view/scroll-top sv) (- y top))))]
-        {:row row
-         :col (max 0 (min (dec (:width g)) x))
-         :scroll-view sv})
-      (let [term @(:terminal tui)]
-        (if term
-          (let [h (.getHeight (.terminal term))
-                w (.getWidth (.terminal term))]
-            {:row (max 0 (min (dec h) y))
-             :col (max 0 (min (dec w) x))})
-          {:row (max 0 y) :col (max 0 x)})))))
-
-(defn- selection-bounds
-  "Normalized start/end of the current selection; nil when empty or when the
-   anchor and focus are in different scroll views (pi: getSelectionBounds)."
-  [tui]
-  (let [a @(:selection-anchor tui)
-        f @(:selection-focus tui)]
-    (when (and a f (or (nil? (:scroll-view a)) (identical? (:scroll-view a) (:scroll-view f))))
-      (let [same? (and (= (:row a) (:row f)) (= (:col a) (:col f)))
-            before? (or (< (:row a) (:row f))
-                        (and (= (:row a) (:row f)) (< (:col a) (:col f))))]
-        (when-not same?
-          (if before? {:start a :end f} {:start f :end a}))))))
-
-(defn- selection-columns
-  "Visible-column range of a selection on a given CONTENT row (pi:
-   getSelectionColumns)."
-  [line row sel]
-  (let [line-width (utils/visible-width line)
-        start-col (if (= row (:row (:start sel)))
-                    (min (:col (:start sel)) line-width)
-                    0)
-        end-col (if (= row (:row (:end sel)))
-                  (min (inc (:col (:end sel))) line-width)
-                  line-width)]
-    {:start (max 0 (min start-col line-width))
-     :end (max start-col (min end-col line-width))}))
-
-(defn- apply-selection-highlight
-  "Wrap TEXT's visible characters in reverse video, re-asserting reverse
-   after every SGR code so styling survives (pi: applySelectionHighlight)."
-  [text]
-  (let [sb (StringBuilder.)]
-    (.append sb "\u001b[7m")
-    (loop [i 0]
-      (when (< i (count text))
-        (if-let [[code clen] (utils/ansi-code-at text i)]
-          (do (.append sb code)
-              (when (str/ends-with? code "m")
-                (.append sb "\u001b[7m"))
-              (recur (+ i clen)))
-          (do (.append sb (nth text i))
-              (recur (inc i))))))
-    (.append sb "\u001b[27m")
-    (str sb)))
-
-(defn- highlight-selection-line
-  "Apply reverse video to the visible columns [start, end) of LINE
-   (pi: applySelection slice/append composition)."
-  [line start end]
-  (if (<= end start)
-    line
-    (let [total (utils/visible-width line)
-          before (utils/slice-with-width line 0 start)
-          selected (utils/slice-with-width line start (- end start))
-          after (utils/slice-with-width line end (max 0 (- total end)))]
-      (str (:text before)
-           (apply-selection-highlight (:text selected))
-           (:text after)))))
-
-(defn- composite-selection
-  "Apply the active selection highlight onto LINES (pi: applySelection).
-   Selection rows are mapped from content coordinates to screen rows via the
-   scroll view's scrollTop; selections outside any scroll view are in screen
-   coordinates."
-  [tui lines]
-  (if-let [sel (selection-bounds tui)]
-    (if-let [sv (:scroll-view (:start sel))]
-      ;; selection inside the scroll view — requires the current layout
-      (when-let [g @(:scroll-layout tui)]
-        (let [top (:top g)
-              viewport (:height g)
-              scroll-top (scroll-view/scroll-top sv)]
-          (loop [row (:row (:start sel)) lines lines]
-            (if (> row (:row (:end sel)))
-              lines
-              (let [screen-row (+ top (- row scroll-top))
-                    lines (if (and (>= screen-row top)
-                                   (< screen-row (+ top viewport))
-                                   (< screen-row (count lines)))
-                            (let [screen-line (nth lines screen-row)
-                                  {:keys [start end]} (selection-columns screen-line row sel)]
-                              (assoc lines screen-row
-                                     (highlight-selection-line screen-line start end)))
-                            lines)]
-                (recur (inc row) lines))))))
-      ;; screen-coordinate selection (outside any scroll view)
-      (loop [row (:row (:start sel)) lines lines]
-        (if (> row (:row (:end sel)))
-          lines
-          (let [lines (if (and (>= row 0) (< row (count lines)))
-                        (let [line (nth lines row)
-                              {:keys [start end]} (selection-columns line row sel)]
-                          (assoc lines row (highlight-selection-line line start end)))
-                        lines)]
-            (recur (inc row) lines)))))
-    lines))
-
-(defn- selection-source-lines
-  "Lines the selection refers to: the scroll view's full content when the
-   selection is inside one, else the composited screen (pi: scrollContentLines
-   / previousScreen)."
-  [tui sel]
-  (if (:scroll-view (:start sel))
-    (:full-lines @(:scroll-layout tui))
-    @(:previous-lines tui)))
-
-(defn- copy-selection-to-clipboard!
-  "Port of pi's copySelectionToClipboard: join the selected rows with \\n,
-   strip ANSI codes, and write the result to the terminal clipboard via
-   OSC 52. Flashes \"Copied!\" (pi parity)."
-  [tui]
-  (when-let [sel (selection-bounds tui)]
-    (let [lines (selection-source-lines tui sel)
-          rows (for [row (range (:row (:start sel)) (inc (:row (:end sel))))]
-                 (let [line (if (< row (count lines)) (nth lines row) "")
-                       {:keys [start end]} (selection-columns line row sel)
-                       text (utils/slice-with-width line start (max 0 (- end start)))]
-                   (-> (:text text) utils/strip-ansi-codes str/trimr)))
-          text (str/join "\n" rows)]
-      (when (seq text)
-        (let [b64 (.encodeToString (java.util.Base64/getEncoder)
-                                   (.getBytes text "UTF-8"))]
-          (terminal/write-output @(:terminal tui) (str "\u001b]52;c;" b64 "\u0007"))
-          (tui-flash! tui "Copied!"))))))
-
-;; ─── Mouse event routing (pi: handleViewportInput / handleScrollbarMouseEvent
-;;      / handleSelectionMouseEvent / updateScrollbarHover) ───────────────────
-
-(defn- update-scrollbar-hover!
-  [tui x y]
-  (let [target (scrollbar-target-at tui x y)
-        sv (:scroll-view target)]
-    (when-not (identical? sv @(:scrollbar-hover tui))
-      (when-let [old @(:scrollbar-hover tui)]
-        (scroll-view/set-scrollbar-active! old false))
-      (reset! (:scrollbar-hover tui) sv)
-      (when sv
-        (scroll-view/set-scrollbar-active! sv true)
-        (tui-request-render tui)))))
-
-(defn- handle-scrollbar-mouse!
-  "Port of pi's handleScrollbarMouseEvent. Returns true when the event was
-   consumed by scrollbar drag state."
-  [tui event]
-  (if-let [drag @(:scrollbar-drag tui)]
-    (do
-      (when (:release? event)
-        (reset! (:scrollbar-drag tui) nil))
-      (when-let [g @(:scroll-layout tui)]
-        (let [sv (:scroll-view drag)
-              top (:top g)
-              geom (scroll-view/scrollbar-geometry sv (:width g))]
-          (when geom
-            (let [max-thumb-offset (max 0 (- (:track-height geom) (:thumb-height geom)))
-                  thumb-offset (max 0 (min max-thumb-offset
-                                           (- (- (:y event) top) (:grab-offset drag))))
-                  max-scroll (:max-scroll-top geom)
-                  scroll-top (if (zero? max-thumb-offset)
-                               0
-                               (long (Math/round (double (* (/ thumb-offset max-thumb-offset) max-scroll)))))]
-              (scroll-view/scroll-to! sv scroll-top)))))
-      true)
-    (when-not (or (:release? event)
-                  (pos? (bit-and (:button event) 32))
-                  (pos? (bit-and (:button event) 3)))
-      (when-let [target (scrollbar-target-at tui (:x event) (:y event))]
-        (reset! (:selection-press-active? tui) false)
-        (reset! (:selection-anchor tui) nil)
-        (reset! (:selection-focus tui) nil)
-        (reset! (:selection-dragged? tui) false)
-        (update-scrollbar-hover! tui (:x event) (:y event))
-        (reset! (:scrollbar-drag tui)
-                {:scroll-view (:scroll-view target)
-                 :grab-offset (- (:y event)
-                                 (+ (:top @(:scroll-layout tui))
-                                    (:thumb-top (:geometry target))))})
-        true))))
-
-(defn- handle-selection-mouse!
-  "Port of pi's handleSelectionMouseEvent — press/drag/release selection."
-  [tui event]
-  (when (zero? (bit-and (:button event) 3))
-    (let [point (selection-point tui (:x event) (:y event))]
-      (cond
-        (:release? event)
-        (when @(:selection-press-active? tui)
-          (reset! (:selection-press-active? tui) false)
-          (reset! (:selection-dragged? tui) false)
-          (when @(:selection-anchor tui)
-            (reset! (:selection-focus tui) point)
-            (copy-selection-to-clipboard! tui)
-            (reset! (:selection-anchor tui) nil)
-            (reset! (:selection-focus tui) nil)
-            (tui-request-render tui)))
-
-        (pos? (bit-and (:button event) 32))
-        (when (and @(:selection-press-active? tui) @(:selection-anchor tui))
-          (reset! (:selection-dragged? tui) true)
-          (reset! (:selection-focus tui) point)
-          (tui-request-render tui))
-
-        :else
-        (do (reset! (:selection-press-active? tui) true)
-            (reset! (:selection-anchor tui) point)
-            (reset! (:selection-focus tui) point)
-            (reset! (:selection-dragged? tui) false)
-            (tui-request-render tui))))))
-
-(defn- clear-viewport-state!
-  "Reset selection/scrollbar state (pi: FOCUS_OUT / stop paths)."
-  [tui]
-  (when @(:selection-press-active? tui)
-    (reset! (:selection-anchor tui) nil)
-    (reset! (:selection-focus tui) nil))
-  (reset! (:selection-press-active? tui) false)
-  (reset! (:selection-dragged? tui) false)
-  (update-scrollbar-hover! tui -1 -1)
-  (reset! (:scrollbar-drag tui) nil)
-  (tui-request-render tui))
-
-(defn- handle-viewport-input
-  "Port of pi's handleViewportInput: consumes mouse events (wheel, buttons,
-   focus) and viewport scroll keys before the focused component sees them.
-   Returns {:consume true} when handled, nil otherwise."
-  [tui data]
-  (cond
-    (= data "\u001b[I")
-    {:consume true}
-
-    (= data "\u001b[O")
-    (do (clear-viewport-state! tui)
-        {:consume true})
-
-    (keys/parse-wheel-event data)
-    (let [event (keys/parse-wheel-event data)]
-      (route-wheel! tui event)
-      {:consume true})
-
-    (keys/parse-sgr-mouse data)
-    (let [event (keys/parse-sgr-mouse data)]
-      (if (handle-scrollbar-mouse! tui event)
-        {:consume true}
-        (do (update-scrollbar-hover! tui (:x event) (:y event))
-            (handle-selection-mouse! tui event)
-            {:consume true})))
-
-    (keys/mouse-sequence? data)
-    {:consume true}
-
-    (keys/matches-key? data "pageUp")
-    (do (when-not (keys/is-key-release? data)
-          (when-let [sv (primary-scroll-view tui)]
-            (scroll-view/scroll-by! sv (- (max 1 (- (scroll-view/viewport-height sv)
-                                                    PAGE-SCROLL-OVERLAP))))))
-        {:consume true})
-
-    (keys/matches-key? data "pageDown")
-    (do (when-not (keys/is-key-release? data)
-          (when-let [sv (primary-scroll-view tui)]
-            (scroll-view/scroll-by! sv (max 1 (- (scroll-view/viewport-height sv)
-                                                 PAGE-SCROLL-OVERLAP)))))
-        {:consume true})
-
-    (keys/matches-key? data "home")
-    (do (when-not (keys/is-key-release? data)
-          (when-let [sv (primary-scroll-view tui)]
-            (scroll-view/scroll-to-start! sv)))
-        {:consume true})
-
-    (keys/matches-key? data "end")
-    (do (when-not (keys/is-key-release? data)
-          (when-let [sv (primary-scroll-view tui)]
-            (scroll-view/scroll-to-end! sv)))
-        {:consume true})
-
-    :else nil))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Overlays
@@ -1664,14 +1285,12 @@
                 h (.getHeight jline)]
             (when @(:render-requested? tui)
               (reset! (:render-requested? tui) false)
-              ;; Base content: the stack layout bounds the ScrollView (chat) to
-              ;; the space left by the fixed components, so the total never
-              ;; exceeds the screen and mid-document growth doesn't trigger
-              ;; full-screen redraws. Visible overlays are then composited on
-              ;; top (pi: compositeOverlays).
-              (let [base-lines (stack/render-stack @(:components tui) w h
-                                                   #(tui-request-render tui)
-                                                   (:scroll-layout tui))
+              ;; Base content: the whole UI is one flat document — the stack
+              ;; layout renders every component at natural height, so the total
+              ;; may exceed the screen and the render loop scrolls the overflow
+              ;; into the native terminal scrollback (pi: main-screen model).
+              ;; Visible overlays are then composited on top (pi: compositeOverlays).
+              (let [base-lines (stack/render-stack @(:components tui) w)
                     raw-lines (composite-overlays tui base-lines w h)
                     cursor-result (extract-cursor-position raw-lines h)
                     cursor (:cursor cursor-result)
@@ -1683,7 +1302,6 @@
                     ;; normalization must precede the padding).
                     lines (mapv utils/normalize-terminal-output lines)
                     lines (pad-lines-to-width lines w)
-                    lines (composite-selection tui lines)
                     lines (composite-flashes @(:flashes tui) lines w h)
                     ;; pi: applyLineResets — every non-image line ends with a
                     ;; full SGR + OSC 8 reset (SEGMENT_RESET) so a truncated
@@ -2055,9 +1673,8 @@
   (reset! (:previous-height tui) 0)
   (reset! (:max-lines-rendered tui) 0)
   (reset! (:previous-kitty-image-ids tui) #{})
-  ;; Drop any stale selection / scrollbar state and pending input flush from
-  ;; before the suspend (pi: beforeTerminalStart resets selection state).
-  (clear-viewport-state! tui)
+  ;; Drop any pending input flush from before the suspend (pi:
+  ;; beforeTerminalStart resets selection state).
   (clear-incomplete-flush! tui)
   (start-input-reader tui)
   (reset! (:render-loop tui) (future (run-render-loop! tui)))

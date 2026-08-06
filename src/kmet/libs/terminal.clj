@@ -49,12 +49,6 @@
 (def ^:const CSI-2026-SYNC-ON "\u001b[?2026h")
 (def ^:const CSI-2026-SYNC-OFF "\u001b[?2026l")
 
-;; SGR mouse mode (pi: tui-alt-screen.ts ENABLE_MOUSE / DISABLE_MOUSE):
-;; 1000 normal tracking, 1002 button-event, 1003 any-event, 1004 focus
-;; events, 1006 SGR encoding.
-(def ^:const MOUSE-ON "\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1004h\u001b[?1006h")
-(def ^:const MOUSE-OFF "\u001b[?1006l\u001b[?1004l\u001b[?1003l\u001b[?1002l\u001b[?1000l")
-
 ;; ─── Kitty keyboard protocol negotiation (pi: terminal.ts) ─────────────────
 ;; Requested flags: 1 = disambiguate escape codes, 2 = report event types,
 ;; 4 = report alternate keys. The trailing DA query is a sentinel supported

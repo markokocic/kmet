@@ -854,6 +854,55 @@ below the screen. The `ScrollView` port stays for
 modal/embedded uses only. Revisit only if scrollback fidelity becomes a
 problem on a target platform.
 
+**Implementation status: DONE — main-screen model landed.** The code
+initially diverged from this decision: the transcript was wrapped in a
+bounded `ScrollView` (ported from pi's alt-screen plan, `tui-plan.md`) and
+`render-stack` windowed it to `screen height − dock height`, keeping the
+dock (pending/status/widgets/editor/footer) pinned at the bottom and
+scrolling only the chat in-app. That model was removed; kmet now renders
+like pi's main screen:
+
+- **Layout** (`modes/interactive.clj`): the TUI root is a single flat
+  document — transcript (header, loaded resources, chat) followed
+  top-to-bottom by pending messages, status, widgets, editor, footer.
+  `render-stack` (`tui/components/stack.clj`) renders every component at
+  its natural height (`(mapcat render components)`); when the document
+  exceeds the terminal height the render loop scrolls it natively into the
+  terminal scrollback (`\r\n` at the bottom with `viewportTop` tracking —
+  the same branch pi's `tui.ts` uses), keeping the viewport pinned to the
+  document end. The editor stays visible at the bottom; everything above
+  it scrolls together.
+- **No mouse capture** (`tui/terminal.clj`, `libs/terminal.clj`): the SGR
+  mouse/focus report modes (`?1000h ?1002h ?1003h ?1004h ?1006h`) are no
+  longer enabled, so wheel scrolling, the scrollbar, and text selection
+  belong to the terminal (native scrollback + native selection).
+- **Viewport machinery removed** (`tui/core.clj`): `handle-viewport-input`
+  (wheel routing, scrollbar hover/drag, in-app selection with OSC 52
+  copy, pageUp/pageDown/home/end interception) and its state
+  (`scroll-layout`, `selection-*`, `scrollbar-*` record fields) are gone;
+  page/end keys reach the editor again (editor paging works like pi).
+  `keys.clj` keeps the structural mouse/focus sequence detection
+  (`mouse-sequence?`/`focus-sequence?` + the SGR completeness rule) — the
+  dispatch gate still needs it so partial CSI fragments never leak as
+  text (pi: `stdin-buffer.ts` keeps the same rules).
+- **ScrollView kept as a standalone component**
+  (`tui/components/scroll_view.clj`): still part of the generic TUI
+  library — public API (`make-scroll-view`/`IScrollView` re-exports in
+  `kmet.tui.core` stay) and exercised by its own unit tests
+  (`test_scroll_view.clj`: follow-end windowing, scroll clamping,
+  scrollbar) — it is not dead code, just unused by the interactive
+  layout.
+- **Tests**: `test_viewport.clj` (wheel/scrollbar/selection routing) was
+  deleted with the machinery it tested.
+
+**Inherited pi main-screen trade-offs**: full redraws (resize, change
+above the viewport) emit `ESC[3J`, which clears the terminal scrollback
+(pi issue #6050); streaming while the user is scrolled up in the
+scrollback writes behind the terminal's viewport (the app cannot know the
+scroll position); the status indicator and pending-messages area scroll
+away with the document instead of staying pinned; history review is the
+terminal's native scroll, not an in-app scrollbar.
+
 ## Related documents
 
 - `alignment.md` — agent-loop and editor alignment (queues, events, retry,

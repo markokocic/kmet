@@ -1343,33 +1343,20 @@
     ;; Status indicator (Pi-style: separate layer between chat and editor)
     (let [si (ui/make-status-indicator :theme (cfg/get-theme config))
           cs (assoc cs :status-indicator si)
-          ;; Pi layout (interactive-mode.ts setupUiLayout viewport TUI): the
-          ;; TUI root is a VStack of the transcript ScrollView (basis 0, grow
-          ;; 1 — fills the space above the dock) and a dock of fixed-height
-          ;; components (pending messages, status, widgets above the editor,
-          ;; editor, widgets below, footer). The ScrollView wraps the whole
-          ;; document (header, loaded resources, chat) with follow:"end" —
-          ;; the frame stays exactly screen-height, so mid-document growth
-          ;; (streaming) never triggers full-screen redraws and scrolling up
-          ;; is an in-app viewport scroll (mouse wheel / page keys), not the
-          ;; terminal scrollback (pi parity).
+          ;; Pi layout (interactive-mode.ts setupUiLayout): the TUI root is a
+          ;; single flat document — the transcript (header, loaded resources,
+          ;; chat) followed top-to-bottom by pending messages, status, widgets
+          ;; above the editor, editor, widgets below, footer. The render loop
+          ;; keeps the viewport pinned to the document end: when the document
+          ;; grows past the screen height it scrolls natively into the
+          ;; terminal scrollback, so the whole interface scrolls together and
+          ;; the editor (document end) stays visible at the bottom.
           header-container (container/make-container [sp1 hdr sp1])
           loaded-resources-container (container/make-container [lr])
           chat-container (container/make-container [ch])
           document-container (container/make-container [header-container
                                                         loaded-resources-container
                                                         chat-container])
-          transcript-scroll-view (tui/make-scroll-view
-                                  document-container
-                                  :follow-end true :primary true :overscroll :chain
-                                  :scrollbar :auto
-                                  ;; Read the ACTIVE theme at paint time (not the
-                                  ;; config setting) so the thumb follows theme
-                                  ;; switches — unlike the other components the
-                                  ;; scroll view has no re-theme callback.
-                                  :scrollbar-style (fn [text]
-                                                     (th/bg (th/get-current-theme)
-                                                            :scrollbar-thumb text)))
           pending-messages-container (:pending-messages-container cs)
           status-container (container/make-container [si])
           ;; pi: renderWidgets initializes the above-editor container with a
@@ -1379,10 +1366,10 @@
           widget-container-below (container/make-container)
           cs (assoc cs :status-container status-container)]
 
-      ;; Add components in pi's layout-root order: the transcript ScrollView
-      ;; first (grows), then the dock children top-to-bottom (pending
-      ;; messages, status, widgets above, editor, widgets below, footer)
-      (tui/tui-add-child t transcript-scroll-view)
+      ;; Add components in pi's layout-root order: the transcript document
+      ;; first, then the dock children top-to-bottom (pending messages,
+      ;; status, widgets above, editor, widgets below, footer)
+      (tui/tui-add-child t document-container)
       (tui/tui-add-child t pending-messages-container)
       (tui/tui-add-child t status-container)
       (tui/tui-add-child t widget-container-above)
@@ -1449,9 +1436,9 @@
                                     (fn [] (handle-dequeue cs)))
 
       ;; Global input listeners — only truly global keys stay here (pi: keep
-      ;; app actions in the editor; the TUI keeps only global keys). Chat
-      ;; scrolling is handled by the TUI viewport listener (mouse wheel,
-      ;; page up/down, home/end) — pi parity.
+      ;; app actions in the editor; the TUI keeps only global keys). The
+      ;; terminal owns scrolling in the main-screen model, so there is no
+      ;; in-app scroll handling.
       (tui/tui-add-input-listener t
                                   (fn [data]
                                     (when (keys/matches-key? data (keys/ctrl "l"))

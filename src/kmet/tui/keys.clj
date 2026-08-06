@@ -30,44 +30,11 @@
 (defn alt [k] (str "alt+" k))
 (defn ctrl-shift [k] (str "ctrl+shift+" k))
 
-;; ─── Mouse event parsing (pi: tui-alt-screen.ts parseWheelEvent /
-;;      parseSgrMouseEvent / isMouseSequence) ─────────────────────────────────
-
-(defn parse-sgr-mouse
-  "Parse an SGR mouse event (\u001b[<b;x;yM/m) into {:button :x :y :release?}.
-   Coordinates are 0-based. Returns nil for non-mouse data."
-  [data]
-  (when-let [[_ b x y fin] (re-matches #"\u001b\[<(\d+);(\d+);(\d+)([Mm])" data)]
-    {:button (parse-long b)
-     :x (dec (parse-long x))
-     :y (dec (parse-long y))
-     :release? (= fin "m")}))
-
-(defn parse-legacy-mouse
-  "Parse an X10 mouse event (\u001b[Mabc, exactly 6 chars) into
-   {:button :x :y}. Returns nil for non-mouse data."
-  [data]
-  (when (and (= (count data) 6) (str/starts-with? data "\u001b[M"))
-    {:button (- (int (nth data 3)) 32)
-     :x (- (int (nth data 4)) 33)
-     :y (- (int (nth data 5)) 33)}))
-
-(defn parse-mouse-event
-  "Parse any supported mouse event encoding (SGR or legacy X10)."
-  [data]
-  (or (parse-sgr-mouse data) (parse-legacy-mouse data)))
-
-(defn parse-wheel-event
-  "Parse a mouse-wheel event into {:direction -1|1 :x :y}. The wheel flag
-   is button bit 6 (64); the direction is bits 0-1 (0 = up, 1 = down)."
-  [data]
-  (let [ev (parse-mouse-event data)]
-    (when (and ev (pos? (bit-and (:button ev) 64)))
-      (let [d (bit-and (:button ev) 3)]
-        (when (or (== d 0) (== d 1))
-          {:direction (if (== d 0) -1 1)
-           :x (:x ev)
-           :y (:y ev)})))))
+;; ─── Mouse/focus sequence detection (pi: stdin-buffer.ts isCompleteSequence) ─
+;; The dispatch gate treats mouse and focus sequences as structurally
+;; complete so partial CSI fragments never leak as text into the editor —
+;; the terminal is not asked to report mouse/focus events (main-screen
+;; model), but the sequences must still be recognized if they arrive.
 
 (defn mouse-sequence?
   "True when DATA is a complete mouse event sequence (SGR or legacy X10)."

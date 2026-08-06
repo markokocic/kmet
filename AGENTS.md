@@ -121,10 +121,13 @@ src/kmet/
 │       ├── spinner.clj
 │       ├── image.clj
 │       ├── scroll_view.clj — bounded viewport over one child (pi ScrollView:
-│       │                     follow-end, scroll API, scrollbar state machine)
+│       │                     follow-end, scroll API, scrollbar state machine);
+│       │                     standalone component, not used by the interactive
+│       │                     layout — the main screen scrolls natively
 │       ├── stack.clj    — stack sizing (allocate-stack-sizes) + the render-loop
-│       │                  vertical layout (the single IScrollView entry grows
-│       │                  to fill remaining height)
+│       │                  vertical layout: every component renders at its
+│       │                  natural height, a single flat document (pi Container;
+│       │                  overflow scrolls into the native terminal scrollback)
 │       ├── h_stack.clj  — horizontal flex stack (grow/shrink allocation,
 │       │                  ANSI-aware line compositing; pi HStack)
 │       ├── v_stack.clj  — vertical stack component (children top-to-bottom
