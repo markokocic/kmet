@@ -1003,10 +1003,10 @@ Be precise and concise in your responses."}}]
 (defn- llm-total-timeout-ms
   "Total deadline for one LLM call: the configured idle timeout plus a grace
    period, so a stalled stream always errors via the idle timeout (retryable)
-   before the total deadline. 0 (disabled) means no total deadline (pi:
-   timeoutMs ?? httpIdleTimeoutMs, 0 → effectively disabled)."
+   before the total deadline. 0 (or an unset value) means no total deadline
+   (pi: timeoutMs ?? httpIdleTimeoutMs, 0 → effectively disabled)."
   [agent]
-  (let [idle (:http-idle-timeout-ms agent)]
+  (let [idle (or (:http-idle-timeout-ms agent) 0)]
     (if (pos? idle)
       (+ idle 30000)
       Integer/MAX_VALUE)))

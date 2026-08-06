@@ -661,6 +661,7 @@
   (t/is (loop/retryable-error? "connection refused"))
   (t/is (loop/retryable-error? "ECONNRESET: socket hang up"))
   (t/is (loop/retryable-error? "Request timed out"))
+  (t/is (loop/retryable-error? "HTTP/1.1 header parser received no bytes"))
   (t/is (loop/retryable-error? "Provider returned error: upstream connect"))
   (t/is (not (loop/retryable-error? "insufficient_quota")))
   (t/is (not (loop/retryable-error? "Monthly usage limit reached")))
@@ -1401,3 +1402,12 @@
   (let [agent (loop/make-agent-state)]
     (loop/add-bash-result! agent "ls" {:output "x" :exit-code 0} true)
     (t/is (= true (:exclude-from-context? (first (loop/get-context agent)))))))
+
+(t/deftest test-loop-add-bash-result-after-error
+  ;; pi: isStreaming is false once a run has errored — the result lands
+  ;; immediately instead of queueing for a flush that never comes
+  (let [agent (loop/make-agent-state)]
+    (reset! (:status agent) :error)
+    (loop/add-bash-result! agent "git st" {:output "clean\n" :exit-code 0} false)
+    (t/is (= 1 (count (loop/get-context agent))))
+    (t/is (empty? @(:pending-bash agent)))))
