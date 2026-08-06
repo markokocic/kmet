@@ -115,3 +115,27 @@
     (t/is (str/includes? (:message (first @events)) "idle timeout"))
     (.close out)
     (.close in)))
+
+(t/deftest test-openai-stream-idle-resets-on-flow
+  ;; Data arriving well within the idle window over a total duration longer
+  ;; than the timeout must not stall — the clock resets per byte (undici
+  ;; bodyTimeout semantics, not a total deadline).
+  (let [[in out] (make-pipe)
+        events (atom [])
+        f (future
+            (sse/process-openai-stream {:body in}
+                                       (fn [e] (swap! events conj e))
+                                       nil
+                                       100)
+            :done)]
+    (dotimes [_ 5]
+      (.write out (.getBytes "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"))
+      (.flush out)
+      (Thread/sleep 50))
+    (.write out (.getBytes "data: [DONE]\n\n"))
+    (.flush out)
+    (.close out)
+    (t/is (= :done (deref f 3000 :timeout)))
+    (t/is (= 5 (count (filter #(= :text (:type %)) @events))))
+    (t/is (= :done (:type (last @events))))
+    (.close in)))
