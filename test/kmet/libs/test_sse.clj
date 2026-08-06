@@ -46,9 +46,9 @@
     (.write out (.getBytes "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
     (.flush out)
     ;; Do not write or close further — the stream must error via the idle
-    ;; timeout instead of hanging. Closing the write side afterwards releases
-    ;; the reader thread (PipedInputStream close would deadlock on a blocked
-    ;; read — a test-only artifact of pipes).
+    ;; timeout instead of hanging. Closing the write side afterwards lets the
+    ;; daemon reader thread see EOF (tests use pipes, which don't unblock on
+    ;; close-while-reading).
     (Thread/sleep 300)
     (.close out)
     (t/is (= :done (deref f 3000 :timeout)))
@@ -57,7 +57,6 @@
     (t/is (= "hi" (:content (first @events))))
     (t/is (= :error (:type (second @events))))
     (t/is (str/includes? (:message (second @events)) "idle timeout"))
-    (.close out)
     (.close in)))
 
 (t/deftest test-openai-stream-completes-without-timeout
@@ -67,7 +66,7 @@
             (sse/process-openai-stream {:body in}
                                        (fn [e] (swap! events conj e))
                                        nil
-                                       100)
+                                       300)
             :done)]
     (.write out (.getBytes "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
     (.flush out)
@@ -107,28 +106,28 @@
                                           100)
             :done)]
     ;; Nothing is ever written — the stream must error via the idle timeout.
-    ;; Close the write side to release the reader thread before deref'ing.
+    ;; Close the write side to let the daemon reader thread see EOF.
     (Thread/sleep 300)
     (.close out)
     (t/is (= :done (deref f 3000 :timeout)))
     (t/is (= :error (:type (first @events))))
     (t/is (str/includes? (:message (first @events)) "idle timeout"))
-    (.close out)
     (.close in)))
 
 (t/deftest test-openai-stream-idle-resets-on-flow
   ;; Data arriving well within the idle window over a total duration longer
   ;; than the timeout must not stall — the clock resets per byte (undici
-  ;; bodyTimeout semantics, not a total deadline).
+  ;; bodyTimeout semantics, not a total deadline). Idle 200ms with 50ms gaps
+  ;; (4x headroom) over a 400ms total (2x the idle).
   (let [[in out] (make-pipe)
         events (atom [])
         f (future
             (sse/process-openai-stream {:body in}
                                        (fn [e] (swap! events conj e))
                                        nil
-                                       100)
+                                       200)
             :done)]
-    (dotimes [_ 5]
+    (dotimes [_ 8]
       (.write out (.getBytes "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"))
       (.flush out)
       (Thread/sleep 50))
@@ -136,6 +135,6 @@
     (.flush out)
     (.close out)
     (t/is (= :done (deref f 3000 :timeout)))
-    (t/is (= 5 (count (filter #(= :text (:type %)) @events))))
+    (t/is (= 8 (count (filter #(= :text (:type %)) @events))))
     (t/is (= :done (:type (last @events))))
     (.close in)))
