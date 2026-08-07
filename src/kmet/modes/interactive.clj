@@ -250,14 +250,14 @@
                  (let [parts (str/split args #":" 2)
                        provider (keyword (or (first parts) "openai"))
                        model (or (second parts) (:model (:config cs)))]
-                   (agent/set-provider! (:agent-state cs) provider)
-                   (agent/set-model! (:agent-state cs) model)
+                   (agent/set-provider! @(:agent-state cs) provider)
+                   (agent/set-model! @(:agent-state cs) model)
                    (ui/chat-history-add-message! (:chat-history cs)
                                                  {:role :assistant :content (str "Switched to " (fmt-model provider model))}))
                  (ui/chat-history-add-message! (:chat-history cs)
                                                {:role :assistant :content
-                                                (str "Current model: " (fmt-model @(:provider (:agent-state cs))
-                                                                                  @(:model (:agent-state cs)))
+                                                (str "Current model: " (fmt-model @(:provider @(:agent-state cs))
+                                                                                  @(:model @(:agent-state cs)))
                                                      "\nUsage: /model <provider:model>")})))})
   (commands/register-command!
    {:name "new"
@@ -267,7 +267,7 @@
                  (debug/log "new session created: " (:id new-session))
                  (ui/chat-history-clear! (:chat-history cs))
                  (reset! (:session-atom cs) new-session)
-                 (let [old-ag (:agent-state cs)
+                 (let [old-ag @(:agent-state cs)
                        new-ag (assoc old-ag :session new-session)]
                    (reset! (:agent-state cs) new-ag))
                  (ui/chat-history-add-message! (:chat-history cs)
@@ -320,7 +320,8 @@
     :description "Manually compact the session context"
     :argument-hint "<instructions>"
     :handler (fn [cs args]
-               (let [{:keys [agent-state chat-history]} cs
+               (let [{:keys [chat-history]} cs
+                     agent-state @(:agent-state cs)
                      instructions (when (seq args) args)]
                  (cond
                    (not= :idle (agent/get-status agent-state))
@@ -387,7 +388,8 @@
    session.reload → _rebuildSystemPrompt). Refuses while the agent is
    running (pi warns to wait for the current response)."
   [cs _]
-  (let [{:keys [agent-state chat-history]} cs]
+  (let [{:keys [chat-history]} cs
+        agent-state @(:agent-state cs)]
     (if-not (= :idle (agent/get-status agent-state))
       (ui/chat-history-add-message! chat-history
                                     {:role :info :label "Reload"
@@ -495,7 +497,7 @@
                                         "... " n-msgs " msgs")
                             :value s})))
             sl-ref (atom nil)
-            on-select-fn (fn []
+            on-select-fn (fn [_]
                            (when-let [sel (select-list/select-list-get-selected @sl-ref)]
                              (let [sess (session/load-session (:value sel))
                                    entries (session/get-branch sess)
@@ -503,7 +505,7 @@
                                    short-id (subs fname 0 (min 8 (count fname)))]
                                (ui/chat-history-clear! (:chat-history cs))
                                (reset! (:session-atom cs) sess)
-                               (let [new-ag (assoc (:agent-state cs) :session sess)]
+                               (let [new-ag (assoc @(:agent-state cs) :session sess)]
                                  (reset! (:agent-state cs) new-ag))
                                ;; session_info entries are metadata — never
                                ;; rendered as chat messages (pi: only message
@@ -570,7 +572,7 @@
                                        nodes))
                 items (vec (flatten-tree tree 0))
                 sl-ref (atom nil)
-                on-select-fn (fn []
+                on-select-fn (fn [_]
                                (when-let [sel (select-list/select-list-get-selected @sl-ref)]
                                  (let [entry (:entry sel)
                                        role (:role entry)
@@ -663,7 +665,7 @@
   "Refresh the queued steering/follow-up display (pi:
    updatePendingMessagesDisplay)."
   [cs]
-  (let [{:keys [steering follow-up]} (agent/queued-messages (:agent-state cs))]
+  (let [{:keys [steering follow-up]} (agent/queued-messages @(:agent-state cs))]
     (ui/pending-messages-set-queues! (:pending-messages-comp cs)
                                      steering follow-up))
   (tui/tui-request-render (:tui cs)))
@@ -772,7 +774,7 @@
                        :theme (th/get-current-theme))
 
             ;; ── Build session env (pi: resolveSpawnContext) ─────────────
-            ag (:agent-state cs)
+            ag @(:agent-state cs)
             session-env
             (let [tl @(:thinking ag)]
               (cond-> {"KMET_PROVIDER" (name @(:provider ag))
@@ -831,7 +833,7 @@
               ;; streaming so tool_use/tool_result ordering is preserved
               ;; (pi: recordBashResult queues pending bash messages, flushed
               ;; by run-agent-turn once the run settles)
-              (agent/add-bash-result! (:agent-state cs) command result exclude-from-context?)
+              (agent/add-bash-result! @(:agent-state cs) command result exclude-from-context?)
 
               ;; Move pending bash from pending container to chat (pi: pendingMessagesContainer)
               (when @(:running-turn? cs)
@@ -873,7 +875,7 @@
       (ui/chat-history-finalize-thinking! (:chat-history cs))
       (ui/chat-history-add-message! (:chat-history cs)
                                     {:role :user :content text})
-      (agent/steer! (:agent-state cs) text)
+      (agent/steer! @(:agent-state cs) text)
       (update-footer! cs)
       (tui/tui-request-render (:tui cs)))
     (do
@@ -887,7 +889,7 @@
       (ui/chat-history-start-streaming! (:chat-history cs))
       (update-footer! cs)
       (tui/tui-request-render (:tui cs))
-      (agent/run-agent-turn (:agent-state cs)
+      (agent/run-agent-turn @(:agent-state cs)
                             {:message text
                              :on-text #(on-agent-text cs %)
                              :on-thinking #(on-agent-thinking cs %)
@@ -967,7 +969,7 @@
       (editor/editor-push-history! ed text)
       (editor-text-set! ed "")
       (if @(:running-turn? cs)
-        (do (agent/follow-up! (:agent-state cs) text)
+        (do (agent/follow-up! @(:agent-state cs) text)
             (ui/chat-history-add-message! (:chat-history cs)
                                           {:role :user :content text})
             (update-pending-messages! cs))
@@ -978,14 +980,14 @@
   "Pi: handleDequeue — Alt+Up. Restore all queued steering/follow-up
    messages to the editor, combined with the current text."
   [cs]
-  (let [{:keys [steering follow-up]} (agent/queued-messages (:agent-state cs))
+  (let [{:keys [steering follow-up]} (agent/queued-messages @(:agent-state cs))
         all (into (vec steering) follow-up)]
     (if (seq all)
       (let [ed @(:current-editor-atom cs)
             current (editor-text-get ed)
             queued-text (str/join "\n\n" all)
             combined (str/join "\n\n" (remove str/blank? [queued-text current]))]
-        (agent/clear-queues! (:agent-state cs))
+        (agent/clear-queues! @(:agent-state cs))
         (editor-text-set! ed combined)
         (ui/chat-history-show-status!
          (:chat-history cs)
@@ -998,12 +1000,12 @@
 (defn- handle-cancel
   "Cancel the current agent turn, bash command, or in-progress compaction."
   [cs]
-  (when @(:compacting? (:agent-state cs))
+  (when @(:compacting? @(:agent-state cs))
     ;; Escape during compaction aborts the summarization (pi: onEscape →
     ;; abortCompaction). The compaction-end event clears the indicator and
     ;; reports the cancellation.
     (debug/log "compaction cancelled by user")
-    (reset! (:signal (:agent-state cs)) true)
+    (reset! (:signal @(:agent-state cs)) true)
     (tui/tui-request-render (:tui cs)))
   (when @(:bash-running? cs)
     (debug/log "bash command cancelled by user")
@@ -1015,7 +1017,7 @@
     (debug/log "agent turn cancelled by user")
     (stop-anim-timer! cs)
     (clear-status-indicator! cs)
-    (agent/cancel-turn (:agent-state cs))
+    (agent/cancel-turn @(:agent-state cs))
     ;; Remove empty streaming placeholder if present
     (let [ch (:chat-history cs)]
       (when-let [s @(:streaming-atom ch)]
@@ -1339,7 +1341,7 @@
 
         ;; Core state (status-indicator/status-container filled in after layout)
         cs (map->CoreState {:tui t
-                            :agent-state ag
+                            :agent-state (atom ag)
                             :chat-history ch
                             :editor ed
                             :current-editor-atom (atom ed)

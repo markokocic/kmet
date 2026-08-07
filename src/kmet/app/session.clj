@@ -271,7 +271,8 @@
   (let [d (io/file dir)]
     (when (fs/directory? d)
       (->> (fs/list-dir d)
-           (filter #(str/ends-with? (fs/file-name %) ".ednl"))
+           (filter #(and (str/ends-with? (fs/file-name %) ".ednl")
+                         (fs/regular-file? %)))
            (sort-by #(.toMillis (fs/last-modified-time %)) >)
            (mapv #(str (fs/canonicalize %)))))))
 

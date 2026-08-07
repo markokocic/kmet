@@ -1123,15 +1123,22 @@
               (let [buf (atom "")]
                 (while (and @(:running? tui) (not @(:stopped? tui))
                             (identical? reader @(:current-reader tui)))
-                  (try (let [ch (.read reader)]
-                         (when (>= ch 0)
-                           (swap! buf str (char ch))
-                           (swap! (:input-generation tui) inc)
-                           (process-input-buffer! tui read-fn buf)))
-                       (catch Exception e
-                         (when (and @(:running? tui)
-                                    (identical? reader @(:current-reader tui)))
-                           (binding [*out* *err*] (println "input:" (ex-message e)))))))))]
+                  (try
+                    ;; Bounded read: data arrives immediately, but the idle
+                    ;; timeout lets the loop re-check the stop conditions and
+                    ;; lets terminal close() proceed promptly. A blocking
+                    ;; read here deadlocks JLine's FFM terminal close on
+                    ;; aarch64 Linux (jline3 #1909 — close waits for the
+                    ;; in-flight read; the FFM pump thread never wakes it).
+                    (let [ch (.read reader 100)]
+                      (when (>= ch 0)
+                        (swap! buf str (char ch))
+                        (swap! (:input-generation tui) inc)
+                        (process-input-buffer! tui read-fn buf)))
+                    (catch Exception e
+                      (when (and @(:running? tui)
+                                 (identical? reader @(:current-reader tui)))
+                        (binding [*out* *err*] (println "input:" (ex-message e)))))))))]
       (reset! (:input-reader tui) f))))
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Start / Stop

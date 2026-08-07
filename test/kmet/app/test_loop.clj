@@ -590,7 +590,10 @@
             (recur)))
         (let [start (System/currentTimeMillis)]
           (loop/cancel-turn agent)
-          @fut
+          ;; Bounded wait: a working cancel settles in ms; if the cancel
+          ;; delivery ever fails, fail promptly instead of stalling the
+          ;; suite for the 330s LLM deref deadline.
+          (deref fut 15000 :timeout)
           (t/is (< (- (System/currentTimeMillis) start) 5000)
                 "run ends promptly after cancel (no 120s timeout wait)")
           (t/is (empty? @errors) "no error callback on cancel")
@@ -653,7 +656,7 @@
             (recur)))
         (let [start (System/currentTimeMillis)]
           (loop/cancel-turn agent)
-          @fut
+          (deref fut 15000 :timeout)
           (t/is (< (- (System/currentTimeMillis) start) 5000)
                 "run ends promptly after cancel during tool execution")
           (t/is (empty? @errors) "no error callback on cancel")
@@ -1367,7 +1370,15 @@
       (with-redefs [cfg/get-api-key (fn [_] "test-key")
                     llm/send-message (fn [_] (promise))]
         (let [fut (future (loop/compact-context! agent))]
-          (Thread/sleep 200)
+          ;; Wait until the first compaction is actually in flight — the
+          ;; second call below must see :compacting? true, or it would start
+          ;; its own compaction and block 120s on the never-resolving
+          ;; summarize promise (llm/send-message is redefined to a bare
+          ;; promise; only the cancel signal ends it).
+          (loop []
+            (when-not @(:compacting? agent)
+              (Thread/sleep 20)
+              (recur)))
           (t/is (false? (loop/compact-context! agent))
                 "second compaction refused while one is in flight")
           (loop/cancel-turn agent)

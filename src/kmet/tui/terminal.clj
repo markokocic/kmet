@@ -5,7 +5,8 @@
    (Kitty keyboard negotiation, escape sequences, write log) lives in
    kmet.libs.terminal; the fns below are thin record-taking wrappers over
    it (write-fn based), plus the JLine-reader drain loop."
-  (:require [kmet.libs.terminal :as lib]))
+  (:require [kmet.libs.terminal :as lib]
+            [clojure.string :as str]))
 
 (import '(org.jline.terminal TerminalBuilder Terminal))
 
@@ -24,8 +25,32 @@
   (clear-from-cursor! [this] "Clear from cursor to end of screen")
   (set-progress! [this active] "Show/hide the terminal progress indicator (OSC 9;4)"))
 
+(defn- run-stty
+  "Run `stty` with inherited stdin so it sees the controlling terminal
+   (Java's default pipe-redirect hides it). Returns trimmed stdout, or nil
+   when stty is unavailable or fails (Windows, non-tty stdin, ...). The
+   stream read is bounded — a hung stty must never block startup or exit."
+  [& args]
+  (try
+    (let [pb (ProcessBuilder. (into-array String (cons "stty" args)))
+          _ (.redirectInput pb java.lang.ProcessBuilder$Redirect/INHERIT)
+          _ (.redirectErrorStream pb true)
+          p (.start pb)
+          out (deref (future (slurp (.getInputStream p))) 2000 nil)]
+      (when out
+        (.waitFor p)
+        (let [out (str/trim out)]
+          (when (seq out) out))))
+    (catch Exception _ nil)))
+
+(defn- capture-stty-snapshot
+  "The full `stty -g` saved-state string of the current terminal, or nil."
+  []
+  (run-stty "-g"))
+
 (defrecord JLineTerminal [^Terminal terminal ^java.io.Reader reader ^java.io.Writer writer
-                          input-handler resize-handler running? progress-interval-atom]
+                          input-handler resize-handler running? progress-interval-atom
+                          stty-snapshot-atom]
 
   ITerminal
   (start! [this on-input on-resize]
@@ -48,6 +73,10 @@
           (.flush w))
         (finally
           (.close (:terminal this))))
+      ;; Re-apply the pre-raw-mode terminal state. JLine's own restore
+      ;; misses the baud rate (see create-terminal) and may leave speed 0.
+      (when-let [snapshot @(:stty-snapshot-atom this)]
+        (run-stty snapshot))
       (assoc this :running? false)))
 
   (write-output [this s]
@@ -90,13 +119,23 @@
           (write-output this lib/TERMINAL-PROGRESS-CLEAR-SEQUENCE)))))
 
 (defn create-terminal []
-  (let [t (TerminalBuilder/terminal)]
-    (map->JLineTerminal {:terminal t :progress-interval-atom (atom nil)})))
+  (let [;; JLine's FFM termios mapping (FfmUnixSysTerminal on aarch64 Linux)
+        ;; writes a baud rate of 0 the moment the terminal is constructed —
+        ;; capture the cooked-state `stty -g` snapshot BEFORE that, so stop!
+        ;; can restore the real speed (and flags) after JLine's own restore.
+        snapshot (capture-stty-snapshot)
+        t (TerminalBuilder/terminal)]
+    (map->JLineTerminal {:terminal t
+                         :progress-interval-atom (atom nil)
+                         :stty-snapshot-atom (atom snapshot)})))
 
 (defn create-dumb-terminal []
-  (let [t (TerminalBuilder/terminal
+  (let [snapshot (capture-stty-snapshot)
+        t (TerminalBuilder/terminal
            (into-array Object ["dumb" true "system" false]))]
-    (map->JLineTerminal {:terminal t :progress-interval-atom (atom nil)})))
+    (map->JLineTerminal {:terminal t
+                         :progress-interval-atom (atom nil)
+                         :stty-snapshot-atom (atom snapshot)})))
 
 ;; ─── Kitty protocol wrappers (lib fns bound to this terminal's writer) ─────
 

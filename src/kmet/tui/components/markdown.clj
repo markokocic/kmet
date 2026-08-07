@@ -75,20 +75,26 @@
   "Render a :code token: styled fence lines (with lang), interior lines with
    the code-block theme and indent (or a :highlight-code hook when set).
    EXTRA-INDENT prefixes code nested inside list items. Trailing interior
-   blank lines are preserved."
+   blank lines are preserved. Interior lines are truncated to
+   CONTENT-WIDTH — streaming a long unbroken line (or a long token in a
+   narrow terminal) must never overflow the render width (pi crashes on
+   width overflow; kmet clips with ellipsis instead)."
   [result t theme content-width left-pad extra-indent]
   (let [indent (or (:code-block-indent theme) "  ")
         prefix (str left-pad extra-indent)
         lang (:lang t "")
         text (:text t)
-        interior (if (str/blank? text) [] (str/split text #"\n" -1))]
-    (vswap! result conj (str prefix ((:code-block-border theme) (str "```" lang))))
+        interior (if (str/blank? text) [] (str/split text #"\n" -1))
+        fit (fn [styled]
+              (pad-right content-width
+                         (u/truncate-to-width styled content-width "...")))]
+    (vswap! result conj (fit (str prefix ((:code-block-border theme) (str "```" lang)))))
     (if-let [hl (:highlight-code theme)]
       (doseq [l (hl text lang)]
-        (vswap! result conj (pad-right content-width (str prefix indent l))))
+        (vswap! result conj (fit (str prefix indent l))))
       (doseq [line interior]
-        (vswap! result conj (pad-right content-width (str prefix indent ((:code-block theme) line))))))
-    (vswap! result conj (str prefix ((:code-block-border theme) "```")))))
+        (vswap! result conj (fit (str prefix indent ((:code-block theme) line))))))
+    (vswap! result conj (fit (str prefix ((:code-block-border theme) "```"))))))
 
 (defn- longest-word-width
   "Visible width of TEXT's longest word, capped at LIMIT (0 when empty)."
@@ -278,7 +284,9 @@
           styled (if (>= level 3)
                    (str ((:heading theme) (str (apply str (repeat level "#")) " ")) content)
                    ((:heading theme) content))]
-      (vswap! result conj (pad-right content-width (str left-pad styled)))
+      (vswap! result conj (pad-right content-width
+                                     (u/truncate-to-width (str left-pad styled)
+                                                          content-width "...")))
       ;; Add underline for H1/H2
       (when (<= level 2)
         (vswap! result conj (str left-pad ((:hr theme)
@@ -292,7 +300,10 @@
 
     :quote
     (let [border ((:quote-border theme) "▎")
-          styled ((:quote theme) (render-inlines (:content t) theme))]
+          border-w (u/visible-width border)
+          budget (max 1 (- content-width (u/visible-width left-pad) border-w))
+          styled (u/truncate-to-width ((:quote theme) (render-inlines (:content t) theme))
+                                      budget "...")]
       (vswap! result conj
               (str left-pad border styled
                    (apply str (repeat (max 0 (- content-width (inc (u/visible-width styled)))) \space)))))
