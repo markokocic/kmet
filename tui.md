@@ -1,8 +1,14 @@
-# kmet ↔ pi TUI Alignment (100% parity plan)
+# kmet ↔ pi TUI Alignment (parity plan)
 
 Analysis of pi's TUI architecture (pi source: `~/src/cvstree/pi/packages/tui/` +
 `packages/coding-agent/src/modes/interactive/interactive-mode.ts` and
-`.../theme/`) and a staged plan to bring kmet's TUI to full parity:
+`.../theme/`) and a staged plan to bring kmet's TUI to full parity.
+
+**Post-parity note (Aug 7, 2026):** pi shipped v0.84.0/v0.84.1 after this
+plan landed — a fullscreen/alt-screen viewport mode (`tuiMode` setting), a
+layout system (`layout.ts`/`layout-node.ts`), LaTeX math in Markdown,
+Mermaid diagrams, and more. The **Post-parity delta** section below tracks
+the gap list; the phases document parity with pi as of Jun 19, 2026.
 
 - **Part A — TUI-core parity**: `kmet.tui.*` vs `@earendil-works/pi-tui`
   (render loop, input pipeline, focusable/IME, overlays, theme, components).
@@ -26,11 +32,15 @@ are DONE** (see the per-phase notes below).
 
 | pi module (`packages/tui/src`) | kmet | Status |
 |--------------------------------|------|--------|
-| `tui.ts` — TUI/Container/Component/Focusable, render loop, overlays, IME cursor | `tui/core.clj`, `tui/components/container.clj` | ✅ overlays + focus-restore state machine (§A.3, §A.2); render loop: force render, height-change redraw, clearOnShrink, crash/debug logs, kitty-image diff, cell-size query done (§A.4) |
+| `tui.ts` — TuiBase: TUI/Container/Component/Focusable, render loop, overlays, IME cursor | `tui/core.clj`, `tui/components/container.clj` | ✅ overlays + focus-restore state machine (§A.3, §A.2); render loop: force render, height-change redraw, clearOnShrink, crash/debug logs, kitty-image diff, cell-size query done (§A.4). pi split this into `tui-main-screen.ts` + `tui-alt-screen.ts` after the port — kmet covers the main-screen half |
+| `tui-main-screen.ts` — main-screen renderer (native scrollback model) | `tui/core.clj` | ✅ pi's default `tuiMode: "regular"` — the ported model |
+| `tui-alt-screen.ts` — fullscreen viewport renderer (layout root, scrollbars, selection) | — | **missing** (Post-parity delta) |
+| `layout.ts` / `layout-node.ts` — layout boxes, clips, layers, `[LAYOUT_NODE]` protocol | `tui/components/stack.clj` (flex sizing only) | **missing** (Post-parity delta) |
+| `latex.ts` — LaTeX → Unicode math rendering | — | **missing** (Post-parity delta) |
 | `keys.ts` — key parsing (legacy + Kitty), `matchesKey`, event types | `tui/keys.clj` | ✅ full Kitty CSI-u + modifyOtherKeys + legacy parsing, order-insensitive matching (§A.1) |
 | `terminal.ts` — ProcessTerminal, Kitty protocol negotiation, write log, progress, drainInput | `tui/terminal.clj` | ✅ negotiation, drain, write log, `set-title!`, `set-progress!` (OSC 9;4 + keepalive), `move-by!`, `clear-from-cursor!` (§A.1, §A.5) |
 | `stdin-buffer.ts` — batch splitting, paste re-wrap | (inline in `core.clj` input reader) | ✅ per-sequence splitting via the ESC-wait loop (cap raised for CSI-u) |
-| `native-modifiers.ts` | — | missing (Apple Terminal Shift+Enter) (§A.1) |
+| `native-modifiers.ts` | — | missing (Apple Terminal Shift+Enter; pi also added Windows Shift+Enter — 73dd066ee) (§A.1, Post-parity delta) |
 | `utils.ts` — visibleWidth/truncateToWidth/wrapTextWithAnsi/sliceByColumn/extractSegments | `tui/utils.clj` | ✅ `normalizeTerminalOutput` (Thai/Lao AM + tab→3sp) + `SEGMENT_RESET` landed with the applyLineResets follow-up; overlay compositing uses `sgr-state-at` rather than pi's raw `SEGMENT_RESET` (equivalent: re-applies the base's active style after the overlay — see §A.4 note) |
 | `keybindings.ts` — KeybindingsManager, keyText, conflicts | `tui/keybindings.clj` | ✅ (verify conflict reporting + `key-text`) |
 | `autocomplete.ts` | `tui/autocomplete.clj` | ✅ (extension-provider delegation added with §B.9) |
@@ -42,7 +52,7 @@ are DONE** (see the per-phase notes below).
 | `components/text|box|spacer|truncated-text.ts` | `tui/components/*` | ✅ |
 | `components/input.ts` | `tui/components/input.clj` | ✅ kill-ring/undo/word-nav/paste parity (§A.7; paste newline removal fixed Phase 5) |
 | `components/editor.ts` | `tui/components/editor.clj` | ✅ (verify against §A.7 list) |
-| `components/markdown.ts` | `tui/components/markdown.clj` | ✅ |
+| `components/markdown.ts` | `tui/components/markdown.clj` | ✅ pre-LaTeX (pi added `$...$`/`$$` math rendering after the port — see Post-parity delta) |
 | `components/select-list.ts` | `tui/components/select_list.clj` | ✅ `truncatePrimary` + layout options (§A.7) |
 | `components/settings-list.ts` | `tui/components/settings_list.clj` | ✅ |
 | `components/loader.ts` + `cancellable-loader.ts` | `tui/components/spinner.clj` + `cancellable_loader.clj` | ✅ `set-indicator!` done (verbatim frames, empty-frames hide, nil restores) |
@@ -107,7 +117,8 @@ batch splitting, no alt+ESC, no drain, no write log.
 4. `terminal.clj`: `PI_TUI_WRITE_LOG`-equivalent env (`KMET_TUI_WRITE_LOG`)
    appending every write.
 5. Apple Terminal Shift+Enter normalization (skip on non-darwin; port
-   `native-modifiers.clj` shim if feasible).
+   `native-modifiers.clj` shim if feasible). Pi now also detects Windows
+   Shift+Enter (73dd066ee) — the same shim covers both.
 6. Windows VT input: skip (Babashka stdin path differs; note as known
    divergence).
 
@@ -690,9 +701,10 @@ which threw at runtime).
 
 Divergences: footer context shows `{tokens} tokens` when no
 `:context-window` is configured (kmet has no model context-window data);
-no session name in the footer (kmet has no `/name`); the retry countdown
-is computed from elapsed time on each render (the anim timer drives
-renders) instead of a JS `CountdownTimer`.
+the retry countdown is computed from elapsed time on each render (the
+anim timer drives renders) instead of a JS `CountdownTimer`. (The earlier
+"no session name" divergence is resolved — kmet has `/name` since 992bec1
+and the footer shows the session name.)
 
 **Compaction cancellation** (pi: onEscape → `session.abortCompaction()`):
 escape aborts a compaction in progress — `summarize!` now drives the
@@ -844,15 +856,47 @@ a manual side-by-side pass.
       cancellation events — `test-loop-compaction-cancelled`,
       `test-loop-compaction-refuses-when-active`; live pass needed)
 
+## Post-parity delta — pi v0.84.0/v0.84.1 (Jul 30 – Aug 7, 2026)
+
+pi's TUI evolved after the phased plan landed; the table tracks the delta
+(short hashes from `~/src/cvstree/pi`). Items are not ported unless marked
+otherwise.
+
+| pi change (commit) | kmet status |
+|--------------------|-------------|
+| **Fullscreen TUI mode** — `tuiMode` setting (default `"regular"`), `TuiAltScreen` + `setLayoutRoot`, runtime mode switch with main-screen render-state capture/restore (`b103937d3`), `fullscreenScrollbar` setting (`6129a353b`, `b3ed27b3f`) | **missing** — kmet implements the regular (default) mode only |
+| Layout system — `layout.ts`/`layout-node.ts`: `LayoutComponent`/`[LAYOUT_NODE]`, layout boxes, clips, layers (`ea1e77e2d`, `c13ffe187`) | **missing** — kmet's `stack.clj` has flex sizing only; ScrollView already matches the new options API (follow/primary/overscroll/scrollbar/scrollbarStyle/hideDelay) but nothing drives it |
+| Fullscreen transcript navigation — `tui.altScreen.*` ids (top/bottom/halfPageUp/Down/pageUp/Down/previousPrompt/nextPrompt) + half-page scrolling (`3c717842e`, `a3e93ec85`) | **missing** (part of fullscreen mode) |
+| Multi-click text selection + reduced mouse tracking in multiplexers (`58fc0431a`, `171c6b520`, `fc3554e16`) | **missing** (fullscreen mode only) |
+| Draggable transient scrollbars (`8ac92f831`) | **missing** |
+| **LaTeX math in Markdown** — `latex.ts`, `$...$`/`$$...$$`/`\[...\]` tokens with pending states, `renderLatex` option default true (`05e89b418`, `aa601d7ba`) | **missing** in `libs/markdown.clj` + `tui/components/markdown.clj` |
+| **Mermaid diagram rendering** — app-layer markdown transformer → image; `markdown.mermaid` setting (`off`/`final`/`streaming`, default `streaming`) (`66534fbdc`) | **missing** (app layer; needs an image pipeline) |
+| **Extension `registerMarkdownTransformer`** + `MarkdownTransformContext` (messageType/isStreaming/availableWidth) (`714978bf5`) | **missing** in `app/extensions.clj` |
+| `tui.editor.historyPrevious`/`historyNext` ids — configurable prompt history actions (`16ad96ae8`) | **missing** — kmet browses history via up/down at the edges only; no dedicated action ids |
+| Batched color-scheme reports `^(?:\x1b\[\?997;(1|2)n)+$` (`0e633790c`) | **partial** — `parse-terminal-color-scheme-report` matches one report per buffer; a batched buffer falls through to key parsing |
+| OSC 8 link close on truncation (`b780d20aa`) + skip-OSC-8-scan perf guard (`229afb825`) | **partial** — `truncate-to-width` drops pending ANSI but leaves an active hyperlink open; perf guard N/A |
+| Progress clear sequence `\x1b]9;4;0\x07` (no trailing `;`) (`e8a17822d`) | **divergence** — kmet still writes `\x1b]9;4;0;\x07` (`libs/terminal.clj` `TERMINAL-PROGRESS-CLEAR-SEQUENCE`) |
+| Grapheme width spacing-mark heuristic — Indic conjuncts/spacing marks (`dfe47d3fb`) | **divergence** — kmet's `char-width` has no mark handling (edge-case horizontal drift) |
+| Windows Shift+Enter detection (`73dd066ee`) | **missing** — extends the existing native-modifiers divergence (Apple Terminal) |
+| Keyboard-input throttle fix (`29d9f087c`) | N/A — kmet's fixed 16 ms render loop has no timer-based throttling to preempt |
+| iterm2 `size=` payload for xterm.js (`2c233a5c0`), Windows truecolor detection (`fa07e7bd9`) | N/A — kmet is Kitty-`f=`-native, no iterm encode path; platform divergence |
+| Offscreen Kitty-image cache (`a8ee03b81`) | N/A — alt-screen only |
+| Theme detection delay 200→100 ms (`7cb2a51c0`) | N/A — cosmetic; kmet's detection order differs |
+| Stacked alt-screen flashes (`17090d4b9`), ScrollView options API (`6129a353b` follow-up) | ✅ already ported |
+| Session name in footer (`/name`) | ✅ kmet landed it (`992bec1`) — Phase 6 divergence note updated |
+
 ## Decision record: unbounded vs windowed chat
 
-**Stay unbounded** (pi parity). The chat renders all lines; the terminal's
-own scrollback is the history; the content-index diff (pi-identical) keeps
-mid-document growth cheap: only the changed range is rewritten with 2K
-pre-clears, and the viewport only scrolls when the first changed line falls
-below the screen. The `ScrollView` port stays for
-modal/embedded uses only. Revisit only if scrollback fidelity becomes a
-problem on a target platform.
+**Stay unbounded — pi's default ("regular") mode.** The chat renders all
+lines; the terminal's own scrollback is the history; the content-index diff
+(pi-identical) keeps mid-document growth cheap: only the changed range is
+rewritten with 2K pre-clears, and the viewport only scrolls when the first
+changed line falls below the screen. Pi has since added a `tuiMode` setting
+(`"regular"` default, `"fullscreen"` alt-screen viewport with in-app
+scrollbar) plus runtime mode switching; kmet implements the regular mode
+only — a fullscreen port is tracked in the Post-parity delta. The
+`ScrollView` port stays for modal/embedded uses only. Revisit if scrollback
+fidelity becomes a problem on a target platform.
 
 **Implementation status: DONE — main-screen model landed.** The code
 initially diverged from this decision: the transcript was wrapped in a
