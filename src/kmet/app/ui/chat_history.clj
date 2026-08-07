@@ -66,7 +66,6 @@
                theme-atom
                output-pad-atom
                streaming-atom  ;; atom of streaming message map or nil
-               status-line-atom  ;; atom of StatusLine (bottom status message) or nil
                tools-expanded-atom   ;; flag: tool output expanded (pi: toolOutputExpanded)
                thinking-hidden-atom  ;; flag: thinking blocks hidden (pi: hideThinkingBlock)
                hidden-label-atom]    ;; label shown in place of hidden thinking (pi: hiddenThinkingLabel)
@@ -74,14 +73,12 @@
   (render [_this width]
     (let [msgs @messages-atom
           info-lines (when-let [i @info-comp-atom] (protocols/render i width))
-          msg-lines (render-messages msgs width (some? @info-comp-atom))
-          status-lines (when-let [s @status-line-atom] (protocols/render s width))]
-      (into [] (concat info-lines msg-lines status-lines))))
+          msg-lines (render-messages msgs width (some? @info-comp-atom))]
+      (into [] (concat info-lines msg-lines))))
 
   (invalidate [_this]
     (when-let [i @info-comp-atom] (protocols/invalidate i))
-    (doseq [m @messages-atom] (protocols/invalidate (:component m)))
-    (when-let [s @status-line-atom] (protocols/invalidate s))))
+    (doseq [m @messages-atom] (protocols/invalidate (:component m)))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
@@ -99,7 +96,6 @@
                               :theme-atom (atom theme)
                               :output-pad-atom (atom output-pad)
                               :streaming-atom (atom nil)
-                              :status-line-atom (atom nil)
                               :tools-expanded-atom (atom false)
                               :thinking-hidden-atom (atom (boolean thinking-hidden))
                               :hidden-label-atom (atom "Thinking...")}))
@@ -145,6 +141,37 @@
                                                      :padding-x 0))
     c))
 
+;; ─── Status line (pi: showStatus) ──────────────────────────────────────────
+
+;; StatusLine — a dim single-line status entry appended to the chat (pi:
+;; showStatus appends Spacer(1) + Text to the chat container). Uses
+;; TruncatedText so long statuses truncate with an ellipsis instead of
+;; wrapping. No component kind — kind-based dispatch (toggles, theme
+;; application) returns nil for it.
+(defcomponent StatusLine nil [spacer-atom text-atom cache-atom]
+  (render [this width]
+    (track! this width
+      (let [sp @spacer-atom
+            tt @text-atom]
+        ;; The inner TruncatedText's text atom changes on status updates
+        ;; (truncated-text-set-text!) — track it so the cache invalidates.
+        (track-deps @(:text-atom tt))
+        (into [] (concat (protocols/render sp width)
+                         (protocols/render tt width))))))
+  (invalidate [_this]
+    (protocols/invalidate @spacer-atom)
+    (protocols/invalidate @text-atom)))
+
+(defn- make-status-line
+  "Create a StatusLine for a status message (pi: showStatus — a Spacer(1)
+   plus a dim line)."
+  [message]
+  (map->StatusLine {:spacer-atom (atom (spacer/make-spacer 1))
+                    :text-atom (atom (truncated-text/make-truncated-text
+                                      (theme/dim message)
+                                      :padding-x 1 :padding-y 0))
+                    :cache-atom (atom nil)}))
+
 (defn- make-component-for-msg
   "Create the appropriate component for a message map.
    For tool messages, looks up render functions from the tool registry.
@@ -188,6 +215,7 @@
                                   :output-pad output-pad)
     :error (make-plain-msg (theme/fg theme :error (str "Error: " (:content msg ""))))
     :warning (make-plain-msg (theme/fg theme :warning (str "Warning: " (:content msg ""))))
+    :status (make-status-line (:content msg ""))
     ;; Fallback for roles with no dedicated component (e.g. :system compaction
     ;; summaries, unknown roles from session data): render content as markdown
     ;; (pi renders compaction summaries via Markdown) rather than dropping it.
@@ -231,13 +259,23 @@
                    (vec (concat (subvec msgs 0 idx) [entry] (subvec msgs idx))))))))
     comp))
 
+(defn- drop-trailing-statuses
+  "Pop trailing :status entries (UI-only status lines) off the end of MSGS."
+  [msgs]
+  (loop [msgs msgs]
+    (if (= :status (:role (peek msgs)))
+      (recur (pop msgs))
+      msgs)))
+
 (defn chat-history-remove-last!
   "Remove the last message from history.
-   A trailing status line is dropped with it (it is not a message)."
+   Trailing status lines are dropped with it (they are UI-only, not
+   messages)."
   [ch]
-  (reset! (:status-line-atom ch) nil)
-  (when (seq @(:messages-atom ch))
-    (swap! (:messages-atom ch) pop)))
+  (swap! (:messages-atom ch)
+         (fn [msgs]
+           (let [msgs (drop-trailing-statuses msgs)]
+             (if (seq msgs) (pop msgs) msgs)))))
 
 ;; ─── Streaming ────────────────────────────────────────────────────────────
 
@@ -405,38 +443,20 @@
 
 ;; ─── Status message (pi: showStatus) ────────────────────────────────────────
 
-;; StatusLine — bottom-of-chat status line: a dim single-line message under
-;; a Spacer(1). The message uses TruncatedText (pi's one-line hint component)
-;; so long statuses truncate with an ellipsis instead of wrapping.
-;; No component kind — kind-based dispatch (toggles, theme application)
-;; returns nil for it.
-(defcomponent StatusLine nil [spacer-atom text-atom cache-atom]
-  (render [this width]
-    (track! this width
-      (let [sp @spacer-atom
-            tt @text-atom]
-        ;; The inner TruncatedText's text atom changes on status updates
-        ;; (truncated-text-set-text!) — track it so the cache invalidates.
-        (track-deps @(:text-atom tt))
-        (into [] (concat (protocols/render sp width)
-                         (protocols/render tt width))))))
-  (invalidate [_this]
-    (protocols/invalidate @spacer-atom)
-    (protocols/invalidate @text-atom)))
-
 (defn chat-history-show-status!
-  "Show a dim status message at the bottom of the chat (pi: showStatus).
-   When the previous status line is still showing, its text is updated in
-   place instead of appending, so repeated toggles don't accumulate status."
+  "Show a dim status message at the end of the chat (pi: showStatus — appends
+   a Spacer(1) + dim Text to the chat container). The status is a regular
+   trailing entry, not a pinned bottom line: subsequent messages append after
+   it and it scrolls away with the transcript. When the trailing entry is
+   already a status, its text is updated in place so repeated toggles don't
+   accumulate. Status entries are UI-only — chat-history-get-messages excludes
+   them, so they are never persisted."
   [ch message]
-  (if-let [line @(:status-line-atom ch)]
-    (truncated-text/truncated-text-set-text! @(:text-atom line) (theme/dim message))
-    (reset! (:status-line-atom ch)
-            (map->StatusLine {:spacer-atom (atom (spacer/make-spacer 1))
-                              :text-atom (atom (truncated-text/make-truncated-text
-                                                (theme/dim message)
-                                                :padding-x 1 :padding-y 0))
-                              :cache-atom (atom nil)})))
+  (let [last-msg (peek @(:messages-atom ch))]
+    (if (and last-msg (= :status (:role last-msg)))
+      (truncated-text/truncated-text-set-text! @(:text-atom (:component last-msg))
+                                               (theme/dim message))
+      (chat-history-add-message! ch {:role :status :content message})))
   nil)
 
 ;; ─── Misc ─────────────────────────────────────────────────────────────────
@@ -446,8 +466,7 @@
   [ch]
   (reset! (:messages-atom ch) [])
   (reset! (:info-comp-atom ch) nil)
-  (reset! (:streaming-atom ch) nil)
-  (reset! (:status-line-atom ch) nil))
+  (reset! (:streaming-atom ch) nil))
 
 (defn chat-history-rebuild!
   "Rebuild the chat history from a new message vector (context replacement).
@@ -470,8 +489,9 @@
 (defn chat-history-get-messages
   "Get all stored messages as plain maps — the data source of the chat,
    read directly from messages-atom (no component reverse-engineering).
-   Includes the info banner first; excludes bash executions (!! / !), which
-   are UI-only, and strips the :component/:streaming? keys."
+   Includes the info banner first; excludes bash executions (!! / !) and
+   status lines, which are UI-only, and strips the :component/:streaming?
+   keys."
   [ch]
   (->> (concat
         (when-let [info @(:info-comp-atom ch)]
@@ -479,7 +499,7 @@
             :label @(:label-atom info)
             :content @(:content-atom info)}])
         @(:messages-atom ch))
-       (remove #(= :bash (:role %)))
+       (remove #(#{:bash :status} (:role %)))
        (mapv #(dissoc % :component :streaming?))))
 
 (defn chat-history-set-max-lines!

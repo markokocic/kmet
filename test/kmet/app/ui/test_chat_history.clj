@@ -362,14 +362,29 @@
             "all assistant messages — old and new — have thinking hidden")))))
 
 (deftest test-remove-last-skips-status
-  (testing "remove-last pops the trailing status line first, then the message"
+  (testing "remove-last drops trailing status lines with the last message"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-add-message! ch {:role :user :content "msg"})
       (ch/chat-history-show-status! ch "Tool output: expanded")
       (ch/chat-history-remove-last! ch)
       (is (= [] (ch/chat-history-get-messages ch))
-          "the message is removed, not the status line")
-      (is (nil? @(:status-line-atom ch)) "status line is dropped with it"))))
+          "the status line and the message are both removed"))))
+
+(deftest test-show-status-appends-then-scrolls-away
+  (testing "a status is a trailing entry — the next message renders below it,
+            pushing the status up out of the pinned-bottom position"
+    (let [ch (ch/make-chat-history)
+          _ (ch/chat-history-add-message! ch {:role :user :content "hello"})
+          _ (ch/chat-history-show-status! ch "Tool output: expanded")
+          _ (ch/chat-history-add-message! ch {:role :assistant :content "response"})
+          lines (plain-lines ch 40)
+          status-idx (first (keep-indexed #(when (re-find #"Tool output" %2) %1) lines))
+          resp-idx (first (keep-indexed #(when (re-find #"response" %2) %1) lines))]
+      (is status-idx)
+      (is resp-idx)
+      (is (< status-idx resp-idx)
+          "the new message appears after the status — the status is no longer
+           pinned to the bottom of the chat"))))
 
 (deftest test-info-banner-in-children
   (testing "the info banner is a chat message: themed, persisted as :info, survives remove-last"
