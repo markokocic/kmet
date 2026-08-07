@@ -28,9 +28,7 @@
                                 lines (u/wrap-text-with-ansi (str heading "\n" body)
                                                              (max 1 width))]
                             (conj (vec lines) ""))))
-                sections)))))
-  (invalidate [this]
-    (reset! (:cache-atom this) nil)))
+                sections))))))
 
 ;; ─── Construction & API ────────────────────────────────────────────────────
 

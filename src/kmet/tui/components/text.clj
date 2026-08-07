@@ -27,8 +27,7 @@
             result (if (clojure.string/blank? text)
                      []
                      (into [] (concat pad-lines content-lines pad-lines)))]
-        result)))
-  (invalidate [_this] (reset! cache nil)))
+        result))))
 
 (defn make-text
   ([text] (make-text text 1 1 nil))

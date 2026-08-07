@@ -4,9 +4,8 @@
    The tokenizer is kmet.libs.markdown/parse (pure data, no ANSI); this
    component walks the token AST and applies theme, padding, and word-wrap."
   (:require [clojure.string :as str]
-            [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
-            [kmet.tui.macros :refer [track!]]
+            [kmet.tui.macros :refer [track! defcomponent]]
             [kmet.libs.markdown :as md]))
 
 ;; ─── Theme ──────────────────────────────────────────────────────────────────
@@ -318,11 +317,9 @@
 
 ;; ─── Markdown component ───────────────────────────────────────────────────
 
-(defrecord Markdown [text-atom theme-atom padding-x-atom
-                     default-style-atom
-                     cache-atom]
-  protocols/IComponent
-
+(defcomponent Markdown nil [text-atom theme-atom padding-x-atom
+                            default-style-atom
+                            cache-atom]
   (render [this width]
     (track! this width
       (let [text @text-atom
@@ -339,12 +336,7 @@
                        tokens)]
           (doseq [t tokens]
             (render-block result t theme content-width left-pad default-style)))
-        @result)))
-
-  (handle-input [_this _data] nil)
-
-  (invalidate [this]
-    (reset! (:cache-atom this) nil)))
+        @result))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 

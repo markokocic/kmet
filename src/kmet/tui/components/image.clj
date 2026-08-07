@@ -3,56 +3,55 @@
    Port of @earendil-works/pi-tui Image component.
    Falls back to text representation when image protocol is unavailable."
   (:require [kmet.tui.protocols :as protocols]
-            [kmet.libs.terminal-image :as img]))
+            [kmet.libs.terminal-image :as img]
+            [kmet.tui.macros :refer [track! defcomponent]]))
 
-(defrecord ImageComponent [base64-data mime-type dimensions
-                           theme-atom options image-id-atom
-                           cache-atom last-width-atom]
-  protocols/IComponent
+(defn- current-image-id
+  "Read the image id atom WITHOUT tracking: the render body allocates and
+   resets it on first render, so a tracked read would self-invalidate the
+   track! cache and re-render every frame."
+  [comp]
+  @(:image-id-atom comp))
+
+(defcomponent ImageComponent nil [base64-data mime-type dimensions
+                                  theme-atom options image-id-atom
+                                  cache-atom]
   (render [this width]
-    (let [cached @cache-atom
-          last-width @last-width-atom]
-      (if (and cached (= last-width width))
-        cached
-        (let [caps (img/get-capabilities)
-              max-width (max 1 (min (- width 2)
-                                    (or (:max-width-cells (:options this)) 60)))
-              cell-dims (img/get-cell-dimensions)
-              default-max-height (max 1 (Math/ceil
-                                         (/ (* max-width (:width-px cell-dims))
-                                            (:height-px cell-dims))))
-              max-height (or (:max-height-cells (:options this)) default-max-height)
-              lines (if (:images caps)
-                      (let [image-id (or @image-id-atom
-                                         (let [id (img/allocate-image-id)]
-                                           (reset! image-id-atom id)
-                                           id))
-                            result (img/render-image base64-data dimensions
-                                                     :mime-type mime-type
-                                                     :max-width-cells max-width
-                                                     :max-height-cells max-height
-                                                     :image-id image-id
-                                                     :move-cursor false)]
-                        (if result
-                          ;; Kitty: sequence on first line, blank padding lines
-                          ;; so TUI accounts for image height
-                          (let [rows (:rows result)]
-                            (into [(:sequence result)]
-                                  (repeat (dec rows) "")))
-                          ;; Render failed — fallback
-                          [(img/image-fallback mime-type
-                                               :dimensions dimensions
-                                               :filename (:filename options))]))
-                      ;; No image protocol — text fallback
-                      [(img/image-fallback mime-type
-                                           :dimensions dimensions
-                                           :filename (:filename options))])]
-          (reset! cache-atom lines)
-          (reset! last-width-atom width)
-          lines))))
-  (handle-input [_this _data] nil)
-  (invalidate [_this]
-    (reset! cache-atom nil)))
+    (track! this width
+      (let [caps (img/get-capabilities)
+            max-width (max 1 (min (- width 2)
+                                  (or (:max-width-cells (:options this)) 60)))
+            cell-dims (img/get-cell-dimensions)
+            default-max-height (max 1 (Math/ceil
+                                       (/ (* max-width (:width-px cell-dims))
+                                          (:height-px cell-dims))))
+            max-height (or (:max-height-cells (:options this)) default-max-height)
+            lines (if (:images caps)
+                    (let [image-id (or (current-image-id this)
+                                       (let [id (img/allocate-image-id)]
+                                         (reset! image-id-atom id)
+                                         id))
+                          result (img/render-image base64-data dimensions
+                                                   :mime-type mime-type
+                                                   :max-width-cells max-width
+                                                   :max-height-cells max-height
+                                                   :image-id image-id
+                                                   :move-cursor false)]
+                      (if result
+                        ;; Kitty: sequence on first line, blank padding lines
+                        ;; so TUI accounts for image height
+                        (let [rows (:rows result)]
+                          (into [(:sequence result)]
+                                (repeat (dec rows) "")))
+                        ;; Render failed — fallback
+                        [(img/image-fallback mime-type
+                                             :dimensions dimensions
+                                             :filename (:filename options))]))
+                    ;; No image protocol — text fallback
+                    [(img/image-fallback mime-type
+                                         :dimensions dimensions
+                                         :filename (:filename options))])]
+        lines))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
@@ -75,8 +74,7 @@
                 :max-height-cells max-height-cells
                 :filename filename}
       :image-id-atom (atom image-id)
-      :cache-atom (atom nil)
-      :last-width-atom (atom nil)})))
+      :cache-atom (atom nil)})))
 
 ;; ─── Public API ─────────────────────────────────────────────────────────
 

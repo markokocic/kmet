@@ -4,15 +4,14 @@
    single horizontal rule (─) spanning the full render width, colored via
    the provided color function. Used to frame dialogs (pi: preset.ts pick
    dialog, BorderedLoader)."
-  (:require [kmet.tui.protocols :as protocols]
-            [kmet.tui.theme :as theme]))
+  (:require
+   [kmet.tui.macros :refer [defcomponent]]
+   [kmet.tui.theme :as theme]))
 
-(defrecord DynamicBorder [color-fn]
-  protocols/IComponent
+(defcomponent DynamicBorder nil [color-fn]
   (render [_this width]
     [(color-fn (apply str (repeat (max 1 width) "─")))])
-  (handle-input [_this _data] nil)
-  (invalidate [_this] nil))
+  (handle-input [_this _data] nil))
 
 (defn make-dynamic-border
   "Create a DynamicBorder. COLOR-FN receives the border string and returns

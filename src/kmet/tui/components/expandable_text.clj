@@ -4,13 +4,19 @@
    produced by (fn [] string) so a rebuild (theme change) can re-run the
    fns and regenerate pre-baked colors; set-expanded! switches the variant."
   (:require [kmet.tui.protocols :as protocols]
-            [kmet.tui.components.text :as text]))
+            [kmet.tui.components.text :as text]
+            [kmet.tui.macros :refer [track! track-deps defcomponent]]))
 
-(defrecord ExpandableText [collapsed-fn expanded-fn expanded?-atom text-comp]
-  protocols/IComponent
-  (render [_this width] (protocols/render text-comp width))
-  (handle-input [_this _data] nil)
-  (invalidate [_this] (protocols/invalidate text-comp)))
+(defcomponent ExpandableText nil [collapsed-fn expanded-fn expanded?-atom text-comp cache-atom]
+  (render [this width]
+    (track! this width
+      (let [tc @text-comp]
+        ;; The inner Text's text atom changes on set-expanded!/rebuild! —
+        ;; track it so the cache invalidates on content switches.
+        (track-deps @(:text-atom tc))
+        (protocols/render tc width))))
+  (invalidate [_this]
+    (protocols/invalidate @text-comp)))
 
 (defn make-expandable-text
   "Create an ExpandableText.
@@ -24,15 +30,16 @@
    {:collapsed-fn collapsed-fn
     :expanded-fn expanded-fn
     :expanded?-atom (atom (boolean expanded?))
-    :text-comp (text/make-text ((if expanded? expanded-fn collapsed-fn))
-                               padding-x padding-y)}))
+    :text-comp (atom (text/make-text ((if expanded? expanded-fn collapsed-fn))
+                                     padding-x padding-y))
+    :cache-atom (atom nil)}))
 
 (defn expandable-text-set-expanded!
   "Set the expansion state, switching the displayed content (pi: setExpanded)."
   [comp expanded?]
   (when (not= (boolean expanded?) @(:expanded?-atom comp))
     (reset! (:expanded?-atom comp) (boolean expanded?))
-    (text/text-set! (:text-comp comp)
+    (text/text-set! @(:text-comp comp)
                     ((if expanded? (:expanded-fn comp) (:collapsed-fn comp)))))
   nil)
 
@@ -46,7 +53,7 @@
    strings produced by the fns may have changed (theme changes: colors are
    pre-baked into the content)."
   [comp]
-  (text/text-set! (:text-comp comp)
+  (text/text-set! @(:text-comp comp)
                   ((if @(:expanded?-atom comp)
                      (:expanded-fn comp)
                      (:collapsed-fn comp))))

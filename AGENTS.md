@@ -199,6 +199,20 @@ development. Run the full gate once before wrapping up:
 - Both `log` and `log-error` accept Exception objects and expand them to class name, message, and full stack trace.
 - Log format: `[ISO_TIMESTAMP] [ERROR: ]message\n`
 
+## Debugging scripts (`scripts/`)
+For debugging terminal rendering issues — modify them (sizes, timing, input)
+to reproduce the issue at hand. The kmet scripts hardcode the Termux path.
+
+- Capture a session's raw output: `tmux_capture.sh <session> <send-after> <text> <timeout> <outfile> <cmd...>`,
+  `tmux_repro.sh <name> <outfile> <cmd...>` (fixed sequence incl. resize),
+  `pty_capture.py` (tmux-free pty; `--cols/--rows/--text/--timeout/--out`).
+- Analyze: `term_dump.py <raw-capture>` replays the bytes through a minimal
+  ANSI emulator and dumps frames (at 2026 sync boundaries) with colors.
+- kmet scenarios: `kmet_sanity.sh <outfile>` (startup + wheel scroll + exit),
+  `kmet_verify.sh <outfile>` (flicker metric while streaming + scrolled up).
+
+Workflow: run a capture script → `python3 scripts/term_dump.py out.raw`.
+
 ## Docstrings
 - No trivial docstrings — a docstring must add information beyond the name (intent, contract, args/return, side effects, exceptions). Skip it when the name is self-explanatory.
 - Where behavior isn't obvious, document: public vars, protocol methods, and `defrecord` types
@@ -214,7 +228,11 @@ When guidelines conflict, priority is (highest first):
 If the user asks for something that contradicts AGENTS.md, explain the conflict and ask for confirmation.
 
 ### Component architecture
-Each message type has its own `defrecord` implementing `IComponent`:
+- **All UI components are defined with `defcomponent`** (never a bare
+  `defrecord` implementing IComponent — extra protocols like IFocusable go
+  in separate `extend-type` forms after the call, e.g. select-list.clj).
+  Enforced by `test-caching-conventions`.
+- Each message type has its own `defrecord` implementing `IComponent`:
 - `UserMessage` — user text in a `Box` with `user-message-bg`
 - `AssistantMessage` — assistant text + thinking (italic + `thinking-text` color)
 - `ToolExecution` — tool call/result in `Box` with status background
@@ -227,16 +245,50 @@ Type dispatch uses `IComponentKind` protocol (`component-kind` returning `:user`
 `:assistant`, `:tool`, `:custom`).
 
 ### Reactive render cache (track!)
-- Wrap a component's render body with `(track! this width ...)`. Every `@atom`
-  read is recorded; when any of them changes, the cache invalidates
-  automatically — setters become plain `reset!`/`swap!` with no manual
-  `(protocols/invalidate comp)` call. Requires a `:cache-atom` (or legacy
-  `:cache`) field on the record.
-- Do NOT use track! when the cache depends on computed child output (Box),
-  when rendering is time-animated (spinner), or for deliberately uncached
-  input widgets (input, editor). `tool_execution` keeps manual invalidate —
-  its invalidate is a re-render signal (fires `request-render-fn`), not cache
-  boilerplate.
+- **Default**: wrap a component's render body with `(track! this width ...)`
+  and give the record a `:cache-atom` field. Every `@atom` read is recorded;
+  when any of them changes, the cache invalidates automatically — setters
+  become plain `reset!`/`swap!` with no manual `(protocols/invalidate comp)`
+  call. Enforcement: `test-caching-conventions` requires every component with a
+  `render` method to either use track! or be on the documented uncached
+  allowlist.
+- **`defcomponent` generates the cache-clearing `invalidate`**: when the
+  render calls track!, the macro adds `(invalidate [this]
+  (invalidate-cache this))` unless a custom method is given — in which case
+  the cache clear is prepended automatically. Components only write an
+  `invalidate` method for extra side effects (delegating to children,
+  firing `request-render-fn`).
+- **`track-deps`** declares dependencies inside a track! body: atoms whose
+  changes must invalidate the cache even though their values don't appear in
+  the body — `(track-deps @theme-atom @content-atom)` (wrapper components
+  re-rendering cached children).
+- **Sound only when the output is a function of atoms the render derefs**:
+  leaves (Text, Spacer, Markdown, Image, ...) and self-contained composites
+  whose mutation paths touch their own atoms (messages, tool executions,
+  footer, status line, expandable header, ...). When a child's internal state
+  affects the output, the render must deref it too (e.g. StatusLine and
+  ExpandableText deref the inner component's text atom). Atoms that the
+  render body itself mutates (e.g. tool_execution's last-component atoms,
+  Image's id allocation) are read through non-tracking helpers so they don't
+  self-invalidate the cache.
+- **Do NOT use track!** for: transparent parents (Container, Box, HStack,
+  VStack, ChatHistory, ScrollView — children change independently and the
+  parent cannot track that; they stay cheap by relying on children's caches;
+  Box additionally memoizes its padding/bg composition), time-animated
+  output (Spinner, status indicators, flashes — must render fresh every
+  pass), and focused input widgets (input, editor). Time-animated content
+  must live at the document bottom (spinner/status) or be cached so it only
+  ticks with real updates (the tool-execution elapsed counter ticks with
+  content chunks, matching pi's cached render).
+- A render body that invalidates itself mid-run (a render fn calling
+  `:invalidate`, or `set-state!` on tracked state) does not cache its stale
+  result: track-render watches the cache atom, so the next render re-runs
+  the body with the fresh state.
+- **Full redraws never emit `\u001b[3J` (erase scrollback)**: Windows Terminal
+  resets the viewport to the top of the scrollback on it, yanking a
+  scrolled-up reader while streaming. The 2J+H redraw rewrites the screen;
+  stale scrollback rows above are the accepted trade-off (see
+  `do-full-redraw` in `kmet.tui.core`).
 
 ## Reference
 - Consult `~/src/cvstree/pi/` for implementation patterns before building new features — e.g., study its TUI component model before adding new components, or its diff rendering approach before implementing a diff view.

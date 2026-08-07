@@ -11,11 +11,11 @@
    :center/:end). Like pi, an HStack does not receive input — the TUI
    dispatches keys to the focused leaf component only."
   (:require [kmet.tui.protocols :as protocols]
+            [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.utils :as u]
             [kmet.tui.components.stack :as stack]))
 
-(defrecord HStack [entries-atom gap-atom align-atom]
-  protocols/IComponent
+(defcomponent HStack nil [entries-atom gap-atom align-atom]
   (render [_this width]
     (let [safe-width (max 1 width)
           viewport {:width safe-width :height Long/MAX_VALUE}

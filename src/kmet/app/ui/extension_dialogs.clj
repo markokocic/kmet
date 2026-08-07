@@ -7,6 +7,7 @@
    forward focus to the inner component so the IME candidate window follows
    the cursor (pi: Focusable propagation convention)."
   (:require [clojure.string :as str]
+            [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.keybindings :as kb]
@@ -54,11 +55,12 @@
 
 ;; ─── Selector (pi: ExtensionSelectorComponent) ─────────────────────────────
 
-(defrecord ExtensionSelectorDialog [container select-list focused?-atom]
-  protocols/IComponent
+(defcomponent ExtensionSelectorDialog nil [container select-list focused?-atom]
   (render [this width] (protocols/render (:container this) width))
   (handle-input [this data] (protocols/handle-input (:select-list this) data))
-  (invalidate [this] (protocols/invalidate (:container this)))
+  (invalidate [this] (protocols/invalidate (:container this))))
+
+(extend-type ExtensionSelectorDialog
   protocols/IFocusable
   (focused [this] @(:focused?-atom this))
   (set-focused! [this val]
@@ -87,11 +89,12 @@
 
 ;; ─── Input (pi: ExtensionInputComponent) ───────────────────────────────────
 
-(defrecord ExtensionInputDialog [container input-comp focused?-atom]
-  protocols/IComponent
+(defcomponent ExtensionInputDialog nil [container input-comp focused?-atom]
   (render [this width] (protocols/render (:container this) width))
   (handle-input [this data] (protocols/handle-input (:input-comp this) data))
-  (invalidate [this] (protocols/invalidate (:container this)))
+  (invalidate [this] (protocols/invalidate (:container this))))
+
+(extend-type ExtensionInputDialog
   protocols/IFocusable
   (focused [this] @(:focused?-atom this))
   (set-focused! [this val]
@@ -114,11 +117,12 @@
 
 ;; ─── Editor (pi: ExtensionEditorComponent) ─────────────────────────────────
 
-(defrecord ExtensionEditorDialog [container editor-comp focused?-atom]
-  protocols/IComponent
+(defcomponent ExtensionEditorDialog nil [container editor-comp focused?-atom]
   (render [this width] (protocols/render (:container this) width))
   (handle-input [this data] (protocols/handle-input (:editor-comp this) data))
-  (invalidate [this] (protocols/invalidate (:container this)))
+  (invalidate [this] (protocols/invalidate (:container this))))
+
+(extend-type ExtensionEditorDialog
   protocols/IFocusable
   (focused [this] @(:focused?-atom this))
   (set-focused! [this val]

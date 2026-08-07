@@ -4,8 +4,9 @@
    line above the animated line (pi Loader: a blank line then the text lines);
    renders nothing when inactive.
    Supports theme-aware color functions for spinner frame and message text."
-  (:require [kmet.tui.protocols :as protocols]
-            [kmet.tui.utils :as u]))
+  (:require
+   [kmet.tui.macros :refer [defcomponent]]
+   [kmet.tui.utils :as u]))
 
 (def ^:private DEFAULT-FRAMES
   ["⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"])
@@ -13,10 +14,9 @@
 (def ^:private CYN "\u001b[36m")
 (def ^:private RST "\u001b[0m")
 
-(defrecord Spinner [active-atom text-atom start-atom frames-atom interval-ms-atom
-                    prefix-atom spinner-color-fn-atom message-color-fn-atom
-                    verbatim-atom]
-  protocols/IComponent
+(defcomponent Spinner nil [active-atom text-atom start-atom frames-atom interval-ms-atom
+                           prefix-atom spinner-color-fn-atom message-color-fn-atom
+                           verbatim-atom]
   (render [_this width]
     (if-not @active-atom
       []  ;; invisible when inactive
@@ -38,8 +38,7 @@
                       (msg-fn @text-atom))]
         ;; pi Loader: leading blank line above the animated line
         ["" (u/truncate-to-width line width)])))
-  (handle-input [_this _data] nil)
-  (invalidate [_this] nil))
+  (handle-input [_this _data] nil))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 

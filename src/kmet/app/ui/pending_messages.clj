@@ -25,9 +25,7 @@
                  (mapv #(u/truncate-to-width (theme/dim (str "Follow-up: " %)) width "...")
                        follow-up)
                  [(u/truncate-to-width (theme/dim (str "↳ " @hint-atom " to edit all queued messages"))
-                                       width "...")]))))))
-  (invalidate [this]
-    (reset! (:cache-atom this) nil)))
+                                       width "...")])))))))
 
 ;; ─── Construction & API ────────────────────────────────────────────────────
 

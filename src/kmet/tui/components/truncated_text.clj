@@ -27,9 +27,7 @@
             line (str line (apply str (repeat need \space)))]
         (into [] (concat (repeat pad-y empty-line)
                          [line]
-                         (repeat pad-y empty-line))))))
-  (invalidate [this]
-    (reset! (:cache this) nil)))
+                         (repeat pad-y empty-line)))))))
 
 ;; ─── Construction & API ────────────────────────────────────────────────────
 

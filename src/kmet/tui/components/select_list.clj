@@ -7,7 +7,7 @@
             [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as u]
-            [kmet.tui.macros :refer [track!]]))
+            [kmet.tui.macros :refer [track! defcomponent]]))
 
 ;; ─── Default theme ──────────────────────────────────────────────────────────
 ;; Matches pi's SelectListTheme interface.
@@ -133,13 +133,12 @@
 
 ;; ─── SelectList component ───────────────────────────────────────────────────
 
-(defrecord SelectList [items-atom selected-idx-atom filter-atom
-                       on-select on-escape on-selection-change
-                       focused? theme-atom height-atom cache-atom
-                       header-atom
-                       min-primary-column-atom max-primary-column-atom
-                       truncate-primary-atom]
-  protocols/IComponent
+(defcomponent SelectList nil [items-atom selected-idx-atom filter-atom
+                              on-select on-escape on-selection-change
+                              focused? theme-atom height-atom cache-atom
+                              header-atom
+                              min-primary-column-atom max-primary-column-atom
+                              truncate-primary-atom]
 
   (render [this width]
     (track! this width
@@ -271,10 +270,7 @@
           (when-not has-ctrl?
             (swap! filter-atom str data)
             (reset! selected-idx-atom 0)
-            nil)))))
-
-  (invalidate [this]
-    (reset! (:cache-atom this) nil)))
+            nil))))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 

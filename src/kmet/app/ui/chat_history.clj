@@ -18,7 +18,7 @@
             [kmet.app.ui.tool-execution :as te]
             [kmet.app.ui.custom-message :as cm]
             [kmet.app.ui.bash-execution :as be]
-            [kmet.tui.macros :refer [defcomponent]]))
+            [kmet.tui.macros :refer [track! track-deps defcomponent]]))
 
 ;; ─── Info component at top ─────────────────────────────────────────────────
 
@@ -410,10 +410,16 @@
 ;; so long statuses truncate with an ellipsis instead of wrapping.
 ;; No component kind — kind-based dispatch (toggles, theme application)
 ;; returns nil for it.
-(defcomponent StatusLine nil [spacer-atom text-atom]
-  (render [_this width]
-    (into [] (concat (protocols/render @spacer-atom width)
-                     (protocols/render @text-atom width))))
+(defcomponent StatusLine nil [spacer-atom text-atom cache-atom]
+  (render [this width]
+    (track! this width
+      (let [sp @spacer-atom
+            tt @text-atom]
+        ;; The inner TruncatedText's text atom changes on status updates
+        ;; (truncated-text-set-text!) — track it so the cache invalidates.
+        (track-deps @(:text-atom tt))
+        (into [] (concat (protocols/render sp width)
+                         (protocols/render tt width))))))
   (invalidate [_this]
     (protocols/invalidate @spacer-atom)
     (protocols/invalidate @text-atom)))
@@ -429,7 +435,8 @@
             (map->StatusLine {:spacer-atom (atom (spacer/make-spacer 1))
                               :text-atom (atom (truncated-text/make-truncated-text
                                                 (theme/dim message)
-                                                :padding-x 1 :padding-y 0))})))
+                                                :padding-x 1 :padding-y 0))
+                              :cache-atom (atom nil)})))
   nil)
 
 ;; ─── Misc ─────────────────────────────────────────────────────────────────

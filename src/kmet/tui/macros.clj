@@ -77,7 +77,9 @@
    records the values AS READ (not a post-body snapshot), so an atom that
    changed mid-render makes the stored values disagree with the current
    ones on the next hit check and forces a re-render.
-   Requires COMPONENT to have a :cache-atom (or legacy :cache) field."
+   Requires COMPONENT to have a :cache-atom (or legacy :cache) field.
+   A body that invalidates itself mid-run (a render fn calling :invalidate)
+   is not cached — the next render re-runs it with the fresh state."
   [component width render-fn]
   (let [cache-atom (component-cache-atom component)
         cache @cache-atom]
@@ -87,22 +89,35 @@
       (:result cache)
       (let [tracked (atom {})]
         (binding [*tracked* tracked]
-          (let [result (render-fn)
-                tracked-map @tracked]
-            (doseq [a (keys tracked-map)]
-              (add-watch a (tracker-key component)
-                         (fn [_ _ old new]
-                           ;; Skip invalidation when the value didn't actually
-                           ;; change: renders are pure functions of tracked
-                           ;; values, so an equal value means the cached result
-                           ;; is still valid. (Clojure fires watches even on
-                           ;; equal-value reset!/swap!.)
-                           (when-not (= old new)
-                             (invalidate-cache component)))))
-            (reset! cache-atom {:width width
-                                :values tracked-map
-                                :result result})
-            result))))))
+          (let [cache-watch-key (keyword (str "track!cache" (System/identityHashCode component)))
+                invalidated? (atom false)
+                ;; Watch the cache atom itself: an invalidate mid-body (a
+                ;; render fn calling :invalidate, or a tracked atom changing
+                ;; while the body runs) resets it — a signal that this result
+                ;; was built from stale state, so it must not be cached; the
+                ;; next render re-runs the body with the fresh state.
+                _ (add-watch cache-atom cache-watch-key
+                             (fn [_ _ _ _] (reset! invalidated? true)))]
+            (try
+              (let [result (render-fn)
+                    tracked-map @tracked]
+                (doseq [a (keys tracked-map)]
+                  (add-watch a (tracker-key component)
+                             (fn [_ _ old new]
+                               ;; Skip invalidation when the value didn't actually
+                               ;; change: renders are pure functions of tracked
+                               ;; values, so an equal value means the cached result
+                               ;; is still valid. (Clojure fires watches even on
+                               ;; equal-value reset!/swap!.)
+                               (when-not (= old new)
+                                 (invalidate-cache component)))))
+                (when-not @invalidated?
+                  (reset! cache-atom {:width width
+                                      :values tracked-map
+                                      :result result}))
+                result)
+              (finally
+                (remove-watch cache-atom cache-watch-key)))))))))
 
 (defmacro track!
   "Reactive cache wrapper for IComponent render methods.
@@ -161,6 +176,48 @@
 ;; defcomponent — record + IComponent + IComponentKind boilerplate
 ;; ═══════════════════════════════════════════════════════════════════════════
 
+(defn track-deps
+  "Declare tracked dependencies inside a track! body: deref atoms whose
+   changes must invalidate the render cache even though their values don't
+   otherwise appear in the body (wrapper components whose output comes from
+   cached children, e.g. a message component re-rendering its Box). Call
+   with @atom forms — the track! deref rewrite records them like any other
+   read. Returns nil."
+  [& _]
+  nil)
+
+(defn- track!-form?
+  "True when FORM is a (track! ...) call (referred or fully qualified)."
+  [form]
+  (and (seq? form)
+       (or (= 'track! (first form))
+           (= 'kmet.tui.macros/track! (first form)))))
+
+(defn- render-uses-track?
+  "True when the render method calls track! lexically (the body must contain
+   a (track! ...) form for the deref rewrite to apply)."
+  [render-method]
+  (boolean (some track!-form?
+                 (tree-seq coll? seq render-method))))
+
+(defn- cache-clearing-invalidate
+  "An invalidate method that clears the component's track! cache (the
+   reactive watches make it redundant, but explicit invalidation must stay
+   correct)."
+  []
+  '(invalidate [this] (kmet.tui.macros/invalidate-cache this)))
+
+(defn- prepend-cache-clear
+  "Prepend the track! cache clear to a custom invalidate method body, using
+   the method's own component binding (authors may name it _this when the
+   body doesn't use it)."
+  [invalidate-form]
+  (let [[_ args & body] invalidate-form
+        this-arg (first args)]
+    (list* 'invalidate args
+           (list 'kmet.tui.macros/invalidate-cache this-arg)
+           body)))
+
 (defn- body-method
   "First body form whose head symbol is SYM, or nil."
   [body sym]
@@ -173,22 +230,38 @@
      (defcomponent Name kind [field...]
        (render [this width] ...)          ; required
        (handle-input [this data] ...)     ; optional — defaults to no-op
-       (invalidate [this] ...))           ; optional — defaults to no-op
+       (invalidate [this] ...))           ; optional
+
+   When the render body calls track!, an invalidate method is generated
+   (or the cache clear prepended to a custom one) so explicit invalidation
+   always clears the render cache — components only write an invalidate
+   method for additional side effects (delegating to children, firing
+   request-render).
 
    KIND is a keyword like :user / :assistant / :tool / :custom for message
    components, or nil for plain tui components (Text, Spacer, footer...).
    Expands to a defrecord with the given method bodies, then an extend-type
    for IComponentKind when KIND is given. Components that need additional
-   protocols (IFocusable) keep a separate extend-type form after the call."
+   protocols (IFocusable) keep a separate extend-type form after the call.
+   The expansion requires kmet.tui.protocols first, so component namespaces
+   load standalone (their own ns need not require it — clj-kondo would flag
+   that as unused)."
   [name kind fields & body]
   (let [render (body-method body 'render)]
     (when-not render
       (throw (ex-info "defcomponent requires a render method" {:name name})))
-    (let [handle-input (or (body-method body 'handle-input)
+    (let [track? (render-uses-track? render)
+          handle-input (or (body-method body 'handle-input)
                            '(handle-input [_this _data] nil))
-          invalidate (or (body-method body 'invalidate)
-                         '(invalidate [this] nil))]
+          custom-invalidate (body-method body 'invalidate)
+          invalidate (cond
+                       custom-invalidate (if track?
+                                           (prepend-cache-clear custom-invalidate)
+                                           custom-invalidate)
+                       track? (cache-clearing-invalidate)
+                       :else '(invalidate [this] nil))]
       `(do
+         (clojure.core/require 'kmet.tui.protocols)
          (defrecord ~name ~fields
            kmet.tui.protocols/IComponent
            ~render

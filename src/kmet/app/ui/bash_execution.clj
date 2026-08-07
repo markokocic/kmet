@@ -151,10 +151,7 @@
                                  (map #(str (border-color "│") (pad-line %) (border-color "│")))
                                  content-lines)
                            bottom-border)]
-          result))))
-
-  (invalidate [this]
-    (reset! (:cache-atom this) nil)))
+          result)))))
 
 ;; ─── Construction ─────────────────────────────────────────────────────────
 

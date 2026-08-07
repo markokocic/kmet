@@ -19,7 +19,7 @@
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.image :as ic]
             [kmet.libs.terminal-image :as timg]
-            [kmet.tui.macros :refer [defsetter defgetter defcomponent]]
+            [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]
             [cheshire.core :as json]))
 
 ;; ─── Shared render helpers (pi: render-utils.ts) ────────────────────────────
@@ -637,6 +637,19 @@
 
 ;; ─── Render context helper ─────────────────────────────────────────────────
 
+(defn- last-call-component
+  "Read the previous render-call component WITHOUT tracking (the render body
+   resets this atom on every cache miss; a tracked read would self-invalidate
+   the track! render cache and re-render every frame)."
+  [comp]
+  @(:last-call-component-atom comp))
+
+(defn- last-result-component
+  "Read the previous render-result component WITHOUT tracking (see
+   last-call-component)."
+  [comp]
+  @(:last-result-component-atom comp))
+
 (defn- tool-execution-context
   "Build a ToolRenderContext map for the given component and last-component."
   [comp last-comp]
@@ -679,68 +692,70 @@
                request-render-fn-atom  ;; nil or (fn) to trigger TUI re-render
                cwd-atom                ;; current working directory
                box             ;; outer Box (padding + bg)
-               inner-container] ;; Container for call/result children
+               inner-container ;; Container for call/result children
+               cache-atom]     ;; render cache (track!)
   (render [this width]
-    (let [theme @theme-atom
-          is-error @is-error-atom
-          output-pad @output-pad-atom
-          name @name-atom
-          args @args-atom
-          content @content-atom
-          expanded? @expanded-atom
-          started-at @started-at-atom
-          ended-at @ended-at-atom
+    (track! this width
+      (let [theme @theme-atom
+            is-error @is-error-atom
+            output-pad @output-pad-atom
+            name @name-atom
+            args @args-atom
+            content @content-atom
+            expanded? @expanded-atom
+            started-at @started-at-atom
+            ended-at @ended-at-atom
       ;; Re-check empty — only when no call component rendered and no result
-          builtin (get builtin-renderers name)
-          render-call-fn (or @custom-render-call-atom
-                             (:render-call builtin)
-                             default-render-call)
-          render-result-fn (or @custom-render-result-atom
-                               (:render-result builtin)
-                               default-render-result)
-          render-shell (or (:render-shell builtin) :default)
-          container @inner-container
-          content-width (max 1 (- width (* 2 output-pad)))
-          call-context (tool-execution-context this @last-call-component-atom)
-          call-comp (render-call-fn name args theme content-width call-context)
-          _ (reset! last-call-component-atom call-comp)
-          truncation @truncation-atom
-          result-context (tool-execution-context this @last-result-component-atom)
-          result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation result-context)
-          _ (reset! last-result-component-atom result-comp)
-          image-data @image-data-atom]
+            builtin (get builtin-renderers name)
+            render-call-fn (or @custom-render-call-atom
+                               (:render-call builtin)
+                               default-render-call)
+            render-result-fn (or @custom-render-result-atom
+                                 (:render-result builtin)
+                                 default-render-result)
+            render-shell (or (:render-shell builtin) :default)
+            container @inner-container
+            content-width (max 1 (- width (* 2 output-pad)))
+            call-context (tool-execution-context this (last-call-component this))
+            call-comp (render-call-fn name args theme content-width call-context)
+            _ (reset! last-call-component-atom call-comp)
+            truncation @truncation-atom
+            result-context (tool-execution-context this (last-result-component this))
+            result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation result-context)
+            _ (reset! last-result-component-atom result-comp)
+            image-data @image-data-atom]
       ;; Pi: hide component when no call/render content and no images
-      (if (and (nil? call-comp) (nil? result-comp) (not (seq image-data)))
-        []
-        (do
+        (if (and (nil? call-comp) (nil? result-comp) (not (seq image-data)))
+          []
+          (do
           ;; Build inner container
-          (container/container-clear container)
-          (container/container-add-child container call-comp)
-          (when result-comp
-            (container/container-add-child container result-comp))
+            (container/container-clear container)
+            (container/container-add-child container call-comp)
+            (when result-comp
+              (container/container-add-child container result-comp))
           ;; Build image components from raw data (Pi: spacer + ImageComponent)
-          (doseq [img image-data]
-            (container/container-add-child container (spacer/make-spacer 1))
-            (container/container-add-child container
-                                           (ic/make-image (:data img) (:mime-type img)
-                                                          {:fallback-color (fn [s] (theme/fg theme :tool-output s))}
-                                                          :max-width-cells 60)))
+            (doseq [img image-data]
+              (container/container-add-child container (spacer/make-spacer 1))
+              (container/container-add-child container
+                                             (ic/make-image (:data img) (:mime-type img)
+                                                            {:fallback-color (fn [s] (theme/fg theme :tool-output s))}
+                                                            :max-width-cells 60)))
           ;; Pi: render-shell :self skips outer Box (tool renders its own framing)
-          (if (= :self render-shell)
-            (let [content-lines (protocols/render container width)]
-              (if (seq content-lines)
-                (into [""] content-lines)
-                []))
-            (let [bg-key (cond
+            (if (= :self render-shell)
+              (let [content-lines (protocols/render container width)]
+                (if (seq content-lines)
+                  (into [""] content-lines)
+                  []))
+              (let [bg-key (cond
                            ;; Pi: isPartial=true until result arrives; ended-at=nil = pending
-                           (nil? ended-at) :tool-pending-bg
-                           is-error :tool-error-bg
-                           :else :tool-success-bg)
-                  _ (box/box-set-bg-fn @box #(theme/bg theme bg-key %))
-                  box-lines (protocols/render @box width)]
-              (if (seq box-lines)
-                (into [""] box-lines)
-                [])))))))
+                             (nil? ended-at) :tool-pending-bg
+                             is-error :tool-error-bg
+                             :else :tool-success-bg)
+                    _ (box/box-set-bg-fn @box #(theme/bg theme bg-key %))
+                    box-lines (protocols/render @box width)]
+                (if (seq box-lines)
+                  (into [""] box-lines)
+                  []))))))))
   (invalidate [_this]
     (protocols/invalidate @box)
     ;; Pi: invalidate also triggers TUI re-render
@@ -781,7 +796,8 @@
                                   :request-render-fn-atom (atom nil)
                                   :cwd-atom (atom cwd)
                                   :box (atom b)
-                                  :inner-container (atom inner-container)})))
+                                  :inner-container (atom inner-container)
+                                  :cache-atom (atom nil)})))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 ;; Pi: set-content! and set-error! manage timing internally.

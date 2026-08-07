@@ -6,21 +6,20 @@
    their duration and the host re-renders. The render loop composites flash
    lines over the screen window (right-aligned at the bottom, pi:
    compositeFlashes); the container itself just holds and expires entries."
-  (:require [kmet.tui.protocols :as protocols]
-            [kmet.tui.utils :as u]
-            [kmet.tui.theme :as theme]))
+  (:require
+   [kmet.tui.macros :refer [defcomponent]]
+   [kmet.tui.utils :as u]
+   [kmet.tui.theme :as theme]))
 
 (def ^:private DEFAULT-DURATION-MS 1000)
 
-(defrecord AltScreenFlashContainer [request-render-fn entries-atom next-id-atom]
-  protocols/IComponent
+(defcomponent AltScreenFlashContainer nil [request-render-fn entries-atom next-id-atom]
   (render [_this width]
     (mapv (fn [entry]
             (let [message (u/truncate-to-width (str " " (:message entry) " ") width "")]
               (theme/inverse message)))
           @entries-atom))
-  (handle-input [_this _data] nil)
-  (invalidate [_this] nil))
+  (handle-input [_this _data] nil))
 
 (defn- request-render!
   "Call the host's re-render callback when present."

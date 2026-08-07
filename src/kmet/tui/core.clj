@@ -1365,7 +1365,17 @@
                                      (when clear?
                                        (doseq [id @(:previous-kitty-image-ids tui)]
                                          (emit! (img/delete-kitty-image id)))
-                                       (emit! "\u001b[2J\u001b[H\u001b[3J"))
+                                       ;; No \u001b[3J (erase scrollback): Windows
+                                       ;; Terminal resets the viewport to the top of
+                                       ;; the scrollback on it, yanking a scrolled-up
+                                       ;; reader — full redraws happen mid-stream (a
+                                       ;; mid-document line changing above the
+                                       ;; viewport), so the scrollback must survive.
+                                       ;; The 2J+H redraw below fully rewrites the
+                                       ;; screen; stale scrollback rows above are a
+                                       ;; cosmetic trade-off (claude-code v2.1.101
+                                       ;; made the same change).
+                                       (emit! "\u001b[2J\u001b[H"))
                                      (loop [i 0]
                                        (when (< i new-count)
                                          (when (pos? i) (emit! "\r\n"))

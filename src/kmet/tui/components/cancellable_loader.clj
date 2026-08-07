@@ -9,11 +9,11 @@
    on-abort callback. Async code polls cancellable-loader-aborted? or
    watches the signal atom."
   (:require [kmet.tui.protocols :as protocols]
+            [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.keybindings :as kb]
             [kmet.tui.components.spinner :as spinner]))
 
-(defrecord CancellableLoader [spinner abort-signal-atom on-abort-fn-atom]
-  protocols/IComponent
+(defcomponent CancellableLoader nil [spinner abort-signal-atom on-abort-fn-atom]
   (render [this width]
     (protocols/render (:spinner this) width))
   (handle-input [this data]

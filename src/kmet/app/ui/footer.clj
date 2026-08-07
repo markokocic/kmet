@@ -134,9 +134,7 @@
                         (theme/dim (str/join " " ext-statuses))
                         width (theme/dim "...")))]
         (into [pwd-line (str dim-left dim-remainder)]
-              (when ext-line [ext-line])))))
-  (invalidate [this]
-    (reset! (:cache-atom this) nil)))
+              (when ext-line [ext-line]))))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 

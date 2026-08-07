@@ -1170,8 +1170,10 @@
                             (tui/tui-request-render t))
                           :tool-execution-update
                            ;; Pi: live partial content from streaming tools (bash);
-                           ;; no periodic pings — the elapsed timer ticks via the
-                           ;; anim-timer renders during the turn
+                           ;; no periodic pings — the render is cached (track!), so
+                           ;; the elapsed timer ticks when content arrives here
+                           ;; (a silent long-running tool freezes Elapsed until the
+                           ;; next chunk or completion, matching pi's cached render)
                           (do (when-let [comp @pending-tool-comp]
                                 (when-let [content (:content evt)]
                                   (ui/tool-execution-set-content! comp content)))

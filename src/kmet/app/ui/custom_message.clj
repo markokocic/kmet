@@ -9,7 +9,7 @@
             [kmet.tui.components.markdown :as md]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.spacer :as spacer]
-            [kmet.tui.macros :refer [defsetter defgetter defcomponent]]))
+            [kmet.tui.macros :refer [track! track-deps defsetter defgetter defcomponent]]))
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
@@ -23,11 +23,17 @@
                output-pad-atom
                expanded-atom   ;; current expanded state (collapsible messages)
                collapsed-content-atom  ;; content when collapsed (nil = not collapsible)
-               expanded-content-atom]  ;; content when expanded (nil = not collapsible)
-  (render [_this width]
-    (let [spacer-lines (protocols/render @spacer width)
-          box-lines (protocols/render @box width)]
-      (into [] (concat spacer-lines box-lines))))
+               expanded-content-atom   ;; content when expanded (nil = not collapsible)
+               cache-atom]
+  (render [this width]
+    (track! this width
+      (let [s @spacer
+            b @box]
+        (track-deps @inner-container @label-atom @content-atom @theme-atom
+                    @output-pad-atom @expanded-atom @collapsed-content-atom
+                    @expanded-content-atom)
+        (into [] (concat (protocols/render s width)
+                         (protocols/render b width))))))
   (invalidate [_this]
     (protocols/invalidate @spacer)
     (protocols/invalidate @box)))
@@ -137,7 +143,8 @@
                                              :output-pad-atom (atom output-pad)
                                              :expanded-atom (atom false)
                                              :collapsed-content-atom (atom nil)
-                                             :expanded-content-atom (atom nil)})]
+                                             :expanded-content-atom (atom nil)
+                                             :cache-atom (atom nil)})]
       ;; Set initial content
       (rebuild-content! comp)
       (box/box-set-bg-fn b #(theme/bg theme :custom-message-bg %))

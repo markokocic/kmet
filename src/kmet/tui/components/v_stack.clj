@@ -10,6 +10,7 @@
    receive input — the TUI dispatches keys to the focused leaf component
    only."
   (:require [kmet.tui.protocols :as protocols]
+            [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.components.stack :as stack]))
 
 (defn- render-entries
@@ -26,8 +27,7 @@
                              (protocols/render (stack/entry-component e) safe-width))))
         acc))))
 
-(defrecord VStack [entries-atom gap-atom]
-  protocols/IComponent
+(defcomponent VStack nil [entries-atom gap-atom]
   (render [_this width]
     (render-entries @entries-atom width @gap-atom))
   (handle-input [_this _data] nil)

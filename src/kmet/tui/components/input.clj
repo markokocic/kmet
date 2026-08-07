@@ -2,6 +2,7 @@
   "Single-line text input with horizontal scrolling and cursor.
    Port of @earendil-works/pi-tui Input."
   (:require [clojure.string :as str]
+            [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as u]
@@ -167,9 +168,8 @@
 
 ;; ─── Input component ────────────────────────────────────────────────────────
 
-(defrecord Input [value-atom cursor-atom on-submit on-escape focused?
-                  paste-buffer paste-state kill-ring last-action undo-stack]
-  protocols/IComponent
+(defcomponent Input nil [value-atom cursor-atom on-submit on-escape focused?
+                         paste-buffer paste-state kill-ring last-action undo-stack]
 
   (render [_this width]
     (let [prompt "> "
@@ -342,9 +342,7 @@
                                      (and (>= c 128) (<= c 159))))
                               data)]
           (when-not has-ctrl?
-            (insert-character this data))))))
-
-  (invalidate [_this] nil))
+            (insert-character this data)))))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 

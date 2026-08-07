@@ -1,0 +1,155 @@
+(ns kmet.tui.components.test-caching-conventions
+  "Convention test: every component with a render method must either use
+   track! with a :cache-atom (or legacy :cache) field, or be on the
+   documented uncached allowlist.
+
+   Rationale: an uncached component whose output changes while sitting above
+   the render viewport triggers destructive full redraws during streaming
+   (a mid-document line changing above the viewport — e.g. a time-animated
+   elapsed counter — forced `\\u001b[3J`-emitting full redraws every frame,
+   which yanks a scrolled-up reader to the top on Windows Terminal). track!
+   makes the cache the default so volatile renders can only live in the two
+   documented places: at the document bottom (spinner/status) or cached so
+   they tick with real updates."
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is]]
+            [babashka.fs :as fs]))
+
+(def ^:private uncached-allowlist
+  "Components deliberately without track! caching, keyed by record name.
+   :transparent-parent — output depends on children's internal state, which
+     track! cannot see; the render walks children (each cached) every pass.
+     Box additionally memoizes its padding/bg composition on child-lines.
+   :time-animated — output depends on wall-clock time; must render fresh
+     every pass.
+   :focused-input — user-editable widgets.
+   :stateless-ephemeral — no mutable state, or recreated per render (a
+     track! cache would never be hit)."
+  {"Box"                        :transparent-parent
+   "Container"                  :transparent-parent
+   "HStack"                     :transparent-parent
+   "VStack"                     :transparent-parent
+   "ChatHistoryComponent"       :transparent-parent
+   "ScrollView"                 :transparent-parent
+   "ExtensionSelectorDialog"    :transparent-parent
+   "ExtensionInputDialog"       :transparent-parent
+   "ExtensionEditorDialog"      :transparent-parent
+   "Spinner"                    :time-animated
+   "StatusIndicator"            :time-animated
+   "RetryStatusIndicator"       :time-animated
+   "CompactionStatusIndicator"  :time-animated
+   "AltScreenFlashContainer"    :time-animated
+   "CancellableLoader"          :time-animated
+   "Input"                      :focused-input
+   "Editor"                     :focused-input
+   "DynamicBorder"              :stateless-ephemeral
+   "BashPreview"                :stateless-ephemeral})
+
+(def ^:private component-dirs
+  ["src/kmet/tui/components" "src/kmet/app/ui"])
+
+;; ─── Top-level form splitting (paren-balanced, strings/comments skipped) ──
+
+(defn- top-level-forms
+  "Split SRC into its top-level forms, skipping string/regex literals and
+   line comments so parens inside them don't unbalance the scan."
+  [src]
+  (let [n (count src)]
+    (loop [i 0 depth 0 start 0 in-str false in-comment false acc []]
+      (if (>= i n)
+        (if (zero? depth) acc (conj acc (subs src start n)))
+        (let [c (.charAt src i)
+              escaped? (and (= c \\) (< (inc i) n))]
+          (cond
+            in-comment
+            (recur (inc i) depth start false (if (= c \newline) false true) acc)
+
+            in-str
+            (if escaped?
+              (recur (+ i 2) depth start true false acc)
+              (recur (inc i) depth start (not= c \") false acc))
+
+            (= c \;) (recur (inc i) depth start false true acc)
+
+            ;; regex literal #"..." — treat the quote as a string start
+            (and (= c \#) (< (inc i) n) (= (.charAt src (inc i)) \"))
+            (recur (+ i 2) depth start true false acc)
+
+            (= c \") (recur (inc i) depth start true false acc)
+
+            (= c \() (recur (inc i) (inc depth) start false false acc)
+
+            (= c \))
+            (let [d (dec depth)]
+              (if (zero? d)
+                (recur (inc i) 0 (inc i) false false
+                       (conj acc (subs src start (inc i))))
+                (recur (inc i) d start false false acc)))
+
+            :else (recur (inc i) depth start false false acc)))))))
+
+(defn- strip-leading-comments
+  "Remove leading comment lines and whitespace from a form text so the
+   def regex can anchor on the def form itself."
+  [s]
+  (loop [s s]
+    (let [t (str/triml s)]
+      (if (str/starts-with? t ";")
+        (recur (str/replace-first t #";[^\n]*" ""))
+        t))))
+
+(defn- component-info
+  "Parse a top-level defrecord/defcomponent form into
+   {:name :has-render? :uses-track? :fields} or nil."
+  [form]
+  (let [form (strip-leading-comments form)]
+    (when-let [[_ kind name fields]
+               (re-find #"^\(def(record|component)\s+([^\s\[(]+)(?:\s+[^\s\[(]+)?\s*\[([^\]]*)\]" form)]
+      {:kind kind
+       :name name
+       :has-render? (boolean (re-find #"\(\s*render\s+\[" form))
+       :uses-track? (boolean (re-find #"track!" form))
+       :fields fields})))
+
+(def ^:private expected-component-count
+  "Total number of render-bearing components across component-dirs. Bumped
+   when components are added or removed; a mismatch means the scan below
+   silently lost forms (a scanner regression), so the convention checks
+   would otherwise pass vacuously."
+  36)
+
+(deftest caching-conventions
+  (let [checked (atom [])]
+    (doseq [dir component-dirs
+            f (->> (fs/list-dir dir)
+                   (filter #(str/ends-with? (str %) ".clj"))
+                   (sort-by str))]
+      (let [src (slurp (str f))]
+        (doseq [form (top-level-forms src)]
+          (when-let [{:keys [kind name has-render? uses-track? fields]} (component-info form)]
+            (when has-render?
+              (swap! checked conj name)
+              ;; All UI components are defcomponents — extra protocols (e.g.
+              ;; IFocusable) go in separate extend-type forms (AGENTS.md).
+              (is (= "component" kind)
+                  (str name " (in " f ") must be a defcomponent — extra "
+                       "protocols go in extend-type forms after the call"))
+              (let [has-cache-field? (boolean (re-find #"cache-atom|\bcache\b" fields))
+                    allowlisted? (contains? uncached-allowlist name)]
+                (is (or (and uses-track? has-cache-field?)
+                        allowlisted?)
+                    (str name " (in " f ") must use track! with a :cache-atom/"
+                         "legacy :cache field or be on the uncached allowlist "
+                         "(see test-caching-conventions docstring)"))))))))
+    (let [checked-names (set @checked)]
+      ;; Every allowlisted component must actually exist — catches allowlist
+      ;; rot (renamed/removed components).
+      (is (every? checked-names (keys uncached-allowlist))
+          (str "uncached-allowlist entries missing from the component scan: "
+               (pr-str (remove checked-names (keys uncached-allowlist)))))
+      ;; The full inventory must be scanned — a scanner regression that
+      ;; silently drops forms would otherwise pass the per-component checks
+      ;; vacuously.
+      (is (= expected-component-count (count @checked))
+          (str "expected " expected-component-count " render-bearing components, "
+               "scanned " (count @checked) ": " (pr-str (sort @checked)))))))

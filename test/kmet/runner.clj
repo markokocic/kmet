@@ -42,6 +42,7 @@
             [kmet.tui.components.test-settings-list]
             [kmet.tui.components.test-markdown]
             [kmet.tui.components.test-track]
+            [kmet.tui.components.test-caching-conventions]
             [kmet.tui.components.test-scroll-view]
             [kmet.tui.components.test-stack]
             [kmet.tui.components.test-v-stack]
@@ -108,6 +109,7 @@
     kmet.tui.components.test-settings-list
     kmet.tui.components.test-markdown
     kmet.tui.components.test-track
+    kmet.tui.components.test-caching-conventions
     kmet.tui.components.test-scroll-view
     kmet.tui.components.test-stack
     kmet.tui.components.test-v-stack

@@ -3,6 +3,7 @@
    Port of @earendil-works/pi-tui Box. Like pi, a Box does not receive input:
    the TUI dispatches keys to the focused leaf component only."
   (:require [kmet.tui.protocols :as protocols]
+            [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.utils :as u]))
 
 ;; ─── Internal helpers (defined before record to be visible in method bodies) ─
@@ -15,8 +16,7 @@
 
 ;; ─── Box record ─────────────────────────────────────────────────────────────
 
-(defrecord Box [children padding-x padding-y bg-fn cache]
-  protocols/IComponent
+(defcomponent Box nil [children padding-x padding-y bg-fn cache]
   (render [this width]
     (if (empty? @children)
       []

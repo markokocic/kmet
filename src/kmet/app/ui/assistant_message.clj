@@ -93,9 +93,7 @@
             ;; Pi-style: top padding only (Spacer(1) equivalent).
             ;; No bottom padding — next component provides its own top spacing.
             (vec (concat (repeat pad-y empty)
-                         content)))))))
-  (invalidate [this]
-    (reset! (:cache-atom this) nil)))
+                         content))))))))
 
 ;; ─── Internal: reflow both text and thinking into the line atoms ──────────
 

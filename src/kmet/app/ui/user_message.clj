@@ -8,7 +8,7 @@
             [kmet.tui.theme :as theme]
             [kmet.tui.components.box :as box]
             [kmet.tui.components.markdown :as md]
-            [kmet.tui.macros :refer [defsetter defcomponent]]))
+            [kmet.tui.macros :refer [track! track-deps defsetter defcomponent]]))
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
@@ -17,9 +17,13 @@
                markdown-comp   ;; Markdown child component
                text-atom       ;; raw text (uncolored, for backward compat)
                theme-atom
-               output-pad-atom]
-  (render [_this width]
-    (protocols/render @box width))
+               output-pad-atom
+               cache-atom]
+  (render [this width]
+    (track! this width
+      (let [b @box]
+        (track-deps @text-atom @theme-atom @output-pad-atom)
+        (protocols/render b width))))
   (invalidate [_this]
     (protocols/invalidate @box)))
 
@@ -59,7 +63,8 @@
                                          :markdown-comp (atom m)
                                          :text-atom (atom text)
                                          :theme-atom (atom theme)
-                                         :output-pad-atom (atom output-pad)})]
+                                         :output-pad-atom (atom output-pad)
+                                         :cache-atom (atom nil)})]
     (box/box-add-child b m)
     ;; Set initial text and theme (bg-fn)
     (user-message-set-text! comp text)

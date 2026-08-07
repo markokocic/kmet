@@ -5,7 +5,7 @@
             [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as u]
-            [kmet.tui.macros :refer [track!]]))
+            [kmet.tui.macros :refer [track! defcomponent]]))
 
 ;; ─── Theme ──────────────────────────────────────────────────────────────────
 
@@ -23,10 +23,9 @@
 
 ;; ─── SettingsList component ─────────────────────────────────────────────────
 
-(defrecord SettingsList [items-atom selected-idx-atom filter-atom
-                         focused? theme-atom cache-atom
-                         on-change-atom on-escape-atom]
-  protocols/IComponent
+(defcomponent SettingsList nil [items-atom selected-idx-atom filter-atom
+                                focused? theme-atom cache-atom
+                                on-change-atom on-escape-atom]
 
   (render [this width]
     (track! this width
@@ -157,10 +156,7 @@
           (when-not has-ctrl?
             (swap! filter-atom str data)
             (reset! selected-idx-atom 0)
-            nil)))))
-
-  (invalidate [this]
-    (reset! (:cache-atom this) nil)))
+            nil))))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 

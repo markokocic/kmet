@@ -7,6 +7,7 @@
    and window it through render-window. Not used by the interactive layout
    (the main screen scrolls natively); exercised by its own unit tests."
   (:require [kmet.tui.protocols :as protocols]
+            [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.utils :as u]))
 
 (defprotocol IScrollView
@@ -28,13 +29,12 @@
   "Pi default: bright-black background (\\u001b[100m ... \\u001b[49m)."
   (fn [text] (str "\u001b[100m" text "\u001b[49m")))
 
-(defrecord ScrollView [child follow-end? primary? overscroll
-                       scrollbar-atom scrollbar-style-atom scrollbar-hide-delay-ms-atom
-                       last-width-atom scroll-top-atom content-height-atom viewport-height-atom
-                       following-end-atom request-render-fn-atom
-                       transient-scrollbar-visible-atom scrollbar-active-atom
-                       scrollbar-hide-timer-atom]
-  protocols/IComponent
+(defcomponent ScrollView nil [child follow-end? primary? overscroll
+                              scrollbar-atom scrollbar-style-atom scrollbar-hide-delay-ms-atom
+                              last-width-atom scroll-top-atom content-height-atom viewport-height-atom
+                              following-end-atom request-render-fn-atom
+                              transient-scrollbar-visible-atom scrollbar-active-atom
+                              scrollbar-hide-timer-atom]
   (render [this width]
     ;; Render the child's FULL content — the caller windows it via
     ;; update-layout! + render-window (render itself never clips).

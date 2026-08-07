@@ -11,6 +11,7 @@
    dispatched from handle-input (editor-set-on-action!), and expanded-text
    support for the external editor flow (editor-get-expanded-text)."
   (:require [clojure.string :as str]
+            [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.keybindings :as kb]
@@ -1041,19 +1042,18 @@
 
 ;; ─── Editor component ──────────────────────────────────────────────────────
 
-(defrecord Editor [state-atom scroll-offset-atom preferred-col-atom
-                   last-width-atom focused? on-submit on-change
-                   disable-submit padding-x border-fn height-atom
-                   undo-stack redo-stack kill-ring last-action
-                   paste-buffer paste-state paste-store paste-counter
-                   jump-mode
-                   history history-idx history-draft
-                   terminal-rows-atom
-                   autocomplete-provider autocomplete-state
-                   autocomplete-list autocomplete-prefix
-                   autocomplete-max-visible autocomplete-theme
-                   action-handlers keybindings]
-  protocols/IComponent
+(defcomponent Editor nil [state-atom scroll-offset-atom preferred-col-atom
+                          last-width-atom focused? on-submit on-change
+                          disable-submit padding-x border-fn height-atom
+                          undo-stack redo-stack kill-ring last-action
+                          paste-buffer paste-state paste-store paste-counter
+                          jump-mode
+                          history history-idx history-draft
+                          terminal-rows-atom
+                          autocomplete-provider autocomplete-state
+                          autocomplete-list autocomplete-prefix
+                          autocomplete-max-visible autocomplete-theme
+                          action-handlers keybindings]
 
   (render [this width]
     (let [state @state-atom
@@ -1337,9 +1337,7 @@
                                        (and (>= c 128) (<= c 159))))
                                 data)]
             (when-not has-ctrl?
-              (insert-character this data)))))))
-
-  (invalidate [_this] nil))
+              (insert-character this data))))))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 

@@ -3,10 +3,10 @@
    Port of @earendil-works/pi-tui Container. Like pi, a Container does not
    receive input: the TUI dispatches keys to the focused leaf component
    only (pi: focusedComponent?.handleInput)."
-  (:require [kmet.tui.protocols :as protocols]))
+  (:require [kmet.tui.protocols :as protocols]
+            [kmet.tui.macros :refer [defcomponent]]))
 
-(defrecord Container [children]
-  protocols/IComponent
+(defcomponent Container nil [children]
   (render [_this width] (into [] (mapcat #(protocols/render % width)) @children))
   ;; pi: no handleInput on containers — input routes via TUI focus
   (handle-input [_this _data] nil)
