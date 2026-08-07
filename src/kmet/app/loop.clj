@@ -1078,7 +1078,6 @@ Be precise and concise in your responses."}}]
               (emit agent {:type :status :status :thinking})
 
               (let [text-buf (atom "")
-                    max-turns 20
                     agent-end (fn [& [error]]
                                 (emit agent {:type :agent-end
                                              :messages (subvec @(:messages agent) msg-count-before)
@@ -1087,166 +1086,162 @@ Be precise and concise in your responses."}}]
                                 ;; every run — success, error, timeout, or abort —
                                 ;; the agent is fully idle (agent-session.js).
                                 (emit agent {:type :agent-settled}))]
-              ;; Outer loop: follow-up
+              ;; Outer loop: follow-up. No turn limit — the inner loop settles
+              ;; only when the model stops calling tools and no messages are
+              ;; queued (pi: runLoop while(true)).
                 (loop [turn 0]
-                  (if (>= turn max-turns)
-                    (do (when on-error (on-error "Max turn limit reached"))
-                        (reset! (:status agent) :error)
-                        (emit agent {:type :error :message "Max turn limit reached"})
-                        (agent-end "Max turn limit reached"))
                   ;; Inner loop: LLM → tools → steer → ... → settle
-                    (let [inner (loop [t turn prev-tool-calls [] must-run true]
-                                  (if (or (>= t max-turns)
-                                          @(:signal agent)
-                                          (and (not must-run)
-                                               (empty? prev-tool-calls)
-                                               (empty? @(:steering agent))))
-                                    (if @(:signal agent)
-                                      (do (reset! (:status agent) :idle)
-                                          (emit agent {:type :status :status :idle})
-                                          (agent-end)
-                                          {:aborted true}) ;; cancelled — exit quietly
-                                      {:settled t})
-                                    (let [steer-msgs (drain-queue! (:steering agent)
-                                                                   (:steering-mode agent))]
-                                      (doseq [m steer-msgs]
-                                        (add-user-message! agent m))
+                  (let [inner (loop [t turn prev-tool-calls [] must-run true]
+                                (if (or @(:signal agent)
+                                        (and (not must-run)
+                                             (empty? prev-tool-calls)
+                                             (empty? @(:steering agent))))
+                                  (if @(:signal agent)
+                                    (do (reset! (:status agent) :idle)
+                                        (emit agent {:type :status :status :idle})
+                                        (agent-end)
+                                        {:aborted true}) ;; cancelled — exit quietly
+                                    {:settled t})
+                                  (let [steer-msgs (drain-queue! (:steering agent)
+                                                                 (:steering-mode agent))]
+                                    (doseq [m steer-msgs]
+                                      (add-user-message! agent m))
                                       ;; Consumed messages left the queue — refresh the
                                       ;; pending display (pi: message_start → queue_update)
-                                      (when (seq steer-msgs)
-                                        (emit agent {:type :queue-update
-                                                     :steering @(:steering agent)
-                                                     :follow-up @(:follow-up agent)}))
-                                      (emit agent {:type :turn-start :turn-index t})
-                                      (let [promise (do (reset! text-buf "")
-                                                        (call-llm agent (resolve-api-key agent) text-buf on-text on-thinking))]
-                                        (reset! (:active-call agent) promise)
-                                        (let [result (deref promise (llm-total-timeout-ms agent) :timeout)]
-                                          (reset! (:active-call agent) nil)
-                                          (if (:cancelled result)
-                                            (do (agent-end)
-                                                {:aborted true})
-                                            (if (= :timeout result)
-                                              (do (reset! (:signal agent) true)
-                                                  (let [timeout-msg (str "LLM call timed out after " (llm-total-timeout-ms agent) "ms")]
-                                                    (when on-error (on-error timeout-msg))
-                                                    (reset! (:status agent) :error)
-                                                    (emit agent {:type :error :message timeout-msg})
-                                                    (agent-end timeout-msg)
-                                                    {:aborted true}))
-                                              (if (:error result)
-                                                (let [err (:error result)
-                                                      max-retries (:max-retries agent)]
-                                                  (cond
+                                    (when (seq steer-msgs)
+                                      (emit agent {:type :queue-update
+                                                   :steering @(:steering agent)
+                                                   :follow-up @(:follow-up agent)}))
+                                    (emit agent {:type :turn-start :turn-index t})
+                                    (let [promise (do (reset! text-buf "")
+                                                      (call-llm agent (resolve-api-key agent) text-buf on-text on-thinking))]
+                                      (reset! (:active-call agent) promise)
+                                      (let [result (deref promise (llm-total-timeout-ms agent) :timeout)]
+                                        (reset! (:active-call agent) nil)
+                                        (if (:cancelled result)
+                                          (do (agent-end)
+                                              {:aborted true})
+                                          (if (= :timeout result)
+                                            (do (reset! (:signal agent) true)
+                                                (let [timeout-msg (str "LLM call timed out after " (llm-total-timeout-ms agent) "ms")]
+                                                  (when on-error (on-error timeout-msg))
+                                                  (reset! (:status agent) :error)
+                                                  (emit agent {:type :error :message timeout-msg})
+                                                  (agent-end timeout-msg)
+                                                  {:aborted true}))
+                                            (if (:error result)
+                                              (let [err (:error result)
+                                                    max-retries (:max-retries agent)]
+                                                (cond
                                                   ;; Context overflow → compact once, then retry
                                                   ;; (pi: overflow is compaction territory, not auto-retry)
-                                                    (and (not @(:overflow-recovered agent))
-                                                         (context-overflow? err)
-                                                         (:session agent)
-                                                         (:compact-threshold agent))
-                                                    (do (reset! (:overflow-recovered agent) true)
-                                                        (compact-for-overflow! agent)
-                                                        (recur t prev-tool-calls must-run))
+                                                  (and (not @(:overflow-recovered agent))
+                                                       (context-overflow? err)
+                                                       (:session agent)
+                                                       (:compact-threshold agent))
+                                                  (do (reset! (:overflow-recovered agent) true)
+                                                      (compact-for-overflow! agent)
+                                                      (recur t prev-tool-calls must-run))
 
-                                                    (and (<= (inc @(:retry-count agent)) max-retries)
-                                                         (not (context-overflow? err))
-                                                         (retryable-error? err))
+                                                  (and (<= (inc @(:retry-count agent)) max-retries)
+                                                       (not (context-overflow? err))
+                                                       (retryable-error? err))
                                                   ;; Auto-retry with exponential backoff (pi: _prepareRetry)
-                                                    (let [attempt (inc @(:retry-count agent))
-                                                          delay-ms (* (:base-delay-ms agent)
-                                                                      (long (Math/pow 2 (dec attempt))))]
-                                                      (reset! (:retry-count agent) attempt)
-                                                      (emit agent {:type :auto-retry-start
-                                                                   :attempt attempt
-                                                                   :max-attempts max-retries
-                                                                   :delay-ms delay-ms
-                                                                   :error-message err})
-                                                      (if (backoff-sleep! agent delay-ms)
+                                                  (let [attempt (inc @(:retry-count agent))
+                                                        delay-ms (* (:base-delay-ms agent)
+                                                                    (long (Math/pow 2 (dec attempt))))]
+                                                    (reset! (:retry-count agent) attempt)
+                                                    (emit agent {:type :auto-retry-start
+                                                                 :attempt attempt
+                                                                 :max-attempts max-retries
+                                                                 :delay-ms delay-ms
+                                                                 :error-message err})
+                                                    (if (backoff-sleep! agent delay-ms)
                                                       ;; Same turn, same context — no new user message
-                                                        (recur t prev-tool-calls must-run)
+                                                      (recur t prev-tool-calls must-run)
                                                       ;; Cancelled during backoff
-                                                        (do (emit agent {:type :auto-retry-end
-                                                                         :success false
-                                                                         :attempt attempt
-                                                                         :final-error "Retry cancelled"})
-                                                            (reset! (:retry-count agent) 0)
-                                                            (reset! (:status agent) :idle)
-                                                            (emit agent {:type :status :status :idle})
-                                                            (agent-end)
-                                                            {:aborted true})))
+                                                      (do (emit agent {:type :auto-retry-end
+                                                                       :success false
+                                                                       :attempt attempt
+                                                                       :final-error "Retry cancelled"})
+                                                          (reset! (:retry-count agent) 0)
+                                                          (reset! (:status agent) :idle)
+                                                          (emit agent {:type :status :status :idle})
+                                                          (agent-end)
+                                                          {:aborted true})))
 
                                                   ;; Terminal error (non-retryable or retries exhausted)
-                                                    :else
-                                                    (do (when (pos? @(:retry-count agent))
-                                                          (let [n @(:retry-count agent)]
-                                                            (emit agent {:type :auto-retry-end
-                                                                         :success false
-                                                                         :attempt n
-                                                                         :final-error err})
-                                                            (reset! (:retry-count agent) 0)))
-                                                        (when on-error (on-error err))
-                                                        (reset! (:status agent) :error)
-                                                        (emit agent {:type :error :message err})
-                                                        (agent-end err)
-                                                        {:aborted true})))
-                                                (let [retried @(:retry-count agent)]
+                                                  :else
+                                                  (do (when (pos? @(:retry-count agent))
+                                                        (let [n @(:retry-count agent)]
+                                                          (emit agent {:type :auto-retry-end
+                                                                       :success false
+                                                                       :attempt n
+                                                                       :final-error err})
+                                                          (reset! (:retry-count agent) 0)))
+                                                      (when on-error (on-error err))
+                                                      (reset! (:status agent) :error)
+                                                      (emit agent {:type :error :message err})
+                                                      (agent-end err)
+                                                      {:aborted true})))
+                                              (let [retried @(:retry-count agent)]
                                                 ;; A retried LLM call succeeded — reset the budget
-                                                  (when (pos? retried)
-                                                    (reset! (:retry-count agent) 0)
-                                                    (emit agent {:type :auto-retry-end
-                                                                 :success true
-                                                                 :attempt retried}))
-                                                  (when @(:overflow-recovered agent)
+                                                (when (pos? retried)
+                                                  (reset! (:retry-count agent) 0)
+                                                  (emit agent {:type :auto-retry-end
+                                                               :success true
+                                                               :attempt retried}))
+                                                (when @(:overflow-recovered agent)
                                                   ;; A non-error message ends overflow recovery (pi resets on success)
-                                                    (reset! (:overflow-recovered agent) false))
-                                                  (let [text (:text result)
-                                                        tool-calls (:tool-calls result)
-                                                        usage (:usage result)]
-                                                    (if (seq tool-calls)
+                                                  (reset! (:overflow-recovered agent) false))
+                                                (let [text (:text result)
+                                                      tool-calls (:tool-calls result)
+                                                      usage (:usage result)]
+                                                  (if (seq tool-calls)
                                                     ;; Execute tool calls
-                                                      (let [assistant-msg (add-assistant-message! agent text tool-calls usage)]
-                                                        (reset! (:status agent) :executing)
-                                                        (emit agent {:type :status :status :executing
-                                                                     :tool-calls tool-calls})
-                                                        (let [tool-results (execute-tool-calls! agent tool-calls assistant-msg)]
-                                                          (reset! (:status agent) :thinking)
-                                                          (emit agent {:type :status :status :thinking})
-                                                          (emit agent {:type :turn-end
-                                                                       :message assistant-msg
-                                                                       :tool-results tool-results})
-                                                        ;; Proactive mid-run compaction (pi: after tool results, before next call)
-                                                          (maybe-compact! agent)
-                                                          (if (after-turn! agent t assistant-msg tool-results)
-                                                            {:settled (inc t)}
-                                                            (recur (inc t) tool-calls false))))
-                                                    ;; Final response
-                                                      (let [assistant-msg (add-assistant-message! agent text nil (:usage result))
-                                                            tool-results []]
+                                                    (let [assistant-msg (add-assistant-message! agent text tool-calls usage)]
+                                                      (reset! (:status agent) :executing)
+                                                      (emit agent {:type :status :status :executing
+                                                                   :tool-calls tool-calls})
+                                                      (let [tool-results (execute-tool-calls! agent tool-calls assistant-msg)]
+                                                        (reset! (:status agent) :thinking)
+                                                        (emit agent {:type :status :status :thinking})
                                                         (emit agent {:type :turn-end
                                                                      :message assistant-msg
                                                                      :tool-results tool-results})
+                                                        ;; Proactive mid-run compaction (pi: after tool results, before next call)
+                                                        (maybe-compact! agent)
                                                         (if (after-turn! agent t assistant-msg tool-results)
                                                           {:settled (inc t)}
-                                                          (recur (inc t) [] false))))))))))))))]
-                      (if (:aborted inner)
-                        nil ;; aborted (error or cancel) — exit without follow-ups
-                        (let [turn' (:settled inner)
+                                                          (recur (inc t) tool-calls false))))
+                                                    ;; Final response
+                                                    (let [assistant-msg (add-assistant-message! agent text nil (:usage result))
+                                                          tool-results []]
+                                                      (emit agent {:type :turn-end
+                                                                   :message assistant-msg
+                                                                   :tool-results tool-results})
+                                                      (if (after-turn! agent t assistant-msg tool-results)
+                                                        {:settled (inc t)}
+                                                        (recur (inc t) [] false))))))))))))))]
+                    (if (:aborted inner)
+                      nil ;; aborted (error or cancel) — exit without follow-ups
+                      (let [turn' (:settled inner)
                             ;; Outer: poll follow-up queue
-                              follow-ups (drain-queue! (:follow-up agent)
-                                                       (:follow-up-mode agent))]
-                          (if (seq follow-ups)
-                            (do (doseq [m follow-ups]
-                                  (add-user-message! agent m))
-                                (emit agent {:type :queue-update
-                                             :steering @(:steering agent)
-                                             :follow-up @(:follow-up agent)})
-                                (reset! (:status agent) :thinking)
-                                (emit agent {:type :status :status :thinking})
-                                (recur turn'))
-                            (do (reset! (:status agent) :idle)
-                                (emit agent {:type :status :status :idle})
-                                (agent-end)
-                                (when on-done (on-done @text-buf)))))))))))
+                            follow-ups (drain-queue! (:follow-up agent)
+                                                     (:follow-up-mode agent))]
+                        (if (seq follow-ups)
+                          (do (doseq [m follow-ups]
+                                (add-user-message! agent m))
+                              (emit agent {:type :queue-update
+                                           :steering @(:steering agent)
+                                           :follow-up @(:follow-up agent)})
+                              (reset! (:status agent) :thinking)
+                              (emit agent {:type :status :status :thinking})
+                              (recur turn'))
+                          (do (reset! (:status agent) :idle)
+                              (emit agent {:type :status :status :idle})
+                              (agent-end)
+                              (when on-done (on-done @text-buf))))))))))
 
             (catch Exception e
               (reset! (:status agent) :error)
