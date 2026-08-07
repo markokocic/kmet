@@ -407,9 +407,12 @@
                                         {:role :info :label "Reload"
                                          :content "Reloaded keybindings, extensions, skills, prompts, themes, and context files."}))
         (catch Exception e
+          (debug/log "reload failed: " e)
           (ui/chat-history-add-message! chat-history
                                         {:role :info :label "Reload"
-                                         :content (str "Reload failed: " (ex-message e))}))))))
+                                         :content (str "Reload failed: "
+                                                       (or (ex-message e)
+                                                           (.getName (class e))))}))))))
 
 (defn- register-not-implemented-commands!
   "Register pi's builtin slash commands that kmet does not implement yet,
@@ -1318,9 +1321,6 @@
                             :pending-bash-components (atom [])
                             :pending-messages-container (container/make-container [pm])})]
 
-    ;; Expose CoreState to the agent on-event handler (for :status events)
-    (reset! cs-ref cs)
-
     ;; Initial loaded-resources sections (rebuilt on /reload)
     (ui/loaded-resources-set-sections! lr (build-loaded-resource-sections))
 
@@ -1343,7 +1343,31 @@
 
     ;; Status indicator (Pi-style: separate layer between chat and editor)
     (let [si (ui/make-status-indicator :theme (cfg/get-theme config))
-          cs (assoc cs :status-indicator si)
+          ;; Theme controller (pi: InteractiveThemeController) — created in
+          ;; the layout so CoreState carries it for all handlers (slash
+          ;; commands, /reload, extension registry); applies the configured
+          ;; theme, drives auto light/dark sync via color-scheme
+          ;; notifications, and re-themes the app components live on change
+          ;; (the on-changed callback — pi: notifyChanged → onChanged). The
+          ;; callback runs only after the layout is fully bound.
+          tc (theme-ctrl/make-theme-controller
+              t config
+              (fn [msg] (tui/tui-flash! t msg :duration-ms 3000))
+              (fn []
+                (let [current-theme (th/get-current-theme)]
+                  ;; key-hint theme fns first — the header rebuild re-runs
+                  ;; the content fns that use them
+                  (app-kb/set-key-hint-theme-fns!
+                   #(th/dim %) #(th/fg current-theme :muted %))
+                  (ui/chat-history-set-theme! ch current-theme)
+                  (ui/footer-set-theme! ftr current-theme)
+                  (ui/status-indicator-set-theme! si current-theme)
+                  (ui/loaded-resources-set-theme! lr current-theme)
+                  (expandable-text/expandable-text-rebuild! hdr)
+                  (editor/editor-set-autocomplete-theme!
+                   ed (th/get-select-list-theme current-theme))
+                  (tui/tui-request-render t))))
+          cs (assoc cs :status-indicator si :theme-controller tc)
           ;; Pi layout (interactive-mode.ts setupUiLayout): the TUI root is a
           ;; single flat document — the transcript (header, loaded resources,
           ;; chat) followed top-to-bottom by pending messages, status, widgets
@@ -1451,41 +1475,23 @@
       ;; ExpandableText fns on first render)
       (update-footer! cs)
 
-      ;; Theme controller (pi: InteractiveThemeController) — applies the
-      ;; configured theme, drives auto light/dark sync via color-scheme
-      ;; notifications, and re-themes the app components live on change
-      ;; (the on-changed callback — pi: notifyChanged → onChanged).
-      (let [tc (theme-ctrl/make-theme-controller
-                t config
-                (fn [msg] (tui/tui-flash! t msg :duration-ms 3000))
-                (fn []
-                  (let [current-theme (th/get-current-theme)]
-                    ;; key-hint theme fns first — the header rebuild re-runs
-                    ;; the content fns that use them
-                    (app-kb/set-key-hint-theme-fns!
-                     #(th/dim %) #(th/fg current-theme :muted %))
-                    (ui/chat-history-set-theme! ch current-theme)
-                    (ui/footer-set-theme! ftr current-theme)
-                    (ui/status-indicator-set-theme! si current-theme)
-                    (ui/loaded-resources-set-theme! lr current-theme)
-                    (expandable-text/expandable-text-rebuild! hdr)
-                    (editor/editor-set-autocomplete-theme!
-                     ed (th/get-select-list-theme current-theme))
-                    (tui/tui-request-render t))))
-            cs (assoc cs :theme-controller tc)]
-
       ;; Extension UI registry (pi: ExtensionUIContext) — installed after the
       ;; layout is live so extensions can drive the UI from event handlers
-        (build-extension-ui-registry cs
-                                     {:ed ed :ftr ftr :hdr hdr :ch ch
-                                      :sp1 sp1 :fdp fdp
-                                      :header-container header-container
-                                      :editor-container editor-container
-                                      :widget-container-above widget-container-above
-                                      :widget-container-below widget-container-below}
-                                     tc)
+      (build-extension-ui-registry {:tui t :cs cs}
+                                   {:ed ed :ftr ftr :hdr hdr :ch ch
+                                    :sp1 sp1 :fdp fdp
+                                    :header-container header-container
+                                    :editor-container editor-container
+                                    :widget-container-above widget-container-above
+                                    :widget-container-below widget-container-below}
+                                   tc)
 
-        cs))))
+      ;; Expose the fully-built CoreState to the agent on-event handler (for
+      ;; :status events) — after the layout assocs so the status
+      ;; indicator/container and theme controller are present
+      (reset! cs-ref cs)
+
+      cs)))
 
 ;; ─── Extension UI registry (pi: ExtensionUIContext) ────────────────────────
 ;; build-layout installs this registry after the layout is live; extensions
