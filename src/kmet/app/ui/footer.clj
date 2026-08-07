@@ -62,7 +62,10 @@
             home (or (System/getenv "HOME") (System/getenv "USERPROFILE"))
             branch (fdp/fdp-get-git-branch provider)
             pwd (str (format-cwd-for-footer (fdp/fdp-get-cwd provider) home)
-                     (when branch (str " (" branch ")")))
+                     (when branch (str " (" branch ")"))
+                     ;; pi: footer line 1 shows `pwd • sessionName` when set
+                     (when-let [session-name (fdp/fdp-get-session-name provider)]
+                       (str " • " session-name)))
             pwd-line (u/truncate-to-width (theme/dim pwd) width (theme/dim "..."))
             ;; ── Stats left (pi: statsParts) ──────────────────────────────
             stats-parts (cond-> []

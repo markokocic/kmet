@@ -222,6 +222,47 @@
           (t/is (= (count branch) (count @(:entries loaded))))))
       (finally (fs/delete-tree dir)))))
 
+;; ─── Session display name (pi: /name command) ────────────────────────────
+
+(t/deftest test-sanitize-session-name
+  (t/is (= "my session" (s/sanitize-session-name " my\nsession\r\n "))
+        "newlines collapse to spaces, then trim")
+  (t/is (= "" (s/sanitize-session-name "  \n "))
+        "whitespace-only names sanitize to empty"))
+
+(t/deftest test-append-session-info
+  (let [session (s/create-session test-dir)
+        entry (s/append-session-info! session "my session")]
+    (t/is (= :session_info (:role entry)))
+    (t/is (= "my session" (:name entry)))
+    (t/is (= 1 (count @(:entries session))))
+    (t/is (= 1 (count (s/get-branch session)))
+          "session_info participates in the branch tree")))
+
+(t/deftest test-get-session-name
+  (let [session (s/create-session test-dir)]
+    (t/is (nil? (s/get-session-name session)))
+    (s/append-entry session {:role :user :content "hi"})
+    (s/append-session-info! session "alpha")
+    (t/is (= "alpha" (s/get-session-name session)))
+    (s/append-session-info! session "beta")
+    (t/is (= "beta" (s/get-session-name session))
+          "latest session_info entry wins")))
+
+(t/deftest test-get-session-name-empty-clears
+  (let [session (s/create-session test-dir)]
+    (s/append-session-info! session "alpha")
+    (s/append-session-info! session "   ")
+    (t/is (nil? (s/get-session-name session))
+          "empty name explicitly clears the title")))
+
+(t/deftest test-session-name-persists
+  (let [session (s/create-session test-dir)
+        file (:file session)]
+    (s/append-session-info! session "my session")
+    (let [loaded (s/load-session file)]
+      (t/is (= "my session" (s/get-session-name loaded))))))
+
 ;; ─── Usage tracking ────────────────────────────────────────────────────────
 
 ;; ─── Bash result recording ─────────────────────────────────────────────────

@@ -284,6 +284,34 @@
     :handler (fn [cs _]
                (show-session-tree cs))})
   (commands/register-command!
+   {:name "name"
+    :description "Set session display name"
+    :argument-hint "<name>"
+    :handler (fn [cs args]
+               (let [sess @(:session-atom cs)]
+                 (if (nil? sess)
+                   (ui/chat-history-add-message! (:chat-history cs)
+                                                 {:role :assistant
+                                                  :content "No active session."})
+                   (if (seq args)
+                     (let [sanitized (session/sanitize-session-name args)]
+                       (session/append-session-info! sess sanitized)
+                       (when-not (= args sanitized)
+                         ;; pi: warn when normalization changed the input
+                         (ui/show-warning!
+                          (:chat-history cs)
+                          (str "Session name was normalized from " (pr-str args)
+                               " to " (pr-str sanitized))))
+                       (ui/chat-history-add-message! (:chat-history cs)
+                                                     {:role :info :label "Name"
+                                                      :content (str "Session name set: " sanitized)}))
+                     (if-let [current (session/get-session-name sess)]
+                       (ui/chat-history-add-message! (:chat-history cs)
+                                                     {:role :info :label "Name"
+                                                      :content (str "Session name: " current)})
+                       (ui/show-warning! (:chat-history cs)
+                                         "Usage: /name <name>"))))))})
+  (commands/register-command!
    {:name "reload"
     :description "Reload keybindings, extensions, skills, prompts, themes, and context files"
     :handler handle-reload})
@@ -458,8 +486,13 @@
                          (let [fname (str/replace s #".*/" "")
                                short-id (subs fname 0 (min 8 (count fname)))
                                loaded (session/load-session s)
-                               n-msgs (count @(:entries loaded))]
-                           {:label (str short-id "... " n-msgs " msgs")
+                               name (session/get-session-name loaded)
+                               ;; session_info entries are metadata, not messages
+                               n-msgs (count (remove #(= :session_info (:role %))
+                                                     @(:entries loaded)))]
+                           {:label (str short-id
+                                        (when name (str " (" name ")"))
+                                        "... " n-msgs " msgs")
                             :value s})))
             sl-ref (atom nil)
             on-select-fn (fn []
@@ -472,7 +505,11 @@
                                (reset! (:session-atom cs) sess)
                                (let [new-ag (assoc (:agent-state cs) :session sess)]
                                  (reset! (:agent-state cs) new-ag))
-                               (doseq [e entries]
+                               ;; session_info entries are metadata — never
+                               ;; rendered as chat messages (pi: only message
+                               ;; entries are replayed on resume)
+                               (doseq [e entries
+                                       :when (not= :session_info (:role e))]
                                  (let [role (:role e)
                                       ;; Tool results are stored as :tool_result blocks
                                       ;; (with :content str); others as :text blocks

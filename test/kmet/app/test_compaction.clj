@@ -17,8 +17,9 @@
     (t/is (pos? (compaction/estimate-tokens {:role :assistant
                                              :content [{:type :thinking :thinking "hmm..."}]
                                              :tool-calls [{:name "read" :arguments {:path "/x"}}]}))))
-  (t/testing "info and excluded bash contribute 0"
+  (t/testing "info, session_info, and excluded bash contribute 0"
     (t/is (zero? (compaction/estimate-tokens {:role :info :content "x"})))
+    (t/is (zero? (compaction/estimate-tokens {:role :session_info :name "my session"})))
     (t/is (zero? (compaction/estimate-tokens {:role :bash :command "ls" :output "out" :exclude-from-context? true}))))
   (t/testing "bash without exclusion counts command + output"
     (t/is (pos? (compaction/estimate-tokens {:role :bash :command "ls" :output "out"})))))

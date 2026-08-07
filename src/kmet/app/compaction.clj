@@ -43,11 +43,12 @@
 
 (defn estimate-tokens
   "Rough token estimate for a session entry (pi: estimateTokens, chars/4).
-   :info and excluded-from-context :bash entries contribute 0 — they never
-   reach the LLM."
+   :info, :session_info, and excluded-from-context :bash entries contribute 0
+   — they never reach the LLM."
   [entry]
   (let [chars (case (:role entry)
                 :info 0
+                :session_info 0
                 :bash (if (:exclude-from-context? entry)
                         0
                         (+ (count (or (:command entry) ""))

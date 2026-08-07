@@ -82,6 +82,35 @@
               (recur (:parent-id e)))))
         (vec (reverse @path))))))
 
+;; ─── Session display name (pi: /name command) ─────────────────────────────
+
+(defn sanitize-session-name
+  "Sanitize a session display name: collapse newlines to spaces, trim
+   (pi: appendSessionInfo — [\\r\\n]+ → space)."
+  [name]
+  (-> (str name)
+      (str/replace #"[\r\n]+" " ")
+      str/trim))
+
+(defn append-session-info!
+  "Set the session display name: appends a session_info entry carrying the
+   sanitized name (pi: appendSessionInfo). Returns the entry."
+  [session name]
+  (append-entry session {:role :session_info :name (sanitize-session-name name)}))
+
+(defn get-session-name
+  "Current session display name from the latest session_info entry, or nil.
+   Empty names explicitly clear the title (pi: getSessionName — walks
+   entries in reverse; the latest session_info entry wins, even when its
+   name is empty)."
+  [session]
+  (loop [entries (reverse @(:entries session))]
+    (when-let [e (first entries)]
+      (if (= :session_info (:role e))
+        (let [n (str/trim (str (:name e "")))]
+          (when (seq n) n))
+        (recur (rest entries))))))
+
 (defn get-tree
   "Build a tree structure from session entries.
    Returns map of {:id info, :children [...]}"
@@ -99,7 +128,12 @@
                               trimmed (str/trim text)]
                           (if (seq trimmed)
                             (subs trimmed 0 (min 60 (count trimmed)))
-                            "(empty)"))
+                            ;; session_info entries carry the display name
+                            ;; instead of message content (pi: tree shows
+                            ;; "[title: name]")
+                            (if (= (:role entry) :session_info)
+                              (or (:name entry) "(empty)")
+                              "(empty)")))
                :children (mapv build-node (children (:id entry)))})]
       (mapv build-node root-children))))
 

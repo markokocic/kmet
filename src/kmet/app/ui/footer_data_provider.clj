@@ -72,9 +72,11 @@
   nil)
 
 (defn fdp-get-session-name
-  "Session display name. kmet sessions have no name (pi: getSessionName)."
-  [_provider]
-  nil)
+  "Session display name from the latest session_info entry (pi:
+   getSessionName), or nil when the session has no name."
+  [provider]
+  (when-let [sess (fdp-get-session provider)]
+    (session/get-session-name sess)))
 
 (defn fdp-get-provider-count [provider] @(:provider-count-atom provider))
 

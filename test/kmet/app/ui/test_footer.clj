@@ -1,7 +1,9 @@
 (ns kmet.app.ui.test-footer
   (:require [clojure.string :as str]
             [clojure.test :as t :refer [deftest is testing]]
+            [babashka.fs :as fs]
             [kmet.tui.core :as core]
+            [kmet.app.session :as s]
             [kmet.app.ui.footer :as ft]
             [kmet.app.ui.footer-data-provider :as fdp]))
 
@@ -111,6 +113,26 @@
           plain (render-plain c 20)]
       (is (every? #(<= (count %) 20) plain)
           "every rendered line fits the width"))))
+
+(deftest test-session-name
+  (testing "session display name renders after the cwd (pi: pwd • name)"
+    (let [dir (str "target/test-footer-name-" (System/currentTimeMillis))
+          sess (s/create-session dir)]
+      (try
+        (s/append-session-info! sess "my project")
+        (let [c (make-footer-with-session :session sess :cwd "/srv/workspace")
+              plain (render-plain c 60)]
+          ;; a git branch may resolve in the test env — allow an optional suffix
+          (is (some #(re-find #"/srv/workspace( \([^)]*\))? • my project" %) plain)))
+        (finally (fs/delete-tree dir)))))
+  (testing "no name renders the plain cwd line"
+    (let [dir (str "target/test-footer-name-" (System/currentTimeMillis))
+          sess (s/create-session dir)]
+      (try
+        (let [c (make-footer-with-session :session sess :cwd "/srv/workspace")
+              plain (render-plain c 60)]
+          (is (some #(re-find #"/srv/workspace( \([^)]*\))?$" %) plain)))
+        (finally (fs/delete-tree dir))))))
 
 (deftest test-format-tokens
   (testing "pi formatTokens scaling"
