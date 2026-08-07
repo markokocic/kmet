@@ -65,7 +65,7 @@
 
 ;; OSC 9;4 terminal progress (pi: terminal.ts TERMINAL_PROGRESS_*)
 (def ^:const TERMINAL-PROGRESS-ACTIVE-SEQUENCE "\u001b]9;4;3\u0007")
-(def ^:const TERMINAL-PROGRESS-CLEAR-SEQUENCE "\u001b]9;4;0;\u0007")
+(def ^:const TERMINAL-PROGRESS-CLEAR-SEQUENCE "\u001b]9;4;0\u0007")
 (def ^:const TERMINAL-PROGRESS-KEEPALIVE-MS 1000)
 
 (def ^:private osc-11-response-re #"(?i)\u001b\]11;([^\u0007\u001b]*)(?:\u0007|\u001b\\)")
@@ -115,11 +115,14 @@
               (when (and r g b) {:r r :g g :b b}))))))))
 
 (defn parse-terminal-color-scheme-report
-  "Parse a terminal color scheme report (\u001b[?997;1n = dark, ;2 = light)
-   into :dark / :light, or nil (pi: parseTerminalColorSchemeReport)."
+  "Parse a terminal color scheme report buffer into :dark / :light, or nil.
+   Accepts batched buffers with several reports — the LAST report wins,
+   matching pi's repeated-group capture (pi: parseTerminalColorSchemeReport,
+   pattern (?: ESC [ ?997;(1|2)n )+)."
   [s]
-  (when-let [[_ v] (re-matches color-scheme-report-re s)]
-    (if (= v "2") :light :dark)))
+  (when (re-matches #"(?:\u001b\[\?997;(1|2)n)+" s)
+    (let [[_ v] (last (re-seq color-scheme-report-re s))]
+      (if (= v "2") :light :dark))))
 
 (defn parse-cell-size-response
   "Parse the cell size response to \u001b[16t (\u001b[6;height;widtht) into

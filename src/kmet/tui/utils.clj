@@ -21,6 +21,37 @@
 ;; or an open hyperlink bleeding into the next line.
 (def ^:const SEGMENT-RESET "\u001b[0m\u001b]8;;\u0007")
 
+;; OSC 8 hyperlink close for truncation (pi: getActiveOsc8Close). When
+;; truncate-to-width cuts through a hyperlink label, the retained prefix
+;; would leave the link open — the close must be emitted before the
+;; ellipsis so following text isn't swallowed by the link.
+(def ^:private osc-8-link-re #"\u001b\]8;[^\u0007\u001b\u009c]*(?:\u001b\\|\u0007|\u009c)")
+
+(defn- active-osc-8-close
+  "Close sequence for the last open OSC 8 hyperlink in S, or \"\" when none
+   is open. A link is open when its `params;url` body has a ';' and a
+   non-empty url; a bare `\u001b]8;;\u0007` close resets it. The close reuses
+   the link's terminator (BEL or ST) like pi (pi: parseOsc8Hyperlink /
+   formatOsc8Close)."
+  [s]
+  (when (str/includes? s "\u001b]8;")
+    (let [term (reduce (fn [term code]
+                         (let [term-len (cond
+                                          (str/ends-with? code "\u0007") 1
+                                          (str/ends-with? code "\u001b\\") 2
+                                          :else 1)
+                               body (subs code 4 (- (count code) term-len))
+                               sep (str/index-of body ";")]
+                           (cond
+                             ;; no separator — not a link, state unchanged (pi: undefined)
+                             (nil? sep) term
+                             ;; empty url — a close, resets the active link (pi: null)
+                             (>= (inc sep) (count body)) nil
+                             :else (if (str/ends-with? code "\u0007") "\u0007" "\u001b\\"))))
+                       nil
+                       (re-seq osc-8-link-re s))]
+      (when term (str "\u001b]8;;" term)))))
+
 ;; ANSI sequences (CSI, OSC, APC) recognized while expanding tabs (pi:
 ;; extractAnsiCode). The cursor marker is an APC (ESC _ ... BEL).
 (def ^:private ANSI-OR-TAB-RE
@@ -206,7 +237,7 @@
                                [(.group m) (.end m)])))]
              (loop [i 0 total 0 pending ""]
                (if (or (>= i n) (>= total target))
-                 (str sb ellipsis)
+                 (str sb (active-osc-8-close (str sb)) ellipsis)
                  (if-let [[code end] (ansi-at i)]
                    (recur end total (str pending code))
                    (let [cp (code-point-at s i)
@@ -216,7 +247,7 @@
                        (do (.append sb pending)
                            (.append sb (subs s i (+ i nchars)))
                            (recur (+ i nchars) (+ total w) ""))
-                       (str sb ellipsis)))))))))))))
+                       (str sb (active-osc-8-close (str sb)) ellipsis)))))))))))))
 
 ;; ─── Word wrapping ──────────────────────────────────────────────────────────
 

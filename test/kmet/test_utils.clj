@@ -27,6 +27,26 @@
   (t/is (= ".." (u/truncate-to-width "hello world" 2 "...")))
   (t/is (= "" (u/truncate-to-width "hello world" 0 "..."))))
 
+(t/deftest test-truncate-to-width-osc-8-close
+  ;; pi: getActiveOsc8Close — cutting through a hyperlink label must close
+  ;; the link before the ellipsis so following text isn't swallowed by it
+  (t/testing "BEL-terminated link is closed with BEL"
+    (let [link "\u001b]8;;https://example.com\u0007"
+          result (u/truncate-to-width (str link "hello world") 9 "…")]
+      (t/is (= (str link "hello wo\u001b]8;;\u0007…") result))
+      (t/is (= 9 (u/visible-width result)))))
+  (t/testing "ST-terminated link is closed with ST"
+    (let [link "\u001b]8;;https://example.com\u001b\\"
+          result (u/truncate-to-width (str link "hello world") 5 "…")]
+      (t/is (= (str link "hell\u001b]8;;\u001b\\…") result))
+      (t/is (= 5 (u/visible-width result)))))
+  (t/testing "an already-closed link is not closed again"
+    (let [text "\u001b]8;;https://example.com\u0007ok\u001b]8;;\u0007hello world"
+          result (u/truncate-to-width text 6 "…")]
+      (t/is (str/ends-with? result "hel…"))
+      (t/is (not (str/includes? result "\u001b]8;;\u0007\u001b]8;;\u0007")) "no doubled close")
+      (t/is (= 6 (u/visible-width result))))))
+
 (t/deftest test-wrap-long-unbreakable-word
   ;; A single word longer than the width wraps across lines (pi: breakLongWord)
   ;; instead of being clipped — every character is preserved.

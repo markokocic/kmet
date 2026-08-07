@@ -72,7 +72,12 @@
     (t/is (= :dark (lib/parse-terminal-color-scheme-report "\u001b[?997;1n")))
     (t/is (= :light (lib/parse-terminal-color-scheme-report "\u001b[?997;2n")))
     (t/is (nil? (lib/parse-terminal-color-scheme-report "\u001b[?997;3n")))
-    (t/is (nil? (lib/parse-terminal-color-scheme-report "a")))))
+    (t/is (nil? (lib/parse-terminal-color-scheme-report "a"))))
+  (testing "batched reports — the last one wins (pi: (?: ESC [ ?997;(1|2)n )+)"
+    (t/is (= :dark (lib/parse-terminal-color-scheme-report "\u001b[?997;1n\u001b[?997;1n")))
+    (t/is (= :light (lib/parse-terminal-color-scheme-report "\u001b[?997;1n\u001b[?997;2n")))
+    (t/is (nil? (lib/parse-terminal-color-scheme-report "\u001b[?997;3n\u001b[?997;1n"))
+          "an invalid report in the batch rejects the whole buffer")))
 
 (deftest test-parse-cell-size-response
   (testing "CSI 16 t reply: CSI 6;height;width t (pi: consumeCellSizeResponse)"

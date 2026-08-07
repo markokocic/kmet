@@ -873,9 +873,9 @@ otherwise.
 | **Mermaid diagram rendering** — app-layer markdown transformer → image; `markdown.mermaid` setting (`off`/`final`/`streaming`, default `streaming`) (`66534fbdc`) | **missing** (app layer; needs an image pipeline) |
 | **Extension `registerMarkdownTransformer`** + `MarkdownTransformContext` (messageType/isStreaming/availableWidth) (`714978bf5`) | **missing** in `app/extensions.clj` |
 | `tui.editor.historyPrevious`/`historyNext` ids — configurable prompt history actions (`16ad96ae8`) | **missing** — kmet browses history via up/down at the edges only; no dedicated action ids |
-| Batched color-scheme reports `^(?:\x1b\[\?997;(1|2)n)+$` (`0e633790c`) | **partial** — `parse-terminal-color-scheme-report` matches one report per buffer; a batched buffer falls through to key parsing |
-| OSC 8 link close on truncation (`b780d20aa`) + skip-OSC-8-scan perf guard (`229afb825`) | **partial** — `truncate-to-width` drops pending ANSI but leaves an active hyperlink open; perf guard N/A |
-| Progress clear sequence `\x1b]9;4;0\x07` (no trailing `;`) (`e8a17822d`) | **divergence** — kmet still writes `\x1b]9;4;0;\x07` (`libs/terminal.clj` `TERMINAL-PROGRESS-CLEAR-SEQUENCE`) |
+| Batched color-scheme reports `^(?:\x1b\[\?997;(1|2)n)+$` (`0e633790c`) | ✅ `parse-terminal-color-scheme-report` accepts batched buffers, last report wins |
+| OSC 8 link close on truncation (`b780d20aa`) + skip-OSC-8-scan perf guard (`229afb825`) | ✅ `truncate-to-width` closes the active hyperlink (BEL or ST) before the ellipsis (`active-osc-8-close`); perf guard N/A |
+| Progress clear sequence `\x1b]9;4;0\x07` (no trailing `;`) (`e8a17822d`) | ✅ `TERMINAL-PROGRESS-CLEAR-SEQUENCE` matches pi |
 | Grapheme width spacing-mark heuristic — Indic conjuncts/spacing marks (`dfe47d3fb`) | **divergence** — kmet's `char-width` has no mark handling (edge-case horizontal drift) |
 | Windows Shift+Enter detection (`73dd066ee`) | **missing** — extends the existing native-modifiers divergence (Apple Terminal) |
 | Keyboard-input throttle fix (`29d9f087c`) | N/A — kmet's fixed 16 ms render loop has no timer-based throttling to preempt |
