@@ -209,78 +209,105 @@ Implementation notes (Phase 0):
 
 ## Phase 1 — Data pipeline (`bb generate-models`)
 
+**Status: implemented.** `scripts/generate_models.clj` (a faithful port of pi's
+`scripts/generate-models.ts`, filtered to kmet's 4 providers) + `bb generate-models` /
+`bb check-model-data` tasks + `test/kmet/app/test_model_data.clj` (offline
+strict validation of the committed files + manifest hash match; loads the
+script via `load-file` and runs its `validate-committed!`, keeping the
+generator the single source of truth). Catalogs regenerated from models.dev
+(2026-08-08): deepseek 2, github-copilot 17, opencode-go 16, opencode 38.
+
 ### Task
 
 `bb.edn`:
 
 ```clojure
 generate-models {:doc "Regenerate provider model catalogs from models.dev (network)"
-                 :task (load-file "scripts/generate_models.clj")}
+                 :task (do (load-file "scripts/generate_models.clj")
+                           ((ns-resolve 'generate-models '-main)))}
+check-model-data {:doc "Offline validation of committed provider catalogs + manifest"
+                  :task (let [errors (do (load-file "scripts/generate_models.clj")
+                                         ((ns-resolve 'generate-models 'validate-committed!)))]
+                          (if (seq errors) ... (System/exit 1)))}  ;; exits 1 on errors
 ```
 
-Optionally `check-model-data` (offline validation of committed data; the
-offline half also runs as a test — see Testing).
+bb.edn is parsed as EDN and task bodies are analyzed before `load-file` runs,
+so the script fns are reached via `ns-resolve` at runtime (no `#()` either —
+EDN has no reader macros).
 
 ### Script behavior (`scripts/generate_models.clj`)
 
-Babashka script; uses `babashka.http-client` (or `java.net.http`) + cheshire.
+Babashka script; uses `babashka.http-client` + cheshire (both bb builtins).
 
 1. Fetch `https://models.dev/api.json` (pi: `loadModelsDevData`).
 2. For each target provider, filter `tool_call === true`, skip `status === "deprecated"`.
-3. Apply per-provider enrichment rules (ported from
-   `scripts/generate-models.ts`; exact values verified at implementation time
-   against the pi script):
+3. Per-provider enrichment (ported from `scripts/generate-models.ts`; exact
+   values verified against pi's script):
 
 **opencode / opencode-go** (pi `opencodeVariants`, basePath
 `https://opencode.ai/zen` / `https://opencode.ai/zen/go`):
 - api from models.dev `provider.npm`: `@ai-sdk/openai` → **skip** (needs
-  openai-responses; log skipped ids), `@ai-sdk/anthropic` → `:anthropic-messages`
-  (baseUrl = basePath), `@ai-sdk/google` → `:google-generative-ai`
-  (baseUrl = basePath + `/v1`), everything else (`@ai-sdk/openai-compatible`,
-  null) → `:openai-completions` (baseUrl = basePath + `/v1`).
+  openai-responses; logged as `skipped (opencode, openai-responses)`),
+  `@ai-sdk/anthropic` → `:anthropic-messages` (baseUrl = basePath),
+  `@ai-sdk/google` → `:google-generative-ai` (baseUrl = basePath + `/v1`),
+  everything else (`@ai-sdk/openai-compatible`, null) → `:openai-completions`
+  (baseUrl = basePath + `/v1`).
 - `kimi-k2.6` (both providers): `:thinking-format :deepseek`,
   `:supports-reasoning-effort false`.
+- opencode `grok-build-0.1`: `:supports-reasoning-effort false`.
 - opencode-go overrides: `minimax-m2.7` → `:openai-completions`;
   `qwen3.5-plus`/`qwen3.6-plus` → `:openai-completions` +
   `:thinking-format :qwen`.
 - All opencode `:openai-completions` models: `:max-tokens-field :max-tokens`.
 
-**deepseek** (pi `deepseekV4Models` + models.dev):
-- base-url `https://api.deepseek.com`, api `:openai-completions`.
-- compat: `:requires-reasoning-content-on-assistant-messages true`,
-  `:thinking-format :deepseek`.
-- **Hardcoded overrides** for `deepseek-v4-flash` / `deepseek-v4-pro`
-  (models.dev lags; pi carries them as `missingOpenAiModels`/`deepseekV4Models`
-  with cost + 1M context). Port these verbatim into the script.
-- Other deepseek models from models.dev keep their listed limits/cost.
+**deepseek**: aligned to pi — **no models.dev loop**; the two hardcoded
+`deepseekV4Models` (`deepseek-v4-flash` / `deepseek-v4-pro`, cost + 1M context)
+are the whole catalog. Compat: `:requires-reasoning-content-on-assistant-messages
+true`, `:thinking-format :deepseek`.
+
+**deepseek-v4 compat normalization** (pi, after all providers): every
+openai-completions `deepseek-v4*` model gets the deepseek compat; opencode
+(zen) preserves native reasoning effort so it only gains
+`:requires-reasoning-content-on-assistant-messages` (no `:thinking-format`).
 
 **github-copilot** (pi copilot section):
 - base-url `https://api.individual.githubcopilot.com`, static headers
   `COPILOT_STATIC_HEADERS` (User-Agent `GitHubCopilotChat/0.35.0`,
   Editor-Version, Editor-Plugin-Version, Copilot-Integration-Id).
-- api: `claude-(haiku|sonnet|opus)-[45]...` → `:anthropic-messages`;
-  `gpt-5*`, `grok-4.5`, `oswe*`, `mai-*` → **skip** (openai-responses only;
-  log skipped ids); rest → `:openai-completions` with compat
-  `{:supports-store false :supports-developer-role false :supports-reasoning-effort false}`
-  (port the three keys kmet's builder needs; drop the rest).
+- api: `claude-(haiku|sonnet|opus)-[45]...` → `:anthropic-messages` (partial
+  match, like JS `test()` — `re-find`, not `re-matches`); `gpt-5*`, `grok-4.5`,
+  `oswe*`, `mai-*` → **skip** (openai-responses only; logged as `skipped
+  (github-copilot, openai-responses)`); rest → `:openai-completions` with
+  compat `{:supports-store false :supports-developer-role false
+  :supports-reasoning-effort false}` (the three keys kmet's builder needs).
+- context-window/max-tokens defaults 128000/8192 (pi); cost flat 4-field
+  `getModelsDevCost` (tiers dropped — kmet's Model has no cost tiers).
 - `filterModels` (OAuth availableModelIds) deferred — no OAuth in scope.
 
 4. **Strict validation** (pi `validateModelValue`): every model has non-empty
    `id`/`name`, matching provider/api, `base-url` string, `reasoning` bool,
-   non-empty `input`, positive finite `context-window`/`max-tokens`, valid
-   `cost` (4 numeric fields), no model id in two api groups, no duplicate ids
-   within a group. Fail the task on any error, print the list.
+   non-empty `input`, positive `context-window`/`max-tokens`, valid `cost`
+   (4 non-negative numeric fields), no model id in two api groups, no duplicate
+   ids within a group. All errors collected + printed; task exits 1 on any.
 5. Write `src/kmet/app/model_data/<provider>.edn` + `manifest.edn`
    (`:structure-hash` = sha256 over canonical sorted
-   `{provider -> {api -> sorted model-ids}}` string — mirrors pi's
-   `modelDataStructureHash`).
+   `{provider -> {model-id -> api}}` — identical computation to
+   `kmet.app.models/catalog-structure`, so the offline manifest check agrees).
 
 ### Committed data & offline test
 
-- The generated EDN + manifest are **committed**.
-- `test/kmet/app/test_model_data.clj` re-runs validation offline over the
-  committed files (structure validity + manifest hash match), so drift is
-  caught in CI without network.
+- The generated EDN + manifest are **committed**. The generator is
+  deterministic: api groups, model ids, and every map's keys are emitted in a
+  fixed order (canonical key-priority sort — hash-map iteration order is not
+  stable), costs rounded to 6 decimals, one `:generated-at` timestamp per run.
+- `bb check-model-data` + `test/kmet/app/test_model_data.clj` re-run the
+  strict validation offline over the committed files (structure validity +
+  manifest hash match), so drift is caught in CI without network.
+- **Regenerated catalog notes**: models.dev's opencode-go has no
+  `@ai-sdk/google` models, so opencode-go lost its `:google-generative-ai`
+  api-type (test updated); `test_models.clj` now pins all four providers'
+  api-types. `thinking-level-map` is still not emitted — Phase 2 derives it
+  from models.dev reasoning options (`getEffortThinkingLevelMap`).
 
 ---
 

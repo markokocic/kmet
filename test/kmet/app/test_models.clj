@@ -99,8 +99,13 @@
         (t/is (= "OpenCode Go" (:name og)))
         (t/is (= ["OPENCODE_API_KEY"] (:env-vars og)))
         (t/is (= "deepseek-v4-flash" (:default-model og)))
-        (t/is (= #{:openai-completions :anthropic-messages :google-generative-ai}
+        (t/is (= #{:openai-completions :anthropic-messages}
                  (:api-types og))))
+      (t/is (= #{:openai-completions :anthropic-messages :google-generative-ai}
+               (:api-types (m/get-provider :opencode))))
+      (t/is (= #{:openai-completions} (:api-types (m/get-provider :deepseek))))
+      (t/is (= #{:openai-completions :anthropic-messages}
+               (:api-types (m/get-provider :github-copilot))))
       (t/is (= ["DEEPSEEK_API_KEY"] (:env-vars (m/get-provider :deepseek))))
       (t/is (= ["COPILOT_GITHUB_TOKEN"] (:env-vars (m/get-provider :github-copilot)))))
     (t/testing "default provider/model resolves against the opencode-go catalog"

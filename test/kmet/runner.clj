@@ -15,6 +15,7 @@
             [kmet.app.test-tools]
             [kmet.app.test-llm]
             [kmet.app.test-models]
+            [kmet.app.test-model-data]
             [kmet.app.test-proxy]
             [kmet.app.test-loop]
             [kmet.test-theme]
@@ -85,6 +86,7 @@
     kmet.app.test-tools
     kmet.app.test-llm
     kmet.app.test-models
+    kmet.app.test-model-data
     kmet.app.test-proxy
     kmet.app.test-loop
     kmet.test-theme kmet.test-config
