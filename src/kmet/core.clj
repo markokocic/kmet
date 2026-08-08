@@ -101,7 +101,7 @@
   (println "Examples:")
   (println "  kmet                    Start interactive TUI")
   (println "  kmet -p \"list files\"    Print response and exit")
-  (println "  kmet --model gpt-4o     Start with specific model")
+  (println "  kmet --model deepseek-v4-flash  Start with a specific model")
   (println "  kmet @tasks.md         Start with file content"))
 
 ;; ─── Main ──────────────────────────────────────────────────────────────────

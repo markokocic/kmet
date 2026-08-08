@@ -403,13 +403,20 @@ anthropic compat (`getAnthropicMessagesCompat`) still only affects
 
 ## Phase 3 — Auth (`kmet.app.auth`)
 
+**Partial (env table applied early with the legacy removal):** the
+`get-api-key` case in `config.clj` now uses the pi env-api-keys table below
+(`OPENCODE_API_KEY` / `DEEPSEEK_API_KEY` / `COPILOT_GITHUB_TOKEN`;
+`KMET_OPENCODE_GO_KEY` dropped, legacy `:openai`/`:anthropic` cases removed).
+Remaining: the `kmet.app.auth` namespace (credential resolution,
+`configured?`, `/login` `/logout`) and the auth precedence tests.
+
 ### Env var alignment (pi `env-api-keys.ts`)
 
 | provider | env vars (pi order) | kmet change |
 |---|---|---|
-| `:opencode-go` | `OPENCODE_API_KEY` | **drop `KMET_OPENCODE_GO_KEY`** (breaking; note in help text) |
-| `:opencode` | `OPENCODE_API_KEY` | new |
-| `:deepseek` | `DEEPSEEK_API_KEY` | new |
+| `:opencode-go` | `OPENCODE_API_KEY` | **done** — `KMET_OPENCODE_GO_KEY` dropped |
+| `:opencode` | `OPENCODE_API_KEY` | **done** |
+| `:deepseek` | `DEEPSEEK_API_KEY` | **done** |
 | `:github-copilot` | `COPILOT_GITHUB_TOKEN` | new |
 | `:openai` | `OPENAI_API_KEY` | unchanged |
 | `:anthropic` | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` | keep `ANTHROPIC_API_KEY`; auth-token variants deferred (see later phases) |
