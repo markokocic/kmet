@@ -156,11 +156,13 @@
 
 (t/deftest test-get-api-key-returns-string-or-nil
   ;; get-api-key returns a string (if key available) or nil
-  (let [key (cfg/get-api-key :openai)]
+  (let [key (cfg/get-api-key :deepseek)]
     (t/is (or (nil? key) (string? key)))))
 
 (t/deftest test-get-api-key-unknown-provider
-  (t/is (nil? (cfg/get-api-key :nonexistent))))
+  ;; providers without an env entry → nil (auth.edn aside)
+  (t/is (nil? (cfg/get-api-key :nonexistent)))
+  (t/is (nil? (cfg/get-api-key :openai))))
 
 ;; ─── load-auth ─────────────────────────────────────────────────────────────
 

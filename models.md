@@ -190,13 +190,13 @@ Implementation notes (Phase 0):
 
 - **Structure hash canonical string**: pi hashes `JSON.stringify(sortedRecord)`;
   kmet uses `pr-str` of the equivalent sorted-map (same canonical content).
-- **openai/anthropic are kept as legacy providers without catalog entries**
-  (Phase 1's generator only covers the 4 target providers). Registry lookups
-  return nil for them and `loop/resolve-endpoint` then yields nil
-  api-type/base-url, so `llm/send-message` falls back to its provider
-  defaults (`default-openai-url` / `anthropic-url`, model "gpt-4o" /
-  "claude-sonnet-4-20250514") — exactly the old
-  `{:base-url nil :api-type provider}` fallback behavior.
+- **No legacy providers**: every provider must have a catalog entry
+  (opencode-go, opencode, deepseek, github-copilot). Unknown providers and
+  unknown model ids error out in `llm/send-message` ("Unknown provider" /
+  "Unknown model"). The earlier legacy :openai/:anthropic fallback
+  (`default-openai-url` / `anthropic-url`, model "gpt-4o" /
+  "claude-sonnet-4-20250514") was removed together with the legacy dispatch
+  and config.
 - **URL construction pre-Phase 2**: the catalog stores API-base URLs (as pi
   does), but llm still takes full endpoint URLs, so `loop/resolve-endpoint`
   appends `/chat/completions` / `/v1/messages`. Phase 2 moves this into the
@@ -341,10 +341,10 @@ URL, thinking shaping, max-token field and static headers all derive from it.
 | `:anthropic-messages` | `(str base-url "/v1/messages")` | `https://api.anthropic.com/v1/messages`, copilot `https://api.individual.githubcopilot.com/v1/messages` |
 | `:google-generative-ai` | `(str base-url "/models/" model-id ":streamGenerateContent?alt=sse")` | `https://opencode.ai/zen/v1/models/...:streamGenerateContent?alt=sse` |
 
-- `default-openai-url`/`anthropic-url` public constants removed; the legacy
-  provider defaults live in a private `legacy-defaults` map (`https://api.openai.com/v1`,
-  `https://api.anthropic.com`). The `:base-url` opt remains a full endpoint
-  URL override (used verbatim — local test servers, agent override).
+- `default-openai-url`/`anthropic-url` public constants removed along with
+  the legacy :openai/:anthropic provider fallback (`legacy-defaults`); the
+  `:base-url` opt remains a full endpoint URL override (used verbatim — local
+  test servers, agent override).
 - Static model `:headers` merged into request headers (copilot
   `COPILOT_STATIC_HEADERS`); google sends `x-goog-api-key`.
 
@@ -381,8 +381,9 @@ the caller (pi agent.ts: `thinkingLevel === "off" ? undefined : level`).
 - OpenAI-compatible: `:max_completion_tokens` default, `:max_tokens` when
   compat `:max-tokens-field` says so (`max-tokens-key`) — both from the
   model's `:max-tokens`.
-- Anthropic: `:max_tokens` = model `:max-tokens` (legacy fallback 4096),
-  thinking budget bounded by `max_tokens - 1024` (pi MIN_ANSWER_TOKENS).
+- Anthropic: `:max_tokens` = model `:max-tokens` (fallback 4096 for models
+  without the field), thinking budget bounded by `max_tokens - 1024` (pi
+  MIN_ANSWER_TOKENS).
 
 ### Context window
 
@@ -532,7 +533,9 @@ scope, pi's current implementation, and kmet's needs when the time comes.
 ## Migration & compatibility notes
 
 - **Breaking**: `KMET_OPENCODE_GO_KEY` env var removed in favor of
-  `OPENCODE_API_KEY` (update help text and `AGENTS.md` examples).
+  `OPENCODE_API_KEY` (help text, README and AGENTS.md updated); the legacy
+  `:openai` / `:anthropic` providers are gone (no built-in fallback —
+  unknown providers error out).
 - `settings.edn` keys `:provider` / `:model` / `:models` / `:context-window`
   keep working (context-window becomes a fallback only).
 - Default provider/model unchanged (`:opencode-go` / `"deepseek-v4-flash"`),
@@ -543,8 +546,16 @@ scope, pi's current implementation, and kmet's needs when the time comes.
   `config.clj` are deleted (Phase 0); `get-provider-config`,
   `get-provider-base-url`, `get-provider-api-type` are removed — loop.clj
   resolves base-url/api-type from the registry via `resolve-endpoint`
-  (model :api/:base-url; nil for legacy providers → llm defaults).
+  (model :api/:base-url; nil for unknown providers → error).
 - Existing `auth.edn` entries keep working (same shape).
+
+### Phase 3 note (applied early)
+
+The provider env-var table (pi `env-api-keys.ts`) landed with the legacy
+removal: `OPENCODE_API_KEY` (opencode-go/opencode), `DEEPSEEK_API_KEY`,
+`COPILOT_GITHUB_TOKEN`. The remaining Phase 3 work is the `kmet.app.auth`
+namespace (credential resolution, `configured?`, `/login` `/logout`) and the
+`auth.edn` precedence tests.
 
 ## Phase order & dependencies
 

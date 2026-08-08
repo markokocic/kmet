@@ -107,13 +107,15 @@
 
 (defn get-api-key
   "Look up API key for a provider.
-   Checks auth.edn first, then falls back to environment variable."
+   Checks auth.edn first, then falls back to the provider's environment
+   variable (pi env-api-keys order; the Phase 3 table, applied early)."
   [provider]
   (or (get-in @auth-atom [provider :key])
       (case provider
-        :openai (System/getenv "OPENAI_API_KEY")
-        :anthropic (System/getenv "ANTHROPIC_API_KEY")
-        :opencode-go (System/getenv "KMET_OPENCODE_GO_KEY")
+        :opencode-go (System/getenv "OPENCODE_API_KEY")
+        :opencode (System/getenv "OPENCODE_API_KEY")
+        :deepseek (System/getenv "DEEPSEEK_API_KEY")
+        :github-copilot (System/getenv "COPILOT_GITHUB_TOKEN")
         nil)))
 
 ;; ─── Config loading continued ──────────────────────────────────────────────
@@ -133,8 +135,6 @@
         project-dir (str (fs/absolutize ".kmet"))
         env-provider (when-not no-env?
                        (or (some-> (System/getenv "KMET_PROVIDER") keyword)
-                           (when (System/getenv "OPENAI_API_KEY") :openai)
-                           (when (System/getenv "ANTHROPIC_API_KEY") :anthropic)
                            (when (get-api-key :opencode-go) :opencode-go)))
         env-model (System/getenv "KMET_MODEL")
         base (deep-merge (resolve-scope-paths default-config global-dir)

@@ -18,7 +18,7 @@
     (t/is (= :idle @(:status agent)))
     (t/is (instance? clojure.lang.Atom (:messages agent)))
     (t/is (empty? @(:messages agent)))
-    (t/is (= :openai @(:provider agent)))
+    (t/is (= :opencode-go @(:provider agent)))
     (t/is (nil? @(:model agent)))
     (t/is (string? @(:system agent)))
     (t/is (instance? clojure.lang.Atom (:signal agent)))
@@ -1216,8 +1216,8 @@
 (t/deftest test-loop-endpoint-from-model-registry
   ;; Phase 2: llm resolves the Model itself (registry is the unit of truth);
   ;; loop forwards provider/model plus only the agent-level overrides.
-  ;; Legacy providers without a catalog entry fall through to llm's built-in
-  ;; defaults; agent-level overrides win over the model.
+  ;; Providers without a catalog entry are unknown; overrides win over the
+  ;; model.
   (models/load-catalogs!)
   (let [sent (atom nil)]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
@@ -1234,20 +1234,14 @@
         (t/is (= {:provider :opencode-go :model "deepseek-v4-flash"
                   :api-type nil :base-url nil}
                  @sent)))
-      (t/testing "legacy provider without a catalog entry → no overrides"
-        @(loop/run-agent-turn (loop/make-agent-state :provider :openai :model "gpt-4o")
-                              {:message "hi" :on-error (fn [_])})
-        (t/is (= {:provider :openai :model "gpt-4o"
-                  :api-type nil :base-url nil}
-                 @sent)))
       (t/testing "agent-level overrides flow through to llm"
         @(loop/run-agent-turn (loop/make-agent-state :provider :opencode-go
                                                      :model "deepseek-v4-flash"
-                                                     :api-type :anthropic
+                                                     :api-type :anthropic-messages
                                                      :base-url "https://custom.example/v1/messages")
                               {:message "hi" :on-error (fn [_])})
         (t/is (= {:provider :opencode-go :model "deepseek-v4-flash"
-                  :api-type :anthropic
+                  :api-type :anthropic-messages
                   :base-url "https://custom.example/v1/messages"}
                  @sent))))))
 

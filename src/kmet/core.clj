@@ -92,7 +92,7 @@
   (println "  -c, --continue        Continue most recent session")
   (println "  -r, --resume          Browse sessions")
   (println "  --model <id>          Model to use")
-  (println "  --provider <name>     Provider (opencode-go, opencode, deepseek,\n                        github-copilot, openai, anthropic)")
+  (println "  --provider <name>     Provider (opencode-go, opencode, deepseek,\n                        github-copilot)")
   (println "  --system-prompt <txt> Replace the system prompt (or path to a file)")
   (println "  --append-system-prompt <txt> Append to the system prompt (repeatable)")
   (println "  -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)")

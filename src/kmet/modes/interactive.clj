@@ -249,7 +249,7 @@
     :handler (fn [cs args]
                (if (seq args)
                  (let [parts (str/split args #":" 2)
-                       provider (keyword (or (first parts) "openai"))
+                       provider (keyword (or (first parts) "opencode-go"))
                        model (or (second parts) (:model (:config cs)))]
                    (agent/set-provider! @(:agent-state cs) provider)
                    (agent/set-model! @(:agent-state cs) model)

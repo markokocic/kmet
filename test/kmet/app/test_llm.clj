@@ -27,20 +27,18 @@
     (t/is (= ["Unknown model: opencode-go/no-such-model"] @errors))))
 
 (t/deftest test-llm-unknown-provider
+  (m/load-catalogs!)
   (let [errors (atom [])]
     @(llm/send-message {:provider :unknown
                         :api-key "test"
                         :on-error (fn [e] (swap! errors conj e))})
-    (t/is (= ["Unknown provider: unknown"] @errors))))
-
-(t/deftest test-llm-legacy-fallback
-  ;; legacy :openai/:anthropic have no catalog entry → built-in defaults
-  (m/load-catalogs!)
-  (t/is (nil? (m/get-provider :openai)))
-  (let [fut (llm/send-message {:provider :openai :model "gpt-4o"
-                               :api-key "test"
-                               :on-error (fn [_])})]
-    (t/is (future? fut))))
+    (t/is (= ["Unknown provider: unknown"] @errors)))
+  (t/testing "providers without a catalog entry are unknown (no legacy fallback)"
+    (let [errors (atom [])]
+      @(llm/send-message {:provider :openai :model "gpt-4o"
+                          :api-key "test"
+                          :on-error (fn [e] (swap! errors conj e))})
+      (t/is (= ["Unknown provider: openai"] @errors)))))
 
 ;; ─── Endpoint URL construction (each api owns it) ──────────────────────────
 
@@ -59,7 +57,7 @@
 (t/deftest test-llm-no-api-key
   (let [errors (atom [])
         fut (llm/send-message
-             {:provider :openai
+             {:provider :opencode-go
               :on-error (fn [e] (swap! errors conj e))})]
     @fut  ;; wait for future
     (t/is (pos? (count @errors)))
@@ -68,7 +66,7 @@
 (t/deftest test-llm-no-api-key-anthropic
   (let [errors (atom [])
         fut (llm/send-message
-             {:provider :anthropic
+             {:provider :deepseek
               :on-error (fn [e] (swap! errors conj e))})]
     @fut
     (t/is (pos? (count @errors)))
@@ -90,7 +88,9 @@
 ;; ─── SSE parsing helpers ──────────────────────────────────────────────────
 
 (t/deftest test-llm-send-message-returns-future
-  (let [fut (llm/send-message {:provider :openai :api-key "test"})]
+  (m/load-catalogs!)
+  (let [fut (llm/send-message {:provider :opencode-go :model "deepseek-v4-flash"
+                               :api-key "test" :on-error (fn [_])})]
     (t/is (future? fut))))
 
 ;; ─── Edge: empty tools list ───────────────────────────────────────────────
@@ -98,7 +98,8 @@
 (t/deftest test-llm-no-tools
   (let [errors (atom [])
         fut (llm/send-message
-             {:provider :openai
+             {:provider :opencode-go
+              :model "deepseek-v4-flash"
               :tools []
               :on-error (fn [e] (swap! errors conj e))})]
     @fut
@@ -106,9 +107,11 @@
 
 ;; ─── Multiple providers ──────────────────────────────────────────────────
 
-(t/deftest test-llm-provider-keywords
-  (t/is (= :openai (-> {:provider :openai} :provider)))
-  (t/is (= :anthropic (-> {:provider :anthropic} :provider))))
+(t/deftest test-llm-all-providers-resolve
+  (m/load-catalogs!)
+  (t/is (= 4 (count (m/get-providers))))
+  (doseq [p [:opencode-go :opencode :deepseek :github-copilot]]
+    (t/is (some? (m/get-provider p)) (str p " has a catalog entry"))))
 
 ;; ─── Image block conversion ───────────────────────────────────────────────
 
@@ -389,6 +392,7 @@
 ;; ─── Transport total timeout follows the configured idle timeout ──────────
 
 (t/deftest ^:slow test-llm-request-timeout-follows-idle
+  (m/load-catalogs!)
   ;; A server that accepts the request but never responds: the request must
   ;; error via the configured total timeout (~idle-timeout-ms), not the old
   ;; hardcoded 120s (pi: SDK timeoutMs ?? httpIdleTimeoutMs).
@@ -409,10 +413,10 @@
             (.start))
         t0 (System/currentTimeMillis)
         errors (atom [])
-        fut (llm/send-message {:provider :openai
+        fut (llm/send-message {:provider :opencode-go
                                :api-key "sk-test"
                                :base-url (str "http://localhost:" port "/v1/chat/completions")
-                               :model "gpt-4o"
+                               :model "deepseek-v4-flash"
                                :messages [{:role "user" :content "hi"}]
                                :idle-timeout-ms 1500
                                :on-error (fn [e] (swap! errors conj e))})]
@@ -427,6 +431,7 @@
         (.close ss)))))
 
 (t/deftest ^:slow test-llm-body-stall-idle-timeout-completes
+  (m/load-catalogs!)
   ;; A server that sends response headers then stalls the body: the SSE idle
   ;; timeout must fire and the request future must complete promptly. Before
   ;; the interrupt/join-before-close fix, closing the java.net.http body
@@ -449,10 +454,10 @@
             (.setDaemon true)
             (.start))
         errors (atom [])
-        fut (llm/send-message {:provider :openai
+        fut (llm/send-message {:provider :opencode-go
                                :api-key "sk-test"
                                :base-url (str "http://localhost:" port "/v1/chat/completions")
-                               :model "gpt-4o"
+                               :model "deepseek-v4-flash"
                                :messages [{:role "user" :content [{:type :text :text "hi"}]}]
                                :idle-timeout-ms 1000
                                :on-error (fn [e] (swap! errors conj e))})]

@@ -4,8 +4,8 @@
 
    The resolved Model record is the unit of truth (pi): dispatch (wire api),
    endpoint URL, thinking shaping, max-token field, static headers and cost
-   all derive from it. Legacy providers without a catalog entry (:openai /
-   :anthropic) fall back to built-in defaults."
+   all derive from it. Every provider must have a catalog entry; unknown
+   providers/models error out."
   (:require [clojure.string :as str]
             [cheshire.core :as json]
             [kmet.libs.sse :as sse]
@@ -13,32 +13,9 @@
             [kmet.app.proxy :as proxy]
             [kmet.app.tools.core :as tools]))
 
-;; ─── Legacy provider defaults ──────────────────────────────────────────────
-
-(def ^:private legacy-defaults
-  "Provider defaults for legacy providers without a catalog entry (pi:
-   pre-catalog providers). :api is the wire api, :base-url the API base (the
-   per-api endpoint path is appended by endpoint-url)."
-  {:openai {:id "gpt-4o" :api :openai-completions :base-url "https://api.openai.com/v1"
-            :reasoning false :max-tokens nil :headers nil :compat nil
-            :thinking-level-map nil}
-   :anthropic {:id "claude-sonnet-4-20250514" :api :anthropic-messages
-               :base-url "https://api.anthropic.com"
-               :reasoning true :max-tokens nil :headers nil :compat nil
-               :thinking-level-map nil}})
-
 (def ^:private default-anthropic-version "2023-06-01")
 
 ;; ─── Wire api + URL construction ───────────────────────────────────────────
-
-(defn- wire-api
-  "Wire api keyword from an api-type keyword (:openai/:anthropic are the
-   legacy builder names; wire api keywords pass through)."
-  [t]
-  (case t
-    :openai :openai-completions
-    :anthropic :anthropic-messages
-    t))
 
 (defn- endpoint-url
   "Full request URL from a wire api + API base + model id (pi: the SDK
@@ -646,11 +623,11 @@
 
    opts:
      :provider    — provider keyword (:opencode-go, :opencode, :deepseek,
-                    :github-copilot, or legacy :openai / :anthropic)
+                    :github-copilot)
      :model       — model id string, resolved against the provider's catalog
-                    (legacy providers fall back to their built-in defaults)
-     :api-type    — wire api override (:openai, :anthropic, or a wire api
-                    keyword); wins over the resolved model's :api
+     :api-type    — wire api override (:openai-completions,
+                    :anthropic-messages, :google-generative-ai); wins over
+                    the resolved model's :api
      :base-url    — full endpoint URL override (e.g. local test servers);
                     wins over the model-derived URL
      :api-key     — API key (required — resolved by caller via cfg/get-api-key)
@@ -670,7 +647,7 @@
                      stream chunk.
 
    Returns: future that completes when the stream ends."
-  [{:keys [provider model api-key] :or {provider :openai} :as opts}]
+  [{:keys [provider model api-key] :or {provider :opencode-go} :as opts}]
   (cond
     (nil? api-key)
     (future
@@ -679,24 +656,22 @@
                        ". Set the key in ~/.kmet/agent/auth.edn."))))
 
     :else
-    (let [catalog-model (models/get-model provider model)
-          legacy (legacy-defaults provider)]
+    (let [m (models/get-model provider model)]
       (cond
         ;; Catalog provider with an unknown model id → error
-        (and (some? (models/get-provider provider)) (nil? catalog-model))
+        (and (some? (models/get-provider provider)) (nil? m))
         (future
           (when-let [on-error (:on-error opts)]
             (on-error (str "Unknown model: " (name provider) "/" model))))
 
-        ;; Unknown provider (neither catalog nor legacy) → error
-        (and (nil? catalog-model) (nil? legacy))
+        ;; Unknown provider (no catalog entry) → error
+        (nil? m)
         (future
           (when-let [on-error (:on-error opts)]
             (on-error (str "Unknown provider: " (name provider)))))
 
         :else
-        (let [m (or catalog-model legacy)
-              api (or (some-> (:api-type opts) wire-api) (:api m))
+        (let [api (or (:api-type opts) (:api m))
               effort (effective-effort m (:thinking opts))]
           (case api
             :openai-completions (openai-request (assoc opts :model-record m :effort effort :api-key api-key))

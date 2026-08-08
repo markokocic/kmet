@@ -88,7 +88,7 @@
                        thinking      ;; :off :low :medium :high :max
                        on-event      ;; callback for state updates
                        base-url      ;; full endpoint URL override (default: derived from the Model record)
-                       api-type      ;; :openai or :anthropic override (default: derived from the Model record)
+                       api-type      ;; wire api override (:openai-completions | :anthropic-messages | :google-generative-ai)
                        steering      ;; atom of vector of queued steer messages
                        follow-up     ;; atom of vector of queued follow-up messages
                        steering-mode ;; :all | :one-at-a-time (drain mode)
@@ -123,7 +123,7 @@
          :keep-recent-tokens (default 20000, pi: keepRecentTokens),
          :http-idle-timeout-ms (default 300000, pi: httpIdleTimeoutMs; 0 disables)"
   [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key models compact-token-threshold keep-recent-tokens http-idle-timeout-ms]
-      :or {provider :openai
+      :or {provider :opencode-go
            thinking :off
            steering-mode :all
            follow-up-mode :all

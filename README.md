@@ -24,7 +24,8 @@ with the agent having access to filesystem tools (read, write, edit, bash, grep,
 ## Prerequisites
 
 - [Babashka](https://babashka.org/) ≥ 1.12.215 (bundles JLine 4.3.1)
-- API keys: `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` environment variables
+- API keys: `OPENCODE_API_KEY` (opencode-go/opencode), `DEEPSEEK_API_KEY`,
+  `COPILOT_GITHUB_TOKEN` (or `auth.edn` credentials)
 
 ## Usage
 
@@ -36,7 +37,7 @@ bb run
 ./kmet
 
 # With options
-bb run --model gpt-4o --provider openai
+bb run --model deepseek-v4-flash --provider opencode-go
 
 # Non-interactive mode
 bb run --print "list files in current directory"
@@ -49,8 +50,8 @@ bb run --print "list files in current directory"
   -c, --continue        Continue most recent session
   -r, --resume          Browse sessions
   --model <id>          Model to use
-  --provider <name>     Provider (openai, anthropic)
-  -t, --thinking <level> Thinking level (off, low, medium, high)
+  --provider <name>     Provider (opencode-go, opencode, deepseek, github-copilot)
+  -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)
   -h, --help            Show this help
 ```
 
@@ -126,9 +127,8 @@ Example `~/.kmet/agent/settings.edn`:
 ```
 
 `kmet` reads its provider catalog from `src/kmet/app/model_data/*.edn`
-(opencode-go, opencode, deepseek, github-copilot; openai and anthropic keep
-working through built-in defaults). Models, base URLs and defaults are
-registry data — see `models.md` for the subsystem plan.
+(opencode-go, opencode, deepseek, github-copilot). Models, base URLs and
+defaults are registry data — see `models.md` for the subsystem plan.
 
 The system prompt (pi-compatible) is built from: the default (or `:system-prompt`)
 base, the active tools with one-line snippets, guidelines, `:append-system-prompt`,
