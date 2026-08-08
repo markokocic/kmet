@@ -403,12 +403,17 @@ anthropic compat (`getAnthropicMessagesCompat`) still only affects
 
 ## Phase 3 — Auth (`kmet.app.auth`)
 
-**Partial (env table applied early with the legacy removal):** the
-`get-api-key` case in `config.clj` now uses the pi env-api-keys table below
-(`OPENCODE_API_KEY` / `DEEPSEEK_API_KEY` / `COPILOT_GITHUB_TOKEN`;
-`KMET_OPENCODE_GO_KEY` dropped, legacy `:openai`/`:anthropic` cases removed).
-Remaining: the `kmet.app.auth` namespace (credential resolution,
-`configured?`, `/login` `/logout`) and the auth precedence tests.
+**Status: implemented.** `kmet.app.auth` (new ns, no kmet.* deps beyond
+`kmet.libs.file-lock`) owns the env-var table, auth.edn state, credential
+resolution, and `/login` `/logout`. `config.clj` delegates (`get-api-key` →
+`auth/resolve-api-key`, load-config triggers `auth/load-auth!`);
+`models/get-available` checks `auth/configured?`. The settings lock machinery
+was extracted to `kmet.libs.file-lock` (shared by settings.edn and auth.edn
+writes). `/login` / `/logout` moved out of the not-implemented list: /login
+validates the provider against the registry and prompts for the key via the
+existing extension-input dialog overlay; /logout removes the auth.edn entry
+(env vars untouched, per pi). Auth precedence covered by
+test/kmet/app/test_auth.clj.
 
 ### Env var alignment (pi `env-api-keys.ts`)
 

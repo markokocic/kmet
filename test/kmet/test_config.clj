@@ -4,7 +4,8 @@
             [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
-            [kmet.config :as cfg]))
+            [kmet.config :as cfg]
+            [kmet.app.auth :as auth]))
 
 ;; ─── Defaults ──────────────────────────────────────────────────────────────
 
@@ -160,16 +161,11 @@
     (t/is (or (nil? key) (string? key)))))
 
 (t/deftest test-get-api-key-unknown-provider
-  ;; providers without an env entry → nil (auth.edn aside)
-  (t/is (nil? (cfg/get-api-key :nonexistent)))
-  (t/is (nil? (cfg/get-api-key :openai))))
-
-;; ─── load-auth ─────────────────────────────────────────────────────────────
-
-(t/deftest test-load-auth-returns-map
-  ;; load-auth should return a map (possibly empty if no auth file)
-  (let [auth (cfg/load-auth)]
-    (t/is (map? auth))))
+  ;; providers without an env entry → nil (auth.edn aside); env lookup is
+  ;; pinned to nil so the result doesn't depend on the host environment
+  (with-redefs [auth/getenv (fn [_] nil)]
+    (t/is (nil? (cfg/get-api-key :nonexistent)))
+    (t/is (nil? (cfg/get-api-key :openai)))))
 
 ;; ─── get-theme ─────────────────────────────────────────────────────────────
 

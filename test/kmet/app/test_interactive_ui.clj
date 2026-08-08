@@ -5,7 +5,10 @@
   (:require [clojure.test :as t :refer [deftest testing]]
             [kmet.tui.autocomplete :as ac]
             [kmet.tui.components.editor :as editor]
-            [kmet.modes.interactive :as inter]))
+            [kmet.modes.interactive :as inter]
+            [kmet.app.commands :as commands]
+            [kmet.app.ui :as ui]
+            [kmet.config :as cfg]))
 
 (defn- transfer-editor! [app-ed custom-ed kb]
   ((var inter/transfer-editor!) app-ed custom-ed kb))
@@ -69,3 +72,32 @@
           plain {:render (fn [_] [""])}]
       (t/is (nil? (transfer-editor! app-ed plain nil)))
       (t/is (= [:render] (keys plain)) "plain map untouched"))))
+
+;; ─── Builtin auth commands (Phase 3) ───────────────────────────────────────
+
+(deftest test-builtin-login-logout-registered
+  (testing "login/logout are real builtins inside register-builtin-commands!
+            (not dropped or left as top-level forms)"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [login (commands/find-command "login")
+          logout (commands/find-command "logout")]
+      (t/is (some? login) "login registered")
+      (t/is (= "Configure provider authentication" (:description login)))
+      (t/is (some? (:handler login)) "login has a handler")
+      (t/is (some? logout) "logout registered")
+      (t/is (= "Remove provider authentication" (:description logout)))
+      (t/is (some? (:handler logout)) "logout has a handler"))))
+
+(deftest test-login-logout-unknown-provider
+  (testing "login/logout validate the provider against the registry"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [warned (atom nil)]
+      (with-redefs [ui/show-warning! (fn [_ msg] (reset! warned msg))
+                    ui/chat-history-add-message! (fn [_ _] nil)]
+        ((:handler (commands/find-command "login")) {} "nonexistent-provider")
+        (t/is (= "Unknown provider: nonexistent-provider" @warned))
+        (reset! warned nil)
+        ((:handler (commands/find-command "logout")) {} "nonexistent-provider")
+        (t/is (= "Unknown provider: nonexistent-provider" @warned))))))

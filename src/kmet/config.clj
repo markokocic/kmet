@@ -6,7 +6,9 @@
             [clojure.edn :as edn]
             [clojure.string :as str]
             [babashka.fs :as fs]
-            [kmet.tui.theme :as theme]))
+            [kmet.tui.theme :as theme]
+            [kmet.app.auth :as auth]
+            [kmet.libs.file-lock :as file-lock]))
 
 ;; ─── Defaults ───────────────────────────────────────────────────────────────
 
@@ -91,32 +93,13 @@
             (println "Warning: Failed to load" path ":" (ex-message e)))
           nil)))))
 
-;; ─── Auth ───────────────────────────────────────────────────────────────────
-
-(def default-auth {})
-
-(defonce ^:private auth-atom (atom default-auth))
-
-(defn load-auth
-  "Load auth from ~/.kmet/agent/auth.edn.
-   Returns the auth map, merging with defaults."
-  []
-  (let [auth (or (load-edn-file "~/.kmet/agent/auth.edn") {})]
-    (reset! auth-atom auth)
-    auth))
+;; ─── Auth (Phase 3: kmet.app.auth owns auth.edn + the env-var table) ──────
 
 (defn get-api-key
-  "Look up API key for a provider.
-   Checks auth.edn first, then falls back to the provider's environment
-   variable (pi env-api-keys order; the Phase 3 table, applied early)."
+  "API key for a provider (pi: getApiKey) — auth.edn credential first, then
+   the provider's env vars in pi order. Delegates to kmet.app.auth."
   [provider]
-  (or (get-in @auth-atom [provider :key])
-      (case provider
-        :opencode-go (System/getenv "OPENCODE_API_KEY")
-        :opencode (System/getenv "OPENCODE_API_KEY")
-        :deepseek (System/getenv "DEEPSEEK_API_KEY")
-        :github-copilot (System/getenv "COPILOT_GITHUB_TOKEN")
-        nil)))
+  (auth/resolve-api-key provider))
 
 ;; ─── Config loading continued ──────────────────────────────────────────────
 
@@ -130,12 +113,12 @@
   [& {:keys [no-env?]}]
   (let [user-config (load-edn-file "~/.kmet/agent/settings.edn")
         project-config (load-edn-file ".kmet/settings.edn")
-        _ (load-auth)
+        _ (auth/load-auth!)
         global-dir (expand-path "~/.kmet/agent")
         project-dir (str (fs/absolutize ".kmet"))
         env-provider (when-not no-env?
                        (or (some-> (System/getenv "KMET_PROVIDER") keyword)
-                           (when (get-api-key :opencode-go) :opencode-go)))
+                           (when (auth/resolve-api-key :opencode-go) :opencode-go)))
         env-model (System/getenv "KMET_MODEL")
         base (deep-merge (resolve-scope-paths default-config global-dir)
                          (resolve-scope-paths user-config global-dir)
@@ -171,10 +154,6 @@
   []
   (expand-path "~/.kmet/agent/settings.edn"))
 
-(def ^:private lock-stale-ms 10000)
-(def ^:private lock-acquire-attempts 10)
-(def ^:private lock-acquire-delay-ms 20)
-
 (defn- pretty-edn
   "Format a settings map as EDN with each top-level entry on its own line and
    the closing brace on its own line (pi: JSON.stringify(settings, null, 2))."
@@ -187,30 +166,10 @@
   (when-let [parsed (try (edn/read-string text) (catch Exception _ nil))]
     (when (map? parsed) parsed)))
 
-(defn- acquire-lock!
-  "Acquire the settings lock via atomic directory creation (pi:
-   proper-lockfile.lockSync — brief retry; locks older than 10s left by
-   crashed writers are broken)."
-  [lock-path]
-  (loop [attempt 1]
-    (cond
-      (try (fs/create-dir lock-path) true (catch Exception _ false)) :ok
-      (try (> (- (System/currentTimeMillis) (.toMillis (fs/last-modified-time lock-path)))
-              lock-stale-ms)
-           (catch Exception _ false))
-      (do (fs/delete-tree lock-path) (Thread/sleep lock-acquire-delay-ms) (recur attempt))
-      (< attempt lock-acquire-attempts)
-      (do (Thread/sleep lock-acquire-delay-ms) (recur (inc attempt)))
-      :else (throw (ex-info "Timed out acquiring settings lock"
-                            {:type :settings-lock-timeout :path lock-path})))))
-
 (defn- with-settings-lock
   "Run F with the settings lock held (pi: SettingsStorage.withLock)."
   [f]
-  (let [lock-path (str (global-settings-path) ".lock")]
-    (acquire-lock! lock-path)
-    (try (f)
-         (finally (fs/delete-tree lock-path)))))
+  (file-lock/with-file-lock (str (global-settings-path) ".lock") f))
 
 (defn- setting-line
   "EDN text for one pretty settings entry, e.g. \" :hide-thinking-block true\"."

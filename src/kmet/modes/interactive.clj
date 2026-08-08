@@ -18,6 +18,7 @@
             [kmet.tui.components.select-list :as select-list]
             [kmet.app.loop :as agent]
             [kmet.app.models :as models]
+            [kmet.app.auth :as auth]
             [kmet.app.session :as session]
             [kmet.app.tools.core :as tools]
             [kmet.app.keybindings :as app-kb]
@@ -374,7 +375,90 @@
                                                                 (theme-ctrl/get-active-theme-name tc)
                                                                 "\nAvailable themes: "
                                                                 (str/join ", " (sort (keys (th/get-all-themes))))
-                                                                "\nUsage: /theme <name>")}))))}))
+                                                                "\nUsage: /theme <name>")}))))})
+  (commands/register-command!
+   {:name "login"
+    :description "Configure provider authentication"
+    :argument-hint "<provider>"
+    :get-argument-completions
+    (fn [_]
+      (mapv (fn [p] {:value (name (:id p)) :label (:name p)})
+            (models/get-providers)))
+    :handler
+    (fn [cs args]
+      (let [provider (some-> (first (str/split args #"\s+")) str/trim not-empty keyword)]
+        (cond
+          (nil? provider)
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        {:role :assistant
+                                         :content (str "Usage: /login <provider>"
+                                                       "\nProviders: "
+                                                       (str/join ", " (map (comp name :id) (models/get-providers))))})
+
+          (nil? (models/get-provider provider))
+          (ui/show-warning! (:chat-history cs) (str "Unknown provider: " (name provider)))
+
+          :else
+          (let [p (models/get-provider provider)]
+            (tui/tui-show-overlay
+             (:tui cs)
+             (dialogs/make-extension-input
+              (str "API key for " (:name p))
+              (fn [value]
+                (tui/tui-hide-overlay (:tui cs))
+                (let [key (str/trim value)]
+                  (if (seq key)
+                    (do (auth/set-credential! provider key)
+                        (ui/chat-history-add-message! (:chat-history cs)
+                                                      {:role :assistant
+                                                       :content (str "Saved API key for " (:name p) ".")}))
+                    (ui/show-warning! (:chat-history cs)
+                                      "No API key entered — nothing saved.")))
+                (tui/tui-request-render (:tui cs)))
+              (fn []
+                (tui/tui-hide-overlay (:tui cs))
+                (tui/tui-request-render (:tui cs)))
+              (th/get-current-theme))
+             :width 60 :height 9)
+            (tui/tui-request-render (:tui cs))))))})
+  (commands/register-command!
+   {:name "logout"
+    :description "Remove provider authentication"
+    :argument-hint "<provider>"
+    :get-argument-completions
+    (fn [_]
+      (let [configured (auth/get-credentials)]
+        (mapv (fn [p] {:value (name (:id p)) :label (:name p)})
+              (filter #(contains? configured (:id %)) (models/get-providers)))))
+    :handler
+    (fn [cs args]
+      (let [provider (some-> (first (str/split args #"\s+")) str/trim not-empty keyword)
+            configured (auth/get-credentials)]
+        (cond
+          (nil? provider)
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        {:role :assistant
+                                         :content (if (seq configured)
+                                                    (str "Usage: /logout <provider>"
+                                                         "\nSaved credentials: "
+                                                         (str/join ", " (map name (keys configured))))
+                                                    "No stored credentials to remove. /logout only removes credentials saved by /login; environment variables are unchanged.")})
+
+          (nil? (models/get-provider provider))
+          (ui/show-warning! (:chat-history cs) (str "Unknown provider: " (name provider)))
+
+          (not (contains? configured provider))
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        {:role :assistant
+                                         :content (str "No saved credential for " (name provider)
+                                                       " — environment variables are unchanged.")})
+
+          :else
+          (do (auth/remove-credential! provider)
+              (ui/chat-history-add-message! (:chat-history cs)
+                                            {:role :assistant
+                                             :content (str "Removed stored API key for " (name provider)
+                                                           ". Environment variables are unchanged.")})))))}))
 
 (defn- command-not-implemented
   "In-chat reply for pi slash commands kmet does not implement yet."
@@ -465,10 +549,7 @@
            {:name "hotkeys" :description "Show all keyboard shortcuts"}
            {:name "fork" :description "Create a new fork from a previous user message"}
            {:name "clone" :description "Duplicate the current session at the current position"}
-           {:name "trust" :description "Save project trust decision for future sessions"}
-           {:name "login" :description "Configure provider authentication"
-            :argument-hint "<provider>"}
-           {:name "logout" :description "Remove provider authentication"}]]
+           {:name "trust" :description "Save project trust decision for future sessions"}]]
     (commands/register-command!
      {:name name
       :description description

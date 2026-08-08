@@ -2,7 +2,7 @@
   "Phase 0: registry semantics, catalog loading, EDN shape, manifest."
   (:require [clojure.test :as t]
             [kmet.app.models :as m]
-            [kmet.config :as cfg]))
+            [kmet.app.auth :as auth]))
 
 ;; ─── Registry semantics (pi: MutableModels) ────────────────────────────────
 
@@ -179,20 +179,20 @@
       (t/is (not (contains? (:files manifest) "manifest.edn")))
       (t/is (every? #(re-matches #"[0-9a-f]{64}" %) (vals (:files manifest)))))))
 
-;; ─── get-available (auth check = cfg/get-api-key until Phase 3) ────────────
+;; ─── get-available (auth check = auth/configured?, Phase 3) ───────────────
 
 (t/deftest test-get-available
   (m/load-catalogs!)
   (t/testing "no keys → nothing available"
-    (with-redefs [cfg/get-api-key (fn [_] nil)]
+    (with-redefs [auth/configured? (fn [_] false)]
       (t/is (empty? (m/get-available)))))
   (t/testing "all keys → every model available"
-    (with-redefs [cfg/get-api-key (fn [_] "key")]
+    (with-redefs [auth/configured? (fn [_] true)]
       (let [available (m/get-available)]
         (t/is (= (count (m/get-models)) (count available)))
         (t/is (seq (m/get-available :deepseek))))))
   (t/testing "per-provider filter"
-    (with-redefs [cfg/get-api-key (fn [p] (when (= p :deepseek) "key"))]
+    (with-redefs [auth/configured? (fn [p] (= p :deepseek))]
       (let [available (m/get-available)]
         (t/is (= (mapv :id (m/get-models :deepseek)) (mapv :id available)))))))
 

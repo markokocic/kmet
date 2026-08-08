@@ -10,7 +10,8 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [babashka.fs :as fs]
-            [kmet.config :as cfg]))
+            [kmet.config :as cfg]
+            [kmet.app.auth :as auth]))
 
 ;; ─── Records (pi: types.ts Model / models.ts Provider) ─────────────────────
 
@@ -92,10 +93,9 @@
         (first (:models p)))))
 
 (defn get-available
-  "Models whose provider has complete auth (pi: Models.getAvailable).
-   Phase 0 uses cfg/get-api-key (auth.edn → env vars); Phase 3 rewires the
-   check to the kmet.app.auth table. With PROV-ID, only that provider's
-   available models."
+  "Models whose provider has complete auth (pi: Models.getAvailable) —
+   auth.edn credential or env var per the kmet.app.auth table. With PROV-ID,
+   only that provider's available models."
   ([]
    (get-available nil))
   ([prov-id]
@@ -103,7 +103,7 @@
          (for [p (if prov-id
                    (when-let [p (get-provider prov-id)] [p])
                    (get-providers))
-               :when (and p (cfg/get-api-key (:id p)))
+               :when (and p (auth/configured? (:id p)))
                m (:models p)]
            m))))
 

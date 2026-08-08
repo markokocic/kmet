@@ -68,7 +68,8 @@
           (or (first available) :off)
           (or (first (filter (set available) (drop idx thinking-levels)))
               (first (filter (set available) (reverse (take idx thinking-levels))))
-              (or (first available) :off)))))))
+              (first available)
+              :off))))))
 
 (defn- effort-value
   "Wire reasoning_effort string for a level: the model's mapped value, else
