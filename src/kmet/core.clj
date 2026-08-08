@@ -6,6 +6,7 @@
   (:require [kmet.modes.interactive :as interactive]
             [kmet.modes.print :as print-mode]
             [kmet.config :as cfg]
+            [kmet.app.models :as models]
             [kmet.debug :as debug]
             [clojure.string :as str]))
 
@@ -91,7 +92,7 @@
   (println "  -c, --continue        Continue most recent session")
   (println "  -r, --resume          Browse sessions")
   (println "  --model <id>          Model to use")
-  (println "  --provider <name>     Provider (openai, anthropic, opencode-go)")
+  (println "  --provider <name>     Provider (opencode-go, opencode, deepseek,\n                        github-copilot, openai, anthropic)")
   (println "  --system-prompt <txt> Replace the system prompt (or path to a file)")
   (println "  --append-system-prompt <txt> Append to the system prompt (repeatable)")
   (println "  -t, --thinking <level> Thinking level (off, low, medium, high)")
@@ -113,6 +114,10 @@
     (when (:help opts)
       (print-usage)
       (System/exit 0))
+
+    ;; Provider/model registry — loads the committed catalogs (pi registers
+    ;; its generated providers at startup)
+    (models/load-catalogs!)
 
     (when (:print opts)
       (let [msg (str/join " " (:messages opts))]

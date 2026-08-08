@@ -1,0 +1,39 @@
+{:schema-version 1
+ :generated-at "2026-08-08T00:00:00Z"
+ :provider {:id :github-copilot
+            :name "GitHub Copilot"
+            :env-vars ["COPILOT_GITHUB_TOKEN"]
+            :default-model "claude-sonnet-4.5"}
+ :models
+ {:anthropic-messages
+  {"claude-sonnet-4.5"
+   {:id "claude-sonnet-4.5" :name "Claude Sonnet 4.5" :provider :github-copilot
+    :api :anthropic-messages :base-url "https://api.individual.githubcopilot.com"
+    :reasoning true :input [:text]
+    :cost {:input 3.0 :output 15.0 :cache-read 0.3 :cache-write 3.75}
+    :context-window 200000 :max-tokens 64000
+    :headers {"User-Agent" "GitHubCopilotChat/0.35.0"
+              "Editor-Version" "vscode/1.107.0"
+              "Editor-Plugin-Version" "copilot-chat/0.35.0"
+              "Copilot-Integration-Id" "vscode-chat"}}
+   "claude-haiku-4.5"
+   {:id "claude-haiku-4.5" :name "Claude Haiku 4.5" :provider :github-copilot
+    :api :anthropic-messages :base-url "https://api.individual.githubcopilot.com"
+    :reasoning false :input [:text]
+    :cost {:input 1.0 :output 5.0 :cache-read 0.1 :cache-write 1.25}
+    :context-window 200000 :max-tokens 32000
+    :headers {"User-Agent" "GitHubCopilotChat/0.35.0"
+              "Editor-Version" "vscode/1.107.0"
+              "Editor-Plugin-Version" "copilot-chat/0.35.0"
+              "Copilot-Integration-Id" "vscode-chat"}}
+   "claude-opus-4.5"
+   {:id "claude-opus-4.5" :name "Claude Opus 4.5" :provider :github-copilot
+    :api :anthropic-messages :base-url "https://api.individual.githubcopilot.com"
+    :reasoning true :input [:text]
+    :cost {:input 5.0 :output 25.0 :cache-read 0.5 :cache-write 6.25}
+    :context-window 200000 :max-tokens 64000
+    :headers {"User-Agent" "GitHubCopilotChat/0.35.0"
+              "Editor-Version" "vscode/1.107.0"
+              "Editor-Plugin-Version" "copilot-chat/0.35.0"
+              "Copilot-Integration-Id" "vscode-chat"}}}}
+}

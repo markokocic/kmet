@@ -1,0 +1,7 @@
+{:schema-version 1
+ :generated-at "2026-08-08T00:00:00Z"
+ :structure-hash "9eb5e8fcaa02ad60ee986916b39ee09d5fb4709bf2892252df80f850d740c20f"
+ :files {"deepseek.edn" "277bb73eb5fc8c2712da55b5087cc64dd9b1fadf52160a18085075fc2a0feca3"
+         "github-copilot.edn" "68627fba669f227ecf553cb21f97f21831556a54f567e89313d622e9b1a56d89"
+         "opencode-go.edn" "2d470b6c7827a7751a9eb72d97b0d4caeb8acd4484486c830f2eed986999f796"
+         "opencode.edn" "5255d22f208c8da91ae2d4004188216caa76ab6042ff48b31ae202d06738b1d7"}}

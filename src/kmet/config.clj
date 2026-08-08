@@ -27,12 +27,7 @@
    :extensions-dir "~/.kmet/agent/extensions"
    :skills-dir "~/.kmet/agent/skills"
    :prompts-dir "~/.kmet/agent/prompts"
-   :themes-dir "~/.kmet/agent/themes"
-   :providers {:openai {:model "gpt-4o"}
-               :anthropic {:model "claude-sonnet-4-20250514"}
-               :opencode-go {:model "deepseek-v4-flash"
-                             :base-url "https://opencode.ai/zen/go/v1/chat/completions"
-                             :api-type :openai}}})
+   :themes-dir "~/.kmet/agent/themes"})
 
 ;; ─── Path expansion ────────────────────────────────────────────────────────
 
@@ -121,24 +116,6 @@
         :opencode-go (System/getenv "KMET_OPENCODE_GO_KEY")
         nil)))
 
-;; ─── Provider config ───────────────────────────────────────────────────────
-
-(def provider-configs
-  {:openai {:base-url "https://api.openai.com/v1/chat/completions"
-            :api-type :openai}
-   :anthropic {:base-url "https://api.anthropic.com/v1/messages"
-               :api-type :anthropic}
-   :opencode-go {:base-url "https://opencode.ai/zen/go/v1/chat/completions"
-                 :api-type :openai}})
-
-(defn get-provider-config
-  "Get provider configuration map (base-url, api-type).
-   Checks provider-configs first, then falls back to :providers in default-config."
-  [provider]
-  (or (get provider-configs provider)
-      (get-in default-config [:providers provider])
-      {:base-url nil :api-type provider}))
-
 ;; ─── Config loading continued ──────────────────────────────────────────────
 
 (defn load-config
@@ -174,8 +151,7 @@
   (:provider config))
 
 (defn get-model [config]
-  (or (:model config)
-      (get-in config [:providers (get-provider config) :model])))
+  (:model config))
 
 (defn get-session-dir [config]
   (expand-path (:session-dir config)))
@@ -367,16 +343,6 @@
 
 (defn get-theme [config]
   (theme/get-theme (get-theme-name config)))
-
-(defn get-provider-base-url
-  "Get the API base URL for a given provider."
-  [provider]
-  (:base-url (get-provider-config provider)))
-
-(defn get-provider-api-type
-  "Get the API type (:openai or :anthropic) for a given provider."
-  [provider]
-  (:api-type (get-provider-config provider)))
 
 (defn resource-dirs
   "All directories to load for a resource type (pi: global + project +

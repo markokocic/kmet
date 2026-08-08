@@ -115,16 +115,20 @@ Settings are loaded from:
 Example `~/.kmet/agent/settings.edn`:
 
 ```clojure
-{:provider :openai
+{:provider :opencode-go
+ :model "deepseek-v4-flash"
  :theme "dark"
  :thinking :off
  :session-dir "~/.kmet/sessions"
  :http-idle-timeout-ms 300000   ; LLM stream idle + total deadline in ms; 0 disables
  :system-prompt "You are a helpful assistant."   ; replaces the default system prompt
- :append-system-prompt "Follow the project conventions." ; appended after it
- :providers {:openai {:model "gpt-4o"}
-             :anthropic {:model "claude-sonnet-4-20250514"}}}
+ :append-system-prompt "Follow the project conventions." ; appended after it}
 ```
+
+`kmet` reads its provider catalog from `src/kmet/app/model_data/*.edn`
+(opencode-go, opencode, deepseek, github-copilot; openai and anthropic keep
+working through built-in defaults). Models, base URLs and defaults are
+registry data — see `models.md` for the subsystem plan.
 
 The system prompt (pi-compatible) is built from: the default (or `:system-prompt`)
 base, the active tools with one-line snippets, guidelines, `:append-system-prompt`,

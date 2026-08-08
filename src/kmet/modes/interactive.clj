@@ -17,6 +17,7 @@
             [kmet.app.theme-controller :as theme-ctrl]
             [kmet.tui.components.select-list :as select-list]
             [kmet.app.loop :as agent]
+            [kmet.app.models :as models]
             [kmet.app.session :as session]
             [kmet.app.tools.core :as tools]
             [kmet.app.keybindings :as app-kb]
@@ -1140,7 +1141,7 @@
 
         ;; Resolve model and provider from config
         provider (cfg/get-provider config)
-        model (cfg/get-model config)
+        model (models/resolve-config-model config)
 
         ;; Load skills and prompt templates (pi: global + project + explicit
         ;; paths load simultaneously)
@@ -1331,7 +1332,7 @@
         ;; B.6: footer data provider + two-line footer (pi: FooterComponent)
         fdp (ui/make-footer-data-provider
              :session session
-             :provider-count (count (keys (:providers config)))
+             :provider-count (count (models/get-providers))
              :context-window (:context-window config)
              :model @(:model ag) :provider @(:provider ag) :thinking @(:thinking ag))
         ftr (ui/make-footer :theme (cfg/get-theme config)

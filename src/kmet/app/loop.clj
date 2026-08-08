@@ -66,6 +66,7 @@
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [kmet.app.llm :as llm]
+            [kmet.app.models :as models]
             [kmet.app.compaction :as compaction]
             [kmet.app.tools.core :as tools]
             [kmet.app.tools.bash :as bash-tool]
@@ -81,14 +82,14 @@
                        messages      ;; atom of conversation message vectors
                        session       ;; Session record or nil
                        model         ;; model identifier
-                       provider      ;; :openai :anthropic :opencode-go
+                       provider      ;; provider keyword (registry id, e.g. :opencode-go)
                        system        ;; system prompt string
                        signal        ;; atom for cancellation
                        compact-threshold ;; int: auto-compact when entries exceed this
                        thinking      ;; :off :low :medium :high :max
                        on-event      ;; callback for state updates
-                       base-url      ;; custom base URL (for OpenAI-compatible providers)
-                       api-type      ;; :openai or :anthropic
+                       base-url      ;; full endpoint URL override (default: derived from the Model record)
+                       api-type      ;; :openai or :anthropic override (default: derived from the Model record)
                        steering      ;; atom of vector of queued steer messages
                        follow-up     ;; atom of vector of queued follow-up messages
                        steering-mode ;; :all | :one-at-a-time (drain mode)
@@ -615,6 +616,37 @@ Be precise and concise in your responses."}}]
 
 ;; ─── LLM call wrapper ─────────────────────────────────────────────────────
 
+(defn- model-endpoint-url
+  "Full request URL for a Model record — the pre-Phase-2 stand-in for
+   pi's per-api URL construction while llm/send-message still takes full
+   endpoint URLs (Phase 2 moves this into the wire APIs)."
+  [model]
+  (case (:api model)
+    :openai-completions (str (:base-url model) "/chat/completions")
+    :anthropic-messages (str (:base-url model) "/v1/messages")
+    nil))
+
+(defn- llm-api-type
+  "llm request-builder keyword for a Model :api (Phase 2: llm dispatches on
+   the wire api names directly, replacing this mapping)."
+  [api]
+  (case api
+    :openai-completions :openai
+    :anthropic-messages :anthropic
+    nil))
+
+(defn- resolve-endpoint
+  "api-type + base-url for the next LLM call: agent overrides win, then the
+   resolved Model record (the unit of truth — base-url/api-type come from the
+   catalog), then nil (llm falls back to its provider defaults; legacy
+   providers like :openai/:anthropic have no catalog entry yet)."
+  [agent]
+  (let [provider @(:provider agent)
+        model (models/get-model provider @(:model agent))]
+    {:api-type (or (:api-type agent) (some-> model :api llm-api-type))
+     :base-url (or (:base-url agent)
+                   (some-> model model-endpoint-url))}))
+
 (defn- call-llm
   "Send messages to LLM, return a promise that delivers {:text str :tool-calls [...] :stop-reason kw}.
    Calls on-text for text deltas during streaming.
@@ -627,6 +659,7 @@ Be precise and concise in your responses."}}]
         usage-buf (atom nil)
         [tc-add tc-flush] (make-tc-accumulator)
         provider @(:provider agent)
+        ep (resolve-endpoint agent)
         system (or @(:system-prompt-override agent) @(:system agent))
         messages (if-let [tf @(:transform-context agent)]
                    (tf @(:messages agent))
@@ -643,10 +676,10 @@ Be precise and concise in your responses."}}]
                  :message {:role :assistant :content []}})
     (llm/send-message
      {:provider provider
-      :api-type (or (:api-type agent) (cfg/get-provider-api-type provider))
+      :api-type (:api-type ep)
       :model @(:model agent)
       :api-key api-key
-      :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
+      :base-url (:base-url ep)
       :messages messages
       :tools (vals (tools/get-all-tools))
       :signal (:signal agent)
@@ -786,6 +819,7 @@ Be precise and concise in your responses."}}]
    stream to die)."
   [agent prep & [custom-instructions]]
   (let [provider @(:provider agent)
+        ep (resolve-endpoint agent)
         api-key (resolve-api-key agent)]
     (when api-key
       (let [done (promise)
@@ -795,10 +829,10 @@ Be precise and concise in your responses."}}]
                   (:messages prep) (:previous-summary prep) custom-instructions)]
         (llm/send-message
          {:provider provider
-          :api-type (or (:api-type agent) (cfg/get-provider-api-type provider))
+          :api-type (:api-type ep)
           :model @(:model agent)
           :api-key api-key
-          :base-url (or (:base-url agent) (cfg/get-provider-base-url provider))
+          :base-url (:base-url ep)
           :messages msgs
           :signal signal
           :idle-timeout-ms (:http-idle-timeout-ms agent)

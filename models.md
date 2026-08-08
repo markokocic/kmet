@@ -60,6 +60,15 @@ Key design principles (from pi, kept in kmet):
 
 ## Phase 0 — Data model & registry (`kmet.app.models`)
 
+**Status: implemented.** Models/Providers records, the registry atom with
+register/unregister/clear + getters, catalog loading from the committed EDN
+files (light structural validation), manifest computation/check, and the
+config.clj migration (provider-configs/get-provider-config/accessors deleted;
+loop resolves api-type + endpoint URL from the resolved Model via
+`resolve-endpoint`). `get-available` checks auth via `cfg/get-api-key` until
+Phase 3. `models/resolve-config-model` replaces the old `get-model` provider
+fallback (settings.edn `:model` wins, else the provider's catalog default).
+
 Foundation; everything else depends on it.
 
 ### Model record
@@ -132,7 +141,7 @@ compat surface; kmet has 3 APIs and 4 providers).
 ### File layout
 
 ```
-src/kmet/app/models.clj           records, registry, catalog loading
+src/kmet/app/models.clj           records, registry, catalog loading, manifest
 src/kmet/app/model_data/          generated EDN catalogs (committed)
   opencode-go.edn
   opencode.edn
@@ -142,12 +151,18 @@ src/kmet/app/model_data/          generated EDN catalogs (committed)
 ```
 
 Catalog EDN shape (mirrors pi's `data/<provider>.json` group structure, so the
-generator is a direct translation):
+generator is a direct translation). Phase 0 added a `:provider` info block
+(id, name, env vars, default model) — the plan's "a provider is an EDN blob
+(id, name, models, env vars, default model)" principle):
 
 ```clojure
 ;; opencode-go.edn
 {:schema-version 1
  :generated-at "2026-01-01T00:00:00Z"
+ :provider {:id :opencode-go
+            :name "OpenCode Go"
+            :env-vars ["OPENCODE_API_KEY"]   ;; pi env-api-keys order
+            :default-model "deepseek-v4-flash"}
  :models
  {:openai-completions
   {"deepseek-v4-flash"
@@ -167,9 +182,28 @@ Manifest (`manifest.edn`), pi `createModelDataManifest` semantics:
 ```clojure
 {:schema-version 1
  :generated-at "2026-01-01T00:00:00Z"
- :structure-hash "sha256 of canonical sorted {provider -> api -> model-id}"
+ :structure-hash "sha256 of canonical sorted {provider -> model-id -> api}"
  :files {"opencode-go.edn" "sha256hex" ...}}
 ```
+
+Implementation notes (Phase 0):
+
+- **Structure hash canonical string**: pi hashes `JSON.stringify(sortedRecord)`;
+  kmet uses `pr-str` of the equivalent sorted-map (same canonical content).
+- **openai/anthropic are kept as legacy providers without catalog entries**
+  (Phase 1's generator only covers the 4 target providers). Registry lookups
+  return nil for them and `loop/resolve-endpoint` then yields nil
+  api-type/base-url, so `llm/send-message` falls back to its provider
+  defaults (`default-openai-url` / `anthropic-url`, model "gpt-4o" /
+  "claude-sonnet-4-20250514") — exactly the old
+  `{:base-url nil :api-type provider}` fallback behavior.
+- **URL construction pre-Phase 2**: the catalog stores API-base URLs (as pi
+  does), but llm still takes full endpoint URLs, so `loop/resolve-endpoint`
+  appends `/chat/completions` / `/v1/messages`. Phase 2 moves this into the
+  wire APIs and changes llm's `:base-url` semantics.
+- The catalog loader does light structural validation (provider block,
+  required fields, no model id in two api groups); strict per-model
+  validation is Phase 1's generator + offline test.
 
 ---
 
@@ -454,10 +488,10 @@ scope, pi's current implementation, and kmet's needs when the time comes.
   deepseek-v4-flash exists there (pi's script carries it as an override if
   models.dev lags; port that).
 - `:providers` map in `default-config` and `provider-configs` in
-  `config.clj` are deleted once Phase 0 lands; `get-provider-config` is only
-  used internally by `config.clj` (`get-provider-base-url` /
-  `get-provider-api-type`) plus `test_config.clj` — those accessors are
-  replaced by registry lookups.
+  `config.clj` are deleted (Phase 0); `get-provider-config`,
+  `get-provider-base-url`, `get-provider-api-type` are removed — loop.clj
+  resolves base-url/api-type from the registry via `resolve-endpoint`
+  (model :api/:base-url; nil for legacy providers → llm defaults).
 - Existing `auth.edn` entries keep working (same shape).
 
 ## Phase order & dependencies

@@ -14,15 +14,13 @@
     (t/is (= :opencode-go (:provider c)))
     (t/is (= "dark" (:theme c)))
     (t/is (contains? c :session-dir))
-    (t/is (contains? c :providers))
-    (t/is (contains? (:providers c) :openai))
-    (t/is (contains? (:providers c) :anthropic))
+    (t/is (= "deepseek-v4-flash" (:model c)))
     (t/is (= 500 (:max-session-entries c)))))
 
-(t/deftest test-default-model-per-provider
-  (t/is (= "deepseek-v4-flash" (get-in cfg/default-config [:providers :opencode-go :model])))
-  (t/is (= "claude-sonnet-4-20250514" (get-in cfg/default-config [:providers :anthropic :model])))
-  (t/is (= "gpt-4o" (get-in cfg/default-config [:providers :openai :model]))))
+(t/deftest test-default-config-has-no-provider-map
+  ;; Phase 0: the :providers map is replaced by the models registry — the
+  ;; provider defaults live in the catalog EDN, not in default-config.
+  (t/is (not (contains? cfg/default-config :providers))))
 
 ;; ─── Path expansion ────────────────────────────────────────────────────────
 
@@ -53,16 +51,17 @@
     (t/is (= :opencode-go (cfg/get-provider c)))))
 
 (t/deftest test-get-model-from-default
-  (let [c (assoc cfg/default-config :model nil)]
-    (t/is (= "deepseek-v4-flash" (cfg/get-model c)))))
+  (t/is (= "deepseek-v4-flash" (cfg/get-model cfg/default-config))))
 
 (t/deftest test-get-model-explicit
   (let [c (assoc cfg/default-config :model "gpt-4o-mini")]
     (t/is (= "gpt-4o-mini" (cfg/get-model c)))))
 
-(t/deftest test-get-model-anthropic
+(t/deftest test-get-model-no-provider-fallback
+  ;; Phase 0: get-model no longer falls back through :providers — provider
+  ;; defaults come from the models registry (models/resolve-config-model).
   (let [c (assoc cfg/default-config :provider :anthropic :model nil)]
-    (t/is (= "claude-sonnet-4-20250514" (cfg/get-model c)))))
+    (t/is (nil? (cfg/get-model c)))))
 
 (t/deftest test-get-session-dir
   (let [c (assoc cfg/default-config :session-dir "/tmp/kmet-sessions")]
@@ -133,6 +132,9 @@
       (t/is (= {:session-dir nil} (resolve-paths {:session-dir nil} "/base"))))))
 
 ;; ─── Provider config ───────────────────────────────────────────────────────
+;; Phase 0: provider-configs / get-provider-config / get-provider-base-url /
+;; get-provider-api-type are deleted — base-url/api-type come from the models
+;; registry (kmet.app.models), not from config (covered by test_models).
 
 (t/deftest test-resource-dirs
   (let [canon (fn [p] (str (fs/canonicalize (io/file p))))
@@ -149,26 +151,6 @@
       (let [c (assoc cfg/default-config :skills-dir global)
             dirs (cfg/resource-dirs c :skills-dir global)]
         (t/is (= [global] dirs))))))
-
-(t/deftest test-get-provider-config-known
-  (let [c (cfg/get-provider-config :openai)]
-    (t/is (map? c))
-    (t/is (= :openai (:api-type c)))
-    (t/is (some? (:base-url c)))))
-
-(t/deftest test-get-provider-config-unknown
-  (let [c (cfg/get-provider-config :nonexistent)]
-    (t/is (some? c))
-    (t/is (= :nonexistent (:api-type c)))
-    (t/is (nil? (:base-url c)))))
-
-(t/deftest test-get-provider-base-url
-  (t/is (some? (cfg/get-provider-base-url :openai)))
-  (t/is (nil? (cfg/get-provider-base-url :nonexistent))))
-
-(t/deftest test-get-provider-api-type
-  (t/is (= :openai (cfg/get-provider-api-type :openai)))
-  (t/is (= :anthropic (cfg/get-provider-api-type :anthropic))))
 
 ;; ─── API key ───────────────────────────────────────────────────────────────
 

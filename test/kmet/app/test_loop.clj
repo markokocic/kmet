@@ -3,6 +3,7 @@
             [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.app.llm :as llm]
+            [kmet.app.models :as models]
             [kmet.app.tools.core :as tools]
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
@@ -1211,6 +1212,48 @@
                       (when-let [on-done (:on-done opts)] (on-done :stop))
                       :done))]
       @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])}))))
+
+(t/deftest test-loop-endpoint-from-model-registry
+  ;; Phase 0: api-type/base-url derive from the resolved Model record (the
+  ;; registry is the unit of truth); legacy providers without a catalog entry
+  ;; fall through to nil (llm applies its built-in defaults); agent-level
+  ;; overrides win over the model.
+  (models/load-catalogs!)
+  (let [sent (atom nil)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (reset! sent (select-keys opts [:api-type :base-url]))
+                    (future
+                      (when-let [on-text (:on-text opts)] (on-text "hi"))
+                      (when-let [on-done (:on-done opts)] (on-done :stop))))]
+      (t/testing "catalog model drives api-type + endpoint URL"
+        @(loop/run-agent-turn (loop/make-agent-state :provider :opencode-go
+                                                     :model "deepseek-v4-flash")
+                              {:message "hi" :on-error (fn [_])})
+        (t/is (= {:api-type :openai
+                  :base-url "https://opencode.ai/zen/go/v1/chat/completions"}
+                 @sent)))
+      (t/testing "anthropic-messages model routes to the anthropic builder"
+        @(loop/run-agent-turn (loop/make-agent-state :provider :github-copilot
+                                                     :model "claude-sonnet-4.5")
+                              {:message "hi" :on-error (fn [_])})
+        (t/is (= {:api-type :anthropic
+                  :base-url "https://api.individual.githubcopilot.com/v1/messages"}
+                 @sent)))
+      (t/testing "legacy provider without a catalog entry → nil, llm defaults"
+        @(loop/run-agent-turn (loop/make-agent-state :provider :openai :model "gpt-4o")
+                              {:message "hi" :on-error (fn [_])})
+        (t/is (= {:api-type nil :base-url nil} @sent)))
+      (t/testing "agent-level overrides win over the model"
+        @(loop/run-agent-turn (loop/make-agent-state :provider :opencode-go
+                                                     :model "deepseek-v4-flash"
+                                                     :api-type :anthropic
+                                                     :base-url "https://custom.example/v1/messages")
+                              {:message "hi" :on-error (fn [_])})
+        (t/is (= {:api-type :anthropic
+                  :base-url "https://custom.example/v1/messages"}
+                 @sent))))))
 
 (t/deftest test-loop-token-threshold-compaction
   (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})

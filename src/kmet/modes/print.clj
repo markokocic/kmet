@@ -4,6 +4,7 @@
   (:require [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.app.loop :as agent]
+            [kmet.app.models :as models]
             [kmet.app.skills :as skills]
             [kmet.app.context :as context]
             [kmet.app.prompts :as prompts]
@@ -25,7 +26,7 @@
                        :context-files (context/load-project-context-files
                                        (cfg/get-agent-dir) (str (fs/cwd))))
         resolved-provider (or provider (cfg/get-provider config))
-        resolved-model (or model (cfg/get-model config))
+        resolved-model (or model (models/resolve-config-model config))
         ag (agent/make-agent-state
             :model resolved-model
             :provider resolved-provider

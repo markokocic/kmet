@@ -1,0 +1,25 @@
+{:schema-version 1
+ :generated-at "2026-08-08T00:00:00Z"
+ :provider {:id :deepseek
+            :name "DeepSeek"
+            :env-vars ["DEEPSEEK_API_KEY"]
+            :default-model "deepseek-v4-pro"}
+ :models
+ {:openai-completions
+  {"deepseek-v4-flash"
+   {:id "deepseek-v4-flash" :name "DeepSeek V4 Flash" :provider :deepseek
+    :api :openai-completions :base-url "https://api.deepseek.com"
+    :reasoning true :input [:text]
+    :cost {:input 0.14 :output 0.28 :cache-read 0.0028 :cache-write 0}
+    :context-window 1000000 :max-tokens 384000
+    :compat {:requires-reasoning-content-on-assistant-messages true
+             :thinking-format :deepseek}}
+   "deepseek-v4-pro"
+   {:id "deepseek-v4-pro" :name "DeepSeek V4 Pro" :provider :deepseek
+    :api :openai-completions :base-url "https://api.deepseek.com"
+    :reasoning true :input [:text]
+    :cost {:input 0.435 :output 0.87 :cache-read 0.003625 :cache-write 0}
+    :context-window 1000000 :max-tokens 384000
+    :compat {:requires-reasoning-content-on-assistant-messages true
+             :thinking-format :deepseek}}}}
+}
