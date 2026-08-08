@@ -429,9 +429,15 @@
     (let [model-id (or (:model opts) (:id model-record))
           thinking-params (openai-thinking-params model-record effort)
           max-tokens-field (max-tokens-key model-record)
+          ;; pi: requiresReasoningContentOnAssistantMessages gates the
+          ;; reasoning_content field (deepseek/opencode-go only)
+          messages-fn (if (:requires-reasoning-content-on-assistant-messages
+                           (:compat model-record))
+                        openai-messages-with-reasoning
+                        openai-messages)
           url (or base-url (endpoint-url :openai-completions (:base-url model-record) model-id))
           payload (cond-> {:model model-id
-                           :messages (openai-messages-with-reasoning messages)
+                           :messages (messages-fn messages)
                            :stream true
                            :stream_options {:include_usage true}}
                     (seq tools) (assoc :tools (mapv tools/tool->openai-schema tools))

@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-08T15:31:46Z"
+ :generated-at "2026-08-08T15:46:47Z"
  :provider {:id :opencode
             :name "OpenCode (Zen)"
             :env-vars ["OPENCODE_API_KEY"]
@@ -13,13 +13,7 @@
     :api :anthropic-messages
     :base-url "https://opencode.ai/zen"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal nil
-                         :off nil
-                         :xhigh "xhigh"}
+    :thinking-level-map {:max "max" :off nil :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 10 :output 50 :cache-read 1 :cache-write 12.5}
     :context-window 1000000
@@ -42,13 +36,6 @@
     :api :anthropic-messages
     :base-url "https://opencode.ai/zen"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max nil
-                         :medium "medium"
-                         :minimal nil
-                         :off nil
-                         :xhigh nil}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 200000
@@ -60,13 +47,6 @@
     :api :anthropic-messages
     :base-url "https://opencode.ai/zen"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal nil
-                         :off nil
-                         :xhigh nil}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -78,13 +58,6 @@
     :api :anthropic-messages
     :base-url "https://opencode.ai/zen"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal nil
-                         :off nil
-                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -96,13 +69,6 @@
     :api :anthropic-messages
     :base-url "https://opencode.ai/zen"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal nil
-                         :off nil
-                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -114,13 +80,7 @@
     :api :anthropic-messages
     :base-url "https://opencode.ai/zen"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal "low"
-                         :off nil
-                         :xhigh "xhigh"}
+    :thinking-level-map {:max "max" :minimal "low" :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -154,13 +114,6 @@
     :api :anthropic-messages
     :base-url "https://opencode.ai/zen"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal nil
-                         :off nil
-                         :xhigh nil}
     :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 3.75}
     :context-window 1000000
@@ -172,13 +125,7 @@
     :api :anthropic-messages
     :base-url "https://opencode.ai/zen"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal nil
-                         :off nil
-                         :xhigh "xhigh"}
+    :thinking-level-map {:max "max" :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 10 :cache-read 0.2 :cache-write 2.5}
     :context-window 1000000
@@ -213,13 +160,7 @@
     :api :google-generative-ai
     :base-url "https://opencode.ai/zen/v1"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max nil
-                         :medium "medium"
-                         :minimal "minimal"
-                         :off nil
-                         :xhigh nil}
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 0.5 :output 3 :cache-read 0.05 :cache-write 0}
     :context-window 1048576
@@ -233,11 +174,9 @@
     :reasoning true
     :thinking-level-map {:high "HIGH"
                          :low "LOW"
-                         :max nil
                          :medium nil
                          :minimal nil
-                         :off nil
-                         :xhigh nil}
+                         :off nil}
     :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 0}
     :context-window 1048576
@@ -249,13 +188,7 @@
     :api :google-generative-ai
     :base-url "https://opencode.ai/zen/v1"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max nil
-                         :medium "medium"
-                         :minimal "minimal"
-                         :off nil
-                         :xhigh nil}
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 1.5 :output 9 :cache-read 0.15 :cache-write 0}
     :context-window 1048576
@@ -267,13 +200,7 @@
     :api :google-generative-ai
     :base-url "https://opencode.ai/zen/v1"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max nil
-                         :medium "medium"
-                         :minimal "minimal"
-                         :off nil
-                         :xhigh nil}
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 0.3 :output 2.5 :cache-read 0.03 :cache-write 0}
     :context-window 1048576
@@ -285,13 +212,7 @@
     :api :google-generative-ai
     :base-url "https://opencode.ai/zen/v1"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max nil
-                         :medium "medium"
-                         :minimal "minimal"
-                         :off nil
-                         :xhigh nil}
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 0}
     :context-window 1048576

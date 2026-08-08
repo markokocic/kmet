@@ -117,41 +117,42 @@
 
 (defn parse-google-event
   "Parse a Google Generative AI streamGenerateContent SSE data payload (the
-   REST wire format — camelCase fields) into a kmet event map: :text,
-   :thinking (thought parts), :tool-call (functionCall part with the full
-   args object), :done (finishReason), :usage, :delta, or :error.
+   REST wire format — camelCase fields) into a vector of kmet events:
+   :text, :thinking (thought parts), :tool-call (functionCall parts with the
+   full args object), :usage (per-chunk usageMetadata), :done (finishReason),
+   or :error. A single chunk can yield several events (usage + parts +
+   finish — pi reads all parts and usageMetadata per chunk).
 
    Google streams have no terminal sentinel: the last chunk carries
    finishReason, which process-google-stream uses for premature-end
    detection."
   [data]
   (if (or (nil? data) (str/blank? data))
-    {:type :delta :chunk {}}
+    [{:type :delta :chunk {}}]
     (try
       (let [chunk (json/parse-string data true)
             candidate (first (:candidates chunk))
             parts (get-in candidate [:content :parts])
             finish (:finishReason candidate)
-            usage (:usageMetadata chunk)]
-        (cond
-          finish {:type :done :stop-reason (google-stop-reason finish)}
-          (seq parts)
-          (first (keep (fn [[i p]]
-                         (cond
-                           (:functionCall p)
-                           (let [fc (:functionCall p)]
-                             {:type :tool-call
-                              :id (or (:id fc) (str (:name fc) "_" (System/currentTimeMillis) "_" i))
-                              :name (:name fc)
-                              :arguments (:args fc {})
-                              :index i})
-                           (:thought p) {:type :thinking :content (:text p)}
-                           (contains? p :text) {:type :text :content (:text p)}))
-                       (map-indexed vector parts)))
-          usage {:type :usage :usage (google-usage usage)}
-          :else {:type :delta :chunk chunk}))
+            usage (:usageMetadata chunk)
+            part-events (keep (fn [[i p]]
+                                (cond
+                                  (:functionCall p)
+                                  (let [fc (:functionCall p)]
+                                    {:type :tool-call
+                                     :id (or (:id fc) (str (:name fc) "_" (System/currentTimeMillis) "_" i))
+                                     :name (:name fc)
+                                     :arguments (:args fc {})
+                                     :index i})
+                                  (:thought p) {:type :thinking :content (:text p)}
+                                  (contains? p :text) {:type :text :content (:text p)}))
+                              (map-indexed vector parts))
+            events (concat (when usage [{:type :usage :usage (google-usage usage)}])
+                           part-events
+                           (when finish [{:type :done :stop-reason (google-stop-reason finish)}]))]
+        (if (seq events) (vec events) [{:type :delta :chunk chunk}]))
       (catch Exception e
-        {:type :error :message (str "Parse error: " (ex-message e))}))))
+        [{:type :error :message (str "Parse error: " (ex-message e))}]))))
 
 (defn- make-idle-char-reader
   "Idle-timeout char reader over a BufferedReader (undici bodyTimeout
@@ -351,7 +352,7 @@
                                   (fn [line]
                                     (let [[_ data] (parse-sse-line line)]
                                       (when data
-                                        (let [event (parse-google-event data)]
+                                        (doseq [event (parse-google-event data)]
                                           (when (= :done (:type event))
                                             (reset! saw-done true))
                                           (handler event)))))

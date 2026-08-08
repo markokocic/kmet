@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-08T15:31:46Z"
+ :generated-at "2026-08-08T15:46:47Z"
  :provider {:id :github-copilot
             :name "GitHub Copilot"
             :env-vars ["COPILOT_GITHUB_TOKEN"]
@@ -43,13 +43,7 @@
     :api :anthropic-messages
     :base-url "https://api.individual.githubcopilot.com"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal nil
-                         :off nil
-                         :xhigh nil}
+    :thinking-level-map {:max "max"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 200000
@@ -65,13 +59,7 @@
     :api :anthropic-messages
     :base-url "https://api.individual.githubcopilot.com"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal "low"
-                         :off nil
-                         :xhigh "xhigh"}
+    :thinking-level-map {:max "max" :minimal "low" :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 200000
@@ -87,13 +75,7 @@
     :api :anthropic-messages
     :base-url "https://api.individual.githubcopilot.com"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal "low"
-                         :off nil
-                         :xhigh "xhigh"}
+    :thinking-level-map {:max "max" :minimal "low" :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 200000
@@ -109,13 +91,7 @@
     :api :anthropic-messages
     :base-url "https://api.individual.githubcopilot.com"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal "low"
-                         :off nil
-                         :xhigh "xhigh"}
+    :thinking-level-map {:max "max" :minimal "low" :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -161,13 +137,7 @@
     :api :anthropic-messages
     :base-url "https://api.individual.githubcopilot.com"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal "low"
-                         :off nil
-                         :xhigh nil}
+    :thinking-level-map {:max "max" :minimal "low"}
     :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 3.75}
     :context-window 200000
@@ -183,13 +153,7 @@
     :api :anthropic-messages
     :base-url "https://api.individual.githubcopilot.com"
     :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium "medium"
-                         :minimal nil
-                         :off nil
-                         :xhigh "xhigh"}
+    :thinking-level-map {:max "max" :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 10 :cache-read 0.2 :cache-write 2.5}
     :context-window 1000000

@@ -268,9 +268,12 @@
   "pi applyModelsDevReasoningOptionMetadata: reasoning_options effort values
    → thinking-level-map for openai-completions models using the default
    (openai) thinking format and supporting reasoning_effort (kmet: no
-   explicit :thinking-format, :supports-reasoning-effort not false)."
+   explicit :thinking-format, :supports-reasoning-effort not false). pi
+   gates supportsDirectReasoningEffort to openai-completions (google/anthropic
+   models get their maps from the explicit metadata rules only)."
   [mm m]
-  (if (and (:reasoning mm)
+  (if (and (= :openai-completions (:api mm))
+           (:reasoning mm)
            (nil? (:thinking-format (:compat mm)))
            (not= false (:supports-reasoning-effort (:compat mm)))
            (get m "reasoning_options"))

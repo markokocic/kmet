@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-08T15:31:46Z"
+ :generated-at "2026-08-08T15:46:47Z"
  :provider {:id :opencode-go
             :name "OpenCode Go"
             :env-vars ["OPENCODE_API_KEY"]

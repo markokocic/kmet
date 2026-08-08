@@ -332,24 +332,29 @@
              contents))))
 
 (t/deftest test-google-event-parsing
-  (t/is (= {:type :text :content "Hi"}
+  (t/is (= [{:type :text :content "Hi"}]
            (sse/parse-google-event
             "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hi\"}]}}]}")))
-  (t/is (= {:type :thinking :content "think"}
+  (t/is (= [{:type :thinking :content "think"}]
            (sse/parse-google-event
             "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"think\",\"thought\":true}]}}]}")))
-  (let [evt (sse/parse-google-event
-             "{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"read\",\"args\":{\"path\":\"a\"}}}]}}]}")]
-    (t/is (= :tool-call (:type evt)))
-    (t/is (= "read" (:name evt)))
-    (t/is (= {:path "a"} (:arguments evt))))
-  (t/is (= {:type :done :stop-reason :stop}
+  (let [evts (sse/parse-google-event
+              "{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"read\",\"args\":{\"path\":\"a\"}}}]}}]}")]
+    (t/is (= :tool-call (:type (first evts))))
+    (t/is (= "read" (:name (first evts))))
+    (t/is (= {:path "a"} (:arguments (first evts)))))
+  (t/is (= [{:type :done :stop-reason :stop}]
            (sse/parse-google-event
             "{\"candidates\":[{\"finishReason\":\"STOP\"}]}")))
-  (t/is (= :length (:stop-reason (sse/parse-google-event
-                                  "{\"candidates\":[{\"finishReason\":\"MAX_TOKENS\"}]}"))))
-  (t/is (= {:type :usage :usage {:input 10 :output 20 :cache-read 0 :cache-write 0
-                                 :reasoning 0 :total-tokens 30}}
+  (t/is (= :length (:stop-reason (first (sse/parse-google-event
+                                         "{\"candidates\":[{\"finishReason\":\"MAX_TOKENS\"}]}")))))
+  (t/testing "a chunk can carry several events (pi reads all parts per chunk)"
+    (let [evts (sse/parse-google-event
+                "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"},{\"functionCall\":{\"name\":\"read\",\"args\":{}}}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":20,\"totalTokenCount\":30}}")]
+      (t/is (= [:usage :text :tool-call :done] (mapv :type evts))
+            "usage, all parts, and finish are all emitted from one chunk")))
+  (t/is (= [{:type :usage :usage {:input 10 :output 20 :cache-read 0 :cache-write 0
+                                  :reasoning 0 :total-tokens 30}}]
            (sse/parse-google-event
             "{\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":20,\"totalTokenCount\":30}}"))))
 
@@ -366,6 +371,20 @@
         "max-tokens-field :max-tokens → :max_tokens (opencode/deepseek)")
   (t/is (= :max_completion_tokens (@#'llm/max-tokens-key (tmodel :compat nil)))
         "default → :max_completion_tokens"))
+
+(t/deftest test-reasoning-content-gating-data
+  ;; pi: requiresReasoningContentOnAssistantMessages gates reasoning_content
+  ;; on assistant messages — carried by deepseek/opencode-go deepseek-v4
+  ;; models, absent elsewhere.
+  (m/load-catalogs!)
+  (t/is (true? (:requires-reasoning-content-on-assistant-messages
+                (:compat (m/get-model :deepseek "deepseek-v4-flash")))))
+  (t/is (true? (:requires-reasoning-content-on-assistant-messages
+                (:compat (m/get-model :opencode-go "deepseek-v4-flash")))))
+  (t/is (nil? (:requires-reasoning-content-on-assistant-messages
+               (:compat (m/get-model :opencode "glm-5.2")))))
+  (t/is (nil? (:requires-reasoning-content-on-assistant-messages
+               (:compat (m/get-model :github-copilot "claude-sonnet-4.5"))))))
 
 ;; ─── Transport total timeout follows the configured idle timeout ──────────
 
