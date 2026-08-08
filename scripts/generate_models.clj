@@ -123,6 +123,8 @@
     (seq compat) (assoc :compat compat)
     headers (assoc :headers headers)))
 
+(declare apply-thinking-maps)
+
 ;; ─── opencode / opencode-go (pi opencodeVariants) ─────────────────────────
 
 (defn- opencode-model
@@ -161,7 +163,7 @@
                  (= api :openai-completions)
                  (assoc :max-tokens-field :max-tokens))]
     (when api
-      (model-map (:provider variant) api base m mid {:compat compat}))))
+      (apply-thinking-maps (model-map (:provider variant) api base m mid {:compat compat}) m))))
 
 (defn- log-skips
   [label ids]
@@ -198,18 +200,22 @@
                                                (str/starts-with? mid "oswe")
                                                (str/starts-with? mid "mai-"))]
                       (cond
-                        claude? (model-map :github-copilot :anthropic-messages
-                                           "https://api.individual.githubcopilot.com" m mid
-                                           {:headers copilot-static-headers
-                                            :context-default 128000 :max-default 8192})
+                        claude? (apply-thinking-maps
+                                 (model-map :github-copilot :anthropic-messages
+                                            "https://api.individual.githubcopilot.com" m mid
+                                            {:headers copilot-static-headers
+                                             :context-default 128000 :max-default 8192})
+                                 m)
                         needs-responses? (do (vswap! skipped conj mid) nil)
-                        :else (model-map :github-copilot :openai-completions
-                                         "https://api.individual.githubcopilot.com" m mid
-                                         {:headers copilot-static-headers
-                                          :context-default 128000 :max-default 8192
-                                          :compat {:supports-store false
-                                                   :supports-developer-role false
-                                                   :supports-reasoning-effort false}})))))]
+                        :else (apply-thinking-maps
+                               (model-map :github-copilot :openai-completions
+                                          "https://api.individual.githubcopilot.com" m mid
+                                          {:headers copilot-static-headers
+                                           :context-default 128000 :max-default 8192
+                                           :compat {:supports-store false
+                                                    :supports-developer-role false
+                                                    :supports-reasoning-effort false}})
+                               m)))))]
       (log-skips "github-copilot, openai-responses" @skipped)
       models)))
 
@@ -229,6 +235,109 @@
                            deepseek-compat))
            mm))
        models))
+
+;; ─── Thinking level maps (pi applyModelsDevReasoningOptionMetadata +
+;;     applyThinkingLevelMetadata, kmet's providers only) ─────────────────────
+
+(def ^:private thinking-levels
+  [:minimal :low :medium :high :xhigh :max])
+
+(defn- effort-thinking-level-map
+  "pi getEffortThinkingLevelMap: reasoning_options effort values →
+   {level -> wire string | nil}. :off ← \"none\" (nil when unsupported);
+   levels without a verified value are nil (unsupported). Returns nil when
+   there are no usable effort values."
+  [reasoning-options]
+  (let [effort-values (into []
+                            (comp (filter #(= "effort" (get % "type")))
+                                  (mapcat #(get % "values")))
+                            reasoning-options)
+        supported (set effort-values)]
+    (when (and (seq effort-values)
+               (or (some supported (map name thinking-levels))
+                   (contains? supported "none")))
+      (into (array-map :off (if (contains? supported "none") "none" nil))
+            (for [level thinking-levels]
+              [level (if (contains? supported (name level)) (name level) nil)])))))
+
+(defn- merge-thinking-level-map
+  [mm extra]
+  (update mm :thinking-level-map merge extra))
+
+(defn- apply-effort-thinking-map
+  "pi applyModelsDevReasoningOptionMetadata: reasoning_options effort values
+   → thinking-level-map for openai-completions models using the default
+   (openai) thinking format and supporting reasoning_effort (kmet: no
+   explicit :thinking-format, :supports-reasoning-effort not false)."
+  [mm m]
+  (if (and (:reasoning mm)
+           (nil? (:thinking-format (:compat mm)))
+           (not= false (:supports-reasoning-effort (:compat mm)))
+           (get m "reasoning_options"))
+    (if-let [tlm (effort-thinking-level-map (get m "reasoning_options"))]
+      (assoc mm :thinking-level-map tlm)
+      mm)
+    mm))
+
+(defn- apply-thinking-level-metadata
+  "pi applyThinkingLevelMetadata rules for kmet's providers (deepseek-v4
+   maps, opencode-go glm-5.2/kimi-k2.6, opencode grok-build-0.1, copilot
+   claude overrides + adaptive thinking maps, gemini-3 maps)."
+  [mm]
+  (let [id (:id mm)
+        provider (:provider mm)
+        deepseek-v4? (and (= :openai-completions (:api mm))
+                          (str/includes? id "deepseek-v4"))
+        adaptive-high? (or (str/includes? id "opus-4.7")
+                           (str/includes? id "opus-4.8")
+                           (str/includes? id "opus-5")
+                           (str/includes? id "sonnet-5"))
+        adaptive-max? (or (str/includes? id "opus-4.6")
+                          (str/includes? id "sonnet-4.6")
+                          adaptive-high?)
+        gemini3-pro? (re-matches #"(?i).*gemini-3(?:\.\d+)?-pro.*" id)
+        gemini3-flash? (or (re-matches #"(?i).*gemini-3(?:\.\d+)?-flash.*" id)
+                           (= id "gemini-flash-latest")
+                           (= id "gemini-flash-lite-latest"))
+        gemma4? (re-matches #"(?i).*gemma-?4.*" id)
+        copilot-override (get {"claude-opus-4.7" {:minimal "low"}
+                               "claude-opus-4.8" {:minimal "low"}
+                               "claude-opus-5" {:minimal "low"}
+                               "claude-sonnet-4.6" {:minimal "low" :max "max"}}
+                              id)]
+    (cond-> mm
+      deepseek-v4?
+      (merge-thinking-level-map {:minimal nil :low nil :medium nil
+                                 :high "high" :max "max"})
+      (and (= :opencode-go provider) (= id "glm-5.2"))
+      (merge-thinking-level-map {:off nil :minimal nil :low nil :medium nil
+                                 :high "high" :max "max"})
+      (and (= :opencode-go provider) (= id "kimi-k2.6"))
+      (merge-thinking-level-map {:minimal nil :low nil :medium nil})
+      (and (= :opencode provider) (= id "grok-build-0.1"))
+      (merge-thinking-level-map {:off nil :minimal nil :low nil :medium nil})
+      adaptive-max?
+      (merge-thinking-level-map {:max "max"})
+      adaptive-high?
+      (merge-thinking-level-map {:xhigh "xhigh" :max "max"})
+      (str/includes? id "fable-5")
+      (merge-thinking-level-map {:off nil :xhigh "xhigh" :max "max"})
+      copilot-override
+      (merge-thinking-level-map copilot-override)
+      gemini3-pro?
+      (merge-thinking-level-map {:off nil :minimal nil :low "LOW"
+                                 :medium nil :high "HIGH"})
+      gemini3-flash?
+      (merge-thinking-level-map {:off nil})
+      gemma4?
+      (merge-thinking-level-map {:off nil :minimal "MINIMAL" :low nil
+                                 :medium nil :high "HIGH"}))))
+
+(defn- apply-thinking-maps
+  "thinking-level-map pipeline (pi order): effort maps from the models.dev
+   reasoning options, then the explicit metadata rules (later merges win)."
+  [mm m]
+  (-> mm (apply-effort-thinking-map m) apply-thinking-level-metadata))
 
 ;; ─── Generation ────────────────────────────────────────────────────────────
 
@@ -259,7 +368,7 @@
   [data]
   (let [all (->> (concat (process-opencode data)
                          (process-copilot data)
-                         deepseek-v4-models)
+                         (map #(apply-thinking-maps % nil) deepseek-v4-models))
                  (remove nil?))
         grouped (group-by :provider (normalize-deepseek-v4 all))]
     (into (array-map)
@@ -337,7 +446,7 @@
         (map-indexed (fn [i k] [k i]))
         [:schema-version :generated-at
          :id :name :env-vars :default-model
-         :provider :api :base-url :reasoning :input :cost
+         :provider :api :base-url :reasoning :thinking-level-map :input :cost
          :context-window :max-tokens :headers :compat
          :output :cache-read :cache-write
          :supports-store :supports-developer-role :supports-reasoning-effort

@@ -83,6 +83,13 @@
               :description (:description tool)
               :parameters (:parameters tool)}})
 
+(defn tool->google-schema
+  "Convert a tool map to a Google functionDeclaration (pi convertTools)."
+  [tool]
+  {:name (:name tool)
+   :description (:description tool)
+   :parameters (:parameters tool)})
+
 ;; ─── Extended tool registry ────────────────────────────────────────────────
 
 (defonce ^:private custom-tools (atom {}))

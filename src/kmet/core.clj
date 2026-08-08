@@ -95,7 +95,7 @@
   (println "  --provider <name>     Provider (opencode-go, opencode, deepseek,\n                        github-copilot, openai, anthropic)")
   (println "  --system-prompt <txt> Replace the system prompt (or path to a file)")
   (println "  --append-system-prompt <txt> Append to the system prompt (repeatable)")
-  (println "  -t, --thinking <level> Thinking level (off, low, medium, high)")
+  (println "  -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)")
   (println "  -h, --help            Show this help")
   (println)
   (println "Examples:")

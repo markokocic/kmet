@@ -1214,44 +1214,40 @@
       @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])}))))
 
 (t/deftest test-loop-endpoint-from-model-registry
-  ;; Phase 0: api-type/base-url derive from the resolved Model record (the
-  ;; registry is the unit of truth); legacy providers without a catalog entry
-  ;; fall through to nil (llm applies its built-in defaults); agent-level
-  ;; overrides win over the model.
+  ;; Phase 2: llm resolves the Model itself (registry is the unit of truth);
+  ;; loop forwards provider/model plus only the agent-level overrides.
+  ;; Legacy providers without a catalog entry fall through to llm's built-in
+  ;; defaults; agent-level overrides win over the model.
   (models/load-catalogs!)
   (let [sent (atom nil)]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
-                    (reset! sent (select-keys opts [:api-type :base-url]))
+                    (reset! sent (select-keys opts [:provider :model :api-type :base-url]))
                     (future
                       (when-let [on-text (:on-text opts)] (on-text "hi"))
                       (when-let [on-done (:on-done opts)] (on-done :stop))))]
-      (t/testing "catalog model drives api-type + endpoint URL"
+      (t/testing "loop forwards provider + model; llm resolves the wire api"
         @(loop/run-agent-turn (loop/make-agent-state :provider :opencode-go
                                                      :model "deepseek-v4-flash")
                               {:message "hi" :on-error (fn [_])})
-        (t/is (= {:api-type :openai
-                  :base-url "https://opencode.ai/zen/go/v1/chat/completions"}
+        (t/is (= {:provider :opencode-go :model "deepseek-v4-flash"
+                  :api-type nil :base-url nil}
                  @sent)))
-      (t/testing "anthropic-messages model routes to the anthropic builder"
-        @(loop/run-agent-turn (loop/make-agent-state :provider :github-copilot
-                                                     :model "claude-sonnet-4.5")
-                              {:message "hi" :on-error (fn [_])})
-        (t/is (= {:api-type :anthropic
-                  :base-url "https://api.individual.githubcopilot.com/v1/messages"}
-                 @sent)))
-      (t/testing "legacy provider without a catalog entry → nil, llm defaults"
+      (t/testing "legacy provider without a catalog entry → no overrides"
         @(loop/run-agent-turn (loop/make-agent-state :provider :openai :model "gpt-4o")
                               {:message "hi" :on-error (fn [_])})
-        (t/is (= {:api-type nil :base-url nil} @sent)))
-      (t/testing "agent-level overrides win over the model"
+        (t/is (= {:provider :openai :model "gpt-4o"
+                  :api-type nil :base-url nil}
+                 @sent)))
+      (t/testing "agent-level overrides flow through to llm"
         @(loop/run-agent-turn (loop/make-agent-state :provider :opencode-go
                                                      :model "deepseek-v4-flash"
                                                      :api-type :anthropic
                                                      :base-url "https://custom.example/v1/messages")
                               {:message "hi" :on-error (fn [_])})
-        (t/is (= {:api-type :anthropic
+        (t/is (= {:provider :opencode-go :model "deepseek-v4-flash"
+                  :api-type :anthropic
                   :base-url "https://custom.example/v1/messages"}
                  @sent))))))
 

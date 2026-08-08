@@ -66,7 +66,6 @@
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [kmet.app.llm :as llm]
-            [kmet.app.models :as models]
             [kmet.app.compaction :as compaction]
             [kmet.app.tools.core :as tools]
             [kmet.app.tools.bash :as bash-tool]
@@ -197,11 +196,12 @@ Be precise and concise in your responses."}}]
       (seq tool-calls) (assoc :tool-calls tool-calls)
       usage (assoc :usage usage))))
 
-(defn- tool-result-message [tc-id _tc-name result]
+(defn- tool-result-message [tc-id tc-name result]
   (cond-> {:role :tool
            :content [{:type :tool_result
                       :tool_use_id tc-id
                       :content (:content result)}]
+           :tool-name tc-name
            :is-error (:is-error result false)}
     (:images result) (assoc :images (:images result))
     (:truncation result) (assoc :truncation (:truncation result))
@@ -616,36 +616,13 @@ Be precise and concise in your responses."}}]
 
 ;; ─── LLM call wrapper ─────────────────────────────────────────────────────
 
-(defn- model-endpoint-url
-  "Full request URL for a Model record — the pre-Phase-2 stand-in for
-   pi's per-api URL construction while llm/send-message still takes full
-   endpoint URLs (Phase 2 moves this into the wire APIs)."
-  [model]
-  (case (:api model)
-    :openai-completions (str (:base-url model) "/chat/completions")
-    :anthropic-messages (str (:base-url model) "/v1/messages")
-    nil))
-
-(defn- llm-api-type
-  "llm request-builder keyword for a Model :api (Phase 2: llm dispatches on
-   the wire api names directly, replacing this mapping)."
-  [api]
-  (case api
-    :openai-completions :openai
-    :anthropic-messages :anthropic
-    nil))
-
 (defn- resolve-endpoint
-  "api-type + base-url for the next LLM call: agent overrides win, then the
-   resolved Model record (the unit of truth — base-url/api-type come from the
-   catalog), then nil (llm falls back to its provider defaults; legacy
-   providers like :openai/:anthropic have no catalog entry yet)."
+  "api-type + base-url overrides for the next LLM call (Phase 2: llm resolves
+   the Model itself and derives api/base-url/thinking from it; only the
+   agent-level overrides flow through here)."
   [agent]
-  (let [provider @(:provider agent)
-        model (models/get-model provider @(:model agent))]
-    {:api-type (or (:api-type agent) (some-> model :api llm-api-type))
-     :base-url (or (:base-url agent)
-                   (some-> model model-endpoint-url))}))
+  {:api-type (:api-type agent)
+   :base-url (:base-url agent)})
 
 (defn- call-llm
   "Send messages to LLM, return a promise that delivers {:text str :tool-calls [...] :stop-reason kw}.

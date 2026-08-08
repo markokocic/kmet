@@ -306,19 +306,32 @@ openai-completions `deepseek-v4*` model gets the deepseek compat; opencode
 - **Regenerated catalog notes**: models.dev's opencode-go has no
   `@ai-sdk/google` models, so opencode-go lost its `:google-generative-ai`
   api-type (test updated); `test_models.clj` now pins all four providers'
-  api-types. `thinking-level-map` is still not emitted — Phase 2 derives it
-  from models.dev reasoning options (`getEffortThinkingLevelMap`).
+  api-types. `:thinking-level-map` is emitted from Phase 2 on (see Phase 2
+  — generator ports `getEffortThinkingLevelMap` + the
+  `applyThinkingLevelMetadata` rules for kmet's providers).
 
 ---
 
 ## Phase 2 — Runtime dispatch (`kmet.app.llm` refactor)
 
+**Status: implemented.** `llm/send-message` now resolves the Model record via
+`models/get-model` (the registry is the unit of truth); dispatch, endpoint
+URL, thinking shaping, max-token field and static headers all derive from it.
+`kmet.libs.sse` gained a Google stream processor; the generator now emits
+`:thinking-level-map` (pi `getEffortThinkingLevelMap` + the
+`applyThinkingLevelMetadata` rules for kmet's providers); catalogs regenerated.
+
 ### Model resolution at request time
 
-- `send-message` opts change: callers pass `:model-id` + `:provider-id`
-  (or a resolved `Model`); llm resolves via `models/get-model`, errors with
-  "Unknown model/provider" if absent (surfaced through `:on-error`).
+- `send-message` resolves `(models/get-model provider model)`. A catalog
+  provider with an unknown model id → "Unknown model: <provider>/<model>"
+  (pi: unknown model). Legacy providers without a catalog entry (:openai /
+  :anthropic) fall back to built-in defaults (same api/url as before).
 - `:api-key` stays caller-resolved (Phase 3 formalizes resolution).
+- `loop.clj` `resolve-endpoint` now forwards only the agent-level
+  `:api-type` / `:base-url` overrides (both win over the model); the
+  model-derived api-type/base-url computation moved into llm
+  (`model-endpoint-url` / `llm-api-type` deleted).
 
 ### URL construction (each api owns it)
 
@@ -328,50 +341,62 @@ openai-completions `deepseek-v4*` model gets the deepseek compat; opencode
 | `:anthropic-messages` | `(str base-url "/v1/messages")` | `https://api.anthropic.com/v1/messages`, copilot `https://api.individual.githubcopilot.com/v1/messages` |
 | `:google-generative-ai` | `(str base-url "/models/" model-id ":streamGenerateContent?alt=sse")` | `https://opencode.ai/zen/v1/models/...:streamGenerateContent?alt=sse` |
 
-- `default-openai-url`/`anthropic-url` constants and `provider-configs`
-  base-urls go away.
-- Static model `:headers` merged into request headers (copilot).
+- `default-openai-url`/`anthropic-url` public constants removed; the legacy
+  provider defaults live in a private `legacy-defaults` map (`https://api.openai.com/v1`,
+  `https://api.anthropic.com`). The `:base-url` opt remains a full endpoint
+  URL override (used verbatim — local test servers, agent override).
+- Static model `:headers` merged into request headers (copilot
+  `COPILOT_STATIC_HEADERS`); google sends `x-goog-api-key`.
 
 ### Thinking (port pi's per-format handling)
 
-kmet gains `:minimal` and `:xhigh` (full 7 levels + `:off`). The effective
-level comes from settings/CLI (`:thinking`), clamped by model capability
-(`thinking-level-map` present). Request shaping per api+compat:
+kmet gains `:minimal` and `:xhigh` (full 7 levels + `:off`; CLI help updated).
+The effective level comes from settings/CLI (`:thinking`), clamped by model
+capability via `supported-thinking-levels` / `clamp-thinking-level` (pi
+getSupportedThinkingLevels / clampThinkingLevel: null map values mark
+unsupported, `:xhigh`/`:max` need a map entry). `:off` is converted to nil at
+the caller (pi agent.ts: `thinkingLevel === "off" ? undefined : level`).
 
 | api / compat | off | on |
 |---|---|---|
 | `:openai-completions`, default (`supports-reasoning-effort`) | `reasoning_effort` from map `:off` (if string) | `reasoning_effort` = map[level] ?? level |
 | `:openai-completions`, `:thinking-format :deepseek` | `thinking {:type "disabled"}` (unless map `:off` is null) | `thinking {:type "enabled"}` (+ `reasoning_effort` if supported) |
 | `:openai-completions`, `:thinking-format :qwen` | `enable_thinking false` | `enable_thinking true` (+ `reasoning_effort` if supported) |
-| `:anthropic-messages` | — | `thinking {:type "enabled" :budget_tokens N}`; budget map replaces hardcoded `anthropic-thinking-config` |
-| `:google-generative-ai` | — | `thinkingConfig {:thinkingBudget N}` (implementation ported from pi google api) |
+| `:anthropic-messages` | `thinking {:type "disabled"}` (unless map `:off` is null) | budget-based: `thinking {:type "enabled" :budget_tokens N}`; budget map (minimal 1024 / low 2048 / medium 8192 / high 16384, pi `adjustMaxTokensForThinking`) replaces hardcoded `anthropic-thinking-config`; `:max_tokens` = model `:max-tokens` |
+| `:google-generative-ai` | `thinkingConfig` without `includeThoughts` (gemini-3: lowest `thinkingLevel`, others `thinkingBudget 0`) | `thinkingConfig {:includeThoughts true :thinkingLevel|:thinkingBudget}` (gemini-3 pro/flash + gemma4 use `thinkingLevel`, others `getGoogleBudget`) |
 
-Thinking-level maps come from models.dev reasoning options (pi
-`getEffortThinkingLevelMap`: `:off` ← "none", levels ← verified effort
-values, null = unsupported). Copilot/anthropic models without map keep
-provider defaults.
+- **Decision (review note)**: when `:supports-reasoning-effort` is absent
+  from a model's compat, llm treats it as **true** — matching pi's detected
+  compat for kmet's providers (opencode/deepseek detect effort=true;
+  copilot's openai-completions models carry explicit false).
+- Thinking-level maps now come from models.dev reasoning options
+  (`getEffortThinkingLevelMap`: `:off` ← "none", levels ← verified effort
+  values, null = unsupported) plus pi's `applyThinkingLevelMetadata` rules
+  for kmet's providers (deepseek-v4 maps, opencode-go glm-5.2/kimi-k2.6,
+  opencode grok-build-0.1, copilot claude adaptive maps + overrides,
+  gemini-3 maps) — emitted by the generator.
 
 ### max_tokens
 
-- `:max-tokens` from the Model (currently hardcoded 4096/32000 in
-  anthropic-request; `:max-completion-tokens` default for OpenAI-compatible,
-  `:max-tokens` when compat says so).
-- `anthropic-request` currently uses `:max_tokens 32000` when thinking —
-  replace with model `:max-tokens` (bounded by thinking budget).
+- OpenAI-compatible: `:max_completion_tokens` default, `:max_tokens` when
+  compat `:max-tokens-field` says so (`max-tokens-key`) — both from the
+  model's `:max-tokens`.
+- Anthropic: `:max_tokens` = model `:max-tokens` (legacy fallback 4096),
+  thinking budget bounded by `max_tokens - 1024` (pi MIN_ANSWER_TOKENS).
 
 ### Context window
 
-- `interactive.clj` footer construction: `:context-window` from the resolved
-  Model record (falls back to settings value when model unknown) — pi footer
-  `contextPercentDisplay`.
+- `interactive.clj` footer construction now resolves the Model record:
+  `(or (:context-window (models/get-model provider model)) (:context-window config))`
+  — pi footer `contextPercentDisplay`.
 
 ### Tool schemas
 
-Unchanged (`tool->openai-schema` / `tool->anthropic-schema` stay). The
-anthropic messages builder needs copilot's anthropic compat (`getAnthropicMessagesCompat`)
-— check pi's `getAnthropicMessagesCompat("github-copilot", ...)` at
-implementation time; likely only affects `cache_control` which kmet doesn't
-send yet.
+Unchanged for openai/anthropic; new `tool->google-schema`
+(`functionDeclarations`). Tool-result messages now carry `:tool-name` (needed
+by google's `functionResponse`; the other builders ignore it). Copilot's
+anthropic compat (`getAnthropicMessagesCompat`) still only affects
+`cache_control`, which kmet doesn't send — not ported.
 
 ---
 

@@ -96,6 +96,63 @@
     {:type :ping}
     {:type :unknown :event event :data data}))
 
+(defn- google-stop-reason
+  "pi mapStopReasonString: STOP → :stop, MAX_TOKENS → :length, rest :error."
+  [reason]
+  (case reason
+    "STOP" :stop
+    "MAX_TOKENS" :length
+    :error))
+
+(defn- google-usage
+  "pi: usage from GenerateContentResponse.usageMetadata (camelCase wire
+   fields; cache read is the cached-content token count)."
+  [u]
+  {:input (- (or (:promptTokenCount u) 0) (or (:cachedContentTokenCount u) 0))
+   :output (+ (or (:candidatesTokenCount u) 0) (or (:thoughtsTokenCount u) 0))
+   :cache-read (or (:cachedContentTokenCount u) 0)
+   :cache-write 0
+   :reasoning (or (:thoughtsTokenCount u) 0)
+   :total-tokens (or (:totalTokenCount u) 0)})
+
+(defn parse-google-event
+  "Parse a Google Generative AI streamGenerateContent SSE data payload (the
+   REST wire format — camelCase fields) into a kmet event map: :text,
+   :thinking (thought parts), :tool-call (functionCall part with the full
+   args object), :done (finishReason), :usage, :delta, or :error.
+
+   Google streams have no terminal sentinel: the last chunk carries
+   finishReason, which process-google-stream uses for premature-end
+   detection."
+  [data]
+  (if (or (nil? data) (str/blank? data))
+    {:type :delta :chunk {}}
+    (try
+      (let [chunk (json/parse-string data true)
+            candidate (first (:candidates chunk))
+            parts (get-in candidate [:content :parts])
+            finish (:finishReason candidate)
+            usage (:usageMetadata chunk)]
+        (cond
+          finish {:type :done :stop-reason (google-stop-reason finish)}
+          (seq parts)
+          (first (keep (fn [[i p]]
+                         (cond
+                           (:functionCall p)
+                           (let [fc (:functionCall p)]
+                             {:type :tool-call
+                              :id (or (:id fc) (str (:name fc) "_" (System/currentTimeMillis) "_" i))
+                              :name (:name fc)
+                              :arguments (:args fc {})
+                              :index i})
+                           (:thought p) {:type :thinking :content (:text p)}
+                           (contains? p :text) {:type :text :content (:text p)}))
+                       (map-indexed vector parts)))
+          usage {:type :usage :usage (google-usage usage)}
+          :else {:type :delta :chunk chunk}))
+      (catch Exception e
+        {:type :error :message (str "Parse error: " (ex-message e))}))))
+
 (defn- make-idle-char-reader
   "Idle-timeout char reader over a BufferedReader (undici bodyTimeout
    semantics — the clock measures time between received bytes and resets on
@@ -277,3 +334,34 @@
                   :message "Anthropic stream ended before message_stop"})))
     (catch Exception e
       (handler {:type :error :message (str "Stream error: " (ex-message e))}))))
+
+(defn process-google-stream
+  "Read a Google streamGenerateContent response body line by line, calling
+   handler with each parsed event (mirrors process-openai-stream). signal (an
+   atom) cancels the loop; errors via {:type :error}; idle-timeout-ms is the
+   per-byte idle timeout; abort-fn kills the transport on stall.
+
+   Detects premature stream end: when the stream ends before a finishReason
+   chunk is received, reports {:type :error}."
+  [response handler signal & [idle-timeout-ms abort-fn]]
+  (try
+    (let [rdr (io/reader (:body response))
+          saw-done (atom false)
+          end-reason (stream-loop rdr idle-timeout-ms signal abort-fn
+                                  (fn [line]
+                                    (let [[_ data] (parse-sse-line line)]
+                                      (when data
+                                        (let [event (parse-google-event data)]
+                                          (when (= :done (:type event))
+                                            (reset! saw-done true))
+                                          (handler event)))))
+                                  (fn []
+                                    (handler {:type :error
+                                              :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
+                                                            " ms (no data received)")})))]
+      (when (and (= :eof end-reason) (not @saw-done) (not @signal))
+        (handler {:type :error
+                  :message "Stream ended before a terminal response event"})))
+    (catch Exception e
+      (handler {:type :error :message (str "Stream error: " (ex-message e))}))))
+

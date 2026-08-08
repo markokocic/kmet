@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-08T13:44:20Z"
+ :generated-at "2026-08-08T15:31:46Z"
  :provider {:id :opencode-go
             :name "OpenCode Go"
             :env-vars ["OPENCODE_API_KEY"]
@@ -58,6 +58,13 @@
     :api :openai-completions
     :base-url "https://opencode.ai/zen/go/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.07 :output 0.14 :cache-read 0.0014 :cache-write 0}
     :context-window 1000000
@@ -72,6 +79,13 @@
     :api :openai-completions
     :base-url "https://opencode.ai/zen/go/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.435 :output 0.87 :cache-read 0.003625 :cache-write 0}
     :context-window 1000000
@@ -98,6 +112,13 @@
     :api :openai-completions
     :base-url "https://opencode.ai/zen/go/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text]
     :cost {:input 1.4 :output 4.4 :cache-read 0.26 :cache-write 0}
     :context-window 1000000
@@ -110,6 +131,13 @@
     :api :openai-completions
     :base-url "https://opencode.ai/zen/go/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.14 :output 0.58 :cache-read 0.035 :cache-write 0}
     :context-window 256000
@@ -122,6 +150,7 @@
     :api :openai-completions
     :base-url "https://opencode.ai/zen/go/v1"
     :reasoning true
+    :thinking-level-map {:low nil :medium nil :minimal nil}
     :input [:text :image]
     :cost {:input 0.95 :output 4 :cache-read 0.16 :cache-write 0}
     :context-window 262144
@@ -148,6 +177,13 @@
     :api :openai-completions
     :base-url "https://opencode.ai/zen/go/v1"
     :reasoning true
+    :thinking-level-map {:high nil
+                         :low nil
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 0}
     :context-window 1048576

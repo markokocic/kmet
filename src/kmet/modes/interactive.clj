@@ -1333,7 +1333,11 @@
         fdp (ui/make-footer-data-provider
              :session session
              :provider-count (count (models/get-providers))
-             :context-window (:context-window config)
+             ;; Phase 2: context window from the resolved Model record, falling
+             ;; back to the settings value when the model is unknown (pi footer
+             ;; contextPercentDisplay)
+             :context-window (or (:context-window (models/get-model provider model))
+                                 (:context-window config))
              :model @(:model ag) :provider @(:provider ag) :thinking @(:thinking ag))
         ftr (ui/make-footer :theme (cfg/get-theme config)
                             :provider fdp
