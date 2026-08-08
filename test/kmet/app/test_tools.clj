@@ -220,7 +220,9 @@
           result (tools/execute-tool "bash" {:command "sleep 2 &"})
           elapsed (- (System/currentTimeMillis) start)]
       (t/is (not (:is-error result)))
-      (t/is (< elapsed 3000)
+      ;; Window 6s: bash must return at shell exit; a stalled pipe read
+      ;; hangs until the tool timeout (minutes). Generous to loaded hosts.
+      (t/is (< elapsed 6000)
             (str "tool should return at bash exit, took " elapsed "ms")))))
 
 (t/deftest ^:slow test-tool-bash-cancel-signal

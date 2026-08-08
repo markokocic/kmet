@@ -658,7 +658,9 @@
         (let [start (System/currentTimeMillis)]
           (loop/cancel-turn agent)
           (deref fut 15000 :timeout)
-          (t/is (< (- (System/currentTimeMillis) start) 5000)
+          ;; Window 10s: cancel latency = time-to-tool-completion (~2s) +
+          ;; loop response; a broken cancel hangs to the 15s deref timeout.
+          (t/is (< (- (System/currentTimeMillis) start) 10000)
                 "run ends promptly after cancel during tool execution")
           (t/is (empty? @errors) "no error callback on cancel")
           (t/is (zero? @dones) "no done callback on cancel")

@@ -424,7 +424,11 @@
       @fut
       (t/is (= 1 (count @errors)))
       (let [elapsed (- (System/currentTimeMillis) t0)]
-        (t/is (< elapsed 10000)
+        ;; Window 20s: the error message assertion below guards the mechanism
+        ;; (must contain "timed out" — a broken total timeout yields the EOF
+        ;; error instead); this window only allows for scheduling delay on
+        ;; loaded hosts while still rejecting the old 120s hardcoded timeout.
+        (t/is (< elapsed 20000)
               (str "errored via the configured timeout (took " elapsed "ms)"))
         (t/is (str/includes? (first @errors) "timed out")))
       (finally
