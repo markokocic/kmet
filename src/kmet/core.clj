@@ -124,9 +124,9 @@
         (if (empty? msg)
           (do (println "No message provided. Usage: kmet -p \"your message\"")
               (System/exit 1))
-          (do (print-mode/run (assoc opts :messages [msg]))
-              (System/exit 0)))))
-
+          (let [result (print-mode/run (assoc opts :messages [msg]))]
+            ;; exit 1 when the run errored (nil result = no response text)
+            (System/exit (if (nil? result) 1 0))))))
     (when (:debug opts)
       (debug/enable!)
       (debug/log "kmet started with --debug"))
