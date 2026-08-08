@@ -56,6 +56,7 @@
             [kmet.tui.test-overlay]
             [kmet.tui.test-negotiation]
             [kmet.tui.test-terminal-response]
+            [kmet.tui.test-render-loop]
             [kmet.libs.test-self-contained]
             [kmet.libs.test-sse]
             [kmet.libs.test-terminal-image]
@@ -123,6 +124,7 @@
     kmet.tui.test-overlay
     kmet.tui.test-negotiation
     kmet.tui.test-terminal-response
+    kmet.tui.test-render-loop
     kmet.libs.test-self-contained
     kmet.libs.test-sse
     kmet.libs.test-terminal-image
