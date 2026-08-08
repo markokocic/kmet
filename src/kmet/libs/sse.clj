@@ -88,6 +88,8 @@
       (let [d (json/parse-string data true)]
         {:type :message-delta
          :stop-reason (get-in d [:delta :stop_reason])}))
+    "error"
+    {:type :error :message (or data "Anthropic stream error")}
     "message_stop"
     {:type :done :stop-reason :end-turn}
     "ping"
@@ -169,7 +171,11 @@
    error is reported via error-fn. Cleanup on every exit path: the daemon is
    interrupted and joined before the reader is closed — closing while a read
    is in flight deadlocks java.net.http streams, and process pipes (curl)
-   need the abort-fn since interrupts don't unblock them."
+   need the abort-fn since interrupts don't unblock them.
+
+   Returns :aborted when cancelled, :timeout when idle limit reached, or
+   :eof when the stream ended cleanly (nil read without cancel/timeout).
+   The caller can distinguish clean EOF from premature termination."
   [rdr idle-timeout-ms signal abort-fn handle-line error-fn]
   (let [idle (make-idle-line-reader rdr idle-timeout-ms signal)]
     (try
@@ -177,14 +183,15 @@
         (let [line ((:read-line idle))]
           (cond
             (= :aborted line)
-            (do ((:stop idle)) nil)
+            (do ((:stop idle)) :aborted)
             (= :timeout line)
             (do ((:stop idle))
                 (when abort-fn (abort-fn))
-                (error-fn))
-            (nil? line) nil
+                (error-fn)
+                :timeout)
+            (nil? line) :eof
             (and signal @signal)
-            (do ((:stop idle)) nil)
+            (do ((:stop idle)) :aborted)
             :else
             (do (handle-line line)
                 (recur)))))
@@ -200,19 +207,30 @@
    cancels the loop when set to true. Errors are reported via
    {:type :error} events. idle-timeout-ms — per-byte idle timeout (undici
    bodyTimeout semantics); nil or non-positive disables it. abort-fn (optional)
-   — called on idle timeout to kill the transport so a blocked read releases."
+   — called on idle timeout to kill the transport so a blocked read releases.
+
+   Detects premature stream end: when the stream ends before [DONE] is
+   received, reports {:type :error} (pi: iterateOpenAiEvents throws
+   'Stream ended without finish_reason')."
   [response handler signal & [idle-timeout-ms abort-fn]]
   (try
-    (let [rdr (io/reader (:body response))]
-      (stream-loop rdr idle-timeout-ms signal abort-fn
-                   (fn [line]
-                     (let [[_ data] (parse-sse-line line)]
-                       (when data
-                         (handler (parse-openai-event data)))))
-                   (fn []
-                     (handler {:type :error
-                               :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
-                                             " ms (no data received)")}))))
+    (let [rdr (io/reader (:body response))
+          saw-done (atom false)
+          end-reason (stream-loop rdr idle-timeout-ms signal abort-fn
+                                  (fn [line]
+                                    (let [[_ data] (parse-sse-line line)]
+                                      (when data
+                                        (let [event (parse-openai-event data)]
+                                          (when (= :done (:type event))
+                                            (reset! saw-done true))
+                                          (handler event)))))
+                                  (fn []
+                                    (handler {:type :error
+                                              :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
+                                                            " ms (no data received)")})))]
+      (when (and (= :eof end-reason) (not @saw-done) (not @signal))
+        (handler {:type :error
+                  :message "Stream ended before a terminal response event"})))
     (catch Exception e
       (handler {:type :error :message (str "Stream error: " (ex-message e))}))))
 
@@ -222,26 +240,40 @@
    Errors are reported via {:type :error} events. idle-timeout-ms — per-byte
    idle timeout (undici bodyTimeout semantics); nil or non-positive disables
    it. abort-fn (optional) — called on idle timeout to kill the transport so
-   a blocked read releases."
+   a blocked read releases.
+
+   Detects premature stream end: when the stream ends before message_stop is
+   received, reports {:type :error} (pi: iterateAnthropicEvents throws
+   'Anthropic stream ended before message_stop')."
   [response handler signal & [idle-timeout-ms abort-fn]]
   (try
     (let [rdr (io/reader (:body response))
-          state (atom {:event-name nil :buf ""})]
-      (stream-loop rdr idle-timeout-ms signal abort-fn
-                   (fn [line]
-                     (let [[ev data] (parse-sse-line line)
-                           {:keys [event-name buf]} @state]
-                       (cond
-                         ev (reset! state {:event-name data :buf buf})
-                         data (reset! state {:event-name event-name :buf (str buf data)})
-                         (and (empty? line) (seq buf))
-                         (do (when-let [evt (parse-anthropic-event event-name buf)]
-                               (handler evt))
-                             (reset! state {:event-name nil :buf ""}))
-                         :else nil)))
-                   (fn []
-                     (handler {:type :error
-                               :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
-                                             " ms (no data received)")}))))
+          state (atom {:event-name nil :buf ""})
+          saw-message-stop (atom false)
+          end-reason (stream-loop rdr idle-timeout-ms signal abort-fn
+                                  (fn [line]
+                                    (let [[ev data] (parse-sse-line line)
+                                          {:keys [event-name buf]} @state]
+                                      (cond
+                                        ev (reset! state {:event-name data :buf buf})
+                                        data (reset! state {:event-name event-name :buf (str buf data)})
+                                        (and (empty? line) (seq buf))
+                                        (do (when-let [evt (parse-anthropic-event event-name buf)]
+                                              (when (= :done (:type evt))
+                                                (reset! saw-message-stop true))
+                                              (handler evt))
+                                            (reset! state {:event-name nil :buf ""}))
+                                        :else nil)))
+                                  (fn []
+                                    (handler {:type :error
+                                              :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
+                                                            " ms (no data received)")})))]
+      ;; pi: sawMessageStart && !sawMessageEnd → error. kmet is stricter:
+      ;; the stream is always expected to end with message_stop regardless
+      ;; of whether message_start was seen (the envelope event is always
+      ;; present for a valid Anthropic SSE stream).
+      (when (and (= :eof end-reason) (not @saw-message-stop) (not @signal))
+        (handler {:type :error
+                  :message "Anthropic stream ended before message_stop"})))
     (catch Exception e
       (handler {:type :error :message (str "Stream error: " (ex-message e))}))))
