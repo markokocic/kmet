@@ -1372,17 +1372,18 @@
                                      (when clear?
                                        (doseq [id @(:previous-kitty-image-ids tui)]
                                          (emit! (img/delete-kitty-image id)))
-                                       ;; No \u001b[3J (erase scrollback): Windows
-                                       ;; Terminal resets the viewport to the top of
-                                       ;; the scrollback on it, yanking a scrolled-up
-                                       ;; reader — full redraws happen mid-stream (a
-                                       ;; mid-document line changing above the
-                                       ;; viewport), so the scrollback must survive.
-                                       ;; The 2J+H redraw below fully rewrites the
-                                       ;; screen; stale scrollback rows above are a
-                                       ;; cosmetic trade-off (claude-code v2.1.101
-                                       ;; made the same change).
-                                       (emit! "\u001b[2J\u001b[H"))
+                                       ;; The full redraw re-emits the whole
+                                       ;; transcript below, so the scrollback MUST
+                                       ;; be cleared too: 2J alone leaves the old
+                                       ;; transcript in the scrollback and the
+                                       ;; re-emit appends after it, duplicating
+                                       ;; every line (pi issue #6050: "without
+                                       ;; clearing scrollback the whole history
+                                       ;; duplicates"). Windows Terminal scrolls
+                                       ;; to the top on 3J (microsoft/terminal
+                                       ;; #20370, being fixed upstream) — pi
+                                       ;; accepts that over duplicated output.
+                                       (emit! "\u001b[2J\u001b[H\u001b[3J"))
                                      (loop [i 0]
                                        (when (< i new-count)
                                          (when (pos? i) (emit! "\r\n"))
@@ -1673,23 +1674,22 @@
 
 (defn tui-resume!
   "Restart the TUI after tui-suspend!: create a fresh terminal, re-enter raw
-   mode, and restart the render loop and input reader. Forces a full redraw."
+   mode, and restart the render loop and input reader. Forces a clearing full
+   redraw: the external program that took over the terminal restores the
+   pre-suspend frame on exit, so the re-emit must clear the stale screen and
+   scrollback first or old and new content overlap (pi: requestRender(true)
+   after ui.start() — prev-width -1 routes the first frame through the
+   width-changed clearing path)."
   [tui]
   (reset! (:terminal tui) (terminal/create-terminal))
   (reset! (:running? tui) true)
   (reset! (:stopped? tui) false)
-  ;; Empty previous-lines forces a full redraw on the fresh terminal
-  (reset! (:previous-lines tui) [])
-  (reset! (:previous-width tui) 0)
-  (reset! (:previous-height tui) 0)
-  (reset! (:max-lines-rendered tui) 0)
-  (reset! (:previous-kitty-image-ids tui) #{})
   ;; Drop any pending input flush from before the suspend (pi:
   ;; beforeTerminalStart resets selection state).
   (clear-incomplete-flush! tui)
   (start-input-reader tui)
   (reset! (:render-loop tui) (future (run-render-loop! tui)))
-  (tui-request-render tui)
+  (tui-request-render tui true)
   nil)
 
 ;; ═══════════════════════════════════════════════════════════════════════════

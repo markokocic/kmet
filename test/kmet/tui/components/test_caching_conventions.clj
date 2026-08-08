@@ -6,11 +6,12 @@
    Rationale: an uncached component whose output changes while sitting above
    the render viewport triggers destructive full redraws during streaming
    (a mid-document line changing above the viewport — e.g. a time-animated
-   elapsed counter — forced `\\u001b[3J`-emitting full redraws every frame,
-   which yanks a scrolled-up reader to the top on Windows Terminal). track!
-   makes the cache the default so volatile renders can only live in the two
-   documented places: at the document bottom (spinner/status) or cached so
-   they tick with real updates."
+   elapsed counter — forces `\\u001b[3J`-emitting full redraws every frame,
+   wiping the scrollback and re-emitting the whole transcript; on Windows
+   Terminal it also yanks a scrolled-up reader to the top). track! makes the
+   cache the default so volatile renders can only live in the two documented
+   places: at the document bottom (spinner/status) or cached so they tick
+   with real updates."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [babashka.fs :as fs]))

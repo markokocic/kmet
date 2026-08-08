@@ -1508,8 +1508,11 @@
       (tui/tui-add-input-listener t
                                   (fn [data]
                                     (when (keys/matches-key? data (keys/ctrl "l"))
-                                      (term/clear-screen! @(:terminal t))
-                                      (tui/tui-request-render t))
+                                      ;; Clearing full redraw: a bare 2J leaves
+                                      ;; the screen blank (the diff sees no
+                                      ;; change and writes nothing) and
+                                      ;; desyncs the incremental renderer.
+                                      (tui/tui-request-render t true))
                                     nil))
 
       ;; Initialize footer (header content is produced lazily by the

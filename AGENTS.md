@@ -284,11 +284,11 @@ Type dispatch uses `IComponentKind` protocol (`component-kind` returning `:user`
   `:invalidate`, or `set-state!` on tracked state) does not cache its stale
   result: track-render watches the cache atom, so the next render re-runs
   the body with the fresh state.
-- **Full redraws never emit `\u001b[3J` (erase scrollback)**: Windows Terminal
-  resets the viewport to the top of the scrollback on it, yanking a
-  scrolled-up reader while streaming. The 2J+H redraw rewrites the screen;
-  stale scrollback rows above are the accepted trade-off (see
-  `do-full-redraw` in `kmet.tui.core`).
+- **Full redraws emit `\u001b[3J` (erase scrollback)**: the full redraw
+  re-emits the whole transcript, so the scrollback must be cleared or the
+  history duplicates (pi issue #6050). Windows Terminal scrolls to the top
+  on 3J — a known WT bug (microsoft/terminal#20370) accepted over duplicated
+  output (see `do-full-redraw` in `kmet.tui.core`).
 
 ## Reference
 - Consult `~/src/cvstree/pi/` for implementation patterns before building new features — e.g., study its TUI component model before adding new components, or its diff rendering approach before implementing a diff view.
