@@ -50,8 +50,9 @@ bb run --print "list files in current directory"
   -p, --print           Print response and exit (non-interactive)
   -c, --continue        Continue most recent session
   -r, --resume          Browse sessions
-  --model <id>          Model to use
+  --model <id>          Model to use (pattern: provider/model[:thinking])
   --provider <name>     Provider (opencode-go, opencode, deepseek, github-copilot)
+  --models <patterns>   Comma-separated model patterns for Ctrl+P cycling
   -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)
   -h, --help            Show this help
 ```
@@ -62,7 +63,7 @@ bb run --print "list files in current directory"
 |---------|-------------|
 | `/quit` | Exit kmet |
 | `/help` | Show help |
-| `/model <provider:model>` | Switch model |
+| `/model <provider:model[:thinking]>` | Switch model (Ctrl+L opens a selector) |
 | `/new` | Start new session |
 | `/resume` | Browse past sessions |
 | `/tree` | Browse session entry tree |
@@ -76,7 +77,8 @@ bb run --print "list files in current directory"
 | `Escape` | Cancel current turn |
 | `Ctrl+D` | Exit when editor is empty |
 | `Ctrl+C` | Clear editor (twice to quit) |
-| `Ctrl+L` | Clear terminal |
+| `Ctrl+L` | Select model |
+| `Ctrl+P` / `Shift+Ctrl+P` | Cycle scoped models (`--models`) |
 | `Ctrl+Up/Down` | Scroll chat viewport |
 
 ## Project Structure

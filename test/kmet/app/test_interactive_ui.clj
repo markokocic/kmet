@@ -8,6 +8,9 @@
             [kmet.modes.interactive :as inter]
             [kmet.app.commands :as commands]
             [kmet.app.ui :as ui]
+            [kmet.app.models :as m]
+            [kmet.app.auth :as auth]
+            [kmet.app.loop :as agent]
             [kmet.config :as cfg]))
 
 (defn- transfer-editor! [app-ed custom-ed kb]
@@ -101,3 +104,31 @@
         (reset! warned nil)
         ((:handler (commands/find-command "logout")) {} "nonexistent-provider")
         (t/is (= "Unknown provider: nonexistent-provider" @warned))))))
+
+(deftest test-model-command-switches-model
+  (testing "/model resolves provider/model patterns and switches the agent"
+    (commands/clear-commands!)
+    (m/load-catalogs!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [ag (agent/make-agent-state :provider :opencode-go :model "deepseek-v4-flash")
+          cs {:agent-state (atom ag)
+              :chat-history nil
+              :footer-comp nil
+              :footer-provider nil
+              :config cfg/default-config
+              :tui nil}]
+      (with-redefs [auth/configured? (fn [_] true)
+                    ui/chat-history-add-message! (fn [_ _] nil)
+                    inter/sync-footer-model! (fn [_] nil)]
+        (testing "provider/model pattern"
+          ((:handler (commands/find-command "model")) cs "deepseek/deepseek-v4-pro")
+          (t/is (= :deepseek @(:provider ag)))
+          (t/is (= "deepseek-v4-pro" @(:model ag))))
+        (testing ":thinking suffix sets the agent thinking level"
+          ((:handler (commands/find-command "model")) cs "deepseek/deepseek-v4-pro:high")
+          (t/is (= :high @(:thinking ag))))
+        (testing "unmatched pattern reports a clear failure"
+          (let [last-msg (atom nil)]
+            (with-redefs [ui/chat-history-add-message! (fn [_ msg] (reset! last-msg msg))]
+              ((:handler (commands/find-command "model")) cs "nope")
+              (t/is (= "No model matches \"nope\"." (:content @last-msg))))))))))

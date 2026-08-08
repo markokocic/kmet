@@ -88,6 +88,22 @@
 
 (defn fdp-get-thinking [provider] @(:thinking-atom provider))
 
+(defn fdp-set-model! [provider model]
+  (reset! (:model-atom provider) model)
+  nil)
+
+(defn fdp-set-provider! [provider provider-id]
+  (reset! (:provider-atom provider) provider-id)
+  nil)
+
+(defn fdp-set-thinking! [provider level]
+  (reset! (:thinking-atom provider) level)
+  nil)
+
+(defn fdp-set-context-window! [provider window]
+  (reset! (:context-window-atom provider) window)
+  nil)
+
 (defn fdp-usage-totals
   "Cumulative usage across all session entries (pi: FooterComponent
    accumulates usage from ALL session entries, not just post-compaction)."

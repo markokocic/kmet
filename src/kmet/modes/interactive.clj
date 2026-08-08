@@ -5,7 +5,6 @@
   (:require [kmet.tui.core :as tui]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.terminal :as term]
-            [kmet.tui.keys :as keys]
             [kmet.tui.theme :as th]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.spacer :as spacer]
@@ -18,6 +17,7 @@
             [kmet.tui.components.select-list :as select-list]
             [kmet.app.loop :as agent]
             [kmet.app.models :as models]
+            [kmet.app.model-resolver :as resolver]
             [kmet.app.auth :as auth]
             [kmet.app.session :as session]
             [kmet.app.tools.core :as tools]
@@ -156,17 +156,74 @@
     (str (fmt-header-logo) "\n" expanded-instructions "\n\n" onboarding)))
 
 (defn- update-footer!
-  "Sync the footer's data source (session) and request a re-render. The
-   header is static (ExpandableText welcome — rebuilt on theme change by the
-   theme callback); the footer reads the agent's model/provider/thinking
-   atoms live, so only session changes need wiring here."
+  "Sync the footer's session data source and request a re-render. The
+   footer's model/provider/thinking live in the fdp atoms (set once at
+   startup; sync-footer-model! refreshes them on model changes), so only
+   session changes need wiring here."
   [cs]
   (ui/fdp-set-session! (:footer-provider cs) @(:session-atom cs))
-  ;; Provider atoms are read inside helper fns — not lexically tracked by
+  ;; The fdp atoms are read inside helper fns — not lexically tracked by
   ;; track! — so invalidate explicitly on every sync.
   (protocols/invalidate (:footer-comp cs))
   (tui/tui-request-render (:tui cs))
   nil)
+
+(defn- sync-footer-model!
+  "Push the agent's current model/provider/thinking into the footer data
+   provider and re-render (the fdp atoms are set once at startup; /model,
+   the selector, and cycling must refresh them). The context window follows
+   the resolved Model record, falling back to the settings value."
+  [cs]
+  (let [ag @(:agent-state cs)
+        fdp (:footer-provider cs)]
+    (fdp/fdp-set-model! fdp @(:model ag))
+    (fdp/fdp-set-provider! fdp @(:provider ag))
+    (fdp/fdp-set-thinking! fdp @(:thinking ag))
+    (fdp/fdp-set-context-window!
+     fdp (or (:context-window (models/get-model @(:provider ag) @(:model ag)))
+             (:context-window (:config cs))))
+    (protocols/invalidate (:footer-comp cs))
+    (tui/tui-request-render (:tui cs))
+    nil))
+
+(defn- show-model-selector
+  "Model selector overlay: a SelectList of available (authenticated) models
+   (pi ModelSelectorComponent, simplified — bound to Ctrl+L and bare
+   /model)."
+  [cs]
+  (let [available (models/get-available)]
+    (if (empty? available)
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    {:role :assistant
+                                     :content "No models available. Configure a provider first (/login)."})
+      (let [items (mapv (fn [m]
+                          (let [v (str (name (:provider m)) "/" (:id m))]
+                            {:value v :label v}))
+                        available)
+            sl-ref (atom nil)
+            on-select (fn [_]
+                        (when-let [sel (select-list/select-list-get-selected @sl-ref)]
+                          (let [[prov model] (str/split (:value sel) #"/" 2)
+                                ag @(:agent-state cs)]
+                            (tui/tui-hide-overlay (:tui cs))
+                            (agent/set-provider! ag (keyword prov))
+                            (agent/set-model! ag model)
+                            (ui/chat-history-add-message! (:chat-history cs)
+                                                          {:role :assistant
+                                                           :content (str "Switched to " (:value sel))})
+                            (sync-footer-model! cs)
+                            (tui/tui-request-render (:tui cs)))))
+            on-escape (fn []
+                        (tui/tui-hide-overlay (:tui cs))
+                        (tui/tui-request-render (:tui cs)))
+            sl (select-list/make-select-list items
+                                             :height (min (count items) 15)
+                                             :header "Select model"
+                                             :on-select on-select
+                                             :on-escape on-escape)]
+        (reset! sl-ref sl)
+        (tui/tui-show-overlay (:tui cs) sl :width 55 :height (min (count items) 15))
+        (tui/tui-request-render (:tui cs))))))
 
 ;; ─── Command handling ──────────────────────────────────────────────────────
 
@@ -193,7 +250,8 @@
          "  Ctrl+G     — Open external editor\n"
          "  Ctrl+O     — Toggle tool output\n"
          "  Ctrl+T     — Toggle thinking blocks\n"
-         "  Ctrl+L     — Clear terminal\n"
+         "  Ctrl+L     — Select model
+"
          "  Up/Down    — Scroll chat history")))
 
 (defn- tools-text
@@ -220,7 +278,7 @@
 (defn- register-builtin-commands!
   "Register kmet's builtin slash commands. Handlers receive [cs args];
    argument completions feed the editor autocomplete dropdown."
-  [config]
+  [_config]
   (commands/register-command!
    {:name "quit"
     :description "Exit kmet"
@@ -242,25 +300,33 @@
   (commands/register-command!
    {:name "model"
     :description "Switch model"
-    :argument-hint "<provider:model>"
+    :argument-hint "<provider:model[:thinking]>"
     :get-argument-completions
     (fn [_]
-      (mapv (fn [m] {:value m :label m})
-            (or (:models config) [(:model config)])))
-    :handler (fn [cs args]
-               (if (seq args)
-                 (let [parts (str/split args #":" 2)
-                       provider (keyword (or (first parts) "opencode-go"))
-                       model (or (second parts) (:model (:config cs)))]
-                   (agent/set-provider! @(:agent-state cs) provider)
-                   (agent/set-model! @(:agent-state cs) model)
-                   (ui/chat-history-add-message! (:chat-history cs)
-                                                 {:role :assistant :content (str "Switched to " (fmt-model provider model))}))
-                 (ui/chat-history-add-message! (:chat-history cs)
-                                               {:role :assistant :content
-                                                (str "Current model: " (fmt-model @(:provider @(:agent-state cs))
-                                                                                  @(:model @(:agent-state cs)))
-                                                     "\nUsage: /model <provider:model>")})))})
+      (mapv (fn [m] (let [v (str (name (:provider m)) "/" (:id m))]
+                      {:value v :label v}))
+            (models/get-available)))
+    :handler
+    (fn [cs args]
+      (if (seq args)
+        (let [ag @(:agent-state cs)
+              {:keys [model thinking-level]}
+              (resolver/resolve-model-reference args (models/get-available))]
+          (if model
+            (do (agent/set-provider! ag (:provider model))
+                (agent/set-model! ag (:id model))
+                (when thinking-level
+                  (reset! (:thinking ag) thinking-level))
+                (ui/chat-history-add-message! (:chat-history cs)
+                                              {:role :assistant
+                                               :content (str "Switched to " (fmt-model (:provider model) (:id model))
+                                                             (when thinking-level
+                                                               (str " (thinking " (name thinking-level) ")")))})
+                (sync-footer-model! cs))
+            (ui/chat-history-add-message! (:chat-history cs)
+                                          {:role :assistant
+                                           :content (str "No model matches \"" args "\".")})))
+        (show-model-selector cs)))})
   (commands/register-command!
    {:name "new"
     :description "Start a new session"
@@ -1586,20 +1652,19 @@
                                     (fn [] (handle-follow-up cs)))
       (editor/editor-set-on-action! ed "app.message.dequeue"
                                     (fn [] (handle-dequeue cs)))
-
-      ;; Global input listeners — only truly global keys stay here (pi: keep
-      ;; app actions in the editor; the TUI keeps only global keys). The
-      ;; terminal owns scrolling in the main-screen model, so there is no
-      ;; in-app scroll handling.
-      (tui/tui-add-input-listener t
-                                  (fn [data]
-                                    (when (keys/matches-key? data (keys/ctrl "l"))
-                                      ;; Clearing full redraw: a bare 2J leaves
-                                      ;; the screen blank (the diff sees no
-                                      ;; change and writes nothing) and
-                                      ;; desyncs the incremental renderer.
-                                      (tui/tui-request-render t true))
-                                    nil))
+      ;; Model selection/cycling (pi: onAction selectModel/cycleModelForward/
+      ;; cycleModelBackward — scoped models come from --models / settings
+      ;; :models; cycling sets only the model id, the provider is unchanged)
+      (editor/editor-set-on-action! ed "app.model.select"
+                                    (fn [] (show-model-selector cs)))
+      (editor/editor-set-on-action! ed "app.model.cycleForward"
+                                    (fn []
+                                      (when (agent/cycle-model! @(:agent-state cs) 1)
+                                        (sync-footer-model! cs))))
+      (editor/editor-set-on-action! ed "app.model.cycleBackward"
+                                    (fn []
+                                      (when (agent/cycle-model! @(:agent-state cs) -1)
+                                        (sync-footer-model! cs))))
 
       ;; Initialize footer (header content is produced lazily by the
       ;; ExpandableText fns on first render)

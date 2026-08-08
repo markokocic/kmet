@@ -450,7 +450,30 @@ auth.json shape not required for parity).
 
 ## Phase 4 — Resolution & selection (`kmet.app.model-resolver`)
 
-Port the essentials of pi's `model-resolver.ts`:
+**Status: implemented.** `kmet.app.model-resolver` (new ns) ports the
+essentials of pi's `model-resolver.ts`: `find-exact-model-reference-match`
+(canonical/bare match, ambiguity rejection), `parse-model-pattern`
+(exact/partial with alias preference + `:thinking` suffix; strict vs scope
+invalid-suffix handling), `resolve-model-reference` (exact-only /model
+resolution), `resolve-model-scope` (--models patterns → ids), and
+`resolve-cli-model` (provider inference, fail-fast errors). `default-model-for`
+needs no new code — the generator already encodes pi's
+`defaultModelPerProvider` in the catalog `:default-model` blocks, including
+the copilot deviation (first anthropic claude model instead of gpt-5.4, which
+needs openai-responses). `llm/thinking-levels` went public + a
+`valid-thinking-level?` helper for suffix parsing.
+
+Wiring: `core.clj` resolves `--model`/`--models` patterns at dispatch (errors
+exit 1, warnings to stderr; `--models` feeds the Ctrl+P scoped list via
+config `:models`); `/model` resolves exact refs incl. `:thinking` and reports
+failures; Ctrl+L (`app.model.select`) + bare `/model` open a SelectList model
+selector overlay (reusing the /resume overlay pattern);
+`app.model.cycleForward/cycleBackward` (Ctrl+P / Shift+Ctrl+P) cycle the
+scoped list. The footer's model/provider/thinking were previously set once at
+startup — new `fdp-set-model!/-provider!/-thinking!/-context-window!` setters
+and `sync-footer-model!` keep it live across /model, selector, and cycling.
+Covered by test/kmet/app/test_model_resolver.clj (+ handler tests in
+test_interactive_ui.clj).
 
 - `default-model-for provider` — pi's `defaultModelPerProvider` for the 4
   providers: `opencode-go kimi-k2.6`, `opencode kimi-k2.6`,

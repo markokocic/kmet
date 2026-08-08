@@ -35,8 +35,14 @@
 
 ;; ─── Thinking levels (pi: clampThinkingLevel / getSupportedThinkingLevels) ─
 
-(def ^:private thinking-levels
+(def thinking-levels
+  "All thinking levels in order (pi ThinkingLevel)."
   [:off :minimal :low :medium :high :xhigh :max])
+
+(defn valid-thinking-level?
+  "True when LEVEL is one of the thinking levels (pi isValidThinkingLevel)."
+  [level]
+  (some #{level} thinking-levels))
 
 (defn- supported-thinking-levels
   "Levels a model can express (pi getSupportedThinkingLevels): non-reasoning

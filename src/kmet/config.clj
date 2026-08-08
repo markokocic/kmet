@@ -286,13 +286,15 @@
 
 (defn apply-cli-overrides
   "Apply CLI opts onto a config map (pi: CLI flags override settings).
-   Handles :model, :provider, :thinking, :system-prompt (last wins), and
-   :append-system-prompt (repeatable, joined with newlines like pi)."
+   Handles :model, :provider, :thinking, :models (scoped list), :system-prompt
+   (last wins), and :append-system-prompt (repeatable, joined with newlines
+   like pi)."
   [config opts]
   (cond-> config
     (:model opts) (assoc :model (:model opts))
     (:provider opts) (assoc :provider (:provider opts))
     (:thinking opts) (assoc :thinking (:thinking opts))
+    (:models opts) (assoc :models (:models opts))
     (:system-prompt opts) (assoc :system-prompt (:system-prompt opts))
     (:append-system-prompt opts) (assoc :append-system-prompt
                                         (str/join "\n\n" (:append-system-prompt opts)))))
