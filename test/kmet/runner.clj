@@ -231,11 +231,21 @@
 
 (defn -main
   "Run the test suites.
-   Mode \"ext\" runs only the slow (^:slow) tests; anything else runs all
-   tests except the slow ones."
-  [& [mode]]
-  (let [slow? (= mode "ext")
-        vars (selected-vars slow?)
+   slow? selects ^:slow vs non-slow vars; nil means filter by var name only.
+   Remaining args are test var filters (plain name or ns/var): when given,
+   only matching vars run, regardless of :slow (e.g. `bb test test-tool-bash`
+   or `bb test-ext kmet.app.test-loop/test-loop-parallel-tool-execution`)."
+  [slow? & filters]
+  (let [vars (if (seq filters)
+               (filter (fn [v]
+                         (let [vn (name (:name (meta v)))
+                               ns-full (str (:ns (meta v)))]
+                           (some #(let [f (str %)]
+                                    (or (= f vn)
+                                        (= f (str ns-full "/" vn))))
+                                 filters)))
+                       (concat (selected-vars true) (selected-vars false)))
+               (selected-vars slow?))
         start-ms (System/currentTimeMillis)
         results (binding [t/*report-counters* (ref t/*initial-report-counters*)]
                   (run-selected vars)

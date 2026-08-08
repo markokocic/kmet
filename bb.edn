@@ -6,13 +6,13 @@
            :requires ([kmet.core :as core])
            :task (apply core/-main *command-line-args*)
            :override-builtin true}
-  test    {:doc "Run fast test suites (excludes ^:slow tests)"
+  test    {:doc "Run fast test suites (excludes ^:slow tests). Args: test var names (plain name or ns/var) to run only those, e.g. `bb test test-tool-bash`."
            :requires ([kmet.runner :as runner])
-           :task (runner/-main)
+           :task (apply runner/-main false *command-line-args*)
            :override-builtin true}
-  test-ext {:doc "Run ONLY the slow (^:slow) test suites (final validation before commit)"
+  test-ext {:doc "Run ONLY the slow (^:slow) test suites. Args: test var names to run only those (final validation before commit)"
            :requires ([kmet.runner :as runner])
-           :task (runner/-main "ext")
+           :task (apply runner/-main true *command-line-args*)
            :override-builtin true}
   nrepl  {:doc "Start nREPL server for interactive development"
           :task (do (require 'babashka.nrepl.server)
@@ -54,5 +54,5 @@
                                     ["src" "test"])]
                         (fmt/check {:paths paths}))}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests)\n  test-ext      Run ONLY slow (^:slow) test suites (pre-commit validation)\n  check         Verify compilation\n  generate-models  Regenerate provider model catalogs from models.dev (network)\n  check-model-data Offline validation of committed provider catalogs + manifest\n  lint          Lint src/test with clj-kondo (args: files/dirs)\n  format        Format src/test with cljfmt (fix in place; args: files/dirs)\n  format-check  Check src/test formatting with cljfmt (no changes; args: files/dirs)")
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests; args: test names)\n  test-ext      Run ONLY slow (^:slow) test suites (args: test names; pre-commit validation)\n  check         Verify compilation\n  generate-models  Regenerate provider model catalogs from models.dev (network)\n  check-model-data Offline validation of committed provider catalogs + manifest\n  lint          Lint src/test with clj-kondo (args: files/dirs)\n  format        Format src/test with cljfmt (fix in place; args: files/dirs)\n  format-check  Check src/test formatting with cljfmt (no changes; args: files/dirs)")
            :override-builtin true}}}
