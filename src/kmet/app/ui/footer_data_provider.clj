@@ -105,12 +105,13 @@
   nil)
 
 (defn fdp-usage-totals
-  "Cumulative usage across all session entries (pi: FooterComponent
-   accumulates usage from ALL session entries, not just post-compaction)."
+  "Cumulative usage (incl. USD :cost) across all session entries (pi:
+   FooterComponent accumulates usage from ALL session entries, not just
+   post-compaction)."
   [provider]
   (if-let [sess (fdp-get-session provider)]
     (session/usage-totals sess)
-    {:input 0 :output 0 :cache-read 0 :cache-write 0}))
+    {:input 0 :output 0 :cache-read 0 :cache-write 0 :cost 0.0}))
 
 (defn fdp-latest-cache-hit-rate
   "Cache hit rate of the most recent assistant message with usage (pi:

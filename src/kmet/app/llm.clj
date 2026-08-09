@@ -11,6 +11,7 @@
             [kmet.libs.sse :as sse]
             [kmet.app.models :as models]
             [kmet.app.proxy :as proxy]
+            [kmet.app.session :as session]
             [kmet.app.tools.core :as tools]))
 
 (def ^:private default-anthropic-version "2023-06-01")
@@ -412,6 +413,16 @@
     :max_tokens
     :max_completion_tokens))
 
+(defn- usage-with-cost
+  "Attach the per-message USD cost (pi: calculateCost runs in the wire API)
+   to a provider-native usage map, computed from the Model record that
+   produced the response. Usage maps without recognizable tokens pass
+   through unchanged."
+  [model-record usage]
+  (if-let [norm (session/entry-usage usage)]
+    (assoc usage :cost (models/calculate-cost model-record norm))
+    usage))
+
 (defn- openai-request
   [{:keys [model-record effort api-key messages tools signal base-url
            idle-timeout-ms on-text on-thinking on-tool-call on-done on-error
@@ -461,7 +472,7 @@
                                                            (on-tool-call {:arguments (:arguments event)
                                                                           :index (:index event)}))
                                          :done (when on-done (on-done (:stop-reason event)))
-                                         :usage (when on-usage (on-usage (:usage event)))
+                                         :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
                                          :error (when on-error (on-error (:message event)))
                                          nil))
                                      signal
@@ -515,7 +526,7 @@
                                                              (or (not curl-backed)
                                                                  (not= :connection-closed (:stop-reason event))))
                                                     (on-done (:stop-reason event)))
-                                            :usage (when on-usage (on-usage (:usage event)))
+                                            :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
                                             :error (when on-error (on-error (:message event)))
                                             nil))
                                         signal
@@ -620,7 +631,7 @@
                                                                      :arguments (:arguments event)
                                                                      :index (:index event)}))
                                          :done (when on-done (on-done (:stop-reason event)))
-                                         :usage (when on-usage (on-usage (:usage event)))
+                                         :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
                                          :error (when on-error (on-error (:message event)))
                                          nil))
                                      signal

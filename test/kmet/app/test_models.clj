@@ -208,3 +208,29 @@
     (t/is (= "deepseek-v4-pro" (m/resolve-config-model {:provider :deepseek}))))
   (t/testing "unknown provider → nil"
     (t/is (nil? (m/resolve-config-model {:provider :openai})))))
+
+;; ─── Cost (pi: models.ts calculateCost) ────────────────────────────────────
+
+(t/deftest test-calculate-cost
+  (let [model (m/map->Model {:id "m" :name "M" :provider :p
+                             :api :openai-completions :base-url "u"
+                             :reasoning false :input [:text]
+                             :cost {:input 2.0 :output 8.0 :cache-read 0.1 :cache-write 0.0}
+                             :context-window 1000 :max-tokens 100})]
+    (t/testing "token counts × $/M rates (pi: tokens * rate / 1e6)"
+      (let [c (m/calculate-cost model {:input 1000 :output 500 :cache-read 200 :cache-write 0})]
+        (t/is (= 0.002 (:input c)))
+        (t/is (= 0.004 (:output c)))
+        (t/is (= 0.00002 (:cache-read c)))
+        (t/is (= 0.0 (:cache-write c)))
+        (t/is (= 0.00602 (:total c)))))
+    (t/testing "zero usage → zero cost"
+      (t/is (= 0.0 (:total (m/calculate-cost model {:input 0 :output 0
+                                                    :cache-read 0 :cache-write 0})))))
+    (t/testing "missing rates/tokens default to zero (defensive)"
+      (let [bare (m/map->Model {:id "b" :name "B" :provider :p
+                                :api :openai-completions :base-url "u"
+                                :reasoning false :input [:text] :cost {}
+                                :context-window 1 :max-tokens 1})]
+        (t/is (= 0.0 (:total (m/calculate-cost bare {:input 100 :output 100
+                                                     :cache-read 0 :cache-write 0}))))))))

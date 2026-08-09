@@ -40,6 +40,31 @@
                      headers     ;; optional static headers (copilot)
                      ])
 
+;; ─── Cost (pi: models.ts calculateCost, minus tiers/cacheWrite1h) ──────────
+
+(defn calculate-cost
+  "USD cost of a normalized usage map ({:input :output :cache-read
+   :cache-write} — e.g. session/entry-usage's output (whose :input already
+   excludes cache tokens, so cached tokens are never double-priced) at the
+   model's $/M rates. Returns the pi-shaped breakdown map
+   {:input :output :cache-read :cache-write :total}. Models with zero rates
+   yield zero cost. Called at response time (llm) so each message is priced
+   with the model that produced it, keeping totals correct across model
+   switches."
+  [model usage]
+  (let [{tokens-in :input tokens-out :output
+         tokens-cr :cache-read tokens-cw :cache-write} usage
+        {rate-in :input rate-out :output
+         rate-cr :cache-read rate-cw :cache-write} (:cost model)
+        f (fn [tokens rate]
+            (/ (* (double (long (or tokens 0))) (double (or rate 0))) 1000000.0))
+        cost-in (f tokens-in rate-in)
+        cost-out (f tokens-out rate-out)
+        cost-cr (f tokens-cr rate-cr)
+        cost-cw (f tokens-cw rate-cw)]
+    {:input cost-in :output cost-out :cache-read cost-cr :cache-write cost-cw
+     :total (+ cost-in cost-out cost-cr cost-cw)}))
+
 ;; ─── Registry (pi: MutableModels) ──────────────────────────────────────────
 
 (defonce providers-atom (atom {}))

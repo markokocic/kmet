@@ -77,6 +77,9 @@
                                  hit-rate)
                           (conj stats-parts (str "CH" (format "%.1f" hit-rate) "%"))
                           stats-parts)
+            ;; ── Cost (pi: `$${usageTotals.cost.toFixed(3)}`, last stats part) ──
+            stats-parts (cond-> stats-parts
+                          (pos? (:cost usage)) (conj (str "$" (format "%.3f" (:cost usage)))))
             ;; ── Context % (pi: contextPercentDisplay, colored by usage) ──
             percent (when (and window (pos? window)) (* 100.0 (/ tokens window)))
             auto-indicator (if auto " (auto)" "")

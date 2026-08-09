@@ -344,15 +344,32 @@
     (t/is (= (:id entry) (:id (first @(:entries sess)))))))
 
 (t/deftest test-entry-usage
-  (t/testing "OpenAI usage shape"
-    (t/is (= {:input 100 :output 20 :cache-read 30 :cache-write 0}
+  (t/testing "OpenAI usage shape — input excludes cached tokens (pi normalizeUsage)"
+    (t/is (= {:input 70 :output 20 :cache-read 30 :cache-write 0 :cost 0.0}
              (s/entry-usage {:prompt_tokens 100 :completion_tokens 20
                              :prompt_tokens_details {:cached_tokens 30}}))))
-  (t/testing "Anthropic usage shape"
-    (t/is (= {:input 100 :output 20 :cache-read 30 :cache-write 10}
+  (t/testing "OpenAI cache-write tokens are split out and subtracted (OpenRouter-compatible)"
+    (t/is (= {:input 65 :output 20 :cache-read 30 :cache-write 5 :cost 0.0}
+             (s/entry-usage {:prompt_tokens 100 :completion_tokens 20
+                             :prompt_tokens_details {:cached_tokens 30
+                                                     :cache_write_tokens 5}}))))
+  (t/testing "Anthropic usage shape — input_tokens already excludes cache"
+    (t/is (= {:input 100 :output 20 :cache-read 30 :cache-write 10 :cost 0.0}
              (s/entry-usage {:input_tokens 100 :output_tokens 20
                              :cache_read_input_tokens 30
                              :cache_creation_input_tokens 10}))))
+  (t/testing "Google's already-normalized shape (sse/google-usage)"
+    (t/is (= {:input 10 :output 20 :cache-read 5 :cache-write 0 :cost 0.0}
+             (s/entry-usage {:input 10 :output 20 :cache-read 5 :cache-write 0}))))
+  (t/testing "fully-cached prompt → zero input, cache tokens still reported"
+    (t/is (= {:input 0 :output 1 :cache-read 100 :cache-write 0 :cost 0.0}
+             (s/entry-usage {:prompt_tokens 100 :completion_tokens 1
+                             :prompt_tokens_details {:cached_tokens 100}}))))
+  (t/testing "cost is carried through from the breakdown attached by llm"
+    (t/is (= 0.0042 (:cost (s/entry-usage {:prompt_tokens 100 :completion_tokens 20
+                                           :cost {:input 0.0014 :output 0.0028
+                                                  :cache-read 0.0 :cache-write 0.0
+                                                  :total 0.0042}})))))
   (t/testing "unknown shape returns nil"
     (t/is (nil? (s/entry-usage {:foo 1})))
     (t/is (nil? (s/entry-usage nil)))))
@@ -367,6 +384,11 @@
       (s/append-entry sess {:role :assistant :content "b"
                             :usage {:prompt_tokens 20 :completion_tokens 4
                                     :prompt_tokens_details {:cached_tokens 6}}})
-      (t/is (= {:input 30 :output 6 :cache-read 6 :cache-write 0}
+      (s/append-entry sess {:role :assistant :content "c"
+                            :usage {:prompt_tokens 100 :completion_tokens 0
+                                    :cost {:input 0.001 :output 0.0
+                                           :cache-read 0.0 :cache-write 0.0
+                                           :total 0.001}}})
+      (t/is (= {:input 124 :output 6 :cache-read 6 :cache-write 0 :cost 0.001}
                (s/usage-totals sess)))
       (finally (fs/delete-tree dir)))))

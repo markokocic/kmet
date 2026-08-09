@@ -490,3 +490,26 @@
                @errors))
       (finally
         (.close ss)))))
+
+;; ─── Per-message cost attachment (Phase 5) ────────────────────────────────
+
+(t/deftest test-usage-with-cost
+  (m/load-catalogs!)
+  (let [model (m/get-model :deepseek "deepseek-v4-pro")
+        norm {:input 800 :output 500 :cache-read 200 :cache-write 0}]
+    (t/testing "provider-native usage gains the pi-shaped :cost breakdown"
+      (let [usage (@#'llm/usage-with-cost model
+                                          {:prompt_tokens 1000 :completion_tokens 500
+                                           :prompt_tokens_details {:cached_tokens 200}})]
+        (t/is (= 1000 (:prompt_tokens usage)) "provider-native keys preserved")
+        (t/is (= (m/calculate-cost model norm) (:cost usage))
+              "cost equals calculate-cost over the normalized tokens")))
+    (t/testing "google's already-normalized usage is priced too"
+      (let [usage (@#'llm/usage-with-cost model {:input 10 :output 20
+                                                 :cache-read 0 :cache-write 0})]
+        (t/is (= 10 (:input usage)))
+        (t/is (= (m/calculate-cost model {:input 10 :output 20
+                                          :cache-read 0 :cache-write 0})
+                 (:cost usage)))))
+    (t/testing "unrecognized usage passes through unchanged (no :cost)"
+      (t/is (= {:foo 1} (@#'llm/usage-with-cost model {:foo 1}))))))

@@ -504,13 +504,45 @@ UI:
 
 ## Phase 5 — Cost display
 
-- `session.clj` usage-totals × resolved Model cost rates:
-  `cost = input*rate.in + output*rate.out + cache-read*rate.cache-read + cache-write*rate.cache-write`
-  ($, formatted like pi's `formatCost`, shown in footer).
-- The current model's `Model` must reach the footer — footer-data-provider
-  gains a `:model-cost` atom (or the model record), updated on model switch.
-- `/session` command (still stubbed) will later show cost breakdown; footer is
-  the Phase 5 deliverable.
+**Status: implemented.** Cost is computed per message at response time —
+pi-faithful (`calculateCost` runs in the wire API) — and persisted with the
+message's usage map, so totals stay correct across model switches and survive
+session restore. The footer shows the cumulative USD cost as the last stats
+part (`$X.XXX`, pi `toFixed(3)`), before the context %.
+
+- `models/calculate-cost` — `tokens × $/M rates` (pi `calculateCost` minus
+  tiers/cacheWrite1h, which kmet's Model doesn't have); returns the pi-shaped
+  breakdown `{:input :output :cache-read :cache-write :total}`.
+- `llm/usage-with-cost` (private) — each request builder attaches
+  `:cost` (the breakdown map) to the provider-native usage map before
+  `on-usage`, using the exact `model-record` that produced the response.
+- `session/entry-usage` — now also accepts Google's already-normalized shape
+  (`sse/google-usage`; previously only OpenAI/Anthropic were recognized, so
+  google token totals were silently zero) and extracts `:cost` (default 0).
+  **`:input` excludes cache tokens** (pi `normalizeUsage`): OpenAI's
+  `prompt_tokens` includes `cached_tokens`/`cache_write_tokens`, so they're
+  subtracted — otherwise `calculate-cost` priced cached tokens at BOTH the
+  input and cache-read rates. Anthropic's `input_tokens` and Google's
+  normalized `:input` already exclude cache. `usage-totals` sums `:cost`
+  alongside the token fields; `fdp-latest-cache-hit-rate` matches pi
+  (`cacheRead / (input+cacheRead+cacheWrite)`).
+- `footer.clj` — `(pos? (:cost usage)) → "$" + (format "%.3f" …)`, appended
+  after the CH% part (pi's exact position); no `(sub)` suffix (kmet has no
+  subscriptions).
+
+**Deviation from the plan sketch**: the original plan computed cost at render
+time from `usage-totals × current model rates` with a `:model-cost` atom on
+`footer-data-provider` (updated on model switch). That reprices history after
+any `/model` switch; the per-message approach prices each message with the
+model that produced it (pi's architecture) and needs no footer atom.
+
+Covered by test/kmet/app/test_models.clj (`test-calculate-cost`),
+test_session.clj (google shape + `:cost`), test_llm.clj
+(`test-usage-with-cost`), and test_footer.clj (`test-cost-display`).
+
+`/session` cost *breakdown* by model (pi `getUsageCostBreakdown`) remains
+deferred — it needs `:provider`/`:model` on assistant message entries; the
+stored per-message `:cost` breakdown already supports it.
 
 ---
 
@@ -550,14 +582,15 @@ scope, pi's current implementation, and kmet's needs when the time comes.
 ## Testing & validation gates
 
 - `test/kmet/app/test_models.clj` — registry semantics (register/override/
-  clear, get-model, default-model), catalog loading, EDN shape.
+  clear, get-model, default-model), catalog loading, EDN shape, `calculate-cost`.
 - `test/kmet/app/test_model_data.clj` — offline strict validation of
   committed catalogs + manifest hash match (catches uncommitted regenerations).
 - `test/kmet/app/test_model_resolver.clj` — pattern parsing, ambiguity
   rejection, alias/date matching, CLI fallback chain.
 - `test/kmet/app/test_llm.clj` — updated: URL construction per api,
   thinking-format payloads (deepseek/qwen/anthropic/google), max-tokens field
-  selection, model-unknown error path.
+  selection, model-unknown error path, per-message cost attachment
+  (`usage-with-cost`).
 - `test/kmet/app/test_auth.clj` — env precedence (auth.edn over env), pi env
   order, configured? semantics.
 - Generator script: `bb generate-models` must be deterministic (sorted output)

@@ -41,10 +41,14 @@
                                     :content [{:type :text :text "again"}]
                                     :usage {:input_tokens 200 :output_tokens 40
                                             :cache_read_input_tokens 50
-                                            :cache_creation_input_tokens 10}})
+                                            :cache_creation_input_tokens 10
+                                            :cost {:input 0.002 :output 0.0008
+                                                   :cache-read 0.0001 :cache-write 0.0002
+                                                   :total 0.0031}}})
         (let [p (fdp/make-footer-data-provider :session sess)
               totals (fdp/fdp-usage-totals p)]
-          (is (= {:input 300 :output 60 :cache-read 80 :cache-write 10} totals)))))))
+          (is (= {:input 270 :output 60 :cache-read 80 :cache-write 10 :cost 0.0031}
+                 totals)))))))
 
 (deftest test-context-tokens
   (testing "context tokens estimate the session branch"
@@ -56,7 +60,7 @@
           (is (pos? (fdp/fdp-context-tokens p))))))))
 
 (deftest test-latest-cache-hit-rate
-  (testing "cache hit rate comes from the most recent usage entry"
+  (testing "cache hit rate comes from the most recent usage entry (input excludes cache, pi)"
     (with-session
       (fn [sess]
         (session/append-entry sess {:role :assistant :content [{:type :text :text "a"}]
@@ -66,7 +70,8 @@
                                     :usage {:prompt_tokens 200 :completion_tokens 1
                                             :prompt_tokens_details {:cached_tokens 100}}})
         (let [p (fdp/make-footer-data-provider :session sess)]
-          (is (= (/ 100.0 3.0) (fdp/fdp-latest-cache-hit-rate p))))))))
+          (is (= 50.0 (fdp/fdp-latest-cache-hit-rate p))
+              "100 cached / (100 input + 100 cached) — pi: cacheRead / (input+cacheRead+cacheWrite)"))))))
 
 (deftest test-model-provider-thinking
   (testing "model/provider/thinking accessors"

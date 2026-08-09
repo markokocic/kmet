@@ -259,31 +259,49 @@
 ;; ─── Usage tracking ────────────────────────────────────────────────────────
 
 (defn entry-usage
-  "Normalize a message :usage map (OpenAI or Anthropic shapes) into
-   {:input :output :cache-read :cache-write}. Returns nil when the map has
-   no recognizable token fields."
+  "Normalize a message :usage map (OpenAI, Anthropic, or Google shapes) into
+   {:input :output :cache-read :cache-write :cost}. :input EXCLUDES cache
+   tokens (pi normalizeUsage — otherwise cached tokens would be priced at
+   both the input and cache-read rates): OpenAI's prompt_tokens includes
+   cached/cache-write tokens, so they're subtracted; Anthropic's
+   input_tokens and Google's normalized :input already exclude them. :cost
+   is the per-message USD total attached by llm (models/calculate-cost), 0
+   when the message predates cost tracking. Returns nil when the map has no
+   recognizable token fields."
   [usage]
   (when (and usage (map? usage))
-    (let [input (or (:prompt_tokens usage) (:input_tokens usage))
-          output (or (:completion_tokens usage) (:output_tokens usage))
-          cache-read (or (get-in usage [:prompt_tokens_details :cached_tokens])
-                         (:cache_read_input_tokens usage))
-          cache-write (:cache_creation_input_tokens usage)]
+    (let [cache-read (or (get-in usage [:prompt_tokens_details :cached_tokens])
+                         (:prompt_cache_hit_tokens usage)
+                         (:cache_read_input_tokens usage)
+                         (:cache-read usage))
+          cache-write (or (get-in usage [:prompt_tokens_details :cache_write_tokens])
+                          (:cache_creation_input_tokens usage)
+                          (:cache-write usage))
+          prompt (:prompt_tokens usage)
+          input (cond
+                  prompt (max 0 (- (long prompt)
+                                   (long (or cache-read 0))
+                                   (long (or cache-write 0))))
+                  (:input_tokens usage) (:input_tokens usage)
+                  (:input usage) (:input usage))
+          output (or (:completion_tokens usage) (:output_tokens usage) (:output usage))
+          cost (or (get-in usage [:cost :total]) 0)]
       (when (or input output cache-read cache-write)
         {:input (long (or input 0))
          :output (long (or output 0))
          :cache-read (long (or cache-read 0))
-         :cache-write (long (or cache-write 0))}))))
+         :cache-write (long (or cache-write 0))
+         :cost (double cost)}))))
 
 (defn usage-totals
-  "Sum normalized usage across session entries carrying :usage (pi:
-   FooterComponent accumulates usage from all session entries)."
+  "Sum normalized usage (incl. USD :cost) across session entries carrying
+   :usage (pi: FooterComponent accumulates usage from all session entries)."
   [session]
   (reduce (fn [totals e]
             (if-let [u (entry-usage (:usage e))]
               (merge-with + totals u)
               totals))
-          {:input 0 :output 0 :cache-read 0 :cache-write 0}
+          {:input 0 :output 0 :cache-read 0 :cache-write 0 :cost 0.0}
           @(:entries session)))
 
 ;; ─── Convenience ───────────────────────────────────────────────────────────

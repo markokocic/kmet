@@ -147,3 +147,24 @@
     (is (= "~" (ft/format-cwd-for-footer "/home/user" "/home/user")))
     (is (= "~/project" (ft/format-cwd-for-footer "/home/user/project" "/home/user")))
     (is (= "/opt/other" (ft/format-cwd-for-footer "/opt/other" "/home/user")))))
+
+(deftest test-cost-display
+  (testing "usage cost renders as $X.XXX after the stats (pi: toFixed(3))"
+    (let [dir (str "target/test-footer-cost-" (System/currentTimeMillis))
+          sess (s/create-session dir)]
+      (try
+        (s/append-entry sess {:role :assistant :content [{:type :text :text "a"}]
+                              :usage {:prompt_tokens 1000 :completion_tokens 500
+                                      :cost {:input 0.002 :output 0.004
+                                             :cache-read 0.0 :cache-write 0.0
+                                             :total 0.006}}})
+        (let [c (make-footer-with-session :session sess)
+              plain (render-plain c 80)]
+          (is (some #(re-find #"\$0\.006" %) plain)
+              "stats line carries the cumulative cost"))
+        (finally (fs/delete-tree dir)))))
+  (testing "no cost → no $ part"
+    (let [c (make-footer-with-session)
+          plain (render-plain c 80)]
+      (is (not-any? #(re-find #"\$" %) plain)
+          "zero cost renders nothing (pi: if (usageTotals.cost …))"))))
