@@ -251,45 +251,178 @@
 
 ;; ─── Word wrapping ──────────────────────────────────────────────────────────
 
-(defn- leading-ansi-codes
-  "All ANSI escape sequences at the very start of s (pi: active codes)."
-  [s]
-  (let [ansi-re ANSI-CODE-RE]
-    (loop [s s acc ""]
-      (let [m (re-find ansi-re s)]
-        (if (and m (clojure.string/starts-with? s m))
-          (recur (subs s (count m)) (str acc m))
-          acc)))))
+;; ─── ANSI state tracking for wrapping (pi: AnsiCodeTracker) ────────────────
+;; Keeps the active SGR attributes (and the open OSC 8 hyperlink) while
+;; wrapping a styled line so continuation lines re-open the styles instead
+;; of falling back to the terminal default (pi: wrapTextWithAnsi tracks the
+;; active codes and prepends them at each line break).
+
+(defrecord AnsiState [bold dim italic underline blink inverse hidden
+                      strikethrough fg bg hyperlink hyperlink-term])
+
+(defn- make-ansi-state
+  []
+  (map->AnsiState {:bold false :dim false :italic false :underline false
+                   :blink false :inverse false :hidden false :strikethrough false
+                   :fg nil :bg nil :hyperlink nil :hyperlink-term nil}))
+
+(defn- ansi-process-sgr!
+  "Process one SGR sequence (\"\\u001b[31m\" etc.) into the tracker state.
+   Only SGR (ending in m) sequences are tracked — other CSI sequences like
+   \"\\u001b[2J\" are cursor/screen operations, not attributes (pi:
+   AnsiCodeTracker.process requires ansiCode.endsWith('m'))."
+  [st sgr]
+  (when (clojure.string/ends-with? sgr "m")
+    (let [params (subs sgr 2 (max 2 (dec (count sgr))))]
+      (if (or (empty? params) (= params "0"))
+        (reset! st (make-ansi-state))
+        (let [parts (clojure.string/split params #";")
+              n (count parts)]
+          (swap! st
+                 (fn [acc]
+                   (loop [i 0 acc acc]
+                     (if (>= i n)
+                       acc
+                       (let [code (try (Integer/parseInt (nth parts i))
+                                       (catch Exception _ -1))]
+                         (cond
+                           (and (= code 38) (< (+ i 2) n) (= (nth parts (inc i)) "5"))
+                           (recur (+ i 3) (assoc acc :fg (str "38;5;" (nth parts (+ i 2)))))
+                           (and (= code 38) (< (+ i 4) n) (= (nth parts (inc i)) "2"))
+                           (recur (+ i 5) (assoc acc :fg (str "38;2;" (nth parts (+ i 2))
+                                                              ";" (nth parts (+ i 3))
+                                                              ";" (nth parts (+ i 4)))))
+                           (and (= code 48) (< (+ i 2) n) (= (nth parts (inc i)) "5"))
+                           (recur (+ i 3) (assoc acc :bg (str "48;5;" (nth parts (+ i 2)))))
+                           (and (= code 48) (< (+ i 4) n) (= (nth parts (inc i)) "2"))
+                           (recur (+ i 5) (assoc acc :bg (str "48;2;" (nth parts (+ i 2))
+                                                              ";" (nth parts (+ i 3))
+                                                              ";" (nth parts (+ i 4)))))
+                           :else
+                           (recur (inc i)
+                                  (case code
+                                    1 (assoc acc :bold true)
+                                    2 (assoc acc :dim true)
+                                    3 (assoc acc :italic true)
+                                    4 (assoc acc :underline true)
+                                    5 (assoc acc :blink true)
+                                    7 (assoc acc :inverse true)
+                                    8 (assoc acc :hidden true)
+                                    9 (assoc acc :strikethrough true)
+                                    21 (assoc acc :bold false)
+                                    22 (assoc acc :bold false :dim false)
+                                    23 (assoc acc :italic false)
+                                    24 (assoc acc :underline false)
+                                    25 (assoc acc :blink false)
+                                    27 (assoc acc :inverse false)
+                                    28 (assoc acc :hidden false)
+                                    29 (assoc acc :strikethrough false)
+                                    39 (assoc acc :fg nil)
+                                    49 (assoc acc :bg nil)
+                                    ;; default: fg 30-37/90-97, bg 40-47/100-107
+                                    (cond-> acc
+                                      (or (<= 30 code 37) (<= 90 code 97))
+                                      (assoc :fg (str code))
+                                      (or (<= 40 code 47) (<= 100 code 107))
+                                      (assoc :bg (str code))))))))))))))))
+
+(defn- ansi-process-osc8!
+  "Process an OSC 8 hyperlink sequence (open/close) into the tracker state."
+  [st code]
+  (let [term-len (cond (clojure.string/ends-with? code "\u0007") 1
+                       (clojure.string/ends-with? code "\u001b\\") 2
+                       :else 1)
+        body (subs code 4 (- (count code) term-len))]
+    (when (and (clojure.string/starts-with? code "\u001b]8;")
+               (clojure.string/starts-with? body ";"))
+      (let [url (subs body 1)]
+        (if (clojure.string/blank? url)
+          (swap! st assoc :hyperlink nil :hyperlink-term nil)
+          (swap! st assoc :hyperlink url
+                 :hyperlink-term (if (clojure.string/ends-with? code "\u0007")
+                                   "\u0007" "\u001b\\")))))))
+
+(defn- ansi-process-code!
+  "Process one ANSI sequence into the tracker (SGR or OSC 8 hyperlink)."
+  [st code]
+  (if (clojure.string/starts-with? code "\u001b[")
+    (ansi-process-sgr! st code)
+    (ansi-process-osc8! st code)))
+
+(defn- ansi-process-text!
+  "Process all ANSI sequences in TEXT into the tracker state."
+  [st text]
+  (when (clojure.string/includes? text "\u001b")
+    (doseq [code (re-seq ANSI-CODE-RE text)]
+      (ansi-process-code! st code))))
+
+(defn- ansi-process-range!
+  "Process ANSI sequences found in word[i, stop) into the tracker state."
+  [st word i stop]
+  (loop [j i]
+    (when (< j stop)
+      (let [m (when (= \u001b (nth word j))
+                (re-find ANSI-CODE-RE (subs word j)))]
+        (if (and m (clojure.string/starts-with? (subs word j) m))
+          (do (ansi-process-code! st m)
+              (recur (+ j (count m))))
+          (recur (inc j)))))))
+
+(defn- ansi-active-codes
+  "The currently active SGR attributes (and open hyperlink) as a single
+   escape sequence, or \"\" when nothing is active (pi: getActiveCodes)."
+  [st]
+  (let [{:keys [bold dim italic underline blink inverse hidden strikethrough
+                fg bg hyperlink hyperlink-term]} @st
+        codes (cond-> []
+                bold (conj "1")
+                dim (conj "2")
+                italic (conj "3")
+                underline (conj "4")
+                blink (conj "5")
+                inverse (conj "7")
+                hidden (conj "8")
+                strikethrough (conj "9")
+                fg (conj fg)
+                bg (conj bg))
+        sgr (if (seq codes) (str "\u001b[" (clojure.string/join ";" codes) "m") "")
+        link (if hyperlink (str "\u001b]8;;" hyperlink hyperlink-term) "")]
+    (str sgr link)))
 
 (defn- split-long-word
   "Split WORD (longer than max-width) into pieces of at most max-width
    visible columns. Every character is preserved — long unbreakable words
    (URLs, hashes, long flags) wrap instead of being clipped (pi:
    breakLongWord). ANSI escapes are zero-width atoms kept with the piece
-   that contains them; the word's leading escapes are re-prepended to
-   continuation pieces so styling survives the break.
+   that contains them; the active SGR/hyperlink state is re-emitted at the
+   start of every piece so styling survives the break (pi: breakLongWord +
+   AnsiCodeTracker). ST is the wrap's tracker (atom of AnsiState), updated
+   with the codes seen so far.
    Fast path: pure-ASCII words break with a regex (visible width = char
    count), avoiding per-character work — crucial for streaming long
    tokens under SCI where per-char interop is slow."
-  [word max-width]
+  [word max-width st]
   (let [n (count word)
-        ansi-re ANSI-CODE-RE
-        lead (leading-ansi-codes word)]
+        ansi-re ANSI-CODE-RE]
     (if (not (re-find #"[^\u0020-\u007e]" word))
-      ;; ASCII fast path: char count == visible width
-      (let [body (subs word (count lead))
-            pieces (if (seq body)
-                     (vec (re-seq (re-pattern (str "(?s).{1," max-width "}")) body))
-                     [word])]
-        (if (seq lead)
-          (vec (map-indexed (fn [i p] (if (zero? i) p (str lead p))) pieces))
-          pieces))
+      ;; ASCII fast path — no ANSI codes possible (ESC 0x1b is non-ASCII)
+      (let [pieces (vec (re-seq (re-pattern (str "(?s).{1," max-width "}")) word))]
+        (if (seq pieces)
+          ;; every piece starts a fresh line after the buffer flush, so the
+          ;; active state is re-emitted on each — including the first
+          ;; (pi: breakLongWord starts with tracker.getActiveCodes())
+          (vec (map-indexed (fn [_ p] (str (ansi-active-codes st) p))
+                            pieces))
+          [word]))
       ;; Walker: wide chars (CJK/emoji) or embedded ANSI — slice by visible
-      ;; width; one subs per piece, no per-character appends.
+      ;; width; one subs per piece, no per-character appends. Codes inside
+      ;; each piece are processed into the tracker so continuation pieces
+      ;; re-emit the state accumulated so far.
       (loop [i 0 pieces []]
         (if (>= i n)
-          pieces
-          (let [stop (loop [j i total 0]
+          (if (seq pieces) pieces [word])
+          (let [active-before (ansi-active-codes st)
+                stop (loop [j i total 0]
                        (if (>= j n)
                          j
                          (let [m (when (= \u001b (nth word j))
@@ -305,17 +438,18 @@
                                (if (and (pos? total) (> (+ total w) max-width))
                                  j
                                  (recur (+ j nchars) (+ total w))))))))]
+            (ansi-process-range! st word i stop)
             (recur stop
                    (conj pieces
-                         (if (seq pieces)
-                           (str lead (subs word i stop))
-                           (subs word i stop))))))))))
+                         (str active-before (subs word i stop))))))))))
 
 (defn- wrap-single-line
   "Wrap a single line (no internal newlines) to max-width visible columns.
    Returns a vector of lines, each without trailing newlines.
-   ANSI escape codes are preserved and moved with their associated words.
-   Long unbreakable words are broken across lines, never clipped."
+   ANSI escape codes are preserved; the active SGR/hyperlink state is
+   re-emitted at every line break so wrapped continuations keep their
+   style (pi: wrapSingleLine + AnsiCodeTracker). Long unbreakable words
+   are broken across lines, never clipped."
   [line max-width]
   (if (or (empty? line) (<= max-width 0))
     [""]
@@ -323,6 +457,7 @@
       (if (<= (visible-width-plain clean) max-width)
         [line]
         (let [words (clojure.string/split line #"(?<=\s)" -1)
+              st (atom (make-ansi-state))
               result (volatile! [])
               sb (StringBuilder.)
               cur-w (volatile! 0)]
@@ -338,9 +473,12 @@
                     (vswap! result conj (str sb)))
                   (if (<= ww max-width)
                     (do (.setLength sb 0)
+                        ;; new line starts with the state left by the words
+                        ;; flushed above (pi: tracker.getActiveCodes() + token)
+                        (.append sb (ansi-active-codes st))
                         (.append sb w)
                         (vreset! cur-w ww))
-                    (let [pieces (split-long-word w max-width)
+                    (let [pieces (split-long-word w max-width st)
                           last-p (or (last pieces) "")]
                       (doseq [p (butlast pieces)]
                         (vswap! result conj p))
@@ -348,8 +486,12 @@
                       (.append sb last-p)
                       (vreset! cur-w (if (re-find #"[^\u0020-\u007e]" last-p)
                                        (visible-width last-p)
-                                       (count last-p)))))))))
-          (if (pos? @cur-w)
+                                       (count last-p))))))))
+            (ansi-process-text! st w))
+          ;; Flush any pending content — including zero-width styled lines
+          ;; (e.g. a blank input line with a cross-line style prefix, pi:
+          ;; wrapSingleLine returns the prefix-only line)
+          (if (pos? (.length sb))
             (conj @result (str sb))
             @result))))))
 
@@ -360,17 +502,25 @@
    components extends to full terminal width on every line.
    Tabs are expanded to 3 spaces (pi: replaceTabs) so wrapped output is
    display-ready regardless of the terminal's tab stop.
+   Styles left open by a line are re-emitted on the following line so a
+   styled multi-line string keeps its attributes across literal newlines
+   (pi: wrapTextWithAnsi tracks the active codes across input lines).
    Internal fast path: uses visible-width-plain on already-stripped text."
   [text max-width]
   (if (or (empty? text) (<= max-width 0))
     [""]
     (let [text (clojure.string/replace text "\t" "   ")
           input-lines (clojure.string/split text #"\r\n|\r|\n")
-          result (volatile! [])]
+          result (volatile! [])
+          st (atom (make-ansi-state))]
       (doseq [input-line input-lines]
-        (let [wrapped (wrap-single-line input-line max-width)]
+        (let [;; pi: prepend the active codes from previous lines so the
+              ;; first wrapped line of this input line re-opens them
+              prefix (if (seq @result) (ansi-active-codes st) "")
+              wrapped (wrap-single-line (str prefix input-line) max-width)]
           (doseq [wl wrapped]
-            (vswap! result conj wl))))
+            (vswap! result conj wl)))
+        (ansi-process-text! st input-line))
       (if (seq @result)
         @result
         [""]))))

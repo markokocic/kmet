@@ -50,6 +50,28 @@
     (swap! (:messages agent) conj {:role :user :content "hi"})
     (t/is (= 1 (count (loop/get-context agent))))))
 
+(t/deftest test-loop-restore-session-context
+  ;; Restoring a session rebuilds the agent context from the session branch —
+  ;; steered and follow-up user messages come back for the next LLM call.
+  (let [dir (str (fs/create-dirs (fs/path "target" "test-loop-restore")))]
+    (try
+      (let [sess (session/create-session dir)]
+        (session/append-entry sess {:role :user :content [{:type :text :text "hello"}]})
+        (session/append-entry sess {:role :assistant :content [{:type :text :text "hi"}]})
+        (session/append-entry sess {:role :user :content [{:type :text :text "steered"}]})
+        (session/append-entry sess {:role :assistant :content [{:type :text :text "done"}]})
+        (session/append-entry sess {:role :session_info :name "t"})
+        (let [loaded (session/load-session (:file sess))
+              agent (loop/make-agent-state :session loaded)]
+          (loop/restore-session-context! agent)
+          (t/is (= [:user :assistant :user :assistant]
+                   (mapv :role (loop/get-context agent)))
+                "session_info entries are metadata — not context")
+          (t/is (= "steered" (-> (loop/get-context agent) (nth 2) :content first :text))
+                "steered user message restored")))
+      (finally
+        (fs/delete-tree dir)))))
+
 (t/deftest test-loop-set-system-prompt
   (let [agent (loop/make-agent-state)]
     (loop/set-system-prompt! agent "new prompt")

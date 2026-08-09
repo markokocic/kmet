@@ -8,8 +8,24 @@
             [babashka.fs :as fs]))
 
 ;; ─── Session record ─────────────────────────────────────────────────────────
+;; :lock (a ReentrantLock) serializes all file mutations (pi:
+;; JsonlSessionStorage.enqueue — a promise chain serializes
+;; appends/rewrites). Without it, two concurrent appends (e.g. a ! bash
+;; result landing on its future thread while a submitted message appends on
+;; the agent thread) both read the same leaf and write sibling entries — the
+;; branch walk then orphans one of them, so a restored session silently
+;; loses messages.
 
-(defrecord Session [file id entries leaf-id])
+(defrecord Session [file id entries leaf-id lock])
+
+(defmacro with-session-lock
+  "Run BODY under the session's mutation lock (pi: storage.enqueue).
+   Reentrant, so nested session operations inside the body are safe."
+  [session & body]
+  `(let [lock# (:lock ~session)]
+     (.lock lock#)
+     (try ~@body
+          (finally (.unlock lock#)))))
 
 (defn- generate-id []
   (let [now (System/currentTimeMillis)
@@ -32,7 +48,8 @@
       (map->Session {:file (str (fs/canonicalize file))
                      :id id
                      :entries (atom [])
-                     :leaf-id (atom nil)}))))
+                     :leaf-id (atom nil)
+                     :lock (java.util.concurrent.locks.ReentrantLock.)}))))
 
 (defn load-session
   "Load an existing session from file path. Returns Session record."
@@ -53,19 +70,23 @@
     (map->Session {:file (str (fs/canonicalize file))
                    :id (str/replace (fs/file-name file) #"\.ednl$" "")
                    :entries (atom entries)
-                   :leaf-id (atom leaf-id)})))
+                   :leaf-id (atom leaf-id)
+                   :lock (java.util.concurrent.locks.ReentrantLock.)})))
 
 (defn append-entry
-  "Append an entry to the session file and atom."
+  "Append an entry to the session file and atom. Serialized per session so
+   concurrent appends (bash-result future + agent loop) can't produce
+   orphaned sibling entries (pi: storage.appendEntry is enqueued)."
   [session entry]
-  (let [entry (assoc entry :id (generate-id)
-                     :parent-id @(:leaf-id session)
-                     :timestamp (str (timestamp)))
-        file (:file session)]
-    (spit file (prn-str entry) :append true)
-    (swap! (:entries session) conj entry)
-    (reset! (:leaf-id session) (:id entry))
-    entry))
+  (with-session-lock session
+    (let [entry (assoc entry :id (generate-id)
+                       :parent-id @(:leaf-id session)
+                       :timestamp (str (timestamp)))
+          file (:file session)]
+      (spit file (prn-str entry) :append true)
+      (swap! (:entries session) conj entry)
+      (reset! (:leaf-id session) (:id entry))
+      entry)))
 
 (defn get-branch
   "Get entries from root to leaf-id (active branch)."
@@ -142,28 +163,29 @@
    by replacing them with a placeholder summary (used when LLM summarization is
    unavailable — see compact-with-summary!)."
   [session max-entries]
-  (let [entries @(:entries session)
-        n (count entries)]
-    (when (> n max-entries)
-      (let [keep (vec (take-last (quot max-entries 2) entries))
-            summarize (vec (drop-last (quot max-entries 2) (drop-last (count keep) entries)))]
-        (when (seq summarize)
-          (let [summary-text (str "[Compacted " (count summarize)
-                                  " messages — " (first summarize) " to "
-                                  (last summarize) "]")
-                summary-entry {:role :system
-                               :content [{:type :text :text summary-text}]
-                               :summary summary-text
-                               :id (generate-id)
-                               :parent-id nil
-                               :timestamp (str (timestamp))}
-                keep (assoc-in keep [0 :parent-id] (:id summary-entry))
-                new-entries (into [summary-entry] keep)]
-            (reset! (:entries session) new-entries)
-            (reset! (:leaf-id session) (:id (last new-entries)))
-            ;; Rewrite file
-            (spit (:file session) (apply str (map prn-str new-entries))))))
-      @(:leaf-id session))))
+  (with-session-lock session
+    (let [entries @(:entries session)
+          n (count entries)]
+      (when (> n max-entries)
+        (let [keep (vec (take-last (quot max-entries 2) entries))
+              summarize (vec (drop-last (quot max-entries 2) (drop-last (count keep) entries)))]
+          (when (seq summarize)
+            (let [summary-text (str "[Compacted " (count summarize)
+                                    " messages — " (first summarize) " to "
+                                    (last summarize) "]")
+                  summary-entry {:role :system
+                                 :content [{:type :text :text summary-text}]
+                                 :summary summary-text
+                                 :id (generate-id)
+                                 :parent-id nil
+                                 :timestamp (str (timestamp))}
+                  keep (assoc-in keep [0 :parent-id] (:id summary-entry))
+                  new-entries (into [summary-entry] keep)]
+              (reset! (:entries session) new-entries)
+              (reset! (:leaf-id session) (:id (last new-entries)))
+              ;; Rewrite file
+              (spit (:file session) (apply str (map prn-str new-entries))))))
+        @(:leaf-id session)))))
 
 (defn compact-with-summary!
   "Replace all entries before first-kept-id with a single summary entry (pi:
@@ -173,21 +195,22 @@
    includes it. Returns the summary entry, or nil when first-kept-id is not
    found."
   [session summary first-kept-id]
-  (let [entries @(:entries session)
-        idx (first (keep-indexed (fn [i e] (when (= (:id e) first-kept-id) i)) entries))]
-    (when idx
-      (let [summary-entry {:role :system
-                           :content [{:type :text :text summary}]
-                           :summary summary
-                           :id (generate-id)
-                           :parent-id nil
-                           :timestamp (str (timestamp))}
-            keep (assoc-in (vec (subvec entries idx)) [0 :parent-id] (:id summary-entry))
-            new-entries (into [summary-entry] keep)]
-        (reset! (:entries session) new-entries)
-        (reset! (:leaf-id session) (:id (last new-entries)))
-        (spit (:file session) (apply str (map prn-str new-entries)))
-        summary-entry))))
+  (with-session-lock session
+    (let [entries @(:entries session)
+          idx (first (keep-indexed (fn [i e] (when (= (:id e) first-kept-id) i)) entries))]
+      (when idx
+        (let [summary-entry {:role :system
+                             :content [{:type :text :text summary}]
+                             :summary summary
+                             :id (generate-id)
+                             :parent-id nil
+                             :timestamp (str (timestamp))}
+              keep (assoc-in (vec (subvec entries idx)) [0 :parent-id] (:id summary-entry))
+              new-entries (into [summary-entry] keep)]
+          (reset! (:entries session) new-entries)
+          (reset! (:leaf-id session) (:id (last new-entries)))
+          (spit (:file session) (apply str (map prn-str new-entries)))
+          summary-entry)))))
 
 (defn fork-session
   "Create a new session forked at the given entry-id."
@@ -264,6 +287,45 @@
           @(:entries session)))
 
 ;; ─── Convenience ───────────────────────────────────────────────────────────
+
+(defn- entry-text
+  "Plain trimmed text of an entry's content blocks (pi: extractTextContent)."
+  [e]
+  (let [content (:content e)]
+    (if (string? content)
+      (str/trim content)
+      (str/trim (str/join (map :text (filter #(= :text (:type %)) content)))))))
+
+(defn get-first-message
+  "First user message text of the session (pi: buildSessionInfo firstMessage
+   — the first user message with text content, else \"(no messages)\")."
+  [session]
+  (or (some (fn [e]
+              (when (= :user (:role e))
+                (let [t (entry-text e)]
+                  (when (seq t) t))))
+            @(:entries session))
+      "(no messages)"))
+
+(defn get-message-count
+  "Number of message entries in the session (pi: buildSessionInfo
+   messageCount — message types only, session_info excluded)."
+  [session]
+  (count (filter #(contains? #{:user :assistant :tool :bash :info} (:role %))
+                 @(:entries session))))
+
+(defn get-last-activity-ms
+  "Last message activity time as epoch ms (pi: modified — the latest message
+   timestamp), falling back to the file mtime. An unparseable timestamp
+   (corrupt/legacy file) also falls back to mtime rather than throwing."
+  [session]
+  (let [last-ts (some-> (filter #(contains? % :timestamp) @(:entries session))
+                        last
+                        :timestamp)]
+    (or (when last-ts
+          (try (-> (java.time.Instant/parse last-ts) (.toEpochMilli))
+               (catch Exception _ nil)))
+        (.toMillis (fs/last-modified-time (:file session))))))
 
 (defn list-sessions
   "List all session files in a directory, newest first."

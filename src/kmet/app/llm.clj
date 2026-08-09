@@ -164,7 +164,9 @@
 (defn openai-messages
   "Map agent messages to OpenAI chat-completion messages.
    Bash entries become user messages (pi: convertToLlm bashExecution);
-   excluded ones are dropped. Tested directly by test_llm, hence public."
+   excluded ones are dropped. Assistant messages with :thinking send it back
+   as reasoning_content (pi: the thinking signature field — DeepSeek thinking
+   mode round-trips the CoT). Tested directly by test_llm, hence public."
   [messages]
   (into []
         (keep (fn [m]
@@ -178,17 +180,20 @@
                      :tool_call_id (-> m :content first :tool_use_id)
                      :content (tool-result-content m)}
                     "assistant"
-                    (let [text (content-text (:content m))]
-                      (cond-> {:role "assistant" :content text}
-                        (:tool-calls m)
-                        (assoc :tool_calls
-                               (mapv (fn [tc]
-                                       {:id (:id tc)
-                                        :type "function"
-                                        :function {:name (:name tc)
-                                                   :arguments (cheshire.core/generate-string
-                                                               (:arguments tc))}})
-                                     (:tool-calls m)))))
+                    (let [text (content-text (:content m))
+                          thinking (str/trim (or (:thinking m) ""))
+                          msg (cond-> {:role "assistant" :content text}
+                                (:tool-calls m)
+                                (assoc :tool_calls
+                                       (mapv (fn [tc]
+                                               {:id (:id tc)
+                                                :type "function"
+                                                :function {:name (:name tc)
+                                                           :arguments (cheshire.core/generate-string
+                                                                       (:arguments tc))}})
+                                             (:tool-calls m))))]
+                      (cond-> msg
+                        (seq thinking) (assoc :reasoning_content thinking)))
                     {:role role
                      :content (openai-content (:content m))}))))
         messages))
@@ -196,7 +201,9 @@
 (defn- openai-messages-with-reasoning
   "Like openai-messages but adds reasoning_content to assistant messages.
    Some providers (e.g., opencode-go/deepseek-v4-flash) require a
-   reasoning_content field on assistant messages even when empty."
+   reasoning_content field on assistant messages even when empty; a message's
+   own :thinking is sent back verbatim (pi round-trips the thinking
+   signature)."
   [messages]
   (into []
         (keep (fn [m]
@@ -223,7 +230,7 @@
                                                                                       (:arguments tc))}})
                                                             (:tool-calls m))))]
                               ;; opencode-go requires reasoning_content on assistant messages
-                              (assoc msg :reasoning_content ""))
+                              (assoc msg :reasoning_content (or (str/trim (or (:thinking m) "")) "")))
                             {:role role
                              :content (openai-content (:content m))})]
                   msg)))

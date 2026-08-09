@@ -625,73 +625,99 @@
 
 ;; ─── Resume session ────────────────────────────────────────────────────────
 
+(defn- format-session-age
+  "pi: formatSessionDate — now / Nm / Nh / Nd / Nw / Nmo / Ny."
+  [ms]
+  (let [diff (- (System/currentTimeMillis) ms)
+        mins (quot diff 60000)
+        hours (quot mins 60)
+        days (quot hours 24)]
+    (cond
+      (< mins 1) "now"
+      (< mins 60) (str mins "m")
+      (< days 1) (str hours "h")
+      (< days 7) (str days "d")
+      (< days 30) (str (quot days 7) "w")
+      (< days 365) (str (quot days 30) "mo")
+      :else (str (quot days 365) "y"))))
+
+(defn- restore-session!
+  "Restore a session into the UI and the agent: swap the active session,
+   rebuild the agent's in-memory context from the session branch (pi: the
+   session is the source of truth — buildContextEntries; steered and
+   follow-up user messages live in the branch and must come back for the
+   next LLM call), and replay the branch into the chat history. session_info
+   entries are metadata — never rendered (pi: only message entries are
+   replayed on resume)."
+  [cs sess]
+  (reset! (:session-atom cs) sess)
+  (let [new-ag (assoc @(:agent-state cs) :session sess)]
+    (reset! (:agent-state cs) new-ag))
+  (agent/restore-session-context! @(:agent-state cs))
+  (ui/chat-history-clear! (:chat-history cs))
+  (doseq [e (session/get-branch sess)
+          :when (not= :session_info (:role e))]
+    (let [role (:role e)
+          ;; Tool results are stored as :tool_result blocks (with :content
+          ;; str); others as :text blocks
+          content (str/join
+                   (keep (fn [b]
+                           (case (:type b)
+                             :text (:text b)
+                             :tool_result (:content b)
+                             nil))
+                         (:content e)))]
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    (cond-> {:role role :content content}
+                                      (= role :assistant) (assoc :thinking (:thinking e))
+                                      (= role :info) (assoc :label (:label e))
+                                      (= role :tool)
+                                      (assoc :name (or (:name e) "tool")
+                                             :is-error (:is-error e false)
+                                             :truncation (:truncation e)
+                                             :details (:details e))))))
+  (update-footer! cs))
+
 (defn- resume-session
-  "Browse past sessions via SelectList overlay."
+  "Browse past sessions via SelectList overlay (pi: SessionSelectorComponent —
+   rows show the session name or first message with message count + age on
+   the right; typing filters)."
   [cs session-dir-fn]
   (let [sessions (session/list-sessions (session-dir-fn))]
     (if (empty? sessions)
       (ui/chat-history-add-message! (:chat-history cs)
                                     {:role :assistant :content "No past sessions found."})
       (let [items (vec (for [s sessions]
-                         (let [fname (str/replace s #".*/" "")
-                               short-id (subs fname 0 (min 8 (count fname)))
-                               loaded (session/load-session s)
+                         (let [loaded (session/load-session s)
                                name (session/get-session-name loaded)
-                               ;; session_info entries are metadata, not messages
-                               n-msgs (count (remove #(= :session_info (:role %))
-                                                     @(:entries loaded)))]
-                           {:label (str short-id
-                                        (when name (str " (" name ")"))
-                                        "... " n-msgs " msgs")
+                               first-msg (session/get-first-message loaded)
+                               n-msgs (session/get-message-count loaded)
+                               age (format-session-age (session/get-last-activity-ms loaded))]
+                           {:label (if name name first-msg)
+                            :description (str n-msgs " " age)
                             :value s})))
             sl-ref (atom nil)
             on-select-fn (fn [_]
                            (when-let [sel (select-list/select-list-get-selected @sl-ref)]
                              (let [sess (session/load-session (:value sel))
-                                   entries (session/get-branch sess)
                                    fname (str/replace (:value sel) #".*/" "")
                                    short-id (subs fname 0 (min 8 (count fname)))]
-                               (ui/chat-history-clear! (:chat-history cs))
-                               (reset! (:session-atom cs) sess)
-                               (let [new-ag (assoc @(:agent-state cs) :session sess)]
-                                 (reset! (:agent-state cs) new-ag))
-                               ;; session_info entries are metadata — never
-                               ;; rendered as chat messages (pi: only message
-                               ;; entries are replayed on resume)
-                               (doseq [e entries
-                                       :when (not= :session_info (:role e))]
-                                 (let [role (:role e)
-                                      ;; Tool results are stored as :tool_result blocks
-                                      ;; (with :content str); others as :text blocks
-                                       content (str/join
-                                                (keep (fn [b]
-                                                        (case (:type b)
-                                                          :text (:text b)
-                                                          :tool_result (:content b)
-                                                          nil))
-                                                      (:content e)))]
-                                   (ui/chat-history-add-message! (:chat-history cs)
-                                                                 (merge {:role role :content content}
-                                                                        (when (= role :tool)
-                                                                          {:name (or (:name e) "tool")
-                                                                           :is-error (:is-error e false)
-                                                                           :truncation (:truncation e)
-                                                                           :details (:details e)})))))
+                               (restore-session! cs sess)
                                (ui/chat-history-add-message! (:chat-history cs)
                                                              {:role :assistant
                                                               :content (str "Resumed session " short-id ".")})
                                (tui/tui-hide-overlay (:tui cs))
-                               (update-footer! cs)
                                (tui/tui-request-render (:tui cs)))))
             sl (select-list/make-select-list items
                                              :height (min (count items) 15)
-                                             :header "Resume session"
+                                             :header "Resume Session"
+                                             :no-match-text "  No sessions found"
                                              :on-select on-select-fn
                                              :on-escape (fn []
                                                           (tui/tui-hide-overlay (:tui cs))
                                                           (tui/tui-request-render (:tui cs))))]
         (reset! sl-ref sl)
-        (tui/tui-show-overlay (:tui cs) sl :width 50 :height (min (count items) 15))
+        (tui/tui-show-overlay (:tui cs) sl :width 60 :height (min (count items) 15))
         (tui/tui-request-render (:tui cs))))))
 
 ;; ─── Session tree ─────────────────────────────────────────────────────────
@@ -1057,9 +1083,18 @@
 
 (defn- submit-message
   "Run input hooks on text, then send it to the agent (pi: session.prompt —
-   input event, then agent run). Returns nil."
+   input event, then agent run). Records the submitted text in the editor
+   history so Up/Down can browse it (pi: editor.addToHistory on submit —
+   regular messages, steered messages, and follow-ups all land there).
+   Returns nil."
   [cs text]
   (when-let [text (apply-hooks cs text)]
+    (let [ed @(:current-editor-atom cs)]
+      ;; IEditorComponent when available (custom editors), else the
+      ;; field-based fn (duck-typed editors — same pattern as editor-text-set!)
+      (if (satisfies? protocols/IEditorComponent ed)
+        (protocols/editor-add-to-history! ed text)
+        (editor/editor-push-history! ed text)))
     (send-message cs text)))
 
 (defn- handle-submit [cs text]
@@ -1685,6 +1720,14 @@
       ;; :status events) — after the layout assocs so the status
       ;; indicator/container and theme controller are present
       (reset! cs-ref cs)
+
+      ;; Restore a --continue session into the chat history AND the agent
+      ;; context (pi: renderInitialMessages from buildContextEntries) — the
+      ;; agent's in-memory messages must mirror the session branch or the
+      ;; next LLM call loses the whole restored conversation (steered and
+      ;; follow-up messages included)
+      (when (and session (seq @(:entries session)))
+        (restore-session! cs session))
 
       cs)))
 

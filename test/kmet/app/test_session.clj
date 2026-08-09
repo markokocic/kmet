@@ -39,6 +39,23 @@
     (t/is (= 1 (count @(:entries session))))
     (t/is (string? @(:leaf-id session)))))
 
+(t/deftest test-session-concurrent-appends
+  ;; Concurrent appends (a ! bash result on its future thread + a submitted
+  ;; message on the agent thread) must not orphan sibling entries from the
+  ;; branch — pi serializes all mutations through storage.enqueue; kmet locks
+  ;; the session. Regression: this used to lose ~38% of entries on reload.
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content [{:type :text :text "seed"}]})
+    (let [futures (doall
+                   (for [_ (range 200)]
+                     [(future (s/append-entry session {:role :bash :command "ls"}))
+                      (future (s/append-entry session {:role :user :content [{:type :text :text "followup"}]}))]))]
+      (doseq [[f1 f2] futures] @f1 @f2))
+    (let [loaded (s/load-session (:file session))
+          n-branch (count (s/get-branch loaded))
+          n-total (count @(:entries loaded))]
+      (t/is (= n-branch n-total)))))
+
 (t/deftest test-session-append-multiple
   (let [session (s/create-session test-dir)]
     (s/append-entry session {:role :user :content [{:type :text :text "q1"}]})
@@ -93,6 +110,40 @@
 (t/deftest test-session-list-sessions-nonexistent-dir
   (let [files (s/list-sessions "nonexistent-dir")]
     (t/is (nil? files))))
+
+(t/deftest test-session-first-message
+  ;; pi: buildSessionInfo firstMessage — the first user message text
+  (let [session (s/create-session test-dir)]
+    (t/is (= "(no messages)" (s/get-first-message session)) "empty session")
+    (s/append-entry session {:role :user :content [{:type :text :text "hello"}]})
+    (s/append-entry session {:role :assistant :content [{:type :text :text "hi"}]})
+    (s/append-entry session {:role :user :content [{:type :text :text "steered"}]})
+    (t/is (= "hello" (s/get-first-message session)) "first user message wins")))
+
+(t/deftest test-session-message-count
+  ;; pi: buildSessionInfo messageCount — message entries, session_info excluded
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content [{:type :text :text "a"}]})
+    (s/append-entry session {:role :assistant :content [{:type :text :text "b"}]})
+    (s/append-entry session {:role :session_info :name "t"})
+    (s/append-entry session {:role :bash :command "ls" :output "" :exit-code 0})
+    (t/is (= 3 (s/get-message-count session)))))
+
+(t/deftest test-session-last-activity
+  ;; pi: modified — the last entry's timestamp, falling back to file mtime
+  (let [session (s/create-session test-dir)
+        now (System/currentTimeMillis)]
+    (s/append-entry session {:role :user :content [{:type :text :text "a"}]})
+    (let [ms (s/get-last-activity-ms session)]
+      (t/is (number? ms))
+      (t/is (>= ms (- now 5000)) "last activity is recent"))))
+
+(t/deftest test-session-last-activity-empty
+  ;; Empty session files (created but never written to) must still yield a
+  ;; number via the file-mtime fallback — the resume dialog formats it.
+  (let [session (s/create-session test-dir)]
+    (t/is (number? (s/get-last-activity-ms session)))
+    (t/is (pos? (s/get-last-activity-ms session)))))
 
 (t/deftest test-session-fork
   (let [session (s/create-session test-dir)]

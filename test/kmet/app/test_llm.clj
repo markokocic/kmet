@@ -163,6 +163,24 @@
     (t/is (= "hi" (:content (first anthropic)))
           "text-only messages keep string content for Anthropic")))
 
+(t/deftest test-llm-assistant-thinking-roundtrip
+  ;; pi round-trips the thinking signature: assistant messages with :thinking
+  ;; send it back as reasoning_content (DeepSeek thinking mode)
+  (let [msgs [{:role :assistant
+               :content [{:type :text :text "answer"}]
+               :thinking "let me think\nabout it"}]
+        openai (@#'llm/openai-messages msgs)
+        reasoning (@#'llm/openai-messages-with-reasoning msgs)]
+    (t/is (= "let me think\nabout it" (:reasoning_content (first openai)))
+          "plain openai-messages sends the thinking back")
+    (t/is (= "let me think\nabout it" (:reasoning_content (first reasoning)))
+          "with-reasoning variant uses the message thinking"))
+  ;; messages without thinking keep the empty-field compat for
+  ;; requires-reasoning-content-on-assistant-messages providers
+  (let [msgs [{:role :assistant :content [{:type :text :text "answer"}]}]]
+    (t/is (nil? (:reasoning_content (first (@#'llm/openai-messages msgs)))))
+    (t/is (= "" (:reasoning_content (first (@#'llm/openai-messages-with-reasoning msgs)))))))
+
 ;; ─── Bash result conversion (pi: convertToLlm bashExecution) ──────────────
 
 (t/deftest test-llm-bash-conversion

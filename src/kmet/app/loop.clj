@@ -190,9 +190,10 @@ Be precise and concise in your responses."}}]
    :content (into [{:type :text :text text}]
                   (or images []))})
 
-(defn- assistant-message [text tool-calls usage]
+(defn- assistant-message [text thinking tool-calls usage]
   (let [content (if (seq text) [{:type :text :text text}] [])]
     (cond-> {:role :assistant :content content}
+      (seq thinking) (assoc :thinking thinking)
       (seq tool-calls) (assoc :tool-calls tool-calls)
       usage (assoc :usage usage))))
 
@@ -356,8 +357,8 @@ Be precise and concise in your responses."}}]
 (defn- add-assistant-message!
   "Add a final assistant message to context and session, emitting
    :message-end. Returns the message."
-  [agent text tool-calls usage]
-  (let [assistant-msg (assistant-message text tool-calls usage)]
+  [agent text thinking tool-calls usage]
+  (let [assistant-msg (assistant-message text thinking tool-calls usage)]
     (swap! (:messages agent) conj assistant-msg)
     (when (:session agent)
       (session/append-entry (:session agent) assistant-msg))
@@ -691,6 +692,7 @@ Be precise and concise in your responses."}}]
                  (let [tool-calls (tc-flush)]
                    (deliver done-promise
                             {:text @text-buf
+                             :thinking (str/trim @thinking-buf)
                              :tool-calls tool-calls
                              :usage @usage-buf
                              :stop-reason reason})))
@@ -946,12 +948,15 @@ Be precise and concise in your responses."}}]
   (let [msgs (vec messages)]
     (reset! (:messages agent) msgs)
     (when-let [sess (:session agent)]
-      ;; Rebuild the session as a fresh linear branch mirroring the new context
-      (spit (:file sess) "")
-      (reset! (:entries sess) [])
-      (reset! (:leaf-id sess) nil)
-      (doseq [m msgs]
-        (session/append-entry sess m)))
+      ;; Rebuild the session as a fresh linear branch mirroring the new
+      ;; context — under the session lock so a concurrent append (bash
+      ;; result) can't land between the truncate and the re-append
+      (session/with-session-lock sess
+        (spit (:file sess) "")
+        (reset! (:entries sess) [])
+        (reset! (:leaf-id sess) nil)
+        (doseq [m msgs]
+          (session/append-entry sess m))))
     (emit agent {:type :context-replaced :messages msgs})))
 
 (defn- apply-next-turn-update!
@@ -1206,11 +1211,12 @@ Be precise and concise in your responses."}}]
                                                   ;; A non-error message ends overflow recovery (pi resets on success)
                                                   (reset! (:overflow-recovered agent) false))
                                                 (let [text (:text result)
+                                                      thinking (:thinking result)
                                                       tool-calls (:tool-calls result)
                                                       usage (:usage result)]
                                                   (if (seq tool-calls)
                                                     ;; Execute tool calls
-                                                    (let [assistant-msg (add-assistant-message! agent text tool-calls usage)]
+                                                    (let [assistant-msg (add-assistant-message! agent text thinking tool-calls usage)]
                                                       (reset! (:status agent) :executing)
                                                       (emit agent {:type :status :status :executing
                                                                    :tool-calls tool-calls})
@@ -1226,7 +1232,7 @@ Be precise and concise in your responses."}}]
                                                           {:settled (inc t)}
                                                           (recur (inc t) tool-calls false))))
                                                     ;; Final response
-                                                    (let [assistant-msg (add-assistant-message! agent text nil (:usage result))
+                                                    (let [assistant-msg (add-assistant-message! agent text thinking nil (:usage result))
                                                           tool-results []]
                                                       (emit agent {:type :turn-end
                                                                    :message assistant-msg
@@ -1283,6 +1289,23 @@ Be precise and concise in your responses."}}]
 
 (defn get-context [agent]
   @(:messages agent))
+
+(defn restore-session-context!
+  "Rebuild the agent's in-memory context from the session branch (pi: the
+   session is the source of truth — buildContextEntries). Drops session_info
+   entries (metadata, not messages) and display-only :info messages. No-op
+   without a session. Used when a session is resumed/continued so the next
+   LLM call sees the restored conversation — steered and follow-up messages
+   included."
+  [agent]
+  (when-let [sess (:session agent)]
+    (let [branch (session/get-branch sess)]
+      (reset! (:messages agent)
+              (vec (keep (fn [e]
+                           (case (:role e)
+                             (:user :assistant :tool :bash) e
+                             nil))
+                         branch))))))
 
 (defn set-system-prompt! [agent prompt]
   (reset! (:system agent) prompt))

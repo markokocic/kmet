@@ -136,7 +136,7 @@
 (defcomponent SelectList nil [items-atom selected-idx-atom filter-atom
                               on-select on-escape on-selection-change
                               focused? theme-atom height-atom cache-atom
-                              header-atom
+                              header-atom no-match-text-atom
                               min-primary-column-atom max-primary-column-atom
                               truncate-primary-atom]
 
@@ -147,6 +147,7 @@
             theme @theme-atom
             height @height-atom
             header @header-atom
+            no-match-text @no-match-text-atom
             min-col @min-primary-column-atom
             max-col @max-primary-column-atom
             truncate-fn @truncate-primary-atom
@@ -169,7 +170,7 @@
           (vswap! lines conj (str " " (u/truncate-to-width header (- width 2)))))
         ;; Items
         (if (empty? filtered)
-          (vswap! lines conj ((:no-match theme) "  No matching commands"))
+          (vswap! lines conj ((:no-match theme) no-match-text))
           (let [col-width (primary-column-width filtered min-col max-col)]
             (doseq [[idx item] (map-indexed vector visible)]
               (let [global-idx (+ idx start-idx)
@@ -281,6 +282,8 @@
      :height                  — max visible items (default 10)
      :theme                   — SelectListTheme map (default default-theme)
      :header                  — optional title line above the items
+     :no-match-text           — text shown when the filter matches nothing
+                               (default \"  No matching commands\")
      :min-primary-column-width / :max-primary-column-width — description
                                column bounds (pi defaults: 32)
      :truncate-primary        — fn of {:text :max-width :column-width :item
@@ -290,11 +293,12 @@
      :on-selection-change     — fn called with the newly selected item after
                                a navigation key moves the selection (pi
                                SelectList.onSelectionChange)"
-  [items & {:keys [height theme header
+  [items & {:keys [height theme header no-match-text
                    min-primary-column-width max-primary-column-width
                    truncate-primary
                    on-select on-escape on-selection-change]
-            :or {height 10 theme default-theme}}]
+            :or {height 10 theme default-theme
+                 no-match-text "  No matching commands"}}]
   ;; pi: getPrimaryColumnBounds — a single provided bound applies to both
   ;; sides (min ?? max ?? 32); neither defaults to 32
   (let [min-w (or min-primary-column-width
@@ -314,6 +318,7 @@
                       :height-atom (atom height)
                       :cache-atom (atom nil)
                       :header-atom (atom header)
+                      :no-match-text-atom (atom no-match-text)
                       :min-primary-column-atom (atom min-w)
                       :max-primary-column-atom (atom max-w)
                       :truncate-primary-atom (atom truncate-primary)})))

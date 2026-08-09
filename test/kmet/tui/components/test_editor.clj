@@ -192,6 +192,53 @@
     (editor/editor-push-history! e "world")
     (t/is (= ["hello" "world"] (editor/editor-get-history e)))))
 
+(t/deftest test-editor-history-cycles-with-up-down
+  ;; Up/Down cycle through submitted messages (pi: navigateHistory) — Up
+  ;; leaves the cursor at the start so repeated Ups keep navigating; Down
+  ;; leaves it at the end so repeated Downs keep navigating.
+  (let [e (editor/make-editor)
+        st #(deref (:state-atom e))]
+    (editor/editor-push-history! e "hello")
+    (editor/editor-push-history! e "world")
+    ;; Up → newest entry, cursor at start
+    (core/handle-input e K-UP)
+    (t/is (= ["world"] (:lines (st))))
+    (t/is (= [0 0] [(:cursor-line (st)) (:cursor-col (st))]))
+    ;; Up again → older entry (this failed before: the cursor was left at
+    ;; the end, so Up moved up a line instead of navigating history)
+    (core/handle-input e K-UP)
+    (t/is (= ["hello"] (:lines (st))))
+    (t/is (= [0 0] [(:cursor-line (st)) (:cursor-col (st))]))
+    ;; Down → newer entry, then past the newest → back to the draft
+    (core/handle-input e K-DOWN)
+    (t/is (= ["world"] (:lines (st))))
+    (t/is (= 1 @(:history-idx e)))
+    (core/handle-input e K-DOWN)
+    (t/is (= [""] (:lines (st))))
+    (t/is (= -1 @(:history-idx e)))))
+
+(t/deftest test-editor-history-multi-line-cursor-placement
+  ;; Down navigation leaves the cursor at the END of the entry (pi:
+  ;; cursorPlacement "end") so repeated Downs keep navigating from the
+  ;; last visual line.
+  (let [e (editor/make-editor)
+        st #(deref (:state-atom e))]
+    (editor/editor-push-history! e "line one\nline two")
+    (core/handle-input e K-UP)
+    (t/is (= [0 0] [(:cursor-line (st)) (:cursor-col (st))])
+          "Up places the cursor at the start")
+    ;; Down from the first visual line moves down (not history) until the
+    ;; last visual line is reached
+    (core/handle-input e K-DOWN)
+    (t/is (= [1 0] [(:cursor-line (st)) (:cursor-col (st))])
+          "Down keeps the preferred column while moving through lines")
+    (t/is (= 0 @(:history-idx e)) "still browsing")
+    ;; Down from the last visual line navigates past the newest → draft
+    (core/handle-input e K-DOWN)
+    (t/is (= [""] (:lines (st)))
+          "Down past the newest entry restores the draft")
+    (t/is (= -1 @(:history-idx e)))))
+
 (t/deftest test-editor-history-no-duplicates
   (let [e (editor/make-editor)]
     (editor/editor-push-history! e "hello")

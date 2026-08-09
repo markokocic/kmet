@@ -869,7 +869,13 @@
 
 ;; ─── History navigation
 
-(defn- history-set-state! [editor text]
+(declare history-restore-draft!)
+
+(defn- history-set-state!
+  "Replace the editor state with TEXT's lines and cursor, resetting the
+   per-edit state (undo/redo stacks, preferred column, jump mode) so
+   history entries load clean (pi: setTextInternal)."
+  [editor text]
   (reset! (:state-atom editor) (make-editor-state text))
   (reset! (:scroll-offset-atom editor) 0)
   (reset! (:preferred-col-atom editor) nil)
@@ -878,19 +884,35 @@
   (reset! (:last-action editor) nil)
   (reset! (:jump-mode editor) nil))
 
-(defn- history-restore-draft!
-  "Restore the editor state captured when history browsing began (pi:
-   historyDraft), or clear to empty if no draft was captured."
+(defn- current-visual-line-idx
+  "Index of the visual line the cursor is on (0-based), considering word wrap
+   (pi: isOnFirstVisualLine / isOnLastVisualLine)."
   [editor]
-  (if-let [draft @(:history-draft editor)]
-    (do (reset! (:state-atom editor) (map->EditorState draft))
-        (reset! (:paste-store editor) (:paste-store draft))
-        (reset! (:scroll-offset-atom editor) 0)
-        (reset! (:preferred-col-atom editor) nil)
-        (reset! (:last-action editor) nil)
-        (reset! (:jump-mode editor) nil)
-        (reset! (:history-draft editor) nil))
-    (history-set-state! editor "")))
+  (let [state @(:state-atom editor)
+        width @(:last-width-atom editor)
+        visual-lines (build-visual-line-map (:lines state) width (valid-paste-ids editor))]
+    (find-current-visual-line visual-lines (:cursor-line state) (:cursor-col state))))
+
+(defn- history-load!
+  "Load the history entry at IDX into the editor with the cursor at the start
+   (Up) or end (Down) — pi: navigateHistory setTextInternal with
+   cursorPlacement 'start' | 'end'. The placement matters: Up leaves the
+   cursor at (0,0) so the next Up keeps navigating history; Down leaves it at
+   the end so the next Down keeps navigating."
+  [editor idx cursor-start?]
+  (history-set-state! editor (nth @(:history editor) idx))
+  ;; history-set-state! clears the undo stack, so the draft goes back on top
+  ;; of it — Ctrl+Z while browsing returns to the draft
+  (when-let [draft @(:history-draft editor)]
+    (undo-push (:undo-stack editor) draft))
+  (let [lines (:lines @(:state-atom editor))]
+    (swap! (:state-atom editor) assoc
+           :cursor-line (if cursor-start?
+                          0
+                          (max 0 (dec (count lines))))
+           :cursor-col (if cursor-start?
+                         0
+                         (count (last lines))))))
 
 (defn- history-backward [editor]
   (let [h @(:history editor)
@@ -907,15 +929,7 @@
         (if (neg? new-idx)
           ;; Browsed past the first entry — back to the draft
           (history-restore-draft! editor)
-          (do (history-set-state! editor (nth h new-idx))
-              ;; history-set-state! clears the undo stack, so the draft goes
-              ;; back on top of it — Ctrl+Z while browsing returns to the draft
-              (when-let [draft @(:history-draft editor)]
-                (undo-push (:undo-stack editor) draft))
-              (let [lines (:lines @(:state-atom editor))]
-                (swap! (:state-atom editor) assoc
-                       :cursor-line (max 0 (dec (count lines)))
-                       :cursor-col (count (last lines))))))
+          (history-load! editor new-idx true))
         (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))
 
 (defn- history-forward [editor]
@@ -928,18 +942,30 @@
         (if (neg? new-idx)
           ;; Past the newest entry — restore the draft
           (history-restore-draft! editor)
-          (do (history-set-state! editor (nth h new-idx))
-              (when-let [draft @(:history-draft editor)]
-                (undo-push (:undo-stack editor) draft))
-              (let [lines (:lines @(:state-atom editor))]
-                (swap! (:state-atom editor) assoc
-                       :cursor-line (max 0 (dec (count lines)))
-                       :cursor-col (count (last lines))))))
+          (history-load! editor new-idx false))
         (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))))
+
+(defn- history-restore-draft!
+  "Restore the editor state captured when history browsing began (pi:
+   historyDraft), or clear to empty if no draft was captured."
+  [editor]
+  (if-let [draft @(:history-draft editor)]
+    (do (reset! (:state-atom editor) (map->EditorState draft))
+        (reset! (:paste-store editor) (:paste-store draft))
+        (reset! (:scroll-offset-atom editor) 0)
+        (reset! (:preferred-col-atom editor) nil)
+        (reset! (:last-action editor) nil)
+        (reset! (:jump-mode editor) nil)
+        (reset! (:history-draft editor) nil))
+    (history-set-state! editor "")))
 
 (defn editor-push-history! [editor text]
   (when (and (seq text) (not= text (peek @(:history editor))))
-    (swap! (:history editor) conj text)
+    ;; pi: addToHistory caps history at 100 entries (newest kept)
+    (swap! (:history editor)
+           (fn [h]
+             (let [h (conj h text)]
+               (if (> (count h) 100) (subvec h 1) h))))
     (reset! (:history-idx editor) -1)))
 
 ;; ─── Height helper
@@ -1260,23 +1286,45 @@
           (do (handle-yank-pop this) nil)
 
           (keys/matches-key? data "up")
-          (do (let [lines (:lines @state-atom)
-                    cl (:cursor-line @state-atom)
-                    cc (:cursor-col @state-atom)]
-                (if (and (zero? cl) (zero? cc)
-                         (or (empty? lines) (= (first lines) "")))
+          (do (let [state @state-atom
+                    lines (:lines state)
+                    cc (:cursor-col state)
+                    first-visual? (zero? (current-visual-line-idx this))]
+                (cond
+                  ;; pi: history on Up when on the first visual line and
+                  ;; (editor empty || browsing history || cursor at col 0)
+                  (and first-visual?
+                       (or (and (= 1 (count lines)) (= "" (first lines)))
+                           (not (neg? @(:history-idx this)))
+                           (zero? cc)))
                   (history-backward this)
+                  ;; Already at the top — jump to the start of the line
+                  ;; (pi: moveToLineStart)
+                  first-visual?
+                  (swap! state-atom assoc :cursor-col 0)
+                  :else
                   (move-cursor-vertical this -1)))
               nil)
 
           (keys/matches-key? data "down")
-          (do (let [lines (:lines @state-atom)
-                    cl (:cursor-line @state-atom)
-                    cc (:cursor-col @state-atom)
-                    last-idx (dec (count lines))
-                    line (nth lines cl "")]
-                (if (and (= cl last-idx) (>= cc (count line)))
+          (do (let [state @state-atom
+                    lines (:lines state)
+                    cl (:cursor-line state)
+                    line (nth lines cl "")
+                    last-visual? (= (current-visual-line-idx this)
+                                    (dec (count (build-visual-line-map
+                                                 lines @(:last-width-atom this)
+                                                 (valid-paste-ids this)))))]
+                (cond
+                  ;; pi: Down navigates history only while browsing, and only
+                  ;; from the last visual line
+                  (and (not (neg? @(:history-idx this))) last-visual?)
                   (history-forward this)
+                  ;; Already at the bottom — jump to the end of the line
+                  ;; (pi: moveToLineEnd)
+                  last-visual?
+                  (swap! state-atom assoc :cursor-col (count line))
+                  :else
                   (move-cursor-vertical this 1)))
               nil)
 

@@ -18,41 +18,65 @@
     :else [nil nil]))
 
 (defn parse-openai-event
-  "Parse an OpenAI chat-completions SSE data payload into a kmet event map:
-   :text, :thinking, :tool-call, :tool-call-args, :done (with :stop-reason),
-   :delta, or :error."
+  "Parse an OpenAI chat-completions SSE data payload into a vector of kmet
+   events: :text, :thinking, :tool-call, :tool-call-args, :done (with
+   :stop-reason), :delta, :usage, or :error.
+   A single chunk can carry a content delta AND a reasoning delta — both are
+   emitted (pi emits text_delta and thinking_delta for the same chunk; never
+   an else-branch that assumes one field per chunk). Reasoning is read from
+   the first non-empty of reasoning_content / reasoning / reasoning_text
+   (pi: iterateOpenAiEvents reasoningFields — llama.cpp uses
+   reasoning_content, other OpenAI-compatible endpoints use reasoning)."
   [data]
   (if (or (nil? data) (= data "[DONE]"))
-    {:type :done :stop-reason :stop}
+    [{:type :done :stop-reason :stop}]
     (try
       (let [chunk (json/parse-string data true)
             choices (get chunk :choices [])
-            delta (get-in (first choices) [:delta] {})
-            finish (get-in (first choices) [:finish_reason])
-            tc-delta (get delta :tool_calls)]
-        (cond
-          finish {:type :done :stop-reason (keyword finish)}
-          (and tc-delta (get-in (first tc-delta) [:function :name]))
-          (let [tc (first tc-delta)]
-            {:type :tool-call :id (:id tc)
-             :name (get-in tc [:function :name])
-             :arguments (get-in tc [:function :arguments] "")
-             :index (:index tc)})
-          (and tc-delta (get-in (first tc-delta) [:function :arguments]))
-          (let [tc (first tc-delta)]
-            {:type :tool-call-args :id (:id tc)
-             :arguments (get-in tc [:function :arguments] "")
-             :index (:index tc)})
-          (get delta :content)
-          {:type :text :content (get delta :content)}
-          (get delta :reasoning_content)
-          {:type :thinking :content (get delta :reasoning_content)}
-          (get chunk :usage)
-          ;; Final chunk with include_usage: no choices, only usage totals
-          {:type :usage :usage (get chunk :usage)}
-          :else {:type :delta :chunk chunk}))
+            first-choice (first choices)
+            delta (get-in first-choice [:delta] {})
+            finish (get-in first-choice [:finish_reason])
+            tc-delta (get delta :tool_calls)
+            events (volatile! [])]
+        ;; Tool call deltas — a chunk can carry several (pi iterates all)
+        (doseq [tc (seq tc-delta)]
+          (let [fname (get-in tc [:function :name])
+                fargs (get-in tc [:function :arguments])]
+            (cond
+              (some? fname)
+              (vswap! events conj {:type :tool-call :id (:id tc)
+                                   :name fname
+                                   :arguments (or fargs "")
+                                   :index (:index tc)})
+              (some? fargs)
+              (vswap! events conj {:type :tool-call-args :id (:id tc)
+                                   :arguments fargs
+                                   :index (:index tc)}))))
+        ;; Content delta
+        (let [content (get delta :content)]
+          (when (and (string? content) (pos? (count content)))
+            (vswap! events conj {:type :text :content content})))
+        ;; Reasoning delta — first non-empty reasoning field (pi)
+        (let [reasoning (some (fn [f]
+                                (let [v (get delta f)]
+                                  (when (and (string? v) (pos? (count v))) v)))
+                              [:reasoning_content :reasoning :reasoning_text])]
+          (when reasoning
+            (vswap! events conj {:type :thinking :content reasoning})))
+        ;; Final chunk with include_usage: no choices, only usage totals
+        (when-let [usage (get chunk :usage)]
+          (vswap! events conj {:type :usage :usage usage}))
+        ;; finish_reason — terminal event, emitted LAST so any tool-call /
+        ;; content deltas in the same chunk are processed before the run's
+        ;; on-done flushes the tool-call accumulator (pi pushes one done
+        ;; event after the whole stream is consumed)
+        (when finish
+          (vswap! events conj {:type :done :stop-reason (keyword finish)}))
+        (if (seq @events)
+          @events
+          [{:type :delta :chunk chunk}]))
       (catch Exception e
-        {:type :error :message (str "Parse error: " (ex-message e))}))))
+        [{:type :error :message (str "Parse error: " (ex-message e))}]))))
 
 (defn parse-anthropic-event
   "Parse an Anthropic messages SSE (event-name, data) pair into a kmet event
@@ -278,7 +302,7 @@
                                   (fn [line]
                                     (let [[_ data] (parse-sse-line line)]
                                       (when data
-                                        (let [event (parse-openai-event data)]
+                                        (doseq [event (parse-openai-event data)]
                                           (when (= :done (:type event))
                                             (reset! saw-done true))
                                           (handler event)))))

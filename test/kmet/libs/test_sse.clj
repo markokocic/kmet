@@ -13,17 +13,58 @@
   (t/is (= [nil nil] (sse/parse-sse-line ":comment"))))
 
 (t/deftest test-parse-openai-event-done
-  (t/is (= {:type :done :stop-reason :stop} (sse/parse-openai-event "[DONE]")))
-  (t/is (= {:type :done :stop-reason :stop} (sse/parse-openai-event nil))))
+  (t/is (= [{:type :done :stop-reason :stop}]
+           (sse/parse-openai-event "[DONE]")))
+  (t/is (= [{:type :done :stop-reason :stop}]
+           (sse/parse-openai-event nil))))
 
 (t/deftest test-parse-openai-event-text
-  (t/is (= {:type :text :content "hi"}
+  (t/is (= [{:type :text :content "hi"}]
            (sse/parse-openai-event "{\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}"))))
 
+(t/deftest test-parse-openai-event-thinking
+  ;; reasoning_content streams as a :thinking event (deepseek thinking mode)
+  (t/is (= [{:type :thinking :content "let me think"}]
+           (sse/parse-openai-event
+            "{\"choices\":[{\"delta\":{\"reasoning_content\":\"let me think\"}}]}")))
+  ;; other OpenAI-compatible endpoints use `reasoning` (pi: reasoningFields)
+  (t/is (= [{:type :thinking :content "via reasoning"}]
+           (sse/parse-openai-event
+            "{\"choices\":[{\"delta\":{\"reasoning\":\"via reasoning\"}}]}")))
+  (t/is (= [{:type :thinking :content "via reasoning_text"}]
+           (sse/parse-openai-event
+            "{\"choices\":[{\"delta\":{\"reasoning_text\":\"via reasoning_text\"}}]}")))
+  ;; first non-empty reasoning field wins when several are present (pi:
+  ;; reasoning_content has priority over reasoning)
+  (t/is (= [{:type :thinking :content "b"}]
+           (sse/parse-openai-event
+            "{\"choices\":[{\"delta\":{\"reasoning\":\"a\",\"reasoning_content\":\"b\"}}]}"))))
+
 (t/deftest test-parse-openai-event-finish
-  (t/is (= {:type :done :stop-reason :tool_calls}
+  (t/is (= [{:type :done :stop-reason :tool_calls}]
            (sse/parse-openai-event
             "{\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}"))))
+
+(t/deftest test-parse-openai-event-both-text-and-thinking
+  ;; A chunk can carry a content delta AND a reasoning delta — both events
+  ;; fire (pi never uses an else-branch assuming one field per chunk)
+  (t/is (= [{:type :text :content "answer"}
+            {:type :thinking :content "reason"}]
+           (sse/parse-openai-event
+            "{\"choices\":[{\"delta\":{\"content\":\"answer\",\"reasoning_content\":\"reason\"}}]}")))
+  ;; empty-string content must not produce a spurious text event
+  (t/is (= [{:type :delta :chunk {:choices [{:delta {:content ""}}]}}]
+           (sse/parse-openai-event
+            "{\"choices\":[{\"delta\":{\"content\":\"\"}}]}"))))
+
+(t/deftest test-parse-openai-event-multi-tool-calls
+  ;; pi iterates ALL tool call deltas in a chunk, not just the first
+  (t/is (= [{:type :tool-call :id "a" :name "read" :arguments "" :index 0}
+            {:type :tool-call :id "b" :name "bash" :arguments "" :index 1}]
+           (sse/parse-openai-event
+            (str "{\"choices\":[{\"delta\":{\"tool_calls\":["
+                 "{\"id\":\"a\",\"index\":0,\"function\":{\"name\":\"read\"}},"
+                 "{\"id\":\"b\",\"index\":1,\"function\":{\"name\":\"bash\"}}]}}]}")))))
 
 ;; ─── Idle timeout (pi: httpIdleTimeoutMs / undici bodyTimeout) ────────────
 

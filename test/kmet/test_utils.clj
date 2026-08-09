@@ -72,6 +72,39 @@
     (t/is (clojure.string/includes? (second lines) "\u001b[38")
           "continuation piece is re-styled")))
 
+(t/deftest test-wrap-ansi-multiword-styled-line
+  ;; A styled multi-word line (edit diff / bash output: one fg code at the
+  ;; start, reset at the end) must re-open the style on every wrapped
+  ;; continuation line — previously only the first line kept it.
+  (let [styled (str "\u001b[38;5;245m" (clojure.string/join " " (repeat 8 "word123456")) "\u001b[39m")
+        lines (u/wrap-text-with-ansi styled 20)]
+    (t/is (>= (count lines) 2) "line wraps")
+    (doseq [l lines]
+      (t/is (clojure.string/includes? l "\u001b[38")
+            (str "every wrapped line is re-styled: " (pr-str l))))
+    (t/is (= 87 (apply + (map u/visible-width lines))) "all characters kept")))
+
+(t/deftest test-wrap-ansi-fast-path-first-piece-styled
+  ;; A styled word that must be broken across lines (ASCII fast path) — the
+  ;; FIRST piece starts a fresh line and must re-open the style, not just
+  ;; the continuations (pi: breakLongWord starts with getActiveCodes).
+  (let [styled (str "\u001b[31mone two three\u001b[0m")
+        lines (u/wrap-text-with-ansi styled 3)]
+    (doseq [l lines]
+      (t/is (clojure.string/includes? l "\u001b[31m")
+            (str "every piece is re-styled: " (pr-str l))))
+    (t/is (= 13 (apply + (map u/visible-width lines))) "all characters kept")))
+
+(t/deftest test-wrap-ansi-styles-survive-literal-newline
+  ;; A style left open on one line is re-emitted on the next input line (pi:
+  ;; wrapTextWithAnsi carries the tracker across input lines).
+  (let [styled "\u001b[31mline one words here\nline two words here\u001b[0m"
+        lines (u/wrap-text-with-ansi styled 12)]
+    (t/is (>= (count lines) 2))
+    (doseq [l lines]
+      (t/is (clojure.string/includes? l "\u001b[31m")
+            (str "each line is re-styled: " (pr-str l))))    (t/is (= 38 (apply + (map u/visible-width lines))))))
+
 (t/deftest test-wrap-cjk-width
   (let [lines (u/wrap-text-with-ansi (clojure.string/join "" (repeat 15 "汉字")) 22)]
     (t/is (= [22 22 16] (mapv u/visible-width lines))
