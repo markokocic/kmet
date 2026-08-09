@@ -765,20 +765,27 @@
 (defn- schedule-negotiation-flush!
   "Port of pi's scheduleKeyboardProtocolNegotiationBufferFlush: after
    NEGOTIATION-FLUSH-TIMEOUT-MS, flush any still-held negotiation fragment
-   back into the input buffer so it is not swallowed forever."
+   back into the input buffer so it is not swallowed forever.
+   Guarded by the input generation (like schedule-incomplete-flush!): a
+   fragment is only flushed after true idleness — if a new char arrived
+   while sleeping, the response is still coming and the flush is skipped
+   (a stale flush would append the fragment after the fresh char and the
+   re-process would dispatch the char as a key)."
   [tui read-fn buf]
   (when (and (nil? @(:negotiation-timer tui))
              (seq @(:negotiation-buffer tui)))
-    (reset! (:negotiation-timer tui)
-            (future
-              (try
-                (Thread/sleep terminal/NEGOTIATION-FLUSH-TIMEOUT-MS)
-                (when (seq @(:negotiation-buffer tui))
-                  (swap! buf str @(:negotiation-buffer tui))
-                  (reset! (:negotiation-buffer tui) "")
-                  (process-input-buffer! tui read-fn buf))
-                (catch Exception _))
-              (reset! (:negotiation-timer tui) nil)))))
+    (let [gen @(:input-generation tui)]
+      (reset! (:negotiation-timer tui)
+              (future
+                (try
+                  (Thread/sleep terminal/NEGOTIATION-FLUSH-TIMEOUT-MS)
+                  (when (and (seq @(:negotiation-buffer tui))
+                             (= gen @(:input-generation tui)))
+                    (swap! buf str @(:negotiation-buffer tui))
+                    (reset! (:negotiation-buffer tui) "")
+                    (process-input-buffer! tui read-fn buf))
+                  (catch Exception _))
+                (reset! (:negotiation-timer tui) nil))))))
 
 (defn- intercept-keyboard-negotiation!
   "Port of pi's setupStdinBuffer negotiation interception: while the Kitty
@@ -826,20 +833,23 @@
 (defn- schedule-terminal-response-flush!
   "Flush a held terminal-response fragment back into the input buffer after
    the flush timeout so it is never swallowed forever (mirrors the
-   negotiation flush)."
+   negotiation flush). Guarded by the input generation: only flush after
+   true idleness, never while a response is still arriving."
   [tui read-fn buf]
   (when (and (nil? @(:terminal-response-timer tui))
              (seq @(:terminal-response-buffer tui)))
-    (reset! (:terminal-response-timer tui)
-            (future
-              (try
-                (Thread/sleep terminal/NEGOTIATION-FLUSH-TIMEOUT-MS)
-                (when (seq @(:terminal-response-buffer tui))
-                  (swap! buf str @(:terminal-response-buffer tui))
-                  (reset! (:terminal-response-buffer tui) "")
-                  (process-input-buffer! tui read-fn buf))
-                (catch Exception _))
-              (reset! (:terminal-response-timer tui) nil)))))
+    (let [gen @(:input-generation tui)]
+      (reset! (:terminal-response-timer tui)
+              (future
+                (try
+                  (Thread/sleep terminal/NEGOTIATION-FLUSH-TIMEOUT-MS)
+                  (when (and (seq @(:terminal-response-buffer tui))
+                             (= gen @(:input-generation tui)))
+                    (swap! buf str @(:terminal-response-buffer tui))
+                    (reset! (:terminal-response-buffer tui) "")
+                    (process-input-buffer! tui read-fn buf))
+                  (catch Exception _))
+                (reset! (:terminal-response-timer tui) nil))))))
 
 (defn- settle-osc-11-query!
   "Settle the OSC 11 query identified by PROMISE with COLOR (nil on

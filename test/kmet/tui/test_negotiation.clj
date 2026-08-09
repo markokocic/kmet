@@ -160,7 +160,9 @@
 (defn- process-chars
   "Drive process-input-buffer! the way the app reader loop does: one char per
    read (the next char of CHARS available immediately to the ESC-wait loop's
-   timed reads), then assert the final state."
+   timed reads), then assert the final state. Increments :input-generation
+   per char like the real reader so the interception flush timers (guarded
+   by the generation) never fire mid-sequence."
   [tui chars]
   (let [pending (atom (seq chars))
         read-fn (fn [_timeout-ms]
@@ -178,6 +180,7 @@
       (let [ch (read-fn 0)]
         (when (>= ch 0)
           (swap! buf str (char ch))
+          (swap! (:input-generation tui) inc)
           ((var core/process-input-buffer!) tui read-fn buf))))
     {:dispatched @dispatched :buf @buf}))
 
