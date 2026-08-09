@@ -178,9 +178,18 @@
     (dotimes [i 10]
       (s/append-entry session {:role :user :content [{:type :text :text (str "q" i)}]})
       (s/append-entry session {:role :assistant :content [{:type :text :text (str "a" i)}]}))
-    (let [result (s/compact! session 6)]
-      (t/is (string? result))
-      (t/is (<= (count @(:entries session)) 6)))))
+    (let [result (s/compact! session 6)
+          branch (s/get-branch session)]
+      (t/is (some? result))
+      (t/is (= :compaction (:role result)))
+      (t/is (= 21 (count @(:entries session)))
+            "append-only: all entries stay, compaction entry added")
+      (t/is (= (:id result) (:id (last branch)))
+            "compaction is the new leaf")))
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content "hi"})
+    (t/is (nil? (s/compact! session 6))
+          "nothing to compact below the threshold")))
 
 (t/deftest test-session-delete
   (let [session (s/create-session test-dir)
@@ -261,17 +270,100 @@
       (let [entries (s/get-branch sess)
             first-kept-id (:id (nth entries 3))
             summary-entry (s/compact-with-summary! sess "SUMMARY" first-kept-id)
-            branch (s/get-branch sess)]
+            branch (s/get-branch sess)
+            context (s/build-context sess)]
         (t/is (some? summary-entry))
+        (t/is (= :compaction (:role summary-entry)))
         (t/is (= "SUMMARY" (:summary summary-entry)))
-        (t/is (= 4 (count branch)) "summary + 3 kept entries")
-        (t/is (= :system (:role (first branch))) "summary entry is the branch root")
-        (t/is (= "SUMMARY" (-> branch first :content first :text)))
-        (t/is (= first-kept-id (:id (second branch))) "first kept entry follows the summary")
-        ;; file rewritten and reloadable
+        (t/is (= first-kept-id (:first-kept-id summary-entry)))
+        (t/is (= 7 (count branch)) "append-only: 6 entries + compaction")
+        (t/is (= (:id (last entries)) (:parent-id summary-entry))
+              "compaction is a child of the previous leaf")
+        (t/is (= 4 (count context)) "context = compaction + 3 kept entries")
+        (t/is (= :compaction (:role (first context))))
+        (t/is (= first-kept-id (:id (second context))) "first kept entry follows")
+        (t/is (= (:id (first entries)) (:id (first branch)))
+              "summarized history stays in the branch")
+        ;; file reloadable, context survives a reload
         (let [loaded (s/load-session (:file sess))]
-          (t/is (= (count branch) (count @(:entries loaded))))))
+          (t/is (= (count branch) (count @(:entries loaded))))
+          (t/is (= 4 (count (s/build-context loaded))))))
       (finally (fs/delete-tree dir)))))
+
+;; ─── Append-only compaction: context build (pi: buildContextEntries) ─────
+
+(t/deftest test-build-context-no-compaction
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content "a"})
+    (s/append-entry session {:role :assistant :content "b"})
+    (t/is (= 2 (count (s/build-context session)))
+          "no compaction on the path → full branch")))
+
+(t/deftest test-build-context-empty
+  (let [session (s/create-session test-dir)]
+    (t/is (empty? (s/build-context session)))))
+
+(t/deftest test-build-context-latest-compaction-wins
+  (let [session (s/create-session test-dir)]
+    (dotimes [i 6]
+      (s/append-entry session {:role :user :content (str "m" i)}))
+    (let [first-kept-1 (:id (nth (s/get-branch session) 2))]
+      (s/compact-with-summary! session "FIRST" first-kept-1)
+      (s/append-entry session {:role :user :content "m6"})
+      (s/append-entry session {:role :user :content "m7"})
+      (let [e2 (s/get-branch session)
+            first-kept-2 (:id (nth e2 4))]
+        (s/compact-with-summary! session "SECOND" first-kept-2)
+        (let [context (s/build-context session)]
+          (t/is (= "SECOND" (:summary (first context)))
+                "latest compaction wins")
+          (t/is (= first-kept-2 (:id (second context)))
+                "its first-kept-id starts the tail"))))))
+
+(t/deftest test-build-context-messages
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content "q"})
+    (s/append-entry session {:role :assistant :content "a"})
+    (s/append-session-info! session "t")
+    (s/append-entry session {:role :info :label "note" :content "x"})
+    (s/compact-with-summary! session "SUM" (:id (first (s/get-branch session))))
+    (let [msgs (mapcat s/context-messages (s/build-context session))]
+      (t/is (= 3 (count msgs)))
+      (t/is (= "SUM" (-> msgs first :content first :text))
+            "compaction projects to a :user summary message")
+      (t/is (= "q" (-> msgs second :content)))
+      (t/is (= "a" (-> msgs last :content)))
+      (t/is (not-any? #(contains? #{:info :session_info} (:role %)) msgs)
+            ":info/:session_info are metadata, excluded from context"))))
+
+(t/deftest test-compaction-retains-old-entries
+  (let [session (s/create-session test-dir)]
+    (dotimes [i 4]
+      (s/append-entry session {:role :user :content (str "q" i)}))
+    (let [branch (s/get-branch session)
+          first-kept-id (:id (nth branch 2))]
+      (s/compact-with-summary! session "SUM" first-kept-id)
+      (s/append-entry session {:role :assistant :content "after"}))
+    (let [loaded (s/load-session (:file session))]
+      (t/is (= 6 (count @(:entries loaded))) "all entries persist on reload")
+      (t/is (some #(= "q0" (:content %)) @(:entries loaded))
+            "summarized history stays reachable (tree/fork)"))))
+
+;; ─── Atomic rewrite (pi: temp-file publication) ──────────────────────────
+
+(t/deftest test-replace-entries
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content "old"})
+    (s/replace-entries! session [{:role :user :content "new1"}
+                                 {:role :assistant :content "new2"}])
+    (let [branch (s/get-branch session)]
+      (t/is (= 2 (count branch)))
+      (t/is (= "new1" (-> branch first :content)))
+      (t/is (= "new2" (-> branch second :content)))
+      (t/is (= (:id (first branch)) (:parent-id (second branch)))
+            "linear chain rebuilt")
+      (let [loaded (s/load-session (:file session))]
+        (t/is (= 2 (count @(:entries loaded))))))))
 
 ;; ─── Session display name (pi: /name command) ────────────────────────────
 

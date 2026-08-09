@@ -690,15 +690,18 @@
   (doseq [e (session/get-branch sess)
           :when (not= :session_info (:role e))]
     (let [role (:role e)
-          ;; Tool results are stored as :tool_result blocks (with :content
-          ;; str); others as :text blocks
-          content (str/join
-                   (keep (fn [b]
-                           (case (:type b)
-                             :text (:text b)
-                             :tool_result (:content b)
-                             nil))
-                         (:content e)))]
+          ;; Compaction entries carry their summary text, not content blocks;
+          ;; the chat-history fallback renders unknown roles via markdown (pi
+          ;; renders compaction summaries via Markdown)
+          content (if (= :compaction role)
+                    (or (:summary e) "")
+                    (str/join
+                     (keep (fn [b]
+                             (case (:type b)
+                               :text (:text b)
+                               :tool_result (:content b)
+                               nil))
+                           (:content e))))]
       (ui/chat-history-add-message! (:chat-history cs)
                                     (cond-> {:role role :content content}
                                       (= role :assistant) (assoc :thinking (:thinking e))
@@ -785,7 +788,9 @@
                                        texts (if (string? (:content entry))
                                                [(:content entry)]
                                                (map :text (filter #(= (:type %) :text) (:content entry))))
-                                       content (str/join texts)]
+                                       content (if (seq texts)
+                                                 (str/join texts)
+                                                 (or (:summary entry) ""))]
                                    (ui/chat-history-add-message! (:chat-history cs)
                                                                  (merge {:role (or role :unknown) :content content}
                                                                         (when (= role :tool)

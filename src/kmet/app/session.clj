@@ -27,13 +27,43 @@
      (try ~@body
           (finally (.unlock lock#)))))
 
-(defn- generate-id []
-  (let [now (System/currentTimeMillis)
-        rand (rand-int 0xFFFF)]
-    (str (format "%x" now) "-" (format "%x" rand))))
+(defn- generate-id
+  "Generate a unique entry id: hex timestamp + 16-bit hex random, collision
+   checked against the session's existing entry ids (pi: generateId —
+   collision-checked against the index)."
+  [entries]
+  (let [existing (into #{} (map :id) entries)]
+    (loop []
+      (let [id (str (format "%x" (System/currentTimeMillis))
+                    "-" (format "%x" (rand-int 0xFFFF)))]
+        (if (contains? existing id)
+          (recur)
+          id)))))
 
 (defn- timestamp []
   (java.time.Instant/now))
+
+(defn- build-entry
+  "Pure: assign id (collision-checked against entries), parent-id (current
+   leaf), timestamp."
+  [entries leaf-id entry]
+  (assoc entry
+         :id (generate-id entries)
+         :parent-id leaf-id
+         :timestamp (str (timestamp))))
+
+(defn- write-entries!
+  "Atomically replace the session file's contents and in-memory state (pi:
+   temp-file publication — a crash mid-write can't leave a corrupt file).
+   Callers must hold the session lock."
+  [session entries]
+  (let [entries (vec entries)
+        file (:file session)
+        tmp (str file ".tmp")]
+    (spit tmp (apply str (map prn-str entries)))
+    (fs/move tmp file {:replace-existing true})
+    (reset! (:entries session) entries)
+    (reset! (:leaf-id session) (some-> entries last :id))))
 
 ;; ─── CRUD ───────────────────────────────────────────────────────────────────
 
@@ -42,7 +72,7 @@
   [dir]
   (let [session-dir (io/file dir)]
     (fs/create-dirs session-dir)
-    (let [id (generate-id)
+    (let [id (generate-id [])
           file (io/file session-dir (str id ".ednl"))]
       (spit file "")
       (map->Session {:file (str (fs/canonicalize file))
@@ -79,14 +109,26 @@
    orphaned sibling entries (pi: storage.appendEntry is enqueued)."
   [session entry]
   (with-session-lock session
-    (let [entry (assoc entry :id (generate-id)
-                       :parent-id @(:leaf-id session)
-                       :timestamp (str (timestamp)))
+    (let [entry (build-entry @(:entries session) @(:leaf-id session) entry)
           file (:file session)]
       (spit file (prn-str entry) :append true)
       (swap! (:entries session) conj entry)
       (reset! (:leaf-id session) (:id entry))
       entry)))
+
+(defn replace-entries!
+  "Atomically replace the session with a fresh linear branch built from raw
+   entries: ids/parents/timestamps assigned in order (pi: the session file is
+   rewritten to mirror a replaced context). Serialized and published via
+   temp-file + rename so a crash mid-write can't corrupt the file."
+  [session raw-entries]
+  (with-session-lock session
+    (write-entries! session
+                    (loop [raw (seq raw-entries) leaf nil built []]
+                      (if-let [e (first raw)]
+                        (let [e (build-entry built leaf e)]
+                          (recur (next raw) (:id e) (conj built e)))
+                        built)))))
 
 (defn get-branch
   "Get entries from root to leaf-id (active branch)."
@@ -102,6 +144,45 @@
               (vswap! path conj e)
               (recur (:parent-id e)))))
         (vec (reverse @path))))))
+
+;; ─── Context build (pi: buildSessionContext) ─────────────────────────────
+
+(defn context-entries
+  "Pure port of pi buildContextEntries over a branch vector (entries in
+   root→leaf order). With a compaction on the path: [compaction, ...entries
+   from its first-kept-id] — summarized history is excluded from context but
+   stays in the file. Without one: the full branch. Multiple compactions:
+   the latest wins (pi walks the path and keeps the last compaction seen)."
+  [branch]
+  (let [compaction-idx (last (keep-indexed (fn [i e] (when (= :compaction (:role e)) i))
+                                           branch))]
+    (if (nil? compaction-idx)
+      branch
+      (let [compaction (nth branch compaction-idx)
+            kept (subvec branch 0 compaction-idx)
+            kept-tail (drop-while #(not= (:id %) (:first-kept-id compaction)) kept)
+            after-compaction (subvec branch (inc compaction-idx))]
+        (into [compaction] (concat kept-tail after-compaction))))))
+
+(defn build-context
+  "Context entries along the active branch (pi: buildContextEntries — see
+   context-entries)."
+  [session]
+  (context-entries (get-branch session)))
+
+(defn context-messages
+  "Project a session entry into LLM context messages (pi:
+   sessionEntryToContextMessages). Message entries pass through unchanged;
+   compaction entries become a single :user message carrying the summary
+   (kmet providers don't know pi's compactionSummary role — the :user mapping
+   mirrors the pre-append-only summary entry); :info and :session_info are
+   metadata and excluded. Excluded :bash entries are kept here and dropped
+   later by the LLM conversion (pi: convertToLlm filters excludeFromContext)."
+  [entry]
+  (case (:role entry)
+    :compaction [{:role :user :content [{:type :text :text (str (:summary entry))}]}]
+    (:user :assistant :tool :bash) [entry]
+    []))
 
 ;; ─── Session display name (pi: /name command) ─────────────────────────────
 
@@ -147,70 +228,50 @@
                               text (if (string? content) content
                                        (str/join (map :text (filter #(= (:type %) :text) content))))
                               trimmed (str/trim text)]
-                          (if (seq trimmed)
-                            (subs trimmed 0 (min 60 (count trimmed)))
+                          (cond
+                            (seq trimmed) (subs trimmed 0 (min 60 (count trimmed)))
                             ;; session_info entries carry the display name
                             ;; instead of message content (pi: tree shows
                             ;; "[title: name]")
-                            (if (= (:role entry) :session_info)
-                              (or (:name entry) "(empty)")
-                              "(empty)")))
+                            (= (:role entry) :session_info) (or (:name entry) "(empty)")
+                            ;; compaction entries carry their summary text
+                            (:summary entry) (subs (:summary entry) 0 (min 60 (count (:summary entry))))
+                            :else "(empty)"))
                :children (mapv build-node (children (:id entry)))})]
       (mapv build-node root-children))))
 
 (defn compact!
-  "Count-based fallback compaction: summarize older entries beyond a threshold
-   by replacing them with a placeholder summary (used when LLM summarization is
-   unavailable — see compact-with-summary!)."
+  "Count-based fallback compaction: append a placeholder compaction entry
+   covering the oldest entries beyond the threshold (used when LLM
+   summarization is unavailable — see compact-with-summary!). Append-only:
+   the summarized entries stay in the file; build-context excludes them from
+   the LLM context while keeping them reachable via get-branch/get-tree/fork.
+   Returns the compaction entry, or nil when there is nothing to compact."
   [session max-entries]
   (with-session-lock session
     (let [entries @(:entries session)
-          n (count entries)]
-      (when (> n max-entries)
-        (let [keep (vec (take-last (quot max-entries 2) entries))
-              summarize (vec (drop-last (quot max-entries 2) (drop-last (count keep) entries)))]
-          (when (seq summarize)
-            (let [summary-text (str "[Compacted " (count summarize)
-                                    " messages — " (first summarize) " to "
-                                    (last summarize) "]")
-                  summary-entry {:role :system
-                                 :content [{:type :text :text summary-text}]
-                                 :summary summary-text
-                                 :id (generate-id)
-                                 :parent-id nil
-                                 :timestamp (str (timestamp))}
-                  keep (assoc-in keep [0 :parent-id] (:id summary-entry))
-                  new-entries (into [summary-entry] keep)]
-              (reset! (:entries session) new-entries)
-              (reset! (:leaf-id session) (:id (last new-entries)))
-              ;; Rewrite file
-              (spit (:file session) (apply str (map prn-str new-entries))))))
-        @(:leaf-id session)))))
+          n (count entries)
+          keep-count (quot max-entries 2)]
+      (when (and (> n max-entries) (pos? keep-count))
+        (append-entry session
+                      {:role :compaction
+                       :summary (str "[Compacted " (- n keep-count) " messages]")
+                       :first-kept-id (:id (nth entries (- n keep-count)))})))))
 
 (defn compact-with-summary!
-  "Replace all entries before first-kept-id with a single summary entry (pi:
-   the session manager saves a compaction entry and reloads from
-   firstKeptEntryId; kmet physically removes the summarized entries). The
-   first kept entry is re-parented to the summary entry so the active branch
-   includes it. Returns the summary entry, or nil when first-kept-id is not
-   found."
-  [session summary first-kept-id]
-  (with-session-lock session
-    (let [entries @(:entries session)
-          idx (first (keep-indexed (fn [i e] (when (= (:id e) first-kept-id) i)) entries))]
-      (when idx
-        (let [summary-entry {:role :system
-                             :content [{:type :text :text summary}]
-                             :summary summary
-                             :id (generate-id)
-                             :parent-id nil
-                             :timestamp (str (timestamp))}
-              keep (assoc-in (vec (subvec entries idx)) [0 :parent-id] (:id summary-entry))
-              new-entries (into [summary-entry] keep)]
-          (reset! (:entries session) new-entries)
-          (reset! (:leaf-id session) (:id (last new-entries)))
-          (spit (:file session) (apply str (map prn-str new-entries)))
-          summary-entry)))))
+  "Append a compaction entry summarizing everything before first-kept-id (pi:
+   appendCompaction). Append-only: the summarized entries stay in the file;
+   build-context returns [compaction, ...from first-kept-id], so old content
+   stays reachable (tree, fork) while being excluded from the LLM context.
+   opts may carry :tokens-before, :usage, :details (pi: CompactionEntry).
+   Returns the compaction entry, or nil when first-kept-id is not found."
+  [session summary first-kept-id & [opts]]
+  (when (some #(= (:id %) first-kept-id) @(:entries session))
+    (append-entry session
+                  (merge {:role :compaction
+                          :summary summary
+                          :first-kept-id first-kept-id}
+                         (select-keys opts [:tokens-before :usage :details])))))
 
 (defn fork-session
   "Create a new session forked at the given entry-id."

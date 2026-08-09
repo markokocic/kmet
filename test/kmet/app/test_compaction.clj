@@ -83,6 +83,36 @@
           prep (compaction/prepare entries 8)]
       (t/is (= 12 (:tokens-before prep))))))
 
+(t/deftest test-prepare-boundary-after-compaction
+  ;; pi: boundaryStart = the previous compaction's firstKeptEntryId — its kept
+  ;; tail is re-summarizable. Under append-only the tail sits before the
+  ;; compaction; a boundary of prev-idx+1 would skip it, dropping the kept
+  ;; tail from context without summarizing it on the next compaction.
+  (let [msgs (vec (for [i (range 10)]
+                    {:id (str "m" i) :role :user
+                     :content (apply str (repeat 100 (str i)))}))
+        c1 {:id "c1" :role :compaction :summary "FIRST" :first-kept-id "m6"}
+        tail (vec (for [i (range 10 13)]
+                    {:id (str "m" i) :role :user
+                     :content (apply str (repeat 100 (str i)))}))
+        entries (into (conj msgs c1) tail)
+        prep (compaction/prepare entries 100)]
+    (t/is (some? prep))
+    (t/is (= "FIRST" (:previous-summary prep)))
+    (t/is (some #(contains? #{"m6" "m7" "m8" "m9"} (:id %)) (:messages prep))
+          "previous kept tail is re-summarized, not dropped")
+    (let [kept-idx (first (keep-indexed (fn [i e] (when (= (:id e) (:first-kept-id prep)) i))
+                                        entries))]
+      (t/is (>= kept-idx 6)
+            "cut never lands before the previous first-kept"))))
+
+(t/deftest test-prepare-guard-after-compaction
+  ;; pi: prepareCompaction returns undefined when the newest entry is a
+  ;; compaction — prevents immediate re-compaction (e.g. overflow-retry).
+  (let [entries [{:id "m0" :role :user :content "hello"}
+                 {:id "c1" :role :compaction :summary "SUM" :first-kept-id "m0"}]]
+    (t/is (nil? (compaction/prepare entries 100)))))
+
 ;; ─── Serialization (pi: serializeConversation) ─────────────────────────────
 
 (t/deftest test-serialize-conversation

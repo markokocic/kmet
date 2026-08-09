@@ -784,12 +784,6 @@ Be precise and concise in your responses."}}]
 
 (declare resolve-api-key)
 
-(defn- truncate-context!
-  "Keep only the last n messages in the in-memory context, aligned with a
-   count-based session compaction."
-  [agent n]
-  (swap! (:messages agent) #(vec (take-last n %))))
-
 (defn- summarize!
   "LLM summarization of the pre-cut entries (pi: generateSummaryWithUsage).
    Returns the summary text, or nil when no API key is available, the call
@@ -829,41 +823,33 @@ Be precise and concise in your responses."}}]
           (when (and (string? result) (seq result)) result))))))
 
 (defn- sync-context-after-compaction!
-  "Rebuild the in-memory context from the compacted session branch: the
-   summary entry (as a :user message so both providers accept it) followed by
-   the kept context-visible entries (pi: the agent context is rebuilt from the
-   session after compaction)."
+  "Rebuild the in-memory context from the compacted session (pi: the agent
+   context is rebuilt from the session after compaction — buildContextEntries
+   → [compaction, ...from first-kept-id])."
   [agent]
   (when-let [sess (:session agent)]
-    (let [branch (session/get-branch sess)
-          summary-entry (first branch)
-          context (into [{:role :user :content (:content summary-entry)}]
-                        (keep (fn [e]
-                                (case (:role e)
-                                  (:user :assistant :tool :bash) e
-                                  nil)))
-                        (rest branch))]
-      (reset! (:messages agent) context))))
+    (reset! (:messages agent)
+            (vec (mapcat session/context-messages (session/build-context sess))))))
 
 (defn- count-based-compact!
-  "Fallback: count-based compaction (previous behavior). Keeps the most
-   recent half of the session entries and aligns the in-memory context.
+  "Fallback: count-based compaction (previous behavior). Appends a placeholder
+   compaction entry and rebuilds the in-memory context from the session.
    Returns true when compaction happened."
   [agent]
   (if-let [sess (:session agent)]
     (let [n (count @(:entries sess))
-          _ (session/compact! sess (quot n 2))
-          new-n (count @(:entries sess))]
-      (when (< new-n n)
-        (truncate-context! agent new-n)
-        (debug/log "compacted session: " n " → " new-n " entries"))
-      (< new-n n))
+          compacted (session/compact! sess (quot n 2))]
+      (when compacted
+        (sync-context-after-compaction! agent)
+        (debug/log "compacted session: appended count-based compaction entry"))
+      (boolean compacted))
     false))
 
 (defn compact-context!
   "LLM-based compaction (pi: prepareCompaction → compact): summarize the
-   pre-cut entries, replace the session with [summary, kept...], and rebuild
-   the in-memory context to mirror it. Falls back to count-based truncation
+   pre-cut entries, append a compaction entry (append-only — summarized
+   entries stay in the file, build-context excludes them), and rebuild the
+   in-memory context to mirror it. Falls back to count-based truncation
    when summarization is unavailable or fails. Also the manual /compact path
    (pi: session.compact) — custom-instructions are appended to the
    summarization prompt.
@@ -895,7 +881,8 @@ Be precise and concise in your responses."}}]
                         (if @(:signal agent)
                           ;; cancelled during summarization — session unchanged
                           :aborted
-                          (do (session/compact-with-summary! sess summary (:first-kept-id prep))
+                          (do (session/compact-with-summary! sess summary (:first-kept-id prep)
+                                                             {:tokens-before (:tokens-before prep)})
                               (sync-context-after-compaction! agent)
                               (debug/log "compacted session with LLM summary")
                               true))
@@ -919,11 +906,15 @@ Be precise and concise in your responses."}}]
    (:compact-token-threshold). Returns true when compaction happened."
   [agent]
   (if-let [sess (:session agent)]
-    (let [entries (session/get-branch sess)
-          n (count entries)
+    (let [context (session/build-context sess)
+          n (count context)
           threshold (:compact-threshold agent)
           token-threshold (:compact-token-threshold agent)
-          tokens (reduce + 0 (map compaction/estimate-tokens entries))]
+          ;; Measure the context that would be sent, not the whole file:
+          ;; compaction is append-only, so the full branch never shrinks —
+          ;; counting it would re-trigger compaction every turn after the
+          ;; first one (pi: the threshold is evaluated against the context).
+          tokens (reduce + 0 (map compaction/estimate-tokens context))]
       (if (or (and threshold (>= n threshold))
               (and token-threshold (>= tokens token-threshold)))
         (let [result (compact-context! agent nil :threshold)]
@@ -949,14 +940,10 @@ Be precise and concise in your responses."}}]
     (reset! (:messages agent) msgs)
     (when-let [sess (:session agent)]
       ;; Rebuild the session as a fresh linear branch mirroring the new
-      ;; context — under the session lock so a concurrent append (bash
-      ;; result) can't land between the truncate and the re-append
-      (session/with-session-lock sess
-        (spit (:file sess) "")
-        (reset! (:entries sess) [])
-        (reset! (:leaf-id sess) nil)
-        (doseq [m msgs]
-          (session/append-entry sess m))))
+      ;; context — atomic (temp file + rename) so a crash mid-write can't
+      ;; corrupt the file; serialized so a concurrent append (bash result)
+      ;; can't interleave with the rewrite.
+      (session/replace-entries! sess msgs))
     (emit agent {:type :context-replaced :messages msgs})))
 
 (defn- apply-next-turn-update!
@@ -1291,21 +1278,17 @@ Be precise and concise in your responses."}}]
   @(:messages agent))
 
 (defn restore-session-context!
-  "Rebuild the agent's in-memory context from the session branch (pi: the
-   session is the source of truth — buildContextEntries). Drops session_info
-   entries (metadata, not messages) and display-only :info messages. No-op
+  "Rebuild the agent's in-memory context from the session (pi: the session is
+   the source of truth — buildSessionContext). build-context walks root→leaf
+   through the latest compaction; compaction entries project to a :user
+   summary message, :info/:session_info are metadata and excluded. No-op
    without a session. Used when a session is resumed/continued so the next
    LLM call sees the restored conversation — steered and follow-up messages
    included."
   [agent]
   (when-let [sess (:session agent)]
-    (let [branch (session/get-branch sess)]
-      (reset! (:messages agent)
-              (vec (keep (fn [e]
-                           (case (:role e)
-                             (:user :assistant :tool :bash) e
-                             nil))
-                         branch))))))
+    (reset! (:messages agent)
+            (vec (mapcat session/context-messages (session/build-context sess))))))
 
 (defn set-system-prompt! [agent prompt]
   (reset! (:system agent) prompt))

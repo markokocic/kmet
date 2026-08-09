@@ -59,6 +59,24 @@
         (let [p (fdp/make-footer-data-provider :session sess)]
           (is (pos? (fdp/fdp-context-tokens p))))))))
 
+(deftest test-context-tokens-after-compaction
+  ;; Regression: compaction is append-only, so fdp-context-tokens must
+  ;; measure the context (build-context), not the full branch — otherwise the
+  ;; footer shows a token count/percentage that compaction never relieves.
+  (testing "context tokens drop after append-only compaction"
+    (with-session
+      (fn [sess]
+        (dotimes [i 10]
+          (session/append-entry sess {:role :user :content [{:type :text :text (str "message body number " i " with plenty of words")}]}))
+        (let [p (fdp/make-footer-data-provider :session sess)
+              before (fdp/fdp-context-tokens p)
+              branch (session/get-branch sess)
+              first-kept-id (:id (nth branch 6))]
+          (session/compact-with-summary! sess "SUMMARY" first-kept-id)
+          (is (pos? before))
+          (is (< (fdp/fdp-context-tokens p) before)
+              "context tokens reflect the compaction; full branch would not shrink"))))))
+
 (deftest test-latest-cache-hit-rate
   (testing "cache hit rate comes from the most recent usage entry (input excludes cache, pi)"
     (with-session
@@ -72,6 +90,25 @@
         (let [p (fdp/make-footer-data-provider :session sess)]
           (is (= 50.0 (fdp/fdp-latest-cache-hit-rate p))
               "100 cached / (100 input + 100 cached) — pi: cacheRead / (input+cacheRead+cacheWrite)"))))))
+
+(deftest test-latest-cache-hit-rate-after-compaction
+  ;; Regression: append-only compaction keeps pre-compaction messages in the
+  ;; branch; the rate must come from the context (build-context), so a stale
+  ;; pre-compaction rate (reflecting the old context) is not shown.
+  (testing "stale pre-compaction usage is not picked up"
+    (with-session
+      (fn [sess]
+        (session/append-entry sess {:role :user :content [{:type :text :text "q1"}]})
+        (session/append-entry sess {:role :assistant :content [{:type :text :text "old"}]
+                                    :usage {:prompt_tokens 1000 :completion_tokens 1
+                                            :prompt_tokens_details {:cached_tokens 0}}})
+        (session/append-entry sess {:role :user :content [{:type :text :text "q2"}]})
+        (let [branch (session/get-branch sess)
+              first-kept-id (:id (nth branch 2))]
+          (session/compact-with-summary! sess "SUMMARY" first-kept-id)
+          (let [p (fdp/make-footer-data-provider :session sess)]
+            (is (nil? (fdp/fdp-latest-cache-hit-rate p))
+                "no post-compaction usage → nil, not the stale 0% pre-compaction rate")))))))
 
 (deftest test-model-provider-thinking
   (testing "model/provider/thinking accessors"

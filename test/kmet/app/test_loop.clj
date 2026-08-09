@@ -1294,7 +1294,10 @@
         (binding [*err* (java.io.StringWriter.)]
           @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])})))
       (t/is (= 2 @main-call-count) "overflow triggers one compaction then a retry")
-      (t/is (< (count @(:entries sess)) 12) "session was compacted")
+      (t/is (some #(= :compaction (:role %)) @(:entries sess))
+            "overflow appends a compaction entry (append-only)")
+      (t/is (< (count (session/build-context sess)) 12)
+            "compaction excludes the summarized history from context")
       (t/is (some #(and (= :message-end (:type %))
                         (= "recovered" (get-in % [:message :content 0 :text])))
                   @events)
@@ -1370,12 +1373,55 @@
       (t/is (true? (binding [*err* (java.io.StringWriter.)]
                      (loop/maybe-compact! agent)))
             "token estimate above threshold triggers compaction")
-      (t/is (< (count @(:entries sess)) 10) "session entries reduced")
+      (t/is (= 11 (count @(:entries sess)))
+            "append-only: all 10 entries stay, compaction entry added")
       (t/is (< (count @(:messages agent)) 10) "in-memory context aligned with session")
-      (t/is (= (count @(:messages agent)) (count @(:entries sess)))
-            "messages and session entry counts match after compaction")
+      (t/is (= (count @(:messages agent)) (count (session/build-context sess)))
+            "messages mirror the compacted session context (compaction + kept tail)")
       (finally
         (fs/delete-tree dir)))))
+
+(t/deftest test-loop-compaction-not-retriggered
+  ;; Regression: compaction is append-only, so the full branch never shrinks —
+  ;; maybe-compact! must measure the context (compaction + kept tail), not the
+  ;; file. Otherwise the count/token threshold fires every turn after the
+  ;; first compaction.
+  (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})]
+    (try
+      (let [sess (session/create-session (str dir))
+            agent (loop/make-agent-state
+                   :session sess
+                   :compact-threshold 6
+                   :compact-token-threshold 1000
+                   :keep-recent-tokens 5)]
+        (dotimes [i 10]
+          (let [m {:role :user :content [{:type :text :text (str "msg " i)}]}]
+            (swap! (:messages agent) conj m)
+            (session/append-entry sess m)))
+        (t/is (true? (binding [*err* (java.io.StringWriter.)]
+                       (loop/maybe-compact! agent)))
+              "count threshold triggers the first compaction")
+        (t/is (false? (loop/maybe-compact! agent))
+              "context shrank below the count threshold — no re-compaction"))
+      (let [sess (session/create-session (str dir))
+            agent (loop/make-agent-state
+                   :session sess
+                   :compact-threshold 1000
+                   :compact-token-threshold 100
+                   :keep-recent-tokens 40)]
+        (dotimes [i 10]
+          (let [m {:role :user :content [{:type :text :text
+                                          (str "This is message body number " i
+                                               " with plenty of words so the estimated token count "
+                                               "easily exceeds the small test threshold.")}]}]
+            (swap! (:messages agent) conj m)
+            (session/append-entry sess m)))
+        (t/is (true? (binding [*err* (java.io.StringWriter.)]
+                       (loop/maybe-compact! agent)))
+              "token threshold triggers the first compaction")
+        (t/is (false? (loop/maybe-compact! agent))
+              "context tokens dropped below the token threshold — no re-compaction"))
+      (finally (fs/delete-tree dir)))))
 
 (t/deftest test-loop-compact-no-op-reports-false
   (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})

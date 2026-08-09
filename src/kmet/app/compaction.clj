@@ -1,14 +1,17 @@
 (ns kmet.app.compaction
   "LLM-based context compaction aligned with pi (pi: core/compaction/compaction.js).
-   Pure logic here: token estimation, cut-point selection, conversation
-   serialization, and the summarization prompts. Session replacement happens in
-   kmet.app.session (compact-with-summary!), orchestration in kmet.app.loop.
+   Token estimation, cut-point selection, conversation serialization, and the
+   summarization prompts. Session replacement happens in kmet.app.session
+   (compact-with-summary!), orchestration in kmet.app.loop. Depends on
+   session/context-entries for the context-token estimate (pi: compaction.ts
+   imports buildSessionContext from session-manager).
 
    Deviations from pi: no file-operation tracking (kmet does not record
    read/modified files); a split turn is summarized in a single call (pi uses a
    dedicated turn-prefix prompt and merges two summaries)."
   (:require [clojure.string :as str]
-            [clojure.edn :as edn]))
+            [clojure.edn :as edn]
+            [kmet.app.session :as session]))
 
 (def ^:private image-chars 4800)
 (def ^:private tool-result-max-chars 2000)
@@ -109,16 +112,29 @@
 ;; ─── Preparation (pi: prepareCompaction) ───────────────────────────────────
 
 (defn prepare
-  "Compute what to compact (pi: prepareCompaction). Walks from the last
-   compaction summary (physical removal in kmet means everything after it is
-   new), finds the cut point, and collects the context-visible entries before
-   it. Returns {:first-kept-id str :messages [entries] :previous-summary
-   str-or-nil :tokens-before int} or nil when there is nothing to summarize."
+  "Compute what to compact (pi: prepareCompaction). The boundary starts at
+   the previous compaction's first-kept entry, so its kept tail is
+   re-summarizable (pi: boundaryStart = previous firstKeptEntryId — under
+   append-only compaction the kept tail sits before the compaction and must
+   not be skipped or it is dropped from context without being summarized).
+   Finds the cut point and collects the context-visible entries before it.
+   Returns {:first-kept-id str :messages [entries] :previous-summary
+   str-or-nil :tokens-before int} or nil when there is nothing to summarize
+   (including when the newest entry is a compaction — right after one just
+   finished, pi guards this to avoid immediate re-compaction)."
   [entries keep-recent-tokens]
-  (when (seq entries)
+  (when (and (seq entries)
+             (not= :compaction (:role (last entries))))
     (let [prev-idx (last (keep-indexed (fn [i e] (when (:summary e) i)) entries))
           previous-summary (when prev-idx (:summary (nth entries prev-idx)))
-          boundary-start (if prev-idx (inc prev-idx) 0)
+          boundary-start (if prev-idx
+                           (let [idx (first (keep-indexed
+                                             (fn [i e]
+                                               (when (= (:id e) (:first-kept-id (nth entries prev-idx)))
+                                                 i))
+                                             entries))]
+                             (if idx idx (inc prev-idx)))
+                           0)
           cut (find-cut-point (subvec entries boundary-start) keep-recent-tokens)
           cut-idx (+ boundary-start (:first-kept-index cut))
           first-kept-id (:id (nth entries cut-idx))
@@ -127,7 +143,9 @@
         {:first-kept-id first-kept-id
          :messages msgs
          :previous-summary previous-summary
-         :tokens-before (reduce + 0 (map estimate-tokens entries))}))))
+         ;; pi: tokensBefore = context tokens before compaction (the context
+         ;; excludes previously-summarized entries)
+         :tokens-before (reduce + 0 (map estimate-tokens (session/context-entries entries)))}))))
 
 ;; ─── Conversation serialization (pi: serializeConversation) ────────────────
 

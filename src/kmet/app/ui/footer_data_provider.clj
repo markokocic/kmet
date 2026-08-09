@@ -116,7 +116,9 @@
 (defn fdp-latest-cache-hit-rate
   "Cache hit rate of the most recent assistant message with usage (pi:
    latestCacheHitRate — cacheRead / promptTokens of the latest message), or
-   nil when no message reports usage."
+   nil when no message reports usage. Walks the context (build-context), not
+   the full branch: compaction is append-only, so the branch keeps
+   pre-compaction messages whose usage reflects the old, larger context."
   [provider]
   (if-let [sess (fdp-get-session provider)]
     (some (fn [e]
@@ -124,13 +126,15 @@
               (let [total (+ (:input u) (:cache-read u) (:cache-write u))]
                 (when (pos? total)
                   (double (/ (* 100.0 (:cache-read u)) total))))))
-          (reverse (session/get-branch sess)))
+          (reverse (session/build-context sess)))
     nil))
 
 (defn fdp-context-tokens
-  "Estimated tokens of the active session branch (pi: getContextUsage →
-   session context estimate)."
+  "Estimated tokens of the active session context (pi: getContextUsage →
+   context estimate). build-context, not the full branch: compaction is
+   append-only, so the branch never shrinks and would show a stale context
+   percentage that compaction never relieves."
   [provider]
   (if-let [sess (fdp-get-session provider)]
-    (reduce + 0 (map compaction/estimate-tokens (session/get-branch sess)))
+    (reduce + 0 (map compaction/estimate-tokens (session/build-context sess)))
     0))
