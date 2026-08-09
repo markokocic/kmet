@@ -93,7 +93,8 @@
                       bash-signal
                       pending-bash-components
                       pending-messages-container
-                      theme-controller])
+                      theme-controller
+                      active-status-kind])
 
 ;; ─── Formatting helpers ────────────────────────────────────────────────────
 
@@ -805,23 +806,46 @@
 ;; the working StatusIndicator (renders the idle two rows when inactive);
 ;; retry/compaction indicators are transient swaps. All indicators render
 ;; the same two-row shape so the editor and footer never jump.
+;; :active-status-kind records which indicator is in the container (:working /
+;; :retry / :compaction / nil when idle) so a stale end event can't stop an
+;; indicator that was already replaced (pi: clearStatusIndicator(kind) checks
+;; the active kind and no-ops on mismatch).
 
 (defn- show-status-indicator!
   "Replace the status container child with the given indicator (pi:
-   showStatusIndicator — disposes the active indicator)."
-  [cs indicator]
+   showStatusIndicator — disposes the active indicator). KIND records which
+   indicator is active for kind-gated clears."
+  [cs kind indicator]
   (ui/status-indicator-stop! (:status-indicator cs))
   (container/container-clear (:status-container cs))
   (container/container-add-child (:status-container cs) indicator)
+  (reset! (:active-status-kind cs) kind)
   (tui/tui-request-render (:tui cs)))
 
-(defn- clear-status-indicator!
-  "Restore the idle two-row status (pi: clearStatusIndicator → idleStatus)."
+(defn- activate-working-indicator!
+  "Restore the default working StatusIndicator as the container child and
+   activate it (pi: agent_start → showStatusIndicator(new
+   WorkingStatusIndicator)). Used when a new LLM call starts after a retry
+   backoff or compaction, which swapped in a transient indicator."
   [cs]
   (container/container-clear (:status-container cs))
   (container/container-add-child (:status-container cs) (:status-indicator cs))
-  (ui/status-indicator-stop! (:status-indicator cs))
+  (ui/status-indicator-start! (:status-indicator cs))
+  (reset! (:active-status-kind cs) :working)
   (tui/tui-request-render (:tui cs)))
+
+(defn- clear-status-indicator!
+  "Restore the idle two-row status (pi: clearStatusIndicator → idleStatus).
+   With KIND, only clears when that indicator is currently active — a stale
+   end event (e.g. auto-retry-end arriving after the working indicator was
+   revived) then no-ops instead of stopping the working spinner."
+  [cs & [kind]]
+  (when (or (nil? kind) (= kind @(:active-status-kind cs)))
+    (container/container-clear (:status-container cs))
+    (container/container-add-child (:status-container cs) (:status-indicator cs))
+    (ui/status-indicator-stop! (:status-indicator cs))
+    (reset! (:active-status-kind cs) nil)
+    (tui/tui-request-render (:tui cs))))
 
 ;; ─── Pending messages display (pi: updatePendingMessagesDisplay) ──────────
 
@@ -1054,7 +1078,7 @@
       (tui/tui-request-render (:tui cs)))
     (do
       (reset! (:running-turn? cs) true)
-      (ui/status-indicator-start! (:status-indicator cs))
+      (activate-working-indicator! cs)
       (start-anim-timer! cs)
       (debug/log "user submitted: " text)
       (ui/chat-history-add-message! (:chat-history cs)
@@ -1426,6 +1450,21 @@
                           (do (when-let [cs @cs-ref]
                                 (update-pending-messages! cs))
                               (tui/tui-request-render t))
+                          :turn-start
+                           ;; A new LLM call is starting. After a retry backoff
+                           ;; or compaction the status container holds a
+                           ;; transient indicator (or the stopped working
+                           ;; indicator); revive the working spinner so the
+                           ;; call streams under "Working..." (pi: the session
+                           ;; emits a fresh agent_start after retry/compaction
+                           ;; via agent.continue(), re-showing the
+                           ;; WorkingStatusIndicator — kmet's loop recurs
+                           ;; in-turn, so turn-start is the equivalent signal).
+                          (do (when-let [cs @cs-ref]
+                                (when (and @(:running-turn? cs)
+                                           (not= :working @(:active-status-kind cs)))
+                                  (activate-working-indicator! cs)))
+                              (tui/tui-request-render t))
                           :auto-retry-start
                            ;; Clear partial streaming text so the retried stream
                            ;; starts fresh, and show the retry countdown (pi:
@@ -1433,17 +1472,20 @@
                           (do (ui/chat-history-clear-streaming! ch)
                               (when-let [cs @cs-ref]
                                 (show-status-indicator!
-                                 cs
+                                 cs :retry
                                  (ui/make-retry-status-indicator
                                   (:attempt evt) (:max-attempts evt) (:delay-ms evt)
                                   :cancel-hint (fmt-key-display
                                                 (app-kb/key-text "app.interrupt")))))
                               (tui/tui-request-render t))
                           :auto-retry-end
-                           ;; Retry finished — restore the idle status (pi:
-                           ;; auto_retry_end → clearStatusIndicator("retry"))
+                           ;; Retry finished (pi: auto_retry_end →
+                           ;; clearStatusIndicator("retry")). Kind-gated: when
+                           ;; the retried call already started (turn-start
+                           ;; revived the working indicator) this no-ops and
+                           ;; the working spinner keeps spinning.
                           (do (when-let [cs @cs-ref]
-                                (clear-status-indicator! cs))
+                                (clear-status-indicator! cs :retry))
                               (tui/tui-request-render t))
                           :compaction-start
                            ;; Session compaction in progress (pi:
@@ -1451,9 +1493,10 @@
                            ;; the hint is truthful — escape aborts it
                           (do (when-let [cs @cs-ref]
                                 (show-status-indicator!
-                                 cs (ui/make-compaction-status-indicator
-                                     :message (compaction-status-message
-                                               (:reason evt)))))
+                                 cs :compaction
+                                 (ui/make-compaction-status-indicator
+                                  :message (compaction-status-message
+                                            (:reason evt)))))
                               (tui/tui-request-render t))
                           :compaction-end
                            ;; Compaction done — restore the idle status (pi:
@@ -1464,7 +1507,7 @@
                            ;; full turn cancel ("(cancelled)") — no double
                            ;; report.
                           (do (when-let [cs @cs-ref]
-                                (clear-status-indicator! cs)
+                                (clear-status-indicator! cs :compaction)
                                 (when (and (:aborted evt)
                                            (= :manual (:reason evt)))
                                   (ui/chat-history-show-status!
@@ -1547,7 +1590,8 @@
                             :bash-running? (atom false)
                             :bash-signal (atom false)
                             :pending-bash-components (atom [])
-                            :pending-messages-container (container/make-container [pm])})]
+                            :pending-messages-container (container/make-container [pm])
+                            :active-status-kind (atom nil)})]
 
     ;; Initial loaded-resources sections (rebuilt on /reload)
     (ui/loaded-resources-set-sections! lr (build-loaded-resource-sections))
@@ -2066,10 +2110,14 @@
                                                                (or message "Working..."))
                                 (tui/tui-request-render t))
          :set-working-visible (fn [visible?]
+                                ;; Pi: setWorkingVisible — clearStatusIndicator("working")
+                                ;; when hiding (kind-gated: a transient retry/
+                                ;; compaction indicator stays), re-show the working
+                                ;; indicator when showing (only while the turn runs).
                                 (if visible?
                                   (when @(:running-turn? cs)
-                                    (ui/status-indicator-start! (:status-indicator cs)))
-                                  (ui/status-indicator-stop! (:status-indicator cs)))
+                                    (activate-working-indicator! cs))
+                                  (clear-status-indicator! cs :working))
                                 (tui/tui-request-render t))
          :set-hidden-thinking-label (fn [label]
                                       (ui/chat-history-set-hidden-thinking-label! ch label)

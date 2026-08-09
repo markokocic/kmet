@@ -5,6 +5,8 @@
   (:require [clojure.test :as t :refer [deftest testing]]
             [kmet.tui.autocomplete :as ac]
             [kmet.tui.components.editor :as editor]
+            [kmet.tui.components.container :as container]
+            [kmet.tui.protocols :as protocols]
             [kmet.modes.interactive :as inter]
             [kmet.app.commands :as commands]
             [kmet.app.ui :as ui]
@@ -132,3 +134,90 @@
             (with-redefs [ui/chat-history-add-message! (fn [_ msg] (reset! last-msg msg))]
               ((:handler (commands/find-command "model")) cs "nope")
               (t/is (= "No model matches \"nope\"." (:content @last-msg))))))))))
+
+;; ─── Status indicator swap model (pi: showStatusIndicator/clearStatusIndicator) ──
+;; The working indicator must survive mid-turn transient swaps: after a retry
+;; backoff or compaction the next turn-start revives it, and a stale end event
+;; (auto-retry-end / compaction-end) must not stop an indicator that was
+;; already replaced (pi: clearStatusIndicator(kind) is kind-gated).
+
+(defn- test-status-cs
+  "A minimal CoreState-like map for the status swap helpers."
+  []
+  (let [si (ui/make-status-indicator :text "Working...")
+        sc (container/make-container [si])]
+    {:tui {:render-requested? (atom false)}
+     :status-indicator si
+     :status-container sc
+     :active-status-kind (atom nil)
+     :running-turn? (atom true)}))
+
+(defn- status-lines [sc]
+  (protocols/render sc 60))
+
+(defn- working-status? [sc]
+  (let [lines (status-lines sc)]
+    (and (= 2 (count lines))
+         (boolean (some #(re-find #"Working" %) lines)))))
+
+(defn- blank-status? [sc]
+  (let [lines (status-lines sc)]
+    (and (= 2 (count lines))
+         (every? #(re-find #"^\s*$" %) lines))))
+
+(deftest test-status-indicator-survives-retry
+  (testing "the working indicator is revived after a retry backoff and kept
+            by the kind-gated auto-retry-end (pi: agent_start after
+            continue() re-shows WorkingStatusIndicator)"
+    (let [cs (test-status-cs)
+          sc (:status-container cs)]
+      (testing "submit activates the working indicator"
+        ((var inter/activate-working-indicator!) cs)
+        (t/is (working-status? sc)))
+      (testing "auto-retry-start swaps in the retry countdown"
+        ((var inter/show-status-indicator!) cs :retry
+                                            (ui/make-retry-status-indicator 1 3 2000))
+        (t/is (not (working-status? sc))))
+      (testing "turn-start after the backoff revives the working indicator"
+        ((var inter/activate-working-indicator!) cs)
+        (t/is (working-status? sc)))
+      (testing "auto-retry-end no-ops once the working indicator is active"
+        ((var inter/clear-status-indicator!) cs :retry)
+        (t/is (working-status? sc))
+        (t/is (= :working @(:active-status-kind cs))))
+      (testing "turn end clears to the idle two rows"
+        ((var inter/clear-status-indicator!) cs)
+        (t/is (blank-status? sc))))))
+
+(deftest test-status-indicator-survives-compaction
+  (testing "in-loop compaction clears at compaction-end and the following
+            turn-start revives the working indicator"
+    (let [cs (test-status-cs)
+          sc (:status-container cs)]
+      ((var inter/activate-working-indicator!) cs)
+      ((var inter/show-status-indicator!) cs :compaction
+                                          (ui/make-compaction-status-indicator))
+      (t/is (not (working-status? sc)))
+      ((var inter/clear-status-indicator!) cs :compaction)
+      (t/is (blank-status? sc))
+      ((var inter/activate-working-indicator!) cs)
+      (t/is (working-status? sc)))))
+
+(deftest test-status-indicator-kind-gated-clear
+  (testing "a stale end event cannot stop an indicator it didn't own"
+    (let [cs (test-status-cs)
+          sc (:status-container cs)]
+      ((var inter/activate-working-indicator!) cs)
+      ((var inter/show-status-indicator!) cs :compaction
+                                          (ui/make-compaction-status-indicator))
+      ;; auto-retry-end arriving while compaction is active must no-op
+      ((var inter/clear-status-indicator!) cs :retry)
+      (t/is (not (working-status? sc)))
+      (t/is (= :compaction @(:active-status-kind cs)))
+      (testing "cancel during backoff clears unconditionally; the late
+                retry-end no-ops"
+        ((var inter/clear-status-indicator!) cs)
+        (t/is (blank-status? sc))
+        ((var inter/clear-status-indicator!) cs :retry)
+        (t/is (blank-status? sc))
+        (t/is (nil? @(:active-status-kind cs)))))))
