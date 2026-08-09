@@ -327,6 +327,24 @@
     (t/is (not (:is-error result)))
     (t/is (= "alpha BETA" (slurp "target/test-tools-edit.txt")))))
 
+(t/deftest test-tool-string-args-json
+  ;; String args only reach execute-tool when the LLM emitted malformed
+  ;; tool-call arguments (pi: parseStreamingJson) — valid JSON strings must
+  ;; parse to a map and work normally.
+  (spit "target/test-tools-read.txt" "string args")
+  (let [result (tools/execute-tool "read" "{\"path\": \"target/test-tools-read.txt\"}")]
+    (t/is (not (:is-error result)))
+    (t/is (.contains (:content result) "string args"))))
+
+(t/deftest test-tool-string-args-malformed
+  ;; Malformed arguments JSON used to crash edit with "java.lang.String
+  ;; cannot be cast to clojure.lang.Associative" (assoc on a string in
+  ;; normalize-edits). It must degrade to {} and fail validation instead.
+  (let [result (tools/execute-tool "edit" "{malformed-json")]
+    (t/is (:is-error result))
+    (t/is (not (re-find #"ClassCastException" (:content result))))
+    (t/is (re-find #"at least one replacement" (:content result)))))
+
 (t/deftest test-tool-edit-empty-edits
   (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit.txt"})]
     (t/is (:is-error result))

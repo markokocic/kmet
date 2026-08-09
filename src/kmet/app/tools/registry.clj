@@ -1,6 +1,7 @@
 (ns kmet.app.tools.registry
   "Tool registry — built-in tool map, custom tool registration, schema conversion, execution."
-  (:require [kmet.app.tools.tool :as tool]
+  (:require [cheshire.core :as json]
+            [kmet.app.tools.tool :as tool]
             [kmet.app.tools.read :as read]
             [kmet.app.tools.write :as write]
             [kmet.app.tools.edit :as edit]
@@ -116,6 +117,20 @@
 
 ;; ─── Execution ─────────────────────────────────────────────────────────────
 
+(defn- normalize-args
+  "Guard so tool execute fns always receive map args. Defense in depth — the
+   stream accumulator in loop.clj already degrades unparseable tool-call
+   arguments to {} (pi: parseStreamingJson); this catches any other path
+   where string args reach execute-tool so tools report a validation error
+   instead of a ClassCastException from assoc/merge on a string."
+  [args]
+  (if (map? args)
+    args
+    (try
+      (let [parsed (json/parse-string args true)]
+        (if (map? parsed) parsed {}))
+      (catch Exception _ {}))))
+
 (defn execute-tool
   "Execute a tool by name with given arguments.
    on-update — optional (fn [partial]) streaming callback; passed to the
@@ -124,9 +139,10 @@
   [tool-name args & [on-update]]
   (if-let [tool (get-tool tool-name)]
     (try
-      (if (and on-update (:streams? tool))
-        ((:execute tool) args on-update)
-        ((:execute tool) args))
+      (let [args (normalize-args args)]
+        (if (and on-update (:streams? tool))
+          ((:execute tool) args on-update)
+          ((:execute tool) args)))
       (catch Exception e
         {:content (str "Error executing " tool-name ": " (ex-message e))
          :is-error true}))

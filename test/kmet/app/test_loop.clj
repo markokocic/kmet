@@ -402,6 +402,42 @@
               "agent-end :messages includes the user message")
         (t/is (= :idle @(:status agent)) "Agent status should be idle after tool turn")))))
 
+(t/deftest test-loop-malformed-tool-args-degrade-to-map
+  ;; Malformed tool-call arguments (raw JSON string that fails to parse) must
+  ;; degrade to a map before reaching the tool (pi: parseStreamingJson) — the
+  ;; old fallback passed the raw string through, crashing edit's
+  ;; normalize-edits with "java.lang.String cannot be cast to
+  ;; clojure.lang.Associative".
+  (let [captured (atom nil)
+        call-count (atom 0)
+        agent (loop/make-agent-state)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (if (= 1 (swap! call-count inc))
+                        (do (when-let [on-tc (:on-tool-call opts)]
+                              (on-tc {:id "tc1" :name "edit" :arguments "{malformed-json" :index 0}))
+                            (when-let [on-done (:on-done opts)]
+                              (on-done :tool-calls)))
+                        (do (when-let [on-text (:on-text opts)]
+                              (on-text "done"))
+                            (when-let [on-done (:on-done opts)]
+                              (on-done :stop))))
+                      :done))
+                  tools/execute-tool
+                  (fn [name args _]
+                    (reset! captured {:name name :args args})
+                    {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent
+                            {:message "run tool"
+                             :on-done (fn [_])
+                             :on-error (fn [_])}))
+    (t/is (= "edit" (:name @captured)) "tool name reaches execute-tool")
+    (t/is (map? (:args @captured))
+          "malformed args JSON degrades to a map, never a raw string")
+    (t/is (empty? (:args @captured)) "degraded args are the empty map")))
+
 ;; ─── before-agent-start hooks ─────────────────────────────────────────────
 
 (t/deftest test-loop-before-agent-start-hooks

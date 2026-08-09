@@ -609,9 +609,19 @@ Be precise and concise in your responses."}}]
        (let [result (into []
                           (for [[_idx {:keys [id name arguments]}] @pending]
                             {:id id :name name
-                             :arguments (try
-                                          (json/parse-string arguments true)
-                                          (catch Exception _ arguments))}))]
+                             :arguments (cond
+                                          ;; Already-parsed map (Anthropic/Google input blocks)
+                                          (map? arguments) arguments
+                                          ;; OpenAI-style JSON string: pi's parseStreamingJson never
+                                          ;; lets a raw string through — malformed/truncated JSON
+                                          ;; (or JSON that parses to a non-map) degrades to {} so
+                                          ;; tools fail validation instead of throwing
+                                          ;; ClassCastException on assoc/merge of a string.
+                                          (string? arguments)
+                                          (let [parsed (try (json/parse-string arguments true)
+                                                            (catch Exception _ nil))]
+                                            (if (map? parsed) parsed {}))
+                                          :else {})}))]
          (reset! pending {})
          result))]))
 
