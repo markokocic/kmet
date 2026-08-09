@@ -1290,6 +1290,19 @@
         (when @(:running? tui)
           (let [w (.getWidth jline)
                 h (.getHeight jline)]
+            ;; Terminal resize detection. JLine's native WINCH handling does
+            ;; not work under babashka's GraalVM native image (no native
+            ;; signal handlers are registered), so the on-resize callback is
+            ;; never invoked and nothing re-renders on resize — the editor
+            ;; keeps wrapping at the pre-resize width until the next input
+            ;; event (pi: terminal.on("resize") → requestRender).
+            ;; getWidth/getHeight are live terminal queries, so polling them
+            ;; here (16ms cadence) catches the change reliably; the existing
+            ;; width-changed/height-changed logic then does the full redraw.
+            (when (and (pos? @(:previous-width tui)) (not= @(:previous-width tui) w))
+              (tui-request-render tui))
+            (when (and (pos? @(:previous-height tui)) (not= @(:previous-height tui) h))
+              (tui-request-render tui))
             (when @(:render-requested? tui)
               (reset! (:render-requested? tui) false)
               ;; Base content: the whole UI is one flat document — the stack

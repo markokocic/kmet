@@ -520,6 +520,34 @@
                       lines)
             "no partial marker fragments"))))
 
+(t/deftest test-word-wrap-line-backtrack
+  ;; Word-boundary backtracking must keep words intact and never exceed
+  ;; max-width: the running width after backtracking is cw - wrapOppWidth
+  ;; (not the emitted chunk's width), and the break lands AFTER the trailing
+  ;; whitespace (pi: wrapOppIndex = next.index). The old math emitted an
+  ;; extra mid-word hard break right after every word-boundary wrap — the
+  ;; editor "wrapped strangely" (e.g. splitting "quiet" as q / uiet) even
+  ;; before any terminal resize.
+  (let [wrap (fn [text w] (mapv :text (#'editor/word-wrap-line text w #{})))]
+    (t/testing "word-boundary backtrack: trailing space stays on the wrapped line"
+      (t/is (= ["abc " "def " "ghi"] (wrap "abc def ghi" 5))))
+    (t/testing "no mid-word break after a backtrack"
+      (t/is (= ["The quick brown fox jumps " "over the lazy dog while the "
+                "rain falls gently on the " "quiet meadow"]
+               (wrap "The quick brown fox jumps over the lazy dog while the rain falls gently on the quiet meadow" 30))))
+    (t/testing "wrapping at the editor layout width keeps long words intact"
+      (t/is (= ["The quick brown fox jumps over the lazy dog while the rain falls gently on the "
+                "quiet meadow"]
+               (wrap "The quick brown fox jumps over the lazy dog while the rain falls gently on the quiet meadow" 79))))
+    (t/testing "every chunk fits within max-width"
+      (let [text (clojure.string/join " " (map #(str "word" %) (range 40)))
+            chunks (wrap text 17)]
+        (t/is (seq chunks))
+        (t/is (every? #(<= (count %) 17) chunks) "no chunk exceeds max-width")
+        (t/is (= text (apply str chunks)) "wrapping preserves the full text")
+        (t/is (every? #(not (clojure.string/starts-with? % " ")) chunks)
+              "no chunk starts with whitespace")))))
+
 (t/deftest test-editor-undo-restores-paste-store
   (let [e (editor/make-editor)
         big1 (clojure.string/join "\n" (repeat 15 "one"))

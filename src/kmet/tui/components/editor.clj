@@ -91,7 +91,15 @@
                                                    :start-index @cs
                                                    :end-index (:start opp-seg)}))
                           (vreset! cs (:start opp-seg))
-                          (vreset! cw @wow))
+                          ;; The emitted chunk covered everything up to and
+                          ;; including the trailing whitespace (width @wow);
+                          ;; only the non-whitespace content advanced since
+                          ;; the opportunity stays on this line (pi:
+                          ;; currentWidth -= wrapOppWidth). Setting cw to
+                          ;; @wow instead overcounts and forces an extra
+                          ;; mid-word hard break right after every
+                          ;; word-boundary wrap.
+                          (vswap! cw - @wow))
                         (do
                           (when (< @cs char-idx)
                             (vswap! result conj
@@ -106,7 +114,10 @@
                     ;; Record wrap opportunity (ws followed by non-ws)
                     (let [nxt (when (< (inc i) n) (nth segments (inc i)))]
                       (when (and is-ws nxt (not (re-find #"^\s" (:text nxt))))
-                        (vreset! woi i)
+                        ;; The opportunity is the segment AFTER the whitespace
+                        ;; (pi: wrapOppIndex = next.index) — backtracking there
+                        ;; keeps the trailing space on the wrapped line.
+                        (vreset! woi (inc i))
                         (vreset! wow @cw))))))
               (recur (inc i))))
           (vswap! result conj

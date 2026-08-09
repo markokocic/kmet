@@ -194,3 +194,43 @@
           (t/is (str/includes? diff "gamma") "new line written"))
         (finally
           (stop-loop tui))))))
+
+(deftest terminal-resize-triggers-full-redraw
+  (testing "a terminal resize re-renders without any input event: JLine's native WINCH
+            handler is dead under the GraalVM native image, so the loop must detect
+            the size change itself and reflow (pi: terminal.on('resize') → requestRender).
+            Without this the editor keeps wrapping at the pre-resize width."
+    (let [lines (atom ["alpha" "beta"])
+          vt (make-virtual-terminal)
+          tui (core/create-tui (:terminal vt))
+          jline (:terminal (:terminal vt))]
+      (try
+        (core/tui-add-child tui (test-component lines))
+        (start-loop tui)
+        (wait-for-frames (:writes vt) 1 2000)
+        (t/is (= 80 @(:previous-width tui)) "rendered at the initial 80 cols")
+        ;; Resize the terminal WITHOUT requesting a render — the loop's own
+        ;; size poll must notice and reflow.
+        (.setSize jline (Size. 60 24))
+        (wait-for-frames (:writes vt) 2 2000)
+        (let [frame (second (frame-writes (:writes vt)))]
+          (t/is (some? frame) "a new frame was rendered after the resize")
+          (t/is (str/includes? frame clear-seq)
+                "width change takes the clearing full-redraw path")
+          (t/is (str/includes? frame "alpha") "transcript re-emitted at the new width"))
+        (t/is (= 60 @(:previous-width tui)) "diff state updated to the new width")
+        ;; Height-only change must also re-render (editor dynamic height depends
+        ;; on rows): the loop detects it and renders. Whether a frame is written
+        ;; depends on the diff (Termux: height changes take the diff path, so
+        ;; unchanged content emits nothing) — the render itself is observable
+        ;; via the diff-state update.
+        (.setSize jline (Size. 60 30))
+        (let [deadline (+ (System/currentTimeMillis) 2000)]
+          (loop []
+            (when (and (< (System/currentTimeMillis) deadline)
+                       (not= 30 @(:previous-height tui)))
+              (Thread/sleep 5)
+              (recur))))
+        (t/is (= 30 @(:previous-height tui)) "height change detected and rendered")
+        (finally
+          (stop-loop tui))))))
