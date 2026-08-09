@@ -5,7 +5,7 @@ Goal: bring kmet's provider/model subsystem to architectural parity with pi's
 EDN. This document is the working plan; update it as implementation proceeds.
 
 Reference: `~/src/cvstree/pi/packages/ai/` and
-`packages/coding-agent/src/core/{model-config,model-resolver,model-runtime,models-store,provider-composer,remote-catalog-provider,auth-storage}.ts`.
+`packages/coding-agent/src/core/{model-config,model-resolver,model-runtime,provider-composer,auth-storage}.ts`.
 
 ## Decisions (confirmed)
 
@@ -17,6 +17,7 @@ Reference: `~/src/cvstree/pi/packages/ai/` and
 | Data generation | **`bb generate-models`** bb task (network at generation time; committed data is static) |
 | Wire APIs | **`openai-completions`, `anthropic-messages`, `google-generative-ai`** (no responses/bedrock/vertex/azure yet) |
 | Thinking levels | Adopt pi's 7 levels (`off/minimal/low/medium/high/xhigh/max`) + per-model `thinking-level-map` |
+| OAuth (Phase 10) | GitHub Copilot first (device-code), generic OAuthAuth plumbing; PKCE + loopback callback for anthropic/openai-codex; manual-paste fallback on Termux |
 
 ## Architecture overview
 
@@ -31,15 +32,16 @@ providers/*.ts (factories)              kmet.app.model-data  (static EDN catalog
 providers/data/*.json (generated)       src/kmet/app/model_data/*.edn
 api/*.ts (wire protocols)               kmet.app.llm         (3 request builders)
 auth/*.ts + env-api-keys.ts             kmet.app.auth        (env resolution + auth.edn)
+OAuth flows (auth/oauth/*.ts, bun-oauth.ts)  kmet.app.oauth   (Phase 10)
 scripts/generate-models.ts              scripts/generate_models.clj (+ bb task)
 
 coding-agent package
-model-config.ts (models.json)           (later phase: models.edn)
+model-config.ts (models.json)           kmet.app.model-config      (models.edn)
 model-resolver.ts                       kmet.app.model-resolver
-model-runtime.ts                        kmet.app.model-runtime
-models-store.ts (FileModelsStore)       (later phase: remote catalog)
-remote-catalog-provider.ts              (later phase)
-provider-composer.ts (extensions)       (later phase)
+model-runtime.ts                        kmet.app.models + kmet.app.provider-composer
+provider-composer.ts (extensions)       kmet.app.provider-composer
+resolve-config-value.ts                 kmet.app.config-value
+provider-attribution.ts                 kmet.app.attribution
 ```
 
 Key design principles (from pi, kept in kmet):
@@ -424,7 +426,7 @@ test/kmet/app/test_auth.clj.
 | `:deepseek` | `DEEPSEEK_API_KEY` | **done** |
 | `:github-copilot` | `COPILOT_GITHUB_TOKEN` | new |
 | `:openai` | `OPENAI_API_KEY` | unchanged |
-| `:anthropic` | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` | keep `ANTHROPIC_API_KEY`; auth-token variants deferred (see later phases) |
+| `:anthropic` | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` | keep `ANTHROPIC_API_KEY`; auth-token variants → Phase 9 |
 | `:google` | `GEMINI_API_KEY` | reserved for later provider set |
 
 ### Credential resolution
@@ -546,36 +548,287 @@ stored per-message `:cost` breakdown already supports it.
 
 ---
 
-## Later phases (to be re-evaluated once reached)
+## Phase 6 — Custom providers via `models.edn` (`kmet.app.model-config` + `kmet.app.provider-composer` + `kmet.app.config-value`)
 
-Each of these is a substantial project. Do not plan details ahead; re-evaluate
-scope, pi's current implementation, and kmet's needs when the time comes.
+**Status: planned.** Ports pi `model-config.ts` (schema + load), `resolve-config-value.ts`
+(config-value resolution) and the composition half of `provider-composer.ts`
+(`composeModelProvider` / `applyModelsJson` / `applyExtension` / model
+overrides). Lets users define custom providers and override built-in model
+metadata without writing Clojure.
 
-- **Extension `registerProvider` / `unregisterProvider`** — expose
-  `models/register-provider!` to `.clj` extensions (pi `provider-composer.ts`:
-  replace built-in, restore on unregister).
-- **Custom providers via `models.edn`** — `~/.kmet/agent/models.edn` /
-  `.kmet/models.edn` (pi `model-config.ts` + TypeBox validation; kmet: schema
-  check with clojure.spec or manual validation).
-- **Remote catalog overlay** — pi.dev `/api/models/providers/<id>` with
-  ETag/Last-Modified caching in a locked `models-store.edn` + 4h freshness +
-  background refresh at startup (pi `remote-catalog-provider.ts` +
-  `FileModelsStore`). Needs pi.dev API compatibility.
-- **OAuth subscriptions** — Anthropic Pro/Max, GitHub Copilot, ChatGPT
-  (device-code + PKCE, credential refresh, copilot `availableModelIds`
-  filtering). Babashka can do device-code; the interactive browser flow needs
-  a fallback (Termux: open URL + paste code).
+### File & loading
+
+- `~/.kmet/agent/models.edn` + `.kmet/models.edn` (project overrides, merged
+  like settings.edn — **deviation**: pi loads only the global
+  `join(getAgentDir(), "models.json")`; kmet's global+project convention
+  matches its settings handling).
+- One immutable load per startup/reload (pi `ModelConfig.load`); a load
+  failure (parse or schema) yields an error string surfaced via
+  `get-error` — the registry keeps the built-ins (pi: `ModelRuntime.getError`
+  collects config + composition errors, shown as a startup warning).
+- kmet validation is manual (no TypeBox): a `validate-config` walker
+  producing path-style messages (`providers.my-provider.models[0].cost:
+  expected number`), collected rather than thrown.
+
+### Schema (EDN mirror of pi's TypeBox models)
+
+```clojure
+{:providers
+ {:my-provider
+  {:name "My Provider"
+   :base-url "https://api.example.com/v1"
+   :api-key "$MY_PROVIDER_KEY"      ;; config value: literal | $ENV | ${ENV} | !command
+   :api :openai-completions          ;; provider-level default for :models without :api
+   :headers {"X-Custom" "value"}    ;; header values also config-value-resolvable
+   :compat {:supports-reasoning-effort true}
+   :auth-header true                 ;; send Authorization: Bearer <key>
+   :models
+   [{:id "my-model" :name "My Model"
+     :reasoning true :input [:text :image]
+     :context-window 200000 :max-tokens 16384
+     :cost {:input 0.5 :output 1.5 :cache-read 0.1 :cache-write 0.5}}]
+   :model-overrides
+   {"deepseek-v4-flash" {:context-window 128000
+                         :cost {:input 0.2 :output 0.4}}}}}}
+```
+
+ModelDefinition fields (pi `ModelDefinitionSchema`): `id` (required),
+`name`, `api`, `base-url`, `reasoning`, `thinking-level-map`, `input`
+(`[:text]` default), `cost` (4 rates; **no tiers** — kmet's Model has none),
+`context-window` (default 128000), `max-tokens` (default 16384),
+`headers`, `compat`. ModelOverride is the same minus `id`/`api`/`base-url`.
+ProviderCompat: kmet accepts the flat compat map it already understands
+(`:supports-reasoning-effort`, `:thinking-format`, `:max-tokens-field`, …)
+— no openRouterRouting/vercelGatewayRouting/chatTemplateKwargs nesting yet.
+
+### Config-value resolution (`kmet.app.config-value`)
+
+Port of pi `resolve-config-value.ts` verbatim:
+
+- `$NAME` / `${NAME}` → env interpolation; `$$` escapes a literal `$`,
+  `$!` a literal `!`; anything else is a literal. A template with a missing
+  env var resolves to nil.
+- `!command` → shell command, stdout trimmed, **cached** per command string
+  (pi caches for the process lifetime); 10s timeout; non-zero exit → nil.
+  kmet runs it through `babashka.process` + the bash-executor shell
+  resolution (not node's spawnSync).
+- API: `parse-config-value`, `get-config-value-env-var-names`,
+  `is-command-config-value?`, `is-config-value-configured?`,
+  `resolve-config-value` (+ `-or-throw`), `resolve-headers` (+ `-or-throw`),
+  `clear-config-value-cache!`.
+
+### Composition (`kmet.app.provider-composer`)
+
+`compose-model-provider provider-id builtin config extension` merges the
+three layers into a Provider record (pi `composeModelProvider`), applied at
+registration time (kmet's registry is record-based, not lazy `getModels`):
+
+1. `apply-models-json` — base models get `base-url` override (config wins)
+   + `compat` merge; `config.models` upsert (existing id replaced, else
+   appended), defaults taken from the existing model (pi `modelFromJson`:
+   api = model.api ?? provider.api ?? existing.api, else error).
+2. `apply-extension` — extension `:models` replace wholesale (defaults from
+   the built-in), else extension `:base-url` overrides all.
+3. `model-overrides` applied **last** (topmost layer) via `apply-model-override`
+   (pi: field-wise ?? merge; `thinking-level-map`/`compat`/`sampling-params`
+   merge key-wise).
+4. Provider-level `:name`/`:base-url`/`:headers` from extension ?? config ??
+   builtin; `:api-key` (config value) and `:auth-header` carried on the
+   Provider record for auth.
+
+`validate-extension-provider` runs the composition eagerly so a broken
+registration throws immediately (pi: `provider-composer.ts` `getModels()`
+called for its side effects); `configured-request-auth-status` reports
+whether the config/extension apiKey counts as configured (source
+`models-json-key` / `models-json-command` / `environment`).
+
+### Auth integration
+
+- `auth/resolve-api-key` order becomes: auth.edn credential → models.edn/
+  extension `:api-key` (resolved config value) → env vars in pi order
+  (pi `composeApiKeyAuth.resolve`: credential first, then configured key,
+  then inherited env).
+- `auth/configured?` / `models/get-available` include
+  `configured-request-auth-status` (a literal or `!command` apiKey is
+  configured even without auth.edn; `$ENV` needs the var present).
+- `:auth-header true` → llm sends `Authorization: Bearer <key>` (pi
+  `withConfiguredAuth`); configured headers (model- and provider-level)
+  merged into request headers via `resolve-headers` (pi
+  `resolveConfiguredModelHeaders`).
+
+### Registry wiring
+
+- `models/load-models-config!` — load + validate + recompose every provider
+  (pi `ModelRuntime.refresh` → `rebuildProviders`). Called at startup after
+  `load-catalogs!` and from `/reload`.
+- Provider ids come from builtins ∪ models.edn ∪ extension registrations;
+  composition errors are collected per provider (pi `compositionErrors`) and
+  fall back to the built-in, surfaced as warnings.
+
+## Phase 7 — Extension `registerProvider` / `unregisterProvider`
+
+**Status: planned.** The extension half of pi `provider-composer.ts` +
+`model-registry.ts`, on top of Phase 6's composition.
+
+- `models/register-provider-config!` / `unregister-provider-config!` —
+  name + config map (pi `ModelRegistry.registerProvider(name, config)` and
+  `ModelRuntime.registerProvider`): validate eagerly, merge over the previous
+  registration preserving undefined fields, recompose, restore the built-in
+  on unregister.
+- `models/register-native-provider!` — full Provider record (pi
+  `registerNativeProvider`), for extensions that ship a complete provider.
+- Exposed to `.clj` extensions as `register-provider!` /
+  `unregister-provider!` in `kmet.app.extensions` (pi `ctx.registerProvider`),
+  reusing the existing extension loading + `/reload` shutdown/start cycle.
+- A `ModelRegistry`-style facade for extensions: `get-all`, `get-available`,
+  `find`, `has-configured-auth`, `get-provider-auth-status`,
+  `get-api-key-and-headers`, `get-registered-provider-config`, … — kmet
+  already has most of these as plain fns; the phase adds the extension-facing
+  names and the sync snapshot semantics.
+
+## Phase 8 — Provider attribution headers (`kmet.app.attribution`)
+
+**Status: planned.** Port of pi `provider-attribution.ts`:
+
+- OpenRouter models (provider `:openrouter` or base-url host openrouter.ai):
+  `HTTP-Referer: https://pi.dev`, `X-OpenRouter-Title: pi`,
+  `X-OpenRouter-Categories: cli-agent`.
+- NVIDIA NIM (host `integrate.api.nvidia.com`): `X-BILLING-INVOKE-ORIGIN: Pi`.
+- Cloudflare (workers-ai / ai-gateway hosts): `User-Agent: pi-coding-agent`.
+- OpenCode session headers (provider opencode/opencode-go or host
+  opencode.ai): `x-opencode-session` + `x-opencode-client: pi` — **not**
+  telemetry-gated in pi; wired with the kmet Session id (loop passes it
+  through to llm).
+- `merge-provider-attribution-headers` merged into llm request headers; the
+  default attribution is gated on a new `:enable-install-telemetry` setting
+  default true (pi's default — kmet has no telemetry; the flag only controls
+  attribution, documented).
+
+## Phase 9 — Anthropic auth-token variants
+
+**Status: planned.** Completes pi `env-api-keys.ts` for `:anthropic`:
+
+- `env-vars-by-provider :anthropic` → `[ANTHROPIC_AUTH_TOKEN
+  ANTHROPIC_OAUTH_TOKEN ANTHROPIC_API_KEY]` (all three participate in
+  `configured?` / discovery; pi `findEnvKeys`).
+- The x-api-key path **skips** `ANTHROPIC_AUTH_TOKEN` (pi `getEnvApiKey`:
+  first env key ≠ AUTH_TOKEN); the auth-token variants resolve to
+  `Authorization: Bearer` headers instead (pi anthropic provider
+  `auth-token`/`oauth-token` paths) — llm needs an anthropic header branch
+  keyed on which env var matched.
+- Small, self-contained; needed anyway once OAuth lands.
+
+## Phase 10 — OAuth subscriptions (`kmet.app.oauth`)
+
+**Status: planned.** Port of pi's OAuth infrastructure (`packages/ai/src/auth/`
++ `bun-oauth.ts`) and its `/login` integration (pi interactive-mode
+`handleLoginCommand` / oauth-selector). kmet's only OAuth-capable catalog
+provider is **github-copilot**; the generic OAuthAuth plumbing is built so
+anthropic (Pro/Max), openai-codex (ChatGPT), openrouter, and future
+subscription providers plug in.
+
+### Credential model (pi auth/types.ts + auth-storage.ts)
+
+- `OAuthCredential` — `{:type :oauth :access str :refresh str :expires ms
+  :available-model-ids [str] :enterprise-url str?}` (pi OAuthCredential;
+  expires = `Date.now() + expires_in*1000 - 5min` skew).
+- `auth.edn` gains an oauth entry shape `{provider {:type :oauth :access
+  :refresh :expires ...}}` alongside the existing `{:key ...}` api-key shape;
+  the loader validates both (pi auth-storage parse: api_key needs optional
+  `:key`/`:env`; oauth needs string `:access`/`:refresh` + finite `:expires`).
+- `OAuthAuth` record (pi OAuthAuth): `name`, `is-subscription?`, `login-label?`,
+  `login` (interaction → credential), `refresh` (credential signal →
+  credential), `to-auth` (credential → `{:api-key str :base-url str?}`).
+  The `refresh`/`to-auth` split lets the registry own the locked refresh
+  pattern (pi Models): refresh produces a credential, `to-auth` derives
+  request auth from whatever credential ends up stored.
+- `AuthInteraction` (pi): `prompt` (`:text :secret :select :manual-code`) +
+  `notify` (`:info :auth-url :device-code :progress`) — mapped onto kmet's
+  existing dialog infra (extension-input for secret/manual-code, select-list
+  for `:select`, chat-history/status for notifications).
+
+### Flows (pi auth/oauth/*.ts)
+
+**Device-code (RFC 8628)** — github-copilot, xai, kimi-coding:
+
+- `poll-oauth-device-code-flow` (pi device-code.ts): interval (default 5s,
+  min 1s), `slow_down` → +5s (or server-provided interval), expiry deadline,
+  abortable sleep; distinct cancel/timeout/slow-down messages.
+- github-copilot specifics (pi github-copilot.ts): device-code start → poll
+  access token → copilot token exchange (`/copilot_internal/v2/token`) →
+  `enable-all-github-copilot-models` (policy POST per model) →
+  `fetch-available-copilot-model-ids` (models endpoint, picker/policy flags;
+  individual-account policy fallback). Enterprise domain prompt + host
+  normalization; **`proxy-ep` token claim → API base URL** (`api.<host>`)
+  returned via `to-auth` so copilot requests hit the user's proxy endpoint.
+  Copilot available-model-ids feed the provider's `filter-models` (pi
+  `filterModels`), shrinking the registry to what the account can use.
+
+**PKCE + loopback callback** — anthropic, openai-codex, openrouter:
+
+- `generate-pkce` (pi pkce.ts): verifier = 32 random bytes base64url;
+  challenge = SHA-256(verifier) base64url. Babashka: `java.security.SecureRandom`
+  + `MessageDigest` (no Web Crypto in bb).
+- Callback server: minimal one-shot HTTP server on 127.0.0.1 (anthropic port
+  53692, codex 1455; `PI_OAUTH_CALLBACK_HOST` override), `/callback` route
+  with success/error HTML, state check, then token exchange (authorization_code
+  with code_verifier) and refresh (refresh_token). Raced against a
+  `:manual-code` prompt so remote/headless sessions paste the redirect URL
+  (pi `parseAuthorizationInput`: URL / `code#state` / `code=...` forms).
+- **Termux constraint**: no local browser — the loopback server may be
+  unreachable from the phone's browser; the manual-paste path is the primary
+  flow there (open URL on another machine, paste final redirect URL).
+- openrouter: exchanges the code for a **permanent API key** (not expiring
+  tokens) via `oauth.auth`-style `to-auth` returning the key.
+
+### Registry + auth integration
+
+- `models/register-oauth!`-style wiring on the Provider record: `:oauth`
+  (OAuthAuth record) sits next to `:api-key`/`:auth-header` (Phase 6);
+  `compose-provider` carries it through the builtin/config/extension layers
+  (pi provider-composer `composeOAuthAuth`; extension `register-provider!`
+  `:oauth` config adapted via pi `adaptOAuth`).
+- `auth/resolve-api-key` — oauth provider: refresh when `expires` within the
+  min-validity window (pi 5 min), then return `access`; `configured?` true
+  when a stored oauth credential exists. `to-auth` base-url override flows
+  through llm like the model base-url (copilot proxy endpoint).
+- Credential ops serialized per provider + state sync after login/logout
+  (pi ModelRuntime `enqueueCredentialOperation` /
+  `synchronizeCredentialState`): recompose provider, refresh models,
+  refresh availability snapshot — so `/login` results apply immediately.
+
+### `/login` `/logout` UI (pi interactive-mode)
+
+- Provider list grows an auth-type dimension: each provider offers
+  `:oauth` and/or `:api-key` login methods (pi `getLoginProviderOptions`;
+  AUTH_TYPE_ORDER oauth first). `/login <provider>` with a single method
+  starts it directly; ambiguous → a selector listing "Sign in with an
+  account" (oauth, subscription label) vs "Sign in with an API key".
+- OAuth dialog shows `:auth-url` (open browser + instructions) or
+  `:device-code` (user code + verification URI) notifications, then waits
+  on the callback/manual code; `:progress` updates stream into the dialog.
+- `/logout` lists stored credentials by type (api-key vs oauth) and removes
+  the auth.edn entry; env vars untouched (pi semantics).
+
+### Scope cuts (first pass)
+
+- Implement **github-copilot device-code fully** (kmet's only oauth provider)
+  + the generic OAuthAuth/device-code/pkce/auth.edn plumbing.
+- Anthropic/openai-codex/openrouter PKCE + callback: build the shared
+  machinery; per-provider flows land with those providers (later phase).
+- radius / azure / other subscription flows deferred with their providers.
+
+## Deferred (re-evaluate when reached)
+
+Each is a substantial project; do not plan details ahead.
+
 - **More providers & wire APIs** — openai-responses (unblocks copilot
-  gpt-5/grok/oswe models), azure-openai-responses, bedrock-converse-stream,
-  google-vertex, mistral-conversations, plus the remaining ~35 providers.
+  gpt-5/grok/oswe models: new api dispatch + stream parser), plus
+  azure-openai-responses, bedrock-converse-stream, google-vertex,
+  mistral-conversations and the remaining ~35 models.dev providers
+  (regenerate catalogs + per-provider enrichment).
 - **Image models registry** — pi `images.ts` / `images-api-registry.ts`
   (image generation/editing models, openrouter-images).
-- **Provider attribution headers** — pi `provider-attribution.ts`
-  (OpenRouter/Cloudflare/NVIDIA attribution, tied to telemetry setting).
-- **Offline mode** — `--offline` / `PI_OFFLINE` equivalent suppressing all
-  startup network ops (update checks etc.).
-- **Anthropic auth-token variants** — `ANTHROPIC_AUTH_TOKEN` /
-  `ANTHROPIC_OAUTH_TOKEN` header paths (needed for OAuth phase anyway).
 
 ---
 
@@ -593,6 +846,23 @@ scope, pi's current implementation, and kmet's needs when the time comes.
   (`usage-with-cost`).
 - `test/kmet/app/test_auth.clj` — env precedence (auth.edn over env), pi env
   order, configured? semantics.
+- Planned (Phases 6–10):
+  - `test/kmet/app/test_config_value.clj` — env interpolation, `$$`/`$!`
+    escapes, `!command` (cached, timeout), missing-env → nil,
+    `is-config-value-configured?`, header resolution.
+  - `test/kmet/app/test_model_config.clj` — models.edn load (global+project
+    merge), schema validation error paths, `get-error` on parse failure.
+  - `test/kmet/app/test_provider_composer.clj` — 3-layer composition
+    (builtin + config + extension), model overrides (incl. thinking-level-map
+    merge), custom model defaults (api/base-url errors, context-window 128000),
+    modelOverrides applied last, auth-header flag, configured-auth-status.
+  - `test/kmet/app/test_attribution.clj` — openrouter/nvidia/cloudflare
+    headers, opencode session headers, telemetry gate, merge order.
+  - `test/kmet/app/test_oauth.clj` — device-code poll state machine
+    (interval, slow_down, expiry, cancel), PKCE verifier/challenge, auth.edn
+    oauth shape validation, credential refresh on expiry (5-min skew),
+    copilot available-model-ids filtering + proxy-ep base-url, `/login`
+    auth-type selection, serialized credential ops.
 - Generator script: `bb generate-models` must be deterministic (sorted output)
   and fail loudly on validation errors; run once and commit output.
 - Final gate unchanged: `bb lint` + `bb format-check` + `bb test` +
@@ -615,7 +885,14 @@ scope, pi's current implementation, and kmet's needs when the time comes.
   `get-provider-base-url`, `get-provider-api-type` are removed — loop.clj
   resolves base-url/api-type from the registry via `resolve-endpoint`
   (model :api/:base-url; nil for unknown providers → error).
-- Existing `auth.edn` entries keep working (same shape).
+- Existing `auth.edn` entries keep working (same shape); Phase 10 adds an
+  `{:type :oauth ...}` variant alongside the api-key `{:key ...}` shape.
+- models.edn (Phase 6) is the user-config layer over the registry: provider
+  config wins over the catalog for the fields it sets; model overrides are
+  the topmost layer over built-in models. It does not replace `settings.edn`
+  `:provider`/`:model` (which still pick the active model), and unknown
+  providers still error at request time unless defined in models.edn or by
+  an extension (Phase 7).
 
 ### Phase 3 note (applied early)
 
@@ -635,7 +912,22 @@ Phase 3 (auth) ◄── Phase 2 (llm dispatch, thinking, URLs)
         │              │
         ▼              ▼
 Phase 4 (resolver, /model, Ctrl+L) ──► Phase 5 (cost footer)
+                                            │
+                                            ▼
+              Phase 6 (models.edn: config-value + composer + load-models-config!)
+                    │                │
+                    ▼                ▼
+        Phase 7 (ext registerProvider)   Phase 8 (attribution headers)
+                    │                │
+                    ▼                ▼
+              Phase 9 (anthropic auth-token)
+                    │
+                    ▼
+              Phase 10 (OAuth subscriptions)
 ```
 
 Phases 1 and 3 are independent of each other after Phase 0; Phase 2 needs
 Phase 1 (catalogs) but can be built against hand-written EDN fixtures first.
+Phase 6 needs Phase 0 (registry) + Phase 3 (auth resolution); Phases 7–9
+build on Phase 6's composition; Phase 10 needs Phase 6 (provider `:oauth`
+carrying) + Phase 9 (auth-token variants) and reuses Phase 3's auth.edn + `/login`.
