@@ -164,6 +164,87 @@
     @fut
     (t/is @called)))
 
+;; ─── Continue (no initial message) ────────────────────────────────────────
+
+(t/deftest test-loop-continue-without-message
+  ;; /continue runs the agent on the existing context without adding a new
+  ;; user message — after a network error the last entry is an unanswered
+  ;; user message (or a dangling tool result), and the model picks up where
+  ;; the interrupted turn left off.
+  (let [sent (atom nil)
+        agent (loop/make-agent-state)
+        ;; Simulate an interrupted turn: user message with no response yet
+        _ (swap! (:messages agent) conj
+                 {:role :user :content [{:type :text :text "fix the bug"}]})]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (reset! sent opts)
+                    (future
+                      (when-let [on-text (:on-text opts)]
+                        (on-text "will do"))
+                      (when-let [on-done (:on-done opts)]
+                        (on-done :stop))
+                      :done))]
+      ;; deref inside with-redefs keeps the rebinding until the run completes
+      @(loop/run-agent-turn agent
+                            {:on-done (fn [_])
+                             :on-error (fn [_])}))
+    (t/is (= 1 (count (filter #(= :user (:role %)) (loop/get-context agent))))
+          "no new user message is added")
+    (let [llm-msgs (:messages @sent)
+          users (filter #(= :user (:role %)) llm-msgs)]
+      (t/is (= 1 (count users)) "the LLM sees exactly one user message")
+      (t/is (= "fix the bug" (get-in (first users) [:content 0 :text]))
+            "the interrupted user message reaches the LLM")
+      (t/is (= :system (-> llm-msgs first :role)) "system prompt prepended"))
+    (t/is (= :assistant (-> (loop/get-context agent) last :role))
+          "the continued turn lands as the final assistant message")
+    (t/is (= :idle (loop/get-status agent)))))
+
+(t/deftest test-loop-continue-after-error
+  ;; End-to-end /continue flow: a run dies with a network error (the user
+  ;; message is persisted, the assistant never responded), then a no-message
+  ;; run picks up where it left off — exactly one user message in context,
+  ;; and it reaches the LLM.
+  (let [calls (atom 0)
+        sent (atom nil)
+        ;; :max-retries 0 — the network failure is terminal immediately,
+        ;; exactly the state /continue is for (retries exhausted)
+        agent (loop/make-agent-state :max-retries 0)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (if (= 1 (swap! calls inc))
+                        (when-let [on-error (:on-error opts)]
+                          (on-error "connection lost"))
+                        (do (reset! sent opts)
+                            (when-let [on-text (:on-text opts)]
+                              (on-text "fixed"))
+                            (when-let [on-done (:on-done opts)]
+                              (on-done :stop))))
+                      :done))]
+      ;; Turn 1: network error — retries exhausted, run dies
+      @(loop/run-agent-turn agent
+                            {:message "fix the bug"
+                             :on-error (fn [_])})
+      (t/is (= :error (loop/get-status agent))
+            "run ends in :error after the network failure")
+      (t/is (= 1 (count (filter #(= :user (:role %)) (loop/get-context agent))))
+            "the user message stays in context after the error")
+      ;; Turn 2: /continue — no new user message, the model picks up
+      @(loop/run-agent-turn agent
+                            {:on-done (fn [_])
+                             :on-error (fn [_])}))
+    (t/is (= 2 @calls) "second run makes exactly one LLM call")
+    (let [users (filter #(= :user (:role %)) (:messages @sent))]
+      (t/is (= 1 (count users)) "continue sends the context with one user message")
+      (t/is (= "fix the bug" (get-in (first users) [:content 0 :text]))))
+    (t/is (= "fixed" (get-in (last (loop/get-context agent)) [:content 0 :text]))
+          "the continued run completes the response")
+    (t/is (= :idle (loop/get-status agent)) "run settles idle after continue")))
+
 ;; ─── Multiple turns ──────────────────────────────────────────────────────
 
 (t/deftest test-loop-messages-accumulate

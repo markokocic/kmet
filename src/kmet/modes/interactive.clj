@@ -44,7 +44,7 @@
 
 (declare resume-session show-session-tree build-extension-ui-registry
          editor-text-get editor-text-set! editor-text-get-expanded
-         build-loaded-resource-sections)
+         build-loaded-resource-sections start-agent-run!)
 
 ;; ─── Global config ref ────────────────────────────────────────────────────
 
@@ -347,6 +347,37 @@
     :handler (fn [cs _]
                (debug/log "/resume command")
                (resume-session cs ensure-session-dir))})
+  (commands/register-command!
+   {:name "continue"
+    :description "Continue where the agent left off (e.g. after a network error)"
+    :handler (fn [cs _]
+               (let [{:keys [chat-history]} cs
+                     agent-state @(:agent-state cs)]
+                 (cond
+                   ;; A run may have ended in :error (network failure, retries
+                   ;; exhausted) — that's exactly when /continue is useful, so
+                   ;; only actively-running states refuse. Both the UI turn flag
+                   ;; (set synchronously on submit) and the agent status
+                   ;; (:thinking/:executing, set by the run future) are checked.
+                   (or @(:running-turn? cs)
+                       (contains? #{:thinking :executing} (agent/get-status agent-state)))
+                   (ui/chat-history-add-message! chat-history
+                                                 {:role :info :label "Continue"
+                                                  :content "Wait for the current response to finish before continuing."})
+
+                   @(:compacting? agent-state)
+                   (ui/chat-history-add-message! chat-history
+                                                 {:role :info :label "Continue"
+                                                  :content "Wait for the in-progress compaction to finish before continuing."})
+
+                   (empty? (agent/get-context agent-state))
+                   (ui/chat-history-add-message! chat-history
+                                                 {:role :info :label "Continue"
+                                                  :content "No conversation to continue."})
+
+                   :else
+                   (do (debug/log "/continue command")
+                       (start-agent-run! cs)))))})
   (commands/register-command!
    {:name "tree"
     :description "Browse session entry tree"
@@ -1058,6 +1089,30 @@
 
 ;; ─── Message submission (pi: session.prompt input event + agent run) ──────
 
+(defn- start-agent-run!
+  "Start an agent run: set turn state, show the working indicator + animation
+   timer, create the streaming placeholder, wire the streaming callbacks.
+   MESSAGE — optional initial user message; when nil the run continues on the
+   existing context without adding a message (the /continue path, where the
+   last entry is an unanswered user message or a dangling tool result the
+   model must pick up)."
+  [cs & [message]]
+  (reset! (:running-turn? cs) true)
+  (activate-working-indicator! cs)
+  (start-anim-timer! cs)
+  (when message
+    (ui/chat-history-add-message! (:chat-history cs)
+                                  {:role :user :content message}))
+  (ui/chat-history-start-streaming! (:chat-history cs))
+  (update-footer! cs)
+  (tui/tui-request-render (:tui cs))
+  (agent/run-agent-turn @(:agent-state cs)
+                        (cond-> {:on-text #(on-agent-text cs %)
+                                 :on-thinking #(on-agent-thinking cs %)
+                                 :on-done (fn [_] (on-agent-done cs))
+                                 :on-error #(on-agent-error cs %)}
+                          message (assoc :message message))))
+
 (defn- send-message
   "Send text to the agent: steer while streaming, else start a new turn.
    Input hooks must already have been applied (pi: agent run happens after
@@ -1077,22 +1132,8 @@
       (update-footer! cs)
       (tui/tui-request-render (:tui cs)))
     (do
-      (reset! (:running-turn? cs) true)
-      (activate-working-indicator! cs)
-      (start-anim-timer! cs)
       (debug/log "user submitted: " text)
-      (ui/chat-history-add-message! (:chat-history cs)
-                                    {:role :user :content text})
-      ;; Create streaming placeholder for incoming LLM response.
-      (ui/chat-history-start-streaming! (:chat-history cs))
-      (update-footer! cs)
-      (tui/tui-request-render (:tui cs))
-      (agent/run-agent-turn @(:agent-state cs)
-                            {:message text
-                             :on-text #(on-agent-text cs %)
-                             :on-thinking #(on-agent-thinking cs %)
-                             :on-done (fn [_] (on-agent-done cs))
-                             :on-error #(on-agent-error cs %)}))))
+      (start-agent-run! cs text))))
 
 (defn- apply-hooks
   "Run extension input hooks on text; returns the (possibly transformed)

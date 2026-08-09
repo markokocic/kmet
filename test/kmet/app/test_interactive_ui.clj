@@ -7,6 +7,7 @@
             [kmet.tui.components.editor :as editor]
             [kmet.tui.components.container :as container]
             [kmet.tui.protocols :as protocols]
+            [kmet.tui.core :as tui]
             [kmet.modes.interactive :as inter]
             [kmet.app.commands :as commands]
             [kmet.app.ui :as ui]
@@ -134,6 +135,86 @@
             (with-redefs [ui/chat-history-add-message! (fn [_ msg] (reset! last-msg msg))]
               ((:handler (commands/find-command "model")) cs "nope")
               (t/is (= "No model matches \"nope\"." (:content @last-msg))))))))))
+
+;; ─── /continue command ─────────────────────────────────────────────────────
+
+(deftest test-continue-registered
+  (testing "/continue is a real builtin inside register-builtin-commands!"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [c (commands/find-command "continue")]
+      (t/is (some? c) "continue registered")
+      (t/is (= "Continue where the agent left off (e.g. after a network error)"
+               (:description c)))
+      (t/is (some? (:handler c)) "continue has a handler"))))
+
+(deftest test-continue-refuses-while-running
+  (testing "/continue refuses while the agent is running"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [ag (agent/make-agent-state)
+          msg (atom nil)
+          cs {:agent-state (atom ag)
+              :chat-history nil
+              :running-turn? (atom true)
+              :tui nil}]
+      (reset! (:status ag) :thinking)
+      (swap! (:messages ag) conj {:role :user :content [{:type :text :text "hi"}]})
+      (with-redefs [ui/chat-history-add-message! (fn [_ m] (reset! msg m))]
+        ((:handler (commands/find-command "continue")) cs ""))
+      (t/is (= "Wait for the current response to finish before continuing."
+               (:content @msg))
+            "refuses while a turn is running"))))
+
+(deftest test-continue-refuses-empty-context
+  (testing "/continue refuses when there is no conversation to continue"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [ag (agent/make-agent-state)
+          msg (atom nil)
+          cs {:agent-state (atom ag)
+              :chat-history nil
+              :running-turn? (atom false)
+              :tui nil}]
+      (with-redefs [ui/chat-history-add-message! (fn [_ m] (reset! msg m))]
+        ((:handler (commands/find-command "continue")) cs ""))
+      (t/is (= "No conversation to continue." (:content @msg))))))
+
+(deftest test-continue-starts-run-without-message
+  (testing "/continue starts an agent run on the existing context with no new
+            user message — the model picks up the interrupted turn (e.g. after
+            a network error the last entry is an unanswered user message)"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [ag (agent/make-agent-state)
+          _ (swap! (:messages ag) conj
+                   {:role :user :content [{:type :text :text "fix the bug"}]})
+          started (atom nil)
+          cs {:agent-state (atom ag)
+              :chat-history nil
+              :running-turn? (atom false)
+              :tui nil
+              :footer-comp nil
+              :footer-provider nil
+              :status-container nil
+              :status-indicator nil
+              :active-status-kind (atom nil)
+              :anim-timer (atom nil)}]
+      (with-redefs [ui/chat-history-add-message! (fn [_ _] nil)
+                    ui/chat-history-start-streaming! (fn [_] nil)
+                    agent/run-agent-turn (fn [a opts]
+                                           (reset! started [a opts])
+                                           (future))
+                    inter/activate-working-indicator! (fn [_] nil)
+                    inter/start-anim-timer! (fn [_] nil)
+                    inter/update-footer! (fn [_] nil)
+                    tui/tui-request-render (fn [_] nil)]
+        ((:handler (commands/find-command "continue")) cs ""))
+      (t/is (some? @started) "run-agent-turn called")
+      (t/is (identical? ag (first @started)) "runs on the current agent state")
+      (t/is (not (contains? (second @started) :message))
+            "no :message option — no new user message is added")
+      (t/is (true? @(:running-turn? cs)) "UI turn flag set"))))
 
 ;; ─── Status indicator swap model (pi: showStatusIndicator/clearStatusIndicator) ──
 ;; The working indicator must survive mid-turn transient swaps: after a retry
