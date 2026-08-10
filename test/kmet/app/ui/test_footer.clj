@@ -42,8 +42,17 @@
     (let [home (System/getProperty "user.home")
           c (make-footer-with-session :cwd (str home "/project"))
           plain (render-plain c 50)]
-      (is (some #(re-find #"^~/project" %) plain)
-          "cwd under HOME renders home-substituted"))))
+      (is (some #(re-find #"^К ~/project" %) plain)
+          "cwd under HOME renders home-substituted, after the К mark"))))
+
+(deftest test-k-mark
+  (testing "accent cursive К mark renders before the cwd on line 1"
+    (let [c (make-footer-with-session :cwd "/some/project")
+          [line1 :as plain] (render-plain c 50)
+          raw (core/render c 50)]
+      (is (str/starts-with? line1 "К ") "line 1 starts with the К mark")
+      (is (some? (re-find #"^\u001b\[3m\u001b\[38;2;138;190;183mК" (first raw)))
+          "mark is italic (cursive) and accent-colored, matching the info screen"))))
 
 (deftest test-git-branch
   (testing "git branch renders after the cwd when resolved"

@@ -1,6 +1,6 @@
 (ns kmet.app.ui.footer
   "FooterComponent — Pi's two-line footer:
-     line 1: cwd (home-substituted) + git branch, dim
+     line 1: accent cursive К mark + cwd (home-substituted) + git branch, dim
      line 2: usage stats (↑in ↓out R W CH%) + context % colored by usage,
              right-aligned (provider) model • thinking
      line 3 (optional): extension statuses, sorted by key
@@ -66,7 +66,10 @@
                      ;; pi: footer line 1 shows `pwd • sessionName` when set
                      (when-let [session-name (fdp/fdp-get-session-name provider)]
                        (str " • " session-name)))
-            pwd-line (u/truncate-to-width (theme/dim pwd) width (theme/dim "..."))
+            ;; cursive Cyrillic К mark before the folder, in the info-screen
+            ;; accent (light blue) color
+            k-mark (str (theme/italic (theme/fg thm :accent "К")) " ")
+            pwd-line (u/truncate-to-width (str k-mark (theme/dim pwd)) width (theme/dim "..."))
             ;; ── Stats left (pi: statsParts) ──────────────────────────────
             stats-parts (cond-> []
                           (pos? (:input usage)) (conj (str "↑" (format-tokens (:input usage))))
