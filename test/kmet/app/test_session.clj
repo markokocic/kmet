@@ -1,6 +1,7 @@
 (ns kmet.app.test-session
   (:require [clojure.test :as t]
             [clojure.string :as str]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
             [kmet.app.session :as s]))
@@ -28,7 +29,66 @@
     (t/is (instance? clojure.lang.Atom (:entries session)))
     (t/is (instance? clojure.lang.Atom (:leaf-id session)))
     (t/is (empty? @(:entries session)))
-    (t/is (nil? @(:leaf-id session)))))
+    (t/is (nil? @(:leaf-id session)))
+    (t/is (not (.exists (io/file (:file session))))
+          "lazy creation: no file until the first assistant message (G4)")))
+
+(t/deftest test-session-header
+  ;; G1: header carries type/version/id/created-at/cwd/parent-session
+  (let [session (s/create-session test-dir
+                                  {:cwd "/home/user/proj"
+                                   :parent-session "/home/user/proj/parent.ednl"})]
+    (t/is (= :session (:type (:header session))))
+    (t/is (= 1 (:version (:header session))))
+    (t/is (= (:id session) (:id (:header session))))
+    (t/is (= "/home/user/proj" (:cwd (:header session))))
+    (t/is (= "/home/user/proj/parent.ednl" (:parent-session (:header session))))
+    (t/is (string? (:created-at (:header session)))))
+  (t/is (nil? (:parent-session (:header (s/create-session test-dir))))
+        "parent-session omitted for a root session")
+  (t/is (= (str (fs/cwd)) (:cwd (:header (s/create-session test-dir))))
+        "cwd defaults to the process cwd"))
+
+(t/deftest test-session-lazy-creation
+  ;; G4: no file until the first assistant message — user/bash entries
+  ;; accumulate in memory; the assistant entry persists header + everything
+  ;; in order (pi: _persist)
+  (let [dir (str "target/test-sess-lazy-" (System/currentTimeMillis))
+        sess (s/create-session dir)]
+    (try
+      (t/is (not (fs/exists? (:file sess))) "no file after create")
+      (s/append-entry sess {:role :user :content "q"})
+      (s/append-entry sess {:role :bash :command "ls" :output "" :exit-code 0})
+      (t/is (not (fs/exists? (:file sess)))
+            "no file with only user/bash entries")
+      (s/append-entry sess {:role :assistant :content "a"})
+      (t/is (fs/exists? (:file sess))
+            "file appears on the first assistant message")
+      (let [lines (str/split-lines (slurp (:file sess)))]
+        (t/is (= :session (:type (edn/read-string (first lines))))
+              "header is the first line")
+        (t/is (= 4 (count lines)) "header + 3 entries persisted in order"))
+      (let [loaded (s/load-session (:file sess))]
+        (t/is (= 3 (count @(:entries loaded))))
+        (t/is (= (:id sess) (:id loaded)) "id round-trips via the header")
+        (t/is (= (:header sess) (:header loaded)) "header round-trips"))
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-legacy-file-loads
+  ;; Files without a header (pre-G1 format) still load: entries-only, :header
+  ;; nil, :id derived from the filename
+  (let [dir (str "target/test-sess-legacy-" (System/currentTimeMillis))
+        sess (s/create-session dir)
+        file (:file sess)]
+    (try
+      (spit file "{:id \"1\" :role :user :content \"a\"}\n")
+      (spit file "{:id \"2\" :role :assistant :content \"b\"}\n" :append true)
+      (let [loaded (s/load-session file)]
+        (t/is (nil? (:header loaded)))
+        (t/is (= 2 (count @(:entries loaded))))
+        (t/is (= (str/replace (fs/file-name file) #"\.ednl$" "") (:id loaded))
+              "legacy id derives from the filename"))
+      (finally (fs/delete-tree dir)))))
 
 (t/deftest test-session-append-entry
   (let [session (s/create-session test-dir)
@@ -46,6 +106,10 @@
   ;; the session. Regression: this used to lose ~38% of entries on reload.
   (let [session (s/create-session test-dir)]
     (s/append-entry session {:role :user :content [{:type :text :text "seed"}]})
+    ;; An assistant entry persists the file first, so the concurrent appends
+    ;; below exercise the serialized append-to-file path (lazy creation G4
+    ;; would otherwise hold everything in memory).
+    (s/append-entry session {:role :assistant :content [{:type :text :text "boot"}]})
     (let [futures (doall
                    (for [_ (range 200)]
                      [(future (s/append-entry session {:role :bash :command "ls"}))
@@ -91,6 +155,7 @@
       (t/is (.exists (io/file file)))
       (let [loaded (s/load-session file)]
         (t/is (= (:id session) (:id loaded)))
+        (t/is (= (:header session) (:header loaded)) "header round-trips")
         (t/is (= 2 (count @(:entries loaded))))
         (t/is (= :user (:role (first @(:entries loaded)))))
         (t/is (= :assistant (:role (second @(:entries loaded)))))))))
@@ -99,13 +164,75 @@
   (t/is (thrown? Exception (s/load-session "nonexistent.ednl"))))
 
 (t/deftest test-session-list-sessions
-  (let [_ (s/create-session test-dir)
-        _ (s/create-session test-dir)
+  (let [s1 (s/create-session test-dir)
+        _ (s/append-entry s1 {:role :user :content "q"})
+        _ (s/append-entry s1 {:role :assistant :content "a"})
+        s2 (s/create-session test-dir)
+        _ (s/append-entry s2 {:role :user :content "q"})
+        _ (s/append-entry s2 {:role :assistant :content "a"})
         files (s/list-sessions test-dir)]
     (t/is (sequential? files))
     (t/is (>= (count files) 2))
     (doseq [f files]
       (t/is (str/ends-with? f ".ednl")))))
+
+(t/deftest test-encode-cwd
+  ;; G2: pi getDefaultSessionDirPath — `--` + cwd with leading slash stripped
+  ;; and / \ : replaced by -
+  (t/is (= "--home-user-proj--" (s/encode-cwd "/home/user/proj")))
+  (t/is (= "--home-user-proj--" (s/encode-cwd "\\home\\user\\proj")))
+  (t/is (= "--C--Users-dev--" (s/encode-cwd "C:\\Users\\dev")))
+  (t/is (= "--a-b--" (s/encode-cwd "a/b"))))
+
+(t/deftest test-session-list-cwd-dirs
+  ;; G2: sessions live in <base>/<--cwd-->/; list-sessions on the base walks
+  ;; the cwd subdirs (pi: listAll), a cwd dir lists flat, and legacy flat
+  ;; files in the base stay visible (no regression on upgrade)
+  (let [dir (str "target/test-sess-cwd-" (System/currentTimeMillis))
+        cwd-a (s/session-dir-for-cwd dir "/home/user/proj-a")
+        cwd-b (s/session-dir-for-cwd dir "/home/user/proj-b")
+        sa (s/create-session cwd-a)
+        _ (s/append-entry sa {:role :assistant :content "a1"})
+        sb (s/create-session cwd-b)
+        _ (s/append-entry sb {:role :assistant :content "b1"})
+        ;; a legacy pre-G2 session file placed flat in the base dir
+        legacy (s/create-session dir)
+        _ (s/append-entry legacy {:role :assistant :content "legacy"})]
+    (try
+      (t/is (= 3 (count (s/list-sessions dir)))
+            "base listing walks cwd subdirs + legacy flat files")
+      (t/is (= 1 (count (s/list-sessions cwd-a))) "cwd dir lists flat")
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-find-most-recent-session
+  ;; G23/continue: pi findMostRecentSession — header-based discovery in the
+  ;; cwd dir, scoped by header :cwd; legacy headerless files and other-cwd
+  ;; sessions excluded, no fallback
+  (let [dir (str "target/test-sess-mrs-" (System/currentTimeMillis))
+        cwd-a (s/session-dir-for-cwd dir "/home/user/proj-a")
+        cwd-b (s/session-dir-for-cwd dir "/home/user/proj-b")
+        sa1 (s/create-session cwd-a {:cwd "/home/user/proj-a"})
+        _ (s/append-entry sa1 {:role :assistant :content "a1"})
+        _ (Thread/sleep 5)
+        sa2 (s/create-session cwd-a {:cwd "/home/user/proj-a"})
+        _ (s/append-entry sa2 {:role :assistant :content "a2"})
+        sb (s/create-session cwd-b {:cwd "/home/user/proj-b"})
+        _ (s/append-entry sb {:role :assistant :content "b1"})
+        ;; a legacy headerless file in the cwd dir — must be excluded
+        legacy (s/create-session cwd-a {:cwd "/home/user/proj-a"})
+        _ (spit (:file legacy) "{:id \"1\" :role :assistant :content \"old\"}\n")]
+    (try
+      (t/is (= (:file sa2) (s/find-most-recent-session cwd-a "/home/user/proj-a"))
+            "newest matching session in the cwd dir wins")
+      (t/is (nil? (s/find-most-recent-session cwd-a "/home/user/proj-b"))
+            "header :cwd mismatch → excluded")
+      (t/is (nil? (s/find-most-recent-session cwd-b "/home/user/proj-a"))
+            "dir scoping: proj-b has no proj-a session")
+      (t/is (nil? (s/find-most-recent-session dir "/home/user/proj-a"))
+            "only the cwd dir is scanned, not the base")
+      (t/is (nil? (s/find-most-recent-session (str dir "/missing") "/home/user/proj-a"))
+            "missing dir → nil")
+      (finally (fs/delete-tree dir)))))
 
 (t/deftest test-session-list-sessions-nonexistent-dir
   (let [files (s/list-sessions "nonexistent-dir")]
@@ -139,8 +266,8 @@
       (t/is (>= ms (- now 5000)) "last activity is recent"))))
 
 (t/deftest test-session-last-activity-empty
-  ;; Empty session files (created but never written to) must still yield a
-  ;; number via the file-mtime fallback — the resume dialog formats it.
+  ;; Unsaved (lazy) sessions have no file — last activity falls back to the
+  ;; header created-at (G4), so the resume dialog can still format an age.
   (let [session (s/create-session test-dir)]
     (t/is (number? (s/get-last-activity-ms session)))
     (t/is (pos? (s/get-last-activity-ms session)))))
@@ -194,6 +321,7 @@
 (t/deftest test-session-delete
   (let [session (s/create-session test-dir)
         f (:file session)]
+    (s/append-entry session {:role :assistant :content "hi"}) ;; persist (lazy G4)
     (t/is (.exists (io/file f)))
     (s/delete-session! session)
     (t/is (not (.exists (io/file f))))))
@@ -284,10 +412,15 @@
         (t/is (= first-kept-id (:id (second context))) "first kept entry follows")
         (t/is (= (:id (first entries)) (:id (first branch)))
               "summarized history stays in the branch")
+        ;; persist the file (lazy G4: needs an assistant message) so the
+        ;; reload checks below have something to read
+        (s/append-entry sess {:role :assistant :content "done"})
         ;; file reloadable, context survives a reload
         (let [loaded (s/load-session (:file sess))]
-          (t/is (= (count branch) (count @(:entries loaded))))
-          (t/is (= 4 (count (s/build-context loaded))))))
+          (t/is (= 8 (count @(:entries loaded)))
+                "6 user + compaction + the done entry persist")
+          (t/is (= 5 (count (s/build-context loaded)))
+                "context = compaction + 3 kept + done")))
       (finally (fs/delete-tree dir)))))
 
 ;; ─── Append-only compaction: context build (pi: buildContextEntries) ─────
@@ -402,6 +535,8 @@
 (t/deftest test-session-name-persists
   (let [session (s/create-session test-dir)
         file (:file session)]
+    (s/append-entry session {:role :user :content "hi"})
+    (s/append-entry session {:role :assistant :content "hello"}) ;; persist (lazy G4)
     (s/append-session-info! session "my session")
     (let [loaded (s/load-session file)]
       (t/is (= "my session" (s/get-session-name loaded))))))

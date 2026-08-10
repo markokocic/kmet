@@ -16,7 +16,7 @@
 ;; branch walk then orphans one of them, so a restored session silently
 ;; loses messages.
 
-(defrecord Session [file id entries leaf-id lock])
+(defrecord Session [file id header entries leaf-id lock])
 
 (defmacro with-session-lock
   "Run BODY under the session's mutation lock (pi: storage.enqueue).
@@ -52,68 +52,132 @@
          :parent-id leaf-id
          :timestamp (str (timestamp))))
 
+(defn- publish-file!
+  "Atomically write the session file: the header line followed by the
+   entries, via temp file + rename so a crash mid-write can't corrupt the
+   file (pi: temp-file publication). Creates the session dir. Callers must
+   hold the session lock."
+  [session entries]
+  (let [file (:file session)
+        tmp (str file ".tmp")]
+    (fs/create-dirs (fs/parent file))
+    (spit tmp (apply str (map prn-str (cons (:header session) entries))))
+    (fs/move tmp file {:replace-existing true})))
+
+(defn- persist-if-needed!
+  "Lazy file creation (pi: _persist — G4): write the file the first time the
+   branch contains an assistant message; before that, entries accumulate in
+   memory only and no file exists on disk. No-op once the file exists.
+   Callers must hold the session lock."
+  [session]
+  (when (and (not (fs/exists? (:file session)))
+             (some #(= :assistant (:role %)) @(:entries session)))
+    (publish-file! session @(:entries session))))
+
 (defn- write-entries!
   "Atomically replace the session file's contents and in-memory state (pi:
-   temp-file publication — a crash mid-write can't leave a corrupt file).
-   Callers must hold the session lock."
+   temp-file publication). Rewrites whenever the file exists; a
+   not-yet-persisted session (lazy creation — G4) is only written once the
+   branch has an assistant message. Callers must hold the session lock."
   [session entries]
-  (let [entries (vec entries)
-        file (:file session)
-        tmp (str file ".tmp")]
-    (spit tmp (apply str (map prn-str entries)))
-    (fs/move tmp file {:replace-existing true})
+  (let [entries (vec entries)]
+    (when (or (fs/exists? (:file session))
+              (some #(= :assistant (:role %)) entries))
+      (publish-file! session entries))
     (reset! (:entries session) entries)
     (reset! (:leaf-id session) (some-> entries last :id))))
+
+;; ─── Layout (pi: cwd-encoded session dirs) ───────────────────────────────
+
+(defn encode-cwd
+  "Encode a cwd path into a safe directory name: `--` + the cwd with its
+   leading slash stripped and / \\ : replaced by - + `--` (pi:
+   getDefaultSessionDirPath — sessions/<--cwd-->/)."
+  [cwd]
+  (str "--" (-> (str cwd)
+                (str/replace #"^[/\\]" "")
+                (str/replace #"[/\\:]" "-"))
+       "--"))
+
+(defn session-dir-for-cwd
+  "Session directory for a cwd under a base sessions dir: BASE/<--cwd-->/
+   (pi: default layout sessions/<--cwd-->/)."
+  [base-dir cwd]
+  (str (fs/path base-dir (encode-cwd cwd))))
 
 ;; ─── CRUD ───────────────────────────────────────────────────────────────────
 
 (defn create-session
-  "Create a new session file in dir. Returns Session record."
-  [dir]
-  (let [session-dir (io/file dir)]
-    (fs/create-dirs session-dir)
-    (let [id (generate-id [])
-          file (io/file session-dir (str id ".ednl"))]
-      (spit file "")
-      (map->Session {:file (str (fs/canonicalize file))
-                     :id id
-                     :entries (atom [])
-                     :leaf-id (atom nil)
-                     :lock (java.util.concurrent.locks.ReentrantLock.)}))))
+  "Create a new session record in DIR. No file is written until the first
+   assistant message (pi: newSession + lazy _persist — G4); the record
+   carries a :header {:type :session :version 1 :id :created-at :cwd
+   :parent-session?} (G1) and the computed :file
+   <timestamp>_<id>.ednl. opts: :cwd (defaults to the process cwd),
+   :parent-session (source session file, for forks)."
+  ([dir] (create-session dir nil))
+  ([dir {:keys [cwd parent-session]}]
+   (let [id (generate-id [])
+         ts (str (timestamp))
+         header (cond-> {:type :session
+                         :version 1
+                         :id id
+                         :created-at ts
+                         :cwd (or cwd (str (fs/cwd)))}
+                  parent-session (assoc :parent-session parent-session))
+         file (io/file dir (str (str/replace ts #"[:.]" "-") "_" id ".ednl"))]
+     (fs/create-dirs dir)
+     (map->Session {:file (str (fs/canonicalize file))
+                    :id id
+                    :header header
+                    :entries (atom [])
+                    :leaf-id (atom nil)
+                    :lock (java.util.concurrent.locks.ReentrantLock.)}))))
 
 (defn load-session
-  "Load an existing session from file path. Returns Session record."
+  "Load an existing session from file path. Returns Session record.
+   A leading :session header line (G1) is parsed into :header and excluded
+   from the entries; legacy files without a header load with :header nil
+   and :id derived from the filename."
   [path]
   (let [file (io/file path)
         content (slurp file)
         lines (str/split-lines content)
-        entries (vec (keep identity
-                           (for [line lines]
-                             (let [trimmed (str/trim line)]
-                               (when (seq trimmed)
-                                 (try (edn/read-string trimmed)
-                                      (catch Exception ex
-                                        (binding [*out* *err*]
-                                          (println "Warning: Skipping invalid entry in" path ":" (ex-message ex)))
-                                        nil)))))))
+        parsed (vec (keep identity
+                          (for [line lines]
+                            (let [trimmed (str/trim line)]
+                              (when (seq trimmed)
+                                (try (edn/read-string trimmed)
+                                     (catch Exception ex
+                                       (binding [*out* *err*]
+                                         (println "Warning: Skipping invalid entry in" path ":" (ex-message ex)))
+                                       nil)))))))
+        header? (and (seq parsed) (= :session (:type (first parsed))))
+        header (when header? (first parsed))
+        entries (if header? (subvec parsed 1) parsed)
         leaf-id (some-> entries last :id)]
     (map->Session {:file (str (fs/canonicalize file))
-                   :id (str/replace (fs/file-name file) #"\.ednl$" "")
+                   :id (or (:id header)
+                           (str/replace (fs/file-name file) #"\.ednl$" ""))
+                   :header header
                    :entries (atom entries)
                    :leaf-id (atom leaf-id)
                    :lock (java.util.concurrent.locks.ReentrantLock.)})))
 
 (defn append-entry
-  "Append an entry to the session file and atom. Serialized per session so
+  "Append an entry to the session atom, persisting it to the file (pi:
+   storage.appendEntry is enqueued; _persist defers the file write until the
+   first assistant message — lazy creation G4). Serialized per session so
    concurrent appends (bash-result future + agent loop) can't produce
-   orphaned sibling entries (pi: storage.appendEntry is enqueued)."
+   orphaned sibling entries."
   [session entry]
   (with-session-lock session
     (let [entry (build-entry @(:entries session) @(:leaf-id session) entry)
           file (:file session)]
-      (spit file (prn-str entry) :append true)
       (swap! (:entries session) conj entry)
       (reset! (:leaf-id session) (:id entry))
+      (if (fs/exists? file)
+        (spit file (prn-str entry) :append true)
+        (persist-if-needed! session))
       entry)))
 
 (defn replace-entries!
@@ -274,26 +338,29 @@
                          (select-keys opts [:tokens-before :usage :details])))))
 
 (defn fork-session
-  "Create a new session forked at the given entry-id."
+  "Create a new session forked at the given entry-id (pi:
+   createBranchedSession). The fork lives in the same session directory and
+   its header links :parent-session to the source file. The branch up to
+   entry-id is copied. Note: entries are re-id'd — pi keeps entry ids and
+   re-chains around labels (G18, fixed in the branching phase)."
   [session entry-id]
   (let [entries @(:entries session)
         index (reduce (fn [m e] (assoc m (:id e) e)) {} entries)
         target (get index entry-id)]
     (when target
-      (let [fork-dir (io/file (str (fs/parent (:file session))) "forks")]
-        (fs/create-dirs fork-dir)
-        (let [fork (create-session (str (fs/canonicalize fork-dir)))
-              ;; Copy branch up to target
-              branch (loop [id entry-id result []]
-                       (if id
-                         (if-let [e (get index id)]
-                           (recur (:parent-id e) (conj result e))
-                           result)
-                         result))]
-          (doseq [e (reverse branch)]
-            (let [clean (dissoc e :id :parent-id :timestamp)]
-              (append-entry fork clean)))
-          fork)))))
+      (let [branch (loop [id entry-id result []]
+                     (if id
+                       (if-let [e (get index id)]
+                         (recur (:parent-id e) (conj result e))
+                         result)
+                       result))
+            fork (create-session (str (fs/parent (:file session)))
+                                 {:cwd (get-in session [:header :cwd])
+                                  :parent-session (:file session)})]
+        (doseq [e (reverse branch)]
+          (let [clean (dissoc e :id :parent-id :timestamp)]
+            (append-entry fork clean)))
+        fork))))
 
 ;; ─── Bash result recording ─────────────────────────────────────────────────
 
@@ -395,8 +462,10 @@
 
 (defn get-last-activity-ms
   "Last message activity time as epoch ms (pi: modified — the latest message
-   timestamp), falling back to the file mtime. An unparseable timestamp
-   (corrupt/legacy file) also falls back to mtime rather than throwing."
+   timestamp), falling back to the file mtime, then the header :created-at
+   (a lazy session has no file until the first assistant message — G4).
+   An unparseable timestamp (corrupt/legacy file) falls back rather than
+   throwing."
   [session]
   (let [last-ts (some-> (filter #(contains? % :timestamp) @(:entries session))
                         last
@@ -404,18 +473,75 @@
     (or (when last-ts
           (try (-> (java.time.Instant/parse last-ts) (.toEpochMilli))
                (catch Exception _ nil)))
-        (.toMillis (fs/last-modified-time (:file session))))))
+        (when (fs/exists? (:file session))
+          (.toMillis (fs/last-modified-time (:file session))))
+        (when-let [created (:created-at (:header session))]
+          (try (-> (java.time.Instant/parse created) (.toEpochMilli))
+               (catch Exception _ nil)))
+        0)))
 
 (defn list-sessions
-  "List all session files in a directory, newest first."
+  "List all session files under a session directory, newest first. When DIR
+   is a base sessions dir, its cwd-encoded subdirectories are walked too
+   (pi: listAll — sessions/<--cwd-->/); when DIR is a single cwd-encoded
+   dir, it is listed flat. Returns canonical absolute paths."
   [dir]
   (let [d (io/file dir)]
+    (when (fs/directory? d)
+      (let [dirs (cons d (filter fs/directory? (fs/list-dir d)))]
+        (->> dirs
+             (mapcat (fn [sub]
+                       (->> (fs/list-dir sub)
+                            (filter #(and (str/ends-with? (fs/file-name %) ".ednl")
+                                          (fs/regular-file? %)))
+                            (map #(str (fs/canonicalize %))))))
+             (sort-by #(.toMillis (fs/last-modified-time %)) >)
+             vec)))))
+
+(defn- read-session-header
+  "Best-effort header read for discovery (pi: readSessionHeaderForDiscovery —
+   a bounded leading-line scan): returns the first :session header of the
+   file, or nil for headerless, corrupt, or unreadable files. Blank and
+   malformed leading lines are skipped; the scan stops at the first
+   parseable non-header entry."
+  [path]
+  (try
+    (with-open [r (io/reader path)]
+      (loop [lines (line-seq r)]
+        (if-let [line (first lines)]
+          (let [trimmed (str/trim line)]
+            (if (seq trimmed)
+              (let [e (try (edn/read-string trimmed) (catch Exception _ ::invalid))]
+                (cond
+                  (and (map? e) (= :session (:type e))) e
+                  (= ::invalid e) (recur (rest lines))
+                  :else nil))
+              (recur (rest lines))))
+          nil)))
+    (catch Exception _ nil)))
+
+(defn find-most-recent-session
+  "Most recent session file in DIR whose header :cwd matches CWD (pi:
+   findMostRecentSession — header-based discovery, best-effort; continue is
+   scoped to the current project). Returns the canonical path, or nil when
+   DIR holds no matching session. Legacy headerless files and files from
+   other cwds are excluded — no fallback."
+  [dir cwd]
+  (let [resolved-cwd (str (fs/absolutize cwd))
+        d (io/file dir)]
     (when (fs/directory? d)
       (->> (fs/list-dir d)
            (filter #(and (str/ends-with? (fs/file-name %) ".ednl")
                          (fs/regular-file? %)))
+           (keep (fn [f]
+                   (let [path (str (fs/canonicalize f))
+                         header (read-session-header path)]
+                     (when (and header
+                                (seq (:cwd header))
+                                (= (str (fs/absolutize (:cwd header))) resolved-cwd))
+                       path))))
            (sort-by #(.toMillis (fs/last-modified-time %)) >)
-           (mapv #(str (fs/canonicalize %)))))))
+           first))))
 
 (defn delete-session!
   "Delete a session file."

@@ -57,18 +57,30 @@
     (cfg/get-session-dir c)
     (str (System/getProperty "user.home") "/.kmet/sessions")))
 
-(defn- ensure-session-dir []
+(defn- ensure-session-dir
+  "The base sessions dir (created). Listings (resume-session) walk it plus
+   its cwd-encoded subdirectories (pi: listAll — G2), so legacy flat session
+   files remain visible alongside per-project ones."
+  []
   (let [d (get-session-dir)]
     (fs/create-dirs d)
     d))
 
-(defn- find-session
-  "Find the most recent existing session, or nil."
+(defn- ensure-cwd-session-dir
+  "The sessions dir for the current cwd — where new sessions are placed:
+   BASE/<--cwd-->/ (pi: getDefaultSessionDir — per-project isolation, G2)."
   []
-  (let [dir (ensure-session-dir)
-        existing (session/list-sessions dir)]
-    (when (seq existing)
-      (session/load-session (first existing)))))
+  (let [d (session/session-dir-for-cwd (get-session-dir) (str (fs/cwd)))]
+    (fs/create-dirs d)
+    d))
+
+(defn- find-session
+  "Most recent session for the current cwd (pi: continueRecent →
+   findMostRecentSession — header-based discovery in the cwd-encoded dir;
+   legacy headerless sessions and other-cwd files are excluded, no fallback).
+   Used by --continue so the current project's last session is resumed."
+  []
+  (session/find-most-recent-session (ensure-cwd-session-dir) (str (fs/cwd))))
 
 ;; ─── Core state ────────────────────────────────────────────────────────────
 
@@ -332,7 +344,7 @@
    {:name "new"
     :description "Start a new session"
     :handler (fn [cs _]
-               (let [new-session (session/create-session (ensure-session-dir))]
+               (let [new-session (session/create-session (ensure-cwd-session-dir))]
                  (debug/log "new session created: " (:id new-session))
                  (ui/chat-history-clear! (:chat-history cs))
                  (reset! (:session-atom cs) new-session)
@@ -735,8 +747,7 @@
             on-select-fn (fn [_]
                            (when-let [sel (select-list/select-list-get-selected @sl-ref)]
                              (let [sess (session/load-session (:value sel))
-                                   fname (str/replace (:value sel) #".*/" "")
-                                   short-id (subs fname 0 (min 8 (count fname)))]
+                                   short-id (subs (:id sess) 0 (min 8 (count (:id sess))))]
                                (restore-session! cs sess)
                                (ui/chat-history-add-message! (:chat-history cs)
                                                              {:role :assistant
@@ -2271,11 +2282,20 @@
             _ (reset! global-config config)
             session (cond
                       (:resume opts) nil
-                      (:continue opts) (find-session)
-                      :else (session/create-session (ensure-session-dir)))
+                      (:continue opts) (or (find-session)
+                                           ;; pi: continueRecent — no session
+                                           ;; to continue → start a fresh one
+                                           (session/create-session (ensure-cwd-session-dir)))
+                      :else (session/create-session (ensure-cwd-session-dir)))
             cs (build-layout config session)]
         (reset! tui-ref (:tui cs))
         (when (:resume opts) (resume-session cs ensure-session-dir))
+        ;; pi: continueRecent — a found session is the source of truth:
+        ;; rebuild the agent context and replay the chat so the next turn
+        ;; continues where the previous run stopped (the session is
+        ;; otherwise loaded but the agent starts with an empty context).
+        (when (and (:continue opts) session (seq @(:entries session)))
+          (restore-session! cs session))
         ;; pi: start the UI before initializing extensions so session_start
         ;; handlers can use interactive dialogs — kmet loads extensions
         ;; earlier, so the event fires once the layout + UI registry are
