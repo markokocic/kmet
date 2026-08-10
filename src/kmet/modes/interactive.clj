@@ -2282,10 +2282,15 @@
             _ (reset! global-config config)
             session (cond
                       (:resume opts) nil
-                      (:continue opts) (or (find-session)
-                                           ;; pi: continueRecent — no session
-                                           ;; to continue → start a fresh one
-                                           (session/create-session (ensure-cwd-session-dir)))
+                      (:continue opts) (if-let [path (find-session)]
+                                         ;; find-session returns the session
+                                         ;; file path — load it into a Session
+                                         ;; record so the context and chat can
+                                         ;; be restored below
+                                         (session/load-session path)
+                                         ;; pi: continueRecent — no session to
+                                         ;; continue → start a fresh one
+                                         (session/create-session (ensure-cwd-session-dir)))
                       :else (session/create-session (ensure-cwd-session-dir)))
             cs (build-layout config session)]
         (reset! tui-ref (:tui cs))
