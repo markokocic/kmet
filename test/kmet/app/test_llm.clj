@@ -232,6 +232,16 @@
              (te (java.net.SocketException. "Connection reset"))))
     (t/is (= "network error: UnknownHostException"
              (te (java.net.UnknownHostException. nil))))
+    ;; HTTP/2 RST_STREAM surfaces as a plain IOException (java.net.http
+    ;; builds the message from the frame's error code) — same class of
+    ;; transport reset as SocketException "Connection reset", so it gets
+    ;; the same stable retryable token.
+    (t/is (= "network error: Received RST_STREAM: Protocol error"
+             (te (java.io.IOException. "Received RST_STREAM: Protocol error"))))
+    (t/is (= "network error: Received RST_STREAM: CANCEL"
+             (te (java.io.IOException. "Received RST_STREAM: CANCEL"))))
+    ;; Other IOExceptions are not network errors
+    (t/is (= "Broken pipe" (te (java.io.IOException. "Broken pipe"))))
     ;; Non-network exceptions keep their message / legacy fallback
     (t/is (= "Invalid API key" (te (ex-info "Invalid API key" {}))))
     (t/is (= "Request failed: ExceptionInfo" (te (ex-info nil {}))))))

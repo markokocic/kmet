@@ -431,6 +431,14 @@
     "UnresolvedAddressException" "SocketTimeoutException"
     "HttpTimeoutException" "SocketException"})
 
+(def ^:private http2-stream-reset-regex
+  "Message pattern for HTTP/2 stream resets. java.net.http surfaces a server
+   RST_STREAM frame as a plain java.io.IOException whose message is
+   'Received RST_STREAM: <code>' (e.g. 'Protocol error', 'CANCEL') — the
+   class is too broad to add to network-exception-classes, so these are
+   classified by message."
+  (re-pattern "(?i)received rst_stream"))
+
 (defn- transport-error-message
   "Message for a transport-layer exception. Network failures carry a stable
    'network error' token so the loop's retry classifier (retryable-error?)
@@ -444,6 +452,13 @@
     (cond
       (contains? network-exception-classes cls)
       (str "network error: " (if (str/blank? msg) cls msg))
+
+      ;; HTTP/2 RST_STREAM arrives as a plain IOException — same class of
+      ;; transport reset as SocketException "Connection reset", so it gets
+      ;; the same stable retryable token (pi: undici reports these as
+      ;; 'fetch failed').
+      (re-find http2-stream-reset-regex (or msg ""))
+      (str "network error: " (or msg cls))
 
       (str/blank? msg)
       (str "Request failed: " cls)

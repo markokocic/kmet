@@ -188,8 +188,9 @@
    java.net.http streams).
 
    Returns [read-char stop thread]:
-     read-char — no-arg fn: next char (int), -1 at EOF, :timeout on stall,
-                 :aborted when the cancel signal fired mid-poll
+     read-char — no-arg fn: next char (int), -1 at EOF, the read
+                 exception when the underlying stream failed, :timeout on
+                 stall, :aborted when the cancel signal fired mid-poll
      stop      — interrupts the daemon so a blocked read releases (required
                   before closing the reader, which deadlocks while a read is
                   in flight on java.net.http streams)
@@ -200,9 +201,13 @@
            (fn []
              (try
                (loop []
-                 (let [c (.read rdr)]
+                 (let [c (try (.read rdr) (catch Exception e e))]
                    (.put q c)
-                   (when-not (neg? c) (recur))))
+                   ;; A read failure (e.g. HTTP/2 RST_STREAM) is put on the
+                   ;; queue like data so the caller reports the real error
+                   ;; instead of stalling to the idle deadline.
+                   (when-not (or (neg? c) (instance? Exception c))
+                     (recur))))
                (catch Exception _ nil))))]
     (.setDaemon t true)
     (.start t)
@@ -211,6 +216,7 @@
          (loop []
            (let [v (.poll q 100 java.util.concurrent.TimeUnit/MILLISECONDS)]
              (cond
+               (instance? Exception v) v
                (some? v) (int v)
                (and signal @signal) :aborted
                (>= (System/currentTimeMillis) deadline) :timeout
@@ -220,12 +226,14 @@
 
 (defn- read-line-from
   "Assemble one line from an idle-char-reader fn. Returns the line string,
-   nil at EOF, or the reader's :timeout/:aborted sentinel."
+   nil at EOF, the read exception when the stream failed, or the reader's
+   :timeout/:aborted sentinel."
   [read-char]
   (let [sb (StringBuilder.)]
     (loop []
       (let [c (read-char)]
         (cond
+          (instance? Exception c) c
           (or (= :timeout c) (= :aborted c)) c
           (neg? c) (when (pos? (.length sb)) (str sb)) ;; EOF mid-line
           (= c (int \newline)) (str sb)
@@ -234,8 +242,9 @@
 (defn- make-idle-line-reader
   "Line reader with a per-byte idle timeout (undici bodyTimeout semantics).
    Returns {:read-line f :stop f :thread t} — f produces lines, nil at EOF,
-   :timeout on stall, :aborted on cancel; stop releases a blocked read;
-   thread is the daemon thread (nil when the idle timeout is disabled)."
+   the read exception when the stream failed, :timeout on stall, :aborted on
+   cancel; stop releases a blocked read; thread is the daemon thread (nil
+   when the idle timeout is disabled)."
   [rdr idle-ms signal]
   (if (and idle-ms (pos? idle-ms))
     (let [[read-char stop thread] (make-idle-char-reader rdr idle-ms signal)]
@@ -255,9 +264,11 @@
    is in flight deadlocks java.net.http streams, and process pipes (curl)
    need the abort-fn since interrupts don't unblock them.
 
-   Returns :aborted when cancelled, :timeout when idle limit reached, or
-   :eof when the stream ended cleanly (nil read without cancel/timeout).
-   The caller can distinguish clean EOF from premature termination."
+   Returns :aborted when cancelled, :timeout when idle limit reached,
+   :error when the underlying read failed (the exception is reported via
+   error-fn), or :eof when the stream ended cleanly (nil read without
+   cancel/timeout). The caller can distinguish clean EOF from premature
+   termination."
   [rdr idle-timeout-ms signal abort-fn handle-line error-fn]
   (let [idle (make-idle-line-reader rdr idle-timeout-ms signal)]
     (try
@@ -274,6 +285,15 @@
             (nil? line) :eof
             (and signal @signal)
             (do ((:stop idle)) :aborted)
+            ;; A transport read failure (RST_STREAM, connection reset, ...)
+            ;; surfaces immediately — cancel wins if it raced with the error.
+            ;; abort-fn kills a possibly-still-alive curl transport so
+            ;; finish-curl!'s process deref doesn't block on it.
+            (instance? Exception line)
+            (do ((:stop idle))
+                (when abort-fn (abort-fn))
+                (error-fn line)
+                :error)
             :else
             (do (handle-line line)
                 (recur)))))
@@ -306,10 +326,15 @@
                                           (when (= :done (:type event))
                                             (reset! saw-done true))
                                           (handler event)))))
-                                  (fn []
-                                    (handler {:type :error
-                                              :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
-                                                            " ms (no data received)")})))]
+                                  (fn
+                                    ([] (handler {:type :error
+                                                  :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
+                                                                " ms (no data received)")}))
+                                    ;; Transport read failure (RST_STREAM, connection
+                                    ;; reset, ...) — the accurate error surfaces instead
+                                    ;; of a misleading idle timeout.
+                                    ([e] (handler {:type :error
+                                                   :message (str "Stream error: " (ex-message e))}))))]
       (when (and (= :eof end-reason) (not @saw-done) (not @signal))
         (handler {:type :error
                   :message "Stream ended before a terminal response event"})))
@@ -346,10 +371,15 @@
                                               (handler evt))
                                             (reset! state {:event-name nil :buf ""}))
                                         :else nil)))
-                                  (fn []
-                                    (handler {:type :error
-                                              :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
-                                                            " ms (no data received)")})))]
+                                  (fn
+                                    ([] (handler {:type :error
+                                                  :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
+                                                                " ms (no data received)")}))
+                                    ;; Transport read failure (RST_STREAM, connection
+                                    ;; reset, ...) — the accurate error surfaces instead
+                                    ;; of a misleading idle timeout.
+                                    ([e] (handler {:type :error
+                                                   :message (str "Stream error: " (ex-message e))}))))]
       ;; pi: sawMessageStart && !sawMessageEnd → error. kmet is stricter:
       ;; the stream is always expected to end with message_stop regardless
       ;; of whether message_start was seen (the envelope event is always
@@ -380,10 +410,15 @@
                                           (when (= :done (:type event))
                                             (reset! saw-done true))
                                           (handler event)))))
-                                  (fn []
-                                    (handler {:type :error
-                                              :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
-                                                            " ms (no data received)")})))]
+                                  (fn
+                                    ([] (handler {:type :error
+                                                  :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
+                                                                " ms (no data received)")}))
+                                    ;; Transport read failure (RST_STREAM, connection
+                                    ;; reset, ...) — the accurate error surfaces instead
+                                    ;; of a misleading idle timeout.
+                                    ([e] (handler {:type :error
+                                                   :message (str "Stream error: " (ex-message e))}))))]
       (when (and (= :eof end-reason) (not @saw-done) (not @signal))
         (handler {:type :error
                   :message "Stream ended before a terminal response event"})))

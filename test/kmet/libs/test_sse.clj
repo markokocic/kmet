@@ -155,6 +155,29 @@
     (t/is (str/includes? (:message (first @events)) "idle timeout"))
     (.close in)))
 
+(t/deftest test-openai-stream-read-error-surfaces-immediately
+  ;; A transport read failure (e.g. HTTP/2 RST_STREAM thrown by
+  ;; java.net.http mid-stream) must surface as an accurate error right away
+  ;; — not stall to the idle deadline and report a misleading idle timeout.
+  ;; Regression for "No retry after: Received RST_STREAM: Protocol error":
+  ;; the daemon reader used to swallow read exceptions, so the classifier
+  ;; never saw the real message.
+  (let [events (atom [])
+        throwing-reader
+        (proxy [java.io.Reader] []
+          (read
+            ([] (throw (java.io.IOException. "Received RST_STREAM: Protocol error")))
+            ([cbuf off len] (throw (java.io.IOException. "Received RST_STREAM: Protocol error")))))
+        f (future
+            (sse/process-openai-stream {:body throwing-reader}
+                                       (fn [e] (swap! events conj e))
+                                       nil
+                                       300000) ;; 5-min idle — must not be reached
+            :done)]
+    (t/is (= :done (deref f 3000 :timeout)))
+    (t/is (= [{:type :error :message "Stream error: Received RST_STREAM: Protocol error"}]
+             @events))))
+
 (t/deftest test-openai-stream-idle-resets-on-flow
   ;; Data arriving well within the idle window over a total duration longer
   ;; than the timeout must not stall — the clock resets per byte (undici

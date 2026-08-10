@@ -823,6 +823,20 @@
   (t/is (loop/retryable-error? "Request timed out"))
   (t/is (loop/retryable-error? "HTTP/1.1 header parser received no bytes"))
   (t/is (loop/retryable-error? "Provider returned error: upstream connect"))
+  ;; HTTP/2 RST_STREAM (java.net.http throws a plain IOException whose
+  ;; message is "Received RST_STREAM: <code>") — same class of transport
+  ;; reset as "Connection reset", so it must be retried too; both the raw
+  ;; llm-layer message and the sse read-path "Stream error: ..." prefix.
+  (t/is (loop/retryable-error? "Received RST_STREAM: Protocol error"))
+  (t/is (loop/retryable-error? "Stream error: Received RST_STREAM: Protocol error"))
+  (t/is (loop/retryable-error? "Received RST_STREAM: CANCEL"))
+  (t/is (loop/retryable-error? "Stream error: Connection reset"))
+  ;; Other JVM transport-reset phrasings (OS/JDK-specific) surfacing on the
+  ;; sse read path without the 'network error' token.
+  (t/is (loop/retryable-error? "Software caused connection abort: recv failed"))
+  (t/is (loop/retryable-error? "Stream error: Software caused connection abort"))
+  (t/is (loop/retryable-error? "An existing connection was forcibly closed by the remote host"))
+  (t/is (loop/retryable-error? "Broken pipe"))
   (t/is (not (loop/retryable-error? "insufficient_quota")))
   (t/is (not (loop/retryable-error? "Monthly usage limit reached")))
   (t/is (not (loop/retryable-error? "GoUsageLimitError")))
