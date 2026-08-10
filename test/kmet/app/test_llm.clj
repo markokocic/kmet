@@ -218,6 +218,24 @@
     (t/is (str/includes? text "(command cancelled)"))
     (t/is (not (str/includes? text "Command exited with code")))))
 
+(t/deftest test-llm-transport-error-message
+  ;; A connect-time failure on this JDK surfaces as a ConnectException with a
+  ;; nil message — transport-error-message must still mark it retryable
+  ;; (pi: undici always reports transport failures as "fetch failed"), or
+  ;; auto-retry on network errors silently dies.
+  (let [te @#'llm/transport-error-message]
+    (t/is (= "network error: ConnectException"
+             (te (java.net.ConnectException. nil))))
+    (t/is (= "network error: request timed out"
+             (te (java.net.http.HttpTimeoutException. "request timed out"))))
+    (t/is (= "network error: Connection reset"
+             (te (java.net.SocketException. "Connection reset"))))
+    (t/is (= "network error: UnknownHostException"
+             (te (java.net.UnknownHostException. nil))))
+    ;; Non-network exceptions keep their message / legacy fallback
+    (t/is (= "Invalid API key" (te (ex-info "Invalid API key" {}))))
+    (t/is (= "Request failed: ExceptionInfo" (te (ex-info nil {}))))))
+
 ;; ─── Thinking level machinery (pi: clampThinkingLevel) ─────────────────────
 
 (defn- tmodel

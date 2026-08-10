@@ -423,6 +423,33 @@
     (assoc usage :cost (models/calculate-cost model-record norm))
     usage))
 
+(def ^:private network-exception-classes
+  "JVM exception classes indicating a transport/network failure (connect,
+   DNS, timeout, reset). java.net.http can throw these with a nil message
+   (e.g. ConnectException on this JDK), so they are classified by class."
+  #{"ConnectException" "UnknownHostException" "NoRouteToHostException"
+    "UnresolvedAddressException" "SocketTimeoutException"
+    "HttpTimeoutException" "SocketException"})
+
+(defn- transport-error-message
+  "Message for a transport-layer exception. Network failures carry a stable
+   'network error' token so the loop's retry classifier (retryable-error?)
+   recognizes them even when the JVM message is nil — 'Request failed:
+   ConnectException' matches no retryable pattern, which silently kills
+   auto-retry on connect/DNS failures (pi's undici always reports transport
+   failures as 'fetch failed'). Non-network exceptions keep their message."
+  [e]
+  (let [msg (ex-message e)
+        cls (some-> (class e) .getSimpleName)]
+    (cond
+      (contains? network-exception-classes cls)
+      (str "network error: " (if (str/blank? msg) cls msg))
+
+      (str/blank? msg)
+      (str "Request failed: " cls)
+
+      :else msg)))
+
 (defn- openai-request
   [{:keys [model-record effort api-key messages tools signal base-url
            idle-timeout-ms on-text on-thinking on-tool-call on-done on-error
@@ -480,7 +507,7 @@
                                      (fn [] (proxy/abort-stream! response)))
           (proxy/finish-curl! response signal on-error))
         (catch Exception e
-          (when on-error (on-error (or (ex-message e) (str "Request failed: " (.getSimpleName (class e)))))))))))
+          (when on-error (on-error (transport-error-message e))))))))
 
 ;; ─── Anthropic messages request ────────────────────────────────────────────
 
@@ -534,7 +561,7 @@
                                         (fn [] (proxy/abort-stream! response)))
           (proxy/finish-curl! response signal on-error))
         (catch Exception e
-          (when on-error (on-error (or (ex-message e) (str "Request failed: " (.getSimpleName (class e)))))))))))
+          (when on-error (on-error (transport-error-message e))))))))
 
 ;; ─── Google Generative AI request ──────────────────────────────────────────
 
@@ -639,7 +666,7 @@
                                      (fn [] (proxy/abort-stream! response)))
           (proxy/finish-curl! response signal on-error))
         (catch Exception e
-          (when on-error (on-error (or (ex-message e) (str "Request failed: " (.getSimpleName (class e)))))))))))
+          (when on-error (on-error (transport-error-message e))))))))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 

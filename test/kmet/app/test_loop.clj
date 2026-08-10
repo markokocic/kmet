@@ -814,6 +814,12 @@
   (t/is (loop/retryable-error? "Internal Server Error"))
   (t/is (loop/retryable-error? "connection refused"))
   (t/is (loop/retryable-error? "ECONNRESET: socket hang up"))
+  ;; Network transport failures — the llm layer reports these with a stable
+  ;; 'network error' token (java.net.http ConnectExceptions carry a nil
+  ;; message on this JDK; see kmet.app.llm/transport-error-message)
+  (t/is (loop/retryable-error? "network error: ConnectException"))
+  (t/is (loop/retryable-error? "network error: Connection reset"))
+  (t/is (loop/retryable-error? "network error: request timed out"))
   (t/is (loop/retryable-error? "Request timed out"))
   (t/is (loop/retryable-error? "HTTP/1.1 header parser received no bytes"))
   (t/is (loop/retryable-error? "Provider returned error: upstream connect"))
@@ -985,6 +991,31 @@
       (t/is (= "503 service unavailable" (:final-error (first ends)))))
     (t/is (= :error (loop/get-status agent)))
     (t/is (some #(= :error (:type %)) @events) "terminal :error event emitted")))
+
+(t/deftest test-loop-auto-retry-on-network-error
+  ;; Regression: a connect-time failure used to surface as "Request failed:
+  ;; ConnectException" (nil JVM message), which matched no retryable pattern —
+  ;; auto-retry silently died. The llm layer now reports it as "network error:
+  ;; ConnectException", which must be retried like pi's "fetch failed".
+  (let [events (atom [])]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (when-let [on-error (:on-error opts)]
+                        (on-error "network error: ConnectException"))
+                      :done))]
+      (let [agent (loop/make-agent-state
+                   :on-event (fn [e] (swap! events conj e))
+                   :max-retries 2
+                   :base-delay-ms 1)]
+        @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])})))
+    (let [starts (filter #(= :auto-retry-start (:type %)) @events)]
+      (t/is (= 2 (count starts)) "network errors retry with backoff")
+      (t/is (= "network error: ConnectException" (:error-message (first starts)))))
+    (t/is (some #(and (= :auto-retry-end (:type %)) (false? (:success %))
+                      (= "network error: ConnectException" (:final-error %)))
+                @events) "terminal error after retries exhausted")))
 
 (t/deftest test-loop-no-retry-on-quota-error
   (let [events (atom [])
