@@ -798,7 +798,7 @@
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
         cc (:cursor-col state)
         prev-char (when (pos? cc) (subs (nth lines cl "") (dec cc) cc))
-        text (edit/smart-path-spacing text prev-char)
+        text (edit/smart-path-spacing (edit/normalize-paste-text text) prev-char)
         paste-lines (clojure.string/split-lines text)
         line-count (count paste-lines)]
     (push-undo-state editor)
@@ -1123,8 +1123,12 @@
             result (volatile! [])]
         ;; Top border
         (if (pos? scroll-offset)
-          (vswap! result conj (str "─── ↑ " scroll-offset " more "
-                                   (apply str (repeat (max 0 (- width 12)) "─"))))
+          (let [prefix (str "─── ↑ " scroll-offset " more ")
+                prefix-w (u/visible-width prefix)]
+            (vswap! result conj
+                    (if (>= prefix-w width)
+                      (subs prefix 0 width)
+                      (str prefix (apply str (repeat (- width prefix-w) "─"))))))
           (vswap! result conj (apply str (repeat width bdr))))
         ;; Render visible lines
         (doseq [[vi vl] (map-indexed vector visible)]
@@ -1156,8 +1160,12 @@
         ;; Bottom border
         (let [remaining (- (count visual-lines) (+ scroll-offset (count visible)))]
           (if (pos? remaining)
-            (vswap! result conj (str "─── ↓ " remaining " more "
-                                     (apply str (repeat (max 0 (- width 12)) "─"))))
+            (let [prefix (str "─── ↓ " remaining " more ")
+                  prefix-w (u/visible-width prefix)]
+              (vswap! result conj
+                      (if (>= prefix-w width)
+                        (subs prefix 0 width)
+                        (str prefix (apply str (repeat (- width prefix-w) "─"))))))
             (vswap! result conj (apply str (repeat width bdr)))))
         ;; Autocomplete dropdown below the border (pi: SelectList in render)
         (when (and @(:autocomplete-state this) @(:autocomplete-list this))

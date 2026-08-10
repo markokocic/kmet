@@ -5,6 +5,7 @@
             [kmet.tui.components.editor :as editor]
             [kmet.tui.autocomplete :as ac]
             [kmet.tui.components.select-list :as select-list]
+            [kmet.tui.utils :as u]
             [kmet.app.keybindings :as app-kb]
             [babashka.fs :as fs]))
 
@@ -389,6 +390,37 @@
     (core/handle-input e "line2\u001b[201~")
     (t/is (= "line1\nline2" (editor/editor-get-text e)))
     (t/is (not @submitted))))
+
+(t/deftest test-editor-paste-lone-cr-normalized
+  ;; Terminals in raw mode send CR for line breaks; a paste of \r-separated
+  ;; lines must split like \n (pi editor.ts normalizeText: \r\n and \r -> \n)
+  (let [e (editor/make-editor)
+        submitted (atom false)]
+    (editor/editor-set-on-submit! e (fn [_] (reset! submitted true)))
+    (core/handle-input e "\u001b[200~line1\rline2\rline3\u001b[201~")
+    (t/is (= "line1\nline2\nline3" (editor/editor-get-text e)))
+    (t/is (not @submitted) "lone CR must not trigger submit")
+    (t/is (= :idle @(:paste-state e))))
+  ;; tabs expand to 4 spaces (pi normalizeText)
+  (let [e (editor/make-editor)]
+    (core/handle-input e "\u001b[200~a\tb\u001b[201~")
+    (t/is (= "a    b" (editor/editor-get-text e)))))
+
+(t/deftest test-editor-scroll-border-fits-width
+  ;; Regression: the "─── ↑ N more ───" border overflowed by one column for
+  ;; single-digit N (6 + digits + 6 fixed chars vs width-12 dashes), tripping
+  ;; the render loop's width-overflow crash when the editor scrolled.
+  (let [e (editor/make-editor :height 3)
+        lines (vec (for [i (range 10)] (str "line " i)))]
+    (core/handle-input e (str "\u001b[200~" (clojure.string/join "\n" lines) "\u001b[201~"))
+    (doseq [width [10 20 46 100]]
+      (let [rendered (core/render e width)]
+        (t/is (seq rendered))
+        (t/is (some #(clojure.string/includes? % "↑") rendered)
+              (str "scrolled editor shows ↑ border at width " width))
+        (doseq [line rendered]
+          (t/is (<= (u/visible-width line) width)
+                (str "rendered line fits width " width ": " (pr-str line))))))))
 
 (t/deftest test-editor-paste-marker-created
   (let [e (editor/make-editor)

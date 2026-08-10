@@ -442,6 +442,19 @@
                                 (and (>= cp 65) (<= cp 90)) (str (char (- cp 64)))
                                 :else match)))))
 
+(defn normalize-paste-text
+  "Normalize pasted text line endings (pi editor.ts normalizeText): \r\n and
+   lone \r become \n so multi-line pastes split on any newline convention
+   (terminals send CR for Enter/line breaks in raw mode), and tabs expand to
+   4 spaces (a literal tab byte renders at the terminal's tab stop, which
+   mismatches the editor's width accounting — tabs are indentation, not
+   paste content)."
+  [text]
+  (-> text
+      (clojure.string/replace "\r\n" "\n")
+      (clojure.string/replace "\r" "\n")
+      (clojure.string/replace "\t" "    ")))
+
 (defn smart-path-spacing
   "If text starts with a path marker (/ ~ .) and prev-char is a word character,
    prepend a space so the pasted path doesn't merge with the preceding word.
