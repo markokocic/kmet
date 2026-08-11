@@ -115,7 +115,7 @@
 
 ;; ─── Tests ─────────────────────────────────────────────────────────────────
 
-(deftest first-render-preserves-terminal-output
+(deftest ^:slow first-render-preserves-terminal-output
   (testing "the first frame writes without clearing (prior terminal output above the TUI survives)"
     (let [vt (make-virtual-terminal)
           tui (core/create-tui (:terminal vt))]
@@ -132,7 +132,7 @@
         (finally
           (stop-loop tui))))))
 
-(deftest forced-full-redraw-clears-scrollback
+(deftest ^:slow forced-full-redraw-clears-scrollback
   (testing "a forced render (tui-resume! / Ctrl+L) clears screen AND scrollback before re-emitting"
     (let [vt (make-virtual-terminal)
           tui (core/create-tui (:terminal vt))]
@@ -155,7 +155,7 @@
         (finally
           (stop-loop tui))))))
 
-(deftest change-above-viewport-uses-clearing-redraw
+(deftest ^:slow change-above-viewport-uses-clearing-redraw
   (testing "a change above the viewport falls back to a clearing full redraw (firstChanged < viewportTop)"
     (let [lines (atom (vec (map #(str "line " %) (range 30))))
           vt (make-virtual-terminal)
@@ -176,7 +176,7 @@
         (finally
           (stop-loop tui))))))
 
-(deftest ordinary-diff-does-not-clear
+(deftest ^:slow ordinary-diff-does-not-clear
   (testing "an in-viewport change takes the diff path — no clear, no scrollback wipe"
     (let [lines (atom ["alpha" "beta"])
           vt (make-virtual-terminal)
@@ -195,7 +195,7 @@
         (finally
           (stop-loop tui))))))
 
-(deftest terminal-resize-triggers-full-redraw
+(deftest ^:slow terminal-resize-triggers-full-redraw
   (testing "a terminal resize re-renders without any input event: JLine's native WINCH
             handler is dead under the GraalVM native image, so the loop must detect
             the size change itself and reflow (pi: terminal.on('resize') → requestRender).

@@ -2,6 +2,7 @@
   (:require [clojure.test :as t]
             [clojure.string :as str]
             [clojure.java.io :as io]
+            [babashka.fs :as fs]
             [kmet.tui.theme :as theme]))
 
 ;; ─── Theme record ──────────────────────────────────────────────────────────
@@ -195,12 +196,9 @@
     (theme/load-themes-from-dir tmp-dir)
     (let [loaded (theme/get-theme "test")]
       (t/is (some? loaded))
-      (t/is (= "test" (:name loaded)))))
-  ;; Cleanup
-  (let [d (io/file "target")]
-    (doseq [f (file-seq d)]
-      (when (str/ends-with? (.getName f) ".edn")
-        (.delete f)))))
+      (t/is (= "test" (:name loaded))))
+    ;; Cleanup — scoped to this run's dir (walking all of target/ was ~1 s)
+    (fs/delete-tree tmp-dir)))
 
 (t/deftest test-load-themes-from-dir-rejects-partial
   (t/testing "a theme missing required tokens fails with the sorted list
@@ -216,12 +214,9 @@
       (let [msg (str out)]
         (t/is (str/includes? msg "Missing required color tokens:") "reports the missing-token header")
         (t/is (str/includes? msg "- accent") "sorted list includes the first missing token")
-        (t/is (str/includes? msg "- tool-error-bg") "sorted list includes the last missing token")))
-    ;; Cleanup
-    (let [d (io/file "target")]
-      (doseq [f (file-seq d)]
-        (when (str/ends-with? (.getName f) ".edn")
-          (.delete f))))))
+        (t/is (str/includes? msg "- tool-error-bg") "sorted list includes the last missing token"))
+      ;; Cleanup — scoped to this run's dir
+      (fs/delete-tree tmp-dir))))
 
 ;; ─── Terminal theme detection (pi: detection section) ──────────────────────
 

@@ -75,7 +75,7 @@
         out (java.io.PipedOutputStream. in)]
     [in out]))
 
-(t/deftest test-openai-stream-idle-timeout
+(t/deftest ^:slow test-openai-stream-idle-timeout
   (let [[in out] (make-pipe)
         events (atom [])
         f (future
@@ -137,7 +137,7 @@
     (t/is (= [{:type :done :stop-reason :stop}] @events))
     (.close in)))
 
-(t/deftest test-anthropic-stream-idle-timeout
+(t/deftest ^:slow test-anthropic-stream-idle-timeout
   (let [[in out] (make-pipe)
         events (atom [])
         f (future
@@ -178,7 +178,7 @@
     (t/is (= [{:type :error :message "Stream error: Received RST_STREAM: Protocol error"}]
              @events))))
 
-(t/deftest test-openai-stream-idle-resets-on-flow
+(t/deftest ^:slow test-openai-stream-idle-resets-on-flow
   ;; Data arriving well within the idle window over a total duration longer
   ;; than the timeout must not stall — the clock resets per byte (undici
   ;; bodyTimeout semantics, not a total deadline). Idle 200ms with 50ms gaps
