@@ -1241,25 +1241,33 @@
         (handle-submit cs text))
       (tui/tui-request-render (:tui cs)))))
 
-(defn- handle-dequeue
-  "Pi: handleDequeue — Alt+Up. Restore all queued steering/follow-up
-   messages to the editor, combined with the current text."
+(defn- restore-queued-messages!
+  "Restore queued steering/follow-up messages to the editor, combined with
+   the current text, and clear the queues (pi: restoreQueuedMessagesToEditor).
+   Returns the number of messages restored."
   [cs]
   (let [{:keys [steering follow-up]} (agent/queued-messages @(:agent-state cs))
         all (into (vec steering) follow-up)]
-    (if (seq all)
+    (when (seq all)
       (let [ed @(:current-editor-atom cs)
             current (editor-text-get ed)
             queued-text (str/join "\n\n" all)
             combined (str/join "\n\n" (remove str/blank? [queued-text current]))]
         (agent/clear-queues! @(:agent-state cs))
-        (editor-text-set! ed combined)
-        (ui/chat-history-show-status!
-         (:chat-history cs)
-         (str "Restored " (count all) " queued message"
-              (when (> (count all) 1) "s") " to editor")))
-      (ui/chat-history-show-status! (:chat-history cs)
-                                    "No queued messages to restore"))
+        (editor-text-set! ed combined)))
+    (count all)))
+
+(defn- handle-dequeue
+  "Pi: handleDequeue — Alt+Up. Restore all queued steering/follow-up
+   messages to the editor, combined with the current text."
+  [cs]
+  (let [restored (restore-queued-messages! cs)]
+    (ui/chat-history-show-status!
+     (:chat-history cs)
+     (if (pos? restored)
+       (str "Restored " restored " queued message"
+            (when (> restored 1) "s") " to editor")
+       "No queued messages to restore"))
     (tui/tui-request-render (:tui cs))))
 
 (defn- handle-cancel
@@ -1282,16 +1290,26 @@
     (debug/log "agent turn cancelled by user")
     (stop-anim-timer! cs)
     (clear-status-indicator! cs)
-    (agent/cancel-turn @(:agent-state cs))
-    ;; Remove empty streaming placeholder if present
-    (let [ch (:chat-history cs)]
-      (when-let [s @(:streaming-atom ch)]
-        (if (and (empty? @(:text-atom (:component s)))
-                 (empty? @(:thinking-text-atom (:component s))))
-          (do (ui/chat-history-remove-last! ch) (reset! (:streaming-atom ch) nil))
-          (do (ui/chat-history-finalize-streaming! ch) (ui/chat-history-finalize-thinking! ch)))))
-    (ui/chat-history-add-message! (:chat-history cs)
-                                  {:role :assistant :content (th/dim "(cancelled)")})
+    ;; pi: restoreQueuedMessagesToEditor({abort: true}) — queued steering/
+    ;; follow-up messages return to the editor instead of vanishing when
+    ;; cancel-turn clears the queues (they reach the chat only once the
+    ;; loop consumes them, so cancel would otherwise lose them entirely).
+    (let [restored (restore-queued-messages! cs)]
+      (agent/cancel-turn @(:agent-state cs))
+      ;; Remove empty streaming placeholder if present
+      (let [ch (:chat-history cs)]
+        (when-let [s @(:streaming-atom ch)]
+          (if (and (empty? @(:text-atom (:component s)))
+                   (empty? @(:thinking-text-atom (:component s))))
+            (do (ui/chat-history-remove-last! ch) (reset! (:streaming-atom ch) nil))
+            (do (ui/chat-history-finalize-streaming! ch) (ui/chat-history-finalize-thinking! ch)))))
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    {:role :assistant :content (th/dim "(cancelled)")})
+      (when (pos? restored)
+        (ui/chat-history-show-status!
+         (:chat-history cs)
+         (str "Restored " restored " queued message"
+              (when (> restored 1) "s") " to editor"))))
     (reset! (:running-turn? cs) false)
     (update-footer! cs)
     (tui/tui-request-render (:tui cs))))

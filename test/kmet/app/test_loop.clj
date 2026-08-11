@@ -9,7 +9,9 @@
             [kmet.app.event-bus :as event-bus]
             [kmet.app.session :as session]
             [kmet.app.loop :as loop]
-            [kmet.config :as cfg]))
+            [kmet.config :as cfg]
+            [kmet.app.ui.chat-history :as ui]
+            [kmet.tui.theme :as th]))
 
 ;; ─── State construction ───────────────────────────────────────────────────
 
@@ -1755,3 +1757,74 @@
     (loop/add-bash-result! agent "git st" {:output "clean\n" :exit-code 0} false)
     (t/is (= 1 (count (loop/get-context agent))))
     (t/is (empty? @(:pending-bash agent)))))
+
+(t/deftest test-loop-interactive-chat-flow-with-steer-and-followup
+  ;; End-to-end: the interactive UI mirrors the loop via :message-start
+  ;; (:user → addMessageToChat, :assistant → new streaming component) and
+  ;; streams text via :on-text. A steered message lands in the chat when the
+  ;; loop consumes it (before the response to it); a follow-up lands after
+  ;; the run settles. Tool-only turns finalize an empty assistant placeholder
+  ;; (:tool-execution-start), matching pi.
+  (let [ch (ui/make-chat-history
+            :theme th/dark-theme)
+        calls (atom 0)
+        events (atom [])
+        agent (loop/make-agent-state
+               :on-event (fn [evt]
+                           (swap! events conj evt)
+                           (case (:type evt)
+                             :message-start
+                             (case (:role (:message evt))
+                               :user (ui/chat-history-add-message!
+                                      ch (:message evt))
+                               :assistant (do (ui/chat-history-finalize-streaming! ch)
+                                              (ui/chat-history-finalize-thinking! ch)
+                                              (ui/chat-history-start-streaming! ch))
+                               nil)
+                             :tool-execution-start
+                             (let [msg {:role :tool :name (:tool-name evt) :args {} :content "" :is-error false}]
+                               (ui/chat-history-finalize-streaming! ch)
+                               (ui/chat-history-add-message! ch msg))
+                             nil)))]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (if (= 1 (swap! calls inc))
+                        (do (when-let [on-tc (:on-tool-call opts)]
+                              (on-tc {:id "tc1" :name "bash" :arguments "{}" :index 0}))
+                            (when-let [on-done (:on-done opts)]
+                              (on-done :tool-calls)))
+                        (do (when-let [on-text (:on-text opts)]
+                              (on-text "resp"))
+                            (when-let [on-done (:on-done opts)]
+                              (on-done :stop))))
+                      :done))
+                  tools/execute-tool
+                  (fn [_ _ _]
+                    (loop/steer! agent "steered")
+                    (loop/follow-up! agent "followup")
+                    {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent
+                            {:message "start"
+                             :on-text #(ui/chat-history-append-streaming-text! ch %)
+                             :on-done (fn [_])
+                             :on-error (fn [_])}))
+    (ui/chat-history-finalize-streaming! ch)
+    (let [chat (mapv (fn [m] {:role (:role m) :content (:content m) :streaming? (:streaming? m)})
+                     @(:messages-atom ch))
+          text (fn [m] (if (string? (:content m)) (:content m) (get-in m [:content 0 :text])))
+          roles (mapv :role chat)
+          texts (mapv text chat)]
+      (t/is (= [:user :assistant :tool :user :assistant :user :assistant] roles)
+            "prompt, tool-turn, tool, steered, response, follow-up, response")
+      (t/is (= ["start" "" "" "steered" "resp" "followup" "resp"] texts)
+            "steered/follow-up land at the right position; responses stream into place")
+      (t/is (every? #(not (:streaming? %)) chat)
+            "all streaming placeholders finalized by run end")
+      (t/is (= ["start" "steered" "followup"]
+               (mapv #(get-in % [:message :content 0 :text])
+                     (filter #(and (= :message-start (:type %))
+                                   (= :user (:role (:message %))))
+                             @events)))
+            "one :message-start :user per consumed message, in order"))))
