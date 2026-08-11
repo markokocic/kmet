@@ -332,7 +332,7 @@
             (do (agent/set-provider! ag (:provider model))
                 (agent/set-model! ag (:id model))
                 (when thinking-level
-                  (reset! (:thinking ag) thinking-level))
+                  (agent/set-thinking-level! ag thinking-level))
                 (ui/chat-history-add-message! (:chat-history cs)
                                               {:role :assistant
                                                :content (str "Switched to " (fmt-model (:provider model) (:id model))
@@ -666,11 +666,9 @@
            {:name "import" :description "Import and resume a session from a JSONL file"}
            {:name "share" :description "Share session as a secret GitHub gist"}
            {:name "copy" :description "Copy last agent message to clipboard"}
-           {:name "name" :description "Set session display name"}
            {:name "session" :description "Show session info and stats"}
            {:name "changelog" :description "Show changelog entries"}
-           {:name "hotkeys" :description "Show all keyboard shortcuts"}
-           {:name "trust" :description "Save project trust decision for future sessions"}]]
+           {:name "hotkeys" :description "Show all keyboard shortcuts"}]]
     (commands/register-command!
      {:name name
       :description description
@@ -704,7 +702,7 @@
   [cs sess]
   (ui/chat-history-clear! (:chat-history cs))
   (doseq [e (session/get-branch sess)
-          :when (not (contains? #{:session_info :label} (:role e)))]
+          :when (not (contains? #{:session_info :label :model-change :thinking-level-change} (:role e)))]
     (let [role (:role e)
           ;; Compaction/branch_summary entries carry their summary text, not
           ;; content blocks; the chat-history fallback renders unknown roles
@@ -735,12 +733,18 @@
    follow-up user messages live in the branch and must come back for the
    next LLM call), and replay the branch into the chat history. session_info
    entries are metadata — never rendered (pi: only message entries are
-   replayed on resume)."
-  [cs sess]
+   replayed on resume). When APPLY-SETTINGS? is true (startup resume,
+   /resume — pi: createAgentSession), the session-derived model/thinking are
+   applied to the agent and the footer refreshes; fork and clone pass false
+   (pi: navigateTree keeps the current agent state)."
+  [cs sess apply-settings?]
   (reset! (:session-atom cs) sess)
   (let [new-ag (assoc @(:agent-state cs) :session sess)]
     (reset! (:agent-state cs) new-ag))
   (agent/restore-session-context! @(:agent-state cs))
+  (when apply-settings?
+    (agent/apply-session-settings! @(:agent-state cs))
+    (sync-footer-model! cs))
   (replay-branch! cs sess)
   (update-footer! cs))
 
@@ -767,7 +771,7 @@
                            (when-let [sel (select-list/select-list-get-selected @sl-ref)]
                              (let [sess (session/load-session (:value sel))
                                    short-id (subs (:id sess) 0 (min 8 (count (:id sess))))]
-                               (restore-session! cs sess)
+                               (restore-session! cs sess true)
                                (ui/chat-history-add-message! (:chat-history cs)
                                                              {:role :assistant
                                                               :content (str "Resumed session " short-id ".")})
@@ -1010,9 +1014,11 @@
 
 (defn- passes-tree-filter?
   "True when a tree node passes MODE (pi: TreeSelectorComponent applyFilter —
-   default hides bookkeeping entries: labels, session_info)."
+   default hides bookkeeping entries: labels, session_info, model/thinking
+   change entries)."
   [node mode]
-  (let [settings-entry? (contains? #{:label :session_info} (:role node))]
+  (let [settings-entry? (contains? #{:label :session_info :model-change :thinking-level-change}
+                                   (:role node))]
     (case mode
       :user-only (= :user (:role node))
       :no-tools (and (not= :tool (:role node)) (not settings-entry?))
@@ -1173,7 +1179,7 @@
                                             {:role :assistant :content "Failed to create forked session."})
               (do
                 (debug/log "forked session " (:id fork) " from " (:id sess))
-                (restore-session! cs fork)
+                (restore-session! cs fork false)
                 (editor-text-set! (:editor cs) (session-entry-text entry))
                 (ui/chat-history-add-message! (:chat-history cs)
                                               {:role :assistant
@@ -1260,7 +1266,7 @@
                                           {:role :assistant :content "Failed to clone session."})
             (do
               (debug/log "cloned session " (:id fork) " from " (:id sess))
-              (restore-session! cs fork)
+              (restore-session! cs fork false)
               (ui/chat-history-add-message! (:chat-history cs)
                                             {:role :assistant
                                              :content (str "Cloned to new session " (subs (:id fork) 0 8) ".")})
@@ -2312,7 +2318,7 @@
       ;; next LLM call loses the whole restored conversation (steered and
       ;; follow-up messages included)
       (when (and session (seq @(:entries session)))
-        (restore-session! cs session))
+        (restore-session! cs session true))
 
       cs)))
 
@@ -2779,13 +2785,7 @@
             cs (build-layout config session)]
         (reset! tui-ref (:tui cs))
         (when (:resume opts) (resume-session cs ensure-session-dir))
-        ;; pi: continueRecent — a found session is the source of truth:
-        ;; rebuild the agent context and replay the chat so the next turn
-        ;; continues where the previous run stopped (the session is
-        ;; otherwise loaded but the agent starts with an empty context).
-        (when (and (:continue opts) session (seq @(:entries session)))
-          (restore-session! cs session))
-        ;; pi: start the UI before initializing extensions so session_start
+        ;; start the UI before initializing extensions so session_start
         ;; handlers can use interactive dialogs — kmet loads extensions
         ;; earlier, so the event fires once the layout + UI registry are
         ;; live and the render loop is running (the future waits for it).

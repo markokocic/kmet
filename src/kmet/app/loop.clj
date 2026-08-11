@@ -70,6 +70,7 @@
             [kmet.app.tools.core :as tools]
             [kmet.app.tools.bash :as bash-tool]
             [kmet.app.session :as session]
+            [kmet.app.models :as models]
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
             [kmet.debug :as debug]
@@ -1343,14 +1344,48 @@ Be precise and concise in your responses."}}]
   "Rebuild the agent's in-memory context from the session (pi: the session is
    the source of truth — buildSessionContext). build-context walks root→leaf
    through the latest compaction; compaction entries project to a :user
-   summary message, :info/:session_info are metadata and excluded. No-op
-   without a session. Used when a session is resumed/continued so the next
-   LLM call sees the restored conversation — steered and follow-up messages
-   included."
+   summary message, :info/:session_info are metadata and excluded. Messages
+   only — like pi's buildSessionContext consumers, the agent's model/thinking
+   are left untouched here; the session-derived settings are applied on
+   session load via apply-session-settings! (pi: sdk.ts createAgentSession
+   restore logic). No-op without a session. Used when a session is
+   resumed/continued (and on tree navigation / fork / clone, which rebuild
+   the context without touching the model/thinking)."
   [agent]
   (when-let [sess (:session agent)]
     (reset! (:messages agent)
             (vec (mapcat session/context-messages (session/build-context sess))))))
+
+(defn apply-session-settings!
+  "Apply the session-derived model/thinking to the agent state (pi: sdk.ts
+   createAgentSession — the session restores its settings when loaded via
+   resume/continue; tree navigation, fork and clone never touch them). Only
+   recorded settings are applied:
+   - model: only when it resolves to an authenticated model (pi: getModel +
+     hasConfiguredAuth); otherwise the current model stays (pi falls back to
+     the settings default — kmet's current model IS that default).
+   - thinking: only when a :thinking-level-change entry is on the branch;
+     without one the current level stays (pi: hasThinkingEntry guard — the
+     settings default is kept, not pi's unrecorded \"off\" default).
+   Returns true when anything changed."
+  [agent]
+  (when-let [sess (:session agent)]
+    (let [{:keys [thinking-level model provider]}
+          (session/derive-context-settings sess)
+          authenticated-model? (some #(and (= provider (:provider %))
+                                           (= model (:id %)))
+                                     (models/get-available))
+          thinking-recorded? (some #(= :thinking-level-change (:role %))
+                                   (session/get-branch sess))
+          changed (volatile! false)]
+      (when authenticated-model?
+        (reset! (:model agent) model)
+        (reset! (:provider agent) provider)
+        (vreset! changed true))
+      (when thinking-recorded?
+        (reset! (:thinking agent) thinking-level)
+        (vreset! changed true))
+      @changed)))
 
 (defn set-system-prompt! [agent prompt]
   (reset! (:system agent) prompt))
@@ -1371,11 +1406,14 @@ Be precise and concise in your responses."}}]
   (reset! (:after-tool-call agent) hook))
 
 (defn set-model!
-  "Set the active model, emitting :model-select (pi: setModel)."
+  "Set the active model, emitting :model-select and persisting a
+   :model-change session entry (pi: setModel → appendModelChange)."
   [agent model]
   (let [previous @(:model agent)]
     (when-not (= previous model)
       (reset! (:model agent) model)
+      (when-let [sess (:session agent)]
+        (session/append-model-change! sess @(:provider agent) model))
       (emit agent {:type :model-select
                    :model model
                    :previous-model previous
@@ -1398,11 +1436,24 @@ Be precise and concise in your responses."}}]
                     -1)
             next-model (nth models (mod (+ idx direction) (count models)))]
         (reset! (:model agent) next-model)
+        (when-not (= next-model current)
+          (when-let [sess (:session agent)]
+            (session/append-model-change! sess @(:provider agent) next-model)))
         (emit agent {:type :model-select
                      :model next-model
                      :previous-model current
                      :source :cycle})
         next-model))))
+
+(defn set-thinking-level!
+  "Set the thinking level, persisting a :thinking-level-change session entry
+   only when the level actually changes (pi: setThinkingLevel — only
+   persisted on change)."
+  [agent level]
+  (when-not (= level @(:thinking agent))
+    (reset! (:thinking agent) level)
+    (when-let [sess (:session agent)]
+      (session/append-thinking-level-change! sess level))))
 
 (defn set-system-prompt-override!
   "Set the per-run system prompt override (pi: _systemPromptOverride).

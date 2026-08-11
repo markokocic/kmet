@@ -815,3 +815,78 @@
           "same entry is its own common ancestor")
     (t/is (nil? (s/common-ancestor-id session nil (:id a2)))
           "no old leaf → nil")))
+
+;; ─── Model & thinking changes (G6 — pi: appendModelChange /
+;;     appendThinkingLevelChange / getSessionContextSettings) ───────────────
+
+(t/deftest test-model-and-thinking-change-entries
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content "q"})
+    (s/append-model-change! session :anthropic "claude-sonnet")
+    (s/append-thinking-level-change! session :high)
+    ;; persisted on disk (assistant message triggers the lazy write)
+    (s/append-entry session {:role :assistant :content "a"})
+    (let [loaded (s/load-session (:file session))
+          branch (s/get-branch loaded)]
+      (t/is (= [:user :model-change :thinking-level-change :assistant]
+               (mapv :role branch)))
+      (t/is (= :anthropic (:provider (nth branch 1))))
+      (t/is (= "claude-sonnet" (:model (nth branch 1))))
+      (t/is (= :high (:thinking-level (nth branch 2))))
+      ;; excluded from LLM context and message counts
+      (t/is (= [:user :assistant] (mapv :role (mapcat s/context-messages branch)))
+            "change entries project to no context messages")
+      (t/is (= 2 (s/get-message-count loaded))))))
+
+(t/deftest test-derive-context-settings
+  ;; G6: model/thinking derived from the branch path — latest wins, defaults
+  ;; when absent (pi: getSessionContextSettings)
+  (let [session (s/create-session test-dir)]
+    (t/is (= {:thinking-level :off :model nil :provider nil}
+             (s/derive-context-settings session))
+          "empty session: defaults")
+    (s/append-entry session {:role :user :content "q"})
+    (t/is (= {:thinking-level :off :model nil :provider nil}
+             (s/derive-context-settings session))
+          "no change entries: defaults")
+    (s/append-model-change! session :anthropic "claude-sonnet")
+    (s/append-thinking-level-change! session :medium)
+    (t/is (= {:thinking-level :medium :model "claude-sonnet" :provider :anthropic}
+             (s/derive-context-settings session)))
+    (s/append-model-change! session :opencode-go "gpt-4o")
+    (s/append-thinking-level-change! session :off)
+    (t/is (= {:thinking-level :off :model "gpt-4o" :provider :opencode-go}
+             (s/derive-context-settings session))
+          "latest change entries win")))
+
+(t/deftest test-derive-context-settings-branch-aware
+  ;; derivation follows the ACTIVE branch — settings from abandoned branches
+  ;; don't leak in (pi: getSessionContextSettings walks root→leaf)
+  (let [session (s/create-session test-dir)
+        q1 (s/append-entry session {:role :user :content "q1"})
+        _ (s/append-model-change! session :anthropic "claude-sonnet")
+        _ (s/append-thinking-level-change! session :high)]
+    (s/branch! session (:id q1))
+    (t/is (= {:thinking-level :off :model nil :provider nil}
+             (s/derive-context-settings session))
+          "branching away abandons the change entries"))
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content "q"})
+    (s/branch! session (:id (first (s/get-branch session))))
+    (s/append-model-change! session :opencode-go "gpt-4o")
+    (t/is (= {:thinking-level :off :model "gpt-4o" :provider :opencode-go}
+             (s/derive-context-settings session))
+          "new branch carries its own change entries")))
+
+(t/deftest test-tree-displays-change-entries
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content "q"})
+    (s/append-model-change! session :anthropic "claude-sonnet")
+    (s/append-thinking-level-change! session :high)
+    (letfn [(flatten-tree [nodes]
+              (mapcat (fn [n]
+                        (cons (:summary n) (flatten-tree (:children n))))
+                      nodes))]
+      (t/is (= ["q" "[model: anthropic/claude-sonnet]" "[thinking: high]"]
+               (vec (flatten-tree (s/get-tree session))))
+            "tree shows the switch instead of (empty)"))))

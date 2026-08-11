@@ -333,6 +333,35 @@
                            :target-id target-id
                            :label (when (seq (str label)) (str label))})))
 
+;; ─── Model & thinking changes (G6 — pi: appendModelChange / appendThinkingLevelChange) ──
+
+(defn append-model-change!
+  "Append a :model-change entry recording a model/provider switch (pi:
+   appendModelChange). Returns the entry."
+  [session provider model]
+  (append-entry session {:role :model-change :provider provider :model model}))
+
+(defn append-thinking-level-change!
+  "Append a :thinking-level-change entry recording a thinking level switch
+   (pi: appendThinkingLevelChange). Returns the entry."
+  [session thinking-level]
+  (append-entry session {:role :thinking-level-change :thinking-level thinking-level}))
+
+(defn derive-context-settings
+  "Derive {:thinking-level :model :provider} from the branch root→leaf (pi:
+   getSessionContextSettings): the latest :thinking-level-change entry wins
+   (:off when none is on the path), the latest :model-change entry wins
+   (nil when none). Settings from abandoned branches are never seen — the
+   derivation follows the active leaf."
+  [session]
+  (reduce (fn [acc e]
+            (case (:role e)
+              :thinking-level-change (assoc acc :thinking-level (:thinking-level e))
+              :model-change (assoc acc :model (:model e) :provider (:provider e))
+              acc))
+          {:thinking-level :off :model nil :provider nil}
+          (get-branch session)))
+
 ;; ─── Context build (pi: buildSessionContext) ─────────────────────────────
 
 (defn context-entries
@@ -364,8 +393,9 @@
    compaction and branch_summary entries become a single :user message
    carrying their summary (kmet providers don't know pi's
    compactionSummary/branchSummary roles — the :user mapping mirrors the
-   pre-append-only summary entry); :info and :session_info are metadata and
-   excluded. Excluded :bash entries are kept here and dropped later by the
+   pre-append-only summary entry); :info, :session_info, :model-change and
+   :thinking-level-change are metadata and excluded. Excluded :bash entries
+   are kept here and dropped later by the
    LLM conversion (pi: convertToLlm filters excludeFromContext)."
   [entry]
   (case (:role entry)
@@ -428,6 +458,11 @@
                             (= (:role entry) :session_info) (or (:name entry) "(empty)")
                             ;; compaction entries carry their summary text
                             (:summary entry) (subs (:summary entry) 0 (min 60 (count (:summary entry))))
+                            ;; model/thinking change entries carry no content — show the switch
+                            (= (:role entry) :model-change)
+                            (str "[model: " (name (:provider entry)) "/" (:model entry) "]")
+                            (= (:role entry) :thinking-level-change)
+                            (str "[thinking: " (name (:thinking-level entry)) "]")
                             :else "(empty)"))
                :children (mapv build-node (children (:id entry)))})]
       (mapv build-node root-children))))

@@ -4,6 +4,7 @@
             [babashka.fs :as fs]
             [kmet.app.llm :as llm]
             [kmet.app.models :as models]
+            [kmet.app.auth :as auth]
             [kmet.app.tools.core :as tools]
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
@@ -88,6 +89,150 @@
   (let [agent (loop/make-agent-state)]
     (loop/set-provider! agent :anthropic)
     (t/is (= :anthropic @(:provider agent)))))
+
+;; ─── Model/thinking change persistence (G6) ───────────────────────────────
+
+(t/deftest test-loop-set-model-persists-change
+  (let [dir (str (fs/create-dirs (fs/path "target" "test-loop-model-change")))]
+    (try
+      (let [sess (session/create-session dir)
+            agent (loop/make-agent-state :session sess
+                                         :provider :anthropic
+                                         :model "claude-sonnet")]
+        (loop/set-model! agent "gpt-4o")
+        (let [branch (session/get-branch sess)]
+          (t/is (= [:model-change] (mapv :role branch)))
+          (t/is (= "gpt-4o" (:model (last branch))))
+          (t/is (= :anthropic (:provider (last branch)))
+                "entry records the current provider"))
+        (loop/set-model! agent "gpt-4o")
+        (t/is (= 1 (count (session/get-branch sess)))
+              "unchanged model: no duplicate entry"))
+      (finally
+        (fs/delete-tree dir)))))
+
+(t/deftest test-loop-cycle-model-persists-change
+  (let [dir (str (fs/create-dirs (fs/path "target" "test-loop-cycle-model")))]
+    (try
+      (let [sess (session/create-session dir)
+            agent (loop/make-agent-state :session sess
+                                         :provider :opencode-go
+                                         :model "a"
+                                         :models ["a" "b"])]
+        ;; lazy creation: file exists only after an assistant message
+        (session/append-entry sess {:role :user :content "q"})
+        (session/append-entry sess {:role :assistant :content "a"})
+        (loop/cycle-model! agent 1)
+        (t/is (= "b" @(:model agent)))
+        (t/is (= :model-change (:role (last (session/get-branch sess)))))
+        (let [loaded (session/load-session (:file sess))]
+          (t/is (= "b" (:model (last (session/get-branch loaded))))
+                "model change persisted to disk")))
+      (finally
+        (fs/delete-tree dir)))))
+
+(t/deftest test-loop-set-thinking-level-persists-change
+  (let [dir (str (fs/create-dirs (fs/path "target" "test-loop-thinking-change")))]
+    (try
+      (let [sess (session/create-session dir)
+            agent (loop/make-agent-state :session sess :thinking :off)]
+        (loop/set-thinking-level! agent :high)
+        (t/is (= :high @(:thinking agent)))
+        (t/is (= [:thinking-level-change] (mapv :role (session/get-branch sess))))
+        (t/is (= :high (:thinking-level (last (session/get-branch sess)))))
+        (loop/set-thinking-level! agent :high)
+        (t/is (= 1 (count (session/get-branch sess)))
+              "same level: no duplicate entry")
+        (loop/set-thinking-level! agent :off)
+        (t/is (= [:thinking-level-change :thinking-level-change]
+                 (mapv :role (session/get-branch sess)))
+              "explicit return to :off records a change"))
+      (finally
+        (fs/delete-tree dir)))))
+
+(t/deftest test-loop-restore-session-context-messages-only
+  ;; pi alignment: buildSessionContext consumers use only :messages — tree
+  ;; navigation/fork/clone never change the agent's model/thinking; the
+  ;; session-derived settings are applied only on session load via
+  ;; apply-session-settings!
+  (let [dir (str (fs/create-dirs (fs/path "target" "test-loop-restore-messages-only")))]
+    (try
+      (let [sess (session/create-session dir)]
+        (session/append-entry sess {:role :user :content [{:type :text :text "hi"}]})
+        (session/append-model-change! sess :anthropic "claude-sonnet")
+        (session/append-thinking-level-change! sess :medium)
+        (session/append-entry sess {:role :assistant :content [{:type :text :text "yo"}]})
+        (let [loaded (session/load-session (:file sess))
+              agent (loop/make-agent-state :session loaded
+                                           :provider :opencode-go
+                                           :model "gpt-4o"
+                                           :thinking :off)]
+          (loop/restore-session-context! agent)
+          (t/is (= "gpt-4o" @(:model agent)))
+          (t/is (= :opencode-go @(:provider agent)))
+          (t/is (= :off @(:thinking agent)))
+          (t/is (= [:user :assistant] (mapv :role (loop/get-context agent)))
+                "change entries are metadata — not context")))
+      (finally
+        (fs/delete-tree dir)))))
+
+(t/deftest test-loop-apply-session-settings
+  ;; pi: sdk.ts createAgentSession restore logic — the session-derived model
+  ;; is applied only when it resolves to an authenticated model; thinking
+  ;; only when a :thinking-level-change entry is on the branch (unrecorded
+  ;; settings keep the current level). The auth atom is redirected so the
+  ;; real auth.edn is never touched (test_auth pattern).
+  (let [dir (str (fs/create-dirs (fs/path "target" "test-loop-apply-settings")))
+        saved-providers (models/get-providers)
+        provider (models/map->Provider
+                  {:id :test-prov :name "test"
+                   :api-types #{:openai-completions}
+                   :models [(models/map->Model {:id "m1" :name "M1" :provider :test-prov})
+                            (models/map->Model {:id "m2" :name "M2" :provider :test-prov})]
+                   :env-vars [] :default-model nil})
+        make-session (fn []
+                       (let [s (session/create-session dir)]
+                         (session/append-entry s {:role :user :content [{:type :text :text "hi"}]})
+                         (session/append-model-change! s :test-prov "m2")
+                         (session/append-entry s {:role :assistant :content [{:type :text :text "yo"}]})
+                         s))
+        with-auth (fn [auth-map f]
+                    (with-redefs [auth/auth-atom (atom auth-map)] (f)))]
+    (try
+      (models/clear-providers!)
+      (models/register-provider! provider)
+      (with-auth {:test-prov {:key "sk-test"}}
+        (fn []
+          ;; authenticated derived model + recorded thinking → both restored
+          (let [s (make-session)
+                _ (session/append-thinking-level-change! s :medium)
+                agent (loop/make-agent-state :session (session/load-session (:file s))
+                                             :provider :test-prov :model "m1" :thinking :off)]
+            (t/is (loop/apply-session-settings! agent))
+            (t/is (= "m2" @(:model agent)) "authenticated derived model restored")
+            (t/is (= :medium @(:thinking agent)) "recorded thinking restored"))))
+      ;; no auth → model not restored, thinking still is
+      (with-auth {}
+        (fn []
+          (let [s (make-session)
+                _ (session/append-thinking-level-change! s :high)
+                agent (loop/make-agent-state :session (session/load-session (:file s))
+                                             :provider :test-prov :model "m1" :thinking :off)]
+            (t/is (loop/apply-session-settings! agent))
+            (t/is (= "m1" @(:model agent)) "unauth'd model not restored (pi: hasConfiguredAuth)")
+            (t/is (= :high @(:thinking agent)) "thinking has no auth guard"))))
+      ;; unrecorded thinking → current level kept (pi: hasThinkingEntry guard)
+      (with-auth {:test-prov {:key "sk-test"}}
+        (fn []
+          (let [agent (loop/make-agent-state :session (session/load-session (:file (make-session)))
+                                             :provider :test-prov :model "m1" :thinking :high)]
+            (t/is (loop/apply-session-settings! agent))
+            (t/is (= "m2" @(:model agent)))
+            (t/is (= :high @(:thinking agent)) "unrecorded thinking keeps the current level"))))
+      (finally
+        (models/clear-providers!)
+        (doseq [p saved-providers] (models/register-provider! p))
+        (fs/delete-tree dir)))))
 
 ;; ─── Cancellation ────────────────────────────────────────────────────────
 
