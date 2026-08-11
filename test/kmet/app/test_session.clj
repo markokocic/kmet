@@ -234,6 +234,41 @@
             "missing dir → nil")
       (finally (fs/delete-tree dir)))))
 
+(t/deftest test-find-most-recent-session-header-across-chunks
+  ;; G13: the bounded header scan is chunked (4 KB) and line-oriented — a
+  ;; header larger than one chunk (big :cwd) is assembled across chunk
+  ;; boundaries and still discovered
+  (let [dir (str "target/test-sess-hdr-chunk-" (System/currentTimeMillis))
+        cwd-dir (s/session-dir-for-cwd dir "/home/user/proj")
+        big-cwd (str "/home/user/" (apply str (repeat 20000 "d")))
+        sess (s/create-session cwd-dir {:cwd big-cwd})
+        _ (s/append-entry sess {:role :assistant :content "a"})]
+    (try
+      (t/is (> (count (slurp (:file sess))) 20000)
+            "header line really spans multiple 4 KB chunks")
+      (t/is (= (:file sess) (s/find-most-recent-session cwd-dir big-cwd))
+            "cross-chunk header discovered")
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-find-most-recent-session-header-scan-limit
+  ;; G13: the header scan is bounded at 1 MB (pi:
+  ;; MAX_SESSION_HEADER_SCAN_BYTES) — a file whose header line exceeds the
+  ;; limit is treated as headerless, never read to the end
+  (let [dir (str "target/test-sess-hdr-limit-" (System/currentTimeMillis))
+        cwd-dir (s/session-dir-for-cwd dir "/home/user/proj")
+        big-cwd (str "/home/user/" (apply str (repeat 1100000 "d")))
+        sess (s/create-session cwd-dir {:cwd big-cwd})
+        _ (s/append-entry sess {:role :assistant :content "a"})
+        other (s/create-session cwd-dir {:cwd "/home/user/proj"})
+        _ (s/append-entry other {:role :assistant :content "b"})]
+    (try
+      (t/is (nil? (s/find-most-recent-session cwd-dir big-cwd))
+            "oversized header → not discovered")
+      (t/is (= (:file other)
+               (s/find-most-recent-session cwd-dir "/home/user/proj"))
+            "a normal header in the same dir is still found")
+      (finally (fs/delete-tree dir)))))
+
 (t/deftest test-session-list-sessions-nonexistent-dir
   (let [files (s/list-sessions "nonexistent-dir")]
     (t/is (nil? files))))
@@ -388,6 +423,127 @@
       (t/is (= 2 (count entries)) "Should skip blank lines")
       (t/is (= "1" (:id (first entries))))
       (t/is (= "4" (:id (second entries)))))))
+
+;; ─── G13: streaming load, torn-tail + unterminated-tail repair ───────────
+
+(t/deftest test-session-streaming-load
+  ;; G13: load streams in 1 MB chunks — a session larger than one chunk
+  ;; round-trips whole, including entries straddling a chunk boundary
+  (let [dir (str "target/test-sess-stream-" (System/currentTimeMillis))
+        sess (s/create-session dir)
+        n 12000  ;; ~1.3 MB of lines, well past one 1 MB chunk
+        entry (fn [i] {:role :user :content [{:type :text :text (str "msg " i " " (apply str (repeat 90 "x")))}]})]
+    (try
+      (s/append-entry sess {:role :assistant :content "start"})  ;; persist (lazy G4)
+      (spit (:file sess)
+            (apply str (map prn-str (map entry (range n))))
+            :append true)
+      (let [loaded (s/load-session (:file sess))
+            entries @(:entries loaded)]
+        (t/is (= (inc n) (count entries)) "header + 1 + N entries all loaded")
+        (t/is (= (:header sess) (:header loaded)) "header intact")
+        (t/is (= "msg 0 " (subs (get-in (second entries) [:content 0 :text]) 0 6))
+              "the entry right after the chunk boundary loads whole"))
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-torn-tail-repair
+  ;; G13: a partial final line (crashed append) is dropped and the valid
+  ;; prefix published atomically — the file on disk is repaired, not just
+  ;; skipped-with-warning
+  (let [dir (str "target/test-sess-torn-" (System/currentTimeMillis))
+        file (str dir "/sess.ednl")]
+    (try
+      (fs/create-dirs dir)
+      (spit file "{:type :session :version 1 :id \"abc\" :created-at \"2025-01-01T00:00:00Z\" :cwd \"/tmp\"}\n")
+      (spit file "{:id \"1\" :role :user :content \"hello\"}\n" :append true)
+      (spit file "{:id \"2\" :role :assistant :content \"wor" :append true)  ;; torn
+      (let [loaded (silent-stderr #(s/load-session file))
+            entries @(:entries loaded)]
+        (t/is (= 1 (count entries)) "torn entry dropped")
+        (t/is (= "1" (:id (first entries))))
+        (t/is (= "abc" (:id loaded)) "header still read"))
+      (let [remaining (str/split-lines (slurp file))]
+        (t/is (= 2 (count remaining)) "file repaired: header + 1 entry")
+        (t/is (= "1" (:id (edn/read-string (second remaining))))
+              "the entry after the torn line survives the repair"))
+      (let [loaded-again (s/load-session file)]
+        (t/is (= 1 (count @(:entries loaded-again)))
+              "reload after repair: no further warnings/repairs"))
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-torn-tail-only-line
+  ;; G13: a file consisting solely of a torn line repairs to an empty
+  ;; session (no entries, no header)
+  (let [dir (str "target/test-sess-torn-only-" (System/currentTimeMillis))
+        file (str dir "/sess.ednl")]
+    (try
+      (fs/create-dirs dir)
+      (spit file "{:id \"1\" :role :user")
+      (let [loaded (silent-stderr #(s/load-session file))]
+        (t/is (empty? @(:entries loaded)))
+        (t/is (nil? (:header loaded))))
+      (t/is (= "\n" (slurp file)) "file repaired to an empty session file")
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-torn-tail-with-earlier-corruption
+  ;; G13: repair drops only the torn tail; malformed middle lines are
+  ;; preserved (pi v4: physicalLines.slice — the tail is the unacknowledged
+  ;; partial append, middle corruption is skipped-with-warning not erased)
+  (let [dir (str "target/test-sess-torn-mid-" (System/currentTimeMillis))
+        file (str dir "/sess.ednl")]
+    (try
+      (fs/create-dirs dir)
+      (spit file "{:id \"1\" :role :user :content \"a\"}\n")
+      (spit file "garbage!@\n" :append true)  ;; malformed middle line
+      (spit file "{:id \"2\" :role :assistant :content \"b" :append true)  ;; torn
+      (let [loaded (silent-stderr #(s/load-session file))
+            entries @(:entries loaded)]
+        (t/is (= 1 (count entries)))
+        (t/is (= "1" (:id (first entries)))))
+      (let [remaining (str/split-lines (slurp file))]
+        (t/is (= 2 (count remaining)) "torn line gone, garbage line kept")
+        (t/is (= "garbage!@" (second remaining))))
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-unterminated-tail-repair
+  ;; G13: a valid final line without a trailing newline gets one appended on
+  ;; load, so a later append can't glue onto it (pi v4 unterminated-tail
+  ;; repair)
+  (let [dir (str "target/test-sess-unterm-" (System/currentTimeMillis))
+        file (str dir "/sess.ednl")]
+    (try
+      (fs/create-dirs dir)
+      (spit file "{:id \"1\" :role :user :content \"hi\"}")  ;; no \n
+      (let [loaded (s/load-session file)]
+        (t/is (= 1 (count @(:entries loaded))))
+        (t/is (str/ends-with? (slurp file) "\n")
+              "trailing newline appended"))
+      ;; the repair keeps subsequent appends on their own line
+      (spit file "{:id \"2\" :role :assistant :content \"bye\"}\n" :append true)
+      (let [loaded (s/load-session file)]
+        (t/is (= 2 (count @(:entries loaded)))
+              "append after repair stays a separate line"))
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-streaming-load-utf8-boundary
+  ;; G13: streaming decodes UTF-8 incrementally (pi's StringDecoder) — a
+  ;; multi-byte character straddling the 1 MB chunk boundary loads intact
+  ;; instead of being replaced with U+FFFD
+  (let [dir (str "target/test-sess-utf8-" (System/currentTimeMillis))
+        file (str dir "/sess.ednl")
+        ;; 漢's 3 bytes span byte 1048575..1048577 — right across the 1 MB
+        ;; read boundary
+        line (prn-str {:id "1" :role :user
+                       :content (str (apply str (repeat 1048541 "a")) "漢")})]
+    (try
+      (fs/create-dirs dir)
+      (spit file (str line "\n"))
+      (let [loaded (s/load-session file)
+            content (:content (first @(:entries loaded)))]
+        (t/is (= 1 (count @(:entries loaded))))
+        (t/is (= \漢 (last content))
+              "multi-byte char across the chunk boundary intact"))
+      (finally (fs/delete-tree dir)))))
 
 (t/deftest test-compact-with-summary
   (let [dir (str "target/test-sess-cws-" (System/currentTimeMillis))

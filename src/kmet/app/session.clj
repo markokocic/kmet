@@ -148,24 +148,98 @@
                     :leaf-id (atom nil)
                     :lock (java.util.concurrent.locks.ReentrantLock.)}))))
 
+;; ─── Loading (G13 — pi: loadEntriesFromFile / readSessionHeader) ──────────
+
+(def ^:private read-buffer-size
+  "Chunk size (chars) for streaming session file reads (pi:
+   SESSION_READ_BUFFER_SIZE — 1 MB)."
+  (* 1024 1024))
+
+(defn- read-physical-lines
+  "Read PATH's physical lines with READ-BUFFER-SIZE chunked, line-oriented
+   reads (pi: loadEntriesFromFile), so the file is never materialized as a
+   single string. The reader decodes UTF-8 incrementally, so a multi-byte
+   character spanning a chunk boundary stays intact (pi's StringDecoder).
+   Returns {:lines [..] :ends-with-newline? bool}; the final line is
+   included even without a trailing newline."
+  [path]
+  (with-open [r (io/reader path :encoding "UTF-8")]
+    (let [cbuf (char-array read-buffer-size)]
+      (loop [pending "" lines []]
+        (let [n (.read r cbuf)]
+          (if (neg? n)
+            {:lines (if (empty? pending) lines (conj lines pending))
+             :ends-with-newline? (empty? pending)}
+            (let [parts (str/split (str pending (String. cbuf 0 n))
+                                   #"\n" -1)]
+              (recur (last parts) (into lines (butlast parts))))))))))
+
+(defn- parse-physical-line
+  "Parse one physical line into a session entry. Blank lines return nil;
+   malformed lines warn to stderr and return ::invalid (pi v3 skips
+   malformed lines with a warning)."
+  [path line]
+  (let [trimmed (str/trim line)]
+    (when (seq trimmed)
+      (try (edn/read-string trimmed)
+           (catch Exception ex
+             (binding [*out* *err*]
+               (println "Warning: Skipping invalid entry in" path ":" (ex-message ex)))
+             ::invalid)))))
+
+(defn- parseable-line?
+  "True when LINE is blank or parses as EDN — i.e. not a torn tail."
+  [line]
+  (let [trimmed (str/trim line)]
+    (or (empty? trimmed)
+        (try (edn/read-string trimmed) true
+             (catch Exception _ false)))))
+
+(defn- repair-torn-tail!
+  "Drop a torn tail — a partial final line left by a crashed append — by
+   atomically publishing the valid prefix (all physical lines except the
+   last) via temp file + rename (pi v4 torn-tail repair: the tail is an
+   unacknowledged partial append; malformed middle lines are preserved).
+   Returns the repaired lines. Runs during load, before any session exists."
+  [file lines]
+  (let [valid (subvec lines 0 (dec (count lines)))
+        tmp (str file ".tmp")]
+    (spit tmp (str (str/join "\n" valid) "\n"))
+    (fs/move tmp file {:replace-existing true}))
+  (subvec lines 0 (dec (count lines))))
+
 (defn load-session
   "Load an existing session from file path. Returns Session record.
    A leading :session header line (G1) is parsed into :header and excluded
    from the entries; legacy files without a header load with :header nil
-   and :id derived from the filename."
+   and :id derived from the filename.
+
+   Loading streams the file in 1 MB chunks (G13) and repairs two crash
+   artifacts atomically (pi v4): a torn tail — a partial final line from a
+   crashed append — is dropped by publishing the valid prefix via temp file
+   + rename, and a missing trailing newline is appended so a future append
+   can't glue onto the last line. Malformed non-tail lines keep the v3
+   skip-with-warning behavior."
   [path]
   (let [file (io/file path)
-        content (slurp file)
-        lines (str/split-lines content)
-        parsed (vec (keep identity
-                          (for [line lines]
-                            (let [trimmed (str/trim line)]
-                              (when (seq trimmed)
-                                (try (edn/read-string trimmed)
-                                     (catch Exception ex
-                                       (binding [*out* *err*]
-                                         (println "Warning: Skipping invalid entry in" path ":" (ex-message ex)))
-                                       nil)))))))
+        {:keys [lines ends-with-newline?]} (read-physical-lines (str file))
+        torn? (and (seq lines)
+                   (let [last-line (peek lines)]
+                     (and (seq (str/trim last-line))
+                          (not (parseable-line? last-line)))))
+        lines (if torn?
+                (do (binding [*out* *err*]
+                      (println "Warning: Repairing torn session tail in" path))
+                    (repair-torn-tail! file lines))
+                lines)
+        ;; a final line without a newline would glue the next append onto it
+        ;; (pi v4: unterminated-tail repair)
+        _ (when (and (not ends-with-newline?) (seq lines) (not torn?))
+            (spit (str file) "\n" :append true))
+        parsed (vec (keep (fn [line]
+                            (let [e (parse-physical-line path line)]
+                              (when-not (= ::invalid e) e)))
+                          lines))
         header? (and (seq parsed) (= :session (:type (first parsed))))
         header (when header? (first parsed))
         entries (if header? (subvec parsed 1) parsed)
@@ -711,26 +785,77 @@
              (sort-by #(.toMillis (fs/last-modified-time %)) >)
              vec)))))
 
+(def ^:private header-read-buffer-size
+  "Chunk size (chars) for the bounded header scan (pi:
+   SESSION_HEADER_READ_BUFFER_SIZE — 4 KB)."
+  4096)
+
+(def ^:private max-header-scan-chars
+  "Upper bound (chars) for the header scan (pi:
+   MAX_SESSION_HEADER_SCAN_BYTES — 1 MB), so discovery never reads an
+   oversized/garbage file to the end."
+  (* 1024 1024))
+
+(defn- parse-header-candidate
+  "Inspect a single physical line while searching for a session header (pi:
+   parseSessionHeaderCandidate). Blank and malformed lines keep scanning
+   (::continue); a parsed non-header entry stops the scan with nil; a
+   session header returns the header map."
+  [line]
+  (let [trimmed (str/trim line)]
+    (if (empty? trimmed)
+      ::continue
+      (let [e (try (edn/read-string trimmed)
+                   (catch Exception _ ::invalid))]
+        (cond
+          (= ::invalid e) ::continue
+          (and (map? e) (= :session (:type e))) e
+          :else nil)))))
+
+(defn- consume-header-lines
+  "Consume complete lines from TEXT through parse-header-candidate. Returns
+   [decision remaining]: decision is a header map, nil (a parsed non-header
+   entry), or ::continue; remaining is the unprocessed tail (a partial final
+   line without a newline, carried to the next chunk)."
+  [text]
+  (loop [text text]
+    (if-let [nl (str/index-of text "\n")]
+      (let [decision (parse-header-candidate (subs text 0 nl))]
+        (if (= ::continue decision)
+          (recur (subs text (inc nl)))
+          [decision (subs text (inc nl))]))
+      [::continue text])))
+
 (defn- read-session-header
-  "Best-effort header read for discovery (pi: readSessionHeaderForDiscovery —
-   a bounded leading-line scan): returns the first :session header of the
-   file, or nil for headerless, corrupt, or unreadable files. Blank and
-   malformed leading lines are skipped; the scan stops at the first
-   parseable non-header entry."
+  "Best-effort bounded header read for discovery (pi:
+   readSessionHeaderForDiscovery): 4096-char chunked reads up to a 1 MB
+   scan limit, line-oriented so a header spanning a chunk boundary is
+   assembled (UTF-8 is decoded incrementally — split multi-byte sequences
+   stay intact). Blank/malformed leading lines are skipped; the scan stops
+   at the first parseable non-header entry (nil) or a session header.
+   Returns nil for headerless, corrupt, oversized (no decision within the
+   scan limit), or unreadable files."
   [path]
   (try
-    (with-open [r (io/reader path)]
-      (loop [lines (line-seq r)]
-        (if-let [line (first lines)]
-          (let [trimmed (str/trim line)]
-            (if (seq trimmed)
-              (let [e (try (edn/read-string trimmed) (catch Exception _ ::invalid))]
-                (cond
-                  (and (map? e) (= :session (:type e))) e
-                  (= ::invalid e) (recur (rest lines))
-                  :else nil))
-              (recur (rest lines))))
-          nil)))
+    (with-open [r (io/reader path :encoding "UTF-8")]
+      (let [cbuf (char-array header-read-buffer-size)]
+        (loop [scanned 0 pending ""]
+          (if (>= scanned max-header-scan-chars)
+            ;; At the limit a final header ending exactly here (no further
+            ;; characters) is still accepted — probe EOF (pi: readSessionHeader).
+            (if (neg? (.read r))
+              (let [decision (parse-header-candidate pending)]
+                (when-not (= ::continue decision) decision))
+              nil)
+            (let [n (.read r cbuf)]
+              (if (neg? n)
+                (let [decision (parse-header-candidate pending)]
+                  (when-not (= ::continue decision) decision))
+                (let [[decision remaining]
+                      (consume-header-lines (str pending (String. cbuf 0 n)))]
+                  (if (= ::continue decision)
+                    (recur (+ scanned n) remaining)
+                    decision))))))))
     (catch Exception _ nil)))
 
 (defn find-most-recent-session

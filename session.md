@@ -82,6 +82,14 @@ Kmet side: `src/kmet/app/session.clj` (+ consumers: `app/loop.clj`, `modes/inter
   `:info`; the resumed model/thinking level comes from live config, not the session.
 - `list-sessions` returns only paths (mtime-sorted); `resume-session` then **fully loads each
   file** to get name/first-message/count/age. No cwd filter, no progress, no concurrency cap.
+- **Phase 4 (G13) done**: `load-session` streams in 1 MB chunks instead of `slurp`; the header
+  scan (`read-session-header` for discovery) is bounded at 1 MB with 4 KB chunked reads;
+  a torn tail (partial final line from a crashed append) is dropped by atomically publishing
+  the valid prefix (temp file + rename); a missing trailing newline is appended so a future
+  append can't glue onto the last line; malformed non-tail lines keep skip-with-warning;
+  UTF-8 sequences spanning chunk boundaries decode intact. G20 was already satisfied — all
+  rewrite paths (`publish-file!`, `write-entries!`, `write-entries-verbatim!`, `repair-torn-tail!`)
+  publish via temp file + rename; appends are single-line and covered by torn-tail repair.
 
 ## 2. Gap list
 
