@@ -837,6 +837,46 @@ Be precise and concise in your responses."}}]
                           (finally (remove-watch signal :kmet/summarize-cancel)))]
           (when (and (string? result) (seq result)) result))))))
 
+(defn generate-branch-summary
+  "LLM summary of abandoned branch entries for tree navigation (pi:
+   generateBranchSummary). Returns {:summary str} with the branch preamble
+   applied, {:aborted true} when the signal fired mid-call, or nil when no
+   API key is available or the call fails/times out/returns empty. SIGNAL
+   (optional, defaults to the agent's cancel signal) aborts the call."
+  [agent entries & [custom-instructions signal]]
+  (let [provider @(:provider agent)
+        ep (resolve-endpoint agent)
+        api-key (resolve-api-key agent)]
+    (when api-key
+      (let [done (promise)
+            text-buf (atom "")
+            signal (or signal (:signal agent))
+            msgs (compaction/branch-summary-messages
+                  (vec (mapcat session/context-messages entries))
+                  custom-instructions)]
+        (llm/send-message
+         {:provider provider
+          :api-type (:api-type ep)
+          :model @(:model agent)
+          :api-key api-key
+          :base-url (:base-url ep)
+          :messages msgs
+          :signal signal
+          :idle-timeout-ms (:http-idle-timeout-ms agent)
+          :on-text (fn [t] (swap! text-buf str t))
+          :on-done (fn [_] (deliver done @text-buf))
+          :on-error (fn [_] (when-not (realized? done) (deliver done nil)))})
+        (add-watch signal :kmet/branch-summarize-cancel
+                   (fn [_ _ _ v] (when v (deliver done nil))))
+        (when @signal (deliver done nil))
+        (let [result (try (deref done 120000 :timeout)
+                          (finally (remove-watch signal :kmet/branch-summarize-cancel)))]
+          (cond
+            (and (nil? result) @signal) {:aborted true}
+            (string? result) (when (seq result)
+                               {:summary (str compaction/branch-summary-preamble result)})
+            :else nil))))))
+
 (defn- sync-context-after-compaction!
   "Rebuild the in-memory context from the compacted session (pi: the agent
    context is rebuilt from the session after compaction — buildContextEntries

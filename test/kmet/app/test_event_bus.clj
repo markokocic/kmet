@@ -82,3 +82,20 @@
       (event-bus/emit-event! {:type :err-test :data "ok"}))
     (t/is (= 1 (count @log)))
     (t/is (= "ok" (first @log)))))
+
+(t/deftest test-event-returns-last-non-nil-result
+  (event-bus/clear-event-listeners!)
+  (event-bus/on-event :tree-prep (fn [_] {:summary "ext summary"}))
+  (event-bus/on-event :tree-prep (fn [_] nil))
+  (t/is (= {:summary "ext summary"}
+           (event-bus/emit-event! {:type :tree-prep :x 1}))
+        "emit returns the last non-nil handler result (pi: runner.emit)")
+  (t/is (nil? (event-bus/emit-event! {:type :unregistered :x 1}))
+        "no listeners → nil"))
+
+(t/deftest test-event-handler-error-swallowed
+  (event-bus/clear-event-listeners!)
+  (event-bus/on-event :bad (fn [_] (throw (ex-info "boom" {}))))
+  (event-bus/on-event :bad (fn [_] {:ok true}))
+  (t/is (= {:ok true} (event-bus/emit-event! {:type :bad}))
+        "an errored handler doesn't prevent later handlers or throw"))

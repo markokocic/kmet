@@ -360,3 +360,23 @@
         lines (core/render s2 40)]
     (t/is (not-any? #(.contains % "(1/4)") lines)
           "no scroll info when everything fits")))
+
+;; ─── :on-key hook (pi: SelectList onAction) ────────────────────────────────
+
+(t/deftest test-select-list-on-key-hook
+  (let [handled (atom 0)
+        s (sl/make-select-list sample-items
+                               :on-key (fn [_ data]
+                                         (when (= data "ctrl+x")
+                                           (swap! handled inc)
+                                           true)))]
+    (core/handle-input s "ctrl+x")
+    (t/is (= 1 @handled) "consumed key never reaches built-in handling")
+    (core/handle-input s K-DOWN)
+    (t/is (= 1 @handled) "unhandled keys fall through without incrementing")
+    (t/is (= 1 @(:selected-idx-atom s)) "built-in handling still works")))
+
+(t/deftest test-select-list-set-header
+  (let [s (sl/make-select-list sample-items :header "Tree")]
+    (sl/select-list-set-header! s "Tree [user]")
+    (t/is (= "Tree [user]" @(:header-atom s)))))

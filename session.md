@@ -15,6 +15,9 @@ Kmet side: `src/kmet/app/session.clj` (+ consumers: `app/loop.clj`, `modes/inter
   no shared sequence/mutation log, no records, no writer claims, no session search. Anything
   borrowed from v4 is a format-agnostic *technique* (e.g. torn-tail repair, atomic publish),
   not v4 architecture.
+- **No migration machinery** — the header's `:version` is informational only; legacy
+  headerless files load with `:header nil` (already handled by `load-session`). pi's
+  v1→v2→v3 migrations are not ported and no `migrate!` is planned.
 
 ### v3 reference behavior (the target)
 
@@ -53,7 +56,7 @@ Kmet side: `src/kmet/app/session.clj` (+ consumers: `app/loop.clj`, `modes/inter
   concurrency 10, progress callback; `findMostRecentSession` reads only headers for discovery
   and filters by cwd.
 - **Migrations**: v1→v2 (id/parentId tree), v2→v3 (hookMessage role rename), run on load and
-  rewrite the file.
+  rewrite the file. *(reference only — kmet does not port these, see §0.)*
 - **Robustness**: malformed lines skipped; torn-tail repair and atomic file publication are
   format-agnostic techniques worth adopting for EDN even though they come from v4.
 
@@ -91,7 +94,6 @@ Legend: 🔴 high (correctness/UX parity), 🟡 medium, 🟢 low.
 | G1 | **No session header** | header with id/version/cwd/timestamp/parentSession | none | 🔴 |
 | G2 | **Flat session dir** | cwd-encoded dirs; per-project isolation; `listAll` | one flat dir; `/resume` mixes all projects | 🔴 |
 | G4 | **Lazy file creation** | file exists only after first assistant msg; fork/clone refuse before | empty file at create | 🟡 |
-| G5 | **Versioning + migrations** | version field, v1→v2→v3 migration on load | none | 🔴 (once G1 lands) |
 
 *Format itself (EDN vs JSONL) is resolved: EDN, no interop — see §0. No pi-file compatibility
 is required, so a JSONL codec is never built.*
@@ -141,8 +143,7 @@ is required, so a JSONL codec is never built.*
 ## 3. Dependencies between gaps
 
 ```
-G1 header ──┬──▶ G5 versioning/migrations
-            ├──▶ G23 cwd-scoped continue (with G2)
+G1 header ──┬──▶ G23 cwd-scoped continue (with G2)
             └──▶ G22 /session info (with G2)
 G2 cwd dirs ──▶ G15 listing cwd filter
 G7 append-only compaction ──▶ G20 atomic publish (rewrite paths shrink)
@@ -156,7 +157,7 @@ G11 labels ──▶ G18 label re-chaining on fork
 
 ## 4. Proposed plan
 
-**Phase 1 — Header, layout, versioning (G1, G2, G4, G5, G23).**
+**Phase 1 — Header & layout (G1, G2, G4, G23).**
 - Add a header entry (first line) to `create-session`: `{:type :session :version 1 :id
   :created-at :cwd :parent-session}` in EDN. `load-session` reads it; `get-branch`/
   `get-tree` skip it.
@@ -165,8 +166,6 @@ G11 labels ──▶ G18 label re-chaining on fork
   `resume-session`/`list-sessions` to walk cwd dirs (listAll) and filter by cwd.
 - Lazy file creation: defer writing until the first assistant entry; add the
   "wait for first assistant response before forking" guard.
-- Migration scaffold: `migrate!` on load (now: v0→v1 adds the header for legacy files), with
-  tests mirroring pi's `migrateV1ToV2`/`migrateV2ToV3` shapes.
 
 **Phase 2 — Entry vocabulary (G6–G12).**
 - Persist `model_change` / `thinking_level_change` / `active_tools_change` entries from the
@@ -196,8 +195,8 @@ G11 labels ──▶ G18 label re-chaining on fork
 - Streaming/chunked load instead of `slurp` (1 MB chunks, line-oriented) with a bounded header
   scan; keep skip-with-warning for malformed lines but **detect and repair a torn tail**
   atomically (temp file + rename) — the v4 technique, applied to EDN.
-- Make all rewrite paths (`migrate!`, any remaining compaction fallback, `replace-context!`)
-  publish via temp file + rename; keep the in-process lock for append serialization.
+- Make all rewrite paths (the compaction fallback, `replace-context!`) publish via temp file
+  + rename; keep the in-process lock for append serialization.
 
 **Phase 5 — Listing & stats (G15, G16).**
 - `list-sessions` → per-file streaming `build-session-info` (name, firstMessage, messageCount,
@@ -227,6 +226,6 @@ G11 labels ──▶ G18 label re-chaining on fork
 - Write EDN conformance tests in `test/kmet/app/session_test.clj` covering the pi v3 semantics
   we're aligning to: append-chain, branch walk, leaf move, compaction context
   (latest compaction + tail from first-kept-id), branch_summary projection, label latest-wins
-  + fork re-chaining, migration v0→v1, torn-tail repair, fork id preservation.
+  + fork re-chaining, torn-tail repair, fork id preservation.
 - Add regression tests for the concurrency bug the lock guards (concurrent appends → no
   orphaned siblings), and for `build-session-info` parity with pi's `buildSessionInfo`.

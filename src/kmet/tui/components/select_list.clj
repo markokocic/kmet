@@ -138,7 +138,7 @@
                               focused? theme-atom height-atom cache-atom
                               header-atom no-match-text-atom
                               min-primary-column-atom max-primary-column-atom
-                              truncate-primary-atom]
+                              truncate-primary-atom on-key]
 
   (render [this width]
     (track! this width
@@ -189,89 +189,91 @@
         @lines)))
 
   (handle-input [this data]
-    (let [items @items-atom
-          filter-str @filter-atom
-          filtered (if (empty? filter-str)
-                     items
-                     (vec (clojure.core/filter #(fuzzy-match? filter-str (:label %)) items)))
-          n (count filtered)
-          selected @selected-idx-atom]
-      (cond
+    (if (and @on-key (@on-key this data))
+      nil
+      (let [items @items-atom
+            filter-str @filter-atom
+            filtered (if (empty? filter-str)
+                       items
+                       (vec (clojure.core/filter #(fuzzy-match? filter-str (:label %)) items)))
+            n (count filtered)
+            selected @selected-idx-atom]
+        (cond
         ;; Enter — select
-        (and (keys/matches-key? data "enter") (pos? n))
-        (do (when-let [cb @on-select]
-              (cb (nth filtered selected)))
-            nil)
+          (and (keys/matches-key? data "enter") (pos? n))
+          (do (when-let [cb @on-select]
+                (cb (nth filtered selected)))
+              nil)
 
         ;; Escape — cancel
-        (keys/matches-key? data "escape")
-        (do (when-let [cb @on-escape] (cb))
-            nil)
+          (keys/matches-key? data "escape")
+          (do (when-let [cb @on-escape] (cb))
+              nil)
 
         ;; Down — pi wraps to the top at the bottom
-        (or (keys/matches-key? data "down")
-            (keys/matches-key? data (keys/ctrl "n")))
-        (do (when (pos? n)
-              (if (= selected (dec n))
-                (reset! selected-idx-atom 0)
-                (swap! selected-idx-atom inc))
-              (notify-selection-change! this filtered n))
-            nil)
+          (or (keys/matches-key? data "down")
+              (keys/matches-key? data (keys/ctrl "n")))
+          (do (when (pos? n)
+                (if (= selected (dec n))
+                  (reset! selected-idx-atom 0)
+                  (swap! selected-idx-atom inc))
+                (notify-selection-change! this filtered n))
+              nil)
 
         ;; Up — pi wraps to the bottom at the top
-        (or (keys/matches-key? data "up")
-            (keys/matches-key? data (keys/ctrl "p")))
-        (do (when (pos? n)
-              (if (zero? selected)
-                (reset! selected-idx-atom (dec n))
-                (swap! selected-idx-atom dec))
-              (notify-selection-change! this filtered n))
-            nil)
+          (or (keys/matches-key? data "up")
+              (keys/matches-key? data (keys/ctrl "p")))
+          (do (when (pos? n)
+                (if (zero? selected)
+                  (reset! selected-idx-atom (dec n))
+                  (swap! selected-idx-atom dec))
+                (notify-selection-change! this filtered n))
+              nil)
 
         ;; Page down — shift+pageDown (the select-list's own key; plain
         ;; pageDown is the viewport transcript scroll, pi parity)
-        (keys/matches-key? data (keys/shift "pageDown"))
-        (do (when (pos? n)
-              (swap! selected-idx-atom #(min (+ % @height-atom) (max 0 (dec n))))
-              (notify-selection-change! this filtered n))
-            nil)
+          (keys/matches-key? data (keys/shift "pageDown"))
+          (do (when (pos? n)
+                (swap! selected-idx-atom #(min (+ % @height-atom) (max 0 (dec n))))
+                (notify-selection-change! this filtered n))
+              nil)
 
         ;; Page up
-        (keys/matches-key? data (keys/shift "pageUp"))
-        (do (swap! selected-idx-atom #(max 0 (- % @height-atom)))
-            (notify-selection-change! this filtered n)
-            nil)
+          (keys/matches-key? data (keys/shift "pageUp"))
+          (do (swap! selected-idx-atom #(max 0 (- % @height-atom)))
+              (notify-selection-change! this filtered n)
+              nil)
 
         ;; Home
-        (keys/matches-key? data "home")
-        (do (reset! selected-idx-atom 0)
-            (notify-selection-change! this filtered n)
-            nil)
+          (keys/matches-key? data "home")
+          (do (reset! selected-idx-atom 0)
+              (notify-selection-change! this filtered n)
+              nil)
 
         ;; End
-        (keys/matches-key? data "end")
-        (do (when (pos? n)
-              (reset! selected-idx-atom (dec n))
-              (notify-selection-change! this filtered n))
-            nil)
+          (keys/matches-key? data "end")
+          (do (when (pos? n)
+                (reset! selected-idx-atom (dec n))
+                (notify-selection-change! this filtered n))
+              nil)
 
         ;; Backspace — remove last filter char
-        (or (keys/matches-key? data "backspace")
-            (keys/matches-key? data (keys/ctrl "h")))
-        (do (swap! filter-atom #(subs % 0 (max 0 (dec (count %)))))
-            (reset! selected-idx-atom 0)
-            nil)
+          (or (keys/matches-key? data "backspace")
+              (keys/matches-key? data (keys/ctrl "h")))
+          (do (swap! filter-atom #(subs % 0 (max 0 (dec (count %)))))
+              (reset! selected-idx-atom 0)
+              nil)
 
         ;; Regular character — add to filter
-        :else
-        (let [has-ctrl? (some #(let [c (int %)]
-                                 (or (< c 32) (== c 127)
-                                     (and (>= c 128) (<= c 159))))
-                              data)]
-          (when-not has-ctrl?
-            (swap! filter-atom str data)
-            (reset! selected-idx-atom 0)
-            nil))))))
+          :else
+          (let [has-ctrl? (some #(let [c (int %)]
+                                   (or (< c 32) (== c 127)
+                                       (and (>= c 128) (<= c 159))))
+                                data)]
+            (when-not has-ctrl?
+              (swap! filter-atom str data)
+              (reset! selected-idx-atom 0)
+              nil)))))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
@@ -292,11 +294,15 @@
                                SelectListLayoutOptions.truncatePrimary)
      :on-selection-change     — fn called with the newly selected item after
                                a navigation key moves the selection (pi
-                               SelectList.onSelectionChange)"
+                               SelectList.onSelectionChange)
+     :on-key                  — fn (fn [sl data]) called before built-in key
+                               handling; return truthy when the key was
+                               consumed (pi SelectList onAction)
+     :on-escape               — fn called when the user cancels"
   [items & {:keys [height theme header no-match-text
                    min-primary-column-width max-primary-column-width
                    truncate-primary
-                   on-select on-escape on-selection-change]
+                   on-key on-select on-escape on-selection-change]
             :or {height 10 theme default-theme
                  no-match-text "  No matching commands"}}]
   ;; pi: getPrimaryColumnBounds — a single provided bound applies to both
@@ -321,9 +327,15 @@
                       :no-match-text-atom (atom no-match-text)
                       :min-primary-column-atom (atom min-w)
                       :max-primary-column-atom (atom max-w)
-                      :truncate-primary-atom (atom truncate-primary)})))
+                      :truncate-primary-atom (atom truncate-primary)
+                      :on-key (atom on-key)})))
 
 ;; ─── Public helpers ─────────────────────────────────────────────────────────
+
+(defn select-list-set-header!
+  "Set the header line (pi: SelectList header updates dynamically)."
+  [sl header]
+  (reset! (:header-atom sl) header))
 
 (defn select-list-set-items! [sl items]
   (reset! (:items-atom sl) items)

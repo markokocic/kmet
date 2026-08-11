@@ -39,6 +39,7 @@
    "StatusIndicator"            :time-animated
    "RetryStatusIndicator"       :time-animated
    "CompactionStatusIndicator"  :time-animated
+   "BranchSummaryStatusIndicator" :time-animated
    "AltScreenFlashContainer"    :time-animated
    "CancellableLoader"          :time-animated
    "Input"                      :focused-input
@@ -117,7 +118,7 @@
    when components are added or removed; a mismatch means the scan below
    silently lost forms (a scanner regression), so the convention checks
    would otherwise pass vacuously."
-  36)
+  37)
 
 (deftest caching-conventions
   (let [checked (atom [])]

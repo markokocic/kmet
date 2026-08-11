@@ -131,3 +131,26 @@
   (map->CompactionStatusIndicator {:start-atom (atom (System/currentTimeMillis))
                                    :message-atom (atom message)
                                    :cache-atom (atom nil)}))
+
+(defcomponent BranchSummaryStatusIndicator nil [start-atom message-atom
+                                                cancel-hint-atom cache-atom]
+  (render [_this width]
+    (let [elapsed (- (System/currentTimeMillis) @start-atom)
+          th (theme/get-current-theme)
+          frame (frame-at elapsed)
+          message (str @message-atom " (" @cancel-hint-atom " to cancel)")
+          line (str (theme/fg th :accent frame) " " (theme/fg th :muted message))]
+      ["" (u/truncate-to-width line width)]))
+  (handle-input [_this _data] nil)
+  (invalidate [this] (reset! (:cache-atom this) nil)))
+
+(defn make-branch-summary-status-indicator
+  "Branch summarization progress indicator (pi: BranchSummaryStatusIndicator)
+   with a cancel hint — escape aborts the summarization via the editor's
+   interrupt action."
+  [& {:keys [message cancel-hint]
+      :or {message "Summarizing branch..." cancel-hint "Escape"}}]
+  (map->BranchSummaryStatusIndicator {:start-atom (atom (System/currentTimeMillis))
+                                      :message-atom (atom message)
+                                      :cancel-hint-atom (atom cancel-hint)
+                                      :cache-atom (atom nil)}))

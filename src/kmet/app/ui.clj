@@ -92,6 +92,7 @@
 (def status-indicator-set-theme! status-indicator/status-indicator-set-theme!)
 (def make-retry-status-indicator status-indicator/make-retry-status-indicator)
 (def make-compaction-status-indicator status-indicator/make-compaction-status-indicator)
+(def make-branch-summary-status-indicator status-indicator/make-branch-summary-status-indicator)
 
 ;; ChatHistoryComponent
 (def make-chat-history chat-history/make-chat-history)

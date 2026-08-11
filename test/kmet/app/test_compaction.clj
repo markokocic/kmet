@@ -24,6 +24,15 @@
   (t/testing "bash without exclusion counts command + output"
     (t/is (pos? (compaction/estimate-tokens {:role :bash :command "ls" :output "out"})))))
 
+(t/deftest test-estimate-tokens-summary-roles
+  (t/is (pos? (compaction/estimate-tokens
+               {:role :branch-summary :summary "a fairly long summary of the abandoned branch"}))
+        "branch_summary projects to a user message — its text is context")
+  (t/is (pos? (compaction/estimate-tokens
+               {:role :compaction :summary "a fairly long compaction summary"})))
+  (t/is (zero? (compaction/estimate-tokens {:role :label :target-id "x" :label "l"}))
+        "labels are navigation metadata — never in context"))
+
 ;; ─── Cut point (pi: findCutPoint) ──────────────────────────────────────────
 
 (t/deftest test-find-cut-point
@@ -130,7 +139,15 @@
     (let [text (compaction/serialize-conversation
                 [{:role :info :content "ignored"}
                  {:role :bash :command "ls" :output "out" :exclude-from-context? true}])]
-      (t/is (empty? text)))))
+      (t/is (empty? text))))
+  (t/testing "compaction/branch_summary entries serialize their summary (pi:
+              convertToLlm maps both to user messages before serialization —
+              they survive a later compaction)"
+    (let [text (compaction/serialize-conversation
+                [{:role :branch-summary :summary "abandoned branch"}
+                 {:role :compaction :summary "old conversation"}])]
+      (t/is (str/includes? text "[User]: abandoned branch"))
+      (t/is (str/includes? text "[User]: old conversation")))))
 
 ;; ─── Summarization request (pi: generateSummaryWithUsage) ─────────────────
 

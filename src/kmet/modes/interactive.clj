@@ -40,11 +40,14 @@
             [kmet.app.ui.bash-execution :as be]
             [kmet.app.ui.extension-dialogs :as dialogs]
             [kmet.tui.components.spinner :as spinner]
+            [kmet.tui.keys :as keys]
             [kmet.libs.process :as process]))
 
-(declare resume-session show-session-tree build-extension-ui-registry
+(declare resume-session show-session-tree show-fork-selector clone-current-session!
+         build-extension-ui-registry ask-branch-summary
          editor-text-get editor-text-set! editor-text-get-expanded
-         build-loaded-resource-sections start-agent-run!)
+         build-loaded-resource-sections start-agent-run!
+         show-status-indicator! clear-status-indicator!)
 
 ;; ─── Global config ref ────────────────────────────────────────────────────
 
@@ -392,9 +395,19 @@
                        (start-agent-run! cs)))))})
   (commands/register-command!
    {:name "tree"
-    :description "Browse session entry tree"
+    :description "Navigate session tree (switch branches)"
     :handler (fn [cs _]
                (show-session-tree cs))})
+  (commands/register-command!
+   {:name "fork"
+    :description "Create a new fork from a previous user message"
+    :handler (fn [cs _]
+               (show-fork-selector cs))})
+  (commands/register-command!
+   {:name "clone"
+    :description "Duplicate the current session at the current position"
+    :handler (fn [cs _]
+               (clone-current-session! cs))})
   (commands/register-command!
    {:name "name"
     :description "Set session display name"
@@ -657,8 +670,6 @@
            {:name "session" :description "Show session info and stats"}
            {:name "changelog" :description "Show changelog entries"}
            {:name "hotkeys" :description "Show all keyboard shortcuts"}
-           {:name "fork" :description "Create a new fork from a previous user message"}
-           {:name "clone" :description "Duplicate the current session at the current position"}
            {:name "trust" :description "Save project trust decision for future sessions"}]]
     (commands/register-command!
      {:name name
@@ -685,27 +696,20 @@
       (< days 365) (str (quot days 30) "mo")
       :else (str (quot days 365) "y"))))
 
-(defn- restore-session!
-  "Restore a session into the UI and the agent: swap the active session,
-   rebuild the agent's in-memory context from the session branch (pi: the
-   session is the source of truth — buildContextEntries; steered and
-   follow-up user messages live in the branch and must come back for the
-   next LLM call), and replay the branch into the chat history. session_info
-   entries are metadata — never rendered (pi: only message entries are
-   replayed on resume)."
+(defn- replay-branch!
+  "Replay a session's active branch into the chat history (pi:
+   renderInitialMessages — only message entries; session_info and label
+   entries are metadata, compaction and branch_summary entries render their
+   summary text)."
   [cs sess]
-  (reset! (:session-atom cs) sess)
-  (let [new-ag (assoc @(:agent-state cs) :session sess)]
-    (reset! (:agent-state cs) new-ag))
-  (agent/restore-session-context! @(:agent-state cs))
   (ui/chat-history-clear! (:chat-history cs))
   (doseq [e (session/get-branch sess)
-          :when (not= :session_info (:role e))]
+          :when (not (contains? #{:session_info :label} (:role e)))]
     (let [role (:role e)
-          ;; Compaction entries carry their summary text, not content blocks;
-          ;; the chat-history fallback renders unknown roles via markdown (pi
-          ;; renders compaction summaries via Markdown)
-          content (if (= :compaction role)
+          ;; Compaction/branch_summary entries carry their summary text, not
+          ;; content blocks; the chat-history fallback renders unknown roles
+          ;; via markdown (pi renders compaction summaries via Markdown)
+          content (if (contains? #{:compaction :branch-summary} role)
                     (or (:summary e) "")
                     (str/join
                      (keep (fn [b]
@@ -722,7 +726,22 @@
                                       (assoc :name (or (:name e) "tool")
                                              :is-error (:is-error e false)
                                              :truncation (:truncation e)
-                                             :details (:details e))))))
+                                             :details (:details e)))))))
+
+(defn- restore-session!
+  "Restore a session into the UI and the agent: swap the active session,
+   rebuild the agent's in-memory context from the session branch (pi: the
+   session is the source of truth — buildContextEntries; steered and
+   follow-up user messages live in the branch and must come back for the
+   next LLM call), and replay the branch into the chat history. session_info
+   entries are metadata — never rendered (pi: only message entries are
+   replayed on resume)."
+  [cs sess]
+  (reset! (:session-atom cs) sess)
+  (let [new-ag (assoc @(:agent-state cs) :session sess)]
+    (reset! (:agent-state cs) new-ag))
+  (agent/restore-session-context! @(:agent-state cs))
+  (replay-branch! cs sess)
   (update-footer! cs))
 
 (defn- resume-session
@@ -766,52 +785,358 @@
         (tui/tui-show-overlay (:tui cs) sl :width 60 :height (min (count items) 15))
         (tui/tui-request-render (:tui cs))))))
 
-;; ─── Session tree ─────────────────────────────────────────────────────────
+;; ─── Session tree navigation (pi: TreeSelectorComponent) ──────────────────
+
+(defn- session-entry-text
+  "Plain trimmed text of a session entry's content blocks (pi:
+   extractUserMessageText — used for fork/tree editor restore)."
+  [e]
+  (let [content (:content e)]
+    (if (string? content)
+      (str/trim content)
+      (str/trim (str/join (map :text (filter #(= :text (:type %)) content)))))))
+
+(defn- order-tree-for-selector
+  "Order tree nodes for the selector: nodes on the active branch path first,
+   the rest in file order (pi: TreeSelectorComponent current-branch-first)."
+  [nodes active-ids]
+  (let [{on-path true off-path false} (group-by #(contains? active-ids (:id %)) nodes)]
+    (concat on-path off-path)))
+
+(defn- complete-tree-navigation!
+  "Apply a tree navigation (pi: navigateTree tail): branch the session leaf
+   (with an optional branch summary), rebuild the agent context and chat
+   history from the new branch, restore USER-MSG-TEXT into the editor when
+   navigating to a user message (only when the editor is empty), attach
+   LABEL to the summary/target entry when given, and emit :session-tree."
+  [cs sess old-leaf target-leaf summary user-msg-text from-extension? label]
+  (try
+    (let [summary-entry (if summary
+                          (session/branch-with-summary! sess target-leaf summary)
+                          (do (if (nil? target-leaf)
+                                (session/reset-leaf! sess)
+                                (session/branch! sess target-leaf))
+                              nil))
+          label-target (if summary-entry (:id summary-entry) target-leaf)]
+      (when (and label label-target)
+        (session/set-label! sess label-target label))
+      (agent/restore-session-context! @(:agent-state cs))
+      (replay-branch! cs sess)
+      ;; pi: restore the user message only when the editor is empty — a draft
+      ;; the user is composing is not clobbered by navigation
+      (when (and user-msg-text
+                 (str/blank? (editor-text-get (:editor cs))))
+        (editor-text-set! (:editor cs) user-msg-text))
+      (update-footer! cs)
+      (event-bus/emit-event!
+       (cond-> {:type :session-tree
+                :new-leaf-id @(:leaf-id sess)
+                :old-leaf-id old-leaf
+                :from-extension? (boolean from-extension?)}
+         summary-entry (assoc :summary-entry summary-entry)))
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    {:role :assistant
+                                     :content (if summary
+                                                "Navigated to the selected point (branch summarized)."
+                                                "Navigated to the selected point.")})
+      (tui/tui-request-render (:tui cs)))
+    (catch Exception e
+      (debug/log "tree navigation failed: " e)
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    {:role :info :label "Tree"
+                                     :content (str "Navigation failed: " (ex-message e))})
+      (tui/tui-request-render (:tui cs)))))
+
+(defn- branch-summarize-and-apply!
+  "Run the LLM branch summarization (pi: navigateTree summarize) with the
+   BranchSummaryStatusIndicator and editor-escape abort, then branch with
+   the summary. On abort/failure the branch is unchanged. PREP is the
+   :session-before-tree preparation map; ABORT-ATOM cancels the call."
+  [cs sess old-leaf target-leaf user-msg-text prep abort-atom custom-instructions]
+  (let [ag @(:agent-state cs)
+        ed (:editor cs)
+        prev-interrupt (get @(:action-handlers ed) "app.interrupt")
+        indicator (ui/make-branch-summary-status-indicator)
+        done (promise)]
+    ;; escape → abort (pi: defaultEditor.onEscape = abortBranchSummary)
+    (editor/editor-set-on-action! ed "app.interrupt"
+                                  (fn [] (reset! abort-atom true)))
+    (show-status-indicator! cs :branch-summary indicator)
+    (tui/tui-request-render (:tui cs))
+    ;; render driver: tick the indicator while the summarization runs
+    (future
+      (while (not (realized? done))
+        (Thread/sleep 100)
+        (tui/tui-request-render (:tui cs))))
+    (future
+      (try
+        (deliver done (agent/generate-branch-summary
+                       ag (:entries-to-summarize prep) custom-instructions abort-atom))
+        (catch Exception e
+          (debug/log "branch summarization failed: " e)
+          (deliver done nil))))
+    (future
+      (let [result (deref done 120000 :timeout)]
+        (editor/editor-set-on-action! ed "app.interrupt" prev-interrupt)
+        (clear-status-indicator! cs :branch-summary)
+        (cond
+          (= result :timeout)
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        {:role :info :label "Tree"
+                                         :content "Branch summarization timed out — branch unchanged."})
+
+          (nil? result)
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        {:role :info :label "Tree"
+                                         :content "Branch summarization failed — branch unchanged."})
+
+          (:aborted result)
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        {:role :info :label "Tree"
+                                         :content "Branch summarization cancelled — branch unchanged."})
+
+          :else
+          (complete-tree-navigation! cs sess old-leaf target-leaf
+                                     (:summary result) user-msg-text false nil))
+        (tui/tui-request-render (:tui cs))))))
+
+(defn- navigate-tree!
+  "Branch the session to the selected tree entry (pi: navigateTree):
+   selecting a user message re-opens it in the editor (leaf = its parent),
+   any other entry becomes the new leaf. Emits :session-before-tree
+   (extensions may cancel, supply the summary, or override
+   custom-instructions/label), optionally summarizes the abandoned path,
+   branches, and emits :session-tree."
+  [cs sess entry wants-summary custom-instructions]
+  (let [old-leaf @(:leaf-id sess)
+        target-leaf (if (= :user (:role entry)) (:parent-id entry) (:id entry))
+        entries (session/branch-summary-entries sess old-leaf (:id entry))
+        user-msg-text (when (= :user (:role entry)) (session-entry-text entry))
+        abort-atom (atom false)
+        prep {:target-id (:id entry)
+              :old-leaf-id old-leaf
+              :common-ancestor-id (session/common-ancestor-id sess old-leaf (:id entry))
+              :entries-to-summarize entries
+              :user-wants-summary (boolean wants-summary)
+              :custom-instructions custom-instructions
+              :replace-instructions false
+              :label nil}
+        ext-result (event-bus/emit-event! {:type :session-before-tree
+                                           :preparation prep
+                                           :signal abort-atom})
+        custom-instructions (or (:custom-instructions ext-result) custom-instructions)]
+    (cond
+      (and wants-summary (empty? entries))
+      ;; nothing abandoned to summarize — branch without a summary
+      (complete-tree-navigation! cs sess old-leaf target-leaf nil user-msg-text
+                                 false (:label ext-result))
+
+      (:cancel ext-result)
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    {:role :info :label "Tree"
+                                     :content "Navigation cancelled by an extension."})
+
+      (and wants-summary (:summary ext-result))
+      (complete-tree-navigation! cs sess old-leaf target-leaf
+                                 (:summary ext-result) user-msg-text true
+                                 (:label ext-result))
+
+      (not wants-summary)
+      (complete-tree-navigation! cs sess old-leaf target-leaf nil user-msg-text
+                                 false (:label ext-result))
+
+      :else
+      (branch-summarize-and-apply! cs sess old-leaf target-leaf user-msg-text
+                                   prep abort-atom custom-instructions))))
+
+(defn- prompt-custom-summary!
+  "Ask for custom summarization instructions, then navigate with them
+   (pi: 'Summarize with custom prompt'). Escape loops back to the summarize
+   choice."
+  [cs sess entry]
+  (tui/tui-show-overlay
+   (:tui cs)
+   (dialogs/make-extension-input
+    "Custom branch summarization instructions"
+    (fn [instructions]
+      (tui/tui-hide-overlay (:tui cs))
+      (navigate-tree! cs sess entry true (str/trim instructions)))
+    (fn []
+      (tui/tui-hide-overlay (:tui cs))
+      (ask-branch-summary cs sess entry))
+    (th/get-current-theme)))
+  (tui/tui-request-render (:tui cs)))
+
+(defn- ask-branch-summary
+  "Ask whether to summarize the abandoned branch before branching (pi: the
+   Summarize branch? selector), then navigate. Escape re-opens the tree."
+  [cs sess entry]
+  (let [items [{:value "none" :label "No summary"}
+               {:value "summarize" :label "Summarize"}
+               {:value "custom" :label "Summarize with custom prompt"}]
+        sl-ref (atom nil)
+        on-select (fn [_]
+                    (when-let [sel (select-list/select-list-get-selected @sl-ref)]
+                      (tui/tui-hide-overlay (:tui cs))
+                      (case (:value sel)
+                        "none" (navigate-tree! cs sess entry false nil)
+                        "summarize" (navigate-tree! cs sess entry true nil)
+                        "custom" (prompt-custom-summary! cs sess entry))))
+        on-escape (fn []
+                    (tui/tui-hide-overlay (:tui cs))
+                    (show-session-tree cs))
+        sl (select-list/make-select-list items
+                                         :height 3
+                                         :header "Summarize branch?"
+                                         :on-select on-select
+                                         :on-escape on-escape)]
+    (reset! sl-ref sl)
+    (tui/tui-show-overlay (:tui cs) sl :width 42 :height 3)
+    (tui/tui-request-render (:tui cs))))
+
+(def ^:private tree-filter-modes
+  "pi: FilterMode — the /tree selector filter modes (default hides
+   bookkeeping entries; children of hidden nodes are hidden with them)."
+  [:default :no-tools :user-only :labeled-only :all])
+
+(defn- tree-filter-mode-label
+  [mode]
+  (case mode
+    :no-tools " [no-tools]"
+    :user-only " [user]"
+    :labeled-only " [labeled]"
+    :all " [all]"
+    ""))
+
+(defn- passes-tree-filter?
+  "True when a tree node passes MODE (pi: TreeSelectorComponent applyFilter —
+   default hides bookkeeping entries: labels, session_info)."
+  [node mode]
+  (let [settings-entry? (contains? #{:label :session_info} (:role node))]
+    (case mode
+      :user-only (= :user (:role node))
+      :no-tools (and (not= :tool (:role node)) (not settings-entry?))
+      :labeled-only (some? (:label node))
+      :all true
+      (not settings-entry?))))
 
 (defn- show-session-tree
-  "Browse the current session's entry tree via SelectList overlay."
+  "Session tree navigation overlay (pi: TreeSelectorComponent): browse the
+   entry tree (active branch first, labels shown, current leaf marked) and
+   select an entry to branch there. Filter modes (ctrl+d/t/u/l/a/o) and
+   label editing (shift+l) work inside the overlay."
   [cs]
   (let [sess @(:session-atom cs)]
     (if (nil? sess)
       (ui/chat-history-add-message! (:chat-history cs)
                                     {:role :assistant :content "No active session."})
-      (let [tree (session/get-tree sess)]
+      (let [leaf-id @(:leaf-id sess)
+            active-ids (set (map :id (session/get-branch sess)))
+            tree (session/get-tree sess)]
         (if (empty? tree)
           (ui/chat-history-add-message! (:chat-history cs)
                                         {:role :assistant :content "Session is empty."})
-          (let [flatten-tree (fn flatten-tree [nodes depth]
-                               (mapcat (fn [n]
-                                         (let [prefix (apply str (repeat depth "  "))
-                                               role-str (name (:role n))
-                                               label (str prefix role-str ": " (:summary n))]
-                                           (cons {:label label
-                                                  :value (:id n)
-                                                  :depth depth
-                                                  :entry n}
-                                                 (flatten-tree (:children n) (inc depth)))))
-                                       nodes))
-                items (vec (flatten-tree tree 0))
+          (let [filter-mode (atom :default)
                 sl-ref (atom nil)
+                build-items (fn []
+                              (let [flatten-tree (fn flatten-tree [nodes depth]
+                                                   (mapcat (fn [n]
+                                                             (if (passes-tree-filter? n @filter-mode)
+                                                               (let [prefix (apply str (repeat depth "  "))
+                                                                     role-str (name (:role n))
+                                                                     label (str prefix role-str ": " (:summary n)
+                                                                                (when (:label n) (str " [" (:label n) "]"))
+                                                                                (when (= (:id n) leaf-id) " ◀"))]
+                                                                 (cons {:label label
+                                                                        :value (:id n)
+                                                                        :depth depth
+                                                                        :entry n}
+                                                                       (flatten-tree (order-tree-for-selector (:children n) active-ids)
+                                                                                     (inc depth))))
+                                                               nil))
+                                                           (order-tree-for-selector nodes active-ids)))]
+                                (vec (flatten-tree tree 0))))
+                refresh! (fn []
+                           (select-list/select-list-set-items! @sl-ref (build-items))
+                           (select-list/select-list-set-header!
+                            @sl-ref (str "Session tree" (tree-filter-mode-label @filter-mode)))
+                           (tui/tui-request-render (:tui cs)))
+                edit-label! (fn []
+                              (when-let [sel (select-list/select-list-get-selected @sl-ref)]
+                                (let [entry-id (:value sel)
+                                      current (session/get-label sess entry-id)]
+                                  (tui/tui-show-overlay
+                                   (:tui cs)
+                                   (dialogs/make-extension-input
+                                    "Edit tree label"
+                                    (fn [label]
+                                      (tui/tui-hide-overlay (:tui cs))
+                                      (let [label (str/trim label)]
+                                        (session/set-label! sess entry-id
+                                                            (when (seq label) label))
+                                        (refresh!)))
+                                    (fn []
+                                      (tui/tui-hide-overlay (:tui cs))
+                                      (tui/tui-request-render (:tui cs)))
+                                    (th/get-current-theme)
+                                    ;; pi: LabelInput prefills the current
+                                    ;; label; empty submit clears it
+                                    current))
+                                  (tui/tui-request-render (:tui cs)))))
+                cycle-filter! (fn [dir]
+                                (let [i (first (keep-indexed (fn [i m] (when (= m @filter-mode) i))
+                                                             tree-filter-modes))
+                                      n (count tree-filter-modes)
+                                      nxt (nth tree-filter-modes (mod (+ i dir) n))]
+                                  (reset! filter-mode nxt)
+                                  (refresh!)))
+                on-key (fn [_ data]
+                         (cond
+                           (keys/matches-key? data (keys/ctrl "d"))
+                           (do (reset! filter-mode :default) (refresh!) true)
+                           (keys/matches-key? data (keys/ctrl "t"))
+                           (do (reset! filter-mode (if (= :no-tools @filter-mode) :default :no-tools))
+                               (refresh!) true)
+                           (keys/matches-key? data (keys/ctrl "u"))
+                           (do (reset! filter-mode (if (= :user-only @filter-mode) :default :user-only))
+                               (refresh!) true)
+                           (keys/matches-key? data (keys/ctrl "l"))
+                           (do (reset! filter-mode (if (= :labeled-only @filter-mode) :default :labeled-only))
+                               (refresh!) true)
+                           (keys/matches-key? data (keys/ctrl "a"))
+                           (do (reset! filter-mode (if (= :all @filter-mode) :default :all))
+                               (refresh!) true)
+                           (keys/matches-key? data (keys/ctrl "o"))
+                           (do (cycle-filter! 1) true)
+                           (keys/matches-key? data (keys/ctrl-shift "o"))
+                           (do (cycle-filter! -1) true)
+                           ;; shift+l edits the label (legacy terminals send a
+                           ;; bare uppercase letter — pi: app.tree.editLabel)
+                           (or (keys/matches-key? data (keys/shift "l"))
+                               (keys/matches-key? data "L"))
+                           (do (edit-label!) true)
+                           :else false))
                 on-select-fn (fn [_]
                                (when-let [sel (select-list/select-list-get-selected @sl-ref)]
-                                 (let [entry (:entry sel)
-                                       role (:role entry)
-                                       texts (if (string? (:content entry))
-                                               [(:content entry)]
-                                               (map :text (filter #(= (:type %) :text) (:content entry))))
-                                       content (if (seq texts)
-                                                 (str/join texts)
-                                                 (or (:summary entry) ""))]
-                                   (ui/chat-history-add-message! (:chat-history cs)
-                                                                 (merge {:role (or role :unknown) :content content}
-                                                                        (when (= role :tool)
-                                                                          {:name (or (:name entry) "tool")})))
+                                 (let [entry (:entry sel)]
                                    (tui/tui-hide-overlay (:tui cs))
-                                   (update-footer! cs)
-                                   (tui/tui-request-render (:tui cs)))))
+                                   (cond
+                                     (= (:id entry) leaf-id)
+                                     (ui/chat-history-add-message! (:chat-history cs)
+                                                                   {:role :assistant :content "Already at this point."})
+
+                                     @(:running-turn? cs)
+                                     (ui/chat-history-add-message! (:chat-history cs)
+                                                                   {:role :assistant
+                                                                    :content "Wait for the current response to finish before navigating the session tree."})
+
+                                     :else
+                                     (ask-branch-summary cs sess entry)))))
+                items (build-items)
                 sl (select-list/make-select-list items
                                                  :height (min (count items) 20)
                                                  :header "Session tree"
+                                                 :on-key on-key
                                                  :on-select on-select-fn
                                                  :on-escape (fn []
                                                               (tui/tui-hide-overlay (:tui cs))
@@ -819,6 +1144,133 @@
             (reset! sl-ref sl)
             (tui/tui-show-overlay (:tui cs) sl :width 70 :height (min (count items) 20))
             (tui/tui-request-render (:tui cs))))))))
+
+;; ─── Fork / clone (pi: /fork, /clone) ─────────────────────────────────────
+
+(defn- fork-at!
+  "Fork the session before the given user message and switch to the fork
+   (pi: runtimeHost.fork — the new session starts at the message's parent;
+   the message text is restored to the editor for re-editing). Forking the
+   first user message (no parent) starts an empty session linked to this
+   one."
+  [cs entry-id]
+  (if @(:running-turn? cs)
+    (ui/chat-history-add-message! (:chat-history cs)
+                                  {:role :assistant
+                                   :content "Wait for the current response to finish before forking."})
+    (let [sess @(:session-atom cs)
+          entry (session/get-entry sess entry-id)]
+      (if (nil? entry)
+        (ui/chat-history-add-message! (:chat-history cs)
+                                      {:role :assistant :content "Invalid entry for forking."})
+        (try
+          (let [fork (if (:parent-id entry)
+                       (session/fork-session sess (:parent-id entry))
+                       (session/create-session (ensure-cwd-session-dir)
+                                               {:parent-session (:file sess)}))]
+            (if (nil? fork)
+              (ui/chat-history-add-message! (:chat-history cs)
+                                            {:role :assistant :content "Failed to create forked session."})
+              (do
+                (debug/log "forked session " (:id fork) " from " (:id sess))
+                (restore-session! cs fork)
+                (editor-text-set! (:editor cs) (session-entry-text entry))
+                (ui/chat-history-add-message! (:chat-history cs)
+                                              {:role :assistant
+                                               :content (str "Forked to new session " (subs (:id fork) 0 8) ".")})
+                (tui/tui-request-render (:tui cs)))))
+          (catch Exception e
+            (debug/log "fork failed: " e)
+            (ui/chat-history-add-message! (:chat-history cs)
+                                          {:role :info :label "Fork"
+                                           :content (str "Fork failed: " (ex-message e))})
+            (tui/tui-request-render (:tui cs))))))))
+
+(defn- show-fork-selector
+  "Select a user message to fork from (pi: UserMessageSelectorComponent)."
+  [cs]
+  (let [sess @(:session-atom cs)]
+    (if (nil? sess)
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    {:role :assistant :content "No active session."})
+      (if-not (fs/exists? (:file sess))
+        (ui/chat-history-add-message! (:chat-history cs)
+                                      {:role :assistant
+                                       :content "Wait for the first assistant response before forking."})
+        (let [msgs (->> @(:entries sess)
+                        ;; pi: getUserMessagesForForking iterates ALL entries
+                        ;; (every branch), not just the active path
+                        (filter #(= :user (:role %)))
+                        (keep (fn [e]
+                                (let [t (session-entry-text e)]
+                                  (when (seq t) {:entry e :text t})))))
+              items (mapv (fn [{:keys [entry text]}]
+                            {:label (subs text 0 (min 60 (count text)))
+                             :value (:id entry)})
+                          msgs)]
+          (if (empty? items)
+            (ui/chat-history-add-message! (:chat-history cs)
+                                          {:role :assistant :content "No messages to fork from."})
+            (let [sl-ref (atom nil)
+                  on-select (fn [_]
+                              (when-let [sel (select-list/select-list-get-selected @sl-ref)]
+                                (tui/tui-hide-overlay (:tui cs))
+                                (fork-at! cs (:value sel))))
+                  on-escape (fn []
+                              (tui/tui-hide-overlay (:tui cs))
+                              (tui/tui-request-render (:tui cs)))
+                  sl (select-list/make-select-list items
+                                                   :height (min (count items) 15)
+                                                   :header "Fork from message"
+                                                   :on-select on-select
+                                                   :on-escape on-escape)]
+              (reset! sl-ref sl)
+              (tui/tui-show-overlay (:tui cs) sl :width 70 :height (min (count items) 15))
+              (tui/tui-request-render (:tui cs)))))))))
+
+(defn- clone-current-session!
+  "Duplicate the session at its current position (pi: /clone → fork at the
+   current leaf) and switch to the clone."
+  [cs]
+  (let [sess @(:session-atom cs)]
+    (cond
+      @(:running-turn? cs)
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    {:role :assistant
+                                     :content "Wait for the current response to finish before cloning."})
+
+      (nil? sess)
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    {:role :assistant :content "No active session."})
+
+      (nil? @(:leaf-id sess))
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    {:role :assistant :content "Nothing to clone yet."})
+
+      (not (fs/exists? (:file sess)))
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    {:role :assistant
+                                     :content "Wait for the first assistant response before cloning."})
+
+      :else
+      (try
+        (let [fork (session/clone-session sess)]
+          (if (nil? fork)
+            (ui/chat-history-add-message! (:chat-history cs)
+                                          {:role :assistant :content "Failed to clone session."})
+            (do
+              (debug/log "cloned session " (:id fork) " from " (:id sess))
+              (restore-session! cs fork)
+              (ui/chat-history-add-message! (:chat-history cs)
+                                            {:role :assistant
+                                             :content (str "Cloned to new session " (subs (:id fork) 0 8) ".")})
+              (tui/tui-request-render (:tui cs)))))
+        (catch Exception e
+          (debug/log "clone failed: " e)
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        {:role :info :label "Clone"
+                                         :content (str "Clone failed: " (ex-message e))})
+          (tui/tui-request-render (:tui cs)))))))
 
 ;; ─── Animation timer ────────────────────────────────────────────────────────
 ;; Drives re-renders while the agent turn is running, so the separate

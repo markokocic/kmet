@@ -73,6 +73,20 @@
    "Fired when the user runs a bash command (!/!!).
     Payload: :command, :exclude-from-context?, :cwd."
 
+   :session-before-tree
+   "Fired before a session-tree navigation branches (pi: session_before_tree).
+    Payload: :preparation {:target-id :old-leaf-id :common-ancestor-id
+    :entries-to-summarize :user-wants-summary :custom-instructions
+    :replace-instructions :label}, :signal (abort atom). Handlers may return
+    a map: {:cancel true} aborts the navigation, {:summary str :details …}
+    (when :user-wants-summary) supplies the branch summary, and
+    :custom-instructions/:label override the inputs."
+
+   :session-tree
+   "Fired after a session-tree navigation branched (pi: session_tree).
+    Payload: :new-leaf-id, :old-leaf-id, :summary-entry (optional),
+    :from-extension? (when the summary came from an extension)."
+
    ;; ─── Queue events (emitted by loop.clj) ──────────────────────────────
    :queue-update
    "Fired when steering/follow-up queues change.
@@ -141,17 +155,22 @@
 (defn emit-event!
   "Emit an event to all registered listeners.
    event — map with :type keyword and any additional data.
-   Runs all callbacks in a doseq (synchronous)."
+   Returns the last non-nil handler result (pi: runner.emit — the tree
+   navigation reads :session-before-tree results: :cancel, :summary, ...)."
   [event]
   (let [type (:type event)
         listeners (get @event-listeners type)]
     (when listeners
-      (doseq [[_ cb] listeners]
-        (try
-          (cb event)
-          (catch Exception e
-            (binding [*out* *err*]
-              (println "Warning: extension event handler error:" (ex-message e)))))))))
+      (reduce (fn [acc [_ cb]]
+                (let [result (try
+                               (cb event)
+                               (catch Exception e
+                                 (binding [*out* *err*]
+                                   (println "Warning: extension event handler error:" (ex-message e)))
+                                 nil))]
+                  (if (some? result) result acc)))
+              nil
+              listeners))))
 
 (defn get-event-types
   "List all registered event types."

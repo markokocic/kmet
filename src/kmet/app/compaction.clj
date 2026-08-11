@@ -56,6 +56,8 @@
                         0
                         (+ (count (or (:command entry) ""))
                            (count (or (:output entry) ""))))
+                ;; summary entries project to a user message in context
+                (:compaction :branch-summary) (count (or (:summary entry) ""))
                 (+ (text-chars (:content entry))
                    (reduce + 0
                            (for [tc (:tool-calls entry)]
@@ -67,12 +69,15 @@
 
 (defn- context-visible?
   "True when an entry contributes to the LLM context. Tool results and
-   display-only entries are never valid cut points (pi: isCutPointMessage)."
+   display-only entries are never valid cut points (pi: isCutPointMessage —
+   branch/compaction summaries count: they project to user messages)."
   [entry]
   (case (:role entry)
     :user true
     :assistant true
     :system true
+    :compaction true
+    :branch-summary true
     :bash (not (:exclude-from-context? entry))
     false))
 
@@ -195,6 +200,13 @@
                       :tool (let [t (content-text (:content e))]
                               (when (seq t)
                                 (str "[Tool result]: " (truncate-for-summary t))))
+                      ;; compaction/branch_summary entries project to user
+                      ;; messages in context — serialize their summary text so
+                      ;; it survives a later compaction (pi: convertToLlm maps
+                      ;; both to user messages before serializeConversation)
+                      (:compaction :branch-summary)
+                      (let [t (str/trim (or (:summary e) ""))]
+                        (when (seq t) (str "[User]: " t)))
                       nil))
                   entries)))
 
@@ -304,3 +316,63 @@ Keep each section concise. Preserve exact file paths, function names, and error 
   [messages previous-summary custom-instructions]
   [{:role :system :content [{:type :text :text summarization-system-prompt}]}
    (summarization-request messages previous-summary custom-instructions)])
+
+;; ─── Branch summarization (pi: compaction/branch-summarization.ts) ────────
+
+(def branch-summary-preamble
+  "pi: BRANCH_SUMMARY_PREAMBLE — prepended to a generated branch summary so
+   the plain summary reads as context about a branch the conversation came
+   back from."
+  "The user explored a different conversation branch before returning here.
+Summary of that exploration:
+
+")
+
+(def ^:private branch-summary-prompt
+  "pi: BRANCH_SUMMARY_PROMPT — structured format for summarizing an
+   abandoned conversation branch."
+  "Create a structured summary of this conversation branch for context when returning later.
+
+Use this EXACT format:
+
+## Goal
+[What was the user trying to accomplish in this branch?]
+
+## Constraints & Preferences
+- [Any constraints, preferences, or requirements mentioned]
+- [Or \"(none)\" if none were mentioned]
+
+## Progress
+### Done
+- [x] [Completed tasks/changes]
+
+### In Progress
+- [ ] [Work that was started but not finished]
+
+### Blocked
+- [Issues preventing progress, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [What should happen next to continue this work]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.")
+
+(defn branch-summary-messages
+  "The full message list for a branch summarization call (pi:
+   generateBranchSummary): the summarization system prompt + a single user
+   message carrying the serialized abandoned-branch entries in
+   <conversation> tags and the structured-summary prompt, with optional
+   custom instructions appended."
+  [entries custom-instructions]
+  [{:role :system :content [{:type :text :text summarization-system-prompt}]}
+   {:role :user
+    :content [{:type :text
+               :text (str "<conversation>\n"
+                          (serialize-conversation entries)
+                          "\n</conversation>\n\n"
+                          (if (seq custom-instructions)
+                            (str branch-summary-prompt "\n\nAdditional focus: " custom-instructions)
+                            branch-summary-prompt))}]}])

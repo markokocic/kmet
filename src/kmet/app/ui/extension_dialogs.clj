@@ -103,9 +103,11 @@
 
 (defn make-extension-input
   "Create a one-line input dialog. TITLE — dialog title; ON-SUBMIT receives
-   the entered string; ON-CANCEL fires on escape. TH — theme map."
-  [title on-submit on-cancel th]
+   the entered string; ON-CANCEL fires on escape. TH — theme map.
+   PREFILL — optional initial text (default \"\")."
+  [title on-submit on-cancel th & [prefill]]
   (let [inp (input/make-input)
+        _ (when (seq prefill) (input/input-set-value! inp prefill))
         _ (input/input-set-on-submit! inp on-submit)
         _ (input/input-set-on-escape! inp on-cancel)]
     (map->ExtensionInputDialog

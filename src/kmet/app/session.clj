@@ -87,6 +87,21 @@
     (reset! (:entries session) entries)
     (reset! (:leaf-id session) (some-> entries last :id))))
 
+(defn- write-entries-verbatim!
+  "Write pre-built entries (ids/parents/timestamps already assigned) to the
+   session file and in-memory state, publishing via temp-file + rename.
+   Used by forks, which copy source entries verbatim (pi:
+   createBranchedSession/forkFrom). Lazy creation: nothing is written until
+   the branch contains an assistant message. Callers must hold the session
+   lock."
+  [session entries]
+  (let [entries (vec entries)]
+    (when (or (fs/exists? (:file session))
+              (some #(= :assistant (:role %)) entries))
+      (publish-file! session entries))
+    (reset! (:entries session) entries)
+    (reset! (:leaf-id session) (some-> entries last :id))))
+
 ;; ─── Layout (pi: cwd-encoded session dirs) ───────────────────────────────
 
 (defn encode-cwd
@@ -195,19 +210,128 @@
                         built)))))
 
 (defn get-branch
-  "Get entries from root to leaf-id (active branch)."
+  "Get entries from root to the active leaf (or to FROM-ID when given)."
+  ([session] (get-branch session @(:leaf-id session)))
+  ([session from-id]
+   (let [entries @(:entries session)]
+     (if (empty? entries)
+       []
+       (let [index (reduce (fn [m e] (assoc m (:id e) e)) {} entries)
+             path (volatile! [])]
+         (loop [id from-id]
+           (when id
+             (when-let [e (get index id)]
+               (vswap! path conj e)
+               (recur (:parent-id e)))))
+         (vec (reverse @path)))))))
+
+(defn get-entry
+  "Get a single entry by id (pi: getEntry), nil when not found."
+  [session entry-id]
+  (some #(when (= (:id %) entry-id) %) @(:entries session)))
+
+;; ─── Branching (pi: SessionManager.branch / resetLeaf) ────────────────────
+
+(defn branch!
+  "Move the leaf pointer to an existing entry (pi: branch). The next append
+   becomes a child of that entry, forming a new branch; existing entries are
+   untouched (append-only). Throws when ENTRY-ID is not in the session."
+  [session entry-id]
+  (with-session-lock session
+    (when-not (some #(= (:id %) entry-id) @(:entries session))
+      (throw (ex-info (str "Entry " entry-id " not found")
+                      {:type :entry-not-found :id entry-id})))
+    (reset! (:leaf-id session) entry-id)))
+
+(defn reset-leaf!
+  "Reset the leaf pointer to nil (pi: resetLeaf). The next append creates a
+   new root entry (parent-id nil)."
   [session]
-  (let [entries @(:entries session)]
-    (if (empty? entries)
-      []
-      (let [index (reduce (fn [m e] (assoc m (:id e) e)) {} entries)
-            path (volatile! [])]
-        (loop [id @(:leaf-id session)]
-          (when id
-            (when-let [e (get index id)]
-              (vswap! path conj e)
-              (recur (:parent-id e)))))
-        (vec (reverse @path))))))
+  (with-session-lock session
+    (reset! (:leaf-id session) nil)))
+
+(defn common-ancestor-id
+  "The deepest entry on both the OLD-LEAF-ID and TARGET-ID paths (pi:
+   collectEntriesForBranchSummary's commonAncestorId), nil when OLD-LEAF-ID
+   is nil or the paths are disjoint."
+  [session old-leaf-id target-id]
+  (when old-leaf-id
+    (let [old-path (set (map :id (get-branch session old-leaf-id)))]
+      (some (fn [e] (when (contains? old-path (:id e)) (:id e)))
+            (reverse (get-branch session target-id))))))
+
+(defn branch-summary-entries
+  "The abandoned-branch entries a summary captures when navigating from
+   OLD-LEAF-ID to TARGET-ID (pi: collectEntriesForBranchSummary): the path
+   from the old leaf up to, excluding, the common ancestor with the target
+   path, in chronological order. Empty when OLD-LEAF-ID is nil."
+  [session old-leaf-id target-id]
+  (when old-leaf-id
+    (let [index (into {} (map (juxt :id identity)) @(:entries session))
+          common (common-ancestor-id session old-leaf-id target-id)]
+      (loop [id old-leaf-id result ()]
+        (if (and id (not= id common))
+          (if-let [e (get index id)]
+            (recur (:parent-id e) (cons e result))
+            (vec result))
+          (vec result))))))
+
+(defn branch-with-summary!
+  "Move the leaf to BRANCH-FROM-ID (nil = root) and append a :branch-summary
+   entry capturing the abandoned path (pi: branchWithSummary). The summary
+   entry is a child of the new leaf position and projects into the LLM
+   context as a user message on the next context build (context-messages).
+   opts: :details, :usage, :from-hook. Returns the summary entry. Throws
+   when BRANCH-FROM-ID is not in the session."
+  [session branch-from-id summary & [opts]]
+  (with-session-lock session
+    (when (and branch-from-id
+               (not (some #(= (:id %) branch-from-id) @(:entries session))))
+      (throw (ex-info (str "Entry " branch-from-id " not found")
+                      {:type :entry-not-found :id branch-from-id})))
+    (reset! (:leaf-id session) branch-from-id)
+    (append-entry session
+                  (merge {:role :branch-summary
+                          :summary summary
+                          :from-id (or branch-from-id "root")}
+                         (select-keys opts [:details :usage :from-hook])))))
+
+;; ─── Labels (pi: appendLabelChange / getLabel) ────────────────────────────
+
+(defn- resolve-labels
+  "Latest-wins label resolution over :label entries: {target-id {:label str
+   :timestamp str}} for targets whose latest :label entry set (not cleared)
+   the label (pi: labelsById + labelTimestampsById)."
+  [entries]
+  (reduce (fn [m e]
+            (if (= :label (:role e))
+              (if (seq (str (:label e "")))
+                (assoc m (:target-id e)
+                       {:label (str (:label e)) :timestamp (:timestamp e)})
+                (dissoc m (:target-id e)))
+              m))
+          {}
+          entries))
+
+(defn get-label
+  "Current label of an entry id (pi: getLabel); nil when unlabeled or
+   cleared by a later label entry."
+  [session entry-id]
+  (get-in (resolve-labels @(:entries session)) [entry-id :label]))
+
+(defn set-label!
+  "Set or clear a label on an entry (pi: appendLabelChange): appends a
+   :label entry as a child of the current leaf. Labels are user-defined
+   markers shown in the session tree; pass nil or \"\" to clear. Throws when
+   TARGET-ID is not an entry. Returns the label entry."
+  [session target-id label]
+  (with-session-lock session
+    (when-not (some #(= (:id %) target-id) @(:entries session))
+      (throw (ex-info (str "Entry " target-id " not found")
+                      {:type :entry-not-found :id target-id})))
+    (append-entry session {:role :label
+                           :target-id target-id
+                           :label (when (seq (str label)) (str label))})))
 
 ;; ─── Context build (pi: buildSessionContext) ─────────────────────────────
 
@@ -237,14 +361,16 @@
 (defn context-messages
   "Project a session entry into LLM context messages (pi:
    sessionEntryToContextMessages). Message entries pass through unchanged;
-   compaction entries become a single :user message carrying the summary
-   (kmet providers don't know pi's compactionSummary role — the :user mapping
-   mirrors the pre-append-only summary entry); :info and :session_info are
-   metadata and excluded. Excluded :bash entries are kept here and dropped
-   later by the LLM conversion (pi: convertToLlm filters excludeFromContext)."
+   compaction and branch_summary entries become a single :user message
+   carrying their summary (kmet providers don't know pi's
+   compactionSummary/branchSummary roles — the :user mapping mirrors the
+   pre-append-only summary entry); :info and :session_info are metadata and
+   excluded. Excluded :bash entries are kept here and dropped later by the
+   LLM conversion (pi: convertToLlm filters excludeFromContext)."
   [entry]
   (case (:role entry)
-    :compaction [{:role :user :content [{:type :text :text (str (:summary entry))}]}]
+    (:compaction :branch-summary)
+    [{:role :user :content [{:type :text :text (str (:summary entry))}]}]
     (:user :assistant :tool :bash) [entry]
     []))
 
@@ -282,12 +408,14 @@
    Returns map of {:id info, :children [...]}"
   [session]
   (let [entries @(:entries session)
+        labels (resolve-labels entries)
         children (fn [parent-id]
                    (filter #(= (:parent-id %) parent-id) entries))
         root-children (filter #(nil? (:parent-id %)) entries)]
     (letfn [(build-node [entry]
               {:id (:id entry)
                :role (:role entry)
+               :label (get-in labels [(:id entry) :label])
                :summary (let [content (:content entry)
                               text (if (string? content) content
                                        (str/join (map :text (filter #(= (:type %) :text) content))))
@@ -338,29 +466,79 @@
                          (select-keys opts [:tokens-before :usage :details])))))
 
 (defn fork-session
-  "Create a new session forked at the given entry-id (pi:
-   createBranchedSession). The fork lives in the same session directory and
-   its header links :parent-session to the source file. The branch up to
-   entry-id is copied. Note: entries are re-id'd — pi keeps entry ids and
-   re-chains around labels (G18, fixed in the branching phase)."
+  "Create a new session containing the branch root→ENTRY-ID (pi:
+   createBranchedSession — /fork and /clone). The fork lives in the same
+   session directory; its header links :parent-session to the source file
+   and keeps the source cwd. Entry ids and timestamps are preserved so
+   label/extension references stay valid. Label entries are real tree
+   entries: they are filtered out of the retained path (parents re-chained)
+   and recreated as a chain off the last entry (pi: label re-chaining —
+   later entries can be children of labels, so removing them would orphan
+   subtrees). Returns the new Session record, or nil when ENTRY-ID is not
+   found."
   [session entry-id]
   (let [entries @(:entries session)
-        index (reduce (fn [m e] (assoc m (:id e) e)) {} entries)
-        target (get index entry-id)]
+        target (get-entry session entry-id)]
     (when target
-      (let [branch (loop [id entry-id result []]
-                     (if id
-                       (if-let [e (get index id)]
-                         (recur (:parent-id e) (conj result e))
-                         result)
-                       result))
+      (let [path (get-branch session entry-id)
+            ;; Labels out of the path, parents re-chained along the rest
+            [retained _] (reduce (fn [[acc last-id] e]
+                                   (if (= :label (:role e))
+                                     [acc last-id]
+                                     [(conj acc (assoc e :parent-id last-id)) (:id e)]))
+                                 [[] nil]
+                                 path)
+            retained-ids (into #{} (map :id) retained)
+            ;; Recreate labels targeting retained entries, chained off the
+            ;; last retained entry, with their original timestamps
+            [label-entries _] (reduce (fn [[acc parent-id] [target-id {:keys [label timestamp]}]]
+                                        (let [le {:role :label
+                                                  :id (generate-id (into #{} (map :id) (concat retained acc)))
+                                                  :parent-id parent-id
+                                                  :timestamp timestamp
+                                                  :target-id target-id
+                                                  :label label}]
+                                          [(conj acc le) (:id le)]))
+                                      [[] (some-> retained last :id)]
+                                      (keep (fn [[target-id l]]
+                                              (when (contains? retained-ids target-id)
+                                                [target-id l]))
+                                            (resolve-labels entries)))
             fork (create-session (str (fs/parent (:file session)))
                                  {:cwd (get-in session [:header :cwd])
                                   :parent-session (:file session)})]
-        (doseq [e (reverse branch)]
-          (let [clean (dissoc e :id :parent-id :timestamp)]
-            (append-entry fork clean)))
+        (with-session-lock fork
+          (write-entries-verbatim! fork (into retained label-entries)))
         fork))))
+
+(defn clone-session
+  "Duplicate the session at its current position (pi: /clone → fork at the
+   current leaf). Returns the fork, or nil when the session has no leaf yet
+   (nothing to clone)."
+  [session]
+  (when-let [leaf @(:leaf-id session)]
+    (fork-session session leaf)))
+
+(defn fork-from
+  "Fork a session from another project into TARGET-CWD (pi: forkFrom): a new
+   session in TARGET-CWD's session dir under BASE-DIR with a new header
+   linking :parent-session to the source; all non-header entries are copied
+   verbatim (ids, parents, timestamps preserved). Returns the new Session
+   record. Throws when the source file is empty or has no header."
+  [source-path target-cwd base-dir]
+  (let [source (load-session source-path)]
+    (when (empty? @(:entries source))
+      (throw (ex-info (str "Cannot fork: source session file is empty or invalid: " source-path)
+                      {:type :fork-error :path source-path})))
+    (when (nil? (:header source))
+      (throw (ex-info (str "Cannot fork: source session has no header: " source-path)
+                      {:type :fork-error :path source-path})))
+    (let [dir (session-dir-for-cwd base-dir (str (fs/absolutize target-cwd)))
+          fork (create-session dir {:cwd (str (fs/absolutize target-cwd))
+                                    :parent-session (:file source)})]
+      (with-session-lock fork
+        (write-entries-verbatim! fork @(:entries source)))
+      fork)))
 
 ;; ─── Bash result recording ─────────────────────────────────────────────────
 
