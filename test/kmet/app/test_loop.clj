@@ -672,6 +672,65 @@
     (t/is (empty? @(:steering agent)) "steering queue drained")
     (t/is (= :idle @(:status agent)))))
 
+(t/deftest test-loop-consumed-queued-messages-emit-user-message-start
+  ;; The UI displays consumed steering/follow-up messages on :message-start
+  ;; (pi: message_start → addMessageToChat), so the loop must emit it with
+  ;; the user role and the queued text when a message is drained.
+  (let [calls (atom 0)
+        events (atom [])
+        agent (loop/make-agent-state
+               :on-event (fn [e] (swap! events conj e)))]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (if (= 1 (swap! calls inc))
+                        (do (when-let [on-tc (:on-tool-call opts)]
+                              (on-tc {:id "tc1" :name "bash" :arguments "{}" :index 0}))
+                            (when-let [on-done (:on-done opts)]
+                              (on-done :tool-calls)))
+                        (do (when-let [on-text (:on-text opts)]
+                              (on-text "resp"))
+                            (when-let [on-done (:on-done opts)]
+                              (on-done :stop))))
+                      :done))
+                  tools/execute-tool
+                  (fn [_ _ _]
+                    (loop/steer! agent "steered")
+                    (loop/follow-up! agent "followup")
+                    {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent
+                            {:message "start"
+                             :on-done (fn [_])
+                             :on-error (fn [_])})
+      (let [user-starts (filter #(and (= :message-start (:type %))
+                                      (= :user (:role (:message %))))
+                                @events)
+            texts (mapv #(get-in % [:message :content 0 :text]) user-starts)]
+        (t/is (some #(= "steered" %) texts)
+              "steered message emits :message-start with role :user on consumption")
+        (t/is (some #(= "followup" %) texts)
+              "follow-up message emits :message-start with role :user on consumption")))))
+
+(t/deftest test-loop-no-api-key-emits-user-message-start
+  ;; The run cannot start without an API key, but the submitted message must
+  ;; still be displayed (pi emits message_start for prompt messages before
+  ;; running the loop) — the UI adds it to the chat on :message-start.
+  (let [events (atom [])
+        agent (loop/make-agent-state
+               :on-event (fn [e] (swap! events conj e)))]
+    (with-redefs [cfg/get-api-key (fn [_] nil)]
+      @(loop/run-agent-turn agent
+                            {:message "hello"
+                             :on-error (fn [_])})
+      (let [user-start (first (filter #(and (= :message-start (:type %))
+                                            (= :user (:role (:message %))))
+                                      @events))]
+        (t/is (some? user-start) ":message-start emitted for the submitted message")
+        (t/is (= "hello" (get-in user-start [:message :content 0 :text])))
+        (t/is (empty? (loop/get-context agent))
+              "message is display-only — not added to context without a run")))))
+
 ;; ─── Queue modes (per-queue) ───────────────────────────────────────────────
 
 (t/deftest test-loop-queue-modes-default

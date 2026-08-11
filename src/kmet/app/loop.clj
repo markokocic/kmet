@@ -1058,7 +1058,14 @@ Be precise and concise in your responses."}}]
   (let [provider @(:provider agent)
         api-key (resolve-api-key agent)]
     (if (nil? api-key)
-      (do (when on-error
+      (do (when message
+            ;; The run cannot start, but the submitted message is still shown
+            ;; in the chat (pi emits message_start for prompt messages before
+            ;; running the loop). Display-only: not added to context or
+            ;; session since no LLM call will consume it.
+            (emit agent {:type :message-start
+                         :message (user-message message images)}))
+          (when on-error
             (on-error (str "No API key for " (name provider)
                            ". Set the key in ~/.kmet/agent/auth.edn or the appropriate environment variable.")))
           (future))

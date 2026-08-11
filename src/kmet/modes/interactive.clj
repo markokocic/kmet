@@ -1107,7 +1107,11 @@
 
 (defn- start-agent-run!
   "Start an agent run: set turn state, show the working indicator + animation
-   timer, create the streaming placeholder, wire the streaming callbacks.
+   timer, wire the streaming callbacks. The user message and the assistant
+   streaming placeholder are created from the loop's :message-start events
+   (pi: message_start → addMessageToChat / new streaming component), so the
+   initial prompt and consumed steering/follow-up messages all land in the
+   chat at the same lifecycle point.
    MESSAGE — optional initial user message; when nil the run continues on the
    existing context without adding a message (the /continue path, where the
    last entry is an unanswered user message or a dangling tool result the
@@ -1116,10 +1120,6 @@
   (reset! (:running-turn? cs) true)
   (activate-working-indicator! cs)
   (start-anim-timer! cs)
-  (when message
-    (ui/chat-history-add-message! (:chat-history cs)
-                                  {:role :user :content message}))
-  (ui/chat-history-start-streaming! (:chat-history cs))
   (update-footer! cs)
   (tui/tui-request-render (:tui cs))
   (agent/run-agent-turn @(:agent-state cs)
@@ -1135,16 +1135,15 @@
    hook/expansion processing). Returns nil."
   [cs text]
   (if @(:running-turn? cs)
-    ;; Agent running: steer the current run (pi: steeringQueue).
-    ;; Finalize the in-progress assistant message first so the steered
-    ;; message lands below it; the next turn streams into a new message.
+    ;; Agent running: steer the current run (pi: steeringQueue). The message
+    ;; is only queued (and shown in the pending display) — it lands in the
+    ;; chat as a user message when the loop consumes it (:message-start,
+    ;; pi: message_start → addMessageToChat). The in-flight response keeps
+    ;; streaming into its own message until then.
     (do
       (debug/log "user steered: " text)
-      (ui/chat-history-finalize-streaming! (:chat-history cs))
-      (ui/chat-history-finalize-thinking! (:chat-history cs))
-      (ui/chat-history-add-message! (:chat-history cs)
-                                    {:role :user :content text})
       (agent/steer! @(:agent-state cs) text)
+      (update-pending-messages! cs)
       (update-footer! cs)
       (tui/tui-request-render (:tui cs)))
     (do
@@ -1233,9 +1232,11 @@
       (editor/editor-push-history! ed text)
       (editor-text-set! ed "")
       (if @(:running-turn? cs)
+        ;; Pi: handleFollowUp queues a follow-up (processed after the run
+        ;; settles). Not added to the chat here — like steering, it appears
+        ;; as a user message when the loop consumes it (:message-start,
+        ;; pi: message_start → addMessageToChat).
         (do (agent/follow-up! @(:agent-state cs) text)
-            (ui/chat-history-add-message! (:chat-history cs)
-                                          {:role :user :content text})
             (update-pending-messages! cs))
         (handle-submit cs text))
       (tui/tui-request-render (:tui cs)))))
@@ -1575,23 +1576,36 @@
                           (do (ui/chat-history-rebuild! ch (:messages evt))
                               (tui/tui-request-render t))
                           :message-start
-                           ;; before-agent-start injected messages (role :info)
-                           ;; display as labeled info boxes above the incoming
-                           ;; response; user/assistant message-starts are
-                           ;; already mirrored by the UI. Content is normalized
-                           ;; from text blocks to a string for the info box.
-                          (when (= :info (:role (:message evt)))
-                            (let [m (:message evt)
-                                  text (if (string? (:content m))
-                                         (:content m)
-                                         (str/join
-                                          (for [b (:content m)
-                                                :when (= :text (:type b))]
-                                            (:text b))))]
-                              (ui/chat-history-insert-before-streaming! ch
-                                                                        (assoc m :content text))
-                              (tui/tui-request-render t)))
-                          nil)))
+                           ;; Pi: message_start → user messages (the initial
+                           ;; prompt and consumed steering/follow-up messages)
+                           ;; land in the chat here; assistant message starts
+                           ;; finalize the previous turn's streaming placeholder
+                           ;; and open a fresh one, so a follow-up continuation
+                           ;; never merges into the prior response; before-
+                           ;; agent-start injected messages (role :info) display
+                           ;; as labeled info boxes above the response. Content
+                           ;; is normalized from text blocks to a string for
+                           ;; the info box.
+                          (case (:role (:message evt))
+                            :user (do (ui/chat-history-add-message! ch (:message evt))
+                                      (when-let [cs @cs-ref]
+                                        (update-pending-messages! cs))
+                                      (tui/tui-request-render t))
+                            :assistant (do (ui/chat-history-finalize-streaming! ch)
+                                           (ui/chat-history-finalize-thinking! ch)
+                                           (ui/chat-history-start-streaming! ch)
+                                           (tui/tui-request-render t))
+                            :info (let [m (:message evt)
+                                        text (if (string? (:content m))
+                                               (:content m)
+                                               (str/join
+                                                (for [b (:content m)
+                                                      :when (= :text (:type b))]
+                                                  (:text b))))]
+                                    (ui/chat-history-insert-before-streaming! ch
+                                                                              (assoc m :content text))
+                                    (tui/tui-request-render t))
+                            nil))))
         _ (when (seq (:models config))
             ;; Scoped model list for cycle-model! (pi: _scopedModels)
             (agent/set-models! ag (:models config)))
