@@ -796,6 +796,23 @@ Be precise and concise in your responses."}}]
         (when-not (compare-and-set! (:pending-bash agent) pending [])
           (recur))))))
 
+(defn add-context-message!
+  "Inject a message into the agent's in-memory context without persisting it
+   (pi: custom messages flow through the agent loop — kmet extensions
+   persist a :custom-message entry via the session and inject the projection
+   here). Emits :message-start so the TUI renders it (the display flag is
+   honored by the TUI handler). String :content is normalized to a text
+   block, matching the canonical kmet message format."
+  [agent msg]
+  (let [content (:content msg)
+        content (cond
+                  (string? content) [{:type :text :text content}]
+                  (nil? content) []
+                  :else content)
+        msg (assoc msg :content content)]
+    (swap! (:messages agent) conj msg)
+    (emit agent {:type :message-start :message msg})))
+
 ;; ─── Agent run ─────────────────────────────────────────────────────────────
 
 (declare resolve-api-key)

@@ -13,7 +13,8 @@
    pi: core/extensions/runner.js."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [babashka.fs :as fs]))
+            [babashka.fs :as fs]
+            [kmet.app.session :as session]))
 
 ;; ─── Extension input / before-agent-start hooks ────────────────────────────
 ;; pi: extensions register via pi.on("input") and pi.on("before_agent_start");
@@ -350,6 +351,88 @@
    listeners."
   []
   (ui-call :reset))
+
+;; ─── Extension-facing session API (pi: ctx.sessionManager / ctx.session) ──
+;; kmet extensions append custom entries for durable state and custom
+;; messages for LLM-context injection, and set/read labels on entries. The
+;; live session and the agent context sink are registered by interactive
+;; mode (set-session! / set-context-sink!).
+
+(defonce ^:private session-atom (atom nil))
+(defonce ^:private context-sink-atom (atom nil))
+
+(defn set-session!
+  "Register the live session for extension access (pi: ctx.sessionManager).
+   Called by interactive mode whenever the live session changes (create,
+   resume, fork, clone)."
+  [session]
+  (reset! session-atom session)
+  nil)
+
+(defn get-session
+  "The currently active Session record (pi: ctx.sessionManager), or nil when
+   no session is live."
+  []
+  @session-atom)
+
+(defn set-context-sink!
+  "Install the live-context sink — (fn [msg]) injecting a message into the
+   agent's in-memory context (pi: custom messages flow through the agent
+   loop). Interactive mode wires it to the agent state; re-installed on
+   reload."
+  [f]
+  (reset! context-sink-atom f)
+  nil)
+
+(defn append-custom-entry!
+  "Append a custom entry (extension state, never in LLM context) to the
+   live session (pi: ctx.session.appendEntry). No-op (nil) when no session
+   is live. Returns the entry id."
+  [custom-type & [data]]
+  (when-let [sess @session-atom]
+    (:id (session/append-custom-entry! sess custom-type data))))
+
+(defn append-custom-message!
+  "Send a custom message that participates in LLM context (pi:
+   ctx.session.sendMessage — appendCustomMessageEntry + agent injection):
+   the entry is persisted to the session, the message is injected into the
+   agent's live context (seen by the next LLM call), and it renders in the
+   TUI when DISPLAY is true. Returns the entry id, or nil when no session
+   is live."
+  [custom-type content display & [details]]
+  (when-let [sess @session-atom]
+    (let [entry (session/append-custom-message-entry! sess custom-type
+                                                      content display details)]
+      (when-let [sink @context-sink-atom]
+        (sink {:role :custom
+               :custom-type custom-type
+               :content content
+               :display display
+               :details details}))
+      (:id entry))))
+
+(defn get-custom-entries
+  "The live session's :custom entries of CUSTOM-TYPE along the active branch
+   (extensions restore state on reload). Empty when no session is live."
+  [custom-type]
+  (if-let [sess @session-atom]
+    (session/get-custom-entries sess custom-type)
+    []))
+
+(defn set-label!
+  "Set or clear a label on an entry of the live session (pi:
+   ctx.session.setLabel). Throws when the entry id is unknown; no-op (nil)
+   when no session is live."
+  [entry-id label]
+  (when-let [sess @session-atom]
+    (session/set-label! sess entry-id label)))
+
+(defn get-label
+  "Current label of an entry in the live session (pi:
+   ctx.sessionManager.getLabel); nil when unlabeled or no session is live."
+  [entry-id]
+  (when-let [sess @session-atom]
+    (session/get-label sess entry-id)))
 
 (defn load-extensions-from-dir
   "Load all .clj extension files from a directory.

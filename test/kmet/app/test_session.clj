@@ -1046,3 +1046,115 @@
       (t/is (= ["q" "[model: anthropic/claude-sonnet]" "[thinking: high]"]
                (vec (flatten-tree (s/get-tree session))))
             "tree shows the switch instead of (empty)"))))
+
+;; ─── G9/G10: custom + custom_message entries ──────────────────────────────
+
+(t/deftest test-custom-entry
+  ;; G9: custom entries are extension state — persisted, never in context
+  (let [session (s/create-session test-dir)
+        e (s/append-custom-entry! session :my-state {:count 1})]
+    (t/is (= :custom (:role e)))
+    (t/is (= :my-state (:custom-type e)))
+    (t/is (= {:count 1} (:data e)))
+    (t/is (empty? (s/context-messages e)) "custom entries excluded from context")
+    (t/is (= [e] (s/get-custom-entries session :my-state)))
+    (t/is (empty? (s/get-custom-entries session :other)) "type filter")
+    ;; state survives save/load
+    (let [loaded (s/load-session (:file (do (s/append-entry session {:role :assistant :content "a"})
+                                            session)))]
+      (t/is (= :my-state (:custom-type (first (s/get-custom-entries loaded :my-state))))))))
+
+(t/deftest test-custom-entry-branch-scoped
+  ;; get-custom-entries follows the ACTIVE branch (pi: getBranch)
+  (let [session (s/create-session test-dir)
+        q (s/append-entry session {:role :user :content "q"})
+        _ (s/append-custom-entry! session :my-state {:v 1})]
+    (s/branch! session (:id q))
+    (t/is (empty? (s/get-custom-entries session :my-state))
+          "abandoned branch state not visible"))
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content "q"})
+    (s/branch! session (:id (first (s/get-branch session))))
+    (s/append-custom-entry! session :my-state {:v 2})
+    (t/is (= 1 (count (s/get-custom-entries session :my-state))))
+    (t/is (= {:v 2} (:data (first (s/get-custom-entries session :my-state)))))))
+
+(t/deftest test-custom-message-entry
+  ;; G10: custom_message entries participate in context as a :custom-role
+  ;; message; display flag + details carried through; excluded from counts
+  (let [session (s/create-session test-dir)
+        e (s/append-custom-message-entry! session :note "hello" true {:x 1})
+        msg (first (s/context-messages e))]
+    (t/is (= :custom-message (:role e)))
+    (t/is (= :note (:custom-type e)))
+    (t/is (= true (:display e)))
+    (t/is (= {:x 1} (:details e)))
+    (t/is (= :custom (:role msg)) "projects to a custom-role message")
+    (t/is (= [{:type :text :text "hello"}] (:content msg))
+          "string content normalized to a text block")
+    (t/is (= :note (:custom-type msg)))
+    (t/is (= true (:display msg)))
+    (t/is (= {:x 1} (:details msg)))
+    (t/is (= 0 (s/get-message-count session)) "custom entries are not messages")))
+
+(t/deftest test-custom-message-entry-block-content
+  ;; block content passes through unmodified
+  (let [session (s/create-session test-dir)
+        e (s/append-custom-message-entry! session :img
+                                          [{:type :image :data "aa" :mime-type "image/png"}]
+                                          true)
+        msg (first (s/context-messages e))]
+    (t/is (= [{:type :image :data "aa" :mime-type "image/png"}] (:content msg)))))
+
+(t/deftest test-custom-message-entry-nil-content
+  ;; nil content defaults to an empty block vector (pi: content ?? [])
+  (let [session (s/create-session test-dir)
+        e (s/append-custom-message-entry! session :quiet nil false)
+        msg (first (s/context-messages e))]
+    (t/is (= [] (:content msg)))
+    (t/is (= false (:display msg)))))
+
+(t/deftest test-tree-displays-custom-entries
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content "q"})
+    (s/append-custom-entry! session :my-state {:v 1})
+    (s/append-custom-message-entry! session :note "hi" true)
+    (s/append-custom-message-entry! session :quiet nil false)
+    (letfn [(flatten-tree [nodes]
+              (mapcat (fn [n]
+                        (cons (:summary n) (flatten-tree (:children n))))
+                      nodes))]
+      (t/is (= ["q" "[custom: my-state]" "hi" "[custom: quiet]"]
+               (vec (flatten-tree (s/get-tree session))))
+            "tree shows custom entries instead of (empty)"))))
+
+(t/deftest test-entry-id-format
+  ;; G12: ids are <hex-ms>-<8-hex> — time-ordered prefix + 32-bit random,
+  ;; so same-ms cross-process collisions are negligible
+  (let [session (s/create-session test-dir)
+        e (s/append-entry session {:role :user :content "q"})]
+    (t/is (re-matches #"[0-9a-f]+-[0-9a-f]{8}" (:id e)))
+    (t/is (re-matches #"[0-9a-f]+-[0-9a-f]{8}" (:id session)) "session id too")
+    (t/is (not= (:id e) (:id session)))))
+
+(t/deftest test-custom-entries-persist-and-replay
+  ;; G10: custom_message entries with display=true replay into chat history
+  ;; data as labeled info messages; display=false and :custom state are
+  ;; skipped (covered by replay-branch! in interactive mode — here we check
+  ;; the projection + branch content survive a round-trip)
+  (let [dir (str "target/test-sess-custom-" (System/currentTimeMillis))
+        sess (s/create-session dir)]
+    (try
+      (s/append-entry sess {:role :user :content "q"})
+      (s/append-custom-message-entry! sess :note "hello" true {:x 1})
+      (s/append-custom-entry! sess :state {:v 1})
+      (s/append-entry sess {:role :assistant :content "a"})
+      (let [loaded (s/load-session (:file sess))
+            roles (mapv :role (s/get-branch loaded))
+            ctx-roles (mapv :role (mapcat s/context-messages (s/get-branch loaded)))]
+        (t/is (= [:user :custom-message :custom :assistant] roles))
+        (t/is (= [:user :custom :assistant] ctx-roles)
+              "custom state excluded from context, custom_message projected")
+        (t/is (= "hello" (:content (nth (s/get-branch loaded) 1)))
+              "entry content persisted verbatim"))
+      (finally (fs/delete-tree dir)))))

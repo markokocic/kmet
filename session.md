@@ -90,6 +90,16 @@ Kmet side: `src/kmet/app/session.clj` (+ consumers: `app/loop.clj`, `modes/inter
   UTF-8 sequences spanning chunk boundaries decode intact. G20 was already satisfied — all
   rewrite paths (`publish-file!`, `write-entries!`, `write-entries-verbatim!`, `repair-torn-tail!`)
   publish via temp file + rename; appends are single-line and covered by torn-tail repair.
+- **Phase 2 leftovers (G9/G10/G12) done**: `custom` entries (`append-custom-entry!`,
+  `get-custom-entries` — extension state, never in LLM context) and `custom_message` entries
+  (`append-custom-message-entry!` — projects to a `:custom`-role context message, sent to the
+  LLM as a user message, `display` flag controls TUI rendering on replay and live via
+  `:message-start`). Exposed to the extensions SDK: `extensions/append-custom-entry!`,
+  `extensions/append-custom-message!` (persists + injects into the live agent context via a
+  context sink), `extensions/get-custom-entries`, `extensions/set-label!`/`get-label`,
+  `extensions/get-session` (the live Session record, registered by interactive mode on
+  create/resume/fork/clone). Id generation (G12) now uses a 32-bit random component
+  (`<hex-ms>-<8-hex>`), time-ordered across processes with negligible same-ms collisions.
 
 ## 2. Gap list
 

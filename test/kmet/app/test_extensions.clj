@@ -1,7 +1,8 @@
 (ns kmet.app.test-extensions
   (:require [clojure.test :as t]
             [clojure.java.io :as io]
-            [kmet.app.extensions :as extensions]))
+            [kmet.app.extensions :as extensions]
+            [kmet.app.session :as session]))
 
 ;; ─── Extension loading ────────────────────────────────────────────────────
 
@@ -162,3 +163,74 @@
     (let [r (extensions/apply-input-hooks "hello" :interactive)]
       (t/is (= :pass (:action r)))
       (t/is (= "hello" (:text r))))))
+
+;; ─── Extension session API (G9/G10/G11: custom, custom_message, labels) ──
+
+(defn- with-session
+  "Register SESS as the live session, run F, then unregister (tests isolate
+   the session registry atom)."
+  [sess f]
+  (try
+    (extensions/set-session! sess)
+    (f)
+    (finally
+      (extensions/set-session! nil))))
+
+(t/deftest test-session-api-append-custom-entry
+  ;; G9: extensions persist state as custom entries (never in LLM context)
+  (let [sess (session/create-session "target/test-ext-session")]
+    (with-session sess
+      (fn []
+        (let [id (extensions/append-custom-entry! :my-state {:count 1})
+              e (session/get-entry sess id)]
+          (t/is (string? id))
+          (t/is (= :custom (:role e)))
+          (t/is (= :my-state (:custom-type e)))
+          (t/is (= {:count 1} (:data e)))
+          (t/is (= [e] (extensions/get-custom-entries :my-state)))
+          (t/is (empty? (extensions/get-custom-entries :other)))
+          (t/is (empty? (session/context-messages e)) "never in context"))))))
+
+(t/deftest test-session-api-append-custom-message
+  ;; G10: append-custom-message! persists the entry AND injects the message
+  ;; into the live agent context via the installed sink
+  (let [sess (session/create-session "target/test-ext-session")
+        received (atom nil)]
+    (extensions/set-context-sink! (fn [m] (reset! received m)))
+    (with-session sess
+      (fn []
+        (let [id (extensions/append-custom-message! :note "hello" true {:x 1})
+              e (session/get-entry sess id)]
+          (t/is (= :custom-message (:role e)))
+          (t/is (= :note (:custom-type e)))
+          (t/is (= true (:display e)))
+          (t/is (= {:x 1} (:details e)))
+          (t/is (= :custom (:role @received)) "sink sees the projection")
+          (t/is (= "hello" (:content @received)))
+          (t/is (= :note (:custom-type @received)))
+          (t/is (= true (:display @received))))))
+    (extensions/set-context-sink! nil)))
+
+(t/deftest test-session-api-labels
+  ;; G11: extensions set/read labels on entries (pi: ctx.session.setLabel)
+  (let [sess (session/create-session "target/test-ext-session")
+        e (session/append-entry sess {:role :assistant :content "a"})]
+    (with-session sess
+      (fn []
+        (t/is (nil? (extensions/get-label (:id e))))
+        (extensions/set-label! (:id e) "done")
+        (t/is (= "done" (extensions/get-label (:id e))))
+        (t/is (= "done" (session/get-label sess (:id e))) "entry-level API agrees")
+        (extensions/set-label! (:id e) nil)
+        (t/is (nil? (extensions/get-label (:id e))) "cleared")))))
+
+(t/deftest test-session-api-no-session
+  ;; wrappers are no-ops (nil/empty) without a live session
+  (extensions/set-session! nil)
+  (extensions/set-context-sink! nil)
+  (t/is (nil? (extensions/get-session)))
+  (t/is (nil? (extensions/append-custom-entry! :x {:v 1})))
+  (t/is (nil? (extensions/append-custom-message! :x "hi" true)))
+  (t/is (empty? (extensions/get-custom-entries :x)))
+  (t/is (nil? (extensions/get-label "nope")))
+  (t/is (nil? (extensions/set-label! "nope" "l"))))

@@ -28,14 +28,17 @@
           (finally (.unlock lock#)))))
 
 (defn- generate-id
-  "Generate a unique entry id: hex timestamp + 16-bit hex random, collision
+  "Generate a unique entry id: hex timestamp + 8-hex random, collision
    checked against the session's existing entry ids (pi: generateId —
-   collision-checked against the index)."
+   collision-checked against the index). The timestamp prefix keeps ids
+   time-ordered across processes; the 32-bit random component makes
+   same-ms cross-process collisions negligible (G12 — the 16-bit rand
+   allowed 1/65536 same-ms collisions)."
   [entries]
   (let [existing (into #{} (map :id) entries)]
     (loop []
       (let [id (str (format "%x" (System/currentTimeMillis))
-                    "-" (format "%x" (rand-int 0xFFFF)))]
+                    "-" (format "%04x%04x" (rand-int 0x10000) (rand-int 0x10000)))]
         (if (contains? existing id)
           (recur)
           id)))))
@@ -407,6 +410,37 @@
                            :target-id target-id
                            :label (when (seq (str label)) (str label))})))
 
+;; ─── Custom entries (G9/G10 — pi: appendCustomEntry / appendCustomMessageEntry) ──
+
+(defn append-custom-entry!
+  "Append a custom entry (extension state) as a child of the current leaf
+   (pi: appendCustomEntry). Custom entries never participate in LLM
+   context — extensions use them for durable state, read back with
+   get-custom-entries on reload. Returns the entry."
+  [session custom-type & [data]]
+  (append-entry session {:role :custom :custom-type custom-type :data data}))
+
+(defn append-custom-message-entry!
+  "Append a custom_message entry that participates in LLM context (pi:
+   appendCustomMessageEntry): its content projects into the context as a
+   :custom-role message (sent to the LLM as a user message — pi:
+   convertToLlm custom→user), :display controls whether it renders in the
+   TUI, :details is extension metadata not sent to the LLM. Returns the
+   entry."
+  [session custom-type content display & [details]]
+  (append-entry session {:role :custom-message
+                         :custom-type custom-type
+                         :content content
+                         :display display
+                         :details details}))
+
+(defn get-custom-entries
+  "All :custom entries of CUSTOM-TYPE along the active branch (pi:
+   extensions persist state as custom entries and restore it on reload)."
+  [session custom-type]
+  (filter #(and (= :custom (:role %)) (= custom-type (:custom-type %)))
+          (get-branch session)))
+
 ;; ─── Model & thinking changes (G6 — pi: appendModelChange / appendThinkingLevelChange) ──
 
 (defn append-model-change!
@@ -467,14 +501,28 @@
    compaction and branch_summary entries become a single :user message
    carrying their summary (kmet providers don't know pi's
    compactionSummary/branchSummary roles — the :user mapping mirrors the
-   pre-append-only summary entry); :info, :session_info, :model-change and
-   :thinking-level-change are metadata and excluded. Excluded :bash entries
-   are kept here and dropped later by the
+   pre-append-only summary entry); custom_message entries become a
+   :custom-role message (sent to the LLM as a user message — pi:
+   convertToLlm custom→user) with string content normalized to a text
+   block; :info, :session_info, :model-change, :thinking-level-change and
+   :custom are metadata/state and excluded. Excluded :bash entries are
+   kept here and dropped later by the
    LLM conversion (pi: convertToLlm filters excludeFromContext)."
   [entry]
   (case (:role entry)
     (:compaction :branch-summary)
     [{:role :user :content [{:type :text :text (str (:summary entry))}]}]
+    :custom-message
+    [{:role :custom
+      :custom-type (:custom-type entry)
+      ;; pi: createCustomMessage — string content becomes a text block, nil
+      ;; defaults to an empty block vector
+      :content (cond
+                 (string? (:content entry)) [{:type :text :text (:content entry)}]
+                 (nil? (:content entry)) []
+                 :else (:content entry))
+      :display (:display entry)
+      :details (:details entry)}]
     (:user :assistant :tool :bash) [entry]
     []))
 
@@ -537,6 +585,11 @@
                             (str "[model: " (name (:provider entry)) "/" (:model entry) "]")
                             (= (:role entry) :thinking-level-change)
                             (str "[thinking: " (name (:thinking-level entry)) "]")
+                            ;; custom entries carry no content — show the extension type
+                            (= (:role entry) :custom)
+                            (str "[custom: " (name (:custom-type entry)) "]")
+                            (= (:role entry) :custom-message)
+                            (str "[custom: " (name (:custom-type entry)) "]")
                             :else "(empty)"))
                :children (mapv build-node (children (:id entry)))})]
       (mapv build-node root-children))))

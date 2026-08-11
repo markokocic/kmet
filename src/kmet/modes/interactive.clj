@@ -351,6 +351,7 @@
                  (debug/log "new session created: " (:id new-session))
                  (ui/chat-history-clear! (:chat-history cs))
                  (reset! (:session-atom cs) new-session)
+                 (extensions/set-session! new-session)
                  (let [old-ag @(:agent-state cs)
                        new-ag (assoc old-ag :session new-session)]
                    (reset! (:agent-state cs) new-ag))
@@ -694,37 +695,57 @@
       (< days 365) (str (quot days 30) "mo")
       :else (str (quot days 365) "y"))))
 
+(defn- custom-message-text
+  "Plain text of a :custom message's content (string or text blocks) — the
+   display text for custom_message entries/messages in the TUI (pi renders
+   custom messages as labeled info boxes)."
+  [m]
+  (if (string? (:content m))
+    (:content m)
+    (str/join (for [b (:content m)
+                    :when (= :text (:type b))]
+                (:text b)))))
+
 (defn- replay-branch!
   "Replay a session's active branch into the chat history (pi:
-   renderInitialMessages — only message entries; session_info and label
-   entries are metadata, compaction and branch_summary entries render their
-   summary text)."
+   renderInitialMessages — only message entries; session_info, label,
+   model/thinking change and custom (extension state) entries are metadata
+   and never rendered; compaction and branch_summary entries render their
+   summary text; custom_message entries render as labeled info boxes when
+   their display flag is set)."
   [cs sess]
   (ui/chat-history-clear! (:chat-history cs))
   (doseq [e (session/get-branch sess)
-          :when (not (contains? #{:session_info :label :model-change :thinking-level-change} (:role e)))]
-    (let [role (:role e)
-          ;; Compaction/branch_summary entries carry their summary text, not
-          ;; content blocks; the chat-history fallback renders unknown roles
-          ;; via markdown (pi renders compaction summaries via Markdown)
-          content (if (contains? #{:compaction :branch-summary} role)
-                    (or (:summary e) "")
-                    (str/join
-                     (keep (fn [b]
-                             (case (:type b)
-                               :text (:text b)
-                               :tool_result (:content b)
-                               nil))
-                           (:content e))))]
-      (ui/chat-history-add-message! (:chat-history cs)
-                                    (cond-> {:role role :content content}
-                                      (= role :assistant) (assoc :thinking (:thinking e))
-                                      (= role :info) (assoc :label (:label e))
-                                      (= role :tool)
-                                      (assoc :name (or (:name e) "tool")
-                                             :is-error (:is-error e false)
-                                             :truncation (:truncation e)
-                                             :details (:details e)))))))
+          :when (not (contains? #{:session_info :label :model-change
+                                  :thinking-level-change :custom} (:role e)))]
+    (let [role (:role e)]
+      (if (= role :custom-message)
+        ;; extension custom messages render only when display is set (pi:
+        ;; the display flag controls TUI rendering); content may be a string
+        ;; or a block vector (pi CustomMessageEntry)
+        (when (:display e)
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        {:role :info
+                                         :content (custom-message-text e)
+                                         :label (:custom-type e)}))
+        (let [content (if (contains? #{:compaction :branch-summary} role)
+                        (or (:summary e) "")
+                        (str/join
+                         (keep (fn [b]
+                                 (case (:type b)
+                                   :text (:text b)
+                                   :tool_result (:content b)
+                                   nil))
+                               (:content e))))]
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        (cond-> {:role role :content content}
+                                          (= role :assistant) (assoc :thinking (:thinking e))
+                                          (= role :info) (assoc :label (:label e))
+                                          (= role :tool)
+                                          (assoc :name (or (:name e) "tool")
+                                                 :is-error (:is-error e false)
+                                                 :truncation (:truncation e)
+                                                 :details (:details e)))))))))
 
 (defn- restore-session!
   "Restore a session into the UI and the agent: swap the active session,
@@ -739,6 +760,7 @@
    (pi: navigateTree keeps the current agent state)."
   [cs sess apply-settings?]
   (reset! (:session-atom cs) sess)
+  (extensions/set-session! sess)
   (let [new-ag (assoc @(:agent-state cs) :session sess)]
     (reset! (:agent-state cs) new-ag))
   (agent/restore-session-context! @(:agent-state cs))
@@ -2048,8 +2070,21 @@
                                    ch "Compaction cancelled")))
                               (tui/tui-request-render t))
                           :context-replaced
-                           ;; Rebuild the chat history to mirror the replaced context
-                          (do (ui/chat-history-rebuild! ch (:messages evt))
+                           ;; Rebuild the chat history to mirror the replaced
+                           ;; context; custom messages honor the display flag
+                           ;; (pi: display controls TUI rendering — hidden
+                           ;; ones stay in the LLM context only)
+                          (do (ui/chat-history-rebuild!
+                               ch
+                               (map (fn [m]
+                                      (if (and (= :custom (:role m)) (:display m))
+                                        (assoc m :role :info
+                                               :content (custom-message-text m)
+                                               :label (:custom-type m))
+                                        m))
+                                    (remove #(and (= :custom (:role %))
+                                                  (not (:display %)))
+                                            (:messages evt))))
                               (tui/tui-request-render t))
                           :message-start
                            ;; Pi: message_start → user messages (the initial
@@ -2081,6 +2116,15 @@
                                     (ui/chat-history-insert-before-streaming! ch
                                                                               (assoc m :content text))
                                     (tui/tui-request-render t))
+                            ;; extension custom messages (pi: custom messages
+                            ;; render as labeled info boxes when display=true)
+                            :custom (do (when (:display (:message evt))
+                                          (let [m (:message evt)]
+                                            (ui/chat-history-insert-before-streaming!
+                                             ch (assoc m :role :info
+                                                       :content (custom-message-text m)
+                                                       :label (:custom-type m)))))
+                                        (tui/tui-request-render t))
                             nil))))
         _ (when (seq (:models config))
             ;; Scoped model list for cycle-model! (pi: _scopedModels)
@@ -2750,6 +2794,14 @@
                   (when (tui/tui-has-overlay? t) (tui/tui-hide-overlay t))
                   (tui/tui-request-render t))}]
     (extensions/set-ui-registry! registry)
+    ;; Live session + context injection for extensions (pi:
+    ;; ctx.sessionManager / custom messages flowing through the agent loop).
+    ;; Installed once with the registry; reload mutates the same CoreState
+    ;; (agent, session atom), so the wiring stays valid across reloads —
+    ;; only /new, /resume, fork and clone re-register the session.
+    (extensions/set-session! @(:session-atom cs))
+    (extensions/set-context-sink!
+     (fn [msg] (agent/add-context-message! @(:agent-state cs) msg)))
     registry))
 
 ;; ─── Run ───────────────────────────────────────────────────────────────────

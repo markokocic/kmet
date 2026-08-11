@@ -137,6 +137,30 @@
              (:content (first converted)))
           "image blocks convert to Anthropic image blocks")))
 
+(t/deftest test-llm-custom-role-maps-to-user
+  ;; G10: custom messages (from custom_message entries) are sent as user
+  ;; messages (pi: convertToLlm custom→user)
+  (let [msgs [{:role :custom
+               :custom-type :note
+               :content [{:type :text :text "hello from an extension"}]}]
+        openai (@#'llm/openai-messages msgs)
+        openai-reasoning (@#'llm/openai-messages-with-reasoning msgs)
+        anthropic (@#'llm/anthropic-messages msgs)
+        [google _] (@#'llm/google-messages msgs)]
+    (t/is (= "user" (:role (first openai))))
+    (t/is (= "user" (:role (first openai-reasoning))))
+    (t/is (= "user" (:role (first anthropic))))
+    (t/is (= "user" (:role (first google))))
+    (t/is (= "hello from an extension" (:content (first openai)))
+          "content preserved (openai-content returns plain text without images)")
+    (t/is (= "hello from an extension" (:text (first (:parts (first google)))))
+          "google content preserved"))
+  ;; string content is normalized by the context projection (context-messages),
+  ;; but the converters accept string content via the shared content helpers
+  (let [msgs [{:role :custom :custom-type :note :content "plain string"}]
+        openai (@#'llm/openai-messages msgs)]
+    (t/is (= "user" (:role (first openai))))))
+
 (t/deftest test-llm-tool-result-images-conversion
   (let [msgs [{:role :tool
                :content [{:type :tool_result :tool_use_id "t1" :content "saw it"}]

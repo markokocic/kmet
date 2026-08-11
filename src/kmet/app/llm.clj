@@ -195,6 +195,9 @@
                                              (:tool-calls m))))]
                       (cond-> msg
                         (seq thinking) (assoc :reasoning_content thinking)))
+                    ;; custom messages (pi: convertToLlm custom→user)
+                    "custom"
+                    {:role "user" :content (openai-content (:content m))}
                     {:role role
                      :content (openai-content (:content m))}))))
         messages))
@@ -232,6 +235,10 @@
                                                             (:tool-calls m))))]
                               ;; opencode-go requires reasoning_content on assistant messages
                               (assoc msg :reasoning_content (or (str/trim (or (:thinking m) "")) "")))
+                            ;; custom messages (pi: convertToLlm custom→user)
+                            "custom"
+                            {:role "user"
+                             :content (openai-content (:content m))}
                             {:role role
                              :content (openai-content (:content m))})]
                   msg)))
@@ -289,6 +296,9 @@
                       {:role "user" :content (bash-execution-text m)})
                     "tool"
                     {:role "tool" :content (anthropic-tool-result-content m)}
+                    ;; custom messages (pi: convertToLlm custom→user)
+                    "custom"
+                    {:role "user" :content (anthropic-content (:content m))}
                     (let [content (anthropic-content (:content m))]
                       (cond-> {:role role :content content}
                         (and (= role "assistant") (:tool-calls m))
