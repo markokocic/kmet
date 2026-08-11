@@ -773,43 +773,66 @@
 (defn- resume-session
   "Browse past sessions via SelectList overlay (pi: SessionSelectorComponent —
    rows show the session name or first message with message count + age on
-   the right; typing filters)."
+   the right; typing filters). Session files are streamed per-file with
+   bounded concurrency (pi: buildSessionInfosWithConcurrency — G15); the
+   overlay header shows loading progress (loaded/total) until the list is
+   ready. Escaping during the load cancels the pending population."
   [cs session-dir-fn]
-  (let [sessions (session/list-sessions (session-dir-fn))]
-    (if (empty? sessions)
-      (ui/chat-history-add-message! (:chat-history cs)
-                                    {:role :assistant :content "No past sessions found."})
-      (let [items (vec (for [s sessions]
-                         (let [loaded (session/load-session s)
-                               name (session/get-session-name loaded)
-                               first-msg (session/get-first-message loaded)
-                               n-msgs (session/get-message-count loaded)
-                               age (format-session-age (session/get-last-activity-ms loaded))]
-                           {:label (if name name first-msg)
-                            :description (str n-msgs " " age)
-                            :value s})))
-            sl-ref (atom nil)
-            on-select-fn (fn [_]
-                           (when-let [sel (select-list/select-list-get-selected @sl-ref)]
-                             (let [sess (session/load-session (:value sel))
-                                   short-id (subs (:id sess) 0 (min 8 (count (:id sess))))]
-                               (restore-session! cs sess true)
-                               (ui/chat-history-add-message! (:chat-history cs)
-                                                             {:role :assistant
-                                                              :content (str "Resumed session " short-id ".")})
-                               (tui/tui-hide-overlay (:tui cs))
-                               (tui/tui-request-render (:tui cs)))))
-            sl (select-list/make-select-list items
-                                             :height (min (count items) 15)
-                                             :header "Resume Session"
-                                             :no-match-text "  No sessions found"
-                                             :on-select on-select-fn
-                                             :on-escape (fn []
-                                                          (tui/tui-hide-overlay (:tui cs))
-                                                          (tui/tui-request-render (:tui cs))))]
-        (reset! sl-ref sl)
-        (tui/tui-show-overlay (:tui cs) sl :width 60 :height (min (count items) 15))
-        (tui/tui-request-render (:tui cs))))))
+  (let [cancelled (atom false)
+        sl-ref (atom nil)
+        on-select-fn (fn [_]
+                       (when-let [sel (select-list/select-list-get-selected @sl-ref)]
+                         (let [sess (session/load-session (:value sel))
+                               short-id (subs (:id sess) 0 (min 8 (count (:id sess))))]
+                           (restore-session! cs sess true)
+                           (ui/chat-history-add-message! (:chat-history cs)
+                                                         {:role :assistant
+                                                          :content (str "Resumed session " short-id ".")})
+                           (tui/tui-hide-overlay (:tui cs))
+                           (tui/tui-request-render (:tui cs)))))
+        sl (select-list/make-select-list []
+                                         :height 15
+                                         :header "Loading sessions…"
+                                         :no-match-text "  No sessions found"
+                                         :on-select on-select-fn
+                                         :on-escape (fn []
+                                                      (reset! cancelled true)
+                                                      (tui/tui-hide-overlay (:tui cs))
+                                                      (tui/tui-request-render (:tui cs))))
+        handle (tui/tui-show-overlay (:tui cs) sl :width 60 :height 15)]
+    (reset! sl-ref sl)
+    (tui/tui-request-render (:tui cs))
+    (future
+      (try
+        (let [infos (session/list-sessions-info
+                     (session-dir-fn)
+                     (fn [loaded total]
+                       (when-not @cancelled
+                         (select-list/select-list-set-header!
+                          sl (str "Loading sessions… (" loaded "/" total ")"))
+                         (tui/tui-request-render (:tui cs)))))]
+          (when-not @cancelled
+            (if (empty? infos)
+              ;; identity-based hide: the user may have escaped and opened a new
+              ;; overlay between the cancelled check and this call — tui-hide-
+              ;; overlay pops the topmost, which could be the wrong one
+              (do ((:hide handle))
+                  (tui/tui-request-render (:tui cs))
+                  (ui/chat-history-add-message! (:chat-history cs)
+                                                {:role :assistant :content "No past sessions found."}))
+              (let [items (vec (for [info infos]
+                                 {:label (or (:name info) (:first-message info))
+                                  :description (str (:message-count info) " "
+                                                    (format-session-age (:modified info)))
+                                  :value (:path info)}))]
+                (select-list/select-list-set-header! sl "Resume Session")
+                (select-list/select-list-set-items! sl items)
+                (tui/tui-request-render (:tui cs))))))
+        (catch Exception e
+          (debug/log "resume-session: " e)
+          (when-not @cancelled
+            ((:hide handle))
+            (tui/tui-request-render (:tui cs))))))))
 
 ;; ─── Session tree navigation (pi: TreeSelectorComponent) ──────────────────
 

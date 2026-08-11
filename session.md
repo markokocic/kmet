@@ -80,8 +80,27 @@ Kmet side: `src/kmet/app/session.clj` (+ consumers: `app/loop.clj`, `modes/inter
   `custom` / `custom_message` / `label` entries anywhere.
 - `restore-session-context!` rebuilds messages from the branch but drops `:session_info` and
   `:info`; the resumed model/thinking level comes from live config, not the session.
-- `list-sessions` returns only paths (mtime-sorted); `resume-session` then **fully loads each
-  file** to get name/first-message/count/age. No cwd filter, no progress, no concurrency cap.
+- **Phase 5 (G15/G16) done**: `build-session-info` streams a session file
+  line-by-line (1 MB chunks, `reduce-physical-lines`, early exit for
+  headerless files) into a pi-style info map `{:path :id :cwd :name
+  :parent-session-path :created :modified :message-count :first-message
+  :all-messages-text}` (name = latest session_info incl. explicit clears,
+  modified = latest user/assistant message-with-content activity, falling
+  back to header :created-at then file mtime); `build-session-infos`
+  processes a file list with at most 10 concurrent loads (pi:
+  buildSessionInfosWithConcurrency) and an on-loaded progress callback;
+  `list-sessions-info` walks the base dir + cwd subdirs (pi: listAll),
+  reports `(loaded, total)` progress, excludes legacy headerless files,
+  and sorts by modified desc. `resume-session` now shows the overlay
+  immediately with a "Loading sessions… (loaded/total)" header that
+  updates as files stream in, then fills the list (escape cancels the
+  pending population). G16: `get-message-count` counts message entries
+  only — kmet's `:bash` role is the EDN analogue of pi's tool-message
+  entries (pi stores bash results as `message` entries, so they count),
+  while display-only `:info` entries don't (pi: `custom_message` is a
+  separate entry type).
+- `list-sessions` (paths, mtime-sorted) and `get-last-activity-ms` remain
+  as public primitives; the resume overlay uses the streaming info path.
 - **Phase 4 (G13) done**: `load-session` streams in 1 MB chunks instead of `slurp`; the header
   scan (`read-session-header` for discovery) is bounded at 1 MB with 4 KB chunked reads;
   a torn tail (partial final line from a crashed append) is dropped by atomically publishing
@@ -134,8 +153,8 @@ is required, so a JSONL codec is never built.*
 |---|-----|----|------|-----|
 | G13 | **Loading robustness** | v3 streams 1 MB chunks + bounded 1 MB header scan; torn-tail repair is a format-agnostic technique | `slurp` whole file; torn tail skipped with a warning and left corrupt forever | 🟡 |
 | G14 | **Query API** | `findEntries{type,order,limit,cursor}`, `findEntriesOnBranch{start,stopAtId,stopAtType}` | only `get-branch` (full path) and `get-tree` | 🟢 (optional; only if internal callers need it) |
-| G15 | **Listing efficiency** | per-file streaming SessionInfo, concurrency 10, progress, cwd filter | full load per file in `resume-session`, no progress | 🟡 |
-| G16 | **Stats parity** | `messageCount` = message entries only | `get-message-count` also counts `:bash` | 🟢 |
+| G15 | **Listing efficiency** | per-file streaming SessionInfo, concurrency 10, progress, cwd filter | ✅ `build-session-info`/`build-session-infos`/`list-sessions-info` (streaming, cap 10, `(loaded, total)` progress); resume overlay shows live progress | 🟡 |
+| G16 | **Stats parity** | `messageCount` = message entries only | ✅ message entries only — `:bash` counts (pi stores bash results as tool messages in `message` entries), display-only `:info` excluded | 🟢 |
 
 ### D. Branching & navigation
 
@@ -216,11 +235,14 @@ G11 labels ──▶ G18 label re-chaining on fork
 - Make all rewrite paths (the compaction fallback, `replace-context!`) publish via temp file
   + rename; keep the in-process lock for append serialization.
 
-**Phase 5 — Listing & stats (G15, G16).**
+**Phase 5 — Listing & stats (G15, G16). ✅ done**
 - `list-sessions` → per-file streaming `build-session-info` (name, firstMessage, messageCount,
   modified = message activity time, cwd, parentSessionPath) with a concurrency cap (~10) and a
   progress callback for the resume overlay; fix `get-message-count` parity (message entries
-  only) or document the `:bash` inclusion.
+  only) or document the `:bash` inclusion — implemented: `build-session-info`,
+  `build-session-infos`, `list-sessions-info`, async resume overlay with progress; G16 resolved
+  by counting message entries only (`:bash` documented as pi tool-message analogue, `:info`
+  excluded).
 
 **Phase 6 — Command surface (G22).**
 - `/session` (info + stats from the header/branch), `/export` (HTML only — no JSONL), `/share`

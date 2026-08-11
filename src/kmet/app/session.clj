@@ -190,6 +190,44 @@
                (println "Warning: Skipping invalid entry in" path ":" (ex-message ex)))
              ::invalid)))))
 
+(defn- parse-silently
+  "Parse one physical line into a session entry, nil for blank or malformed
+   lines without warning (pi: buildSessionInfo skips malformed lines
+   silently — only load-session reports them)."
+  [line]
+  (let [trimmed (str/trim line)]
+    (when (seq trimmed)
+      (try (edn/read-string trimmed)
+           (catch Exception _ nil)))))
+
+(defn- reduce-physical-lines
+  "Reduce F over the physical lines of PATH (chunked, line-oriented reads —
+   pi: createReadStream + readline; UTF-8 sequences spanning chunk
+   boundaries decode intact). F is (fn [acc line]); the final line is
+   included even without a trailing newline. Streams aggregates without
+   materializing the file (used by build-session-info, G15). When F returns
+   (reduced nil), the read stops and nil is returned (early exit for
+   headerless files — nil is never a valid accumulator)."
+  [path f init]
+  (with-open [r (io/reader path :encoding "UTF-8")]
+    (let [cbuf (char-array read-buffer-size)]
+      (loop [pending "" acc init]
+        (let [n (.read r cbuf)]
+          (if (neg? n)
+            (if (seq pending)
+              (let [acc (f acc pending)]
+                (if (reduced? acc) @acc acc))
+              acc)
+            (let [parts (str/split (str pending (String. cbuf 0 n))
+                                   #"\n" -1)
+                  acc (reduce (fn [a line]
+                                (let [a (f a line)]
+                                  (if (reduced? a) (reduced @a) a)))
+                              acc (butlast parts))]
+              (if (nil? acc)
+                nil
+                (recur (last parts) acc)))))))))
+
 (defn- parseable-line?
   "True when LINE is blank or parses as EDN — i.e. not a torn tail."
   [line]
@@ -793,12 +831,21 @@
             @(:entries session))
       "(no messages)"))
 
+(defn- message-entry?
+  "True for conversation message entries (pi: buildSessionInfo counts
+   entry.type === \"message\" — user/assistant/tool, incl. bash results
+   stored as tool messages in pi). Display-only :info entries don't count
+   (pi: custom_message is a separate entry type, never counted)."
+  [e]
+  (contains? #{:user :assistant :tool :bash} (:role e)))
+
 (defn get-message-count
   "Number of message entries in the session (pi: buildSessionInfo
-   messageCount — message types only, session_info excluded)."
+   messageCount — message entries only). kmet's :bash role is the EDN
+   analogue of pi's tool messages (which ARE message entries in pi), so
+   :bash counts; display-only :info entries don't (pi: custom_message)."
   [session]
-  (count (filter #(contains? #{:user :assistant :tool :bash :info} (:role %))
-                 @(:entries session))))
+  (count (filter message-entry? @(:entries session))))
 
 (defn get-last-activity-ms
   "Last message activity time as epoch ms (pi: modified — the latest message
@@ -837,6 +884,166 @@
                             (map #(str (fs/canonicalize %))))))
              (sort-by #(.toMillis (fs/last-modified-time %)) >)
              vec)))))
+
+;; ─── Listing (G15 — pi: buildSessionInfo / buildSessionInfosWithConcurrency) ──
+
+(def ^:private max-concurrent-session-info-loads
+  "Concurrent per-file session-info loads (pi:
+   MAX_CONCURRENT_SESSION_INFO_LOADS — 10)."
+  10)
+
+(defn- timestamp-ms
+  "Parse an ISO-8601 timestamp string into epoch ms, nil when absent or
+   unparseable (pi: new Date(ts).getTime() with NaN → undefined)."
+  [ts]
+  (when ts
+    (try (-> (java.time.Instant/parse ts) (.toEpochMilli))
+         (catch Exception _ nil))))
+
+(defn build-session-info
+  "Streaming per-file session info (pi: buildSessionInfo): a map with
+   :path :id :cwd :name :parent-session-path :created :modified
+   :message-count :first-message :all-messages-text. Streams the file in
+   1 MB chunks, keeping only aggregates (G15). The header must be a
+   :session entry — legacy headerless files yield nil (pi returns null).
+   :name is the latest session_info entry (incl. explicit clears → nil);
+   :modified is the latest message activity time as epoch ms, falling back
+   to the header :created-at, then the file mtime (pi: buildSessionInfo);
+   :message-count counts message entries only (same set as
+   get-message-count); :first-message is the first user message text
+   (\"(no messages)\" when none); :all-messages-text joins all
+   user/assistant message texts. Returns nil for headerless, corrupt, or
+   unreadable files."
+  [path]
+  (try
+    (let [file (io/file path)
+          init {:header nil :name nil :message-count 0 :first-message nil
+                :all-messages [] :last-activity nil}
+          acc (reduce-physical-lines
+               (str file)
+               (fn [acc line]
+                 (let [e (parse-silently line)]
+                   (cond
+                     ;; blank/malformed lines are skipped (pi: !entry → continue)
+                     (nil? e) acc
+                     ;; the first parseable entry must be a session header
+                     (nil? (:header acc))
+                     (if (= :session (:type e))
+                       (assoc acc :header e)
+                       (reduced nil))
+                     ;; latest session_info wins, incl. explicit clears
+                     (= :session_info (:role e))
+                     (assoc acc :name (let [n (str/trim (str (:name e "")))]
+                                        (when (seq n) n)))
+                     (message-entry? e)
+                     (let [text (entry-text e)
+                           ts (timestamp-ms (:timestamp e))
+                           ;; pi: getMessageActivityTime — only user/assistant
+                           ;; messages with content advance the activity time
+                           activity? (and (seq text)
+                                          (contains? #{:user :assistant} (:role e)))]
+                       (cond-> (update acc :message-count inc)
+                         (and (seq text)
+                              (contains? #{:user :assistant} (:role e)))
+                         (update :all-messages conj text)
+                         (and (seq text) (= :user (:role e))
+                              (nil? (:first-message acc)))
+                         (assoc :first-message text)
+                         (and activity? ts (> ts (long (or (:last-activity acc) 0))))
+                         (assoc :last-activity ts)))
+                     :else acc)))
+               init)
+          header (:header acc)
+          created-ms (timestamp-ms (:created-at header))]
+      (when (and header (:id header))
+        {:path (str (fs/canonicalize file))
+         :id (:id header)
+         :cwd (:cwd header)
+         :name (:name acc)
+         :parent-session-path (:parent-session header)
+         :created created-ms
+         :modified (or (:last-activity acc)
+                       created-ms
+                       (.toMillis (fs/last-modified-time file)))
+         :message-count (:message-count acc)
+         :first-message (or (:first-message acc) "(no messages)")
+         :all-messages-text (str/join " " (:all-messages acc))}))
+    (catch Exception _ nil)))
+
+(defn build-session-infos
+  "Build session info for FILES with at most 10 concurrent loads (pi:
+   buildSessionInfosWithConcurrency — a sliding window capped at
+   MAX_CONCURRENT_SESSION_INFO_LOADS). ON-LOADED is called once per file
+   that actually finished (progress callback; may be nil). Returns a vector
+   aligned with FILES — nil for files that yielded no info
+   (headerless/corrupt). Each iteration waits up to 5 s for the first
+   in-flight future, then collects every completed future — completed
+   siblings still count toward progress while a slow slot is pending, and
+   no result is dropped or counted early. (A permanently stuck read stalls
+   the listing, same as pi's Promise.race.)"
+  [files on-loaded]
+  (let [n (count files)
+        results (atom (vec (repeat n nil)))
+        in-flight (atom #{})
+        next-idx (atom 0)]
+    (letfn [(start-next! []
+              (let [i @next-idx]
+                (when (< i n)
+                  (swap! next-idx inc)
+                  (swap! in-flight conj (future
+                                          (try
+                                            (swap! results assoc i
+                                                   (build-session-info (nth files i)))
+                                            (catch Exception _ nil)))))))]
+      (loop []
+        (while (and (< @next-idx n)
+                    (< (count @in-flight) max-concurrent-session-info-loads))
+          (start-next!))
+        (if (seq @in-flight)
+          (let [f (first @in-flight)
+                ;; wait for this slot (bounded — a stuck read can't hang the
+                ;; caller forever); only completed futures count below
+                _ (deref f 5000 nil)
+                done (vec (filter future-done? @in-flight))]
+            (swap! in-flight #(reduce disj % done))
+            (doseq [_ done] (when on-loaded (on-loaded)))
+            (recur))
+          @results)))))
+
+(defn list-sessions-info
+  "Session info for all session files under a session directory, newest
+   modified first (pi: SessionManager.listAll + buildSessionInfosWith-
+   Concurrency). When DIR is a base sessions dir, its cwd-encoded
+   subdirectories are walked (pi: listAll); when DIR is a single
+   cwd-encoded dir, it is listed flat. Files are streamed (build-session-
+   info) at most 10 concurrent; ON-PROGRESS (fn [loaded total]) is called
+   as files complete. Legacy headerless files are excluded. Returns [] on
+   any error (pi: listSessionsFromDir catches and returns empty — a broken
+   dir must not take down the resume overlay)."
+  [dir & [on-progress]]
+  (try
+    (let [d (io/file dir)]
+      (if-not (fs/directory? d)
+        []
+        (let [dirs (cons d (filter fs/directory? (fs/list-dir d)))
+              files (vec (mapcat (fn [sub]
+                                   (->> (fs/list-dir sub)
+                                        (filter #(and (str/ends-with? (fs/file-name %) ".ednl")
+                                                      (fs/regular-file? %)))
+                                        (map #(str (fs/canonicalize %)))))
+                                 dirs))
+              total (count files)
+              loaded (atom 0)
+              infos (build-session-infos
+                     files
+                     (fn []
+                       (swap! loaded inc)
+                       (when on-progress (on-progress @loaded total))))]
+          (->> infos
+               (remove nil?)
+               (sort-by :modified >)
+               vec))))
+    (catch Exception _ [])))
 
 (def ^:private header-read-buffer-size
   "Chunk size (chars) for the bounded header scan (pi:

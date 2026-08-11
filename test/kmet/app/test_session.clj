@@ -283,13 +283,117 @@
     (t/is (= "hello" (s/get-first-message session)) "first user message wins")))
 
 (t/deftest test-session-message-count
-  ;; pi: buildSessionInfo messageCount — message entries, session_info excluded
+  ;; pi: buildSessionInfo messageCount — message entries only. kmet's :bash
+  ;; role is the EDN analogue of pi's tool-message entries (bash results are
+  ;; stored as tool messages in pi), so :bash counts; display-only :info
+  ;; entries don't (pi: custom_message is a separate entry type).
   (let [session (s/create-session test-dir)]
     (s/append-entry session {:role :user :content [{:type :text :text "a"}]})
     (s/append-entry session {:role :assistant :content [{:type :text :text "b"}]})
     (s/append-entry session {:role :session_info :name "t"})
     (s/append-entry session {:role :bash :command "ls" :output "" :exit-code 0})
+    (s/append-entry session {:role :info :label "display-only" :content "x"})
     (t/is (= 3 (s/get-message-count session)))))
+
+(t/deftest test-session-build-info
+  ;; G15: buildSessionInfo — streaming per-file session info. Header
+  ;; required (legacy headerless → nil), name = latest session_info incl.
+  ;; explicit clears, messageCount = message entries only, firstMessage =
+  ;; first user message, modified = latest message activity, cwd + parent
+  ;; path from the header.
+  (let [dir (str "target/test-sess-buildinfo-" (System/currentTimeMillis))
+        sess (s/create-session dir {:cwd "/home/user/proj"
+                                    :parent-session "/old/parent.ednl"})]
+    (try
+      (s/append-entry sess {:role :user :content [{:type :text :text "hello"}]})
+      (s/append-entry sess {:role :assistant :content [{:type :text :text "world"}]})
+      (s/append-entry sess {:role :session_info :name "My Session"})
+      (s/append-entry sess {:role :bash :command "ls" :output "" :exit-code 0})
+      (let [info (s/build-session-info (:file sess))]
+        (t/is (some? info))
+        (t/is (= (:file sess) (:path info)))
+        (t/is (= (:id sess) (:id info)))
+        (t/is (= "/home/user/proj" (:cwd info)))
+        (t/is (= "/old/parent.ednl" (:parent-session-path info)))
+        (t/is (= "My Session" (:name info)))
+        (t/is (= 3 (:message-count info)) "message entries only")
+        (t/is (= "hello" (:first-message info)))
+        (t/is (= "hello world" (:all-messages-text info)))
+        (t/is (number? (:modified info)))
+        (t/is (number? (:created info))))
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-build-info-headerless
+  ;; G15: legacy headerless files yield nil info (pi: buildSessionInfo
+  ;; returns null when the first parseable entry isn't a session header)
+  (let [dir (str "target/test-sess-buildinfo-hl-" (System/currentTimeMillis))
+        f (str dir "/legacy.ednl")]
+    (try
+      (fs/create-dirs dir)
+      (spit f (prn-str {:id "1" :parent-id nil :role :user
+                        :content "old" :timestamp (str (java.time.Instant/now))}))
+      (t/is (nil? (s/build-session-info f)))
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-build-info-name-cleared
+  ;; G15: latest session_info wins, incl. explicit clears → nil name
+  (let [dir (str "target/test-sess-buildinfo-clear-" (System/currentTimeMillis))
+        sess (s/create-session dir)]
+    (try
+      (s/append-entry sess {:role :assistant :content "a"})
+      (s/append-entry sess {:role :session_info :name "T"})
+      (s/append-entry sess {:role :session_info :name ""})
+      (t/is (nil? (:name (s/build-session-info (:file sess)))))
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-build-info-modified
+  ;; G15: modified = latest message activity time (pi: buildSessionInfo),
+  ;; not the file mtime
+  (let [dir (str "target/test-sess-buildinfo-mod-" (System/currentTimeMillis))
+        sess (s/create-session dir)]
+    (try
+      (s/append-entry sess {:role :assistant :content "a"})
+      (Thread/sleep 10)
+      (s/append-entry sess {:role :assistant :content "b"})
+      (let [info (s/build-session-info (:file sess))
+            last-ts (:timestamp (last @(:entries sess)))
+            last-ms (try (-> (java.time.Instant/parse last-ts) (.toEpochMilli))
+                         (catch Exception _ nil))]
+        (t/is (some? info))
+        (t/is (>= (:modified info) last-ms)
+              "modified reflects the latest message activity"))
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-list-sessions-info
+  ;; G15: list-sessions-info streams per-file infos (buildSessionInfo) with
+  ;; a progress callback, walks cwd subdirs, excludes legacy headerless
+  ;; files, newest modified first
+  (let [dir (str "target/test-sess-listinfo-" (System/currentTimeMillis))
+        cwd-a (s/session-dir-for-cwd dir "/home/user/proj-a")
+        cwd-b (s/session-dir-for-cwd dir "/home/user/proj-b")
+        sa (s/create-session cwd-a)
+        _ (s/append-entry sa {:role :assistant :content "a1"})
+        _ (s/append-entry sa {:role :assistant :content "a2"})
+        sb (s/create-session cwd-b)
+        _ (s/append-entry sb {:role :assistant :content "b1"})
+        legacy (s/create-session dir)
+        _ (s/append-entry legacy {:role :assistant :content "legacy"})
+        headerless (str dir "/headerless.ednl")
+        progress (atom [])]
+    (try
+      (spit headerless (prn-str {:id "9" :parent-id nil :role :user
+                                 :content "old" :timestamp (str (java.time.Instant/now))}))
+      (let [infos (s/list-sessions-info dir
+                                        (fn [loaded total]
+                                          (swap! progress conj [loaded total])))]
+        (t/is (= 3 (count infos)) "3 header-bearing sessions, headerless excluded")
+        (t/is (= #{(:file sa) (:file sb) (:file legacy)} (set (map :path infos))))
+        (t/is (= [4 4] (last @progress)) "progress counts all scanned files, incl. headerless")
+        (t/is (apply >= (map :modified infos)) "sorted newest modified first"))
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-list-sessions-info-nonexistent
+  (t/is (= [] (s/list-sessions-info "nonexistent-dir"))))
 
 (t/deftest test-session-last-activity
   ;; pi: modified — the last entry's timestamp, falling back to file mtime
