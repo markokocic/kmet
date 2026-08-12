@@ -153,8 +153,13 @@
       (System/exit 0))
 
     ;; Provider/model registry — loads the committed catalogs (pi registers
-    ;; its generated providers at startup)
+    ;; its generated providers at startup), then the models.edn user config
+    ;; layer (custom providers + overrides; errors surface as warnings)
     (models/load-catalogs!)
+    (models/load-models-config!)
+    (when-let [err (models/get-model-config-error)]
+      (binding [*out* *err*]
+        (println "Warning: models.edn:" err)))
 
     ;; CLI --model/--models patterns resolve against the registry (pi
     ;; resolveCliModel at dispatch) before mode dispatch

@@ -2,6 +2,7 @@
   (:require [clojure.test :as t]
             [clojure.string :as str]
             [kmet.libs.sse :as sse]
+            [kmet.app.config-value :as config-value]
             [kmet.app.llm :as llm]
             [kmet.app.models :as m]
             [kmet.app.tools.core :as tools]))
@@ -434,16 +435,60 @@
 ;; ─── Model headers merge ───────────────────────────────────────────────────
 
 (t/deftest test-model-headers-merge
-  (let [model {:headers {"User-Agent" "GitHubCopilotChat/0.35.0"}}
-        merged (@#'llm/merge-model-headers {"Content-Type" "application/json"} model)]
+  (let [model {:headers {"User-Agent" "GitHubCopilotChat/0.35.0"}
+               :provider :github-copilot :id "claude-sonnet-4.5"}
+        provider {:id :github-copilot
+                  :configured-headers {"X-Custom" "literal"}
+                  :auth-header false}
+        merged (@#'llm/request-headers {"Content-Type" "application/json"} model provider "k")]
     (t/is (= "application/json" (get merged "Content-Type")))
-    (t/is (= "GitHubCopilotChat/0.35.0" (get merged "User-Agent")))))
+    (t/is (= "GitHubCopilotChat/0.35.0" (get merged "User-Agent")))
+    (t/is (= "literal" (get merged "X-Custom")))))
+
+(t/deftest test-request-headers-auth-header
+  (t/testing "auth-header true adds Authorization: Bearer <key> last"
+    (let [merged (@#'llm/request-headers {"x-api-key" "k"}
+                                         {:provider :p :id "m"}
+                                         {:id :p :auth-header true}
+                                         "secret")]
+      (t/is (= "Bearer secret" (get merged "Authorization")))
+      (t/is (= "k" (get merged "x-api-key")))))
+  (t/testing "no auth-header → no Authorization header"
+    (let [merged (@#'llm/request-headers {"x-api-key" "k"}
+                                         {:provider :p :id "m"}
+                                         {:id :p}
+                                         "secret")]
+      (t/is (nil? (get merged "Authorization")))))
+  (t/testing "configured header values resolve as config values ($ENV)"
+    (with-redefs [config-value/getenv (fn [k] (when (= k "TEST_LLM_HEADER") "hdr"))]
+      (let [merged (@#'llm/request-headers {}
+                                           {:provider :p :id "m"}
+                                           {:id :p :configured-headers {"X-Custom" "$TEST_LLM_HEADER"}}
+                                           "k")]
+        (t/is (= "hdr" (get merged "X-Custom")))))))
 
 (t/deftest test-max-tokens-key
   (t/is (= :max_tokens (@#'llm/max-tokens-key (tmodel :compat {:max-tokens-field :max-tokens})))
         "max-tokens-field :max-tokens → :max_tokens (opencode/deepseek)")
   (t/is (= :max_completion_tokens (@#'llm/max-tokens-key (tmodel :compat nil)))
         "default → :max_completion_tokens"))
+
+(t/deftest test-openai-payload-sampling-params
+  (t/testing "sampling-params merged verbatim into the payload, keys win (pi: Object.assign last)"
+    (let [model (assoc (tmodel) :sampling-params {:temperature 1.0 :min_p 0.0})
+          payload (@#'llm/openai-payload model nil [] [] "m1")]
+      (t/is (= 1.0 (:temperature payload)))
+      (t/is (= 0.0 (:min_p payload)))
+      (t/is (= "m1" (:model payload)))
+      (t/is (= true (:stream payload)))))
+  (t/testing "sampling-params override pi-named fields (temperature, max tokens)"
+    (let [model (assoc (tmodel) :sampling-params {:max_completion_tokens 5})
+          payload (@#'llm/openai-payload model nil [] [] "m1")]
+      (t/is (= 5 (:max_completion_tokens payload)) "sampling key beats the model :max-tokens")))
+  (t/testing "no sampling-params → payload unchanged"
+    (let [payload (@#'llm/openai-payload (tmodel) nil [] [] "m1")]
+      (t/is (= 32000 (:max_completion_tokens payload)))
+      (t/is (nil? (:temperature payload))))))
 
 (t/deftest test-reasoning-content-gating-data
   ;; pi: requiresReasoningContentOnAssistantMessages gates reasoning_content

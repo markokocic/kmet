@@ -849,6 +849,8 @@
               _ (extensions/clear-extensions!)
               _ (doseq [d (cfg/resource-dirs config :extensions-dir ".kmet/extensions")]
                   (extensions/load-extensions-from-dir d))
+              ;; pi: model-runtime.refresh — recompose providers from models.edn
+              _ (models/load-models-config!)
               ;; pi: resourceLoader.reload (skills, prompts)
               _ (skills/clear-skills!)
               _ (doseq [d (cfg/resource-dirs config :skills-dir ".kmet/skills")]
@@ -880,7 +882,9 @@
                  (catch Exception e (debug/log "session-start: " e))))
           (ui/chat-history-add-message! chat-history
                                         {:role :info :label "Reload"
-                                         :content "Reloaded keybindings, extensions, skills, prompts, themes, and context files."}))
+                                         :content (str "Reloaded keybindings, extensions, skills, prompts, themes, context files, and models.edn."
+                                                       (when-let [err (models/get-model-config-error)]
+                                                         (str " [models.edn: " err "]")))}))
         (catch Exception e
           (debug/log "reload failed: " e)
           (ui/chat-history-add-message! chat-history

@@ -550,11 +550,48 @@ stored per-message `:cost` breakdown already supports it.
 
 ## Phase 6 — Custom providers via `models.edn` (`kmet.app.model-config` + `kmet.app.provider-composer` + `kmet.app.config-value`)
 
-**Status: planned.** Ports pi `model-config.ts` (schema + load), `resolve-config-value.ts`
-(config-value resolution) and the composition half of `provider-composer.ts`
-(`composeModelProvider` / `applyModelsJson` / `applyExtension` / model
-overrides). Lets users define custom providers and override built-in model
-metadata without writing Clojure.
+**Status: implemented.** Three new namespaces port the pi trio: `kmet.app.config-value`
+(resolve-config-value.ts), `kmet.app.model-config` (model-config.ts load + a
+manual validation walker), and `kmet.app.provider-composer`
+(composeModelProvider / applyModelsJson / applyExtension / model overrides /
+configuredRequestAuthStatus). `models/load-models-config!` recomposes the
+registry from models.edn at startup (after `load-catalogs!`, errors print as
+startup warnings) and on `/reload` (errors appended to the reload info
+message); `models/get-model-config-error` joins the config error + per-provider
+composition errors (pi ModelRuntime.getError). Auth and llm were wired:
+`auth/resolve-api-key` gained the configured-key layer, `auth/configured?`
+consults `is-config-value-configured?`, and llm's `request-headers` resolves
+model/provider configured headers as config values and applies `:auth-header`
+(`Authorization: Bearer <key>`, pi withConfiguredAuth).
+
+**Deviations from the plan sketch**:
+
+- **`:oauth "radius"` is schema-accepted but inert** (Phase 10 owns it); the
+  applyModelsJson "baseUrl required when oauth is set" rule is not ported.
+- **No `validate-extension-provider`** — that's Phase 7's eager registration
+  check; compose-model-provider already runs its composition eagerly.
+- **Configured-key resolution returns nil instead of throwing** when an
+  `$ENV` key is unresolvable (pi throws via resolveConfigValueOrThrow); the
+  nil surfaces as the standard "No API key" request error. It does **not**
+  fall back to env vars (pi semantics: configured key present → no inherited
+  env fallback).
+- **Header precedence**: model-level raw headers are baked into the composed
+  model's `:headers` at compose time and llm merges provider-level configured
+  headers after them, so a provider-level header wins a collision (pi lets the
+  model-level win). `:auth-header` is always merged last (pi order).
+- **Env-interpolation detail**: the env arg (test seam) is checked before the
+  process env, matching pi's `env?.[name] || process.env[name]`; `!command`
+  runs through `babashka.process` with the bash-executor shell resolution
+  (bash → sh → cmd on Windows) and a 10s timeout, cached per command string.
+- **Reload semantics**: `load-models-config!` restores the pristine builtin
+  catalogs before composing (pi: builtins are never mutated — composed
+  providers live in the runtime collection), so `/reload` picks up removed
+  providers/models and changed overrides instead of stacking the config layer
+  onto already-composed providers.
+- **Provider ids normalize to keywords**: models.edn keys may be keywords or
+  strings (pi models.json ids are strings) — a string key composes a
+  provider `(get-provider :kw)` can find. Composed custom models are
+  normalized to `Model` records (the registry contract), not bare maps.
 
 ### File & loading
 
@@ -596,7 +633,11 @@ ModelDefinition fields (pi `ModelDefinitionSchema`): `id` (required),
 `name`, `api`, `base-url`, `reasoning`, `thinking-level-map`, `input`
 (`[:text]` default), `cost` (4 rates; **no tiers** — kmet's Model has none),
 `context-window` (default 128000), `max-tokens` (default 16384),
-`headers`, `compat`. ModelOverride is the same minus `id`/`api`/`base-url`.
+`sampling-params` (free-form map merged verbatim into openai-completions
+request bodies **last**, so its keys win over the named fields — pi
+`Object.assign(params, samplingParams)`), `headers`, `compat`. ModelOverride
+is the same minus `id`/`api`/`base-url`; its `sampling-params` merge per key
+with the base model's value (pi `{...base, ...override}`).
 ProviderCompat: kmet accepts the flat compat map it already understands
 (`:supports-reasoning-effort`, `:thinking-format`, `:max-tokens-field`, …)
 — no openRouterRouting/vercelGatewayRouting/chatTemplateKwargs nesting yet.
@@ -846,16 +887,26 @@ Each is a substantial project; do not plan details ahead.
   (`usage-with-cost`).
 - `test/kmet/app/test_auth.clj` — env precedence (auth.edn over env), pi env
   order, configured? semantics.
-- Planned (Phases 6–10):
+- Implemented (Phase 6):
   - `test/kmet/app/test_config_value.clj` — env interpolation, `$$`/`$!`
-    escapes, `!command` (cached, timeout), missing-env → nil,
-    `is-config-value-configured?`, header resolution.
+    escapes, `!command` (cached, timeout, real subprocess), missing-env → nil,
+    `is-config-value-configured?`, header resolution, `-or-throw` messages.
   - `test/kmet/app/test_model_config.clj` — models.edn load (global+project
-    merge), schema validation error paths, `get-error` on parse failure.
+    merge), schema validation error paths (path-style messages), `get-error`
+    on parse failure, non-map root, unknown keys pass.
   - `test/kmet/app/test_provider_composer.clj` — 3-layer composition
     (builtin + config + extension), model overrides (incl. thinking-level-map
     merge), custom model defaults (api/base-url errors, context-window 128000),
-    modelOverrides applied last, auth-header flag, configured-auth-status.
+    modelOverrides applied last, auth-header flag, configured-auth-status,
+    extension replace/base-url-only layers.
+  - `test/kmet/app/test_models.clj` — `load-models-config!` integration:
+    registry recompose, config-only providers, auth hook precedence (credential
+    → configured key → env, no env fallback on unresolvable $ENV), literal-key
+    configured status, parse-failure keeps builtins, composition failure
+    falls back / drops, `get-model-config-error`.
+  - `test/kmet/app/test_llm.clj` — `request-headers` (model + provider
+    configured headers, `:auth-header` Authorization, `$ENV` resolution).
+- Planned (Phases 7–10):
   - `test/kmet/app/test_attribution.clj` — openrouter/nvidia/cloudflare
     headers, opencode session headers, telemetry gate, merge order.
   - `test/kmet/app/test_oauth.clj` — device-code poll state machine

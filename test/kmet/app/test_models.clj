@@ -1,8 +1,12 @@
 (ns kmet.app.test-models
-  "Phase 0: registry semantics, catalog loading, EDN shape, manifest."
+  "Phase 0: registry semantics, catalog loading, EDN shape, manifest;
+   Phase 6: models.edn composition (load-models-config!)."
   (:require [clojure.test :as t]
+            [babashka.fs :as fs]
             [kmet.app.models :as m]
-            [kmet.app.auth :as auth]))
+            [kmet.app.auth :as auth]
+            [kmet.app.config-value :as config-value]
+            [kmet.app.model-config :as model-config]))
 
 ;; ─── Registry semantics (pi: MutableModels) ────────────────────────────────
 
@@ -234,3 +238,131 @@
                                 :context-window 1 :max-tokens 1})]
         (t/is (= 0.0 (:total (m/calculate-cost bare {:input 100 :output 100
                                                      :cache-read 0 :cache-write 0}))))))))
+
+;; ─── models.edn composition (pi: ModelRuntime.rebuildProviders) ────────────
+
+(t/deftest test-load-models-config!
+  (m/load-catalogs!)
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-models-config-" (System/currentTimeMillis)))))
+        global (str tmp "/agent/models.edn")
+        project (str tmp "/project/models.edn")]
+    (fs/create-dirs (fs/parent global))
+    (fs/create-dirs (fs/parent project))
+    (try
+      (spit global "{:providers {:deepseek {:base-url \"https://proxy.example/v1\"
+                                            :model-overrides {\"deepseek-v4-pro\" {:context-window 555}}
+                                            :api-key \"$MODELS_CONFIG_TEST_KEY\"}
+                                 :my-custom {:base-url \"https://custom.example/v1\"
+                                             :api :openai-completions
+                                             :models [{:id \"custom-1\" :reasoning true}]}
+                                 :my-literal {:base-url \"https://literal.example/v1\"
+                                              :api :openai-completions
+                                              :api-key \"sk-literal\"
+                                              :models [{:id \"lit-1\"}]}}}\n")
+      (spit project "{:providers {:my-custom {:name \"Custom Provider\"}}}\n")
+      (with-redefs [model-config/models-edn-paths (fn [] [global project])]
+        (m/load-models-config!))
+      (t/testing "builtin + config providers recomposed; config-only provider added"
+        (t/is (some? (m/get-provider :deepseek)))
+        (t/is (some? (m/get-provider :my-custom)))
+        (t/is (= "Custom Provider" (:name (m/get-provider :my-custom))))
+        (t/is (= 555 (:context-window (m/get-model :deepseek "deepseek-v4-pro"))))
+        (t/is (= "https://proxy.example/v1" (:base-url (m/get-model :deepseek "deepseek-v4-flash"))))
+        (t/is (= ["custom-1"] (mapv :id (m/get-models :my-custom))))
+        (t/is (= :openai-completions (:api (m/get-model :my-custom "custom-1")))))
+      (t/testing "auth hook: models.edn api-key resolves ahead of env (pi order)"
+        (with-redefs [auth/getenv (fn [k] (when (= k "DEEPSEEK_API_KEY") "env-key"))]
+          (t/is (true? (auth/configured? :deepseek)))
+          (t/is (nil? (auth/resolve-api-key :deepseek)) "unresolvable $ENV key → no env fallback (pi resolveConfigValueOrThrow)")
+          (with-redefs [config-value/getenv (fn [k] (when (= k "MODELS_CONFIG_TEST_KEY") "cfg-key"))]
+            (t/is (= "cfg-key" (auth/resolve-api-key :deepseek)))))
+        (with-redefs [auth/getenv (fn [_] nil)
+                      config-value/getenv (fn [_] nil)]
+          (t/is (false? (auth/configured? :my-custom)))
+          (t/is (true? (auth/configured? :my-literal)) "literal api-key counts as configured (pi configuredRequestAuthStatus)")
+          (t/is (= "sk-literal" (auth/resolve-api-key :my-literal))))
+        (t/is (nil? (m/get-model-config-error))))
+      (t/testing "config-only providers without auth stay unavailable (pi getAvailable)"
+        (with-redefs [auth/getenv (fn [_] nil)
+                      config-value/getenv (fn [_] nil)]
+          (t/is (false? (auth/configured? :my-custom)))))
+      (t/testing "configured custom providers surface in get-available / defaults / cost"
+        (with-redefs [auth/getenv (fn [_] nil)
+                      config-value/getenv (fn [_] nil)]
+          (t/is (some #(= "lit-1" (:id %)) (m/get-available)))
+          (t/is (= "lit-1" (:id (m/default-model-for :my-literal))))
+          (t/is (= "lit-1" (m/resolve-config-model {:provider :my-literal})))))
+      (finally
+        (fs/delete-tree tmp)
+        (m/load-catalogs!)))))
+
+(t/deftest test-load-models-config-error-keeps-builtins
+  (m/load-catalogs!)
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-models-config-err-" (System/currentTimeMillis)))))
+        path (str tmp "/models.edn")]
+    (fs/create-dirs tmp)
+    (try
+      (spit path "{:providers {:deepseek {:base-url")
+      (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
+        (m/load-models-config!))
+      (t/testing "parse failure → error surfaced, built-ins kept"
+        (t/is (some? (m/get-model-config-error)))
+        (t/is (= 4 (count (m/get-providers)))))
+      (t/testing "composition failure falls back to the builtin provider"
+        (spit path "{:providers {:broken {:models [{:id \"x\"}]}}}\n")
+        (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
+          (m/load-models-config!))
+        (t/is (some? (m/get-model-config-error)))
+        (t/is (nil? (m/get-provider :broken)) "config-only provider that fails to compose is dropped")
+        (t/is (some? (m/get-provider :deepseek)))
+        (t/is (some? (m/get-model :deepseek "deepseek-v4-flash")) "builtin models kept"))
+      (finally
+        (fs/delete-tree tmp)
+        (m/load-catalogs!)))))
+
+(t/deftest test-load-models-config-reload-stacking
+  ;; Repeated load-models-config! (startup + /reload) must compose over the
+  ;; pristine builtins, never over already-composed providers: a removed
+  ;; provider disappears and a changed override replaces the old one.
+  (m/load-catalogs!)
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-models-reload-" (System/currentTimeMillis)))))
+        path (str tmp "/models.edn")]
+    (fs/create-dirs tmp)
+    (try
+      (spit path "{:providers {:temp-provider {:base-url \"https://temp.example/v1\"
+                                               :api :openai-completions
+                                               :models [{:id \"t1\"}]}
+                               :deepseek {:model-overrides {\"deepseek-v4-pro\" {:context-window 777}}}}}\n")
+      (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
+        (m/load-models-config!))
+      (t/is (some? (m/get-provider :temp-provider)))
+      (t/is (= 777 (:context-window (m/get-model :deepseek "deepseek-v4-pro"))))
+      (t/testing "second load with temp-provider removed and override changed"
+        (spit path "{:providers {:deepseek {:model-overrides {\"deepseek-v4-pro\" {:context-window 888}}}}}\n")
+        (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
+          (m/load-models-config!))
+        (t/is (nil? (m/get-provider :temp-provider)) "removed provider disappears on reload")
+        (t/is (= 888 (:context-window (m/get-model :deepseek "deepseek-v4-pro"))) "override replaces the old value")
+        (t/is (= 4 (count (m/get-providers))) "registry back to builtin count"))
+      (finally
+        (fs/delete-tree tmp)
+        (m/load-catalogs!)))))
+
+(t/deftest test-composed-models-are-records
+  ;; Registry contract: get-models returns Model records. Composed custom
+  ;; models (plain maps from model-from-json) normalize to records.
+  (m/load-catalogs!)
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-models-records-" (System/currentTimeMillis)))))
+        path (str tmp "/models.edn")]
+    (fs/create-dirs tmp)
+    (try
+      (spit path "{:providers {:custom {:base-url \"https://x/v1\" :api :openai-completions
+                                        :models [{:id \"cm\"}]}}}\n")
+      (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
+        (m/load-models-config!))
+      (t/is (= (class (m/get-model :opencode-go "deepseek-v4-flash"))
+               (class (m/get-model :custom "cm")))
+            "custom models are Model records like builtin ones")
+      (finally
+        (fs/delete-tree tmp)
+        (m/load-catalogs!)))))

@@ -17,6 +17,9 @@
             [kmet.app.test-llm]
             [kmet.app.test-models]
             [kmet.app.test-model-resolver]
+            [kmet.app.test-config-value]
+            [kmet.app.test-model-config]
+            [kmet.app.test-provider-composer]
             [kmet.app.test-auth]
             [kmet.app.test-model-data]
             [kmet.app.test-proxy]
@@ -90,6 +93,9 @@
     kmet.app.test-llm
     kmet.app.test-models
     kmet.app.test-model-resolver
+    kmet.app.test-config-value
+    kmet.app.test-model-config
+    kmet.app.test-provider-composer
     kmet.app.test-auth
     kmet.app.test-model-data
     kmet.app.test-proxy

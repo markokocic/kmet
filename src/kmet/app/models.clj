@@ -11,7 +11,9 @@
             [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.config :as cfg]
-            [kmet.app.auth :as auth]))
+            [kmet.app.auth :as auth]
+            [kmet.app.model-config :as model-config]
+            [kmet.app.provider-composer :as composer]))
 
 ;; ─── Records (pi: types.ts Model / models.ts Provider) ─────────────────────
 
@@ -26,6 +28,7 @@
                   cost          ;; {:input $/M :output $/M :cache-read $/M :cache-write $/M}
                   context-window
                   max-tokens
+                  sampling-params ;; optional map merged verbatim into openai-completions request bodies
                   headers       ;; optional static headers map (copilot)
                   compat        ;; map, api-specific; see models.md
                   ])
@@ -38,6 +41,9 @@
                      default-model ;; string id
                      base-url    ;; optional provider-level fallback
                      headers     ;; optional static headers (copilot)
+                     api-key     ;; raw models.edn/extension api-key config value (Phase 6)
+                     auth-header ;; bool: send Authorization: Bearer <key> (models.edn)
+                     configured-headers ;; raw provider-level config headers (models.edn)
                      ])
 
 ;; ─── Cost (pi: models.ts calculateCost, minus tiers/cacheWrite1h) ──────────
@@ -282,6 +288,62 @@
     (and (map? committed)
          (= (:structure-hash committed) (:structure-hash current))
          (= (:files committed) (:files current)))))
+
+;; ─── models.edn composition (pi: ModelRuntime.rebuildProviders) ────────────
+
+(def ^:private composition-errors (atom {}))
+
+(defn load-models-config!
+  "Load models.edn and recompose every provider (pi ModelRuntime.refresh →
+   rebuildProviders): builtin ∪ config provider ids, with the config layer
+   applied. Restores the pristine builtin catalogs first so repeated calls
+   (startup, /reload) never stack the config layer onto already-composed
+   providers (pi: composed providers live in the runtime collection, the
+   builtins map is never mutated — removed providers/models disappear on
+   reload). A models.edn parse/schema failure keeps the built-ins and is
+   surfaced via get-model-config-error; per-provider composition errors
+   fall back to the built-in for that provider (a config-only provider that
+   fails to compose is dropped). Registers the auth config-key source
+   (models.edn/extension :api-key), so auth resolution and availability
+   reflect configured keys."
+  []
+  (load-catalogs!)
+  (model-config/load-config!)
+  (auth/set-config-key-source! (fn [provider-id] (:api-key (get-provider provider-id))))
+  (let [ids (into (sorted-set)
+                  (concat (keys @providers-atom) (model-config/get-provider-ids)))
+        errors (atom {})]
+    (reset! providers-atom
+            (into {}
+                  (keep (fn [pid]
+                          (let [base (get-provider pid)
+                                config (model-config/get-provider pid)]
+                            (try
+                              [pid (-> (composer/compose-model-provider pid base config nil)
+                                       (update :models #(mapv map->Model %))
+                                       map->Provider)]
+                              (catch Exception e
+                                (swap! errors assoc pid (ex-message e))
+                                (when base [pid base])))))
+                        ids)))
+    (reset! composition-errors @errors)
+    @providers-atom))
+
+(defn get-model-config-error
+  "models.edn load + composition error string (pi ModelRuntime.getError):
+   the config parse/schema error plus each per-provider composition failure
+   ('Provider \"X\": <error>'). nil when clean."
+  []
+  (let [config-error (model-config/get-error)
+        comp-errors (->> @composition-errors
+                         (map (fn [[pid err]]
+                                (str "Provider \"" (name pid) "\": " err)))
+                         sort
+                         vec)]
+    (when (or config-error (seq comp-errors))
+      (str (when config-error config-error)
+           (when (and config-error (seq comp-errors)) "\n\n")
+           (str/join "\n\n" comp-errors)))))
 
 ;; ─── Config interop ────────────────────────────────────────────────────────
 

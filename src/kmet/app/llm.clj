@@ -9,6 +9,7 @@
   (:require [clojure.string :as str]
             [cheshire.core :as json]
             [kmet.libs.sse :as sse]
+            [kmet.app.config-value :as config-value]
             [kmet.app.models :as models]
             [kmet.app.proxy :as proxy]
             [kmet.app.session :as session]
@@ -27,12 +28,24 @@
     :anthropic-messages (str base "/v1/messages")
     :google-generative-ai (str base "/models/" model-id ":streamGenerateContent?alt=sse")))
 
-(defn- merge-model-headers
-  "Request headers with the model's static :headers merged in last (pi:
-   model.headers, e.g. COPILOT_STATIC_HEADERS)."
-  [base model]
-  (cond-> base
-    (seq (:headers model)) (into (:headers model))))
+(defn- request-headers
+  "Request headers for one request: BASE (api-specific) merged with the
+   model's :headers (static builtin + models.edn model-level config values)
+   and the provider's :configured-headers, all resolved as config values
+   (literals pass through, $ENV interpolates, !command executes — pi
+   resolveConfiguredModelHeaders; unresolvable values throw, reported via
+   the builder's on-error). A provider with :auth-header adds
+   Authorization: Bearer <api-key> last (pi withConfiguredAuth)."
+  [base model provider api-key]
+  (let [merged (merge base
+                      (config-value/resolve-headers-or-throw
+                       (:headers model)
+                       (str "model \"" (name (:provider model)) "/" (:id model) "\""))
+                      (config-value/resolve-headers-or-throw
+                       (:configured-headers provider)
+                       (str "provider \"" (name (:id provider)) "\"")))]
+    (cond-> merged
+      (:auth-header provider) (assoc "Authorization" (str "Bearer " api-key)))))
 
 ;; ─── Thinking levels (pi: clampThinkingLevel / getSupportedThinkingLevels) ─
 
@@ -475,35 +488,45 @@
 
       :else msg)))
 
+(defn- openai-payload
+  "Request body for an openai-completions request (pi buildParams):
+   model/messages/stream/stream_options, tools, thinking params, the
+   max-tokens field, then the model's :sampling-params merged last so their
+   keys win over the named request fields (pi: Object.assign(params,
+   samplingParams) after everything else — samplingParams is the single
+   source of sampling truth for a model)."
+  [model-record effort messages tools model-id]
+  (let [thinking-params (openai-thinking-params model-record effort)
+        max-tokens-field (max-tokens-key model-record)
+        ;; pi: requiresReasoningContentOnAssistantMessages gates the
+        ;; reasoning_content field (deepseek/opencode-go only)
+        messages-fn (if (:requires-reasoning-content-on-assistant-messages
+                         (:compat model-record))
+                      openai-messages-with-reasoning
+                      openai-messages)]
+    (cond-> {:model model-id
+             :messages (messages-fn messages)
+             :stream true
+             :stream_options {:include_usage true}}
+      (seq tools) (assoc :tools (mapv tools/tool->openai-schema tools))
+      (seq thinking-params) (merge thinking-params)
+      (:max-tokens model-record) (assoc max-tokens-field (:max-tokens model-record))
+      (seq (:sampling-params model-record)) (merge (:sampling-params model-record)))))
+
 (defn- openai-request
-  [{:keys [model-record effort api-key messages tools signal base-url
+  [{:keys [model-record provider-record effort api-key messages tools signal base-url
            idle-timeout-ms on-text on-thinking on-tool-call on-done on-error
            on-usage] :as opts}]
   (future
     (let [model-id (or (:model opts) (:id model-record))
-          thinking-params (openai-thinking-params model-record effort)
-          max-tokens-field (max-tokens-key model-record)
-          ;; pi: requiresReasoningContentOnAssistantMessages gates the
-          ;; reasoning_content field (deepseek/opencode-go only)
-          messages-fn (if (:requires-reasoning-content-on-assistant-messages
-                           (:compat model-record))
-                        openai-messages-with-reasoning
-                        openai-messages)
           url (or base-url (endpoint-url :openai-completions (:base-url model-record) model-id))
-          payload (cond-> {:model model-id
-                           :messages (messages-fn messages)
-                           :stream true
-                           :stream_options {:include_usage true}}
-                    (seq tools) (assoc :tools (mapv tools/tool->openai-schema tools))
-                    (seq thinking-params) (merge thinking-params)
-                    (:max-tokens model-record)
-                    (assoc max-tokens-field (:max-tokens model-record)))]
+          payload (openai-payload model-record effort messages tools model-id)]
       (try
         (let [response (proxy/post-stream url
-                                          {:headers (merge-model-headers
+                                          {:headers (request-headers
                                                      {"Authorization" (str "Bearer " api-key)
                                                       "Content-Type" "application/json"}
-                                                     model-record)
+                                                     model-record provider-record api-key)
                                            :body (json/generate-string payload)
                                            :as :stream
                                            ;; Total request deadline = the idle timeout (pi: SDK
@@ -537,7 +560,7 @@
 ;; ─── Anthropic messages request ────────────────────────────────────────────
 
 (defn- anthropic-request
-  [{:keys [model-record effort api-key messages tools signal base-url
+  [{:keys [model-record provider-record effort api-key messages tools signal base-url
            idle-timeout-ms on-text on-tool-call on-done on-error on-usage]
     :as opts}]
   (future
@@ -551,11 +574,11 @@
                     (:thinking thinking) (assoc :thinking (:thinking thinking)))]
       (try
         (let [response (proxy/post-stream (or base-url (endpoint-url :anthropic-messages (:base-url model-record) model-id))
-                                          {:headers (merge-model-headers
+                                          {:headers (request-headers
                                                      {"x-api-key" api-key
                                                       "anthropic-version" default-anthropic-version
                                                       "Content-Type" "application/json"}
-                                                     model-record)
+                                                     model-record provider-record api-key)
                                            :body (json/generate-string payload)
                                            :as :stream
                                            ;; Total request deadline = the idle timeout (pi: SDK
@@ -645,7 +668,7 @@
         {:thinkingBudget 0}))))
 
 (defn- google-request
-  [{:keys [model-record effort api-key messages tools signal base-url
+  [{:keys [model-record provider-record effort api-key messages tools signal base-url
            idle-timeout-ms on-text on-thinking on-tool-call on-done on-error
            on-usage]
     :as opts}]
@@ -664,10 +687,10 @@
                                                 (mapv tools/tool->google-schema tools)}]))]
       (try
         (let [response (proxy/post-stream (or base-url (endpoint-url :google-generative-ai (:base-url model-record) model-id))
-                                          {:headers (merge-model-headers
+                                          {:headers (request-headers
                                                      {"x-goog-api-key" api-key
                                                       "Content-Type" "application/json"}
-                                                     model-record)
+                                                     model-record provider-record api-key)
                                            :body (json/generate-string payload)
                                            :as :stream
                                            :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
@@ -749,11 +772,15 @@
 
         :else
         (let [api (or (:api-type opts) (:api m))
+              p (models/get-provider provider)
               effort (effective-effort m (:thinking opts))]
           (case api
-            :openai-completions (openai-request (assoc opts :model-record m :effort effort :api-key api-key))
-            :anthropic-messages (anthropic-request (assoc opts :model-record m :effort effort :api-key api-key))
-            :google-generative-ai (google-request (assoc opts :model-record m :effort effort :api-key api-key))
+            :openai-completions (openai-request (assoc opts :model-record m :provider-record p
+                                                       :effort effort :api-key api-key))
+            :anthropic-messages (anthropic-request (assoc opts :model-record m :provider-record p
+                                                          :effort effort :api-key api-key))
+            :google-generative-ai (google-request (assoc opts :model-record m :provider-record p
+                                                         :effort effort :api-key api-key))
             (future
               (when-let [on-error (:on-error opts)]
                 (on-error (str "Unknown api-type: " (name (:api-type opts))))))))))))

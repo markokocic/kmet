@@ -4,10 +4,16 @@
 
    auth.edn shape: {provider {:key \"...\"}} — kmet-internal (pi's auth.json
    shape not required for parity). Loaded at startup (config/load-config);
-   /login and /logout write it under a file lock."
+   /login and /logout write it under a file lock.
+
+   Resolution order (pi composeApiKeyAuth.resolve): auth.edn credential →
+   models.edn/extension :api-key config value (registered via
+   set-config-key-source! by models/load-models-config!) → env vars in pi
+   order."
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [babashka.fs :as fs]
+            [kmet.app.config-value :as config-value]
             [kmet.libs.file-lock :as file-lock]))
 
 ;; ─── Env var table (pi env-api-keys.ts) ────────────────────────────────────
@@ -106,18 +112,41 @@
 
 ;; ─── Resolution (pi: credential-store resolveApiKey) ──────────────────────
 
+(defonce ^:private config-key-source (atom nil))
+
+(defn set-config-key-source!
+  "Register the provider → raw models.edn/extension :api-key config value
+   source (set by models/load-models-config!; nil returns no configured
+   key). Kept behind a hook so auth stays dependency-free of the registry
+   (no require cycle)."
+  [f]
+  (reset! config-key-source f))
+
+(defn- configured-api-key
+  "Raw models.edn/extension :api-key config value for a provider (nil when
+   none configured)."
+  [provider]
+  (when-let [f @config-key-source]
+    (f provider)))
+
 (defn resolve-api-key
-  "API key for a provider: auth.edn credential first, then env vars in pi
-   order (pi: auth.json before env; the x-api-key path skips
-   ANTHROPIC_AUTH_TOKEN — deferred here since kmet only knows
-   ANTHROPIC_API_KEY)."
+  "API key for a provider: auth.edn credential first, then the models.edn/
+   extension :api-key config value (resolved — a configured-but-unresolvable
+   key does NOT fall back to env vars, pi resolveConfigValueOrThrow), then
+   env vars in pi order."
   [provider]
   (or (get-in @auth-atom [provider :key])
-      (some getenv (provider-env-vars provider))))
+      (let [raw (configured-api-key provider)]
+        (if raw
+          (config-value/resolve-config-value raw)
+          (some getenv (provider-env-vars provider))))))
 
 (defn configured?
-  "True when the provider has a credential: auth.edn entry or any env var
-   present (feeds models/get-available)."
+  "True when the provider has a credential: auth.edn entry, a configured
+   models.edn/extension api-key (literal or !command always; $ENV needs the
+   var present), or any env var present (feeds models/get-available)."
   [provider]
   (boolean (or (get-in @auth-atom [provider :key])
+               (when-let [raw (configured-api-key provider)]
+                 (config-value/is-config-value-configured? raw))
                (some getenv (provider-env-vars provider)))))
