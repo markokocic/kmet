@@ -8,6 +8,7 @@
    proxies are transported via curl."
   (:require [babashka.http-client :as http]
             [babashka.process :as proc]
+            [cheshire.core :as json]
             [clojure.string :as str]
             [kmet.libs.process :as process]))
 
@@ -192,13 +193,16 @@
                    (when-let [t (:timeout opts)]
                      (max 1 (quot t 1000)))
                    curl-timeout-seconds)
+        get? (= :get (:method opts))
         args (into (cond-> ["curl" "-sS" "-N" "--fail-with-body"
                             "--noproxy" ""
                             "--proxy" (:url p)]
                      max-time (conj "--max-time" (str max-time)))
                    (concat
                     (mapcat (fn [[k v]] ["-H" (str k ": " v)]) (:headers opts))
-                    ["--data-binary" "@-" url]))]
+                    (if get?
+                      [url]
+                      ["--data-binary" "@-" url])))]
     (if-let [setsid @process/setsid-path]
       (into [setsid] args)
       args)))
@@ -252,3 +256,46 @@
       (curl-post url opts p signal)
       (http/post url (assoc opts :client (java-client p))))
     (http/post url opts)))
+
+(defn request-json
+  "HTTP request expecting a JSON response (pi fetchJson — the OAuth flows).
+   OPTS are babashka.http-client opts (:method defaults to :post, :headers,
+   :body — a string, or a map that is JSON-encoded; :timeout ms). Routes
+   through the proxy selected from env vars like post-stream; signal — cancel
+   atom (curl-backed requests only). Returns {:status n :body parsed-map-or-
+   nil}: non-2xx responses throw ex-info '<status>: <body>' with the raw
+   response body in the message (curl path reports the error body/exit)."
+  [url opts signal]
+  (let [opts (cond-> (assoc opts :url url :throw false)
+               (map? (:body opts)) (update :body json/generate-string))]
+    (if-let [p (proxy-for-url url)]
+      (if (curl-proxy? p)
+        (let [response (curl-post url opts p signal)
+              result @(:proc response)
+              pid (:pid response)
+              text (slurp (:body response))]
+          ;; curl-post tracks the pid for tree-kill cleanup — a one-shot JSON
+          ;; request must untrack it (finish-curl! does this for streams).
+          (when pid (process/untrack-pid! pid))
+          (if (zero? (:exit result))
+            {:status 200
+             :body (when (seq text) (json/parse-string text true))}
+            (throw (ex-info (str "OAuth request failed: "
+                                 (str/trim (or (:err result) text)))
+                            {:type :oauth-http :status (:exit result)}))))
+        (let [response (http/request (assoc opts :client (java-client p)))
+              status (:status response)
+              body (:body response)]
+          (when-not (<= 200 status 299)
+            (throw (ex-info (str status ": " body)
+                            {:type :oauth-http :status status})))
+          {:status status
+           :body (when (seq body) (json/parse-string body true))}))
+      (let [response (http/request opts)
+            status (:status response)
+            body (:body response)]
+        (when-not (<= 200 status 299)
+          (throw (ex-info (str status ": " body)
+                          {:type :oauth-http :status status})))
+        {:status status
+         :body (when (seq body) (json/parse-string body true))}))))

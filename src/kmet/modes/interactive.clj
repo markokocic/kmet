@@ -426,6 +426,182 @@
            :else
            {:role :info :label "Share" :content (str "Share URL: " (:url result))}))))))
 
+;; ─── Login/logout auth-type selection (Phase 10; pi getLoginProviderOptions /
+;;    showLoginAuthTypeSelector / showLoginDialog / showApiKeyLoginDialog) ────
+
+(def ^:private api-key-login-label "Sign in with an API key")
+
+(defn- login-methods
+  "Auth methods a provider offers, oauth first (pi AUTH_TYPE_ORDER)."
+  [p]
+  (if (:oauth p) [:oauth :api-key] [:api-key]))
+
+(defn- oauth-prompt!
+  "Show a dialog for an OAuth prompt and return the entered string (pi
+   AuthPrompt → LoginDialogComponent; the flow runs on a future, so kmet
+   blocks on the overlay promise). :select shows a select-list; :text/
+   :secret/:manual-code show an input dialog. Dialog cancel sets SIGNAL and
+   throws \"Login cancelled\" (the flow's own signal checks stay consistent)."
+  [cs prompt signal]
+  (let [p (promise)
+        finish (fn [v] (deliver p v))
+        cancel (fn [] (reset! signal true) (deliver p ::cancelled))]
+    (case (:type prompt)
+      :select
+      (let [options (:options prompt)]
+        (tui/tui-show-overlay
+         (:tui cs)
+         (dialogs/make-extension-selector
+          (:message prompt)
+          (mapv :label options)
+          (fn [label]
+            (tui/tui-hide-overlay (:tui cs))
+            (finish (or (:id (first (filter #(= label (:label %)) options)))
+                        label)))
+          (fn []
+            (tui/tui-hide-overlay (:tui cs))
+            (cancel))
+          (th/get-current-theme))
+         :width 60 :height (min (count options) 10)))
+      (tui/tui-show-overlay
+       (:tui cs)
+       (dialogs/make-extension-input
+        (:message prompt)
+        (fn [value]
+          (tui/tui-hide-overlay (:tui cs))
+          (finish value))
+        (fn []
+          (tui/tui-hide-overlay (:tui cs))
+          (cancel))
+        (th/get-current-theme))
+       :width 60 :height 9))
+    (tui/tui-request-render (:tui cs))
+    ;; Block until the dialog resolves; a 10-min safety timeout or any
+    ;; non-string delivery (::cancelled) aborts the flow like pi's abort
+    ;; signal.
+    (let [value (deref p 600000 :timeout)]
+      (if (string? value)
+        value
+        (throw (ex-info "Login cancelled" {:type :login-cancelled}))))))
+
+(defn- oauth-notify!
+  "Map an OAuth AuthEvent onto the chat history (pi notifyAuthDialog):
+   :device-code shows the code + verification URI; :auth-url/:info/:progress
+   post info messages. Renders from the flow future — tui-request-render
+   only sets a flag, safe off the input thread."
+  [cs event]
+  (case (:type event)
+    :device-code
+    (ui/chat-history-add-message! (:chat-history cs)
+                                  {:role :info :label "Login"
+                                   :content (str "Open " (:verification-uri event)
+                                                 " and enter the code: " (:user-code event))})
+    :auth-url
+    (ui/chat-history-add-message! (:chat-history cs)
+                                  {:role :info :label "Login"
+                                   :content (str "Open " (:url event)
+                                                 (when (:instructions event)
+                                                   (str "\n" (:instructions event))))})
+    :info
+    (ui/chat-history-add-message! (:chat-history cs)
+                                  {:role :info :label "Login"
+                                   :content (:message event)})
+    :progress
+    (ui/chat-history-add-message! (:chat-history cs)
+                                  {:role :info :label "Login"
+                                   :content (:message event)}))
+  (when-let [tui (:tui cs)]
+    (tui/tui-request-render tui))
+  nil)
+
+(defn- oauth-login!
+  "Run an OAuthAuth login flow on a future (pi showLoginDialog): the
+   interaction prompts via overlays and notifies via the chat history; on
+   success the credential is persisted to auth.edn. Availability refreshes
+   automatically — models/get-available reads the auth atom live, and the
+   oauth credential's :available-model-ids shrink the model list."
+  [cs provider]
+  (let [oauth (:oauth provider)
+        signal (atom false)
+        interaction {:signal signal
+                     :prompt (fn [prompt] (oauth-prompt! cs prompt signal))
+                     :notify (fn [event] (oauth-notify! cs event))}]
+    (future
+      (try
+        (let [credential ((:login oauth) interaction)]
+          (auth/set-oauth-credential! (:id provider) credential)
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        {:role :assistant
+                                         :content (str "Logged in to " (:name provider)
+                                                       ". Credentials saved to auth.edn.")})
+          (when (and (:session-atom cs) (:footer-comp cs) (:footer-provider cs))
+            (update-footer! cs)))
+        (catch Exception e
+          (if (str/includes? (or (ex-message e) "") "Login cancelled")
+            (ui/chat-history-add-message! (:chat-history cs)
+                                          {:role :info :label "Login"
+                                           :content "Login cancelled."})
+            (ui/show-warning! (:chat-history cs)
+                              (str "Failed to login to " (:name provider) ": " (ex-message e)))))
+        (when-let [tui (:tui cs)]
+          (tui/tui-request-render tui))))))
+
+(defn- api-key-login!
+  "The api-key login flow (pi showApiKeyLoginDialog): prompt for the key via
+   the extension-input overlay and save it to auth.edn."
+  [cs p]
+  (tui/tui-show-overlay
+   (:tui cs)
+   (dialogs/make-extension-input
+    (str "API key for " (:name p))
+    (fn [value]
+      (tui/tui-hide-overlay (:tui cs))
+      (let [key (str/trim value)]
+        (if (seq key)
+          (do (auth/set-credential! (:id p) key)
+              (ui/chat-history-add-message! (:chat-history cs)
+                                            {:role :assistant
+                                             :content (str "Saved API key for " (:name p) ".")}))
+          (ui/show-warning! (:chat-history cs)
+                            "No API key entered — nothing saved.")))
+      (tui/tui-request-render (:tui cs)))
+    (fn []
+      (tui/tui-hide-overlay (:tui cs))
+      (tui/tui-request-render (:tui cs)))
+    (th/get-current-theme))
+   :width 60 :height 9)
+  (tui/tui-request-render (:tui cs)))
+
+(defn- show-login-method-selector!
+  "Offer a provider's auth methods (pi showLoginAuthTypeSelector): the oauth
+   subscription label (or \"Sign in with an account\") and \"Sign in with an
+   API key\" in a select-list overlay; a single method starts directly."
+  [cs p methods]
+  (let [oauth-label (or (:login-label (:oauth p)) "Sign in with an account")
+        options (vec (concat (when (some #{:oauth} methods) [oauth-label])
+                             (when (some #{:api-key} methods) [api-key-login-label])))
+        choose (fn [label]
+                 (if (= label oauth-label)
+                   (oauth-login! cs p)
+                   (api-key-login! cs p)))]
+    (if (= 1 (count options))
+      (choose (first options))
+      (do
+        (tui/tui-show-overlay
+         (:tui cs)
+         (dialogs/make-extension-selector
+          (str "Select authentication method for " (:name p) ":")
+          options
+          (fn [label]
+            (tui/tui-hide-overlay (:tui cs))
+            (choose label))
+          (fn []
+            (tui/tui-hide-overlay (:tui cs))
+            (tui/tui-request-render (:tui cs)))
+          (th/get-current-theme))
+         :width 60 :height (min (count options) 10))
+        (tui/tui-request-render (:tui cs))))))
+
 (defn- register-builtin-commands!
   "Register kmet's builtin slash commands. Handlers receive [cs args];
    argument completions feed the editor autocomplete dropdown."
@@ -759,28 +935,13 @@
           (ui/show-warning! (:chat-history cs) (str "Unknown provider: " (name provider)))
 
           :else
-          (let [p (models/get-provider provider)]
-            (tui/tui-show-overlay
-             (:tui cs)
-             (dialogs/make-extension-input
-              (str "API key for " (:name p))
-              (fn [value]
-                (tui/tui-hide-overlay (:tui cs))
-                (let [key (str/trim value)]
-                  (if (seq key)
-                    (do (auth/set-credential! provider key)
-                        (ui/chat-history-add-message! (:chat-history cs)
-                                                      {:role :assistant
-                                                       :content (str "Saved API key for " (:name p) ".")}))
-                    (ui/show-warning! (:chat-history cs)
-                                      "No API key entered — nothing saved.")))
-                (tui/tui-request-render (:tui cs)))
-              (fn []
-                (tui/tui-hide-overlay (:tui cs))
-                (tui/tui-request-render (:tui cs)))
-              (th/get-current-theme))
-             :width 60 :height 9)
-            (tui/tui-request-render (:tui cs))))))})
+          (let [p (models/get-provider provider)
+                methods (login-methods p)]
+            (if (= 1 (count methods))
+              (if (= :oauth (first methods))
+                (oauth-login! cs p)
+                (api-key-login! cs p))
+              (show-login-method-selector! cs p methods))))))})
   (commands/register-command!
    {:name "logout"
     :description "Remove provider authentication"
@@ -793,7 +954,9 @@
     :handler
     (fn [cs args]
       (let [provider (some-> (first (str/split args #"\s+")) str/trim not-empty keyword)
-            configured (auth/get-credentials)]
+            configured (auth/get-credentials)
+            credential-label (fn [cred]
+                               (if (= :oauth (:type cred)) "OAuth credential" "API key"))]
         (cond
           (nil? provider)
           (ui/chat-history-add-message! (:chat-history cs)
@@ -801,7 +964,10 @@
                                          :content (if (seq configured)
                                                     (str "Usage: /logout <provider>"
                                                          "\nSaved credentials: "
-                                                         (str/join ", " (map name (keys configured))))
+                                                         (str/join ", "
+                                                                   (map (fn [[k v]]
+                                                                          (str (name k) " (" (credential-label v) ")"))
+                                                                        configured)))
                                                     "No stored credentials to remove. /logout only removes credentials saved by /login; environment variables are unchanged.")})
 
           (nil? (models/get-provider provider))
@@ -814,11 +980,14 @@
                                                        " — environment variables are unchanged.")})
 
           :else
-          (do (auth/remove-credential! provider)
-              (ui/chat-history-add-message! (:chat-history cs)
-                                            {:role :assistant
-                                             :content (str "Removed stored API key for " (name provider)
-                                                           ". Environment variables are unchanged.")})))))}))
+          (let [kind (credential-label (get configured provider))]
+            (auth/remove-credential! provider)
+            (ui/chat-history-add-message! (:chat-history cs)
+                                          {:role :assistant
+                                           :content (str "Removed stored " kind " for " (name provider)
+                                                         ". Environment variables are unchanged.")})
+            (when (and (:session-atom cs) (:footer-comp cs) (:footer-provider cs))
+              (update-footer! cs))))))}))
 
 (defn- command-not-implemented
   "In-chat reply for pi slash commands kmet does not implement yet."

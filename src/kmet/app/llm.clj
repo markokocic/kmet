@@ -775,7 +775,13 @@
         ;; prepareRequest resolves auth per request) — so a direct call with
         ;; auth.edn / env credentials works, and the builders never see a nil
         ;; key that would produce an empty Authorization header.
-        api-key (or api-key (:api-key auth))]
+        api-key (or api-key (:api-key auth))
+        ;; An oauth credential's to-auth carries a per-credential base-url
+        ;; (pi applyAuth: auth.baseUrl overrides the model's — Copilot's
+        ;; proxy-ep endpoint); an explicit agent-level :base-url wins.
+        opts (cond-> opts
+               (and (:base-url auth) (nil? (:base-url opts)))
+               (assoc :base-url (:base-url auth)))]
     (cond
       (and (nil? api-key) (nil? (:bearer auth)))
       (future

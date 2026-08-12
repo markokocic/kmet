@@ -17,7 +17,7 @@ Reference: `~/src/cvstree/pi/packages/ai/` and
 | Data generation | **`bb generate-models`** bb task (network at generation time; committed data is static) |
 | Wire APIs | **`openai-completions`, `anthropic-messages`, `google-generative-ai`** (no responses/bedrock/vertex/azure yet) |
 | Thinking levels | Adopt pi's 7 levels (`off/minimal/low/medium/high/xhigh/max`) + per-model `thinking-level-map` |
-| OAuth (Phase 10) | GitHub Copilot first (device-code), generic OAuthAuth plumbing; PKCE + loopback callback for anthropic/openai-codex; manual-paste fallback on Termux |
+| OAuth (Phase 10) | **done** — GitHub Copilot device-code (RFC 8628) fully implemented; generic OAuthAuth/device-code/PKCE plumbing; anthropic/openai-codex/openrouter loopback callback deferred with those providers |
 
 ## Architecture overview
 
@@ -822,102 +822,155 @@ and never take the bearer branch (pi: the token is anthropic-provider-specific).
 
 ## Phase 10 — OAuth subscriptions (`kmet.app.oauth`)
 
-**Status: planned.** Port of pi's OAuth infrastructure (`packages/ai/src/auth/`
-+ `bun-oauth.ts`) and its `/login` integration (pi interactive-mode
-`handleLoginCommand` / oauth-selector). kmet's only OAuth-capable catalog
-provider is **github-copilot**; the generic OAuthAuth plumbing is built so
-anthropic (Pro/Max), openai-codex (ChatGPT), openrouter, and future
-subscription providers plug in.
+**Status: implemented.** New `kmet.app.oauth` ns ports the OAuth
+infrastructure (`packages/ai/src/auth/types.ts` + `auth/oauth/device-code.ts`
++ `auth/oauth/github-copilot.ts`) and its `/login` integration (pi
+interactive-mode `handleLoginCommand` / `showLoginAuthTypeSelector` /
+`showLoginDialog`). kmet's only OAuth-capable catalog provider is
+**github-copilot** (device-code, RFC 8628); the generic OAuthAuth record +
+device-code poll flow + PKCE machinery are built so anthropic (Pro/Max),
+openai-codex (ChatGPT), openrouter, and future subscription providers plug
+in.
 
 ### Credential model (pi auth/types.ts + auth-storage.ts)
 
-- `OAuthCredential` — `{:type :oauth :access str :refresh str :expires ms
-  :available-model-ids [str] :enterprise-url str?}` (pi OAuthCredential;
-  expires = `Date.now() + expires_in*1000 - 5min` skew).
-- `auth.edn` gains an oauth entry shape `{provider {:type :oauth :access
+- OAuth credentials are plain maps `{:type :oauth :access str :refresh str
+  :expires ms :available-model-ids [str] :enterprise-url str?}` (pi
+  OAuthCredential; expires = `expires_in*1000 - 5min` skew).
+- `auth.edn` gains the oauth entry shape `{provider {:type :oauth :access
   :refresh :expires ...}}` alongside the existing `{:key ...}` api-key shape;
-  the loader validates both (pi auth-storage parse: api_key needs optional
-  `:key`/`:env`; oauth needs string `:access`/`:refresh` + finite `:expires`).
+  the loader validates both (`auth/valid-credential?`: api_key needs optional
+  `:key`, oauth needs string `:access`/`:refresh` + finite `:expires`) and
+  drops invalid entries on load.
 - `OAuthAuth` record (pi OAuthAuth): `name`, `is-subscription?`, `login-label?`,
   `login` (interaction → credential), `refresh` (credential signal →
   credential), `to-auth` (credential → `{:api-key str :base-url str?}`).
   The `refresh`/`to-auth` split lets the registry own the locked refresh
   pattern (pi Models): refresh produces a credential, `to-auth` derives
   request auth from whatever credential ends up stored.
-- `AuthInteraction` (pi): `prompt` (`:text :secret :select :manual-code`) +
-  `notify` (`:info :auth-url :device-code :progress`) — mapped onto kmet's
-  existing dialog infra (extension-input for secret/manual-code, select-list
-  for `:select`, chat-history/status for notifications).
+- `AuthInteraction` (pi): a map `{:signal cancel-atom :prompt (fn [prompt]
+  → string) :notify (fn [event] nil)}` — `:prompt` types `:text` `:secret`
+  `:select` `:manual-code` map onto kmet's dialog infra (extension-input for
+  text/secret/manual-code, select-list for `:select` — built in
+  interactive.clj's `oauth-prompt!`); `:notify` types `:info` `:auth-url`
+  `:device-code` `:progress` map onto chat-history info messages
+  (`oauth-notify!`).
 
 ### Flows (pi auth/oauth/*.ts)
 
-**Device-code (RFC 8628)** — github-copilot, xai, kimi-coding:
+**Device-code (RFC 8628)** — github-copilot (kmet's only oauth provider):
 
 - `poll-oauth-device-code-flow` (pi device-code.ts): interval (default 5s,
-  min 1s), `slow_down` → +5s (or server-provided interval), expiry deadline,
-  abortable sleep; distinct cancel/timeout/slow-down messages.
+  min 1s), `slow_down` → server-provided interval or +5s, expiry deadline,
+  abortable cancel; distinct cancel/timeout/slow-down messages. The flow
+  takes a `:now` clock fn (test seam) so the poll state machine is tested
+  deterministically.
 - github-copilot specifics (pi github-copilot.ts): device-code start → poll
   access token → copilot token exchange (`/copilot_internal/v2/token`) →
-  `enable-all-github-copilot-models` (policy POST per model) →
-  `fetch-available-copilot-model-ids` (models endpoint, picker/policy flags;
-  individual-account policy fallback). Enterprise domain prompt + host
-  normalization; **`proxy-ep` token claim → API base URL** (`api.<host>`)
-  returned via `to-auth` so copilot requests hit the user's proxy endpoint.
-  Copilot available-model-ids feed the provider's `filter-models` (pi
-  `filterModels`), shrinking the registry to what the account can use.
+  `enable-all-github-copilot-models` (policy POST per model, catalog ids,
+  concurrency 4) → `fetch-available-copilot-model-ids` (models endpoint,
+  picker/policy flags; individual-account policy fallback). Enterprise
+  domain prompt + host normalization; **`proxy-ep` token claim → API base
+  URL** (`api.<host>`) returned via `to-auth` so copilot requests hit the
+  user's proxy endpoint. Copilot available-model-ids feed
+  `models/get-available` (pi `filterModels`), shrinking the registry to
+  what the account can use.
 
-**PKCE + loopback callback** — anthropic, openai-codex, openrouter:
-
-- `generate-pkce` (pi pkce.ts): verifier = 32 random bytes base64url;
-  challenge = SHA-256(verifier) base64url. Babashka: `java.security.SecureRandom`
-  + `MessageDigest` (no Web Crypto in bb).
-- Callback server: minimal one-shot HTTP server on 127.0.0.1 (anthropic port
-  53692, codex 1455; `PI_OAUTH_CALLBACK_HOST` override), `/callback` route
-  with success/error HTML, state check, then token exchange (authorization_code
-  with code_verifier) and refresh (refresh_token). Raced against a
-  `:manual-code` prompt so remote/headless sessions paste the redirect URL
-  (pi `parseAuthorizationInput`: URL / `code#state` / `code=...` forms).
-- **Termux constraint**: no local browser — the loopback server may be
-  unreachable from the phone's browser; the manual-paste path is the primary
-  flow there (open URL on another machine, paste final redirect URL).
-- openrouter: exchanges the code for a **permanent API key** (not expiring
-  tokens) via `oauth.auth`-style `to-auth` returning the key.
+**PKCE** — `generate-pkce` (pi pkce.ts): verifier = 32 random bytes
+base64url; challenge = SHA-256(verifier) base64url (java.security.SecureRandom
++ MessageDigest — no Web Crypto in bb). The loopback-callback machinery
+(anthropic/openai-codex/openrouter) is deferred with those providers — no
+kmet provider uses PKCE yet.
 
 ### Registry + auth integration
 
-- `models/register-oauth!`-style wiring on the Provider record: `:oauth`
-  (OAuthAuth record) sits next to `:api-key`/`:auth-header` (Phase 6);
-  `compose-provider` carries it through the builtin/config/extension layers
-  (pi provider-composer `composeOAuthAuth`; extension `register-provider!`
-  `:oauth` config adapted via pi `adaptOAuth`).
-- `auth/resolve-api-key` — oauth provider: refresh when `expires` within the
-  min-validity window (pi 5 min), then return `access`; `configured?` true
-  when a stored oauth credential exists. `to-auth` base-url override flows
-  through llm like the model base-url (copilot proxy endpoint).
-- Credential ops serialized per provider + state sync after login/logout
-  (pi ModelRuntime `enqueueCredentialOperation` /
-  `synchronizeCredentialState`): recompose provider, refresh models,
-  refresh availability snapshot — so `/login` results apply immediately.
+- `Provider` record gains `:oauth` (OAuthAuth record) next to
+  `:api-key`/`:auth-header` (Phase 6); `load-catalogs!` attaches the builtin
+  github-copilot OAuthAuth (`make-github-copilot-oauth`, model ids thunked
+  from the loaded catalog — pi imports GITHUB_COPILOT_MODELS statically) and
+  installs the auth oauth-source hook; `compose-model-provider` carries it
+  through the builtin/config/extension layers (pi provider-composer
+  `composeOAuthAuth`; extension `register-provider!` `:oauth` config adapted
+  via `adapt-oauth` — the extension declares `:name/:login/:to-auth` fns,
+  `:refresh-token` optional; models.edn cannot express fns so config `:oauth`
+  stays inert).
+- `auth/resolve-provider-auth` — oauth provider: refresh when `expires`
+  within the 5-min validity window, then return `{:api-key access :base-url
+  str}`; `configured?` true when a stored oauth credential exists AND the
+  provider has a registered OAuthAuth (pi checkAuth — a stored credential
+  owns the provider and blocks env discovery). The `to-auth` base-url
+  override flows through llm (`send-message` assocs it onto the request
+  when the caller passed none) — the copilot proxy-ep endpoint.
+- Credential ops serialized per provider (`auth/run-credential-op!`, pi
+  ModelRuntime `enqueueCredentialOperation`): the request-time refresh runs
+  under the per-provider lock with double-checked expiry, so concurrent
+  requests cannot double-refresh a rotated token. `/login` availability
+  updates apply immediately — `models/get-available` reads the auth atom
+  live and filters by the account's `:available-model-ids`.
+- `get-provider-auth-status` reports `{:source :oauth}` for stored oauth
+  credentials (with a registered OAuthAuth).
 
 ### `/login` `/logout` UI (pi interactive-mode)
 
 - Provider list grows an auth-type dimension: each provider offers
   `:oauth` and/or `:api-key` login methods (pi `getLoginProviderOptions`;
-  AUTH_TYPE_ORDER oauth first). `/login <provider>` with a single method
-  starts it directly; ambiguous → a selector listing "Sign in with an
-  account" (oauth, subscription label) vs "Sign in with an API key".
-- OAuth dialog shows `:auth-url` (open browser + instructions) or
-  `:device-code` (user code + verification URI) notifications, then waits
-  on the callback/manual code; `:progress` updates stream into the dialog.
-- `/logout` lists stored credentials by type (api-key vs oauth) and removes
-  the auth.edn entry; env vars untouched (pi semantics).
+  AUTH_TYPE_ORDER oauth first — `login-methods`). `/login <provider>` with a
+  single method starts it directly; ambiguous → a select-list selector
+  listing the oauth subscription label (or "Sign in with an account") vs
+  "Sign in with an API key" (`show-login-method-selector!`).
+- OAuth flow runs on a future (`oauth-login!`); `:device-code` shows the
+  user code + verification URI as a chat-history info message, `:progress`
+  streams, the enterprise-domain/text prompts use the extension-input
+  overlay and `:select` the select-list (`oauth-prompt!`). Escape cancels a
+  prompt (sets the flow signal → "Login cancelled"); the device poll
+  itself runs to completion or its expiry deadline.
+- `/logout` lists stored credentials by type (api-key vs OAuth credential)
+  and removes the auth.edn entry; env vars untouched (pi semantics).
+
+**Deviations from the plan sketch**:
+
+- **No loopback callback server** — only `generate-pkce` is built; the
+  callback machinery (ports 53692/1455, `/callback` route, `code#state` /
+  `code=...` manual-paste race) lands with the PKCE providers. kmet's only
+  OAuth provider uses device-code, which needs no callback.
+- **No `models/register-oauth!`** — the builtin OAuthAuth is attached in
+  `load-catalogs!` (`builtin-oauth`) instead of a register fn.
+- **`filter-models` is not a Provider field** — the available-model-ids
+  shrink lives inline in `models/get-available` (pi puts `filterModels` on
+  the provider record).
+- **No `composeOAuthAuth` header wrap** — pi wraps `toAuth` with configured
+  headers + `:auth-header`; kmet skips it because `llm/request-headers`
+  already merges configured headers and `Authorization: Bearer` at request
+  time (same observable result).
+- **No recompose on login/logout** — pi's `synchronizeCredentialState`
+  recomposes the provider and refreshes models; kmet's provider record
+  doesn't change and `models/get-available` reads the auth atom live, so
+  availability updates immediately without recomposition.
+- **Refresh failure resolves nil** — pi throws `ModelsError("oauth",
+  "OAuth refresh failed…")` surfaced as a stream error; kmet's sync
+  `resolve-provider-auth` catches and returns nil → the request reports the
+  standard "No API key" error. The stored credential is preserved for
+  retry (pi semantics).
+- **OAuth credentials are plain maps, not records** — stored directly in
+  auth.edn (EDN-serializable); pi uses a typed `OAuthCredential` object.
+- **`oauth-prompt!` blocks the flow future** on the overlay promise (10-min
+  safety timeout) instead of pi's async prompt raced against an abort
+  signal — same observable behavior. Escape cancels a pending prompt, but
+  the device *poll* runs to its expiry deadline (no mid-poll cancel in
+  kmet's chat-message flow).
+- **Request-time refresh gets a throwaway signal atom** —
+  `resolve-provider-auth` is sync and has no request signal to thread;
+  refresh HTTP calls carry their own timeouts.
+- **`adapt-oauth` ignores `modifyModels`** — pi's `ExtensionOAuthConfig`
+  supports it; nothing in kmet uses it yet.
 
 ### Scope cuts (first pass)
 
-- Implement **github-copilot device-code fully** (kmet's only oauth provider)
-  + the generic OAuthAuth/device-code/pkce/auth.edn plumbing.
-- Anthropic/openai-codex/openrouter PKCE + callback: build the shared
-  machinery; per-provider flows land with those providers (later phase).
+- **github-copilot device-code is fully implemented** (kmet's only oauth
+  provider) + the generic OAuthAuth/device-code/pkce/auth.edn plumbing.
+- Anthropic/openai-codex/openrouter PKCE + loopback callback: `generate-pkce`
+  built (no provider uses it yet); the callback server and per-provider
+  flows land with those providers (later phase).
 - radius / azure / other subscription flows deferred with their providers.
 
 ## Deferred (re-evaluate when reached)
@@ -985,12 +1038,20 @@ Each is a substantial project; do not plan details ahead.
   anthropic-auth-headers (bearer vs x-api-key, provider-scoped), send-message
   proceeds past the key check for :anthropic with AUTH_TOKEN while other
   providers still reject.
-- Planned (Phase 10):
-  - `test/kmet/app/test_oauth.clj` — device-code poll state machine
-    (interval, slow_down, expiry, cancel), PKCE verifier/challenge, auth.edn
-    oauth shape validation, credential refresh on expiry (5-min skew),
-    copilot available-model-ids filtering + proxy-ep base-url, `/login`
-    auth-type selection, serialized credential ops.
+- Implemented (Phase 10): `test/kmet/app/test_oauth.clj` — device-code poll
+  state machine (interval, pending, server-interval and +5s slow_down,
+  wait-before-first-poll, expiry timeout, slow-down timeout message, cancel
+  mid-flow, failed; deterministic via the `:now` clock seam), PKCE
+  verifier/challenge, copilot base-url derivation (proxy-ep, enterprise,
+  default), copilot to-auth, the mocked login flow (enterprise prompt,
+  device-code notify, enable-all with catalog ids, available-model-ids,
+  invalid-domain error), auth.edn oauth shape validation + persistence
+  (invalid entries dropped on load), credential refresh on expiry with the
+  5-min skew and double-checked locking, refresh failure (nil resolution,
+  stored credential preserved), stored-oauth-without-auth not configured,
+  serialized credential ops (order + failed-op chain survival),
+  available-model-ids filtering, `/login` auth-type selection (single-method
+  direct start, method selector choose paths), `/logout` credential kinds.
 - Generator script: `bb generate-models` must be deterministic (sorted output)
   and fail loudly on validation errors; run once and commit output.
 - Final gate unchanged: `bb lint` + `bb format-check` + `bb test` +
@@ -1013,8 +1074,9 @@ Each is a substantial project; do not plan details ahead.
   `get-provider-base-url`, `get-provider-api-type` are removed — loop.clj
   resolves base-url/api-type from the registry via `resolve-endpoint`
   (model :api/:base-url; nil for unknown providers → error).
-- Existing `auth.edn` entries keep working (same shape); Phase 10 adds an
-  `{:type :oauth ...}` variant alongside the api-key `{:key ...}` shape.
+- Existing `auth.edn` entries keep working (same shape); oauth credentials
+  add a `{:type :oauth ...}` variant alongside the api-key `{:key ...}`
+  shape (Phase 10); invalid entries are dropped on load.
 - models.edn (Phase 6) is the user-config layer over the registry: provider
   config wins over the catalog for the fields it sets; model overrides are
   the topmost layer over built-in models. It does not replace `settings.edn`

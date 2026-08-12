@@ -26,7 +26,9 @@ with the agent having access to filesystem tools (read, write, edit, bash, grep,
 - [Babashka](https://babashka.org/) ≥ 1.12.215 (bundles JLine 4.3.1)
 - API keys: `OPENCODE_API_KEY` (opencode-go/opencode), `DEEPSEEK_API_KEY`,
   `COPILOT_GITHUB_TOKEN` (or `/login` inside kmet to store `auth.edn`
-  credentials; `/logout` removes them)
+  credentials; `/logout` removes them). GitHub Copilot also supports an
+  OAuth device-code login (`/login github-copilot` → "Sign in with an
+  account") for subscription plans.
 
 ## Usage
 

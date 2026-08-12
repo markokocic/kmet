@@ -6,6 +6,7 @@
   (:require [clojure.test :as t]
             [clojure.string :as str]
             [kmet.app.config-value :as config-value]
+            [kmet.app.models :as models]
             [kmet.app.provider-composer :as pc]))
 
 (defn- base-model
@@ -268,3 +269,59 @@
                    (pc/validate-extension-provider
                     :custom nil nil
                     {:api :openai-completions :models [{:id "m"}]})))))
+
+;; ─── Extension oauth adaptation (Phase 10; pi adaptOAuth) ──────────────────
+
+(t/deftest test-adapt-oauth
+  (let [login (fn [_] {:type :oauth :access "a" :refresh "r" :expires 1})
+        to-auth (fn [cred] {:api-key (:access cred)})
+        refresh-token (fn [cred _] cred)]
+    (t/testing "a map config adapts to an OAuthAuth record"
+      (let [oauth (pc/adapt-oauth {:name "Ext OAuth" :login login :to-auth to-auth})
+            cred {:type :oauth :access "a" :refresh "r" :expires 1}]
+        (t/is (instance? kmet.app.oauth.OAuthAuth oauth))
+        (t/is (= "Ext OAuth" (:name oauth)))
+        (t/is (= login (:login oauth)))
+        (t/is (= to-auth (:to-auth oauth)))
+        (t/is (= cred ((:refresh oauth) cred (atom false)))
+              "refresh-token absent → credential passes through (pi default)")))
+    (t/testing "refresh-token wires to :refresh"
+      (let [oauth (pc/adapt-oauth {:name "Ext" :login login :to-auth to-auth
+                                   :refresh-token refresh-token})]
+        (t/is (= refresh-token (:refresh oauth)))))
+    (t/testing "non-map config → nil"
+      (t/is (nil? (pc/adapt-oauth nil)))
+      (t/is (nil? (pc/adapt-oauth "radius")))))
+  (t/testing "compose-model-provider carries the builtin oauth through layers"
+    (let [base (models/map->Provider
+                {:id :copilot :name "Copilot" :models [] :oauth :builtin-oauth})
+          composed (pc/compose-model-provider :copilot base nil nil)]
+      (t/is (= :builtin-oauth (:oauth composed))))
+    (let [extension-oauth {:name "Ext" :login (fn [_] {}) :to-auth (fn [c] {:api-key (:access c)})}
+          base (models/map->Provider
+                {:id :copilot :name "Copilot" :models [] :oauth :builtin-oauth})
+          composed (pc/compose-model-provider :copilot base nil {:oauth extension-oauth})]
+      (t/is (instance? kmet.app.oauth.OAuthAuth (:oauth composed))
+            "extension oauth replaces the builtin")
+      (t/is (= "Ext" (:name (:oauth composed)))))))
+
+(t/deftest test-adapt-oauth-validation
+  (t/testing "missing login/to-auth throws (eager registration check)"
+    (t/is (thrown-with-msg? Exception #"requires :login and :to-auth"
+                            (pc/adapt-oauth {:name "Broken"})))
+    (t/is (thrown-with-msg? Exception #"requires :login and :to-auth"
+                            (pc/adapt-oauth {:name "Broken" :login (fn [_] {})}))))
+  (t/testing "a valid config passes"
+    (t/is (some? (pc/adapt-oauth {:name "Ok" :login (fn [_] {})
+                                  :to-auth (fn [c] {:api-key (:access c)})})))))
+
+(t/deftest test-validate-extension-provider-oauth
+  (t/testing "broken oauth config fails eager validation"
+    (t/is (thrown-with-msg? Exception #"requires :login and :to-auth"
+                            (pc/validate-extension-provider
+                             :custom nil nil {:oauth {:name "Broken"}}))))
+  (t/testing "valid oauth config passes"
+    (t/is (nil? (pc/validate-extension-provider
+                 :custom nil nil
+                 {:oauth {:name "Ok" :login (fn [_] {})
+                          :to-auth (fn [c] {:api-key (:access c)})}})))))

@@ -15,7 +15,10 @@
    headers after them, so a provider-level header wins over a colliding
    model-level one (pi lets the model win). /reload recomposes, so the
    observable behavior is equivalent."
-  (:require [kmet.app.config-value :as cv]))
+  (:require [kmet.app.config-value :as cv]
+            [kmet.app.oauth :as oauth]))
+
+(declare adapt-oauth)
 
 (defn- as-keyword
   "Keyword for a keyword or string value."
@@ -173,11 +176,35 @@
   "Run the extension layer composition eagerly (pi validateExtensionProvider):
    applies models.edn + the extension onto BASE's models so structural errors
    (missing api/base-url, invalid model fields) throw before a broken
-   registration touches stored state. kmet has no streamSimple, so there is
-   no separate api-requirement check."
+   registration touches stored state, and adapts the extension :oauth config
+   (a missing :login/:to-auth fn throws here too). kmet has no streamSimple,
+   so there is no separate api-requirement check."
   [provider-id base models-config extension]
   (apply-extension provider-id (apply-models-json provider-id (:models base) models-config) extension)
+  (adapt-oauth (:oauth extension))
   nil)
+
+(defn adapt-oauth
+  "Adapt an extension :oauth config map into an OAuthAuth record (pi
+   adaptOAuth): the extension declares :name/:login/:to-auth (fns) and
+   optionally :is-subscription?/:login-label/:refresh-token. kmet's
+   OAuthAuth is a record; the extension config is plain data. Throws on a
+   config missing the required fns — validate-extension-provider runs the
+   composition eagerly, so a broken registration fails at register time
+   instead of an NPE at login time."
+  [config]
+  (when (map? config)
+    (when-not (and (fn? (:login config)) (fn? (:to-auth config)))
+      (throw (ex-info "Provider oauth config requires :login and :to-auth functions"
+                      {:type :model-config-invalid})))
+    (oauth/map->OAuthAuth
+     {:name (or (:name config) "OAuth")
+      :is-subscription? (:is-subscription? config)
+      :login-label (:login-label config)
+      :login (:login config)
+      :refresh (or (:refresh-token config)
+                   (fn [credential _signal] credential))
+      :to-auth (:to-auth config)})))
 
 (defn compose-model-provider
   "Compose the builtin + models.edn + extension layers into a provider map
@@ -209,6 +236,10 @@
             :configured-headers configured-headers
             :api-key api-key
             :auth-header auth-header
+            ;; pi composeOAuthAuth: extension oauth adapted, else the builtin's
+            ;; OAuthAuth (models.edn cannot express fns, so config :oauth is
+            ;; inert — "radius" and future flows land with their providers)
+            :oauth (or (adapt-oauth (:oauth extension)) (:oauth base))
             :api-types (set (map :api models))
             :models models}
            (select-keys base [:env-vars :default-model]))))

@@ -23,6 +23,7 @@
             [kmet.app.test-model-config]
             [kmet.app.test-provider-composer]
             [kmet.app.test-auth]
+            [kmet.app.test-oauth]
             [kmet.app.test-model-data]
             [kmet.app.test-proxy]
             [kmet.app.test-loop]
@@ -100,6 +101,7 @@
     kmet.app.test-model-config
     kmet.app.test-provider-composer
     kmet.app.test-auth
+    kmet.app.test-oauth
     kmet.app.test-model-data
     kmet.app.test-proxy
     kmet.app.test-loop

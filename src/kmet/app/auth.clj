@@ -71,15 +71,31 @@
   []
   (str (fs/path (System/getProperty "user.home") ".kmet" "agent" "auth.edn")))
 
+(defn valid-credential?
+  "Validate an auth.edn entry (pi auth-storage parse: non-object entries
+   throw): the api-key shape {:key string?} (key optional — pi
+   ApiKeyCredential.key is optional) or the oauth shape {:type :oauth with
+   string :access/:refresh and a finite number :expires}. Non-map entries
+   are invalid — a stored entry is always a map."
+  [credential]
+  (and (map? credential)
+       (if (= :oauth (:type credential))
+         (and (string? (:access credential))
+              (string? (:refresh credential))
+              (number? (:expires credential))
+              (Double/isFinite (:expires credential)))
+         (or (nil? (:key credential)) (string? (:key credential))))))
+
 (defn- read-auth-file
-  "Parse auth.edn as a map, nil when missing, malformed, or not a map
-   (non-map content is replaced on the next write — pi: SettingsStorage
-   parses to a map or starts fresh)."
+  "Parse auth.edn as a map, nil when missing or malformed. Entries failing
+   valid-credential? are dropped (pi auth-storage parse throws — kmet keeps
+   startup lenient, the invalid entry just never resolves)."
   []
   (let [f (fs/file (auth-file-path))]
     (when (fs/exists? f)
       (try (let [parsed (edn/read-string (slurp f))]
-             (when (map? parsed) parsed))
+             (when (map? parsed)
+               (into {} (filter (fn [[_ v]] (valid-credential? v))) parsed)))
            (catch Exception _ nil)))))
 
 (defn- pretty-auth
@@ -122,6 +138,31 @@
     (reset! auth-atom auth)
     auth))
 
+(defn stored-credential
+  "The raw auth.edn entry for a provider — the api-key shape {:key ...} or
+   the oauth shape {:type :oauth ...} — or nil."
+  [provider]
+  (get @auth-atom provider))
+
+(defn stored-oauth-credential
+  "The stored oauth credential map for a provider, or nil."
+  [provider]
+  (let [c (stored-credential provider)]
+    (when (and (map? c) (= :oauth (:type c))) c)))
+
+(defn set-oauth-credential!
+  "Store an OAuth credential (map with :type :oauth, string :access/:refresh,
+   finite number :expires — pi OAuthCredential) for PROVIDER in auth.edn and
+   refresh the auth atom. Throws on an invalid shape. Returns the new auth
+   map."
+  [provider credential]
+  (when-not (valid-credential? credential)
+    (throw (ex-info (str "Invalid OAuth credential for " (name provider))
+                    {:type :oauth-credential-invalid})))
+  (let [auth (update-auth! #(assoc % provider credential))]
+    (reset! auth-atom auth)
+    auth))
+
 (defn remove-credential!
   "Remove PROVIDER's auth.edn entry (no-op when absent) and refresh the auth
    atom. Returns the new auth map."
@@ -155,25 +196,110 @@
   (when-let [f @config-key-source]
     (f provider)))
 
-(defn resolve-provider-auth
-  "Resolved request auth for a provider (pi composeApiKeyAuth.resolve + the
-   anthropic provider resolve): {:api-key str} for the x-api-key paths, or
-   {:bearer str} when ANTHROPIC_AUTH_TOKEN wins (anthropic). Exact pi order:
-   auth.edn credential → models.edn/extension configured key (a configured
-   key present but unresolvable blocks the rest, pi resolveConfigValueOrThrow)
-   → ANTHROPIC_AUTH_TOKEN → oauth/api env vars (api-key-env-vars, AUTH_TOKEN
-   skipped). nil when nothing is configured."
+;; ─── OAuth (Phase 10) ─────────────────────────────────────────────────────
+;; The OAuthAuth record for a provider lives on the Provider record; auth
+;; reads it through a hook (like config-key-source) to stay dependency-free
+;; of the registry.
+
+(defonce ^:private oauth-source (atom nil))
+
+(defn set-oauth-source!
+  "Register the provider → OAuthAuth record source (set by
+   models/load-catalogs!; nil returns no oauth). Kept behind a hook so auth
+   stays dependency-free of the registry."
+  [f]
+  (reset! oauth-source f))
+
+(defn- provider-oauth
+  "The OAuthAuth record for a provider, or nil."
   [provider]
-  (or (when-let [k (get-in @auth-atom [provider :key])]
+  (when-let [f @oauth-source]
+    (f provider)))
+
+(def ^:private oauth-min-validity-ms
+  "Refresh when the token has less than this much validity left (pi
+   DEFAULT_OAUTH_MINIMUM_VALIDITY_MS = 5 min)."
+  (* 5 60 1000))
+
+(defn- oauth-fresh?
+  "True when an oauth credential needs no refresh (pi expiresSoon: now +
+   5 min < expires)."
+  [credential]
+  (and (number? (:expires credential))
+       (< (+ (System/currentTimeMillis) oauth-min-validity-ms)
+          (:expires credential))))
+
+(defonce ^:private credential-op-tails (atom {}))
+
+(defn run-credential-op!
+  "Serialize credential ops per provider (pi ModelRuntime
+   enqueueCredentialOperation): TASK runs after previously queued ops for
+   PROVIDER-ID settle. Returns a future delivering TASK's result — deref
+   rethrows on failure; the stored tail swallows errors so the chain
+   survives a failed op. Used by the oauth refresh path (double-checked
+   locking) and available to extensions for credential mutations."
+  [provider-id task]
+  (let [prev (get @credential-op-tails provider-id)
+        op (future
+             (when prev @prev)
+             (task))]
+    (swap! credential-op-tails assoc provider-id
+           (future (try @op (catch Exception _ nil))))
+    op))
+
+(defn- resolve-oauth-auth
+  "Resolved request auth from a stored oauth credential (pi
+   resolveStoredOAuth): {:api-key access :base-url str?} without a refresh
+   when the token is fresh; otherwise refresh under the per-provider lock
+   (double-checked: another request may have rotated it meanwhile), persist
+   the rotated credential, and derive auth from it. nil when the provider
+   has no stored oauth credential or no registered OAuthAuth. A refresh
+   failure resolves nil (the request reports the standard no-auth error; pi
+   surfaces 'OAuth refresh failed' as a stream error)."
+  [provider-id]
+  (when-let [cred (stored-oauth-credential provider-id)]
+    (when-let [oauth (provider-oauth provider-id)]
+      (if (oauth-fresh? cred)
+        ((:to-auth oauth) cred)
+        (let [op (run-credential-op!
+                  provider-id
+                  (fn []
+                    (let [current (stored-oauth-credential provider-id)]
+                      (if (oauth-fresh? current)
+                        ((:to-auth oauth) current)
+                        (let [rotated ((:refresh oauth) current (atom false))]
+                          (set-oauth-credential! provider-id rotated)
+                          ((:to-auth oauth) rotated))))))]
+          (try @op
+               (catch Exception _ nil)))))))
+
+(defn resolve-provider-auth
+  "Resolved request auth for a provider (pi composeApiKeyAuth.resolve +
+   resolveStoredOAuth + the anthropic provider resolve): {:api-key str} for
+   the x-api-key paths, {:bearer str} when ANTHROPIC_AUTH_TOKEN wins
+   (anthropic), or {:api-key str :base-url str} for an oauth credential (the
+   base-url is the per-credential endpoint, e.g. Copilot's proxy-ep). Exact
+   pi order: stored oauth credential (refreshed when expiring; a stored
+   oauth credential without a registered OAuthAuth resolves nil and blocks
+   the env fallback) → auth.edn api-key → models.edn/extension configured
+   key (a configured key present but unresolvable blocks the rest, pi
+   resolveConfigValueOrThrow) → ANTHROPIC_AUTH_TOKEN → oauth/api env vars
+   (api-key-env-vars, AUTH_TOKEN skipped). nil when nothing is configured."
+  [provider]
+  (or (resolve-oauth-auth provider)
+      (when-let [k (get-in @auth-atom [provider :key])]
         {:api-key k})
-      (let [raw (configured-api-key provider)]
-        (if raw
-          (when-let [k (config-value/resolve-config-value raw)]
-            {:api-key k})
-          (or (when-let [t (anthropic-auth-token provider)]
-                {:bearer t})
-              (when-let [k (some getenv (api-key-env-vars provider))]
-                {:api-key k}))))))
+      ;; pi: a stored credential owns the provider — no env fallback when the
+      ;; stored oauth has no registered auth handler
+      (when-not (stored-oauth-credential provider)
+        (let [raw (configured-api-key provider)]
+          (if raw
+            (when-let [k (config-value/resolve-config-value raw)]
+              {:api-key k})
+            (or (when-let [t (anthropic-auth-token provider)]
+                  {:bearer t})
+                (when-let [k (some getenv (api-key-env-vars provider))]
+                  {:api-key k})))))))
 
 (defn resolve-api-key
   "API key for a provider — the api-key view of resolve-provider-auth
@@ -188,11 +314,19 @@
   (boolean (some getenv (provider-env-vars provider))))
 
 (defn configured?
-  "True when the provider has a credential: auth.edn entry, a configured
-   models.edn/extension api-key (literal or !command always; $ENV needs the
-   var present), or any env var present (feeds models/get-available)."
+  "True when the provider has a credential: auth.edn entry — an api-key
+   always, an oauth credential only when the provider has a registered
+   OAuthAuth (pi checkAuth: a stored oauth credential without auth.oauth is
+   not configured; the stored credential blocks env discovery) — a
+   configured models.edn/extension api-key (literal or !command always;
+   $ENV needs the var present), or any env var present (feeds
+   models/get-available). Never refreshes or executes commands."
   [provider]
-  (boolean (or (get-in @auth-atom [provider :key])
-               (when-let [raw (configured-api-key provider)]
-                 (config-value/is-config-value-configured? raw))
-               (env-key-present? provider))))
+  (let [stored (stored-credential provider)]
+    (boolean
+     (cond
+       (stored-oauth-credential provider) (some? (provider-oauth provider))
+       stored true
+       :else (or (when-let [raw (configured-api-key provider)]
+                   (config-value/is-config-value-configured? raw))
+                 (env-key-present? provider))))))

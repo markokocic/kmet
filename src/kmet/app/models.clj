@@ -14,6 +14,7 @@
             [kmet.app.auth :as auth]
             [kmet.app.config-value :as config-value]
             [kmet.app.model-config :as model-config]
+            [kmet.app.oauth :as oauth]
             [kmet.app.provider-composer :as composer]))
 
 ;; ─── Records (pi: types.ts Model / models.ts Provider) ─────────────────────
@@ -45,6 +46,7 @@
                      api-key     ;; raw models.edn/extension api-key config value (Phase 6)
                      auth-header ;; bool: send Authorization: Bearer <key> (models.edn)
                      configured-headers ;; raw provider-level config headers (models.edn)
+                     oauth       ;; OAuthAuth record (Phase 10; github-copilot)
                      ])
 
 ;; ─── Cost (pi: models.ts calculateCost, minus tiers/cacheWrite1h) ──────────
@@ -128,10 +130,34 @@
     (or (get-model prov-id (:default-model p))
         (first (:models p)))))
 
+(defn- oauth-available-model-ids
+  "Available model ids from the provider's stored oauth credential (pi
+   filterModels: credential.availableModelIds must be a string array), nil
+   when absent or malformed — the full model list passes through."
+  [provider-id]
+  (let [cred (get-in (auth/get-credentials) [provider-id])]
+    (when (and (map? cred) (= :oauth (:type cred))
+               (vector? (:available-model-ids cred))
+               (every? string? (:available-model-ids cred)))
+      (:available-model-ids cred))))
+
+(defn- provider-models-with-oauth
+  "A provider's models filtered to what the account can use: when a stored
+   oauth credential carries :available-model-ids, only those models are
+   returned (pi getAvailable → provider.filterModels — Copilot login
+   shrinks the registry to the account's plans)."
+  [p]
+  (if-let [ids (oauth-available-model-ids (:id p))]
+    (let [available (set ids)]
+      (filterv #(contains? available (:id %)) (:models p)))
+    (:models p)))
+
 (defn get-available
   "Models whose provider has complete auth (pi: Models.getAvailable) —
-   auth.edn credential or env var per the kmet.app.auth table. With PROV-ID,
-   only that provider's available models."
+   auth.edn credential (api-key or oauth), configured key, or env var per
+   the kmet.app.auth table; oauth credentials additionally filter by the
+   account's :available-model-ids. With PROV-ID, only that provider's
+   available models."
   ([]
    (get-available nil))
   ([prov-id]
@@ -140,7 +166,7 @@
                    (when-let [p (get-provider prov-id)] [p])
                    (get-providers))
                :when (and p (auth/configured? (:id p)))
-               m (:models p)]
+               m (provider-models-with-oauth p)]
            m))))
 
 ;; ─── Catalog loading (pi: generated providers/data/*.json) ─────────────────
@@ -149,6 +175,19 @@
   "Directory of committed provider catalog EDN files (resolved from the
    project root — the bb tasks and the app always run from there)."
   (str (fs/path (fs/cwd) "src" "kmet" "app" "model_data")))
+
+(defn- builtin-oauth
+  "The OAuthAuth record for a builtin catalog provider (pi: the provider
+   factories declare auth.oauth — kmet attaches them at catalog load).
+   model-ids is a thunk over the provider's loaded models so the enable-all
+   login step has the catalog list (pi imports GITHUB_COPILOT_MODELS
+   statically)."
+  [provider]
+  (case (:id provider)
+    :github-copilot
+    (oauth/make-github-copilot-oauth
+     (fn [] (mapv :id (:models provider))))
+    nil))
 
 (defn- read-edn-file
   "Parse an EDN file as data, nil when unreadable."
@@ -237,11 +276,15 @@
    generated providers at creation)."
   []
   (auth/set-config-key-source! (fn [provider-id] (:api-key (get-provider provider-id))))
+  (auth/set-oauth-source! (fn [provider-id] (:oauth (get-provider provider-id))))
   (if (fs/exists? model-data-dir)
     (let [providers (into {}
                           (for [f (catalog-files)
                                 :let [data (load-catalog-file f)]]
-                            [(:id (:provider data)) (catalog->provider data)]))]
+                            [(:id (:provider data)) (catalog->provider data)]))
+          providers (into {}
+                          (for [[pid p] providers]
+                            [pid (assoc p :oauth (builtin-oauth p))]))]
       (reset! builtins-atom providers)
       (reset! providers-atom providers)
       providers)
@@ -441,21 +484,28 @@
 
 (defn get-provider-auth-status
   "Auth status for a provider (pi ModelRegistry.getProviderAuthStatus):
-   {:configured bool :source kw} — auth.edn credential, then the
-   models.edn/extension api-key config (configuredRequestAuthStatus — a
-   configured-but-unresolvable key reports {:configured false}, blocking the
-   env fallback like resolve), then any other configured auth (env vars,
-   native provider keys — pi's snapshot auth check). :source ∈ :stored |
-   :models-json-key | :models-json-command | :environment | :fallback."
+   {:configured bool :source kw} — a stored oauth credential, then the
+   auth.edn api-key, then the models.edn/extension api-key config
+   (configuredRequestAuthStatus — a configured-but-unresolvable key reports
+   {:configured false}, blocking the env fallback like resolve), then any
+   other configured auth (env vars, native provider keys — pi's snapshot
+   auth check). :source ∈ :oauth | :stored | :models-json-key |
+   :models-json-command | :environment | :fallback."
   [provider-id]
-  (let [stored? (some? (get-in (auth/get-credentials) [provider-id :key]))
+  (let [stored (get-in (auth/get-credentials) [provider-id])
         provider (get-provider provider-id)
         configured (when provider
                      (composer/configured-request-auth-status
                       (model-config/get-provider provider-id)
                       (get @extension-providers provider-id)))]
     (cond
-      stored? {:configured true :source :stored}
+      ;; a stored oauth credential needs a registered OAuthAuth, like
+      ;; auth/configured? (pi checkAuth); without one it is not configured
+      (and (map? stored) (= :oauth (:type stored)))
+      (if (some? (:oauth provider))
+        {:configured true :source :oauth}
+        {:configured false})
+      stored {:configured true :source :stored}
       configured configured
       (auth/configured? provider-id) {:configured true :source :environment}
       :else {:configured false})))
