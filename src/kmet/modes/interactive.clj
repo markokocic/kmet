@@ -1072,7 +1072,6 @@
           [{:name "settings" :description "Open settings menu"}
            {:name "scoped-models" :description "Enable/disable models for Ctrl+P cycling"}
            {:name "import" :description "Import and resume a session from a JSONL file"}
-           {:name "changelog" :description "Show changelog entries"}
            {:name "hotkeys" :description "Show all keyboard shortcuts"}]]
     (commands/register-command!
      {:name name
