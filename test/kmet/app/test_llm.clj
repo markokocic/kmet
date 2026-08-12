@@ -692,3 +692,17 @@
     (finally
       (m/clear-extension-providers!)
       (m/load-catalogs!))))
+
+(t/deftest test-llm-resolves-key-from-auth
+  ;; send-message resolves the key itself when the caller passes none (pi
+  ;; prepareRequest) — an auth.edn credential lets a bare call proceed
+  ;; instead of erroring with an empty Authorization header.
+  (m/load-catalogs!)
+  (with-redefs [auth/auth-atom (atom {:opencode-go {:key "file-key"}})
+                auth/getenv (fn [_] nil)]
+    (let [errors (atom [])]
+      @(llm/send-message {:provider :opencode-go
+                          :model "deepseek-v4-flash"
+                          :on-error (fn [e] (swap! errors conj e))})
+      (t/is (not-any? #(str/includes? (or % "") "No API key") @errors)
+            "proceeds with the auth.edn key (fails on the network, not on auth)"))))

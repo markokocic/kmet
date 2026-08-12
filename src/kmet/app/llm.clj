@@ -770,39 +770,45 @@
 
    Returns: future that completes when the stream ends."
   [{:keys [provider model api-key] :or {provider :opencode-go} :as opts}]
-  (cond
-    (nil? (or api-key (auth/resolve-provider-auth provider)))
-    (future
-      (when-let [on-error (:on-error opts)]
-        (on-error (str "No API key for " (name provider)
-                       ". Set the key in ~/.kmet/agent/auth.edn."))))
+  (let [auth (auth/resolve-provider-auth provider)
+        ;; Resolve the key here when the caller didn't provide one (pi:
+        ;; prepareRequest resolves auth per request) — so a direct call with
+        ;; auth.edn / env credentials works, and the builders never see a nil
+        ;; key that would produce an empty Authorization header.
+        api-key (or api-key (:api-key auth))]
+    (cond
+      (and (nil? api-key) (nil? (:bearer auth)))
+      (future
+        (when-let [on-error (:on-error opts)]
+          (on-error (str "No API key for " (name provider)
+                         ". Set the key in ~/.kmet/agent/auth.edn."))))
 
-    :else
-    (let [m (models/get-model provider model)]
-      (cond
-        ;; Catalog provider with an unknown model id → error
-        (and (some? (models/get-provider provider)) (nil? m))
-        (future
-          (when-let [on-error (:on-error opts)]
-            (on-error (str "Unknown model: " (name provider) "/" model))))
+      :else
+      (let [m (models/get-model provider model)]
+        (cond
+          ;; Catalog provider with an unknown model id → error
+          (and (some? (models/get-provider provider)) (nil? m))
+          (future
+            (when-let [on-error (:on-error opts)]
+              (on-error (str "Unknown model: " (name provider) "/" model))))
 
-        ;; Unknown provider (no catalog entry) → error
-        (nil? m)
-        (future
-          (when-let [on-error (:on-error opts)]
-            (on-error (str "Unknown provider: " (name provider)))))
+          ;; Unknown provider (no catalog entry) → error
+          (nil? m)
+          (future
+            (when-let [on-error (:on-error opts)]
+              (on-error (str "Unknown provider: " (name provider)))))
 
-        :else
-        (let [api (or (:api-type opts) (:api m))
-              p (models/get-provider provider)
-              effort (effective-effort m (:thinking opts))]
-          (case api
-            :openai-completions (openai-request (assoc opts :model-record m :provider-record p
-                                                       :effort effort :api-key api-key))
-            :anthropic-messages (anthropic-request (assoc opts :model-record m :provider-record p
-                                                          :effort effort :api-key api-key))
-            :google-generative-ai (google-request (assoc opts :model-record m :provider-record p
+          :else
+          (let [api (or (:api-type opts) (:api m))
+                p (models/get-provider provider)
+                effort (effective-effort m (:thinking opts))]
+            (case api
+              :openai-completions (openai-request (assoc opts :model-record m :provider-record p
                                                          :effort effort :api-key api-key))
-            (future
-              (when-let [on-error (:on-error opts)]
-                (on-error (str "Unknown api-type: " (name (:api-type opts))))))))))))
+              :anthropic-messages (anthropic-request (assoc opts :model-record m :provider-record p
+                                                            :effort effort :api-key api-key))
+              :google-generative-ai (google-request (assoc opts :model-record m :provider-record p
+                                                           :effort effort :api-key api-key))
+              (future
+                (when-let [on-error (:on-error opts)]
+                  (on-error (str "Unknown api-type: " (name (:api-type opts)))))))))))))
