@@ -65,24 +65,27 @@ Kmet side: `src/kmet/app/session.clj` (+ consumers: `app/loop.clj`, `modes/inter
 *All phases are done (G22 landed last — see the git log for the phase commits;
 Phase 6 details in the plan below). The gap table in §2 is kept for reference.*
 
-- `session.clj` — EDNL (EDN per line), **no header**. Entry shape
+- `session.clj` — EDNL (EDN per line) with a **header** line (G1):
+  `{:type :session :version 1 :id :created-at :cwd :parent-session?}`. Entry shape
   `{:id :parent-id :role :content :timestamp}` with keyword roles
-  `:user :assistant :tool :bash :system :session_info :info`. One `:leaf-id` atom (no lanes,
-  no sequence). `ReentrantLock` serializes mutations (comment cites the sibling-orphan bug it
-  prevents). Compacted summaries are `:system` entries.
-- Files: `<hex-ms>-<hex-rand>.ednl` in a **flat** `~/.kmet/sessions` dir (configurable via
-  `:session-dir`, no cwd encoding).
-- `create-session` writes an empty file immediately; `load-session` slurps the whole file.
-- `compact!` (count-based) and `compact-with-summary!` **physically rewrite** the file: they
-  drop the summarized entries and re-parent the first kept entry onto the summary entry.
-- `fork-session` exists (copies the branch into a `forks/` subdir, **re-ids** every entry) but
-  is **unused** — `/fork` and `/clone` are registered as `command-not-implemented` stubs
-  (interactive.clj:616-617).
-- `/tree` exists but is **read-only** (view entry content); pi's `/tree` navigates branches.
-- No `model_change` / `thinking_level_change` / `active_tools_change` / `branch_summary` /
-  `custom` / `custom_message` / `label` entries anywhere.
-- `restore-session-context!` rebuilds messages from the branch but drops `:session_info` and
-  `:info`; the resumed model/thinking level comes from live config, not the session.
+  `:user :assistant :tool :bash :system :session_info :info :model-change
+  :thinking-level-change :compaction :branch-summary :custom :custom-message :label`.
+  One `:leaf-id` atom plus `branch!`/`reset-leaf!` (G17 — no lanes, no sequence).
+  `ReentrantLock` serializes mutations (comment cites the sibling-orphan bug it prevents).
+- Files: `<timestamp>_<id>.ednl` in **cwd-encoded** `~/.kmet/sessions/<--cwd-->/` dirs (G2);
+  **lazy creation** — no file until the first assistant message (G4).
+- `load-session` streams in 1 MB chunks with torn-tail repair (G13); `create-session` never
+  writes an empty file.
+- `compact!`/`compact-with-summary!` are **append-only** (G7): summarized entries stay in the
+  file; `build-context` returns `[compaction, ...from first-kept-id]`.
+- `fork-session`/`clone-session`/`fork-from` (G18): same-cwd-dir forks, new header with
+  `:parent-session`, entry ids preserved, labels re-chained; wired to `/fork`/`/clone`.
+- `/tree` navigates branches (G19) with optional branch summaries on jump.
+- All pi v3 entry types are persisted: `model_change`, `thinking_level_change`,
+  `branch_summary`, `custom`, `custom_message`, `label` (G6/G8/G9/G10/G11).
+- `restore-session-context!` rebuilds messages from `build-context` (compaction projections
+  included; `:info`/`:session_info` are metadata, excluded); the resumed model/thinking come
+  from the session via `apply-session-settings!` (G6).
 - **Phase 5 (G15/G16) done**: `build-session-info` streams a session file
   line-by-line (1 MB chunks, `reduce-physical-lines`, early exit for
   headerless files) into a pi-style info map `{:path :id :cwd :name
@@ -265,15 +268,15 @@ G11 labels ──▶ G18 label re-chaining on fork
 
 ## 5. Open questions
 
-1. **Session dir**: adopt pi's cwd-encoded layout (changes where existing sessions live) vs
-   keep the flat dir with a header carrying cwd (filtering still works)? cwd-encoding is what
-   pi does; a header-first approach keeps the flat dir tolerable.
-2. **Compaction rewrite**: dropping `compact!`'s physical rewrite changes `replace-context!`
-   (loop.clj:954) and the overflow path — the in-memory context already rebuilds from the
-   branch, so this should be contained; verify.
-3. **Extensions SDK**: G9/G10/G11 imply new kmet extension APIs (session.setLabel,
-   appendCustomEntry, custom_message injection). Confirm the kmet extension surface should grow
-   to match pi's `ctx.sessionManager` read API + `session.setLabel`.
+*All three were resolved by the completed work:*
+
+1. **Session dir** — *resolved by G2*: pi's cwd-encoded layout (`sessions/<--cwd-->/`) was
+   adopted.
+2. **Compaction rewrite** — *resolved by G7*: append-only compaction landed; the overflow
+   path and in-memory context rebuild were updated to match.
+3. **Extensions SDK** — *resolved by G9/G10/G11*: the kmet extension surface grew
+   (`extensions/set-label!`, `append-custom-entry!`, `append-custom-message!`,
+   `get-custom-entries`, `get-session`).
 
 ## 6. Testing
 
