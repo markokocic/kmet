@@ -847,6 +847,112 @@
   [session]
   (count (filter message-entry? @(:entries session))))
 
+(defn get-session-stats
+  "Session statistics for /session (pi: getSessionStats). Aggregates over
+   ALL entries (including history compacted away), so token/cost totals
+   reflect what was actually billed. Message roles: :user counts user,
+   :assistant counts assistant, :tool and :bash count tool results (pi
+   stores bash results as tool messages in message entries). Tool calls are
+   the :tool-calls vectors on assistant entries. Tokens/cost come from
+   usage-totals (assistant + tool usage, incl. compaction/branch-summary
+   usage carried on entries). Returns {:file :id :user-messages
+   :assistant-messages :tool-calls :tool-results :total-messages :tokens
+   {:input :output :cache-read :cache-write :total} :cost}."
+  [session]
+  (let [{:keys [input output cache-read cache-write cost]} (usage-totals session)
+        counts (reduce (fn [acc e]
+                         (case (:role e)
+                           :user (update acc :user inc)
+                           :assistant (update acc :assistant inc)
+                           (:tool :bash) (update acc :tool-results inc)
+                           acc))
+                       {:user 0 :assistant 0 :tool-results 0}
+                       @(:entries session))
+        tool-calls (reduce (fn [n e]
+                             (if (= :assistant (:role e))
+                               (+ n (count (:tool-calls e)))
+                               n))
+                           0
+                           @(:entries session))]
+    {:file (:file session)
+     :id (:id session)
+     :user-messages (:user counts)
+     :assistant-messages (:assistant counts)
+     :tool-calls tool-calls
+     :tool-results (:tool-results counts)
+     :total-messages (get-message-count session)
+     :tokens {:input (long input) :output (long output) :cache-read (long cache-read) :cache-write (long cache-write)
+              :total (+ input output cache-read cache-write)}
+     :cost (double cost)}))
+
+(defn get-last-assistant-text
+  "Text content of the last assistant message on the branch (pi:
+   getLastAssistantText — /copy). Scans the branch (not the full entry
+   list, matching pi's live messages) for the last assistant entry with
+   non-empty text; aborted/empty assistant entries (no text blocks) are
+   skipped. Returns the trimmed text or nil."
+  [session]
+  (some (fn [e]
+          (when (= :assistant (:role e))
+            (let [t (entry-text e)]
+              (when (seq t) t))))
+        (reverse (get-branch session))))
+
+(defn usage-breakdown
+  "Per-model cost/token attribution for /session (pi: getUsageCostBreakdown).
+   Assistant usage is attributed to the provider/model active at that point
+   (derived from :model-change entries — kmet entries, unlike pi messages,
+   don't carry provider/model); tool-result and compaction/branch-summary
+   usage groups under \"Tools/summaries\". Returns [{:key str :cost double
+   :tokens long} ...] sorted by cost desc, filtered to buckets with cost or
+   tokens."
+  [session]
+  (let [;; Walk entries in order; the latest :model-change before an
+        ;; assistant entry is its attribution key.
+        {buckets :buckets}
+        (reduce (fn [{:keys [model] :as acc} e]
+                  (case (:role e)
+                    :model-change
+                    (assoc acc :model (str (name (:provider e)) "/" (:model e)))
+
+                    :assistant
+                    (if-let [u (entry-usage (:usage e))]
+                      (update-in acc [:buckets (or model "unknown")]
+                                 (fnil (fn [totals]
+                                         (-> totals
+                                             (update :input + (:input u))
+                                             (update :output + (:output u))
+                                             (update :cache-read + (:cache-read u))
+                                             (update :cache-write + (:cache-write u))
+                                             (update :cost + (:cost u))))
+                                       {:input 0 :output 0 :cache-read 0 :cache-write 0 :cost 0.0}))
+                      acc)
+
+                    (:tool :bash :compaction :branch-summary)
+                    (if-let [u (entry-usage (:usage e))]
+                      (update-in acc [:buckets "Tools/summaries"]
+                                 (fnil (fn [totals]
+                                         (-> totals
+                                             (update :input + (:input u))
+                                             (update :output + (:output u))
+                                             (update :cache-read + (:cache-read u))
+                                             (update :cache-write + (:cache-write u))
+                                             (update :cost + (:cost u))))
+                                       {:input 0 :output 0 :cache-read 0 :cache-write 0 :cost 0.0}))
+                      acc)
+
+                    acc))
+                {:model nil :buckets {}}
+                @(:entries session))]
+    (->> buckets
+         (map (fn [[key {:keys [input output cache-read cache-write cost]}]]
+                {:key key
+                 :cost cost
+                 :tokens (+ input output cache-read cache-write)}))
+         (filter #(or (pos? (:cost %)) (pos? (:tokens %))))
+         (sort-by :cost >)
+         vec)))
+
 (defn get-last-activity-ms
   "Last message activity time as epoch ms (pi: modified — the latest message
    timestamp), falling back to the file mtime, then the header :created-at

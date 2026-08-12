@@ -62,6 +62,9 @@ Kmet side: `src/kmet/app/session.clj` (+ consumers: `app/loop.clj`, `modes/inter
 
 ## 1. Current kmet state
 
+*All phases are done (G22 landed last — see the git log for the phase commits;
+Phase 6 details in the plan below). The gap table in §2 is kept for reference.*
+
 - `session.clj` — EDNL (EDN per line), **no header**. Entry shape
   `{:id :parent-id :role :content :timestamp}` with keyword roles
   `:user :assistant :tool :bash :system :session_info :info`. One `:leaf-id` atom (no lanes,
@@ -244,9 +247,20 @@ G11 labels ──▶ G18 label re-chaining on fork
   by counting message entries only (`:bash` documented as pi tool-message analogue, `:info`
   excluded).
 
-**Phase 6 — Command surface (G22).**
-- `/session` (info + stats from the header/branch), `/export` (HTML only — no JSONL), `/share`
-  (gist), `/copy` (copy last agent message).
+**Phase 6 — Command surface (G22). ✅ done**
+- `/session` (info + stats from the header/branch — `get-session-stats` mirrors pi
+  `getSessionStats`: message counts, tool calls/results, token/cost totals from
+  usage across all entries; Input/Cached/Uncached/Output/Total token layout and
+  per-model cost breakdown via `usage-breakdown` (pi `getUsageCostBreakdown`,
+  attributed from `:model-change` entries) exactly as pi renders), `/export`
+  (HTML only — no JSONL by decision; standalone dark page, escapes everything,
+  embeds the system prompt + tool definitions + a stats panel like pi's
+  `exportSessionToHtml(state)`, default `kmet-session-<basename>.html` in cwd or
+  explicit path), `/share` (gh auth check → export to temp file →
+  `gh gist create --public=false` → gist URL; graceful messages when gh is
+  missing or not logged in), `/copy` (last assistant text on the branch →
+  platform clipboard tools — Termux/Wayland/X11/macOS/Windows — with an OSC 52
+  terminal fallback). `/import` remains unimplemented (no interop by decision).
 - No `/import` (no interop by decision).
 
 ## 5. Open questions

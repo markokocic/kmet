@@ -228,3 +228,22 @@
       (enable-modify-other-keys! write-fn))
 
     nil))
+
+;; ─── OSC 52 clipboard (pi: copyToClipboard remote-session fallback) ────────
+;; The terminal copies the base64 payload to the system clipboard without
+;; any platform tool. Refused when the encoded payload exceeds the common
+;; terminal limit (pi caps at 100 KB).
+
+(def ^:const max-osc52-encoded-length 100000)
+
+(defn osc52-copy!
+  "Copy TEXT via the OSC 52 escape (\u001b]52;c;<base64>\u0007) using
+   WRITE-FN. Returns true when emitted, false when the encoded payload is
+   too large for terminals (or TEXT is empty)."
+  [write-fn text]
+  (let [encoded (.encodeToString (java.util.Base64/getEncoder)
+                                 (.getBytes (str text) "UTF-8"))]
+    (when (and (seq encoded)
+               (<= (count encoded) max-osc52-encoded-length))
+      (write-fn (str "\u001b]52;c;" encoded "\u0007"))
+      true)))

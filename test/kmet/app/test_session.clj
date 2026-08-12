@@ -1262,3 +1262,84 @@
         (t/is (= "hello" (:content (nth (s/get-branch loaded) 1)))
               "entry content persisted verbatim"))
       (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-stats
+  ;; G22 /session: get-session-stats aggregates over ALL entries (pi:
+  ;; getSessionStats) — user/assistant counts, tool results (:tool and
+  ;; :bash), tool calls from assistant :tool-calls, and usage totals.
+  (let [dir (str "target/test-sess-stats-" (System/currentTimeMillis))
+        sess (s/create-session dir)]
+    (try
+      (s/append-entry sess {:role :user :content "q1"})
+      (s/append-entry sess {:role :assistant :content [{:type :text :text "a1"}]
+                            :tool-calls [{:name "read" :arguments {:path "x"}}]
+                            :usage {:prompt_tokens 100 :completion_tokens 20
+                                    :cost {:total 0.01}}})
+      (s/append-entry sess {:role :assistant :content [{:type :text :text "a2"}]
+                            :usage {:prompt_tokens 50 :completion_tokens 10
+                                    :cost {:total 0.005}}})
+      (s/append-entry sess {:role :tool :content "result" :tool-name "read"})
+      (s/append-entry sess {:role :bash :command "ls" :output "x" :exit-code 0})
+      (s/append-entry sess {:role :info :content "display only"})
+      (let [stats (s/get-session-stats sess)]
+        (t/is (= 1 (:user-messages stats)))
+        (t/is (= 2 (:assistant-messages stats)))
+        (t/is (= 1 (:tool-calls stats)) "one tool call on the first assistant")
+        (t/is (= 2 (:tool-results stats)) ":tool and :bash both count as results")
+        (t/is (= 5 (:total-messages stats)) ":info is display-only, not a message")
+        (t/is (= {:input 150 :output 30 :cache-read 0 :cache-write 0 :total 180}
+                 (:tokens stats)))
+        (t/is (= 0.015 (:cost stats))))
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-session-stats-empty
+  (let [sess (s/create-session test-dir)
+        stats (s/get-session-stats sess)]
+    (t/is (= 0 (:user-messages stats)))
+    (t/is (= 0 (:total-messages stats)))
+    (t/is (= {:input 0 :output 0 :cache-read 0 :cache-write 0 :total 0}
+             (:tokens stats)))
+    (t/is (= 0.0 (:cost stats)))))
+
+(t/deftest test-last-assistant-text
+  ;; G22 /copy: last assistant message with non-empty text on the branch;
+  ;; empty (aborted) assistant entries are skipped.
+  (let [dir (str "target/test-sess-last-" (System/currentTimeMillis))
+        sess (s/create-session dir)]
+    (try
+      (t/is (nil? (s/get-last-assistant-text sess)) "no messages yet")
+      (s/append-entry sess {:role :user :content "q"})
+      (s/append-entry sess {:role :assistant :content []})  ;; aborted, no content
+      (s/append-entry sess {:role :assistant :content [{:type :text :text "first"}]})
+      (s/append-entry sess {:role :assistant :content [{:type :text :text "  second  "}]})
+      (t/is (= "second" (s/get-last-assistant-text sess)))
+      (s/append-entry sess {:role :assistant :content []})  ;; aborted again
+      (t/is (= "second" (s/get-last-assistant-text sess))
+            "trailing empty assistant does not shadow the last text")
+      (finally (fs/delete-tree dir)))))
+
+(t/deftest test-usage-breakdown
+  ;; G22 /session cost breakdown (pi: getUsageCostBreakdown) — assistant
+  ;; usage attributed to the model active at that point (:model-change),
+  ;; compaction/summary usage under "Tools/summaries", sorted by cost desc.
+  (let [dir (str "target/test-sess-breakdown-" (System/currentTimeMillis))
+        sess (s/create-session dir)]
+    (try
+      (s/append-model-change! sess :anthropic "claude-3")
+      (s/append-entry sess {:role :user :content "q"})
+      (s/append-entry sess {:role :assistant :content "a"
+                            :usage {:prompt_tokens 100 :completion_tokens 20 :cost {:total 0.01}}})
+      (s/append-model-change! sess :openai "gpt-4o")
+      (s/append-entry sess {:role :assistant :content "b"
+                            :usage {:prompt_tokens 50 :completion_tokens 5 :cost {:total 0.02}}})
+      (s/append-entry sess {:role :compaction :summary "x" :first-kept-id "y"
+                            :usage {:input_tokens 10 :output_tokens 2 :cost {:total 0.001}}})
+      (let [b (s/usage-breakdown sess)]
+        (t/is (= ["openai/gpt-4o" "anthropic/claude-3" "Tools/summaries"]
+                 (mapv :key b))
+              "sorted by cost desc; compaction under Tools/summaries")
+        (t/is (= 55 (:tokens (first b))))
+        (t/is (= 12 (:tokens (last b)))))
+      (t/is (= [] (s/usage-breakdown (s/create-session test-dir)))
+            "no usage -> no buckets")
+      (finally (fs/delete-tree dir)))))

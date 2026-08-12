@@ -12,6 +12,7 @@
             [kmet.tui.components.expandable-text :as expandable-text]
             [kmet.tui.components.container :as container]
             [kmet.app.ui :as ui]
+            [kmet.app.ui.footer :as footer]
             [kmet.app.ui.footer-data-provider :as fdp]
             [kmet.app.theme-controller :as theme-ctrl]
             [kmet.tui.components.select-list :as select-list]
@@ -20,6 +21,8 @@
             [kmet.app.model-resolver :as resolver]
             [kmet.app.auth :as auth]
             [kmet.app.session :as session]
+            [kmet.app.session-export :as session-export]
+            [kmet.app.clipboard :as clipboard]
             [kmet.app.tools.core :as tools]
             [kmet.app.keybindings :as app-kb]
             [kmet.tui.keybindings :as tui-kb]
@@ -41,7 +44,8 @@
             [kmet.app.ui.extension-dialogs :as dialogs]
             [kmet.tui.components.spinner :as spinner]
             [kmet.tui.keys :as keys]
-            [kmet.libs.process :as process]))
+            [kmet.libs.process :as process]
+            [kmet.libs.terminal :as lib-term]))
 
 (declare resume-session show-session-tree show-fork-selector clone-current-session!
          build-extension-ui-registry ask-branch-summary
@@ -291,6 +295,137 @@
 
 (declare handle-reload)
 
+;; ─── Session info (/session) ────────────────────────────────────────────────
+
+(defn- session-info-text
+  "Pi: handleSessionCommand — stats + name + token/cost breakdown. Plain
+   text with theme styling, rendered as an assistant message."
+  [sess]
+  (let [stats (session/get-session-stats sess)
+        name (session/get-session-name sess)
+        {:keys [input output cache-read cache-write]} (:tokens stats)
+        prompt-tokens (+ input cache-read cache-write)
+        cache-total (+ cache-read cache-write)
+        breakdown (session/usage-breakdown sess)]
+    (str (th/bold "Session Info") "\n\n"
+         (when (seq name) (str (th/dim "Name:") " " name "\n"))
+         (th/dim "File:") " " (:file stats) "\n"
+         (th/dim "ID:") " " (:id stats) "\n\n"
+         (th/bold "Messages") "\n"
+         (th/dim "Total:") " " (:total-messages stats) "\n"
+         (th/dim "User:") " " (:user-messages stats) "\n"
+         (th/dim "Assistant:") " " (:assistant-messages stats) "\n"
+         (th/dim "Tools:") " " (:tool-calls stats) " calls, " (:tool-results stats) " results\n\n"
+         (th/bold "Tokens") "\n"
+         (th/dim "Input:") " " prompt-tokens "\n"
+         (when (pos? cache-total)
+           (str (th/dim "  Cached:") " " cache-read
+                " (" (format "%.1f" (* 100 (/ (double cache-read) (max 1 prompt-tokens)))) "%)\n"
+                (th/dim "  Uncached:") " " (+ input cache-write)
+                (when (pos? cache-write) (str " (" cache-write " written to cache)"))
+                "\n"))
+         (th/dim "Output:") " " output "\n"
+         (th/dim "Total:") " " (:total (:tokens stats)) "\n"
+         (when (pos? (:cost stats))
+           (str "\n" (th/bold "Cost") "\n"
+                (th/dim "Total:") " $" (format "%.3f" (:cost stats))
+                (when (> (count breakdown) 1)
+                  (apply str (for [b breakdown]
+                               (str "\n  " (th/dim (str (:key b) ":"))
+                                    " $" (format "%.3f" (:cost b))
+                                    " " (th/dim (str "(" (footer/format-tokens (:tokens b)) " tokens)"))))))
+                "\n")))))
+
+(defn- parse-export-path
+  "Pi: getPathCommandArgument — strip surrounding quotes, else take the
+   first whitespace-delimited token. Returns nil when there is no
+   argument."
+  [args]
+  (let [args (str/trim args)]
+    (when (seq args)
+      (let [first-char (first args)]
+        (if (contains? #{\" \'} first-char)
+          (when-let [end (str/index-of args first-char 1)]
+            (subs args 1 end))
+          (let [ws (str/index-of args " ")]
+            (if ws (subs args 0 ws) args)))))))
+
+;; ─── Share (/share — gh gist) ───────────────────────────────────────────────
+
+(defn- gh-auth-status
+  "Pi: handleShareCommand — :ok when gh is installed and authenticated,
+   :not-logged-in when gh exists but auth is missing, :not-installed when
+   gh cannot be spawned, :timed-out when gh did not respond in time."
+  []
+  (try
+    (let [p (proc/process ["gh" "auth" "status"]
+                          {:out :string :err :string
+                           :in (fs/file (if process/windows-os? "NUL" "/dev/null"))})
+          r (deref p 10000 :timed-out)]
+      (cond
+        (= r :timed-out)
+        (do (when-let [pid (try (-> p :proc .pid) (catch Exception _ nil))]
+              (process/kill-process-tree! pid))
+            :timed-out)
+        (zero? (:exit r)) :ok
+        :else :not-logged-in))
+    (catch Exception _ :not-installed)))
+
+(defn- share-session!
+  "Export the current session to a temp HTML file and create a secret gist
+   (pi: handleShareCommand). Runs on a future with a spinner status
+   indicator; the chat reply carries the gist URL."
+  [cs]
+  (let [sess @(:session-atom cs)
+        chat (:chat-history cs)
+        indicator (spinner/make-spinner :text "Creating gist..." :active true)
+        done (promise)]
+    (show-status-indicator! cs :share indicator)
+    (tui/tui-request-render (:tui cs))
+    ;; render driver: tick the spinner while the gist creation runs
+    (future
+      (while (not (realized? done))
+        (Thread/sleep 100)
+        (tui/tui-request-render (:tui cs))))
+    (future
+      (let [result
+            (try
+              (let [tmp-dir (or (System/getenv "TMPDIR")
+                                (System/getProperty "java.io.tmpdir"))
+                    tmp (fs/create-temp-file {:prefix "kmet-share-" :suffix ".html" :dir tmp-dir})]
+                (try
+                  (session-export/export-to-html! sess {:path (str tmp)})
+                  (let [p (proc/process ["gh" "gist" "create" "--public=false" (str tmp)]
+                                        {:out :string :err :string
+                                         :in (fs/file (if process/windows-os? "NUL" "/dev/null"))})
+                        r (deref p 60000 :timed-out)]
+                    (if (= r :timed-out)
+                      (do (when-let [pid (try (-> p :proc .pid) (catch Exception _ nil))]
+                            (process/kill-process-tree! pid))
+                          {:error "Gist creation timed out."})
+                      (if (zero? (:exit r))
+                        {:url (str/trim (:out r))}
+                        {:error (str/trim (:err r))})))
+                  (finally (fs/delete-if-exists tmp))))
+              (catch Exception e
+                {:error (or (ex-message e) (str e))}))]
+        (deliver done result)))
+    (future
+      (let [result (deref done 90000 :timeout)]
+        (clear-status-indicator! cs :share)
+        (ui/chat-history-add-message!
+         chat
+         (cond
+           (= result :timeout)
+           {:role :info :label "Share" :content "Gist creation timed out."}
+
+           (:error result)
+           {:role :info :label "Share"
+            :content (str "Failed to create gist: " (:error result))}
+
+           :else
+           {:role :info :label "Share" :content (str "Share URL: " (:url result))}))))))
+
 (defn- register-builtin-commands!
   "Register kmet's builtin slash commands. Handlers receive [cs args];
    argument completions feed the editor autocomplete dropdown."
@@ -437,6 +572,107 @@
                                                       :content (str "Session name: " current)})
                        (ui/show-warning! (:chat-history cs)
                                          "Usage: /name <name>"))))))})
+  (commands/register-command!
+   {:name "session"
+    :description "Show session info and stats"
+    :handler (fn [cs _]
+               (let [sess @(:session-atom cs)
+                     chat (:chat-history cs)]
+                 (if (nil? sess)
+                   (ui/chat-history-add-message! chat
+                                                 {:role :info :label "Session"
+                                                  :content "No active session."})
+                   (ui/chat-history-add-message! chat
+                                                 {:role :assistant
+                                                  :content (session-info-text sess)}))))})
+  (commands/register-command!
+   {:name "export"
+    :description "Export session to HTML (JSONL is not supported by design)"
+    :argument-hint "<path>"
+    :handler (fn [cs args]
+               (let [sess @(:session-atom cs)
+                     chat (:chat-history cs)
+                     arg (parse-export-path args)]
+                 (cond
+                   (nil? sess)
+                   (ui/chat-history-add-message! chat
+                                                 {:role :info :label "Export"
+                                                  :content "No active session."})
+
+                   (str/ends-with? (str/lower-case (or arg "")) ".jsonl")
+                   (ui/chat-history-add-message! chat
+                                                 {:role :info :label "Export"
+                                                  :content "JSONL export is not supported — kmet sessions are EDN-only. Use /export or /export <path.html>."})
+
+                   :else
+                   (try
+                     (let [ag @(:agent-state cs)
+                           system-prompt (or @(:system-prompt-override ag) @(:system ag))
+                           tool-defs (vals (tools/get-all-tools))
+                           opts (cond-> (when arg {:path arg})
+                                  system-prompt (assoc :system-prompt system-prompt)
+                                  (seq tool-defs) (assoc :tools tool-defs))
+                           path (session-export/export-to-html! sess opts)]
+                       (ui/chat-history-add-message! chat
+                                                     {:role :info :label "Export"
+                                                      :content (str "Session exported to: " path)}))
+                     (catch Exception e
+                       (ui/chat-history-add-message! chat
+                                                     {:role :info :label "Export"
+                                                      :content (str "Failed to export session: "
+                                                                    (or (ex-message e) (str e)))}))))))})
+  (commands/register-command!
+   {:name "share"
+    :description "Share session as a secret GitHub gist"
+    :handler (fn [cs _]
+               (let [chat (:chat-history cs)]
+                 (case (gh-auth-status)
+                   :not-installed
+                   (ui/chat-history-add-message! chat
+                                                 {:role :info :label "Share"
+                                                  :content "GitHub CLI (gh) is not installed. Install it from https://cli.github.com/"})
+
+                   :not-logged-in
+                   (ui/chat-history-add-message! chat
+                                                 {:role :info :label "Share"
+                                                  :content "GitHub CLI is not logged in. Run 'gh auth login' first."})
+
+                   :timed-out
+                   (ui/chat-history-add-message! chat
+                                                 {:role :info :label "Share"
+                                                  :content "GitHub CLI did not respond (timed out)."})
+
+                   :else
+                   (if (nil? @(:session-atom cs))
+                     (ui/chat-history-add-message! chat
+                                                   {:role :info :label "Share"
+                                                    :content "No active session."})
+                     (share-session! cs)))))})
+  (commands/register-command!
+   {:name "copy"
+    :description "Copy last agent message to clipboard"
+    :handler (fn [cs _]
+               (let [sess @(:session-atom cs)
+                     chat (:chat-history cs)]
+                 (cond
+                   (nil? sess)
+                   (ui/chat-history-add-message! chat
+                                                 {:role :info :label "Copy"
+                                                  :content "No active session."})
+
+                   :else
+                   (if-let [text (session/get-last-assistant-text sess)]
+                     (if (clipboard/copy-text! text)
+                       (tui/tui-flash! (:tui cs) "Copied!")
+                     ;; No platform tool — fall back to the OSC 52 terminal
+                     ;; protocol (pi: copyToClipboard remote fallback).
+                       (if (lib-term/osc52-copy! (term/write-fn @(:terminal (:tui cs)))
+                                                 text)
+                         (tui/tui-flash! (:tui cs) "Copied!")
+                         (ui/show-warning! chat
+                                           "No clipboard tool available on this system.")))
+                     (ui/show-warning! chat
+                                       "No agent messages to copy yet.")))))})
   (commands/register-command!
    {:name "reload"
     :description "Reload keybindings, extensions, skills, prompts, themes, and context files"
@@ -662,12 +898,7 @@
   (doseq [{:keys [name description argument-hint]}
           [{:name "settings" :description "Open settings menu"}
            {:name "scoped-models" :description "Enable/disable models for Ctrl+P cycling"}
-           {:name "export" :description "Export session (HTML default, or specify path: .html/.jsonl)"
-            :argument-hint "<path>"}
            {:name "import" :description "Import and resume a session from a JSONL file"}
-           {:name "share" :description "Share session as a secret GitHub gist"}
-           {:name "copy" :description "Copy last agent message to clipboard"}
-           {:name "session" :description "Show session info and stats"}
            {:name "changelog" :description "Show changelog entries"}
            {:name "hotkeys" :description "Show all keyboard shortcuts"}]]
     (commands/register-command!

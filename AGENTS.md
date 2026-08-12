@@ -60,6 +60,10 @@ src/kmet/
 │   │                     SOCKS & https-scheme proxies via curl (java.net.http is HTTP-proxy-only)
 │   ├── loop.clj        — Agent conversation loop
 │   ├── session.clj     — Session persistence
+│   ├── session_export.clj — HTML export for /export and /share (standalone
+│   │                     dark page; JSONL deliberately not built)
+│   ├── clipboard.clj   — Clipboard copy via platform tools (Termux/Wayland/
+│   │                     X11/macOS/Windows; OSC52 fallback lives in libs.terminal)
 │   ├── skills.clj      — Skills loading + system prompt
 │   ├── prompts.clj     — Prompt template loading + /name expansion (pi: core/prompt-templates.js)
 │   ├── frontmatter.clj — YAML frontmatter parsing shared by skills/prompts (pi: utils/frontmatter.js)
