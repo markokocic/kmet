@@ -679,6 +679,7 @@ Be precise and concise in your responses."}}]
       :signal (:signal agent)
       :idle-timeout-ms (:http-idle-timeout-ms agent)
       :thinking @(:thinking agent)
+      :session-id (some-> (:session agent) :id)
       :on-text (fn [t]
                  (swap! text-buf str t)
                  (when on-text (on-text t))
@@ -842,6 +843,7 @@ Be precise and concise in your responses."}}]
           :messages msgs
           :signal signal
           :idle-timeout-ms (:http-idle-timeout-ms agent)
+          :session-id (some-> (:session agent) :id)
           :on-text (fn [t] (swap! text-buf str t))
           :on-done (fn [_] (deliver done @text-buf))
           :on-error (fn [_] (when-not (realized? done) (deliver done nil)))})
@@ -881,6 +883,7 @@ Be precise and concise in your responses."}}]
           :messages msgs
           :signal signal
           :idle-timeout-ms (:http-idle-timeout-ms agent)
+          :session-id (some-> (:session agent) :id)
           :on-text (fn [t] (swap! text-buf str t))
           :on-done (fn [_] (deliver done @text-buf))
           :on-error (fn [_] (when-not (realized? done) (deliver done nil)))})

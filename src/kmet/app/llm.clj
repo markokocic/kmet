@@ -9,6 +9,7 @@
   (:require [clojure.string :as str]
             [cheshire.core :as json]
             [kmet.libs.sse :as sse]
+            [kmet.app.attribution :as attribution]
             [kmet.app.config-value :as config-value]
             [kmet.app.models :as models]
             [kmet.app.proxy :as proxy]
@@ -29,15 +30,19 @@
     :google-generative-ai (str base "/models/" model-id ":streamGenerateContent?alt=sse")))
 
 (defn- request-headers
-  "Request headers for one request: BASE (api-specific) merged with the
-   model's :headers (static builtin + models.edn model-level config values)
-   and the provider's :configured-headers, all resolved as config values
-   (literals pass through, $ENV interpolates, !command executes — pi
-   resolveConfiguredModelHeaders; unresolvable values throw, reported via
-   the builder's on-error). A provider with :auth-header adds
-   Authorization: Bearer <api-key> last (pi withConfiguredAuth)."
-  [base model provider api-key]
-  (let [merged (merge base
+  "Request headers for one request: the provider-attribution layer (session
+   headers + origin attribution, pi mergeProviderAttributionHeaders), then
+   BASE (api-specific), the model's :headers (static builtin + models.edn
+   model-level config values) and the provider's :configured-headers, all
+   resolved as config values (literals pass through, $ENV interpolates,
+   !command executes — pi resolveConfiguredModelHeaders; unresolvable values
+   throw, reported via the builder's on-error). A provider with :auth-header
+   adds Authorization: Bearer <api-key> last (pi withConfiguredAuth)."
+  [base model provider api-key session-id]
+  (let [attribution-hdrs (attribution/merge-provider-attribution-headers
+                          model session-id)
+        merged (merge attribution-hdrs
+                      base
                       (config-value/resolve-headers-or-throw
                        (:headers model)
                        (str "model \"" (name (:provider model)) "/" (:id model) "\""))
@@ -515,7 +520,8 @@
 
 (defn- openai-request
   [{:keys [model-record provider-record effort api-key messages tools signal base-url
-           idle-timeout-ms on-text on-thinking on-tool-call on-done on-error
+           idle-timeout-ms session-id
+           on-text on-thinking on-tool-call on-done on-error
            on-usage] :as opts}]
   (future
     (let [model-id (or (:model opts) (:id model-record))
@@ -526,7 +532,8 @@
                                           {:headers (request-headers
                                                      {"Authorization" (str "Bearer " api-key)
                                                       "Content-Type" "application/json"}
-                                                     model-record provider-record api-key)
+                                                     model-record provider-record api-key
+                                                     session-id)
                                            :body (json/generate-string payload)
                                            :as :stream
                                            ;; Total request deadline = the idle timeout (pi: SDK
@@ -561,7 +568,8 @@
 
 (defn- anthropic-request
   [{:keys [model-record provider-record effort api-key messages tools signal base-url
-           idle-timeout-ms on-text on-tool-call on-done on-error on-usage]
+           idle-timeout-ms session-id
+           on-text on-tool-call on-done on-error on-usage]
     :as opts}]
   (future
     (let [model-id (or (:model opts) (:id model-record))
@@ -578,7 +586,8 @@
                                                      {"x-api-key" api-key
                                                       "anthropic-version" default-anthropic-version
                                                       "Content-Type" "application/json"}
-                                                     model-record provider-record api-key)
+                                                     model-record provider-record api-key
+                                                     session-id)
                                            :body (json/generate-string payload)
                                            :as :stream
                                            ;; Total request deadline = the idle timeout (pi: SDK
@@ -669,7 +678,8 @@
 
 (defn- google-request
   [{:keys [model-record provider-record effort api-key messages tools signal base-url
-           idle-timeout-ms on-text on-thinking on-tool-call on-done on-error
+           idle-timeout-ms session-id
+           on-text on-thinking on-tool-call on-done on-error
            on-usage]
     :as opts}]
   (future
@@ -690,7 +700,8 @@
                                           {:headers (request-headers
                                                      {"x-goog-api-key" api-key
                                                       "Content-Type" "application/json"}
-                                                     model-record provider-record api-key)
+                                                     model-record provider-record api-key
+                                                     session-id)
                                            :body (json/generate-string payload)
                                            :as :stream
                                            :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}

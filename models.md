@@ -757,7 +757,23 @@ reports `:source` without pi's runtime-key layer (kmet has no runtime api keys).
 
 ## Phase 8 — Provider attribution headers (`kmet.app.attribution`)
 
-**Status: planned.** Port of pi `provider-attribution.ts`:
+**Status: implemented.** New `kmet.app.attribution` ns ports
+provider-attribution.ts: `host-of` (URL hostname extraction for the exact
+hostname matches), OpenRouter (provider :openrouter or base-url containing
+"openrouter.ai" — pi's substring check), NVIDIA NIM (provider :nvidia or host
+integrate.api.nvidia.com), Cloudflare (providers :cloudflare-workers-ai /
+:cloudflare-ai-gateway or hosts api.cloudflare.com / gateway.ai.cloudflare.com),
+OpenCode session headers (providers :opencode/:opencode-go or host
+opencode.ai; not gated in pi either), and `merge-provider-attribution-headers`
+(session + attribution, then header sources override — pi transformHeaders
+last). llm's `request-headers` merges the attribution layer first so the
+request's own headers win collisions; the loop passes the session id
+(`(some-> (:session agent) :id)`) through to every llm call (main, compaction
+summaries, branch summaries).
+
+**Deviation from the plan: the `:enable-install-telemetry` gate is dropped**
+(per explicit instruction) — kmet has no telemetry, so the setting would only
+add surface; attribution headers are always sent. pi's default is true anyway.
 
 - OpenRouter models (provider `:openrouter` or base-url host openrouter.ai):
   `HTTP-Referer: https://pi.dev`, `X-OpenRouter-Title: pi`,
@@ -941,9 +957,12 @@ Each is a substantial project; do not plan details ahead.
   has-configured-auth / get-provider-auth-status sources /
   get-api-key-and-headers ok+error paths), `test_extensions.clj`
   (register-provider!/unregister-provider! + read-facade delegation).
-- Planned (Phases 8–10):
-  - `test/kmet/app/test_attribution.clj` — openrouter/nvidia/cloudflare
-    headers, opencode session headers, telemetry gate, merge order.
+- Implemented (Phase 8): `test/kmet/app/test_attribution.clj` —
+  openrouter/nvidia/cloudflare headers (incl. exact-hostname vs substring
+  matching, port stripping), opencode session headers (provider + host,
+  no-session-id), merge order (request headers override attribution), and
+  `test_llm.clj` request-headers attribution flow.
+- Planned (Phases 9–10):
   - `test/kmet/app/test_oauth.clj` — device-code poll state machine
     (interval, slow_down, expiry, cancel), PKCE verifier/challenge, auth.edn
     oauth shape validation, credential refresh on expiry (5-min skew),

@@ -15,6 +15,7 @@
             [kmet.app.test-compaction]
             [kmet.app.test-tools]
             [kmet.app.test-llm]
+            [kmet.app.test-attribution]
             [kmet.app.test-models]
             [kmet.app.test-model-resolver]
             [kmet.app.test-config-value]
@@ -91,6 +92,7 @@
     kmet.app.test-compaction
     kmet.app.test-tools
     kmet.app.test-llm
+    kmet.app.test-attribution
     kmet.app.test-models
     kmet.app.test-model-resolver
     kmet.app.test-config-value

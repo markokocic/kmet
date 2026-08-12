@@ -440,7 +440,7 @@
         provider {:id :github-copilot
                   :configured-headers {"X-Custom" "literal"}
                   :auth-header false}
-        merged (@#'llm/request-headers {"Content-Type" "application/json"} model provider "k")]
+        merged (@#'llm/request-headers {"Content-Type" "application/json"} model provider "k" nil)]
     (t/is (= "application/json" (get merged "Content-Type")))
     (t/is (= "GitHubCopilotChat/0.35.0" (get merged "User-Agent")))
     (t/is (= "literal" (get merged "X-Custom")))))
@@ -450,21 +450,21 @@
     (let [merged (@#'llm/request-headers {"x-api-key" "k"}
                                          {:provider :p :id "m"}
                                          {:id :p :auth-header true}
-                                         "secret")]
+                                         "secret" nil)]
       (t/is (= "Bearer secret" (get merged "Authorization")))
       (t/is (= "k" (get merged "x-api-key")))))
   (t/testing "no auth-header → no Authorization header"
     (let [merged (@#'llm/request-headers {"x-api-key" "k"}
                                          {:provider :p :id "m"}
                                          {:id :p}
-                                         "secret")]
+                                         "secret" nil)]
       (t/is (nil? (get merged "Authorization")))))
   (t/testing "configured header values resolve as config values ($ENV)"
     (with-redefs [config-value/getenv (fn [k] (when (= k "TEST_LLM_HEADER") "hdr"))]
       (let [merged (@#'llm/request-headers {}
                                            {:provider :p :id "m"}
                                            {:id :p :configured-headers {"X-Custom" "$TEST_LLM_HEADER"}}
-                                           "k")]
+                                           "k" nil)]
         (t/is (= "hdr" (get merged "X-Custom")))))))
 
 (t/deftest test-max-tokens-key
@@ -610,3 +610,17 @@
                  (:cost usage)))))
     (t/testing "unrecognized usage passes through unchanged (no :cost)"
       (t/is (= {:foo 1} (@#'llm/usage-with-cost model {:foo 1}))))))
+
+(t/deftest test-request-headers-attribution
+  (t/testing "opencode session headers flow through request-headers"
+    (let [model {:provider :opencode :id "qwen3.6-plus"
+                 :base-url "https://opencode.ai/zen/v1"}
+          provider {:id :opencode}
+          merged (@#'llm/request-headers {"Authorization" "Bearer k"} model provider "k" "sess-42")]
+      (t/is (= "sess-42" (get merged "x-opencode-session")))
+      (t/is (= "pi" (get merged "x-opencode-client")))))
+  (t/testing "no session id → no session headers"
+    (let [model {:provider :opencode :id "qwen3.6-plus"}
+          provider {:id :opencode}
+          merged (@#'llm/request-headers {} model provider "k" nil)]
+      (t/is (nil? (get merged "x-opencode-session"))))))
