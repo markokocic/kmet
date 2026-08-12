@@ -1,8 +1,9 @@
 (ns kmet.runner
   "Test runner with per-test slow isolation.
 
-   Slow tests are marked with ^:slow on the deftest (timing/process suites:
-   real backoff sleeps, parallel tool timing, bash tool process spawns).
+   Slow tests are marked with ^:slow on the deftest (tests that wait real
+   wall-clock time: sleeps, terminal-query timeouts; real network calls; and
+   subprocess spawns — bash tool, shell commands, git).
    `bb test` runs all tests except ^:slow ones; `bb test-ext` runs only the
    ^:slow tests. Both are selected at the individual test level — no whole
    namespaces are excluded."

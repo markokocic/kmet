@@ -916,7 +916,7 @@
 
 ;; ─── Cancellation ─────────────────────────────────────────────────────────
 
-(t/deftest test-loop-cancel-delivers-promise
+(t/deftest ^:slow test-loop-cancel-delivers-promise
   (let [errors (atom [])
         dones (atom 0)
         events (atom [])
@@ -1825,7 +1825,7 @@
       (finally
         (fs/delete-tree dir)))))
 
-(t/deftest test-loop-compaction-refuses-when-active
+(t/deftest ^:slow test-loop-compaction-refuses-when-active
   (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
         sess (session/create-session (str dir))
         agent (loop/make-agent-state :session sess :compact-threshold 1000

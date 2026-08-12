@@ -100,7 +100,7 @@
     (t/is (str/includes? (:message (second @events)) "idle timeout"))
     (.close in)))
 
-(t/deftest test-openai-stream-completes-without-timeout
+(t/deftest ^:slow test-openai-stream-completes-without-timeout
   (let [[in out] (make-pipe)
         events (atom [])
         f (future

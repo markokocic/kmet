@@ -12,7 +12,7 @@
     (t/is (satisfies? core/IComponent c))
     (t/is (= [] (core/render c 10)) "no flashes initially")))
 
-(t/deftest test-flash-renders-inverse-line
+(t/deftest ^:slow test-flash-renders-inverse-line
   (let [c (asf/make-alt-screen-flash (fn []))]
     (asf/alt-screen-flash! c "Copied!")
     (let [lines (core/render c 20)]
@@ -41,7 +41,7 @@
     (let [lines (plain (core/render c 12))]
       (t/is (<= (u/visible-width (first lines)) 12)))))
 
-(t/deftest test-dispose
+(t/deftest ^:slow test-dispose
   (let [c (asf/make-alt-screen-flash (fn []))]
     (asf/alt-screen-flash! c "x" :duration-ms 60000)
     (asf/alt-screen-flash-dispose! c)
@@ -49,7 +49,7 @@
     ;; no crash after the pending timer fires
     (Thread/sleep 30)))
 
-(t/deftest test-request-render-called
+(t/deftest ^:slow test-request-render-called
   (let [renders (atom 0)
         c (asf/make-alt-screen-flash #(swap! renders inc))]
     (asf/alt-screen-flash! c "x" :duration-ms 20)

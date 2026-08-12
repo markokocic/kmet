@@ -174,10 +174,11 @@ src/kmet/
 - **Framework**: `clojure.test`
 - **Layout**: `test/kmet/` mirrors `src/kmet/`
 - **Run**: `bb test` — all tests except those marked `^:slow`.
-  Use **`bb test-ext`** to run only the `^:slow` tests (timing/process
-  suites: real backoff sleeps, parallel tool timing, bash tool process
-  spawns). Mark slow tests with `^:slow` on the deftest; selection happens
-  per test var in `kmet.runner`.
+  Use **`bb test-ext`** to run only the `^:slow` tests (tests that wait
+  real wall-clock time: sleeps, terminal-query timeouts; real network
+  calls; and subprocess spawns — bash tool, shell commands, git). Mark
+  slow tests with `^:slow` on the deftest; selection happens per test var
+  in `kmet.runner`.
 
 ### Final validation
 `bb lint` and `bb format-check` are slow — don't run them during iterative

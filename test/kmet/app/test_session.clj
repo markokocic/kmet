@@ -204,7 +204,7 @@
       (t/is (= 1 (count (s/list-sessions cwd-a))) "cwd dir lists flat")
       (finally (fs/delete-tree dir)))))
 
-(t/deftest test-find-most-recent-session
+(t/deftest ^:slow test-find-most-recent-session
   ;; G23/continue: pi findMostRecentSession — header-based discovery in the
   ;; cwd dir, scoped by header :cwd; legacy headerless files and other-cwd
   ;; sessions excluded, no fallback
@@ -346,7 +346,7 @@
       (t/is (nil? (:name (s/build-session-info (:file sess)))))
       (finally (fs/delete-tree dir)))))
 
-(t/deftest test-session-build-info-modified
+(t/deftest ^:slow test-session-build-info-modified
   ;; G15: modified = latest message activity time (pi: buildSessionInfo),
   ;; not the file mtime
   (let [dir (str "target/test-sess-buildinfo-mod-" (System/currentTimeMillis))

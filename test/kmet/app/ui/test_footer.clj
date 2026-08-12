@@ -28,7 +28,7 @@
   (testing "create footer component"
     (is (some? (ft/make-footer)))))
 
-(deftest test-cwd-line
+(deftest ^:slow test-cwd-line
   (testing "first line shows the cwd"
     (let [c (make-footer-with-session :cwd "/some/project")
           plain (render-plain c 50)]
@@ -37,7 +37,7 @@
       (is (= 2 (count plain))
           "two content lines, no separator"))))
 
-(deftest test-home-substitution
+(deftest ^:slow test-home-substitution
   (testing "cwd inside home renders as ~"
     (let [home (System/getProperty "user.home")
           c (make-footer-with-session :cwd (str home "/project"))
@@ -45,7 +45,7 @@
       (is (some #(re-find #"^К ~/project" %) plain)
           "cwd under HOME renders home-substituted, after the К mark"))))
 
-(deftest test-k-mark
+(deftest ^:slow test-k-mark
   (testing "accent cursive К mark renders before the cwd on line 1"
     (let [c (make-footer-with-session :cwd "/some/project")
           [line1] (render-plain c 50)
@@ -54,7 +54,7 @@
       (is (some? (re-find #"^\u001b\[3m\u001b\[38;2;138;190;183mК" (first raw)))
           "mark is italic (cursive) and accent-colored, matching the info screen"))))
 
-(deftest test-git-branch
+(deftest ^:slow test-git-branch
   (testing "git branch renders after the cwd when resolved"
     ;; In a non-git test environment the branch resolves to nil — the footer
     ;; must still render. The branch suffix is covered by the provider test.
@@ -62,13 +62,13 @@
           plain (render-plain c 50)]
       (is (= 2 (count plain))))))
 
-(deftest test-model-right-aligned
+(deftest ^:slow test-model-right-aligned
   (testing "model renders on the right side of the stats line"
     (let [c (make-footer-with-session :model "gpt-4o" :provider-count 1)
           plain (render-plain c 60)]
       (is (some #(re-find #"gpt-4o" %) plain)))))
 
-(deftest test-provider-prefix-when-multiple
+(deftest ^:slow test-provider-prefix-when-multiple
   (testing "(provider) prefix only when more than one provider is configured"
     (let [c (make-footer-with-session :model "gpt-4o" :provider :openai :provider-count 1)
           plain (render-plain c 60)]
@@ -77,7 +77,7 @@
           plain (render-plain c 60)]
       (is (some #(re-find #"\(openai\) gpt-4o" %) plain)))))
 
-(deftest test-thinking-level
+(deftest ^:slow test-thinking-level
   (testing "thinking level renders after the model when not off"
     (let [c (make-footer-with-session :model "claude" :thinking :high)
           plain (render-plain c 60)]
@@ -86,14 +86,14 @@
           plain (render-plain c 60)]
       (is (not-any? #(re-find #"thinking" %) plain)))))
 
-(deftest test-context-percent
+(deftest ^:slow test-context-percent
   (testing "context percent renders with the window and auto indicator"
     (let [c (make-footer-with-session :context-window 200000 :auto-compact true)
           plain (render-plain c 60)]
       (is (some #(re-find #"200k" %) plain))
       (is (some #(re-find #"\(auto\)" %) plain)))))
 
-(deftest test-extension-statuses
+(deftest ^:slow test-extension-statuses
   (testing "keyed extension statuses render dim on a third line, sorted by key"
     (let [c (make-footer-with-session)]
       (ft/footer-set-extension-status! c "ext-b" "✓ ready")
@@ -110,20 +110,20 @@
           (is (= 2 (count plain)))
           (is (not-any? #(re-find #"● active" %) plain)))))))
 
-(deftest test-wide-footer
+(deftest ^:slow test-wide-footer
   (testing "footer handles wide terminal"
     (let [c (make-footer-with-session :model "gpt-4o" :provider :openai :provider-count 3)
           lines (core/render c 120)]
       (is (pos? (count lines))))))
 
-(deftest test-narrow-footer
+(deftest ^:slow test-narrow-footer
   (testing "footer truncates instead of overflowing on narrow terminals"
     (let [c (make-footer-with-session :model "some-very-long-model-name-here" :provider-count 3)
           plain (render-plain c 20)]
       (is (every? #(<= (count %) 20) plain)
           "every rendered line fits the width"))))
 
-(deftest test-session-name
+(deftest ^:slow test-session-name
   (testing "session display name renders after the cwd (pi: pwd • name)"
     (let [dir (str "target/test-footer-name-" (System/currentTimeMillis))
           sess (s/create-session dir)]
@@ -157,7 +157,7 @@
     (is (= "~/project" (ft/format-cwd-for-footer "/home/user/project" "/home/user")))
     (is (= "/opt/other" (ft/format-cwd-for-footer "/opt/other" "/home/user")))))
 
-(deftest test-cost-display
+(deftest ^:slow test-cost-display
   (testing "usage cost renders as $X.XXX after the stats (pi: toFixed(3))"
     (let [dir (str "target/test-footer-cost-" (System/currentTimeMillis))
           sess (s/create-session dir)]

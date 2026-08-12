@@ -642,7 +642,7 @@
       (t/is (= {"x-api-key" "k"}
                (@#'llm/anthropic-auth-headers :github-copilot "k"))))))
 
-(t/deftest test-llm-anthropic-bearer-only
+(t/deftest ^:slow test-llm-anthropic-bearer-only
   (m/load-catalogs!)
   (m/clear-extension-providers!)
   (try
@@ -693,7 +693,7 @@
       (m/clear-extension-providers!)
       (m/load-catalogs!))))
 
-(t/deftest test-llm-resolves-key-from-auth
+(t/deftest ^:slow test-llm-resolves-key-from-auth
   ;; send-message resolves the key itself when the caller passes none (pi
   ;; prepareRequest) — an auth.edn credential lets a bare call proceed
   ;; instead of erroring with an empty Authorization header.

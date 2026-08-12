@@ -135,7 +135,7 @@
       (t/is (nil? (intercept tui buf)))
       (t/is (= "\u001b[6~" @buf) "buffer untouched — normal key handling"))))
 
-(deftest test-intercept-osc-11
+(deftest ^:slow test-intercept-osc-11
   (testing "a response settles the oldest query; timeout settles with nil"
     (let [tui (recording-tui)
           p (core/tui-query-terminal-background-color tui :timeout-ms 200)

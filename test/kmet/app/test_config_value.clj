@@ -74,7 +74,7 @@
 
 ;; ─── Resolution (pi resolveConfigValue) ────────────────────────────────────
 
-(t/deftest test-resolve-config-value
+(t/deftest ^:slow test-resolve-config-value
   (t/testing "literal"
     (t/is (= "sk-abc" (cv/resolve-config-value "sk-abc" nil))))
   (t/testing "$NAME / ${NAME} interpolation (env map first, then process env)"
@@ -94,7 +94,7 @@
     (cv/clear-config-value-cache!)
     (t/is (= "hi" (cv/resolve-config-value "!echo hi" nil)))))
 
-(t/deftest test-resolve-config-value-command-failures
+(t/deftest ^:slow test-resolve-config-value-command-failures
   (cv/clear-config-value-cache!)
   (t/testing "non-zero exit → nil"
     (t/is (nil? (cv/resolve-config-value "!false" nil))))
@@ -114,7 +114,7 @@
         (t/is (= "cached-result" (cv/resolve-config-value "!cmd" nil)))
         (t/is (= 2 @calls))))))
 
-(t/deftest test-resolve-config-value-or-throw
+(t/deftest ^:slow test-resolve-config-value-or-throw
   (with-redefs [cv/getenv (fn [_] nil)]
     (t/testing "resolvable → value"
       (t/is (= "sk-1" (cv/resolve-config-value-or-throw "sk-1" "API key for provider \"x\"" nil))))

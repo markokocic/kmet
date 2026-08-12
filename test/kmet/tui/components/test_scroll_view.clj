@@ -106,7 +106,7 @@
     (sv/set-scrollbar! sv :hidden)
     (t/is (= 80 (sv/get-content-width sv 80)))))
 
-(t/deftest test-auto-scrollbar-transient-visible
+(t/deftest ^:slow test-auto-scrollbar-transient-visible
   (let [lines (mapv #(str "line" %) (range 10))
         sv (sv/make-scroll-view (fake-child lines) :scrollbar :auto
                                 :scrollbar-hide-delay-ms 50)]

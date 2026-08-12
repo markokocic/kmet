@@ -95,7 +95,7 @@
       (t/is (false? @(:auto-sync-enabled-atom ctrl))
             "explicit setting disables auto-sync"))))
 
-(t/deftest test-apply-from-settings-auto
+(t/deftest ^:slow test-apply-from-settings-auto
   (t/testing "an auto setting enables auto-sync and applies one side; the
             notification sequence is written (CSI ? 2031 h)"
     (let [{:keys [tui ctrl writes]} (make-ctrl {:theme "light/dark"})]
@@ -109,7 +109,7 @@
       (t/is (some #(str/includes? % "\u001b[?2031h") @writes)
             "color-scheme notifications requested"))))
 
-(t/deftest test-auto-sync-toggles-on-scheme-report
+(t/deftest ^:slow test-auto-sync-toggles-on-scheme-report
   (t/testing "a color scheme report switches themes while auto-sync is on"
     (let [{:keys [ctrl]} (make-ctrl {:theme "light/dark"})]
       (tc/apply-from-settings! ctrl)
