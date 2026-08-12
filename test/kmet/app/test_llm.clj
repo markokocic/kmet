@@ -2,6 +2,7 @@
   (:require [clojure.test :as t]
             [clojure.string :as str]
             [kmet.libs.sse :as sse]
+            [kmet.app.auth :as auth]
             [kmet.app.config-value :as config-value]
             [kmet.app.llm :as llm]
             [kmet.app.models :as m]
@@ -624,3 +625,45 @@
           provider {:id :opencode}
           merged (@#'llm/request-headers {} model provider "k" nil)]
       (t/is (nil? (get merged "x-opencode-session"))))))
+
+;; ─── Phase 9: anthropic auth-token (Authorization: Bearer) ─────────────────
+
+(t/deftest test-anthropic-auth-headers
+  (t/testing "the :anthropic provider with AUTH_TOKEN → Authorization: Bearer (pi anthropic resolve)"
+    (with-redefs [auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))]
+      (t/is (= {"Authorization" "Bearer tok"}
+               (@#'llm/anthropic-auth-headers :anthropic "ignored-key")))))
+  (t/testing "no AUTH_TOKEN → x-api-key with the resolved key"
+    (with-redefs [auth/getenv (fn [_] nil)]
+      (t/is (= {"x-api-key" "api-key"}
+               (@#'llm/anthropic-auth-headers :anthropic "api-key")))))
+  (t/testing "other providers never take the anthropic bearer path"
+    (with-redefs [auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))]
+      (t/is (= {"x-api-key" "k"}
+               (@#'llm/anthropic-auth-headers :github-copilot "k"))))))
+
+(t/deftest test-llm-anthropic-bearer-only
+  (m/load-catalogs!)
+  (m/clear-extension-providers!)
+  (try
+    (m/register-provider-config! :anthropic
+                                 {:base-url "https://api.anthropic.com" :api :anthropic-messages
+                                  :models [{:id "claude-sonnet-4.5"}]})
+    (t/testing "non-anthropic providers still reject a missing api key"
+      (with-redefs [auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))]
+        (let [errors (atom [])]
+          @(llm/send-message {:provider :deepseek
+                              :on-error (fn [e] (swap! errors conj e))})
+          (t/is (pos? (count @errors)))
+          (t/is (str/includes? (first @errors) "No API key")))))
+    (t/testing "the :anthropic provider with AUTH_TOKEN: proceeds past the key check"
+      (with-redefs [auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))]
+        (let [errors (atom [])]
+          @(llm/send-message {:provider :anthropic
+                              :model "claude-sonnet-4.5"
+                              :on-error (fn [e] (swap! errors conj e))})
+          (t/is (not-any? #(str/includes? (or % "") "No API key") @errors)
+                "reaches the request (fails on the network, not on auth)"))))
+    (finally
+      (m/clear-extension-providers!)
+      (m/load-catalogs!))))

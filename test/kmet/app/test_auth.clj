@@ -28,7 +28,9 @@
     (t/is (= ["DEEPSEEK_API_KEY"] (auth/provider-env-vars :deepseek)))
     (t/is (= ["COPILOT_GITHUB_TOKEN"] (auth/provider-env-vars :github-copilot)))
     (t/is (= ["OPENAI_API_KEY"] (auth/provider-env-vars :openai)))
-    (t/is (= ["ANTHROPIC_API_KEY"] (auth/provider-env-vars :anthropic)))
+    (t/is (= ["ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_OAUTH_TOKEN" "ANTHROPIC_API_KEY"]
+             (auth/provider-env-vars :anthropic))
+          "Phase 9: all three anthropic env vars participate in discovery (pi findEnvKeys)")
     (t/is (= ["GEMINI_API_KEY"] (auth/provider-env-vars :google))))
   (t/testing "unknown provider → empty"
     (t/is (= [] (auth/provider-env-vars :nonexistent)))))
@@ -143,3 +145,35 @@
     (with-redefs [auth/auth-atom (atom {})
                   auth/getenv (fn [_] nil)]
       (t/is (nil? (cfg/get-api-key :deepseek))))))
+
+;; ─── Phase 9: anthropic auth-token variants ────────────────────────────────
+
+(t/deftest test-anthropic-auth-token
+  (t/testing "anthropic-auth-token returns the AUTH_TOKEN for :anthropic"
+    (with-redefs [auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))]
+      (t/is (= "tok" (auth/anthropic-auth-token :anthropic)))
+      (t/is (nil? (auth/anthropic-auth-token :deepseek)) "other providers → nil"))))
+
+(t/deftest test-anthropic-resolve-api-key-skips-auth-token
+  (t/testing "ANTHROPIC_AUTH_TOKEN alone → no api key (pi getEnvApiKey skips it)"
+    (with-redefs [auth/auth-atom (atom {})
+                  auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))]
+      (t/is (nil? (auth/resolve-api-key :anthropic)))
+      (t/is (true? (auth/configured? :anthropic)) "AUTH_TOKEN still counts as configured (pi findEnvKeys)")))
+  (t/testing "OAUTH_TOKEN preferred over API_KEY (pi order)"
+    (with-redefs [auth/auth-atom (atom {})
+                  auth/getenv #(get {"ANTHROPIC_OAUTH_TOKEN" "oauth" "ANTHROPIC_API_KEY" "key"} %)]
+      (t/is (= "oauth" (auth/resolve-api-key :anthropic))))
+    (with-redefs [auth/auth-atom (atom {})
+                  auth/getenv #(get {"ANTHROPIC_OAUTH_TOKEN" "oauth" "ANTHROPIC_API_KEY" "key"
+                                     "ANTHROPIC_AUTH_TOKEN" "tok"} %)]
+      (t/is (= "oauth" (auth/resolve-api-key :anthropic))
+            "AUTH_TOKEN present does not disturb the oauth/api preference")))
+  (t/testing "API_KEY used when oauth absent"
+    (with-redefs [auth/auth-atom (atom {})
+                  auth/getenv #(get {"ANTHROPIC_API_KEY" "key"} %)]
+      (t/is (= "key" (auth/resolve-api-key :anthropic)))))
+  (t/testing "auth.edn credential still wins over all env variants"
+    (with-redefs [auth/auth-atom (atom {:anthropic {:key "file-key"}})
+                  auth/getenv (fn [_] "env")]
+      (t/is (= "file-key" (auth/resolve-api-key :anthropic))))))

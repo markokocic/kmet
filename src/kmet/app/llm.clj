@@ -10,6 +10,7 @@
             [cheshire.core :as json]
             [kmet.libs.sse :as sse]
             [kmet.app.attribution :as attribution]
+            [kmet.app.auth :as auth]
             [kmet.app.config-value :as config-value]
             [kmet.app.models :as models]
             [kmet.app.proxy :as proxy]
@@ -566,6 +567,15 @@
 
 ;; ─── Anthropic messages request ────────────────────────────────────────────
 
+(defn- anthropic-auth-headers
+  "Base auth headers for an anthropic-messages request (pi anthropic provider
+   resolve): the :anthropic provider with ANTHROPIC_AUTH_TOKEN →
+   Authorization: Bearer <token>, else x-api-key with the resolved API key."
+  [provider api-key]
+  (if-let [token (auth/anthropic-auth-token provider)]
+    {"Authorization" (str "Bearer " token)}
+    {"x-api-key" api-key}))
+
 (defn- anthropic-request
   [{:keys [model-record provider-record effort api-key messages tools signal base-url
            idle-timeout-ms session-id
@@ -583,9 +593,9 @@
       (try
         (let [response (proxy/post-stream (or base-url (endpoint-url :anthropic-messages (:base-url model-record) model-id))
                                           {:headers (request-headers
-                                                     {"x-api-key" api-key
-                                                      "anthropic-version" default-anthropic-version
-                                                      "Content-Type" "application/json"}
+                                                     (merge {"anthropic-version" default-anthropic-version
+                                                             "Content-Type" "application/json"}
+                                                            (anthropic-auth-headers (:id provider-record) api-key))
                                                      model-record provider-record api-key
                                                      session-id)
                                            :body (json/generate-string payload)
@@ -760,7 +770,7 @@
    Returns: future that completes when the stream ends."
   [{:keys [provider model api-key] :or {provider :opencode-go} :as opts}]
   (cond
-    (nil? api-key)
+    (and (nil? api-key) (nil? (auth/anthropic-auth-token provider)))
     (future
       (when-let [on-error (:on-error opts)]
         (on-error (str "No API key for " (name provider)

@@ -791,7 +791,24 @@ add surface; attribution headers are always sent. pi's default is true anyway.
 
 ## Phase 9 — Anthropic auth-token variants
 
-**Status: planned.** Completes pi `env-api-keys.ts` for `:anthropic`:
+**Status: implemented.** Completes pi `env-api-keys.ts` for `:anthropic`:
+`env-vars-by-provider :anthropic` is now the full trio
+`[ANTHROPIC_AUTH_TOKEN ANTHROPIC_OAUTH_TOKEN ANTHROPIC_API_KEY]` (pi
+findEnvKeys order) — all three feed `configured?`/`get-provider-auth-status`
+discovery. `auth/resolve-api-key` skips ANTHROPIC_AUTH_TOKEN (pi getEnvApiKey:
+first env key ≠ AUTH_TOKEN — the token travels as Authorization: Bearer
+instead); new `auth/anthropic-auth-token` returns the token for the
+`:anthropic` provider so the request path can branch. llm's anthropic-messages
+builder sends `Authorization: Bearer <token>` when the provider is
+`:anthropic` and the env token is set (pi anthropic provider resolve),
+otherwise `x-api-key`; `send-message` and the loop's auth checks
+(run-agent-turn, compaction/branch summaries) accept a missing api-key when
+the bearer token provides auth.
+
+Note: kmet has no :anthropic catalog provider — the bearer path serves a
+models.edn/extension-registered `:anthropic` provider (and future catalog
+entries). GitHub-copilot's anthropic-messages models use COPILOT_GITHUB_TOKEN
+and never take the bearer branch (pi: the token is anthropic-provider-specific).
 
 - `env-vars-by-provider :anthropic` → `[ANTHROPIC_AUTH_TOKEN
   ANTHROPIC_OAUTH_TOKEN ANTHROPIC_API_KEY]` (all three participate in
@@ -962,7 +979,13 @@ Each is a substantial project; do not plan details ahead.
   matching, port stripping), opencode session headers (provider + host,
   no-session-id), merge order (request headers override attribution), and
   `test_llm.clj` request-headers attribution flow.
-- Planned (Phases 9–10):
+- Implemented (Phase 9): `test/kmet/app/test_auth.clj` — env trio,
+  resolve-api-key skips AUTH_TOKEN (oauth/api preference), anthropic-auth-token,
+  configured? with AUTH_TOKEN alone, credential precedence; `test_llm.clj` —
+  anthropic-auth-headers (bearer vs x-api-key, provider-scoped), send-message
+  proceeds past the key check for :anthropic with AUTH_TOKEN while other
+  providers still reject.
+- Planned (Phase 10):
   - `test/kmet/app/test_oauth.clj` — device-code poll state machine
     (interval, slow_down, expiry, cancel), PKCE verifier/challenge, auth.edn
     oauth shape validation, credential refresh on expiry (5-min skew),

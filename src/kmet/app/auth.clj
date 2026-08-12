@@ -25,20 +25,40 @@
 
 (def env-vars-by-provider
   "Provider → env var names, in pi's order (pi: env-api-keys.ts).
-   :anthropic keeps only ANTHROPIC_API_KEY — the auth-token variants are
-   deferred (later phases); :google is reserved for a later provider set."
+   :anthropic participates in all three (pi findEnvKeys): AUTH_TOKEN is the
+   Authorization: Bearer path (skipped by resolve-api-key, pi getEnvApiKey),
+   OAUTH_TOKEN / API_KEY are the x-api-key paths. :google is reserved for a
+   later provider set."
   {:opencode-go ["OPENCODE_API_KEY"]
    :opencode ["OPENCODE_API_KEY"]
    :deepseek ["DEEPSEEK_API_KEY"]
    :github-copilot ["COPILOT_GITHUB_TOKEN"]
    :openai ["OPENAI_API_KEY"]
-   :anthropic ["ANTHROPIC_API_KEY"]
+   :anthropic ["ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_OAUTH_TOKEN" "ANTHROPIC_API_KEY"]
    :google ["GEMINI_API_KEY"]})
 
 (defn provider-env-vars
   "Env var names for a provider, in pi's order (empty vector when unknown)."
   [provider]
   (get env-vars-by-provider provider []))
+
+(defn anthropic-auth-token
+  "The ANTHROPIC_AUTH_TOKEN value for the :anthropic provider (nil otherwise)
+   — the Authorization: Bearer credential path (pi anthropic provider
+   resolve: auth-token → auth.headers). AUTH_TOKEN is skipped by
+   resolve-api-key, so requests that use it must branch on this instead."
+  [provider]
+  (when (= :anthropic provider)
+    (getenv "ANTHROPIC_AUTH_TOKEN")))
+
+(defn- api-key-env-vars
+  "Env vars that provide an x-api-key: for :anthropic, the trio minus
+   ANTHROPIC_AUTH_TOKEN (pi getEnvApiKey: first env key ≠ AUTH_TOKEN — the
+   token travels as Authorization: Bearer instead)."
+  [provider]
+  (if (= :anthropic provider)
+    (remove #(= "ANTHROPIC_AUTH_TOKEN" %) (provider-env-vars provider))
+    (provider-env-vars provider)))
 
 ;; ─── auth.edn state ────────────────────────────────────────────────────────
 
@@ -139,13 +159,15 @@
   "API key for a provider: auth.edn credential first, then the models.edn/
    extension :api-key config value (resolved — a configured-but-unresolvable
    key does NOT fall back to env vars, pi resolveConfigValueOrThrow), then
-   env vars in pi order."
+   env vars in pi order — for :anthropic the trio minus ANTHROPIC_AUTH_TOKEN
+   (pi getEnvApiKey; the token is the Authorization: Bearer path, see
+   anthropic-auth-token)."
   [provider]
   (or (get-in @auth-atom [provider :key])
       (let [raw (configured-api-key provider)]
         (if raw
           (config-value/resolve-config-value raw)
-          (some getenv (provider-env-vars provider))))))
+          (some getenv (api-key-env-vars provider))))))
 
 (defn env-key-present?
   "True when any of the provider's env vars is present in the process env

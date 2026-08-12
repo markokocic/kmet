@@ -69,6 +69,7 @@
             [kmet.app.compaction :as compaction]
             [kmet.app.tools.core :as tools]
             [kmet.app.tools.bash :as bash-tool]
+            [kmet.app.auth :as auth]
             [kmet.app.session :as session]
             [kmet.app.models :as models]
             [kmet.app.extensions :as extensions]
@@ -828,7 +829,7 @@ Be precise and concise in your responses."}}]
   (let [provider @(:provider agent)
         ep (resolve-endpoint agent)
         api-key (resolve-api-key agent)]
-    (when api-key
+    (when (or api-key (auth/anthropic-auth-token provider))
       (let [done (promise)
             text-buf (atom "")
             signal (:signal agent)
@@ -867,7 +868,7 @@ Be precise and concise in your responses."}}]
   (let [provider @(:provider agent)
         ep (resolve-endpoint agent)
         api-key (resolve-api-key agent)]
-    (when api-key
+    (when (or api-key (auth/anthropic-auth-token provider))
       (let [done (promise)
             text-buf (atom "")
             signal (or signal (:signal agent))
@@ -1118,7 +1119,7 @@ Be precise and concise in your responses."}}]
   (reset! (:signal agent) false)
   (let [provider @(:provider agent)
         api-key (resolve-api-key agent)]
-    (if (nil? api-key)
+    (if (nil? (or api-key (auth/anthropic-auth-token provider)))
       (do (when message
             ;; The run cannot start, but the submitted message is still shown
             ;; in the chat (pi emits message_start for prompt messages before
