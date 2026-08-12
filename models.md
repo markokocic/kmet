@@ -542,9 +542,12 @@ Covered by test/kmet/app/test_models.clj (`test-calculate-cost`),
 test_session.clj (google shape + `:cost`), test_llm.clj
 (`test-usage-with-cost`), and test_footer.clj (`test-cost-display`).
 
-`/session` cost *breakdown* by model (pi `getUsageCostBreakdown`) remains
-deferred — it needs `:provider`/`:model` on assistant message entries; the
-stored per-message `:cost` breakdown already supports it.
+The `/session` cost *breakdown* by model (pi `getUsageCostBreakdown`) is
+implemented as `session/usage-breakdown`: assistant usage is attributed to
+the provider/model active at that point (derived from `:model-change`
+entries), tool-result and compaction/branch-summary usage group under
+"Tools/summaries"; sorted by cost desc, filtered to buckets with cost or
+tokens. Wired into the `/session` handler (interactive.clj).
 
 ---
 
