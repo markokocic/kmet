@@ -771,7 +771,7 @@
    Returns: future that completes when the stream ends."
   [{:keys [provider model api-key] :or {provider :opencode-go} :as opts}]
   (cond
-    (and (nil? api-key) (nil? (auth/anthropic-auth-token provider)))
+    (nil? (or api-key (auth/resolve-provider-auth provider)))
     (future
       (when-let [on-error (:on-error opts)]
         (on-error (str "No API key for " (name provider)

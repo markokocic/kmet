@@ -667,3 +667,28 @@
     (finally
       (m/clear-extension-providers!)
       (m/load-catalogs!))))
+
+(t/deftest test-llm-anthropic-broken-configured-key-blocks-bearer
+  ;; A configured-but-unresolvable models.edn key blocks the whole resolution
+  ;; (pi resolveConfigValueOrThrow: rawKey present → inherited env never
+  ;; reached) — even with AUTH_TOKEN set, the request must NOT proceed with a
+  ;; nil x-api-key.
+  (m/load-catalogs!)
+  (m/clear-extension-providers!)
+  (try
+    (m/register-provider-config! :anthropic
+                                 {:base-url "https://api.anthropic.com" :api :anthropic-messages
+                                  :api-key "$KMT_MISSING_ANTHROPIC_KEY"
+                                  :models [{:id "claude-sonnet-4.5"}]})
+    (with-redefs [auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))
+                  config-value/getenv (fn [_] nil)]
+      (let [errors (atom [])]
+        @(llm/send-message {:provider :anthropic
+                            :model "claude-sonnet-4.5"
+                            :on-error (fn [e] (swap! errors conj e))})
+        (t/is (pos? (count @errors)))
+        (t/is (str/includes? (first @errors) "No API key")
+              "unresolvable configured key wins over AUTH_TOKEN (pi)")))
+    (finally
+      (m/clear-extension-providers!)
+      (m/load-catalogs!))))

@@ -829,7 +829,7 @@ Be precise and concise in your responses."}}]
   (let [provider @(:provider agent)
         ep (resolve-endpoint agent)
         api-key (resolve-api-key agent)]
-    (when (or api-key (auth/anthropic-auth-token provider))
+    (when (or api-key (auth/resolve-provider-auth provider))
       (let [done (promise)
             text-buf (atom "")
             signal (:signal agent)
@@ -868,7 +868,7 @@ Be precise and concise in your responses."}}]
   (let [provider @(:provider agent)
         ep (resolve-endpoint agent)
         api-key (resolve-api-key agent)]
-    (when (or api-key (auth/anthropic-auth-token provider))
+    (when (or api-key (auth/resolve-provider-auth provider))
       (let [done (promise)
             text-buf (atom "")
             signal (or signal (:signal agent))
@@ -1119,7 +1119,7 @@ Be precise and concise in your responses."}}]
   (reset! (:signal agent) false)
   (let [provider @(:provider agent)
         api-key (resolve-api-key agent)]
-    (if (nil? (or api-key (auth/anthropic-auth-token provider)))
+    (if (nil? (or api-key (auth/resolve-provider-auth provider)))
       (do (when message
             ;; The run cannot start, but the submitted message is still shown
             ;; in the chat (pi emits message_start for prompt messages before
