@@ -569,11 +569,12 @@
 
 (defn- anthropic-auth-headers
   "Base auth headers for an anthropic-messages request (pi anthropic provider
-   resolve): the :anthropic provider with ANTHROPIC_AUTH_TOKEN →
-   Authorization: Bearer <token>, else x-api-key with the resolved API key."
+   resolve): the resolved provider auth — when ANTHROPIC_AUTH_TOKEN wins the
+   resolution order (no credential, no configured key) → Authorization:
+   Bearer, else x-api-key with the resolved API key."
   [provider api-key]
-  (if-let [token (auth/anthropic-auth-token provider)]
-    {"Authorization" (str "Bearer " token)}
+  (if-let [t (:bearer (auth/resolve-provider-auth provider))]
+    {"Authorization" (str "Bearer " t)}
     {"x-api-key" api-key}))
 
 (defn- anthropic-request

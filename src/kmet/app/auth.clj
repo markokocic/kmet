@@ -155,19 +155,31 @@
   (when-let [f @config-key-source]
     (f provider)))
 
-(defn resolve-api-key
-  "API key for a provider: auth.edn credential first, then the models.edn/
-   extension :api-key config value (resolved — a configured-but-unresolvable
-   key does NOT fall back to env vars, pi resolveConfigValueOrThrow), then
-   env vars in pi order — for :anthropic the trio minus ANTHROPIC_AUTH_TOKEN
-   (pi getEnvApiKey; the token is the Authorization: Bearer path, see
-   anthropic-auth-token)."
+(defn resolve-provider-auth
+  "Resolved request auth for a provider (pi composeApiKeyAuth.resolve + the
+   anthropic provider resolve): {:api-key str} for the x-api-key paths, or
+   {:bearer str} when ANTHROPIC_AUTH_TOKEN wins (anthropic). Exact pi order:
+   auth.edn credential → models.edn/extension configured key (a configured
+   key present but unresolvable blocks the rest, pi resolveConfigValueOrThrow)
+   → ANTHROPIC_AUTH_TOKEN → oauth/api env vars (api-key-env-vars, AUTH_TOKEN
+   skipped). nil when nothing is configured."
   [provider]
-  (or (get-in @auth-atom [provider :key])
+  (or (when-let [k (get-in @auth-atom [provider :key])]
+        {:api-key k})
       (let [raw (configured-api-key provider)]
         (if raw
-          (config-value/resolve-config-value raw)
-          (some getenv (api-key-env-vars provider))))))
+          (when-let [k (config-value/resolve-config-value raw)]
+            {:api-key k})
+          (or (when-let [t (anthropic-auth-token provider)]
+                {:bearer t})
+              (when-let [k (some getenv (api-key-env-vars provider))]
+                {:api-key k}))))))
+
+(defn resolve-api-key
+  "API key for a provider — the api-key view of resolve-provider-auth
+   (nil when the anthropic AUTH_TOKEN bearer provides auth instead)."
+  [provider]
+  (:api-key (resolve-provider-auth provider)))
 
 (defn env-key-present?
   "True when any of the provider's env vars is present in the process env

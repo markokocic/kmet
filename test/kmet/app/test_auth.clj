@@ -167,8 +167,8 @@
     (with-redefs [auth/auth-atom (atom {})
                   auth/getenv #(get {"ANTHROPIC_OAUTH_TOKEN" "oauth" "ANTHROPIC_API_KEY" "key"
                                      "ANTHROPIC_AUTH_TOKEN" "tok"} %)]
-      (t/is (= "oauth" (auth/resolve-api-key :anthropic))
-            "AUTH_TOKEN present does not disturb the oauth/api preference")))
+      (t/is (nil? (auth/resolve-api-key :anthropic))
+            "AUTH_TOKEN wins over oauth/api env (pi resolve order) — the bearer path has no api-key")))
   (t/testing "API_KEY used when oauth absent"
     (with-redefs [auth/auth-atom (atom {})
                   auth/getenv #(get {"ANTHROPIC_API_KEY" "key"} %)]
@@ -177,3 +177,37 @@
     (with-redefs [auth/auth-atom (atom {:anthropic {:key "file-key"}})
                   auth/getenv (fn [_] "env")]
       (t/is (= "file-key" (auth/resolve-api-key :anthropic))))))
+
+(t/deftest test-resolve-provider-auth-precedence
+  ;; pi order: credential → configured key → AUTH_TOKEN (bearer) → oauth/api env
+  (t/testing "auth.edn credential beats AUTH_TOKEN"
+    (with-redefs [auth/auth-atom (atom {:anthropic {:key "file-key"}})
+                  auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))]
+      (t/is (= {:api-key "file-key"} (auth/resolve-provider-auth :anthropic)))))
+  (t/testing "configured models.edn key beats AUTH_TOKEN"
+    (with-redefs [auth/config-key-source (atom (fn [_] "cfg-key"))
+                  auth/auth-atom (atom {})
+                  auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))]
+      (t/is (= {:api-key "cfg-key"} (auth/resolve-provider-auth :anthropic)))))
+  (t/testing "AUTH_TOKEN beats oauth/api env (pi: token checked before them)"
+    (with-redefs [auth/auth-atom (atom {})
+                  auth/getenv #(get {"ANTHROPIC_AUTH_TOKEN" "tok" "ANTHROPIC_OAUTH_TOKEN" "oauth"
+                                     "ANTHROPIC_API_KEY" "key"} %)]
+      (t/is (= {:bearer "tok"} (auth/resolve-provider-auth :anthropic)))
+      (t/is (nil? (auth/resolve-api-key :anthropic)) "resolve-api-key has no key for the bearer path")))
+  (t/testing "no AUTH_TOKEN → oauth/api env as api-key"
+    (with-redefs [auth/auth-atom (atom {})
+                  auth/getenv #(get {"ANTHROPIC_OAUTH_TOKEN" "oauth"} %)]
+      (t/is (= {:api-key "oauth"} (auth/resolve-provider-auth :anthropic))))
+    (with-redefs [auth/auth-atom (atom {})
+                  auth/getenv #(get {"ANTHROPIC_API_KEY" "key"} %)]
+      (t/is (= {:api-key "key"} (auth/resolve-provider-auth :anthropic)))))
+  (t/testing "non-anthropic providers never resolve a bearer"
+    (with-redefs [auth/auth-atom (atom {})
+                  auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))]
+      (t/is (nil? (auth/resolve-provider-auth :deepseek))
+            "AUTH_TOKEN does not leak to other providers")))
+  (t/testing "nothing configured → nil"
+    (with-redefs [auth/auth-atom (atom {})
+                  auth/getenv (fn [_] nil)]
+      (t/is (nil? (auth/resolve-provider-auth :anthropic))))))

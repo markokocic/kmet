@@ -462,7 +462,8 @@
 
 (defn get-api-key-and-headers
   "Resolved request auth for a model (pi ModelRegistry.getApiKeyAndHeaders):
-   {:ok true :api-key str? :headers map?} — the resolved key plus the
+   {:ok true :api-key str? :headers map?} — the resolved key (or the
+   Authorization bearer for an anthropic AUTH_TOKEN resolution) plus the
    model/provider configured headers resolved as config values — or
    {:ok false :error str}: unknown provider, no key when the provider
    requires one (:auth-header), or an unresolvable configured header (pi:
@@ -473,11 +474,16 @@
     (if (nil? provider)
       {:ok false :error (str "Unknown provider: " (name (or provider-id :unknown)))}
       (try
-        (let [api-key (auth/resolve-api-key provider-id)
+        (let [auth (auth/resolve-provider-auth provider-id)
+              api-key (:api-key auth)
+              bearer (:bearer auth)
               headers (config-value/resolve-headers-or-throw
                        (merge (:headers model) (:configured-headers provider))
-                       (str "model \"" (name provider-id) "/" (:id model) "\""))]
-          (if (and (nil? api-key) (:auth-header provider))
+                       (str "model \"" (name provider-id) "/" (:id model) "\""))
+              headers (if bearer
+                        (assoc headers "Authorization" (str "Bearer " bearer))
+                        headers)]
+          (if (and (nil? api-key) (nil? bearer) (:auth-header provider))
             {:ok false :error (str "No API key found for \"" (name provider-id) "\"")}
             {:ok true :api-key api-key :headers headers}))
         (catch Exception e
