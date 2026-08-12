@@ -249,3 +249,22 @@
                  nil)
           m (first (:models model))]
       (t/is (= {:temperature 0.7} (:sampling-params m))))))
+
+;; ─── Eager extension validation (pi validateExtensionProvider) ─────────────
+
+(t/deftest test-validate-extension-provider
+  (t/testing "valid extension config passes"
+    (t/is (nil? (pc/validate-extension-provider
+                 :custom nil nil
+                 {:base-url "https://x/v1" :api :openai-completions
+                  :models [{:id "m"}]}))))
+  (t/testing "missing api throws (broken registration fails before touching state)"
+    (t/is (thrown? Exception
+                   (pc/validate-extension-provider
+                    :custom nil nil
+                    {:base-url "https://x/v1" :models [{:id "m"}]}))))
+  (t/testing "missing base-url throws"
+    (t/is (thrown? Exception
+                   (pc/validate-extension-provider
+                    :custom nil nil
+                    {:api :openai-completions :models [{:id "m"}]})))))

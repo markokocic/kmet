@@ -6,6 +6,7 @@
   (:require [kmet.modes.interactive :as interactive]
             [kmet.modes.print :as print-mode]
             [kmet.config :as cfg]
+            [kmet.app.extensions :as extensions]
             [kmet.app.models :as models]
             [kmet.app.model-resolver :as resolver]
             [kmet.debug :as debug]
@@ -161,25 +162,31 @@
       (binding [*out* *err*]
         (println "Warning: models.edn:" err)))
 
-    ;; CLI --model/--models patterns resolve against the registry (pi
-    ;; resolveCliModel at dispatch) before mode dispatch
-    (let [opts (resolve-cli-model-opts opts)]
-      (when (:print opts)
-        (let [msg (str/join " " (:messages opts))]
-          (if (empty? msg)
-            (do (println "No message provided. Usage: kmet -p \"your message\"")
-                (System/exit 1))
-            (let [result (print-mode/run (assoc opts :messages [msg]))]
-              ;; exit 1 when the run errored (nil result = no response text)
-              (System/exit (if (nil? result) 1 0))))))
-      (when (:debug opts)
-        (debug/enable!)
-        (debug/log "kmet started with --debug"))
+    ;; Configuration + extensions load before model resolution (pi:
+    ;; createAgentSessionRuntime registers extension providers, then the CLI
+    ;; model resolves) — so --model/--provider and settings.edn can select
+    ;; extension-registered providers, and print mode gets extension hooks.
+    (let [config (cfg/init!)]
+      (doseq [d (cfg/resource-dirs config :extensions-dir ".kmet/extensions")]
+        (extensions/load-extensions-from-dir d))
 
-      (println "Starting kmet...")
+      ;; CLI --model/--models patterns resolve against the registry (pi
+      ;; resolveCliModel at dispatch) before mode dispatch
+      (let [opts (resolve-cli-model-opts opts)]
+        (when (:print opts)
+          (let [msg (str/join " " (:messages opts))]
+            (if (empty? msg)
+              (do (println "No message provided. Usage: kmet -p \"your message\"")
+                  (System/exit 1))
+              (let [result (print-mode/run (assoc opts :messages [msg]))]
+                ;; exit 1 when the run errored (nil result = no response text)
+                (System/exit (if (nil? result) 1 0))))))
+        (when (:debug opts)
+          (debug/enable!)
+          (debug/log "kmet started with --debug"))
 
-      ;; Initialize configuration and themes
-      (let [config (cfg/init!)]
+        (println "Starting kmet...")
+
         (try
           (interactive/run config opts)
           (catch Exception e

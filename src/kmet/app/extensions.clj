@@ -14,6 +14,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [babashka.fs :as fs]
+            [kmet.app.models :as models]
             [kmet.app.session :as session]))
 
 ;; ─── Extension input / before-agent-start hooks ────────────────────────────
@@ -122,6 +123,73 @@
   "Remove all before-agent-start hooks (for testing)."
   []
   (reset! before-agent-start-hooks []))
+
+;; ─── Extension provider registry (pi: ctx.registerProvider / ctx.models) ──
+;; Extensions add providers via register-provider!/unregister-provider!; the
+;; read facade mirrors pi's ModelRegistry (ctx.models). Registrations persist
+;; across /reload (pi: the ModelRuntime survives reload; extensions re-register
+;; idempotently when the extension files re-run).
+
+(defn register-provider!
+  "Register an extension provider (pi: ctx.registerProvider): a provider-id +
+   config map (kmet.app.models/register-provider-config!) or a complete
+   Provider record (kmet.app.models/register-native-provider!). A broken
+   config throws without touching previously registered state."
+  ([provider-id config]
+   (models/register-provider-config! provider-id config))
+  ([provider]
+   (models/register-native-provider! provider)))
+
+(defn unregister-provider!
+  "Remove an extension provider registration (pi: ctx.unregisterProvider):
+   the provider falls back to its builtin (or disappears when it had none)."
+  [provider-id]
+  (models/unregister-provider-config! provider-id))
+
+(defn get-all-models
+  "All registered models across every provider (pi: ctx.models.getAll)."
+  []
+  (models/get-models))
+
+(defn get-available-models
+  "Models whose provider has complete auth (pi: ctx.models.getAvailable)."
+  []
+  (models/get-available))
+
+(defn find-model
+  "Model record for a provider + model id, or nil (pi: ctx.models.find)."
+  [provider-id model-id]
+  (models/get-model provider-id model-id))
+
+(defn has-configured-auth
+  "True when a model's provider has complete auth (pi:
+   ctx.models.hasConfiguredAuth)."
+  [model]
+  (models/has-configured-auth model))
+
+(defn get-provider-auth-status
+  "Auth status map for a provider (pi: ctx.models.getProviderAuthStatus):
+   {:configured bool :source kw}."
+  [provider-id]
+  (models/get-provider-auth-status provider-id))
+
+(defn get-api-key-and-headers
+  "Resolved request auth for a model (pi: ctx.models.getApiKeyAndHeaders):
+   {:ok true :api-key str? :headers map?} or {:ok false :error str}."
+  [model]
+  (models/get-api-key-and-headers model))
+
+(defn get-registered-provider-config
+  "The registered extension config for a provider, or nil (pi:
+   ctx.models.getRegisteredProviderConfig)."
+  [provider-id]
+  (models/get-registered-provider-config provider-id))
+
+(defn get-registered-provider-ids
+  "Provider ids with an extension registration (pi:
+   ctx.models.getRegisteredProviderIds)."
+  []
+  (models/get-registered-provider-ids))
 
 ;; ─── Extension loading ─────────────────────────────────────────────────────
 

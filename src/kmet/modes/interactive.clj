@@ -3073,9 +3073,8 @@
   [config opts]
   (let [tui-ref (atom nil)]
     (try
-      ;; Load extensions (pi: extension discovery)
-      (let [ext-dir (cfg/expand-path (:extensions-dir config))]
-        (extensions/load-extensions-from-dir ext-dir))
+      ;; Extensions were loaded before dispatch (core/-main, pi: extension
+      ;; discovery before model resolution); /reload re-loads them.
 
       ;; Apply command-line overrides
       (let [config (cfg/apply-cli-overrides config opts)

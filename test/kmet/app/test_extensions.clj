@@ -2,6 +2,7 @@
   (:require [clojure.test :as t]
             [clojure.java.io :as io]
             [kmet.app.extensions :as extensions]
+            [kmet.app.models :as models]
             [kmet.app.session :as session]))
 
 ;; ─── Extension loading ────────────────────────────────────────────────────
@@ -234,3 +235,40 @@
   (t/is (empty? (extensions/get-custom-entries :x)))
   (t/is (nil? (extensions/get-label "nope")))
   (t/is (nil? (extensions/set-label! "nope" "l"))))
+
+;; ─── Extension provider registry (pi: ctx.registerProvider / ctx.models) ──
+
+(t/deftest test-register-provider-delegation
+  (models/clear-extension-providers!)
+  (try
+    (t/testing "register-provider! with id + config delegates to the registry"
+      (extensions/register-provider! :ext-prov
+                                     {:base-url "https://ext.example/v1" :api :openai-completions
+                                      :api-key "sk-ext" :models [{:id "ext-1"}]})
+      (t/is (some? (models/get-provider :ext-prov)))
+      (t/is (= ["ext-1"] (mapv :id (models/get-models :ext-prov))))
+      (t/is (= {:base-url "https://ext.example/v1" :api :openai-completions
+                :api-key "sk-ext" :models [{:id "ext-1"}]}
+               (extensions/get-registered-provider-config :ext-prov))))
+    (t/testing "broken config throws and leaves no registration"
+      (t/is (thrown? Exception
+                     (extensions/register-provider! :broken {:models [{:id "x"}]})))
+      (t/is (nil? (models/get-provider :broken))))
+    (t/testing "unregister-provider! removes it"
+      (extensions/unregister-provider! :ext-prov)
+      (t/is (nil? (models/get-provider :ext-prov))))
+    (t/testing "read facade mirrors the registry"
+      (extensions/register-provider! :facade
+                                     {:base-url "https://f/v1" :api :openai-completions
+                                      :api-key "sk" :models [{:id "f1"}]})
+      (let [model (extensions/find-model :facade "f1")]
+        (t/is (some? model))
+        (t/is (some #(= "f1" (:id %)) (extensions/get-all-models)))
+        (t/is (true? (extensions/has-configured-auth model)))
+        (t/is (= {:configured true :source :fallback}
+                 (extensions/get-provider-auth-status :facade)))
+        (t/is (true? (:ok (extensions/get-api-key-and-headers model))))
+        (t/is (= [:facade] (extensions/get-registered-provider-ids)))))
+    (finally
+      (models/clear-extension-providers!)
+      (models/load-catalogs!))))

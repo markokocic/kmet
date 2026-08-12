@@ -2,6 +2,7 @@
   "Phase 0: registry semantics, catalog loading, EDN shape, manifest;
    Phase 6: models.edn composition (load-models-config!)."
   (:require [clojure.test :as t]
+            [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.app.models :as m]
             [kmet.app.auth :as auth]
@@ -366,3 +367,213 @@
       (finally
         (fs/delete-tree tmp)
         (m/load-catalogs!)))))
+
+;; ─── Phase 7: extension provider registration (pi ModelRuntime) ───────────
+
+(defn- ext-model
+  [id]
+  (m/map->Model {:id id :name (str "Ext " id) :provider :native-ext
+                 :api :openai-completions :base-url "https://native.example/v1"
+                 :reasoning false :input [:text]
+                 :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+                 :context-window 1000 :max-tokens 100}))
+
+(t/deftest test-register-provider-config!
+  (m/load-catalogs!)
+  (m/clear-extension-providers!)
+  (try
+    (t/testing "config-only extension provider composes + registers"
+      (m/register-provider-config! :ext-prov
+                                   {:base-url "https://ext.example/v1" :api :openai-completions
+                                    :api-key "sk-ext" :auth-header true
+                                    :models [{:id "ext-1" :reasoning true}]})
+      (t/is (= "ext-prov" (:name (m/get-provider :ext-prov)))
+            "name defaults to provider id")
+      (t/is (= ["ext-1"] (mapv :id (m/get-models :ext-prov))))
+      (t/is (= "sk-ext" (:api-key (m/get-provider :ext-prov))))
+      (t/is (= true (:auth-header (m/get-provider :ext-prov))))
+      (t/is (= {:base-url "https://ext.example/v1" :api :openai-completions
+                :api-key "sk-ext" :auth-header true
+                :models [{:id "ext-1" :reasoning true}]}
+               (m/get-registered-provider-config :ext-prov)))
+      (t/testing "auth: literal api-key counts as configured"
+        (with-redefs [auth/getenv (fn [_] nil)
+                      config-value/getenv (fn [_] nil)]
+          (t/is (true? (auth/configured? :ext-prov)))
+          (t/is (= "sk-ext" (auth/resolve-api-key :ext-prov)))
+          (t/is (some #(= "ext-1" (:id %)) (m/get-available))))))
+    (t/testing "re-registration merges defined values, preserves unset ones (pi)"
+      (m/register-provider-config! :ext-prov {:base-url "https://ext2.example/v1"})
+      (t/is (= "https://ext2.example/v1" (:base-url (m/get-provider :ext-prov))))
+      (t/is (= ["ext-1"] (mapv :id (m/get-models :ext-prov))) "models preserved")
+      (t/is (= :openai-completions (:api (m/get-model :ext-prov "ext-1")))))
+    (t/testing "broken re-registration throws without touching stored state"
+      (t/is (thrown? Exception
+                     (m/register-provider-config! :ext-prov {:models [{:id "bad"}]})))
+      (t/is (= "https://ext2.example/v1" (:base-url (m/get-provider :ext-prov)))
+            "previous registration intact"))
+    (t/testing "unregister drops a config-only provider"
+      (m/unregister-provider-config! :ext-prov)
+      (t/is (nil? (m/get-provider :ext-prov)))
+      (t/is (nil? (m/get-registered-provider-config :ext-prov))))
+    (t/testing "extension over a builtin: base-url override, builtin restored on unregister"
+      (m/register-provider-config! :deepseek {:base-url "https://ext-proxy/v1"})
+      (t/is (= "https://ext-proxy/v1" (:base-url (m/get-model :deepseek "deepseek-v4-flash"))))
+      (t/is (some? (m/get-model :deepseek "deepseek-v4-pro")) "builtin models kept")
+      (m/unregister-provider-config! :deepseek)
+      (t/is (= "https://api.deepseek.com" (:base-url (m/get-model :deepseek "deepseek-v4-flash")))
+            "builtin restored"))
+    (finally
+      (m/clear-extension-providers!)
+      (m/load-catalogs!))))
+
+(t/deftest test-register-native-provider!
+  (m/load-catalogs!)
+  (m/clear-extension-providers!)
+  (try
+    (t/testing "full Provider record registers as-is"
+      (let [p (m/map->Provider {:id :native-ext :name "Native Ext"
+                                :api-types #{:openai-completions}
+                                :models [(ext-model "n1")] :env-vars []
+                                :default-model nil})]
+        (m/register-native-provider! p)
+        (t/is (= p (m/get-provider :native-ext)))
+        (t/is (= ["n1"] (mapv :id (m/get-models :native-ext))))
+        (t/is (= p (m/get-registered-native-provider :native-ext)))))
+    (t/testing "native registration clears a prior config registration"
+      (m/register-provider-config! :native-ext {:base-url "https://cfg/v1" :api :openai-completions
+                                                :models [{:id "c1"}]})
+      (let [p (m/map->Provider {:id :native-ext :name "Native" :api-types #{:openai-completions}
+                                :models [(ext-model "n2")] :env-vars [] :default-model nil})]
+        (m/register-native-provider! p)
+        (t/is (= ["n2"] (mapv :id (m/get-models :native-ext))))
+        (t/is (nil? (m/get-registered-provider-config :native-ext)))))
+    (t/testing "empty provider id throws"
+      (t/is (thrown? Exception
+                     (m/register-native-provider!
+                      (m/map->Provider {:id nil :name "X" :api-types #{} :models []
+                                        :env-vars [] :default-model nil})))))
+    (t/testing "unregister restores the builtin / drops config-only"
+      (m/unregister-provider-config! :native-ext)
+      (t/is (nil? (m/get-provider :native-ext))))
+    (t/testing "registered ids surface"
+      (m/register-provider-config! :ext-a {:base-url "https://a/v1" :api :openai-completions
+                                           :models [{:id "a1"}]})
+      (m/register-native-provider!
+       (m/map->Provider {:id :ext-b :name "B" :api-types #{:openai-completions}
+                         :models [(ext-model "b1")] :env-vars [] :default-model nil}))
+      (t/is (= [:ext-a :ext-b] (m/get-registered-provider-ids)))
+      (t/is (= 6 (count (m/get-providers))) "builtins + 2 extension providers"))
+    (finally
+      (m/clear-extension-providers!)
+      (m/load-catalogs!))))
+
+(t/deftest test-extension-facade
+  (m/load-catalogs!)
+  (m/clear-extension-providers!)
+  (try
+    (m/register-provider-config! :facade-ext
+                                 {:base-url "https://facade/v1" :api :openai-completions
+                                  :api-key "sk-facade" :auth-header true
+                                  :models [{:id "f1"}]})
+    (let [model (m/get-model :facade-ext "f1")]
+      (t/testing "has-configured-auth"
+        (t/is (true? (m/has-configured-auth model)))
+        (t/is (true? (m/has-configured-auth :facade-ext))))
+      (t/testing "get-provider-auth-status sources"
+        (with-redefs [auth/getenv (fn [_] nil)
+                      config-value/getenv (fn [_] nil)]
+          (t/is (= {:configured true :source :fallback}
+                   (m/get-provider-auth-status :facade-ext))
+                "extension-sourced key reports :fallback (pi)")
+          (t/is (= {:configured false} (m/get-provider-auth-status :no-such))))
+        (with-redefs [auth/getenv (fn [k] (when (= k "DEEPSEEK_API_KEY") "dk"))]
+          (t/is (= {:configured true :source :environment}
+                   (m/get-provider-auth-status :deepseek))))
+        (with-redefs [auth/auth-atom (atom {:deepseek {:key "stored-key"}})
+                      auth/getenv (fn [_] nil)]
+          (t/is (= {:configured true :source :stored}
+                   (m/get-provider-auth-status :deepseek)))))
+      (t/testing "get-api-key-and-headers"
+        (with-redefs [auth/auth-atom (atom {})
+                      auth/getenv (fn [_] nil)
+                      config-value/getenv (fn [_] nil)]
+          (t/is (= {:ok true :api-key "sk-facade" :headers nil}
+                   (m/get-api-key-and-headers model)))
+          (t/is (= {:ok false :error "Unknown provider: no-such-provider"}
+                   (m/get-api-key-and-headers {:provider :no-such-provider :id "x"})))
+          (t/testing "no key + no auth-header → ok without key (pi)"
+            (t/is (= {:ok true :api-key nil :headers nil}
+                     (m/get-api-key-and-headers (m/get-model :deepseek "deepseek-v4-flash")))))
+          (t/testing "no key + auth-header → error naming the provider (pi)"
+            (m/register-provider-config! :keyless
+                                         {:base-url "https://k/v1" :api :openai-completions
+                                          :auth-header true :models [{:id "k1"}]})
+            (t/is (= {:ok false :error "No API key found for \"keyless\""}
+                     (m/get-api-key-and-headers (m/get-model :keyless "k1"))))))))
+    (finally
+      (m/clear-extension-providers!)
+      (m/load-catalogs!))))
+
+(t/deftest test-extension-over-models-edn-layer
+  ;; 3 layers: builtin < models.edn < extension (pi composeModelProvider)
+  (m/load-catalogs!)
+  (m/clear-extension-providers!)
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-ext-models-edn-" (System/currentTimeMillis)))))
+        path (str tmp "/models.edn")]
+    (fs/create-dirs tmp)
+    (try
+      (let [orig-flash-cw (:context-window (m/get-model :deepseek "deepseek-v4-flash"))]
+        (spit path "{:providers {:deepseek {:model-overrides {\"deepseek-v4-pro\" {:context-window 444}}}}}\n")
+        (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
+          (m/load-models-config!)
+          (m/register-provider-config! :deepseek {:base-url "https://ext-overlay/v1"})
+          (t/is (= "https://ext-overlay/v1" (:base-url (m/get-model :deepseek "deepseek-v4-flash")))
+                "extension base-url wins over builtin")
+          (t/is (= 444 (:context-window (m/get-model :deepseek "deepseek-v4-pro")))
+                "models.edn override still applied underneath")
+          (t/is (= orig-flash-cw (:context-window (m/get-model :deepseek "deepseek-v4-flash")))
+                "untouched model keeps catalog values")))
+      (finally
+        (fs/delete-tree tmp)
+        (m/clear-extension-providers!)
+        (m/load-catalogs!)))))
+
+(t/deftest test-facade-header-errors-and-native-key
+  ;; pi getApiKeyAndHeaders: unresolvable configured headers → ok:false with
+  ;; the message; native provider api-keys count as configured.
+  (m/load-catalogs!)
+  (m/clear-extension-providers!)
+  (try
+    (with-redefs [auth/auth-atom (atom {})
+                  auth/getenv (fn [_] nil)
+                  config-value/getenv (fn [_] nil)]
+      (t/testing "unresolvable configured header → ok:false with the message"
+        (m/register-provider-config! :hdr-ext
+                                     {:base-url "https://h/v1" :api :openai-completions
+                                      :headers {"X-Bad" "$MISSING_HDR"}
+                                      :models [{:id "h1"}]})
+        (let [r (m/get-api-key-and-headers (m/get-model :hdr-ext "h1"))]
+          (t/is (false? (:ok r)))
+          (t/is (str/includes? (:error r) "MISSING_HDR"))))
+      (t/testing "native provider api-key counts as configured"
+        (m/register-native-provider!
+         (m/map->Provider {:id :native-key :name "NK" :api-types #{:openai-completions}
+                           :api-key "nk"
+                           :models [(m/map->Model {:id "nk1" :name "NK1"
+                                                   :provider :native-key
+                                                   :api :openai-completions
+                                                   :base-url "https://n/v1"
+                                                   :reasoning false :input [:text]
+                                                   :cost {:input 0 :output 0 :cache-read 0
+                                                          :cache-write 0}
+                                                   :context-window 100 :max-tokens 10})]
+                           :env-vars [] :default-model nil}))
+        (t/is (true? (auth/configured? :native-key)))
+        (t/is (= {:configured true :source :environment}
+                 (m/get-provider-auth-status :native-key)))
+        (t/is (= {:ok true :api-key "nk" :headers nil}
+                 (m/get-api-key-and-headers (m/get-model :native-key "nk1"))))))
+    (finally
+      (m/clear-extension-providers!)
+      (m/load-catalogs!))))

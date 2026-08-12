@@ -169,6 +169,16 @@
                        (:headers ext-model))]
     (when (seq headers) headers)))
 
+(defn validate-extension-provider
+  "Run the extension layer composition eagerly (pi validateExtensionProvider):
+   applies models.edn + the extension onto BASE's models so structural errors
+   (missing api/base-url, invalid model fields) throw before a broken
+   registration touches stored state. kmet has no streamSimple, so there is
+   no separate api-requirement check."
+  [provider-id base models-config extension]
+  (apply-extension provider-id (apply-models-json provider-id (:models base) models-config) extension)
+  nil)
+
 (defn compose-model-provider
   "Compose the builtin + models.edn + extension layers into a provider map
    (pi composeModelProvider). BASE is the builtin provider record (or nil

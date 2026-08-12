@@ -116,11 +116,17 @@
 
 (defn set-config-key-source!
   "Register the provider → raw models.edn/extension :api-key config value
-   source (set by models/load-models-config!; nil returns no configured
+   source (set by models/load-catalogs!; nil returns no configured
    key). Kept behind a hook so auth stays dependency-free of the registry
    (no require cycle)."
   [f]
   (reset! config-key-source f))
+
+(defn config-key-source-installed?
+  "True when a config-key source is registered (models/load-catalogs! or
+   extension registration)."
+  []
+  (some? @config-key-source))
 
 (defn- configured-api-key
   "Raw models.edn/extension :api-key config value for a provider (nil when
@@ -141,6 +147,12 @@
           (config-value/resolve-config-value raw)
           (some getenv (provider-env-vars provider))))))
 
+(defn env-key-present?
+  "True when any of the provider's env vars is present in the process env
+   (pi findEnvKeys — feeds get-provider-auth-status)."
+  [provider]
+  (boolean (some getenv (provider-env-vars provider))))
+
 (defn configured?
   "True when the provider has a credential: auth.edn entry, a configured
    models.edn/extension api-key (literal or !command always; $ENV needs the
@@ -149,4 +161,4 @@
   (boolean (or (get-in @auth-atom [provider :key])
                (when-let [raw (configured-api-key provider)]
                  (config-value/is-config-value-configured? raw))
-               (some getenv (provider-env-vars provider)))))
+               (env-key-present? provider))))

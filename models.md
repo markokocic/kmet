@@ -708,8 +708,36 @@ whether the config/extension apiKey counts as configured (source
 
 ## Phase 7 — Extension `registerProvider` / `unregisterProvider`
 
-**Status: planned.** The extension half of pi `provider-composer.ts` +
-`model-registry.ts`, on top of Phase 6's composition.
+**Status: implemented.** The extension half of pi `provider-composer.ts` +
+`model-registry.ts`, on top of Phase 6's composition. `models.clj` gained
+`register-provider-config!` / `unregister-provider-config!` (pi
+ModelRuntime.registerProvider / unregisterProvider: eager validation via the
+composer's `validate-extension-provider`, merge-over-previous preserving unset
+fields, recompose, builtin restored on unregister) and `register-native-provider!`
+(pi registerNativeProvider: full Provider record, clears config registrations,
+throws on an empty id). `compose-model-provider`'s extension layer is now fed
+from a real registry instead of nil — base = native extension ?? pristine
+builtin, with `recompose-provider!` (pi recomposeProvider) per provider: no
+layers → removed, base without overlays → pristine builtin untouched, errors
+→ fall back to base / record for get-model-config-error. `load-models-config!`
+rebuilds from builtins ∪ models.edn ∪ extensions; registrations persist across
+/reload (pi: the ModelRuntime survives reload; extension files re-run and
+re-register idempotently). `kmet.app.extensions` exposes `register-provider!` /
+`unregister-provider!` (pi ctx.registerProvider / ctx.unregisterProvider, both
+arities) plus the ModelRegistry read facade (`get-all-models`,
+`get-available-models`, `find-model`, `has-configured-auth`,
+`get-provider-auth-status`, `get-api-key-and-headers`,
+`get-registered-provider-config`, `get-registered-provider-ids`). The auth
+config-key source hook is installed by `load-catalogs!` (and ensured by
+registration) so extension api-keys feed auth resolution and availability
+without a prior models.edn load. Extension loading moved before CLI model
+resolution in `core/-main` (pi: createAgentSessionRuntime registers extension
+providers, then the CLI model resolves), so `--model`/`--provider`/settings.edn
+can select extension-registered providers and print mode gets extension hooks;
+interactive mode no longer loads extensions itself (/reload re-loads them).
+
+Deviations from pi: no streamSimple (nothing to gate); `get-provider-auth-status`
+reports `:source` without pi's runtime-key layer (kmet has no runtime api keys).
 
 - `models/register-provider-config!` / `unregister-provider-config!` —
   name + config map (pi `ModelRegistry.registerProvider(name, config)` and
@@ -906,7 +934,14 @@ Each is a substantial project; do not plan details ahead.
     falls back / drops, `get-model-config-error`.
   - `test/kmet/app/test_llm.clj` — `request-headers` (model + provider
     configured headers, `:auth-header` Authorization, `$ENV` resolution).
-- Planned (Phases 7–10):
+- Implemented (Phase 7): `test_provider_composer.clj`
+  (`validate-extension-provider` eager errors), `test_models.clj`
+  (register-provider-config! merge/broken-throws/unregister, native records,
+  extension-over-builtin, 3-layer builtin+models.edn+extension, facade
+  has-configured-auth / get-provider-auth-status sources /
+  get-api-key-and-headers ok+error paths), `test_extensions.clj`
+  (register-provider!/unregister-provider! + read-facade delegation).
+- Planned (Phases 8–10):
   - `test/kmet/app/test_attribution.clj` — openrouter/nvidia/cloudflare
     headers, opencode session headers, telemetry gate, merge order.
   - `test/kmet/app/test_oauth.clj` — device-code poll state machine

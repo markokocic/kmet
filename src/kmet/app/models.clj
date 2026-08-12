@@ -12,6 +12,7 @@
             [babashka.fs :as fs]
             [kmet.config :as cfg]
             [kmet.app.auth :as auth]
+            [kmet.app.config-value :as config-value]
             [kmet.app.model-config :as model-config]
             [kmet.app.provider-composer :as composer]))
 
@@ -74,6 +75,10 @@
 ;; ─── Registry (pi: MutableModels) ──────────────────────────────────────────
 
 (defonce providers-atom (atom {}))
+
+;; Pristine catalog providers — compose-model-provider's base layer (pi:
+;; builtins are never mutated; composed providers live in providers-atom).
+(defonce ^:private builtins-atom (atom {}))
 
 (defn register-provider!
   "Upsert a Provider by :id (pi: MutableModels.setProvider — provider ids are
@@ -224,17 +229,24 @@
 
 (defn load-catalogs!
   "Load all committed provider catalogs from model_data/ into the registry,
-   replacing whatever was registered before. Returns the providers map.
-   Call once at startup (pi registers its generated providers at creation)."
+   replacing whatever was registered before. Also snapshots the pristine
+   builtins (compose-model-provider's base layer — pi never mutates its
+   builtins map) and installs the auth config-key source (models.edn /
+   extension :api-key), so auth resolution reflects composed providers.
+   Returns the providers map. Call once at startup (pi registers its
+   generated providers at creation)."
   []
+  (auth/set-config-key-source! (fn [provider-id] (:api-key (get-provider provider-id))))
   (if (fs/exists? model-data-dir)
     (let [providers (into {}
                           (for [f (catalog-files)
                                 :let [data (load-catalog-file f)]]
                             [(:id (:provider data)) (catalog->provider data)]))]
+      (reset! builtins-atom providers)
       (reset! providers-atom providers)
       providers)
-    (do (reset! providers-atom {})
+    (do (reset! builtins-atom {})
+        (reset! providers-atom {})
         {})))
 
 ;; ─── Manifest (pi: scripts/model-data.ts createModelDataManifest) ─────────
@@ -289,45 +301,214 @@
          (= (:structure-hash committed) (:structure-hash current))
          (= (:files committed) (:files current)))))
 
-;; ─── models.edn composition (pi: ModelRuntime.rebuildProviders) ────────────
+;; ─── Provider composition (pi: ModelRuntime rebuildProviders /           ──
+;;    recomposeProvider / registerProvider / registerNativeProvider /        ──
+;;    unregisterProvider)                                                    ──
 
 (def ^:private composition-errors (atom {}))
+(defonce ^:private extension-providers (atom {}))
+(defonce ^:private native-extension-providers (atom {}))
+
+(defn- recompose-provider!
+  "Compose ONE provider from its layers (pi ModelRuntime.recomposeProvider):
+   base = native extension provider ?? pristine builtin; extension = the
+   registered extension config; config = models.edn. No layers at all → the
+   provider is removed. Base with no overlays → the pristine builtin
+   registers untouched (exact auth/stream behavior, pi). Composition errors
+   fall back to the base (or drop) and are recorded for
+   get-model-config-error."
+  [provider-id]
+  (let [base (or (get @native-extension-providers provider-id)
+                 (get @builtins-atom provider-id))
+        extension (get @extension-providers provider-id)
+        config (model-config/get-provider provider-id)]
+    (cond
+      (and (nil? base) (nil? config) (nil? extension))
+      (do (unregister-provider! provider-id)
+          (swap! composition-errors dissoc provider-id))
+
+      (and base (nil? config) (nil? extension))
+      (do (register-provider! base)
+          (swap! composition-errors dissoc provider-id))
+
+      :else
+      (try
+        (register-provider!
+         (-> (composer/compose-model-provider provider-id base config extension)
+             (update :models #(mapv map->Model %))
+             map->Provider))
+        (swap! composition-errors dissoc provider-id)
+        (catch Exception e
+          (swap! composition-errors assoc provider-id (ex-message e))
+          (when base (register-provider! base)))))))
+
+(defn- merge-defined
+  "pi: re-registration merges defined values over the previous registration
+   and preserves undefined (nil) ones."
+  [previous config]
+  (merge previous (into {} (remove (comp nil? val)) config)))
+
+(defn- ensure-auth-hook!
+  "Install the auth config-key source if missing (load-catalogs! sets it;
+   extensions may register providers without going through a catalog load)."
+  []
+  (when-not (auth/config-key-source-installed?)
+    (auth/set-config-key-source! (fn [provider-id] (:api-key (get-provider provider-id))))))
+
+(defn register-provider-config!
+  "Register/replace an extension provider by config map (pi
+   ModelRuntime.registerProvider + ctx.registerProvider(name, config)):
+   validates the incoming registration eagerly (a broken config throws
+   without touching stored state), merges it over any previous registration
+   preserving unset fields, then recomposes the provider (builtin + models.edn
+   + extension layers). Returns the effective config."
+  [provider-id config]
+  (let [provider-id (keyword provider-id)
+        base (or (get @native-extension-providers provider-id)
+                 (get @builtins-atom provider-id))
+        models-config (model-config/get-provider provider-id)
+        effective (merge-defined (get @extension-providers provider-id) config)]
+    (ensure-auth-hook!)
+    (composer/validate-extension-provider provider-id base models-config config)
+    (swap! extension-providers assoc provider-id effective)
+    (swap! native-extension-providers dissoc provider-id)
+    (recompose-provider! provider-id)
+    effective))
+
+(defn unregister-provider-config!
+  "Remove an extension provider registration (pi ModelRuntime.unregisterProvider
+   + ctx.unregisterProvider): the provider falls back to its builtin (or
+   disappears when it had none), keeping the models.edn layer."
+  [provider-id]
+  (let [provider-id (keyword provider-id)]
+    (swap! extension-providers dissoc provider-id)
+    (swap! native-extension-providers dissoc provider-id)
+    (recompose-provider! provider-id)
+    nil))
+
+(defn register-native-provider!
+  "Register a complete Provider record from an extension (pi
+   ModelRuntime.registerNativeProvider + ctx.registerProvider(provider)):
+   clears any config registration for the id, stores the provider as the
+   base, recomposes. Throws on an empty provider id."
+  [provider]
+  (when (str/blank? (str (:id provider)))
+    (throw (ex-info "Provider id must not be empty." {:type :model-config-invalid})))
+  (ensure-auth-hook!)
+  (swap! extension-providers dissoc (:id provider))
+  (swap! native-extension-providers assoc (:id provider) provider)
+  (recompose-provider! (:id provider))
+  provider)
+
+(defn clear-extension-providers!
+  "Remove all extension provider registrations (native + config) and
+   recompose back to builtins + models.edn. Exported for tests."
+  []
+  (reset! extension-providers {})
+  (reset! native-extension-providers {})
+  (doseq [pid (keys @providers-atom)]
+    (recompose-provider! pid))
+  nil)
+
+(defn get-registered-provider-config
+  "The registered extension config for a provider (pi
+   ModelRegistry.getRegisteredProviderConfig), or nil."
+  [provider-id]
+  (get @extension-providers (keyword provider-id)))
+
+(defn get-registered-native-provider
+  "The registered native extension Provider for a provider (pi
+   ModelRegistry.getRegisteredNativeProvider), or nil."
+  [provider-id]
+  (get @native-extension-providers (keyword provider-id)))
+
+(defn get-registered-provider-ids
+  "Provider ids with an extension registration (config or native, pi
+   ModelRegistry.getRegisteredProviderIds)."
+  []
+  (vec (into (sorted-set)
+             (concat (keys @extension-providers) (keys @native-extension-providers)))))
+
+;; ─── Extension facade (pi ModelRegistry) ───────────────────────────────────
+
+(defn has-configured-auth
+  "True when a model's (or provider id's) provider has complete auth (pi
+   ModelRegistry.hasConfiguredAuth)."
+  [model-or-provider]
+  (auth/configured? (if (map? model-or-provider)
+                      (:provider model-or-provider)
+                      model-or-provider)))
+
+(defn get-provider-auth-status
+  "Auth status for a provider (pi ModelRegistry.getProviderAuthStatus):
+   {:configured bool :source kw} — auth.edn credential, then the
+   models.edn/extension api-key config (configuredRequestAuthStatus — a
+   configured-but-unresolvable key reports {:configured false}, blocking the
+   env fallback like resolve), then any other configured auth (env vars,
+   native provider keys — pi's snapshot auth check). :source ∈ :stored |
+   :models-json-key | :models-json-command | :environment | :fallback."
+  [provider-id]
+  (let [stored? (some? (get-in (auth/get-credentials) [provider-id :key]))
+        provider (get-provider provider-id)
+        configured (when provider
+                     (composer/configured-request-auth-status
+                      (model-config/get-provider provider-id)
+                      (get @extension-providers provider-id)))]
+    (cond
+      stored? {:configured true :source :stored}
+      configured configured
+      (auth/configured? provider-id) {:configured true :source :environment}
+      :else {:configured false})))
+
+(defn get-api-key-and-headers
+  "Resolved request auth for a model (pi ModelRegistry.getApiKeyAndHeaders):
+   {:ok true :api-key str? :headers map?} — the resolved key plus the
+   model/provider configured headers resolved as config values — or
+   {:ok false :error str}: unknown provider, no key when the provider
+   requires one (:auth-header), or an unresolvable configured header (pi:
+   getAuth throws → ok:false with the message)."
+  [model]
+  (let [provider-id (:provider model)
+        provider (get-provider provider-id)]
+    (if (nil? provider)
+      {:ok false :error (str "Unknown provider: " (name (or provider-id :unknown)))}
+      (try
+        (let [api-key (auth/resolve-api-key provider-id)
+              headers (config-value/resolve-headers-or-throw
+                       (merge (:headers model) (:configured-headers provider))
+                       (str "model \"" (name provider-id) "/" (:id model) "\""))]
+          (if (and (nil? api-key) (:auth-header provider))
+            {:ok false :error (str "No API key found for \"" (name provider-id) "\"")}
+            {:ok true :api-key api-key :headers headers}))
+        (catch Exception e
+          {:ok false :error (ex-message e)})))))
 
 (defn load-models-config!
   "Load models.edn and recompose every provider (pi ModelRuntime.refresh →
-   rebuildProviders): builtin ∪ config provider ids, with the config layer
-   applied. Restores the pristine builtin catalogs first so repeated calls
-   (startup, /reload) never stack the config layer onto already-composed
-   providers (pi: composed providers live in the runtime collection, the
-   builtins map is never mutated — removed providers/models disappear on
-   reload). A models.edn parse/schema failure keeps the built-ins and is
-   surfaced via get-model-config-error; per-provider composition errors
-   fall back to the built-in for that provider (a config-only provider that
-   fails to compose is dropped). Registers the auth config-key source
-   (models.edn/extension :api-key), so auth resolution and availability
-   reflect configured keys."
+   rebuildProviders): builtin ∪ models.edn ∪ extension provider ids, with
+   the models.edn and extension layers applied. Restores the pristine
+   builtin catalogs first so repeated calls (startup, /reload) never stack
+   the layers onto already-composed providers (pi: composed providers live
+   in the runtime collection, the builtins map is never mutated — removed
+   providers/models disappear on reload). A models.edn parse/schema failure
+   keeps the built-ins and is surfaced via get-model-config-error;
+   per-provider composition errors fall back to the built-in for that
+   provider (a config-only provider that fails to compose is dropped).
+   Registers the auth config-key source (models.edn/extension :api-key), so
+   auth resolution and availability reflect configured keys."
   []
   (load-catalogs!)
   (model-config/load-config!)
-  (auth/set-config-key-source! (fn [provider-id] (:api-key (get-provider provider-id))))
+  (clear-providers!)
+  (reset! composition-errors {})
   (let [ids (into (sorted-set)
-                  (concat (keys @providers-atom) (model-config/get-provider-ids)))
-        errors (atom {})]
-    (reset! providers-atom
-            (into {}
-                  (keep (fn [pid]
-                          (let [base (get-provider pid)
-                                config (model-config/get-provider pid)]
-                            (try
-                              [pid (-> (composer/compose-model-provider pid base config nil)
-                                       (update :models #(mapv map->Model %))
-                                       map->Provider)]
-                              (catch Exception e
-                                (swap! errors assoc pid (ex-message e))
-                                (when base [pid base])))))
-                        ids)))
-    (reset! composition-errors @errors)
-    @providers-atom))
+                  (concat (keys @builtins-atom)
+                          (model-config/get-provider-ids)
+                          (keys @extension-providers)
+                          (keys @native-extension-providers)))]
+    (doseq [pid ids]
+      (recompose-provider! pid)))
+  @providers-atom)
 
 (defn get-model-config-error
   "models.edn load + composition error string (pi ModelRuntime.getError):
