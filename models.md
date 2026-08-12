@@ -976,17 +976,450 @@ kmet provider uses PKCE yet.
   flows land with those providers (later phase).
 - radius / azure / other subscription flows deferred with their providers.
 
+## Missing slash commands (model surface)
+
+Phase 4 wired `/model`, Phase 3/10 wired `/login` `/logout` — but two
+model-surface pi commands remain on kmet's not-implemented list (`/scoped-models`, `/settings`),
+and `/model` misses pi's catalog-refresh-on-miss behavior. This section is the
+plan for the model-related parts (pi interactive-mode: `handleModelCommand`,
+`showModelsSelector`, `ScopedModelsSelectorComponent`, settings-selector
+thinking-level row; pi `settings-manager.ts` `enabledModels`).
+
+### `/scoped-models` — enabled-models selector for Ctrl+P cycling
+
+pi: `/scoped-models` opens `showModelsSelector()`, a
+`ScopedModelsSelectorComponent` overlay. Enabled-ids semantics: `null` = all
+enabled (no filter); `string[]` = explicit ordered list.
+
+- **Initial state**: session scoped-models (a session-level override from a
+  previous edit in this session) wins; otherwise settings `enabledModels`
+  patterns resolve through `resolveModelScopeFromModels` (the same matcher as
+  `--models`); unresolved patterns survive as `[unavailable]` rows.
+- **Refresh on open**: an async `modelRuntime.refresh({signal})` runs with a
+  15s timeout; the status line goes "Refreshing model catalogs…" →
+  "Model catalogs refreshed." (success) / "Model refresh timed out; showing
+  cached models." / "Could not refresh <providers>; showing cached models."
+  (warning); the selector then updates from the fresh snapshot.
+- **Interactions** (pi keybindings `app.models.*`): Enter toggles the selected
+  model; Ctrl+A enables all (filtered to the search query when active);
+  Ctrl+X clears all; Ctrl+P toggles every model of the selected model's
+  provider; Alt+Up/Alt+Down reorder enabled models (order feeds Ctrl+P
+  cycling); the search input fuzzy-filters over `provider id name`.
+- **Persist**: changes are session-only until Ctrl+S (`app.models.save`)
+  writes them to settings as `enabledModels` patterns (all-enabled →
+  undefined; `settingsManager.setEnabledModels`). The footer's available
+  provider count updates live (`updateAvailableProviderCount`).
+- **Consumption**: the session scoped list feeds Ctrl+P / Shift+Ctrl+P
+  cycling (`cycle-model!`) and `/model`'s cached-match search.
+
+kmet state: `/scoped-models` is registered as not-implemented. `--models` /
+settings `:models` already seed the scoped list (`loop/set-models!`), but
+there is no overlay, no session-scoped edit, no persist path, and no
+refresh-on-open. Work items:
+
+1. `app.models.*` keybindings in `kmet.app.keybindings` (pi defaults: save
+   Ctrl+S, enableAll Ctrl+A, clearAll Ctrl+X, toggleProvider Ctrl+P,
+   reorderUp Alt+Up, reorderDown Alt+Down).
+2. A scoped-models selector port over the `/resume` overlay + fuzzy
+   select-list patterns: search input, provider badge (`[provider]`), ✓/✗
+   status, "N/M enabled · K unavailable" footer line, "(unsaved)" dirty
+   marker, scroll indicator, "No matching models".
+3. Session-scoped state: `set-scoped-models!` on the agent-state/session
+   (pi `session.scopedModels`), distinct from the settings-derived list.
+4. settings.edn `:enabled-models` (pattern vector) + `set-enabled-models!`
+   through the `kmet.libs.file-lock` machinery (Phase 3) — pi
+   `settings-manager.ts` `enabledModels` (global settings).
+5. `models/refresh` — see below; wire the timeout + status messages into the
+   overlay.
+6. `cycle-model!` / footer provider count read the session scoped list first
+   (pi `updateAvailableProviderCount`).
+
+### `/model` — refresh-on-miss + search-term fallthrough
+
+pi `handleModelCommand`:
+
+- no args → `showModelSelector()` (bare selector overlay);
+- exact match (`findExactModelReferenceMatch`) against the cached snapshot
+  (session scoped models when set, else the available snapshot) →
+  `session.setModel` + footer invalidate + `Model: <id>` status;
+- **no cached match (and no scoped models) → refresh catalogs** with the
+  same 15s timeout + status warnings, then resolve against the fresh
+  snapshot (pi `findExactModelMatch`);
+- still no match → open the selector with the search term pre-filled.
+
+kmet: `/model` resolves patterns incl. `:thinking` suffix and reports
+resolution failures, but never refreshes catalogs on a miss and opens a bare
+selector. Work items: refresh-on-miss (shared timeout/status handling with
+`/scoped-models`), and pass the failed term into `show-model-selector` as the
+initial search input.
+
+### Model catalog refresh (`models/refresh`)
+
+Shared by `/scoped-models` and `/model`. pi `ModelRuntime.refresh({signal})`:
+re-fetches dynamic provider catalogs (models.dev-backed) concurrently,
+returns per-provider errors, aborts on a 15s timeout, keeps the last known
+models on failure. kmet's catalogs are static committed EDN (no runtime
+network) — the pi behavior degrades to "already up to date"; the work item is
+the timeout/status plumbing around a no-op refresh (kept so a future
+dynamic-catalog provider slots in), plus `get-available` re-reading the
+registry after it.
+
+### `/settings` — thinking-level row
+
+pi's settings selector carries a **Thinking level** row (`session.thinkingLevel`
++ the current model's available levels; there is no Model row in the settings
+menu — model selection stays on `/model`/Ctrl+L). kmet's `/settings` is
+not-implemented; the thinking row lands with the settings menu
+(`:thinking` settings key + `valid-thinking-level?` already exist).
+
+### `--list-models` (CLI, model handling)
+
+pi `cli/list-models.ts`: prints `provider | model | context | max-out |
+thinking | images` (context/max-out in K/M), optional fuzzy search over
+`provider id`, sorted by provider then id, plus the models.json load-error
+warning and the "no models available" message. kmet has no `--list-models` —
+add it in `core.clj` with the same columns/format over
+`models/get-available`.
+
+---
+
 ## Deferred (re-evaluate when reached)
 
-Each is a substantial project; do not plan details ahead.
+Each is a substantial project; the detail below is the pi surface to port
+(verified against `packages/ai/src/{api,providers,images*,image-models*}`,
+`packages/ai/scripts/generate-models.ts` and
+`packages/ai/scripts/generate-image-models.ts`). Plan deeper when started.
 
-- **More providers & wire APIs** — openai-responses (unblocks copilot
-  gpt-5/grok/oswe models: new api dispatch + stream parser), plus
-  azure-openai-responses, bedrock-converse-stream, google-vertex,
-  mistral-conversations and the remaining ~35 models.dev providers
-  (regenerate catalogs + per-provider enrichment).
-- **Image models registry** — pi `images.ts` / `images-api-registry.ts`
-  (image generation/editing models, openrouter-images).
+### Deferred A — More providers & wire APIs
+
+#### A.1 New wire APIs (`kmet.app.llm` dispatch)
+
+kmet dispatches on `:api` with three builders (pi has ten `KnownApi`s); seven
+pi APIs remain. Each needs a request builder, a stream parser, thinking
+shaping, usage/cost handling, and tool-schema conversion in `kmet.app.llm` +
+`kmet.libs.sse`:
+
+| api | URL construction (pi) | wire payload | stream events |
+|---|---|---|---|
+| `:openai-responses` | `(str base-url "/responses")` (openai: `https://api.openai.com/v1/responses`) | `{model, input: [items], stream: true, store: false, tools, tool_choice, max_output_tokens (min 16), temperature, reasoning: {effort, summary}, include: ["reasoning.encrypted_content"], prompt_cache_key}` | SSE `response.created` / `response.output_item.added` / `response.reasoning_summary_text.delta` / `response.reasoning_text.delta` / `response.output_text.delta` / `response.refusal.delta` / `response.function_call_arguments.delta\|.done` / `response.custom_tool_call_input.delta\|.done` / `response.output_item.done` / `response.completed\|incomplete\|failed` |
+| `:openai-codex-responses` | same as responses (ChatGPT oauth; codex base) | same | same (shared processor) |
+| `:azure-openai-responses` | `base-url + "/deployments/" + model-id + "/responses?api-version=" + v`; `normalizeAzureBaseUrl` forces azure hosts to `/openai/v1` base | same; model = deployment | same |
+| `:bedrock-converse-stream` | AWS `ConverseStream` (region from model-ARN / `AWS_REGION` / endpoint host / `us-east-1`; endpoint = model base-url unless a region/profile is configured) | `ConverseStreamCommand {modelId, messages, system, inferenceConfig{maxTokens, temperature}, toolConfig, additionalModelRequestFields}` | ConverseStream frames: `messageStart/Stop`, `contentBlockStart/Deltas` (text/thinking/toolUse), `metadata` (usage) |
+| `:google-vertex` | `https://{location}-aiplatform.googleapis.com/v1/projects/{p}/locations/{l}/publishers/google/models/{id}:streamGenerateContent?alt=sse` (project/location from `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION`; custom `base-url` may override) | same body as google-generative-ai; client adds `vertexai: true` + project/location (`API_VERSION` v1) | same SSE as google |
+| `:mistral-conversations` | `(str base-url "/v1/chat/completions")` (URL-joined) | OpenAI-compatible chat body with Mistral field names (`tool_calls`, `tool_call_id`, `image_url`, `top_p`, `max_tokens`, `random_seed`, `reasoning_effort`, `prompt_mode: "reasoning"`, `prompt_cache_key`); `x-affinity: <session-id>` header when caching | SSE chat-chunk stream (Mistral event boundary; thinking deltas) |
+| `:pi-messages` | `(str base-url "/messages")` — radius; single POST `{model, context, options}` envelope (pi's own transport) | pi-specific | custom SSE (text/thinking/tool deltas) |
+
+**openai-responses family** (`openai-responses-shared.ts` port):
+`convertResponsesMessages` (input items: developer message for the system
+prompt, message items, `function_call_output` items for tool results,
+`additional-tools` items when `supportsAdditionalTools`),
+`convertResponsesTools` (strict JSON-schema when `supportsStrictMode`,
+grammar tools when `supportsOpenAIGrammarTools`), `processResponsesStream`
+(output-item slots per `output_index`, reasoning summary/text deltas,
+function-call argument deltas, reasoning-signature backfill from the
+terminal `response.completed` output — Azure omits
+`reasoning.encrypted_content` on `output_item.done` — usage from
+`input_tokens_details.cached_tokens/cache_write_tokens` +
+`output_tokens_details.reasoning_tokens`, cost via `calculateCost` with
+optional service-tier multipliers for openai `flex`/`priority`). Thinking:
+top-level `reasoning: {effort}` from the model's `thinking-level-map`;
+`include: ["reasoning.encrypted_content"]` is sent whenever
+reasoningEffort/summary options are present (any provider) and always for
+`xai`; with no options, non-copilot providers send
+`reasoning: {effort: thinkingLevelMap.off ?? "none"}` (`:off` → `"none"`,
+copilot sends nothing); min `max_output_tokens` 16 (pi #6265).
+
+**bedrock-converse-stream**: pi uses the `@aws-sdk/client-bedrock-runtime`
+default credential chain (profile / env `AWS_ACCESS_KEY_ID`+`AWS_SECRET_ACCESS_KEY`
++`AWS_SESSION_TOKEN` / ECS / IRSA / bearer via `AWS_BEARER_TOKEN_BEDROCK`;
+`AWS_BEDROCK_SKIP_AUTH=1` sends dummy creds) + `NodeHttpHandler` proxy agent.
+**kmet adaptation**: Babashka has no AWS SDK — implement SigV4 signing over
+`babashka.http-client` (or shell out to the `aws` CLI), ConverseStream
+event-frame parsing, and the proxy wiring (Phase 8's `kmet.app.proxy`).
+Anthropic models: `additionalModelRequestFields` carries
+`thinking {type "enabled"|"adaptive", budget_tokens|display}` — budgets from
+the same 1024/2048/8192/16384 map, `xhigh`/`max` clamped to `high`,
+adaptive models use `output_config: {effort}` + no budget — and
+`anthropic_beta: ["interleaved-thinking-2025-05-14"]` (GovCloud omits
+`thinking.display`); non-anthropic models skip thinking. Images: base64
+bytes (`image/jpeg|png|gif|webp` → `source.bytes` + `format`). Compat:
+`BedrockCompat.supportsStrictMode`.
+
+**google-vertex** (`google-shared.ts` port): reuses the google-generative-ai
+body/thinking (`thinkingConfig` with `includeThoughts` + `thinkingLevel` for
+gemini-3 / `thinkingBudget` otherwise); the Vertex client adds `vertexai: true`
++ project/location at the SDK level (`API_VERSION = "v1"`; kmet replicates
+the `.../v1/projects/{p}/locations/{l}/publishers/google/models/{id}:streamGenerateContent?alt=sse`
+URL itself). Auth via `GOOGLE_CLOUD_API_KEY` (x-goog-api-key) **or** ADC —
+`GOOGLE_APPLICATION_CREDENTIALS` (or the default
+`~/.config/gcloud/application_default_credentials.json`) + project
+(`GOOGLE_CLOUD_PROJECT`/`GCLOUD_PROJECT`) + location (`GOOGLE_CLOUD_LOCATION`),
+pi's `hasVertexAdcCredentials` / `<authenticated>` env-key marker.
+
+**mistral-conversations**: OpenAI-compatible messages with camelCase→
+snake_case remapping on the wire; thinking via `prompt_mode: "reasoning"` +
+`reasoning_effort`; tool-call ids normalized to 9-char alphanumeric (collisions
+resolved with a short hash); `x-affinity` session-affinity header when
+caching unless overridden; 60s timeout.
+
+**pi-messages (radius)**: `POST {baseUrl}/messages` with
+`{model, context, options}`; auth `RADIUS_API_KEY`. radius-config's
+`:api :pi-messages` marks it; models are subscription-scoped (Phase 10
+OAuth machinery).
+
+#### A.2 Provider catalog expansion
+
+pi's builtin set is 40 chat providers; kmet ships 4 (opencode-go, opencode,
+deepseek, github-copilot). The remaining 36 (pi `providers/all.ts`),
+grouped by the api(s) they need:
+
+| api | additional providers |
+|---|---|
+| `:openai-completions` | ant-ling, baseten, cerebras, cloudflare-workers-ai, fireworks (+), groq, huggingface, moonshotai, moonshotai-cn, nvidia, openrouter, qwen-token-plan, qwen-token-plan-cn, qwen-token-plan-individual, together, xai (+), xiaomi, xiaomi-token-plan-ams, xiaomi-token-plan-cn, xiaomi-token-plan-sgp, zai, zai-coding-cn |
+| `:anthropic-messages` | anthropic, cloudflare-ai-gateway (+), fireworks (+), kimi-coding, minimax, minimax-cn, vercel-ai-gateway |
+| `:openai-responses` | cloudflare-ai-gateway (+), github-copilot (+) (gpt-5*/grok-4.5/oswe*/mai-* — currently skipped), openai, opencode (+) (`@ai-sdk/openai` npm models), opencode-go (+), xai (+) |
+| `:openai-codex-responses` | openai-codex |
+| `:azure-openai-responses` | azure-openai-responses |
+| `:bedrock-converse-stream` | amazon-bedrock |
+| `:google-generative-ai` | google |
+| `:google-vertex` | google-vertex |
+| `:mistral-conversations` | mistral |
+| `:pi-messages` | radius |
+
+(`+` = provider also keeps models on apis kmet already has; the generator
+splits by models.dev `provider.npm`: `@ai-sdk/openai` → openai-responses,
+`@ai-sdk/anthropic` → anthropic-messages, `@ai-sdk/google` →
+google-generative-ai, `@ai-sdk/alibaba` → openai-completions +
+`cacheControlFormat: "anthropic"`, else openai-completions.)
+
+Auth per provider (pi `env-api-keys.ts`, complete table for Phase 3's
+`env-vars-by-provider`):
+
+| provider | env vars |
+|---|---|
+| `:anthropic` | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` (done, Phase 9) |
+| `:google` | `GEMINI_API_KEY` |
+| `:google-vertex` | `GOOGLE_CLOUD_API_KEY` (or ADC: `GOOGLE_APPLICATION_CREDENTIALS` + project + location) |
+| `:amazon-bedrock` | ambient: `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`+`AWS_SECRET_ACCESS_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, ECS/IRSA vars (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, `AWS_CONTAINER_CREDENTIALS_FULL_URI`, `AWS_WEB_IDENTITY_TOKEN_FILE`); `<authenticated>` marker |
+| `:openai` | `OPENAI_API_KEY` |
+| `:openai-codex` | OAuth (ChatGPT) — Phase 10 machinery |
+| `:azure-openai-responses` | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_RESOURCE_NAME`, `AZURE_OPENAI_API_VERSION` |
+| `:openrouter` | `OPENROUTER_API_KEY` (+ OAuth) |
+| `:nvidia` | `NVIDIA_API_KEY` |
+| `:groq` | `GROQ_API_KEY` |
+| `:cerebras` | `CEREBRAS_API_KEY` |
+| `:xai` | `XAI_API_KEY` |
+| `:mistral` | `MISTRAL_API_KEY` |
+| `:minimax` / `:minimax-cn` | `MINIMAX_API_KEY` / `MINIMAX_CN_API_KEY` |
+| `:moonshotai` / `:moonshotai-cn` | `MOONSHOT_API_KEY` |
+| `:huggingface` | `HF_TOKEN` |
+| `:fireworks` | `FIREWORKS_API_KEY` |
+| `:together` | `TOGETHER_API_KEY` |
+| `:baseten` | `BASETEN_API_KEY` |
+| `:kimi-coding` | `KIMI_API_KEY` |
+| `:cloudflare-workers-ai` / `:cloudflare-ai-gateway` | `CLOUDFLARE_API_KEY` |
+| `:xiaomi` | `XIAOMI_API_KEY` |
+| `:xiaomi-token-plan-cn/ams/sgp` | `XIAOMI_TOKEN_PLAN_CN_API_KEY` / `_AMS_` / `_SGP_` |
+| `:ant-ling` | `ANT_LING_API_KEY` |
+| `:qwen-token-plan` / `-cn` / `-individual` | `QWEN_TOKEN_PLAN_API_KEY` / `QWEN_TOKEN_PLAN_CN_API_KEY` / `QWEN_TOKEN_PLAN_API_KEY` |
+| `:vercel-ai-gateway` | `AI_GATEWAY_API_KEY` |
+| `:radius` | `RADIUS_API_KEY` (+ OAuth) |
+| `:zai` / `:zai-coding-cn` | `ZAI_API_KEY` / `ZAI_CODING_CN_API_KEY` |
+
+OAuth flows to land with their providers (Phase 10's PKCE loopback + device
+machinery): anthropic Pro/Max (PKCE loopback, ports 53692/1455, `/callback`
+route, `code#state` race), openai-codex ChatGPT (PKCE), openrouter,
+radius; qwen-token-plan / xiaomi-token-plan subscription providers extend the
+copilot-style device flow.
+
+#### A.3 Compat surface completion
+
+Phase 6 accepts the flat compat map kmet already understands. The deferred
+rest of pi's per-api compat (models.edn schema + llm builders):
+
+**OpenAICompletionsCompat** additions: `supportsUsageInStreaming` (omit
+`stream_options: {include_usage: true}`), `supportsFinishReason` (infer
+`stop`/`toolUse` at stream end when absent), `requiresToolResultName`
+(include `name` on tool-result messages), `requiresAssistantAfterToolResult`
+(insert an assistant message after tool results),
+`requiresThinkingAsText` (thinking → `<thinking>` text blocks),
+`supportsStore`, `supportsThinkingTokenBudget` (top-level
+`thinking_token_budget`, vLLM), `supportsOpenAIGrammarTools` (Lark/regex
+custom tools, constrained sampling), `supportsStrictMode`,
+`cacheControlFormat: "anthropic"` (`cache_control` markers on system prompt
++ last tool + last text), `sendSessionAffinityHeaders` + `sessionAffinityFormat`
+(`openai`/`openai-nosession`/`openrouter` headers),
+`supportsLongCacheRetention` (`prompt_cache_retention: "24h"`),
+`deferredToolsMode: "kimi"`, `zaiToolStream`, `chatTemplateKwargs` /
+`chatTemplateArgs` (`$var` thinking.enabled/effort interpolation),
+`openRouterRouting` + `vercelGatewayRouting` (sent verbatim as the `provider`
+request field).
+
+**thinkingFormat variants**: pi supports `openai` (reasoning_effort),
+`openrouter` (`reasoning: {effort}`), `together` (`reasoning: {enabled}` +
+reasoning_effort when supported), `baseten` (configurable `chat_template_args`),
+`zai` (`thinking: {type}`), `deepseek` (`thinking: {type}` + reasoning_effort
+when supported), `qwen` (top-level `enable_thinking`), `qwen-chat-template`
+(`chat_template_kwargs.enable_thinking` + `preserve_thinking`),
+`chat-template` (configurable `chat_template_kwargs`),
+`string-thinking` (top-level `thinking: <string>`),
+`ant-ling` (`reasoning: {effort}` only when the mapped effort is non-null).
+kmet's `llm/thinking-payload` branches on `:thinking-format` — extend the
+keyword set to `:openrouter :together :baseten :zai :chat-template
+:qwen-chat-template :string-thinking :ant-ling`.
+
+**OpenAIResponsesCompat**: `supportsDeveloperRole`, `sessionAffinityFormat`,
+`supportsLongCacheRetention`, `supportsStrictMode`,
+`supportsOpenAIGrammarTools`, `supportsAdditionalTools`, `supportsToolSearch`,
+`supportsExplicitPromptCacheMode` (`prompt_cache_options: {mode: "explicit"}`
+when retention is `none`).
+
+**AnthropicMessagesCompat** additions: `supportsEagerToolInputStreaming`
+(omit per-tool `eager_input_streaming` + legacy
+`fine-grained-tool-streaming-2025-05-14` beta header),
+`supportsLongCacheRetention` (`cache_control.ttl: "1h"`),
+`sendSessionAffinityHeaders` (`x-session-affinity`),
+`supportsCacheControlOnTools`, `supportsTemperature` (opus 4.7+ rejects
+non-default), `forceAdaptiveThinking` (`thinking.type: "adaptive"` +
+`output_config.effort`), `allowEmptySignature`, `supportsStrictTools`,
+`supportsToolReferences` (deferred tools via `tool_reference` blocks).
+
+**Cost tiers** (`ModelCost.tiers`): a tier supplies a complete alternate rate
+set applied to the whole request when total input usage
+(`input + cacheRead + cacheWrite`) exceeds `inputTokensAbove`; highest
+matching threshold wins. kmet's `Model` record gains `:tiers`; `calculate-cost`
+picks the tier. Generator: openai gpt-5.x long-context pricing tiers
+(`OPENAI_LONG_CONTEXT_INPUT_THRESHOLD` 272000) are the first consumer.
+
+**modelOverrides compat merge**: Phase 6 merges `compat` key-wise; the
+nested routing objects (`openRouterRouting`/`vercelGatewayRouting`) and
+`chatTemplateKwargs`/`chatTemplateArgs` merge key-wise too (pi
+`{...base, ...override}` at each level).
+
+#### A.4 Generator changes
+
+`scripts/generate_models.clj` grows the remaining providers' blocks. pi's
+generator (`generate-models.ts`) has three sources: the models.dev loop
+(sections: amazon-bedrock, anthropic, google, vertex, openai, groq,
+cerebras, cloudflare-workers-ai, cloudflare-ai-gateway, xai, zai,
+mistral, huggingface, nvidia (plus the live `fetchNvidiaNimModelIds`),
+together, opencode, copilot, minimax, kimi-coding, moonshotai, xiaomi
+variants, qwen-token-plan variants, baseten, fireworks), live fetches
+(`fetchOpenRouterModels`, `fetchAiGatewayModels`), and hardcoded model lists
+(deepseek-v4, ant-ling, openai-codex — kept small to avoid aliases; plus the
+post-merge additions mistral-medium-3.5, openrouter `auto`/`fusion`, and the
+azure mirror of the openai models). **radius has no generator section** — it
+is a purely dynamic provider (catalog from the gateway config + ModelsStore
+persistence). Highlights to port:
+
+- opencode/opencode-go `@ai-sdk/openai` models → `:openai-responses` with
+  `sessionAffinityFormat: "openai-nosession"` (unblocks copilot gpt-5/grok/
+oswe/mai models too — the Phase 1 "skip" becomes a real api group).
+- `getAnthropicMessagesCompat` — adaptive-thinking + eager-streaming + strict
+tools + long-cache-retention flags per anthropic/copilot model id.
+- `getEffortThinkingLevelMap` + `applyThinkingLevelMetadata` extended to all
+providers (deepseek-v4, qwen-token-plan, kimi-k3, zai glm-4.5/5.2,
+opencode-go glm-5.2, ant-ling ring, gemini-3, together level maps;
+openai responses `off: null` for gpt-5*, copilot gpt-5 `minimal: "low"`,
+adaptive-thinking anthropic xhigh/max, `supportsOpenAiXhigh`/`Max`).
+- Per-provider hardcoded compat: together toggle/effort sets, nvidia NIM
+unsupported models + headers, zai tool-stream unsupported, copilot claude
+partial regex `re-find`, xiaomi variants
+`{requiresReasoningContentOnAssistantMessages true, thinkingFormat deepseek}`,
+qwen-token-plan `{thinkingFormat qwen, supportsDeveloperRole false,
+supportsStore false, supportsReasoningEffort true}` + level maps; static
+headers (KIMI_STATIC_HEADERS, NVIDIA_HEADERS), base-urls (TOGETHER_BASE_URL,
+VERTEX_BASE_URL, AI_GATEWAY_*); openai gpt-5.x long-context cost tiers +
+short-context capped ids (`OPENAI_LONG_CONTEXT_INPUT_THRESHOLD` 272000),
+openai gpt-5.6 metadata (`supportsExplicitPromptCacheMode` when
+`cacheWrite > 0`, tool-search/additional-tools sets for openai + openai-codex).
+- The post-processing pass: `applyOpenAICompletionsCompatMetadata` (URL-based
+compat auto-detection merged under model compat), `applyStrictToolCompatMetadata`
+(strict tools for openai/cloudflare-ai-gateway responses + anthropic),
+`applyOpenAIGrammarToolCompatMetadata` (grammar tools for gpt-5+ on the
+responses-family apis), `applyOpenAIToolSearchMetadata`,
+`applyOpenAIExplicitPromptCacheMetadata`, `applyThinkingLevelMetadata`.
+- `filterModels` (OAuth availableModelIds) stays a runtime concern (Phase
+10); the generator only emits the catalog.
+- The manifest/structure-hash stays `{provider -> model-id -> api}` — adding
+api groups changes hashes; regenerate once per provider batch.
+
+#### A.5 Runtime dispatch & stream parsing
+
+- `llm/send-message` dispatch extends from 3 to 10 `:api` values; each
+  builder keeps the Phase 2 invariants: URL from the model, thinking from
+  `thinking-level-map` + compat, max-tokens field, `sampling-params` merged
+  last, headers (model + provider + attribution + auth).
+- `kmet.libs.sse` gains: responses event processor
+  (`response.*` types), bedrock ConverseStream frame parser, mistral event
+  stream (`findMistralEventBoundary`), google-vertex reuses the google
+  parser; pi-messages reuses the text/thinking/tool delta types.
+- Copilot dynamic headers (`github-copilot-headers.ts`) apply to its
+  openai-responses models: `X-Initiator` (`user`|`agent`, inferred from the
+  last message role), `Openai-Intent: conversation-edits`, and
+  `Copilot-Vision-Request: true` when any user/tool-result content has images.
+- `session/entry-usage` already handles the normalized google shape; the new
+  apis each normalize to the same usage map + `:cost` (Phase 5) so
+  `usage-breakdown`/footer need no changes.
+
+### Deferred B — Image models registry
+
+pi `packages/ai/src/{images.ts, images-models.ts, images-api-registry.ts,
+image-models.ts, image-models.generated.ts}` — the image-generation mirror of
+the chat model subsystem. No coding-agent consumer exists in pi (pure ai
+package API surface); kmet ports the subsystem, not a `/imagine` tool.
+
+**Types** (pi `types.ts`):
+
+```clojure
+(defrecord ImagesModel [id name api provider base-url input output cost])
+;; input/output: [:text] [:image] [:text :image]; cost: 4 rates, no tiers
+;; ImagesApi = :openrouter-images (extensible)
+```
+
+- `ImagesContext` — `{:input [{:type :text :text ..} | {:type :image :mime-type .. :data ..}]}`.
+- `AssistantImages` — `{:api :provider :model :output [text|image blocks]
+  :response-id :usage :stop-reason :stop|:error|:aborted :error-message :timestamp}`.
+
+**ImagesProvider / ImagesModels collection** (`images-models.ts` port):
+provider record `{:id :name :auth :models :refresh-models-fn :generate-fn}`
+and a registry atom mirroring `kmet.app.models` — `get-providers` /
+`get-provider` / `get-models` / `get-model` / `refresh` (dynamic providers,
+shared in-flight fetch, best-effort allSettled) / `get-auth` (reuses
+`kmet.app.auth` resolution) / `generate-images` (auth merge, failures →
+`AssistantImages` with `stop-reason :error`, unknown provider → error).
+
+**images-api-registry**: `register-images-api-provider` /
+`get-images-api-provider` keyed by `:api`, with the api-match guard;
+builtin registration lazy-loads the wire module (pi
+`providers/images/register-builtins.ts`).
+
+**Catalog** (`image-models.generated.ts`): static `IMAGE_MODELS` — one
+provider today: `openrouter` (42 models: flux.2 flex/klein/max/pro,
+seedream-4.5, gemini-2.5-flash-image / gemini-3-pro-image(-preview) Nano
+Banana, etc.), all `:openrouter-images`, base-url
+`https://openrouter.ai/api/v1`. Generator (`generate-image-models.ts`):
+fetch `https://openrouter.ai/api/v1/models?output_modalities=image`, keep
+models whose output modalities include `image`, input/output modalities from
+`architecture`, cost = pricing × 1e6, `--strict` fails on empty; sorted,
+committed. kmet: `src/kmet/app/image_model_data/image-models.edn` + a
+`bb generate-image-models` task (or fold into `generate_models.clj`).
+
+**openrouter-images wire API** (`api/openrouter-images.ts` port): non-stream
+POST `(str base-url "/chat/completions")` with
+`{model, messages: [{role: :user, content: [text | image_url data: URLs]}],
+modalities: ["image"|"image","text"] (per model output), stream: false}`;
+response `choices[0].message.content` (string → text block) +
+`choices[0].message.images[]` (data: URLs → `{:type :image :mime-type ..
+:data ..}`), `response.id` → response-id, usage parsed like openai
+(prompt_tokens minus cached/cache_write) + cost via the Phase 5
+`calculate-cost`. No streaming.
+
+**Auth**: same ProviderAuth machinery — openrouter: env
+`OPENROUTER_API_KEY` + OAuth (pi `lazyOAuth`/`loadOpenRouterOAuth`). kmet:
+add `:openrouter` to `auth/env-vars-by-provider`; `/login` uses the Phase 10
+select machinery; openrouter loopback OAuth lands with the other PKCE
+providers.
 
 ---
 
@@ -1117,6 +1550,12 @@ Phase 4 (resolver, /model, Ctrl+L) ──► Phase 5 (cost footer)
                     │
                     ▼
               Phase 10 (OAuth subscriptions)
+                    │
+                    ▼
+   Missing slash commands (/scoped-models, /model refresh, --list-models)
+                    │
+                    ▼
+   Deferred A (more providers & wire APIs)   Deferred B (image models)
 ```
 
 Phases 1 and 3 are independent of each other after Phase 0; Phase 2 needs
@@ -1124,3 +1563,9 @@ Phase 1 (catalogs) but can be built against hand-written EDN fixtures first.
 Phase 6 needs Phase 0 (registry) + Phase 3 (auth resolution); Phases 7–9
 build on Phase 6's composition; Phase 10 needs Phase 6 (provider `:oauth`
 carrying) + Phase 9 (auth-token variants) and reuses Phase 3's auth.edn + `/login`.
+The missing-slash-commands section builds on Phase 4 (resolver, selector
+overlay) + Phase 6 (settings persistence via file-lock) and is a
+prerequisite for Deferred A's runtime dispatch (it exercises the same
+`models/refresh` plumbing). Deferred A builds on Phases 2/5/10 (llm dispatch,
+usage/cost, oauth); Deferred B is standalone (own registry + wire api) and
+reuses Phases 3/5/10 (auth resolution, cost, oauth).
