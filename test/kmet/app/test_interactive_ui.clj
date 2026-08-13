@@ -449,6 +449,8 @@
           saved (atom nil)]
       (with-redefs [auth/configured? (fn [_] true)
                     ui/chat-history-get-thinking-hidden (fn [_] false)
+                    cfg/get-retry-settings-live
+                    (fn [_] {:enabled true :max-retries 3 :base-delay-ms 2000})
                     cfg/save-setting! (fn [path value] (reset! saved [path value]))
                     tui/tui-show-overlay (fn [_ comp & _] (reset! sl-ref comp))
                     tui/tui-request-render (fn [_])]

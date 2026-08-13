@@ -261,10 +261,14 @@
   "Live :enabled-models patterns from the global settings file (pi: the
    SettingsManager holds mutable settings — kmet's in-memory config is a
    startup snapshot, so /scoped-models re-reads after a Ctrl+S persist).
-   Falls back to the CONFIG value when the file is missing or unreadable."
+   Falls back to the CONFIG value when the file is missing, unreadable, or
+   lacks the key (project-level overrides survive)."
   [config]
   (if-let [settings (read-global-settings)]
-    (:enabled-models settings)
+    ;; the file wins only for keys it has — an absent key falls back to the
+    ;; config (which may carry a project-level .kmet override); a present
+    ;; nil (Ctrl+S all-enabled) reads as nil via get's stored value
+    (get settings :enabled-models (:enabled-models config))
     (:enabled-models config)))
 
 (defn set-enabled-models!
@@ -288,10 +292,12 @@
   "Live :retry settings from the global settings file (the in-memory config
    is a startup snapshot — /settings re-reads after a same-session change,
    like get-enabled-models-live). Falls back to the CONFIG value when the
-   file is missing or unreadable."
+   file is missing, unreadable, or lacks :retry (project overrides)."
   [config]
   (get-retry-settings (if-let [settings (read-global-settings)]
-                        (assoc config :retry (:retry settings))
+                        ;; the file wins only for keys it has — an absent
+                        ;; :retry falls back to the config (project override)
+                        (assoc config :retry (get settings :retry (:retry config)))
                         config)))
 
 ;; ─── System prompt sources (pi: resolvePromptInput + discoverSystemPromptFile) ──

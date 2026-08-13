@@ -263,6 +263,10 @@
         (t/testing "missing file falls back to the config value"
           (fs/delete-tree tmp)
           (t/is (= ["stale"] (cfg/get-enabled-models-live {:enabled-models ["stale"]}))))
+        (t/testing "file without the key falls back to the config (project override)"
+          (fs/create-dirs tmp)
+          (spit settings-file "{:provider :opencode-go}\n")
+          (t/is (= ["stale"] (cfg/get-enabled-models-live {:enabled-models ["stale"]}))))
         (t/testing "unreadable file falls back to the config value"
           (fs/create-dirs tmp)
           (spit settings-file "not-edn[")
@@ -292,6 +296,11 @@
                    (cfg/get-retry-settings-live {:retry {:max-retries 5}}))))
         (t/testing "missing file falls back to the config value"
           (fs/delete-tree tmp)
+          (t/is (= {:enabled true :max-retries 5 :base-delay-ms 2000}
+                   (cfg/get-retry-settings-live {:retry {:max-retries 5}}))))
+        (t/testing "file without :retry falls back to the config (project override)"
+          (fs/create-dirs tmp)
+          (spit settings-file "{:provider :opencode-go}\n")
           (t/is (= {:enabled true :max-retries 5 :base-delay-ms 2000}
                    (cfg/get-retry-settings-live {:retry {:max-retries 5}}))))
         (t/testing "unreadable file falls back to the config value"
