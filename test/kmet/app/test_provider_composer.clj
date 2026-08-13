@@ -291,7 +291,7 @@
         (t/is (= refresh-token (:refresh oauth)))))
     (t/testing "non-map config → nil"
       (t/is (nil? (pc/adapt-oauth nil)))
-      (t/is (nil? (pc/adapt-oauth "radius")))))
+      (t/is (nil? (pc/adapt-oauth "not-a-config")))))
   (t/testing "compose-model-provider carries the builtin oauth through layers"
     (let [base (models/map->Provider
                 {:id :copilot :name "Copilot" :models [] :oauth :builtin-oauth})

@@ -578,8 +578,9 @@ model/provider configured headers as config values and applies `:auth-header`
 
 **Deviations from the plan sketch**:
 
-- **`:oauth "radius"` is schema-accepted but inert** (Phase 10 owns it); the
-  applyModelsJson "baseUrl required when oauth is set" rule is not ported.
+- **models.edn `:oauth` is inert** — the radius-only schema field is dropped
+  with the provider; extension `:oauth` config is Phase 10's (the
+  applyModelsJson "baseUrl required when oauth is set" rule is not ported).
 - **No `validate-extension-provider`** — that's Phase 7's eager registration
   check; compose-model-provider already runs its composition eagerly.
 - **Configured-key resolution returns nil instead of throwing** when an
@@ -983,7 +984,7 @@ kmet provider uses PKCE yet.
 - Anthropic/openai-codex/openrouter PKCE + loopback callback: `generate-pkce`
   built (no provider uses it yet); the callback server and per-provider
   flows land with those providers (later phase).
-- radius / azure / other subscription flows deferred with their providers.
+- azure / other subscription flows deferred with their providers.
 
 ## Missing slash commands (model surface) — **Status: implemented**
 
@@ -1317,7 +1318,7 @@ AI_GATEWAY; `:anthropic`/`:google` env vars already existed from Phase 3/9).
 - ~~**zai / zai-coding-cn, together, baseten, ant-ling, kimi-coding,
   cloudflare-workers-ai / cloudflare-ai-gateway**~~ — **implemented
   (Phase 14)**.
-- **mistral / amazon-bedrock / google-vertex / radius** — new wire APIs
+- **mistral / amazon-bedrock / google-vertex** — new wire APIs
   (Deferred A.1); **ant-ling** also has a hardcoded catalog.
 
 ### Tests
@@ -1528,10 +1529,10 @@ Each is a substantial project; the detail below is the pi surface to port
 
 #### A.1 New wire APIs (`kmet.app.llm` dispatch)
 
-kmet dispatches on `:api` with four builders (pi has ten `KnownApi`s); six
-pi APIs remain. Each needs a request builder, a stream parser, thinking
-shaping, usage/cost handling, and tool-schema conversion in `kmet.app.llm` +
-`kmet.libs.sse`:
+kmet dispatches on `:api` with six builders (pi has ten `KnownApi`s); three
+more are planned here (`:pi-messages` is deliberately dropped). Each needs a
+request builder, a stream parser, thinking shaping, usage/cost handling, and
+tool-schema conversion in `kmet.app.llm` + `kmet.libs.sse`:
 
 | api | URL construction (pi) | wire payload | stream events |
 |---|---|---|---|
@@ -1541,7 +1542,6 @@ shaping, usage/cost handling, and tool-schema conversion in `kmet.app.llm` +
 | `:bedrock-converse-stream` | AWS `ConverseStream` (region from model-ARN / `AWS_REGION` / endpoint host / `us-east-1`; endpoint = model base-url unless a region/profile is configured) | `ConverseStreamCommand {modelId, messages, system, inferenceConfig{maxTokens, temperature}, toolConfig, additionalModelRequestFields}` | ConverseStream frames: `messageStart/Stop`, `contentBlockStart/Deltas` (text/thinking/toolUse), `metadata` (usage) |
 | `:google-vertex` | `https://{location}-aiplatform.googleapis.com/v1/projects/{p}/locations/{l}/publishers/google/models/{id}:streamGenerateContent?alt=sse` (project/location from `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION`; custom `base-url` may override) | same body as google-generative-ai; client adds `vertexai: true` + project/location (`API_VERSION` v1) | same SSE as google |
 | `:mistral-conversations` | `(str base-url "/v1/chat/completions")` (URL-joined) | OpenAI-compatible chat body with Mistral field names (`tool_calls`, `tool_call_id`, `image_url`, `top_p`, `max_tokens`, `random_seed`, `reasoning_effort`, `prompt_mode: "reasoning"`, `prompt_cache_key`); `x-affinity: <session-id>` header when caching | SSE chat-chunk stream (Mistral event boundary; thinking deltas) |
-| `:pi-messages` | `(str base-url "/messages")` — radius; single POST `{model, context, options}` envelope (pi's own transport) | pi-specific | custom SSE (text/thinking/tool deltas) |
 
 **openai-responses family** (`openai-responses-shared.ts` port):
 `convertResponsesMessages` (input items: developer message for the system
@@ -1596,11 +1596,6 @@ snake_case remapping on the wire; thinking via `prompt_mode: "reasoning"` +
 resolved with a short hash); `x-affinity` session-affinity header when
 caching unless overridden; 60s timeout.
 
-**pi-messages (radius)**: `POST {baseUrl}/messages` with
-`{model, context, options}`; auth `RADIUS_API_KEY`. radius-config's
-`:api :pi-messages` marks it; models are subscription-scoped (Phase 10
-OAuth machinery).
-
 #### A.2 Provider catalog expansion
 
 pi's builtin set is 40 chat providers; kmet ships 6 (opencode-go, opencode,
@@ -1618,7 +1613,6 @@ deepseek, github-copilot, openai, xai). The remaining 34 (pi
 | `:google-generative-ai` | google |
 | `:google-vertex` | google-vertex |
 | `:mistral-conversations` | mistral |
-| `:pi-messages` | radius |
 
 (`+` = provider also keeps models on apis kmet already has; the generator
 splits by models.dev `provider.npm`: `@ai-sdk/openai` → openai-responses,
@@ -1675,14 +1669,13 @@ Auth per provider (pi `env-api-keys.ts`, complete table for Phase 3's
 | `:ant-ling` | `ANT_LING_API_KEY` |
 | `:qwen-token-plan` / `-cn` / `-individual` | `QWEN_TOKEN_PLAN_API_KEY` / `QWEN_TOKEN_PLAN_CN_API_KEY` / `QWEN_TOKEN_PLAN_API_KEY` |
 | `:vercel-ai-gateway` | `AI_GATEWAY_API_KEY` |
-| `:radius` | `RADIUS_API_KEY` (+ OAuth) |
 | `:zai` / `:zai-coding-cn` | `ZAI_API_KEY` / `ZAI_CODING_CN_API_KEY` |
 
 OAuth flows to land with their providers (Phase 10's PKCE loopback + device
 machinery): anthropic Pro/Max (PKCE loopback, ports 53692/1455, `/callback`
 route, `code#state` race), **openai-codex ChatGPT — device-code login
-implemented (Phase 12), browser PKCE loopback still deferred**, openrouter,
-radius; qwen-token-plan / xiaomi-token-plan subscription providers extend the
+implemented (Phase 12), browser PKCE loopback still deferred**, openrouter;
+qwen-token-plan / xiaomi-token-plan subscription providers extend the
 copilot-style device flow.
 
 #### A.3 Compat surface completion — **thinking formats + adaptive thinking
@@ -1767,9 +1760,7 @@ done too). **Phase 13 ported the anthropic, google, groq, cerebras,
 huggingface, moonshotai, xiaomi, qwen-token-plan, minimax, nvidia,
 openrouter, fireworks and vercel-ai-gateway sections; the models.dev loop
 sections still to port are baseten, kimi-coding, zai and together (A.3
-thinking formats).** **radius has no generator section** — it is a purely
-dynamic provider (catalog from the gateway config + ModelsStore
-persistence). Highlights to
+thinking formats).** Highlights to
 port:
 
 - opencode/opencode-go `@ai-sdk/openai` models → `:openai-responses` with
@@ -1815,7 +1806,7 @@ api groups changes hashes; regenerate once per provider batch.
 - `kmet.libs.sse` gains: responses event processor
   (`response.*` types), bedrock ConverseStream frame parser, mistral event
   stream (`findMistralEventBoundary`), google-vertex reuses the google
-  parser; pi-messages reuses the text/thinking/tool delta types.
+  parser.
 - Copilot dynamic headers (`github-copilot-headers.ts`) apply to its
   openai-responses models: `X-Initiator` (`user`|`agent`, inferred from the
   last message role), `Openai-Intent: conversation-edits`, and

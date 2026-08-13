@@ -224,8 +224,6 @@
                    (when-present m :base-url (str path ".base-url") valid-string? "expected non-empty string")
                    (when-present m :api-key (str path ".api-key") valid-string? "expected non-empty string")
                    (when-present m :api (str path ".api") api-value? "expected keyword or string")
-                   (when-present m :oauth (str path ".oauth") #(or (= "radius" %) (= :radius %))
-                                 "expected \"radius\"")
                    (when-present m :headers (str path ".headers") map? "expected map")
                    (when-present m :compat (str path ".compat") map? "expected map")
                    (when-present m :auth-header (str path ".auth-header") boolean? "expected boolean")

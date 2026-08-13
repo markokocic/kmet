@@ -237,8 +237,8 @@
             :api-key api-key
             :auth-header auth-header
             ;; pi composeOAuthAuth: extension oauth adapted, else the builtin's
-            ;; OAuthAuth (models.edn cannot express fns, so config :oauth is
-            ;; inert — "radius" and future flows land with their providers)
+            ;; OAuthAuth (models.edn cannot express fns — config :oauth is not
+            ;; a schema field and stays inert)
             :oauth (or (adapt-oauth (:oauth extension)) (:oauth base))
             :api-types (set (map :api models))
             :models models}
