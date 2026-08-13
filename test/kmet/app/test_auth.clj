@@ -31,7 +31,10 @@
     (t/is (= ["ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_OAUTH_TOKEN" "ANTHROPIC_API_KEY"]
              (auth/provider-env-vars :anthropic))
           "Phase 9: all three anthropic env vars participate in discovery (pi findEnvKeys)")
-    (t/is (= ["GEMINI_API_KEY"] (auth/provider-env-vars :google))))
+    (t/is (= ["GEMINI_API_KEY"] (auth/provider-env-vars :google)))
+    (t/is (= [] (auth/provider-env-vars :openai-codex))
+          "Phase 12: openai-codex is OAuth-only — no env var")
+    (t/is (= ["AZURE_OPENAI_API_KEY"] (auth/provider-env-vars :azure-openai-responses))))
   (t/testing "unknown provider → empty"
     (t/is (= [] (auth/provider-env-vars :nonexistent)))))
 

@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T10:56:54Z"
+ :generated-at "2026-08-13T13:31:21Z"
  :provider {:id :opencode
             :name "OpenCode (Zen)"
             :env-vars ["OPENCODE_API_KEY"]
@@ -439,18 +439,6 @@
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 256000
     :max-tokens 32000
-    :compat {:max-tokens-field :max-tokens}}
-   "ling-3.0-tiny-free"
-   {:id "ling-3.0-tiny-free"
-    :name "Ling-3.0-tiny Free"
-    :provider :opencode
-    :api :openai-completions
-    :base-url "https://opencode.ai/zen/v1"
-    :reasoning true
-    :input [:text]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 262144
-    :max-tokens 32768
     :compat {:max-tokens-field :max-tokens}}
    "mimo-v2.5-free"
    {:id "mimo-v2.5-free"

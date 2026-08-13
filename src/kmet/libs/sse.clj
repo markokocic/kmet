@@ -140,7 +140,10 @@
    cached/cache-write tokens — session/entry-usage subtracts them) and the
    stop reason. Completed responses with tool-call slots map :stop to
    :tool-use (pi: output.content has a toolCall). Non-max-output incomplete
-   responses surface as an error (pi: stopReason 'error' + errorMessage)."
+   responses surface as an error (pi: stopReason 'error' + errorMessage).
+   response.done is codex's terminal event (pi mapCodexEvents maps it to
+   response.completed, status normalized — known statuses pass through);
+   unknown/missing statuses error rather than silently ending the stream."
   [d state]
   (let [response (:response d)
         status (:status response)
@@ -156,7 +159,12 @@
       (conj {:type :done :stop-reason :length})
       (and (= "incomplete" status) (not= "max_output_tokens" incomplete-reason))
       (conj {:type :error
-             :message (str "Response incomplete: " (or incomplete-reason "unknown reason"))}))))
+             :message (str "Response incomplete: " (or incomplete-reason "unknown reason"))})
+      ;; unknown status (codex normalizeCodexStatus can strip values)
+      (and (not (#{"completed" "incomplete"} status)) (seq status))
+      (conj {:type :error :message (str "Response ended with status " status)})
+      (and (not (#{"completed" "incomplete"} status)) (nil? status))
+      (conj {:type :error :message "Response ended without a status"}))))
 
 (defn- responses-failed-message
   "pi response.failed handling: the error code+message, else the
@@ -249,6 +257,7 @@
 
           "response.completed" (responses-terminal-events d state)
           "response.incomplete" (responses-terminal-events d state)
+          "response.done" (responses-terminal-events d state)
           "response.failed"
           (do (swap! state assoc :saw-terminal? true)
               [{:type :error :message (responses-failed-message d)}])

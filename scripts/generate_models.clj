@@ -1,11 +1,11 @@
 ;; scripts/generate_models.clj — regenerate src/kmet/app/model_data/*.edn from
-;; models.dev (pi: packages/ai/scripts/generate-models.ts, ported to the 6
+;; models.dev (pi: packages/ai/scripts/generate-models.ts, ported to the 8
 ;; providers kmet ships: opencode-go, opencode, deepseek, github-copilot,
-;; openai, xai).
+;; openai, xai, openai-codex, azure-openai-responses).
 ;;
-;; Wire APIs out of kmet's scope (openai-codex-responses, bedrock, azure,
-;; etc.) are skipped and logged. The generated EDN + manifest.edn are
-;; committed; the offline half (validate-committed!) also runs as
+;; Wire APIs out of kmet's scope (bedrock, google-vertex, mistral, etc.)
+;; are skipped and logged. The generated EDN + manifest.edn are committed;
+;; the offline half (validate-committed!) also runs as
 ;; test/kmet/app/test_model_data.clj so drift is caught without network.
 ;;
 ;; Run via: bb generate-models   (network)
@@ -41,7 +41,13 @@
             :default-model "gpt-5.5"}
    :xai {:name "xAI"
          :env-vars ["XAI_API_KEY"]
-         :default-model "grok-4.5"}))
+         :default-model "grok-4.5"}
+   :openai-codex {:name "OpenAI Codex"
+                  :env-vars []            ;; OAuth (ChatGPT) — no env var
+                  :default-model "gpt-5.5"}
+   :azure-openai-responses {:name "Azure OpenAI"
+                            :env-vars ["AZURE_OPENAI_API_KEY"]
+                            :default-model "gpt-5.4"}))
 
 (def opencode-variants
   "pi opencodeVariants: models.dev key → kmet provider id + API base path."
@@ -385,6 +391,80 @@
                       :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0}
                       :context-window 128000 :max-tokens 16384)]))
 
+;; ─── openai-codex (pi: hardcoded codexModels — ChatGPT OAuth models; the
+;;     list is kept small to avoid aliases) ─────────────────────────────────
+
+(def ^:private codex-base-url "https://chatgpt.com/backend-api")
+(def ^:private codex-context 272000)
+(def ^:private codex-spark-context 128000)
+(def ^:private codex-max-tokens 128000)
+
+(defn- codex-model
+  "One hardcoded codex model map (pi codexModels entry)."
+  [id name input cost context]
+  (array-map :id id :name name
+             :provider :openai-codex :api :openai-codex-responses
+             :base-url codex-base-url
+             :reasoning true :input input
+             :cost cost
+             :context-window context :max-tokens codex-max-tokens))
+
+(defn- process-codex
+  "The hardcoded codex catalog (pi codexModels; gpt-5.4/5.5/5.6 carry the
+   long-context pricing tier, gpt-5.6 standard costs like openai)."
+  []
+  [(codex-model "gpt-5.3-codex-spark" "GPT-5.3 Codex Spark" [:text]
+                (array-map :input 1.75 :output 14 :cache-read 0.175 :cache-write 0)
+                codex-spark-context)
+   (codex-model "gpt-5.4" "GPT-5.4" [:text :image]
+                (with-openai-long-context-pricing
+                 (array-map :input 2.5 :output 15 :cache-read 0.25 :cache-write 0))
+                codex-context)
+   (codex-model "gpt-5.4-mini" "GPT-5.4 mini" [:text :image]
+                (array-map :input 0.75 :output 4.5 :cache-read 0.075 :cache-write 0)
+                codex-context)
+   (codex-model "gpt-5.5" "GPT-5.5" [:text :image]
+                (with-openai-long-context-pricing
+                 (array-map :input 5 :output 30 :cache-read 0.5 :cache-write 0))
+                codex-context)
+   (codex-model "gpt-5.6-luna" "GPT-5.6 Luna" [:text :image]
+                (with-openai-long-context-pricing
+                 (get openai-gpt-56-standard-costs "gpt-5.6-luna"))
+                codex-context)
+   (codex-model "gpt-5.6-sol" "GPT-5.6 Sol" [:text :image]
+                (with-openai-long-context-pricing
+                 (array-map :input 5 :output 30 :cache-read 0.5 :cache-write 6.25))
+                codex-context)
+   (codex-model "gpt-5.6-terra" "GPT-5.6 Terra" [:text :image]
+                (with-openai-long-context-pricing
+                 (get openai-gpt-56-standard-costs "gpt-5.6-terra"))
+                codex-context)])
+
+;; ─── azure-openai-responses (pi: azureOpenAiModels — the mirror of the
+;;     openai responses models; Azure Foundry deploys them with larger
+;;     context windows, cost tiers are dropped) ─────────────────────────────
+
+(def ^:private azure-context-window-overrides
+  {"gpt-5.4" 1050000 "gpt-5.5" 1050000
+   "gpt-5.6-luna" 1050000 "gpt-5.6-sol" 1050000 "gpt-5.6-terra" 1050000})
+
+(defn- process-azure
+  "The azure mirror (pi azureOpenAiModels): every openai-responses openai
+   model becomes an azure-openai-responses model with an empty base-url
+   (the deployment config comes from AZURE_OPENAI_* env vars at request
+   time) and the context override; cost keeps the flat rates only."
+  [openai-models]
+  (for [mm openai-models
+        :when (and (= :openai (:provider mm))
+                   (= :openai-responses (:api mm)))]
+    (assoc mm
+           :api :azure-openai-responses
+           :provider :azure-openai-responses
+           :base-url ""
+           :cost (select-keys (:cost mm) [:input :output :cache-read :cache-write])
+           :context-window (get azure-context-window-overrides (:id mm)
+                                (:context-window mm)))))
+
 ;; ─── deepseek-v4 compat normalization (pi, after all providers) ────────────
 
 (defn- normalize-deepseek-v4
@@ -511,6 +591,8 @@
       (merge-thinking-level-map {:xhigh "xhigh"})
       (supports-openai-max? mm)
       (merge-thinking-level-map {:max "max"})
+      (and (= :openai-codex provider) (supports-openai-xhigh? id))
+      (merge-thinking-level-map {:minimal "low"})
       (and (= :openai provider) (= id "gpt-5.5"))
       (merge-thinking-level-map {:minimal nil})
       (str/ends-with? id "gpt-5.5-pro")
@@ -567,7 +649,9 @@
    pass OpenAI custom grammar tools through — gpt-5+ only (OpenAI rejects
    type: 'custom' tools for pre-GPT-5 models)."
   [mm]
-  (if (and (= :openai-responses (:api mm))
+  (if (and (contains? #{:openai-responses :azure-openai-responses
+                        :openai-codex-responses}
+                      (:api mm))
            (contains? #{:openai :openai-codex :azure-openai-responses
                         :github-copilot :opencode :cloudflare-ai-gateway}
                       (:provider mm))
@@ -576,17 +660,28 @@
     (merge-compat mm {:supports-openai-grammar-tools true})
     mm))
 
+(def ^:private openai-codex-additional-tools-model-ids
+  #{"gpt-5.6-sol" "gpt-5.6-terra" "gpt-5.6-luna"})
+
 (defn- apply-openai-tool-search-metadata
   "pi applyOpenAIToolSearchMetadata: gpt-5.4+ openai responses models can
    load tools at a specific point in the input (tool search) and accept
-   additional_tools items."
+   additional_tools items (the codex responses family adds its own gpt-5.6
+   additional-tools set)."
   [mm]
-  (if (and (= :openai (:provider mm)) (= :openai-responses (:api mm))
-           (contains? openai-tool-search-model-ids (:id mm)))
-    (merge-compat mm (cond-> {:supports-tool-search true}
-                       (contains? openai-additional-tools-model-ids (:id mm))
-                       (assoc :supports-additional-tools true)))
-    mm))
+  (let [is-openai? (and (= :openai (:provider mm)) (= :openai-responses (:api mm)))
+        is-codex? (and (= :openai-codex (:provider mm))
+                       (= :openai-codex-responses (:api mm)))]
+    (if (and (or is-openai? is-codex?)
+             (contains? openai-tool-search-model-ids (:id mm)))
+      (merge-compat mm
+                    (cond-> {:supports-tool-search true}
+                      (or (and is-openai?
+                               (contains? openai-additional-tools-model-ids (:id mm)))
+                          (and is-codex?
+                               (contains? openai-codex-additional-tools-model-ids (:id mm))))
+                      (assoc :supports-additional-tools true)))
+      mm)))
 
 (defn- apply-openai-explicit-prompt-cache-metadata
   "pi applyOpenAIExplicitPromptCacheMetadata: OpenAI charges prompt-cache
@@ -635,13 +730,18 @@
 
 (defn- normalize-context-overrides
   "pi generateModels override loop for kmet's providers: the opencode
-   variants' claude/gpt-5.4 limits, copilot's extended-context models, and
-   the opencode 1M-context claude pair."
+   variants' claude/gpt-5.4 limits, copilot's extended-context models, the
+   opencode 1M-context claude pair, and the azure deployment context
+   windows."
   [mm]
   (let [id (:id mm)
         prov (:provider mm)
         variant? (contains? #{:opencode :opencode-go} prov)]
     (cond-> mm
+      (and (= :azure-openai-responses prov)
+           (contains? azure-context-window-overrides id))
+      (assoc :context-window (get azure-context-window-overrides id))
+
       (and (= :github-copilot prov)
            (contains? github-copilot-extended-context-models id))
       (assoc :context-window 1000000)
@@ -685,13 +785,15 @@
 (defn- generate-models-data
   "Build {provider-id -> [model-map ...]} from a models.dev payload (pi
    generateModels order: all model sources, context/cost overrides, missing
-   gpt models, deepseek-v4 compat normalization, then the metadata passes)."
+   gpt models, codex + the azure mirror, deepseek-v4 compat normalization,
+   then the metadata passes)."
   [data]
   (let [all (->> (concat (process-opencode data)
                          (process-copilot data)
                          (process-xai data)
                          (process-openai data)
-                         (map #(apply-thinking-maps % nil) deepseek-v4-models))
+                         (map #(apply-thinking-maps % nil) deepseek-v4-models)
+                         (map #(apply-thinking-maps % nil) (process-codex)))
                  (remove nil?))
         ;; Hardcoded fallbacks still get the thinking metadata rules (pi runs
         ;; applyThinkingLevelMetadata over allModels — the missing models
@@ -700,8 +802,12 @@
                                       (missing-openai-models (set (map :id all)))))
         normalized (map #(-> % normalize-openai normalize-context-overrides)
                         with-missing)
+        ;; the azure mirror derives from the normalized openai models (pi:
+        ;; after the section overrides, before the metadata passes) and gets
+        ;; the thinking metadata rules on top (off:null for gpt-5* etc.)
+        azure (map #(apply-thinking-maps % nil) (process-azure normalized))
         grouped (group-by :provider
-                          (->> normalized
+                          (->> (concat normalized azure)
                                (map apply-compat-metadata)
                                (normalize-deepseek-v4)))]
     (into (array-map)

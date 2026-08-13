@@ -14,7 +14,7 @@
 (t/deftest test-llm-loaded
   (t/is (fn? llm/send-message))
   (m/load-catalogs!)
-  (t/is (= 6 (count (m/get-providers))))
+  (t/is (= 8 (count (m/get-providers))))
   (t/is (fn? m/get-model)))
 
 ;; ─── Model resolution & dispatch ───────────────────────────────────────────
@@ -56,6 +56,180 @@
            (@#'llm/endpoint-url :google-generative-ai "https://opencode.ai/zen/v1" "gemini-3.1-pro")))
   (t/is (= "https://api.openai.com/v1/responses"
            (@#'llm/endpoint-url :openai-responses "https://api.openai.com/v1" "gpt-5.4"))))
+
+;; ─── OpenAI Codex + Azure responses (shared processor, new URL + auth) ────
+
+(defn- test-jwt
+  "A fake JWT carrying the chatgpt_account_id claim (codex request auth)."
+  [account-id]
+  (let [enc (fn [s] (.encodeToString (java.util.Base64/getUrlEncoder)
+                                     (.getBytes s "UTF-8")))
+        payload (str "{\"https://api.openai.com/auth\":{\"chatgpt_account_id\":\""
+                     account-id "\"}}")]
+    (str (enc "{\"alg\":\"none\"}") "." (enc payload) ".sig")))
+
+(defn- codex-model
+  "A minimal codex Model record for payload tests."
+  [& [overrides]]
+  (m/map->Model
+   (merge {:id "gpt-5.4" :name "GPT-5.4" :provider :openai-codex
+           :api :openai-codex-responses :base-url "https://chatgpt.com/backend-api"
+           :reasoning true :input [:text :image]
+           :cost {:input 2.5 :output 15 :cache-read 0.25 :cache-write 0}
+           :context-window 272000 :max-tokens 128000
+           :thinking-level-map {:minimal "low" :low "low" :medium "medium"
+                                :high "high" :xhigh "xhigh" :max "max"}}
+          overrides)))
+
+(t/deftest test-llm-codex-url
+  (t/is (= "https://chatgpt.com/backend-api/codex/responses"
+           (@#'llm/codex-endpoint-url "https://chatgpt.com/backend-api")))
+  (t/is (= "https://chatgpt.com/backend-api/codex/responses"
+           (@#'llm/codex-endpoint-url nil))
+        "blank base → the default codex base")
+  (t/is (= "https://custom.example/codex/responses"
+           (@#'llm/codex-endpoint-url "https://custom.example/codex"))
+        "base ending in /codex gains /responses")
+  (t/is (= "https://custom.example/codex/responses"
+           (@#'llm/codex-endpoint-url "https://custom.example/codex/responses/"))
+        "the full path passes through (trailing slash trimmed)"))
+
+(t/deftest test-llm-codex-account-id
+  (t/is (= "acc-1" (@#'llm/codex-account-id (test-jwt "acc-1")))
+        "chatgpt_account_id claim from the JWT payload")
+  (t/is (thrown-with-msg? Exception #"Failed to extract accountId"
+                          (@#'llm/codex-account-id "not-a-jwt")))
+  (t/is (thrown-with-msg? Exception #"Failed to extract accountId"
+                          (@#'llm/codex-account-id
+                           (test-jwt ""))) "no claim in the payload"))
+
+(t/deftest test-llm-codex-payload
+  (let [msgs [{:role :system :content [{:type :text :text "S"}]}
+              {:role :user :content [{:type :text :text "hi"}]}]
+        payload (@#'llm/codex-payload (codex-model) :high msgs [] "gpt-5.4"
+                                      "sess-123")]
+    (t/is (= "gpt-5.4" (:model payload)))
+    (t/is (= "S" (:instructions payload)) "the system prompt goes to instructions")
+    (t/is (false? (:store payload)))
+    (t/is (= "low" (get-in payload [:text :verbosity])))
+    (t/is (= ["reasoning.encrypted_content"] (:include payload)))
+    (t/is (= "auto" (:tool_choice payload)))
+    (t/is (true? (:parallel_tool_calls payload)))
+    (t/is (= "sess-123" (:prompt_cache_key payload)))
+    (t/is (= {:effort "high" :summary "auto"} (:reasoning payload)))
+    (t/is (not-any? #(= "developer" (:role %)) (:input payload))
+          "no developer message — the codex envelope uses instructions")
+    (t/is (= [{:role "user"
+               :content [{:type "input_text" :text "hi"}]}]
+             (:input payload))
+          "converted messages without the system prompt"))
+  (t/testing "no prompt-cache key when caching is off"
+    (let [payload (@#'llm/codex-payload (codex-model) nil [] [] "gpt-5.4" nil)]
+      (t/is (nil? (:prompt_cache_key payload)))
+      (t/is (nil? (:reasoning payload)) "off → no reasoning field (codex thinks by default)")))
+  (t/testing "tools + sampling-params merged last"
+    (let [tool (tools/make-tool :name "bash" :description "run"
+                                :parameters {:type "object"
+                                             :properties {:cmd {:type "string"}}}
+                                :execute (fn [_] nil))
+          payload (@#'llm/codex-payload (codex-model {:sampling-params {:temperature 0.2}})
+                                        :high [] [tool] "gpt-5.4" nil)]
+      (t/is (= "bash" (get-in payload [:tools 0 :name])))
+      (t/is (= 0.2 (:temperature payload)) "sampling-params win over the envelope"))))
+
+(t/deftest test-llm-codex-request-headers
+  (let [token (test-jwt "acc-9")
+        headers (@#'llm/codex-request-headers token "sess-123")]
+    (t/is (= (str "Bearer " token) (get headers "Authorization")))
+    (t/is (= "acc-9" (get headers "chatgpt-account-id")))
+    (t/is (= "pi" (get headers "originator")))
+    (t/is (str/starts-with? (get headers "User-Agent") "pi (") "pi User-Agent (pi buildBaseCodexHeaders)")
+    (t/is (= "responses=experimental" (get headers "OpenAI-Beta")))
+    (t/is (= "text/event-stream" (get headers "Accept")))
+    (t/is (= "sess-123" (get headers "session-id")))
+    (t/is (= "sess-123" (get headers "x-client-request-id"))))
+  (t/testing "no session headers when caching is off"
+    (let [headers (@#'llm/codex-request-headers (test-jwt "acc-9") nil)]
+      (t/is (nil? (get headers "session-id")))
+      (t/is (nil? (get headers "x-client-request-id"))))))
+
+(t/deftest test-llm-azure-url
+  (t/testing "normalizeAzureBaseUrl forces azure hosts to /openai/v1"
+    (t/is (= "https://res.openai.azure.com/openai/v1"
+             (@#'llm/normalize-azure-base-url "https://res.openai.azure.com")))
+    (t/is (= "https://res.openai.azure.com/openai/v1"
+             (@#'llm/normalize-azure-base-url "https://res.openai.azure.com/openai/v1/responses")))
+    (t/is (= "https://res.cognitiveservices.azure.com/openai/v1"
+             (@#'llm/normalize-azure-base-url "https://res.cognitiveservices.azure.com/openai/")))
+    (t/is (= "https://res.ai.azure.com/openai/v1"
+             (@#'llm/normalize-azure-base-url "https://res.ai.azure.com")))
+    (t/is (= "https://res.openai.azure.com/custom/path"
+             (@#'llm/normalize-azure-base-url "https://res.openai.azure.com/custom/path"))
+          "other paths pass through"))
+  (t/testing "azureEndpointUrl appends the deployment + api version"
+    (t/is (= "https://res.openai.azure.com/openai/v1/deployments/gpt-5.4/responses?api-version=v1"
+             (@#'llm/azure-endpoint-url "https://res.openai.azure.com/openai/v1"
+                                        "gpt-5.4" "v1"))))
+  (t/testing "deployment name resolution (AZURE_OPENAI_DEPLOYMENT_NAME_MAP)"
+    (with-redefs [llm/getenv (fn [k]
+                               (when (= k "AZURE_OPENAI_DEPLOYMENT_NAME_MAP")
+                                 "gpt-5.4=my-gpt-54, gpt-5.5 = my-gpt-55"))]
+      (t/is (= "my-gpt-54" (@#'llm/azure-deployment-name "gpt-5.4")))
+      (t/is (= "my-gpt-55" (@#'llm/azure-deployment-name "gpt-5.5")))
+      (t/is (= "gpt-4o" (@#'llm/azure-deployment-name "gpt-4o"))
+            "unmapped models use the model id"))
+    (with-redefs [llm/getenv (fn [_] nil)]
+      (t/is (= "gpt-5.4" (@#'llm/azure-deployment-name "gpt-5.4")))))
+  (t/testing "resolved config: env base wins, resource name derives, api version"
+    (with-redefs [llm/getenv (fn [k]
+                               (case k
+                                 "AZURE_OPENAI_BASE_URL" "https://res.openai.azure.com"
+                                 "AZURE_OPENAI_API_VERSION" "2024-02-01"
+                                 nil))]
+      (t/is (= {:base-url "https://res.openai.azure.com/openai/v1" :api-version "2024-02-01"}
+               (@#'llm/azure-resolved-config ""))))
+    (with-redefs [llm/getenv (fn [k]
+                               (when (= k "AZURE_OPENAI_RESOURCE_NAME") "myres"))]
+      (t/is (= {:base-url "https://myres.openai.azure.com/openai/v1" :api-version "v1"}
+               (@#'llm/azure-resolved-config ""))))
+    (with-redefs [llm/getenv (fn [_] nil)]
+      (t/is (= {:base-url "https://model.example/v1" :api-version "v1"}
+               (@#'llm/azure-resolved-config "https://model.example/v1"))
+            "model base-url fallback")
+      (t/is (thrown-with-msg? Exception #"Azure OpenAI base URL is required"
+                              (@#'llm/azure-resolved-config ""))))))
+
+(t/deftest test-llm-azure-payload-uses-deployment
+  (let [payload (@#'llm/responses-payload (codex-model) :high [] [] "my-deployment"
+                                          :short "sess-123")]
+    (t/is (= "my-deployment" (:model payload))
+          "the deployment name is the model field on the wire")
+    (t/is (= "sess-123" (:prompt_cache_key payload)))
+    (t/is (= {:effort "high" :summary "auto"} (:reasoning payload)))))
+
+(t/deftest test-llm-codex-invalid-token-reports-error
+  (m/load-catalogs!)
+  (let [errors (atom [])]
+    @(llm/send-message {:provider :openai-codex
+                        :api-key "not-a-jwt"
+                        :model "gpt-5.4"
+                        :on-error (fn [e] (swap! errors conj e))})
+    (t/is (= ["Failed to extract accountId from token"] @errors)
+          "an invalid codex token reports via on-error (never hangs the loop)")))
+
+(t/deftest test-llm-azure-missing-config-reports-error
+  (m/load-catalogs!)
+  (let [errors (atom [])]
+    ;; the config is resolved inside the request future, so the env redef
+    ;; must stay active until the future completes
+    (with-redefs [llm/getenv (fn [_] nil)]
+      @(llm/send-message {:provider :azure-openai-responses
+                          :api-key "sk"
+                          :model "gpt-5.4"
+                          :on-error (fn [e] (swap! errors conj e))}))
+    (t/is (= ["Azure OpenAI base URL is required. Set AZURE_OPENAI_BASE_URL or AZURE_OPENAI_RESOURCE_NAME."]
+             @errors)
+          "a missing azure base config reports via on-error (never hangs the loop)")))
 
 ;; ─── OpenAI Responses messages + payload ──────────────────────────────────
 
@@ -230,8 +404,9 @@
 
 (t/deftest test-llm-all-providers-resolve
   (m/load-catalogs!)
-  (t/is (= 6 (count (m/get-providers))))
-  (doseq [p [:opencode-go :opencode :deepseek :github-copilot :openai :xai]]
+  (t/is (= 8 (count (m/get-providers))))
+  (doseq [p [:opencode-go :opencode :deepseek :github-copilot :openai :xai
+             :openai-codex :azure-openai-responses]]
     (t/is (some? (m/get-provider p)) (str p " has a catalog entry"))))
 
 ;; ─── Image block conversion ───────────────────────────────────────────────
@@ -1154,5 +1329,189 @@
         (let [payload (json/parse-string @request-body true)]
           (t/is (= "sess-copilot" (:prompt_cache_key payload)))
           (t/is (= {:role "developer" :content "S"} (first (:input payload))))))
+      (finally
+        (.close ss)))))
+
+;; ─── Codex + Azure responses end-to-end (mock server) ─────────────────────
+
+(t/deftest ^:slow test-llm-codex-responses-end-to-end
+  (m/load-catalogs!)
+  (let [token (test-jwt "acc-1")
+        ss (java.net.ServerSocket. 0)
+        port (.getLocalPort ss)
+        request-line (atom nil)
+        request-body (atom nil)
+        request-headers (atom {})
+        _ (doto (Thread.
+                 (fn []
+                   (try
+                     (let [s (.accept ss)
+                           din (java.io.DataInputStream. (.getInputStream s))
+                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. din))
+                           line1 (.readLine rdr)
+                           _ (reset! request-line line1)
+                           clen (atom 0)
+                           req-headers (atom {})
+                           _ (loop []
+                               (let [line (.readLine rdr)]
+                                 (when-not (empty? line)
+                                   (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
+                                     (reset! clen (Long/parseLong (str/trim (subs line 15)))))
+                                   (when-let [colon (str/index-of line ":")]
+                                     (reset! req-headers
+                                             (assoc @req-headers
+                                                    (str/trim (subs line 0 colon))
+                                                    (str/trim (subs line (inc colon))))))
+                                   (recur))))
+                           _ (reset! request-headers @req-headers)
+                           body-sb (StringBuilder.)
+                           _ (loop [n 0]
+                               (if (< n @clen)
+                                 (let [buf (char-array (- @clen n))
+                                       m (.read rdr buf)]
+                                   (when (pos? m)
+                                     (.append body-sb buf 0 m)
+                                     (recur (+ n m))))
+                                 nil))
+                           _ (reset! request-body (str body-sb))
+                           out (.getOutputStream s)
+                           stream-body (str "event: response.output_text.delta\n"
+                                            "data: {\"output_index\":0,\"delta\":\"hello\"}\n\n"
+                                            "event: response.done\n"
+                                            "data: {\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}\n\n")]
+                       (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: text/event-stream\r\n"
+                                                   "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                   stream-body)))
+                       (.flush out)
+                       (.close s))
+                     (catch Exception _ nil))))
+            (.setDaemon true)
+            (.start))
+        text (atom "")
+        done-reason (atom nil)
+        errors (atom [])
+        fut (llm/send-message {:provider :openai-codex
+                               :api-key token
+                               :base-url (str "http://localhost:" port)
+                               :model "gpt-5.4"
+                               :messages [{:role :system :content [{:type :text :text "S"}]}
+                                          {:role :user :content [{:type :text :text "hi"}]}]
+                               :session-id "sess-codex"
+                               :thinking :high
+                               :on-text (fn [t] (swap! text str t))
+                               :on-done (fn [r] (reset! done-reason r))
+                               :on-error (fn [e] (swap! errors conj e))})]
+    (try
+      @fut
+      (t/is (= [] @errors) (str "no stream errors: " @errors))
+      (t/is (= "hello" @text))
+      (t/is (= :stop @done-reason) "codex response.done → :stop")
+      (t/testing "codex headers on the wire"
+        (t/is (= (str "Bearer " token) (get @request-headers "Authorization")))
+        (t/is (= "acc-1" (get @request-headers "chatgpt-account-id")))
+        (t/is (= "pi" (get @request-headers "originator")))
+        (t/is (= "responses=experimental" (get @request-headers "OpenAI-Beta")))
+        (t/is (= "sess-codex" (get @request-headers "session-id")))
+        (t/is (= "sess-codex" (get @request-headers "x-client-request-id"))))
+      (t/testing "the codex envelope is on the wire"
+        (let [payload (json/parse-string @request-body true)]
+          (t/is (= "S" (:instructions payload)))
+          (t/is (= "sess-codex" (:prompt_cache_key payload))
+                "default :short retention sends the cache key")
+          (t/is (= {:effort "high" :summary "auto"} (:reasoning payload)))
+          (t/is (= "low" (get-in payload [:text :verbosity])))))
+      (finally
+        (.close ss)))))
+
+(t/deftest ^:slow test-llm-azure-responses-end-to-end
+  (m/load-catalogs!)
+  (let [ss (java.net.ServerSocket. 0)
+        port (.getLocalPort ss)
+        request-line (atom nil)
+        request-body (atom nil)
+        request-headers (atom {})
+        _ (doto (Thread.
+                 (fn []
+                   (try
+                     (let [s (.accept ss)
+                           din (java.io.DataInputStream. (.getInputStream s))
+                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. din))
+                           line1 (.readLine rdr)
+                           _ (reset! request-line line1)
+                           clen (atom 0)
+                           req-headers (atom {})
+                           _ (loop []
+                               (let [line (.readLine rdr)]
+                                 (when-not (empty? line)
+                                   (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
+                                     (reset! clen (Long/parseLong (str/trim (subs line 15)))))
+                                   (when-let [colon (str/index-of line ":")]
+                                     (reset! req-headers
+                                             (assoc @req-headers
+                                                    (str/trim (subs line 0 colon))
+                                                    (str/trim (subs line (inc colon))))))
+                                   (recur))))
+                           _ (reset! request-headers @req-headers)
+                           body-sb (StringBuilder.)
+                           _ (loop [n 0]
+                               (if (< n @clen)
+                                 (let [buf (char-array (- @clen n))
+                                       m (.read rdr buf)]
+                                   (when (pos? m)
+                                     (.append body-sb buf 0 m)
+                                     (recur (+ n m))))
+                                 nil))
+                           _ (reset! request-body (str body-sb))
+                           out (.getOutputStream s)
+                           stream-body (str "event: response.output_text.delta\n"
+                                            "data: {\"output_index\":0,\"delta\":\"hi\"}\n\n"
+                                            "event: response.completed\n"
+                                            "data: {\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}\n\n")]
+                       (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: text/event-stream\r\n"
+                                                   "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                   stream-body)))
+                       (.flush out)
+                       (.close s))
+                     (catch Exception _ nil))))
+            (.setDaemon true)
+            (.start))
+        text (atom "")
+        done-reason (atom nil)
+        errors (atom [])
+        ;; the azure config is resolved inside the request future, so the
+        ;; env redef must stay active until the future completes
+        _ (with-redefs [llm/getenv (fn [k]
+                                     (case k
+                                       "AZURE_OPENAI_BASE_URL" (str "http://localhost:" port)
+                                       "AZURE_OPENAI_DEPLOYMENT_NAME_MAP" "gpt-5.4=my-deploy"
+                                       nil))]
+            (let [f (llm/send-message {:provider :azure-openai-responses
+                                       :api-key "sk-azure"
+                                       :model "gpt-5.4"
+                                       :messages [{:role :system :content [{:type :text :text "S"}]}
+                                                  {:role :user :content [{:type :text :text "hi"}]}]
+                                       :session-id "sess-azure"
+                                       :thinking :high
+                                       :on-text (fn [t] (swap! text str t))
+                                       :on-done (fn [r] (reset! done-reason r))
+                                       :on-error (fn [e] (swap! errors conj e))})]
+              @f))]
+    (try
+      (t/is (= [] @errors) (str "no stream errors: " @errors))
+      (t/is (= "hi" @text))
+      (t/is (= :stop @done-reason))
+      (t/testing "the deployment path + api version are on the wire"
+        (t/is (str/includes? @request-line "/deployments/my-deploy/responses?api-version=v1")
+              (str "request line: " @request-line)))
+      (t/testing "no session-affinity headers for azure (pi)"
+        (t/is (= (str "Bearer " "sk-azure") (get @request-headers "Authorization")))
+        (t/is (nil? (get @request-headers "session_id")))
+        (t/is (nil? (get @request-headers "x-client-request-id"))))
+      (t/testing "the deployment name is the model field, the cache key is sent"
+        (let [payload (json/parse-string @request-body true)]
+          (t/is (= "my-deploy" (:model payload)))
+          (t/is (= "sess-azure" (:prompt_cache_key payload)))))
       (finally
         (.close ss)))))

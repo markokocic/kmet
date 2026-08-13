@@ -4,7 +4,8 @@
    credential refresh on expiry (5-min skew), serialized credential ops,
    copilot available-model-ids filtering + proxy-ep base-url, and the /login
    auth-type selection."
-  (:require [clojure.test :as t :refer [testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :as t :refer [testing]]
             [clojure.edn :as edn]
             [babashka.fs :as fs]
             [kmet.app.auth :as auth]
@@ -233,6 +234,110 @@
         oauth (oauth/make-github-copilot-oauth (fn [] []))]
     (t/is (thrown-with-msg? Exception #"Invalid GitHub Enterprise URL/domain"
                             ((:login oauth) interaction)))))
+
+;; ─── OpenAI Codex OAuth (device-code login; browser loopback deferred) ────
+
+(t/deftest test-codex-device-poll
+  (let [device {:device-auth-id "da-1" :user-code "12345" :interval 1}]
+    (testing "complete → authorization_code + verifier"
+      (with-redefs [oauth/fetch-json
+                    (fn [_ _] {:authorization_code "ac-1" :code_verifier "v-1"})]
+        (t/is (= {:status :complete
+                  :value {:authorization-code "ac-1" :code-verifier "v-1"}}
+                 (@#'oauth/codex-device-poll device)))))
+    (testing "403 → pending (pi checks response.status directly)"
+      (with-redefs [oauth/fetch-json
+                    (fn [_ _] (throw (ex-info "403: pending" {:type :oauth-http :status 403})))]
+        (t/is (= {:status :pending} (@#'oauth/codex-device-poll device)))))
+    (testing "404 → pending"
+      (with-redefs [oauth/fetch-json
+                    (fn [_ _] (throw (ex-info "404: pending" {:type :oauth-http :status 404})))]
+        (t/is (= {:status :pending} (@#'oauth/codex-device-poll device)))))
+    (testing "non-pending transport errors propagate"
+      (with-redefs [oauth/fetch-json
+                    (fn [_ _] (throw (ex-info "500" {:type :oauth-http :status 500})))]
+        (t/is (thrown-with-msg? Exception #"500" (@#'oauth/codex-device-poll device)))))
+    (testing "deviceauth_authorization_pending error → pending"
+      (with-redefs [oauth/fetch-json
+                    (fn [_ _] {:error "deviceauth_authorization_pending"})]
+        (t/is (= {:status :pending} (@#'oauth/codex-device-poll device)))))
+    (testing "nested error object code → pending"
+      (with-redefs [oauth/fetch-json
+                    (fn [_ _] {:error {:code "deviceauth_authorization_pending"}})]
+        (t/is (= {:status :pending} (@#'oauth/codex-device-poll device)))))
+    (testing "slow_down → slow_down"
+      (with-redefs [oauth/fetch-json (fn [_ _] {:error "slow_down"})]
+        (t/is (= {:status :slow_down} (@#'oauth/codex-device-poll device)))))
+    (testing "unknown responses → failed"
+      (with-redefs [oauth/fetch-json (fn [_ _] {:error "something_else"})]
+        (let [result (@#'oauth/codex-device-poll device)]
+          (t/is (= :failed (:status result)))
+          (t/is (str/includes? (:message result) "something_else")))))))
+
+(t/deftest test-codex-login-flow
+  (let [notified (atom [])
+        interaction {:signal (atom false)
+                     :prompt (fn [_] nil)
+                     :notify (fn [e] (swap! notified conj e))}
+        oauth (oauth/make-openai-codex-oauth)]
+    (with-redefs [oauth/start-codex-device-auth
+                  (fn [] {:device-auth-id "da-1" :user-code "ABC-DEF" :interval 5})
+                  oauth/poll-codex-device-auth
+                  (fn [_ _] {:status :complete
+                             :value {:authorization-code "ac-1" :code-verifier "v-1"}})
+                  oauth/codex-exchange-authorization-code
+                  (fn [_ _ _]
+                    {:access "acc-token" :refresh "ref-token" :expires 9999999999999})]
+      (let [credential ((:login oauth) interaction)]
+        (t/is (= "acc-token" (:access credential)))
+        (t/is (= "ref-token" (:refresh credential)))
+        (t/is (= 9999999999999 (:expires credential)))
+        (t/is (= :device-code (:type (first @notified))))
+        (t/is (= "ABC-DEF" (:user-code (first @notified))))
+        (t/is (= "https://auth.openai.com/codex/device"
+                 (:verification-uri (first @notified))))
+        (t/is (= 900 (:expires-in-seconds (first @notified))))))))
+
+(t/deftest test-codex-refresh-and-to-auth
+  (let [oauth (oauth/make-openai-codex-oauth)]
+    (testing "refresh exchanges the stored refresh token"
+      (with-redefs [oauth/codex-refresh-access-token
+                    (fn [_] {:access "new-access" :refresh "new-refresh" :expires 123})]
+        (let [credential ((:refresh oauth)
+                          {:type :oauth :access "a" :refresh "r" :expires 1} nil)]
+          (t/is (= "new-access" (:access credential)))
+          (t/is (= "new-refresh" (:refresh credential)))
+          (t/is (= 123 (:expires credential))))))
+    (testing "to-auth passes the access token through"
+      (t/is (= {:api-key "acc-token"}
+               ((:to-auth oauth)
+                {:type :oauth :access "acc-token" :refresh "r" :expires 1}))))))
+
+(t/deftest test-codex-token-response-validation
+  (testing "missing fields throw"
+    (t/is (thrown-with-msg? Exception #"missing fields"
+                            (@#'oauth/codex-token-response "exchange" {})))
+    (t/is (thrown-with-msg? Exception #"missing fields"
+                            (@#'oauth/codex-token-response
+                             "refresh" {:access_token "a" :refresh_token "r"}))))
+  (testing "a valid response carries the trio with an absolute expiry"
+    (let [before (System/currentTimeMillis)
+          parsed (@#'oauth/codex-token-response
+                  "exchange" {:access_token "a" :refresh_token "r" :expires_in 3600})
+          after (System/currentTimeMillis)]
+      (t/is (= "a" (:access parsed)))
+      (t/is (= "r" (:refresh parsed)))
+      (t/is (<= (+ before (* 3600 1000)) (:expires parsed) (+ after (* 3600 1000))))))
+  (testing "start-codex-device-auth validates the response fields"
+    (with-redefs [oauth/fetch-json (fn [_ _] {:device_auth_id "d" :user_code "u"})]
+      (t/is (thrown-with-msg? Exception #"Invalid OpenAI Codex device code response"
+                              (@#'oauth/start-codex-device-auth))))
+    (with-redefs [oauth/fetch-json
+                  (fn [_ _] {:device_auth_id "d" :user_code "u" :interval 5})]
+      (let [device (@#'oauth/start-codex-device-auth)]
+        (t/is (= "d" (:device-auth-id device)))
+        (t/is (= "u" (:user-code device)))
+        (t/is (= 5 (:interval device)))))))
 
 ;; ─── auth.edn oauth shape (pi auth-storage parse) ─────────────────────────
 
@@ -497,7 +602,9 @@
           "oauth first (pi AUTH_TYPE_ORDER)")
     (t/is (= [:api-key] ((var inter/login-methods) without-oauth)))
     (t/is (= [:oauth :api-key] ((var inter/login-methods) (models/get-provider :github-copilot)))
-          "github-copilot offers both methods")))
+          "github-copilot offers both methods")
+    (t/is (= [:oauth] ((var inter/login-methods) (models/get-provider :openai-codex)))
+          "openai-codex is oauth-only — no api-key login (Phase 12)")))
 
 (t/deftest test-login-command-auth-type-selection
   (commands/clear-commands!)

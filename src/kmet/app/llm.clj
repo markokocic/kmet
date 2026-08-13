@@ -1,6 +1,7 @@
 (ns kmet.app.llm
-  "LLM API client: OpenAI-completions, Anthropic messages, and Google
-   Generative AI — all with streaming.
+  "LLM API client: OpenAI-completions, OpenAI Responses (incl. the codex/
+   azure responses variants), Anthropic messages, and Google Generative AI
+   — all with streaming.
 
    The resolved Model record is the unit of truth (pi): dispatch (wire api),
    endpoint URL, thinking shaping, max-token field, static headers and cost
@@ -19,6 +20,15 @@
 
 (def ^:private default-anthropic-version "2023-06-01")
 
+(def ^:private codex-default-base-url
+  "pi DEFAULT_CODEX_BASE_URL: the ChatGPT backend the codex endpoint
+   appends /codex/responses to."
+  "https://chatgpt.com/backend-api")
+
+(def ^:private getenv
+  "Process env lookup (System/getenv returns nil for unset vars)."
+  (fn [k] (System/getenv k)))
+
 ;; ─── Wire api + URL construction ───────────────────────────────────────────
 
 (defn- endpoint-url
@@ -30,6 +40,80 @@
     :openai-responses (str base "/responses")
     :anthropic-messages (str base "/v1/messages")
     :google-generative-ai (str base "/models/" model-id ":streamGenerateContent?alt=sse")))
+
+(defn- codex-endpoint-url
+  "pi resolveCodexUrl: the default codex base
+   https://chatgpt.com/backend-api; the endpoint is base + /codex/responses
+   (bases already ending in /codex or the full path pass through)."
+  [base]
+  (let [raw (if (str/blank? base) codex-default-base-url base)
+        normalized (str/replace raw #"/+$" "")]
+    (cond
+      (str/ends-with? normalized "/codex/responses") normalized
+      (str/ends-with? normalized "/codex") (str normalized "/responses")
+      :else (str normalized "/codex/responses"))))
+
+(defn- normalize-azure-base-url
+  "pi normalizeAzureBaseUrl: Azure hosts (.openai.azure.com /
+   .cognitiveservices.azure.com / .ai.azure.com) with a bare or /openai
+   path are forced to /openai/v1 so the deployments path appends correctly."
+  [base-url]
+  (let [trimmed (str/replace (str/trim base-url) #"/+$" "")]
+    (try
+      (let [u (java.net.URI. trimmed)
+            host (some-> u .getHost)
+            path (some-> u .getPath (str/replace #"/+$" ""))]
+        (if (and host
+                 (or (str/ends-with? host ".openai.azure.com")
+                     (str/ends-with? host ".cognitiveservices.azure.com")
+                     (str/ends-with? host ".ai.azure.com"))
+                 (contains? #{"" "/" "/openai" "/openai/v1/responses"} path))
+          (str (java.net.URI. (.getScheme u) (.getUserInfo u) host (.getPort u)
+                              "/openai/v1" nil nil))
+          trimmed))
+      (catch Exception _ trimmed))))
+
+(def ^:private azure-default-api-version "v1")
+
+(defn- azure-deployment-name
+  "pi resolveDeploymentName (no per-request override in kmet): the model's
+   deployment from the AZURE_OPENAI_DEPLOYMENT_NAME_MAP env var
+   (modelId=deploymentName, comma-separated), else the model id."
+  [model-id]
+  (let [mapped (when-let [env (getenv "AZURE_OPENAI_DEPLOYMENT_NAME_MAP")]
+                 (into {}
+                       (keep (fn [entry]
+                               (let [[mid dep] (str/split (str/trim entry) #"=" 2)]
+                                 (when (and (seq mid) (seq dep))
+                                   [(str/trim mid) (str/trim dep)]))))
+                       (str/split env #",")))]
+    (or (get mapped model-id) model-id)))
+
+(defn- azure-resolved-config
+  "pi resolveAzureConfig: base URL + api version for an azure request.
+   Base precedence: AZURE_OPENAI_BASE_URL → AZURE_OPENAI_RESOURCE_NAME
+   (https://<name>.openai.azure.com/openai/v1) → the model's base-url;
+   api version: AZURE_OPENAI_API_VERSION → \"v1\". Throws when no base is
+   configurable (the request reports it as a stream error)."
+  [model-base-url]
+  (let [api-version (or (getenv "AZURE_OPENAI_API_VERSION") azure-default-api-version)
+        env-base (some-> (getenv "AZURE_OPENAI_BASE_URL") str/trim)
+        resource (getenv "AZURE_OPENAI_RESOURCE_NAME")
+        resolved (or (not-empty env-base)
+                     (when (seq resource)
+                       (str "https://" resource ".openai.azure.com/openai/v1"))
+                     (when (seq model-base-url) model-base-url))]
+    (when-not resolved
+      (throw (ex-info "Azure OpenAI base URL is required. Set AZURE_OPENAI_BASE_URL or AZURE_OPENAI_RESOURCE_NAME."
+                      {:type :azure-config-missing})))
+    {:base-url (normalize-azure-base-url resolved)
+     :api-version api-version}))
+
+(defn- azure-endpoint-url
+  "pi: base + /deployments/<deployment>/responses?api-version=<v> (the
+   AzureOpenAI SDK appends the deployment path)."
+  [base deployment api-version]
+  (str base "/deployments/" deployment "/responses?api-version=" api-version))
 
 (defn- request-headers
   "Request headers for one request: the provider-attribution layer (session
@@ -453,6 +537,28 @@
     (assoc usage :cost (models/calculate-cost model-record norm))
     usage))
 
+(defn- responses-events-handler
+  "The event dispatch shared by the responses-family request builders
+   (openai-responses / azure / codex): text/thinking/tool-call deltas,
+   done/usage/error."
+  [{:keys [on-text on-thinking on-tool-call on-done on-error on-usage]} model-record]
+  (fn [event]
+    (case (:type event)
+      :text (when on-text (on-text (:content event)))
+      :thinking (when on-thinking (on-thinking (:content event)))
+      :tool-call (when on-tool-call
+                   (on-tool-call {:id (:id event)
+                                  :name (:name event)
+                                  :arguments (:arguments event)
+                                  :index (:index event)}))
+      :tool-call-args (when on-tool-call
+                        (on-tool-call {:arguments (:arguments event)
+                                       :index (:index event)}))
+      :done (when on-done (on-done (:stop-reason event)))
+      :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
+      :error (when on-error (on-error (:message event)))
+      nil)))
+
 (def ^:private network-exception-classes
   "JVM exception classes indicating a transport/network failure (connect,
    DNS, timeout, reset). java.net.http can throw these with a nil message
@@ -659,9 +765,11 @@
 (defn- responses-messages
   "Map agent messages to OpenAI Responses input items (pi
    convertResponsesMessages): the system prompt becomes the first developer
-   message (system when the model doesn't support the developer role),
-   followed by the converted messages."
-  [model messages]
+   message (system when the model doesn't support the developer role) —
+   unless INCLUDE-SYSTEM? is false, when the caller carries the system
+   prompt itself (codex: the instructions field) — followed by the
+   converted messages."
+  [model messages & [include-system?]]
   (let [system (first (for [m messages :when (= :system (:role m))]
                         (content-text (:content m))))
         role (if (and (:reasoning model)
@@ -672,7 +780,10 @@
            acc []]
       (if-let [m (first msgs)]
         (recur (rest msgs) (inc idx) (into acc (responses-message-items model m idx)))
-        (into (if system [{:role role :content system}] []) acc)))))
+        (into (if (and system (not= false include-system?))
+                [{:role role :content system}]
+                [])
+              acc)))))
 
 (defn- responses-tools
   "pi convertResponsesTools: flat function tools with the JSON schema; the
@@ -778,27 +889,30 @@
       (assoc :prompt_cache_options {:mode "explicit"})
       (seq (:sampling-params model-record)) (merge (:sampling-params model-record)))))
 
+(defn- responses-dynamic-headers
+  "The per-request headers beyond the base: session-affinity (gated on
+   caching like pi's cacheSessionId — :none sends neither the cache key nor
+   the affinity headers) + the per-request Copilot dynamic headers."
+  [model-record session-id retention messages]
+  (merge (when (not= :none retention)
+           (responses-affinity-headers model-record session-id))
+         (when (= :github-copilot (:provider model-record))
+           (copilot-dynamic-headers messages))))
+
 (defn- responses-request-headers
   "The full header map for a responses request (pi createClient + the
-   request-headers merge): the session-affinity headers (gated on caching
-   like pi's cacheSessionId — :none sends neither the key nor the headers)
-   + the per-request Copilot dynamic headers, then request-headers' standard
-   merge so the request's own headers win collisions."
+   request-headers merge): responses-dynamic-headers, then request-headers'
+   standard merge so the request's own headers win collisions."
   [model-record provider-record api-key session-id retention messages]
-  (let [dynamic-headers (merge (when (not= :none retention)
-                                 (responses-affinity-headers model-record session-id))
-                               (when (= :github-copilot (:provider model-record))
-                                 (copilot-dynamic-headers messages)))]
-    (request-headers
-     (merge dynamic-headers
-            {"Authorization" (str "Bearer " api-key)
-             "Content-Type" "application/json"})
-     model-record provider-record api-key session-id)))
+  (request-headers
+   (merge (responses-dynamic-headers model-record session-id retention messages)
+          {"Authorization" (str "Bearer " api-key)
+           "Content-Type" "application/json"})
+   model-record provider-record api-key session-id))
 
 (defn- responses-request
   [{:keys [model-record provider-record effort api-key messages tools signal base-url
-           idle-timeout-ms session-id cache-retention
-           on-text on-thinking on-tool-call on-done on-error on-usage]
+           idle-timeout-ms session-id cache-retention on-error]
     :as opts}]
   (future
     (let [model-id (or (:model opts) (:id model-record))
@@ -816,28 +930,162 @@
                                            :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
                                           signal)]
           (sse/process-responses-stream response
-                                        (fn [event]
-                                          (case (:type event)
-                                            :text (when on-text (on-text (:content event)))
-                                            :thinking (when on-thinking (on-thinking (:content event)))
-                                            :tool-call (when on-tool-call
-                                                         (on-tool-call {:id (:id event)
-                                                                        :name (:name event)
-                                                                        :arguments (:arguments event)
-                                                                        :index (:index event)}))
-                                            :tool-call-args (when on-tool-call
-                                                              (on-tool-call {:arguments (:arguments event)
-                                                                             :index (:index event)}))
-                                            :done (when on-done (on-done (:stop-reason event)))
-                                            :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
-                                            :error (when on-error (on-error (:message event)))
-                                            nil))
+                                        (responses-events-handler opts model-record)
                                         signal
                                         idle-timeout-ms
                                         (fn [] (proxy/abort-stream! response)))
           (proxy/finish-curl! response signal on-error))
         (catch Exception e
           (when on-error (on-error (transport-error-message e))))))))
+
+;; ─── OpenAI Codex responses request (pi: api/openai-codex-responses.ts,  ──
+;;    SSE path only — no WebSocket/zstd transports in kmet; the stream
+;;    processor is shared with openai-responses) ───────────────────────────
+
+(defn- codex-account-id
+  "pi extractAccountId: the chatgpt_account_id claim from the access token's
+   JWT payload (base64url decode of the middle segment). Throws when the
+   token is not a JWT or carries no claim — the Codex backend requires the
+   chatgpt-account-id header."
+  [token]
+  (let [[_ payload] (str/split token #"\.")
+        decoded (try (-> (java.util.Base64/getUrlDecoder)
+                         (.decode (or payload ""))
+                         (String. "UTF-8"))
+                     (catch Exception _ nil))
+        claim (try (when decoded
+                     (get (json/parse-string decoded)
+                          "https://api.openai.com/auth"))
+                   (catch Exception _ nil))
+        account-id (when (map? claim)
+                     (get claim "chatgpt_account_id"))]
+    (when-not (and (string? decoded)
+                   (string? account-id)
+                   (seq account-id))
+      (throw (ex-info "Failed to extract accountId from token"
+                      {:type :codex-account-id})))
+    account-id))
+
+(defn- codex-request-headers
+  "pi buildSSEHeaders + buildBaseCodexHeaders: the token as Authorization:
+   Bearer, the chatgpt-account-id decoded from the token, originator + the
+   pi User-Agent, OpenAI-Beta responses=experimental, plus session-id +
+   x-client-request-id when prompt caching is on. SESSION-ID is the
+   already-clamped cache key."
+  [api-key session-id]
+  (cond-> {"Authorization" (str "Bearer " api-key)
+           "chatgpt-account-id" (codex-account-id api-key)
+           "originator" "pi"
+           "User-Agent" (str "pi (" (System/getProperty "os.name")
+                             "; " (System/getProperty "os.arch") ")")
+           "OpenAI-Beta" "responses=experimental"
+           "Content-Type" "application/json"
+           "Accept" "text/event-stream"}
+    session-id (assoc "session-id" session-id
+                      "x-client-request-id" session-id)))
+
+(defn- codex-payload
+  "pi buildRequestBody: the codex envelope over the shared responses
+   messages/tools — the system prompt goes to the instructions field (not a
+   developer message), text verbosity low, reasoning content always
+   requested, tool_choice auto + parallel_tool_calls, the prompt-cache key
+   when caching. Tools/reasoning/sampling-params merged after the envelope."
+  [model-record effort messages tools model-id codex-session-id]
+  (let [system (first (for [m messages :when (= :system (:role m))]
+                        (content-text (:content m))))
+        reasoning (when (and (:reasoning model-record) effort)
+                    {:effort (effort-value model-record effort) :summary "auto"})]
+    (cond-> {:model model-id
+             :store false
+             :stream true
+             :instructions (or system "You are a helpful assistant.")
+             :input (responses-messages model-record messages false)
+             :text {:verbosity "low"}
+             :include ["reasoning.encrypted_content"]
+             :tool_choice "auto"
+             :parallel_tool_calls true}
+      codex-session-id (assoc :prompt_cache_key codex-session-id)
+      (seq tools) (assoc :tools (responses-tools tools
+                                                 (:supports-strict-mode (:compat model-record))))
+      reasoning (assoc :reasoning reasoning)
+      (seq (:sampling-params model-record)) (merge (:sampling-params model-record)))))
+
+(defn- codex-request
+  [{:keys [model-record provider-record effort api-key messages tools signal base-url
+           idle-timeout-ms session-id cache-retention on-error]
+    :as opts}]
+  (future
+    ;; the envelope computation (account-id decode, cache key) can throw for
+    ;; a bad credential — report it via on-error like a transport failure
+    ;; (pi surfaces it as a stream error), never hang the caller
+    (try
+      (let [model-id (or (:model opts) (:id model-record))
+            retention (or cache-retention :short)
+            codex-session-id (when (and (not= :none retention) session-id)
+                               (clamp-prompt-cache-key session-id))
+            payload (codex-payload model-record effort messages tools model-id
+                                   codex-session-id)
+            headers (request-headers
+                     (codex-request-headers api-key codex-session-id)
+                     model-record provider-record api-key session-id)
+            response (proxy/post-stream (or base-url
+                                            (codex-endpoint-url (:base-url model-record)))
+                                        {:headers headers
+                                         :body (json/generate-string payload)
+                                         :as :stream
+                                         :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
+                                        signal)]
+        (sse/process-responses-stream response
+                                      (responses-events-handler opts model-record)
+                                      signal
+                                      idle-timeout-ms
+                                      (fn [] (proxy/abort-stream! response)))
+        (proxy/finish-curl! response signal on-error))
+      (catch Exception e
+        (when on-error (on-error (transport-error-message e)))))))
+
+;; ─── Azure OpenAI responses request (pi: api/azure-openai-responses.ts —  ──
+;;    shared responses processor; the deployment path + api version are
+;;    env-derived) ─────────────────────────────────────────────────────────
+
+(defn- azure-request
+  [{:keys [model-record provider-record effort api-key messages tools signal base-url
+           idle-timeout-ms session-id cache-retention on-error]
+    :as opts}]
+  (future
+    ;; the config resolution (env base, deployment name) can throw when no
+    ;; base is configurable — report it via on-error like a transport failure
+    ;; (pi surfaces it as a stream error), never hang the caller
+    (try
+      (let [model-id (or (:model opts) (:id model-record))
+            deployment (azure-deployment-name model-id)
+            config (azure-resolved-config (:base-url model-record))
+            retention (or cache-retention :short)
+            url (or base-url
+                    (azure-endpoint-url (:base-url config) deployment
+                                        (:api-version config)))
+            payload (responses-payload model-record effort messages tools deployment
+                                       retention session-id)
+            ;; azure sends no session-affinity headers (pi: the Azure client
+            ;; sets none) — just the bearer + JSON content type
+            headers (request-headers
+                     {"Authorization" (str "Bearer " api-key)
+                      "Content-Type" "application/json"}
+                     model-record provider-record api-key session-id)
+            response (proxy/post-stream url
+                                        {:headers headers
+                                         :body (json/generate-string payload)
+                                         :as :stream
+                                         :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
+                                        signal)]
+        (sse/process-responses-stream response
+                                      (responses-events-handler opts model-record)
+                                      signal
+                                      idle-timeout-ms
+                                      (fn [] (proxy/abort-stream! response)))
+        (proxy/finish-curl! response signal on-error))
+      (catch Exception e
+        (when on-error (on-error (transport-error-message e)))))))
 
 ;; ─── Anthropic messages request ────────────────────────────────────────────
 
@@ -1019,10 +1267,12 @@
 
    opts:
      :provider    — provider keyword (:opencode-go, :opencode, :deepseek,
-                    :github-copilot, :openai, :xai)
+                    :github-copilot, :openai, :xai, :openai-codex,
+                    :azure-openai-responses)
      :model       — model id string, resolved against the provider's catalog
      :api-type    — wire api override (:openai-completions,
-                    :openai-responses, :anthropic-messages,
+                    :openai-responses, :openai-codex-responses,
+                    :azure-openai-responses, :anthropic-messages,
                     :google-generative-ai); wins over the resolved model's :api
      :base-url    — full endpoint URL override (e.g. local test servers);
                     wins over the model-derived URL
@@ -1091,6 +1341,10 @@
                                                          :effort effort :api-key api-key))
               :openai-responses (responses-request (assoc opts :model-record m :provider-record p
                                                           :effort effort :api-key api-key))
+              :openai-codex-responses (codex-request (assoc opts :model-record m :provider-record p
+                                                            :effort effort :api-key api-key))
+              :azure-openai-responses (azure-request (assoc opts :model-record m :provider-record p
+                                                            :effort effort :api-key api-key))
               :anthropic-messages (anthropic-request (assoc opts :model-record m :provider-record p
                                                             :effort effort :api-key api-key))
               :google-generative-ai (google-request (assoc opts :model-record m :provider-record p

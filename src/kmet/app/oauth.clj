@@ -456,3 +456,178 @@
                 :base-url (get-github-copilot-base-url
                            (:access credential)
                            (copilot-enterprise-domain credential))})}))
+
+;; ─── OpenAI Codex (ChatGPT) OAuth (pi: auth/oauth/openai-codex.ts) ────────
+;; Device-code login (RFC 8628, the headless path — same machinery as
+;; copilot); the browser PKCE loopback login is deferred with the callback
+;; server (no kmet provider uses loopback yet), so login always runs the
+;; device flow. The device flow yields an authorization_code + PKCE verifier
+;; that are exchanged at the auth.openai.com token endpoint.
+
+(def ^:private codex-client-id "app_EMoamEEZ73f0CkXaXp7hrann")
+(def ^:private codex-auth-base-url "https://auth.openai.com")
+(def ^:private codex-device-user-code-url
+  (str codex-auth-base-url "/api/accounts/deviceauth/usercode"))
+(def ^:private codex-device-token-url
+  (str codex-auth-base-url "/api/accounts/deviceauth/token"))
+(def ^:private codex-verification-uri (str codex-auth-base-url "/codex/device"))
+(def ^:private codex-device-redirect-uri
+  (str codex-auth-base-url "/deviceauth/callback"))
+(def ^:private codex-token-url (str codex-auth-base-url "/oauth/token"))
+(def ^:private codex-device-code-timeout-seconds (* 15 60))
+
+(defn- codex-credential-from-token
+  "pi credentialsFromToken: the access/refresh/expires trio as an oauth
+   credential. Expiry is absolute ms (now + expires_in*1000, pi) — the
+   5-min validity window is applied at refresh time by oauth-fresh?."
+  [{:keys [access refresh expires]}]
+  {:type :oauth :access access :refresh refresh :expires expires})
+
+(defn- codex-token-response
+  "pi readTokenResponse: parse the token endpoint response into the
+   access/refresh/expires trio; throws when a field is missing."
+  [op data]
+  (let [access (:access_token data)
+        refresh (:refresh_token data)
+        expires-in (:expires_in data)]
+    (when-not (and (string? access) (string? refresh) (number? expires-in))
+      (throw (ex-info (str "OpenAI Codex token " op " response missing fields: "
+                           (pr-str data))
+                      {:type :oauth-invalid-response})))
+    {:access access
+     :refresh refresh
+     :expires (+ (System/currentTimeMillis) (* expires-in 1000))}))
+
+(defn- codex-exchange-authorization-code
+  "pi exchangeAuthorizationCode: grant_type=authorization_code with the PKCE
+   verifier from the device flow."
+  [code verifier redirect-uri]
+  (codex-token-response
+   "exchange"
+   (fetch-json codex-token-url
+               {:method :post
+                :headers {"Content-Type" "application/x-www-form-urlencoded"}
+                :body (str "grant_type=authorization_code"
+                           "&client_id=" codex-client-id
+                           "&code=" (url-encode code)
+                           "&code_verifier=" (url-encode verifier)
+                           "&redirect_uri=" (url-encode redirect-uri))
+                :timeout 15000})))
+
+(defn- codex-refresh-access-token
+  "pi refreshAccessToken: grant_type=refresh_token."
+  [refresh-token]
+  (codex-token-response
+   "refresh"
+   (fetch-json codex-token-url
+               {:method :post
+                :headers {"Content-Type" "application/x-www-form-urlencoded"}
+                :body (str "grant_type=refresh_token"
+                           "&refresh_token=" (url-encode refresh-token)
+                           "&client_id=" codex-client-id)
+                :timeout 15000})))
+
+(defn- start-codex-device-auth
+  "pi startOpenAICodexDeviceAuth: POST the device usercode endpoint and
+   validate device_auth_id/user_code/interval."
+  []
+  (let [data (fetch-json codex-device-user-code-url
+                         {:method :post
+                          :headers {"Content-Type" "application/json"}
+                          :body (json/generate-string {:client_id codex-client-id})
+                          :timeout 15000})
+        device-auth-id (:device_auth_id data)
+        user-code (:user_code data)
+        interval (:interval data)]
+    (when-not (and (string? device-auth-id)
+                   (string? user-code)
+                   (number? interval)
+                   (not (neg? interval)))
+      (throw (ex-info "Invalid OpenAI Codex device code response"
+                      {:type :oauth-invalid-response})))
+    {:device-auth-id device-auth-id
+     :user-code user-code
+     :interval interval}))
+
+(defn- codex-device-poll
+  "One poll of the codex device token endpoint (pi pollOpenAICodexDeviceAuth
+   poll fn): 403/404 (pi checks response.status directly; request-json
+   throws) and deviceauth_authorization_pending → pending, slow_down →
+   slow_down, an authorization_code + verifier → complete."
+  [device]
+  (let [data (try
+               (fetch-json codex-device-token-url
+                           {:method :post
+                            :headers {"Content-Type" "application/json"}
+                            :body (json/generate-string
+                                   {:device_auth_id (:device-auth-id device)
+                                    :user_code (:user-code device)})
+                            :timeout 15000})
+               (catch Exception e
+                 (let [{:keys [status]} (ex-data e)]
+                   (if (contains? #{403 404} status)
+                     {:error "deviceauth_authorization_pending"}
+                     (throw e)))))
+        error (:error data)
+        error-code (if (map? error) (:code error) error)]
+    (cond
+      (and (string? (:authorization_code data))
+           (string? (:code_verifier data)))
+      {:status :complete
+       :value {:authorization-code (:authorization_code data)
+               :code-verifier (:code_verifier data)}}
+
+      (= "deviceauth_authorization_pending" error-code)
+      {:status :pending}
+
+      (= "slow_down" error-code)
+      {:status :slow_down}
+
+      :else
+      {:status :failed
+       :message (str "OpenAI Codex device auth failed: " (pr-str data))})))
+
+(defn- poll-codex-device-auth
+  "pi pollOpenAICodexDeviceAuth: poll the device token endpoint until the
+   flow yields an authorization_code + verifier."
+  [device signal]
+  (poll-oauth-device-code-flow
+   {:interval-seconds (:interval device)
+    :expires-in-seconds codex-device-code-timeout-seconds
+    :signal signal
+    :poll (fn [] (codex-device-poll device))}))
+
+(defn- login-openai-codex-device-code
+  "pi loginOpenAICodexDeviceCode: start the flow, notify the device code +
+   verification URI, poll, exchange the authorization code for the
+   credential."
+  [interaction]
+  (let [device (start-codex-device-auth)
+        _ (when @(:signal interaction)
+            (throw (ex-info cancel-message {:type :login-cancelled})))
+        _ ((:notify interaction)
+           {:type :device-code
+            :user-code (:user-code device)
+            :verification-uri codex-verification-uri
+            :interval-seconds (:interval device)
+            :expires-in-seconds codex-device-code-timeout-seconds})
+        result (poll-codex-device-auth device (:signal interaction))]
+    (codex-credential-from-token
+     (codex-exchange-authorization-code (:authorization-code result)
+                                        (:code-verifier result)
+                                        codex-device-redirect-uri))))
+
+(defn make-openai-codex-oauth
+  "The openai-codex OAuthAuth (pi openaiCodexOAuth). Device-code login only
+   — the browser PKCE loopback method is deferred with the callback server
+   (no kmet provider uses loopback yet). to-auth passes the access token
+   through; the request builder decodes the chatgpt-account-id from it."
+  []
+  (map->OAuthAuth
+   {:name "OpenAI (ChatGPT Plus/Pro)"
+    :is-subscription? true
+    :login (fn [interaction] (login-openai-codex-device-code interaction))
+    :refresh (fn [credential _signal]
+               (codex-credential-from-token
+                (codex-refresh-access-token (:refresh credential))))
+    :to-auth (fn [credential] {:api-key (:access credential)})}))

@@ -108,7 +108,7 @@
   (println "  -c, --continue        Continue most recent session")
   (println "  -r, --resume          Browse sessions")
   (println "  --model <id>          Model to use (pattern: provider/model[:thinking])")
-  (println "  --provider <name>     Provider (opencode-go, opencode, deepseek,\n                        github-copilot, openai, xai)")
+  (println "  --provider <name>     Provider (opencode-go, opencode, deepseek,\n                        github-copilot, openai, xai, openai-codex,\n                        azure-openai-responses)")
   (println "  --models <patterns>   Comma-separated model patterns for Ctrl+P cycling")
   (println "  --list-models [search] List available models (with optional fuzzy search)")
   (println "  --system-prompt <txt> Replace the system prompt (or path to a file)")

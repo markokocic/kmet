@@ -98,7 +98,8 @@
 (t/deftest test-load-catalogs
   (let [providers (m/load-catalogs!)]
     (t/is (map? providers))
-    (t/is (= #{:opencode-go :opencode :deepseek :github-copilot :openai :xai}
+    (t/is (= #{:opencode-go :opencode :deepseek :github-copilot :openai :xai
+               :openai-codex :azure-openai-responses}
              (set (keys providers))))
     (t/testing "provider records carry catalog metadata"
       (let [og (m/get-provider :opencode-go)]
@@ -116,6 +117,12 @@
       (t/is (= #{:openai-responses} (:api-types (m/get-provider :openai))))
       (t/is (= #{:openai-responses :openai-completions}
                (:api-types (m/get-provider :xai))))
+      (t/is (= #{:openai-codex-responses} (:api-types (m/get-provider :openai-codex))))
+      (t/is (= #{:azure-openai-responses}
+               (:api-types (m/get-provider :azure-openai-responses))))
+      (t/is (= [] (:env-vars (m/get-provider :openai-codex)))
+            "codex is OAuth-only — no env var")
+      (t/is (= ["AZURE_OPENAI_API_KEY"] (:env-vars (m/get-provider :azure-openai-responses))))
       (t/is (= ["DEEPSEEK_API_KEY"] (:env-vars (m/get-provider :deepseek))))
       (t/is (= ["COPILOT_GITHUB_TOKEN"] (:env-vars (m/get-provider :github-copilot))))
       (t/is (= ["OPENAI_API_KEY"] (:env-vars (m/get-provider :openai))))
@@ -138,8 +145,9 @@
       (t/is (string? (:id mod)) (str "id is a string: " (:id mod)))
       (t/is (string? (:name mod)))
       (t/is (keyword? (:provider mod)))
-      (t/is (contains? #{:openai-completions :openai-responses :anthropic-messages
-                         :google-generative-ai}
+      (t/is (contains? #{:openai-completions :openai-responses
+                         :openai-codex-responses :azure-openai-responses
+                         :anthropic-messages :google-generative-ai}
                        (:api mod)))
       (t/is (string? (:base-url mod)))
       (t/is (boolean? (:reasoning mod)))
@@ -349,7 +357,7 @@
         (m/load-models-config!))
       (t/testing "parse failure → error surfaced, built-ins kept"
         (t/is (some? (m/get-model-config-error)))
-        (t/is (= 6 (count (m/get-providers)))))
+        (t/is (= 8 (count (m/get-providers)))))
       (t/testing "composition failure falls back to the builtin provider"
         (spit path "{:providers {:broken {:models [{:id \"x\"}]}}}\n")
         (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
@@ -385,7 +393,7 @@
           (m/load-models-config!))
         (t/is (nil? (m/get-provider :temp-provider)) "removed provider disappears on reload")
         (t/is (= 888 (:context-window (m/get-model :deepseek "deepseek-v4-pro"))) "override replaces the old value")
-        (t/is (= 6 (count (m/get-providers))) "registry back to builtin count"))
+        (t/is (= 8 (count (m/get-providers))) "registry back to builtin count"))
       (finally
         (fs/delete-tree tmp)
         (m/load-catalogs!)))))
@@ -504,7 +512,7 @@
        (m/map->Provider {:id :ext-b :name "B" :api-types #{:openai-completions}
                          :models [(ext-model "b1")] :env-vars [] :default-model nil}))
       (t/is (= [:ext-a :ext-b] (m/get-registered-provider-ids)))
-      (t/is (= 8 (count (m/get-providers))) "builtins + 2 extension providers"))
+      (t/is (= 10 (count (m/get-providers))) "builtins + 2 extension providers"))
     (finally
       (m/clear-extension-providers!)
       (m/load-catalogs!))))

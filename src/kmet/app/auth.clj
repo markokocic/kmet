@@ -35,6 +35,8 @@
    :github-copilot ["COPILOT_GITHUB_TOKEN"]
    :openai ["OPENAI_API_KEY"]
    :xai ["XAI_API_KEY"]
+   :openai-codex []                          ;; OAuth only (no env var)
+   :azure-openai-responses ["AZURE_OPENAI_API_KEY"]
    :anthropic ["ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_OAUTH_TOKEN" "ANTHROPIC_API_KEY"]
    :google ["GEMINI_API_KEY"]})
 

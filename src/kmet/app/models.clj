@@ -201,6 +201,8 @@
     :github-copilot
     (oauth/make-github-copilot-oauth
      (fn [] (mapv :id (:models provider))))
+    :openai-codex
+    (oauth/make-openai-codex-oauth)
     nil))
 
 (defn- read-edn-file

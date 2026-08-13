@@ -1,9 +1,11 @@
 {:schema-version 1
- :generated-at "2026-08-13T10:56:54Z"
- :structure-hash "041eee112ce3b5206eb65b7f7d04a18b815701289a9da480433d548f6664ca2e"
- :files {"deepseek.edn" "5aec702edfb93b8a3afaeabb7932985c67b1b203013dc34ee59c0025d66afbda"
-         "github-copilot.edn" "e3b9e651734873cb8cb13be8b6ed107e3bec27aaca4e823878e04c5a30ab83b6"
-         "openai.edn" "6adb038c8ce503e7b48e7190ab92f36da03e5f0538817c3db530e693ff887f73"
-         "opencode-go.edn" "79e89fabd734b36d924c7285bffb0cd03c4d2943385c64a87f19968f45b6e78b"
-         "opencode.edn" "3b94ba88220961bea94cbc66ca8a256c5355f23f6e7c41e26202168585425b07"
-         "xai.edn" "18d5bd3b1831312f158dbb9875edfa53e560ae78da50f1647933e5068dd4a73f"}}
+ :generated-at "2026-08-13T13:31:21Z"
+ :structure-hash "4d51c073b24ace81690069ac96d677ffa0466f333f4a734101605a7e10997659"
+ :files {"azure-openai-responses.edn" "97c4016df84be4ef27109f622f732839454456bfdbf179777e1724250531901e"
+         "deepseek.edn" "466611db4d56770a6351bb24ff8b8971913ace47199119505cccdbd2aa6900ee"
+         "github-copilot.edn" "26f5ce05fdadefc33e1dfe7927fd7c9456b7e7aa9d446d459cfa3f6ea3a5d845"
+         "openai-codex.edn" "e645dc17d20492631b413d7d999c5c017d02c543c72acd44472212f2cfdb3641"
+         "openai.edn" "93a3bf1335f62dfbae2364c47847db0e0dd624750f3d1484799bee18e4cb9c6e"
+         "opencode-go.edn" "21a7ce217d79a2ba9ffa2defcdd85280c3f202ccfd0d4d7bdac53c095fb58df0"
+         "opencode.edn" "6674b1f3ede5c446669d4e677aca46a9d50a8c49c715f22487e09bb6370a4016"
+         "xai.edn" "1cc4018bd52cd4afd32bc4fd4de1b25949244b59e90fe83c0df4b479f8bea6bd"}}

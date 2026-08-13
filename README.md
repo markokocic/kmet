@@ -25,11 +25,13 @@ with the agent having access to filesystem tools (read, write, edit, bash, grep,
 
 - [Babashka](https://babashka.org/) ≥ 1.12.215 (bundles JLine 4.3.1)
 - API keys: `OPENCODE_API_KEY` (opencode-go/opencode), `DEEPSEEK_API_KEY`,
-  `OPENAI_API_KEY` (openai), `XAI_API_KEY` (xai), `COPILOT_GITHUB_TOKEN`
-  (or `/login` inside kmet to store `auth.edn`
-  credentials; `/logout` removes them). GitHub Copilot also supports an
-  OAuth device-code login (`/login github-copilot` → "Sign in with an
-  account") for subscription plans.
+  `OPENAI_API_KEY` (openai), `XAI_API_KEY` (xai), `AZURE_OPENAI_API_KEY`
+  (azure-openai-responses; base URL/deployment from `AZURE_OPENAI_BASE_URL` /
+  `AZURE_OPENAI_RESOURCE_NAME` / `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`),
+  `COPILOT_GITHUB_TOKEN` (or `/login` inside kmet to store `auth.edn`
+  credentials; `/logout` removes them). GitHub Copilot and OpenAI Codex
+  support an OAuth device-code login (`/login github-copilot` →
+  "Sign in with an account"; `/login openai-codex` → ChatGPT device flow).
 
 ## Usage
 
@@ -54,7 +56,8 @@ bb run --print "list files in current directory"
   -c, --continue        Continue most recent session
   -r, --resume          Browse sessions
   --model <id>          Model to use (pattern: provider/model[:thinking])
-  --provider <name>     Provider (opencode-go, opencode, deepseek, github-copilot, openai, xai)
+  --provider <name>     Provider (opencode-go, opencode, deepseek, github-copilot,
+                        openai, xai, openai-codex, azure-openai-responses)
   --models <patterns>   Comma-separated model patterns for Ctrl+P cycling
   --list-models [search] List available models (with optional fuzzy search)
   -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)
@@ -138,7 +141,8 @@ Example `~/.kmet/agent/settings.edn`:
 ```
 
 `kmet` reads its provider catalog from `src/kmet/app/model_data/*.edn`
-(opencode-go, opencode, deepseek, github-copilot, openai, xai). Models,
+(opencode-go, opencode, deepseek, github-copilot, openai, xai, openai-codex,
+azure-openai-responses). Models,
 base URLs and defaults are registry data — see `models.md` for the
 subsystem plan.
 

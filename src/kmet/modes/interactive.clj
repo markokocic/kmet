@@ -629,9 +629,15 @@
 (def ^:private api-key-login-label "Sign in with an API key")
 
 (defn- login-methods
-  "Auth methods a provider offers, oauth first (pi AUTH_TYPE_ORDER)."
+  "Auth methods a provider offers, oauth first (pi AUTH_TYPE_ORDER + the
+   provider's declared auth): an oauth provider only offers the api-key path
+   when it has one (env vars, models.edn configured key, or :auth-header) —
+   openai-codex is oauth-only (no api-key login)."
   [p]
-  (if (:oauth p) [:oauth :api-key] [:api-key]))
+  (if (:oauth p)
+    (cond-> [:oauth]
+      (or (seq (:env-vars p)) (:api-key p) (:auth-header p)) (conj :api-key))
+    [:api-key]))
 
 (defn- oauth-prompt!
   "Show a dialog for an OAuth prompt and return the entered string (pi

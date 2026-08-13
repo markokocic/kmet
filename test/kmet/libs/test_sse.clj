@@ -167,7 +167,39 @@
                 "response.failed"
                 "{\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"boom\"}}}"
                 (responses-state))]
-      (t/is (= [{:type :error :message "server_error: boom"}] evts)))))
+      (t/is (= [{:type :error :message "server_error: boom"}] evts))))
+  (t/testing "codex response.done → the same terminal handling (pi mapCodexEvents)"
+    (let [st (responses-state)
+          evts (sse/parse-responses-event
+                "response.done"
+                "{\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}"
+                st)]
+      (t/is (= [{:type :usage :usage {:input_tokens 10 :output_tokens 5 :total_tokens 15}}
+                {:type :done :stop-reason :stop}]
+               evts))
+      (t/is (:saw-terminal? @st)))
+    (let [st (responses-state)
+          _ (sse/parse-responses-event
+             "response.output_item.added"
+             "{\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"bash\",\"arguments\":\"\"}}"
+             st)
+          evts (sse/parse-responses-event
+                "response.done"
+                "{\"response\":{\"status\":\"completed\"}}"
+                st)]
+      (t/is (= [{:type :done :stop-reason :tool-use}] evts)
+            "codex response.done with a tool-call slot → :tool-use")))
+  (t/testing "unknown/missing status → error, not a silent end (codex normalizeCodexStatus)"
+    (let [evts (sse/parse-responses-event
+                "response.done"
+                "{\"response\":{\"status\":\"queued\"}}"
+                (responses-state))]
+      (t/is (= [{:type :error :message "Response ended with status queued"}] evts)))
+    (let [evts (sse/parse-responses-event
+                "response.done"
+                "{\"response\":{}}"
+                (responses-state))]
+      (t/is (= [{:type :error :message "Response ended without a status"}] evts)))))
 
 (t/deftest test-responses-stream-completes
   (let [[in out] (make-pipe)
