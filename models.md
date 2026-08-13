@@ -1263,7 +1263,7 @@ completing-stream regression test.
 - ~~`:openai-codex-responses` / `:azure-openai-responses` — shared processor,
   new URL + auth only~~ (**implemented, Phase 12**)
 - ~~More providers on the existing APIs (A.2 table)~~ — **the existing-API
-  batch is implemented (Phase 13): 18 providers; the A.3 thinking-format
+  batch is implemented (Phase 13): 20 providers; the A.3 thinking-format
   providers (zai, together, baseten, ant-ling) and kimi-coding (adaptive
   thinking) remain deferred**
 - Cost tiers for models.edn overrides already work wholesale; pi's
@@ -1273,7 +1273,7 @@ completing-stream regression test.
 
 ## Phase 13 — More providers on the existing wire APIs (Deferred A.2 batch)
 
-**Status: implemented.** 18 providers on the six wire APIs kmet already has,
+**Status: implemented.** 20 providers on the six wire APIs kmet already has,
 ported from pi's `loadModelsDevData` sections — no new wire code except the
 `:openrouter` thinking format (brought forward from A.3 because openrouter
 ships in this batch). Catalogs regenerated from models.dev + the live
@@ -1963,7 +1963,7 @@ Phase 4 (resolver, /model, Ctrl+L) ──► Phase 5 (cost footer)
             processor, codex device-code OAuth, azure env config)
                     │
                     ▼
-   Phase 13 (18 providers on the existing wire APIs: anthropic, google,
+   Phase 13 (20 providers on the existing wire APIs: anthropic, google,
             groq, cerebras, huggingface, moonshotai, xiaomi, qwen-token-plan,
             minimax, nvidia, openrouter, fireworks, vercel-ai-gateway; the
             :openrouter thinking format came forward from A.3)

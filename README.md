@@ -152,7 +152,9 @@ Example `~/.kmet/agent/settings.edn`:
 
 `kmet` reads its provider catalog from `src/kmet/app/model_data/*.edn`
 (28 providers incl. anthropic, google, groq, cerebras, openrouter, nvidia,
-openrouter live catalog, ...). Models,
+moonshotai, qwen-token-plan, minimax, fireworks, vercel-ai-gateway, ...;
+the openrouter/nvidia/vercel-ai-gateway catalogs are fetched live at
+generation time). Models,
 base URLs and defaults are registry data — see `models.md` for the
 subsystem plan.
 
