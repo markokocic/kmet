@@ -48,7 +48,17 @@
     (t/is (= ["NVIDIA_API_KEY"] (auth/provider-env-vars :nvidia)))
     (t/is (= ["OPENROUTER_API_KEY"] (auth/provider-env-vars :openrouter)))
     (t/is (= ["FIREWORKS_API_KEY"] (auth/provider-env-vars :fireworks)))
-    (t/is (= ["AI_GATEWAY_API_KEY"] (auth/provider-env-vars :vercel-ai-gateway))))
+    (t/is (= ["AI_GATEWAY_API_KEY"] (auth/provider-env-vars :vercel-ai-gateway)))
+    (t/is (= ["ZAI_API_KEY"] (auth/provider-env-vars :zai)))
+    (t/is (= ["ZAI_CODING_CN_API_KEY"] (auth/provider-env-vars :zai-coding-cn)))
+    (t/is (= ["TOGETHER_API_KEY"] (auth/provider-env-vars :together)))
+    (t/is (= ["BASETEN_API_KEY"] (auth/provider-env-vars :baseten)))
+    (t/is (= ["ANT_LING_API_KEY"] (auth/provider-env-vars :ant-ling)))
+    (t/is (= ["KIMI_API_KEY"] (auth/provider-env-vars :kimi-coding)))
+    (t/is (= ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"]
+             (auth/provider-env-vars :cloudflare-workers-ai)))
+    (t/is (= ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID" "CLOUDFLARE_GATEWAY_ID"]
+             (auth/provider-env-vars :cloudflare-ai-gateway))))
   (t/testing "unknown provider → empty"
     (t/is (= [] (auth/provider-env-vars :nonexistent)))))
 

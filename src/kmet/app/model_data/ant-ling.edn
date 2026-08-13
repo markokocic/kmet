@@ -1,0 +1,65 @@
+{:schema-version 1
+ :generated-at "2026-08-13T15:35:00Z"
+ :provider {:id :ant-ling
+            :name "Ant Ling"
+            :env-vars ["ANT_LING_API_KEY"]
+            :default-model "Ring-2.6-1T"}
+ :models
+ {:openai-completions
+  {"Ling-2.6-1T"
+   {:id "Ling-2.6-1T"
+    :name "Ling 2.6 1T"
+    :provider :ant-ling
+    :api :openai-completions
+    :base-url "https://api.ant-ling.com/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.06 :output 0.25 :cache-read 0 :cache-write 0}
+    :context-window 262144
+    :max-tokens 65536
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :ant-ling
+             :max-tokens-field :max-tokens
+             :supports-long-cache-retention false}}
+   "Ling-2.6-flash"
+   {:id "Ling-2.6-flash"
+    :name "Ling 2.6 Flash"
+    :provider :ant-ling
+    :api :openai-completions
+    :base-url "https://api.ant-ling.com/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.01 :output 0.02 :cache-read 0 :cache-write 0}
+    :context-window 262144
+    :max-tokens 65536
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :ant-ling
+             :max-tokens-field :max-tokens
+             :supports-long-cache-retention false}}
+   "Ring-2.6-1T"
+   {:id "Ring-2.6-1T"
+    :name "Ring 2.6 1T"
+    :provider :ant-ling
+    :api :openai-completions
+    :base-url "https://api.ant-ling.com/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
+    :input [:text]
+    :cost {:input 0.06 :output 0.25 :cache-read 0 :cache-write 0}
+    :context-window 262144
+    :max-tokens 65536
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :ant-ling
+             :max-tokens-field :max-tokens
+             :supports-long-cache-retention false}}}}}

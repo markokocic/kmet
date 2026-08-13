@@ -31,15 +31,26 @@
 
 ;; ─── Wire api + URL construction ───────────────────────────────────────────
 
+(defn- interpolate-base-url
+  "Substitute the {CLOUDFLARE_ACCOUNT_ID} / {CLOUDFLARE_GATEWAY_ID}
+   placeholders in a cloudflare base URL from the env (pi cloudflare-auth
+   resolve — the account/gateway ids are ambient; a missing id leaves the
+   placeholder, which fails the request like pi's missing-auth error)."
+  [base]
+  (-> base
+      (str/replace "{CLOUDFLARE_ACCOUNT_ID}" (or (getenv "CLOUDFLARE_ACCOUNT_ID") ""))
+      (str/replace "{CLOUDFLARE_GATEWAY_ID}" (or (getenv "CLOUDFLARE_GATEWAY_ID") ""))))
+
 (defn- endpoint-url
   "Full request URL from a wire api + API base + model id (pi: the SDK
    appends the endpoint path)."
   [api base model-id]
-  (case api
-    :openai-completions (str base "/chat/completions")
-    :openai-responses (str base "/responses")
-    :anthropic-messages (str base "/v1/messages")
-    :google-generative-ai (str base "/models/" model-id ":streamGenerateContent?alt=sse")))
+  (let [base (interpolate-base-url base)]
+    (case api
+      :openai-completions (str base "/chat/completions")
+      :openai-responses (str base "/responses")
+      :anthropic-messages (str base "/v1/messages")
+      :google-generative-ai (str base "/models/" model-id ":streamGenerateContent?alt=sse"))))
 
 (defn- codex-endpoint-url
   "pi resolveCodexUrl: the default codex base
@@ -462,11 +473,40 @@
 
 ;; ─── Thinking request shaping (pi per-api) ─────────────────────────────────
 
+(defn- resolve-template-values
+  "pi buildChatTemplateValues + resolveChatTemplateKwargValue: resolve the
+   compat :chat-template-args/:chat-template-kwargs spec for one request —
+   literals pass through, {$var: \"thinking.enabled\"} → the on/off boolean,
+   other vars → the thinking-level-map value for the effort (or the :off
+   value when off); a value with :omit-when-off is dropped when thinking is
+   off. Returns nil when nothing resolves."
+  [model effort values]
+  (let [resolved (into {}
+                       (keep (fn [[k v]]
+                               (let [v (if (and (map? v) (:omit-when-off v) (nil? effort))
+                                         nil
+                                         (cond
+                                           (and (map? v) (= "thinking.enabled" (:var v)))
+                                           (boolean effort)
+
+                                           (map? v)
+                                           (let [mapped (get-in model [:thinking-level-map
+                                                                       (or effort :off)])]
+                                             (cond
+                                               (nil? mapped) effort
+                                               (string? mapped) mapped
+                                               :else nil))
+
+                                           :else v))]
+                                 (when (some? v) [k v]))))
+                       values)]
+    (when (seq resolved) resolved)))
+
 (defn- openai-thinking-params
   "Thinking params for an openai-completions payload (pi buildParams thinking
-   section; kmet's formats: default/openai, deepseek, qwen, openrouter — the
-   openrouter format came forward from Deferred A.3 with the openrouter
-   provider). EFFORT is the clamped level, nil when off."
+   section; kmet's formats: default/openai, deepseek, qwen, openrouter,
+   zai, together, baseten, ant-ling, string-thinking, chat-template,
+   qwen-chat-template). EFFORT is the clamped level, nil when off."
   [model effort]
   (let [reasoning? (:reasoning model)
         fmt (:thinking-format (:compat model))
@@ -494,6 +534,60 @@
         (and effort effort?)
         (assoc :reasoning_effort (effort-value model effort)))
 
+      (and reasoning? (= fmt :zai))
+      ;; pi thinkingFormat "zai": thinking {type} + reasoning_effort when
+      ;; the provider supports it (zai models always send the thinking
+      ;; object — no off:null gate, matching pi).
+      (cond-> {:thinking (if effort
+                           {:type "enabled" :clear_thinking false}
+                           {:type "disabled"})}
+        (and effort effort?)
+        (assoc :reasoning_effort (effort-value model effort)))
+
+      (and reasoning? (= fmt :together))
+      ;; pi thinkingFormat "together": nested reasoning: {enabled} +
+      ;; reasoning_effort when supported.
+      (cond-> {:reasoning {:enabled (boolean effort)}}
+        (and effort effort?)
+        (assoc :reasoning_effort (effort-value model effort)))
+
+      (and reasoning? (= fmt :qwen-chat-template))
+      {:chat_template_kwargs {:enable_thinking (boolean effort)
+                              :preserve_thinking true}}
+
+      (and reasoning? (= fmt :chat-template))
+      (cond-> {}
+        (seq (:chat-template-kwargs (:compat model)))
+        (assoc :chat_template_kwargs
+               (resolve-template-values model effort
+                                        (:chat-template-kwargs (:compat model)))))
+
+      (and reasoning? (= fmt :baseten))
+      ;; pi thinkingFormat "baseten": chat_template_args from the compat
+      ;; spec ($var thinking.enabled) + reasoning_effort when supported
+      ;; (the off value from the thinking-level-map).
+      (cond-> {}
+        (seq (:chat-template-args (:compat model)))
+        (assoc :chat_template_args
+               (resolve-template-values model effort
+                                        (:chat-template-args (:compat model))))
+        (and effort effort?)
+        (assoc :reasoning_effort (effort-value model effort))
+        (and (nil? effort) (string? (get-in model [:thinking-level-map :off])))
+        (assoc :reasoning_effort (get-in model [:thinking-level-map :off])))
+
+      (and reasoning? (= fmt :ant-ling))
+      ;; pi thinkingFormat "ant-ling": the branch is empty — Ring reasons
+      ;; by default and ignores explicit effort; the trailing default
+      ;; branches must not fire.
+      {}
+
+      (and reasoning? (= fmt :string-thinking))
+      (cond-> {}
+        effort (assoc :thinking (effort-value model effort))
+        (and (nil? effort) (not (off-explicitly-null? model)))
+        (assoc :thinking (or (get-in model [:thinking-level-map :off]) "none")))
+
       (and reasoning? effort effort?)
       {:reasoning_effort (effort-value model effort)}
 
@@ -509,20 +603,38 @@
 
 (def ^:private min-answer-tokens 1024)
 
+(defn- anthropic-adaptive-effort
+  "pi mapThinkingLevelToEffort: the adaptive output_config effort — the
+   model's thinking-level-map value when mapped, else the level collapsed to
+   low/medium/high (xhigh/max → high)."
+  [model effort]
+  (let [mapped (get-in model [:thinking-level-map effort])]
+    (cond
+      (string? mapped) mapped
+      (contains? #{:minimal :low} effort) "low"
+      (= :medium effort) "medium"
+      :else "high")))
+
 (defn- anthropic-thinking
-  "pi streamSimple budget-based thinking: the thinking config + max_tokens
-   for an anthropic payload. EFFORT is the clamped level; nil when off.
+  "pi streamSimple thinking: the thinking config + max_tokens for an
+   anthropic payload. EFFORT is the clamped level; nil when off.
+   forceAdaptiveThinking models (kimi-coding, claude 4.6+ per pi) send
+   thinking {type adaptive} + output_config {effort} instead of a budget.
    Returns nil when thinking is off and the model allows disabling."
   [model effort]
   (cond
     (not (:reasoning model)) nil
     effort
-    (let [level (if (contains? #{:xhigh :max} effort) :high effort)
-          budget (get thinking-budgets level 0)
-          max-tokens (or (:max-tokens model) 4096)
-          budget (min budget (max 0 (- max-tokens min-answer-tokens)))]
-      {:thinking {:type "enabled" :budget_tokens budget}
-       :max-tokens max-tokens})
+    (if (:force-adaptive-thinking (:compat model))
+      {:thinking {:type "adaptive" :display "summarized"}
+       :output_config {:effort (anthropic-adaptive-effort model effort)}
+       :max-tokens (or (:max-tokens model) 4096)}
+      (let [level (if (contains? #{:xhigh :max} effort) :high effort)
+            budget (get thinking-budgets level 0)
+            max-tokens (or (:max-tokens model) 4096)
+            budget (min budget (max 0 (- max-tokens min-answer-tokens)))]
+        {:thinking {:type "enabled" :budget_tokens budget :display "summarized"}
+         :max-tokens max-tokens}))
     (off-explicitly-null? model) nil
     :else {:thinking {:type "disabled"}
            :max-tokens (or (:max-tokens model) 4096)}))

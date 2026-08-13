@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T14:54:47Z"
+ :generated-at "2026-08-13T15:35:00Z"
  :provider {:id :github-copilot
             :name "GitHub Copilot"
             :env-vars ["COPILOT_GITHUB_TOKEN"]
@@ -51,7 +51,8 @@
     :headers {"Copilot-Integration-Id" "vscode-chat"
               "Editor-Plugin-Version" "copilot-chat/0.35.0"
               "Editor-Version" "vscode/1.107.0"
-              "User-Agent" "GitHubCopilotChat/0.35.0"}}
+              "User-Agent" "GitHubCopilotChat/0.35.0"}
+    :compat {:force-adaptive-thinking true}}
    "claude-opus-4.7"
    {:id "claude-opus-4.7"
     :name "Claude Opus 4.7"
@@ -67,7 +68,8 @@
     :headers {"Copilot-Integration-Id" "vscode-chat"
               "Editor-Plugin-Version" "copilot-chat/0.35.0"
               "Editor-Version" "vscode/1.107.0"
-              "User-Agent" "GitHubCopilotChat/0.35.0"}}
+              "User-Agent" "GitHubCopilotChat/0.35.0"}
+    :compat {:force-adaptive-thinking true}}
    "claude-opus-4.8"
    {:id "claude-opus-4.8"
     :name "Claude Opus 4.8"
@@ -83,7 +85,8 @@
     :headers {"Copilot-Integration-Id" "vscode-chat"
               "Editor-Plugin-Version" "copilot-chat/0.35.0"
               "Editor-Version" "vscode/1.107.0"
-              "User-Agent" "GitHubCopilotChat/0.35.0"}}
+              "User-Agent" "GitHubCopilotChat/0.35.0"}
+    :compat {:force-adaptive-thinking true}}
    "claude-opus-5"
    {:id "claude-opus-5"
     :name "Claude Opus 5"
@@ -99,7 +102,8 @@
     :headers {"Copilot-Integration-Id" "vscode-chat"
               "Editor-Plugin-Version" "copilot-chat/0.35.0"
               "Editor-Version" "vscode/1.107.0"
-              "User-Agent" "GitHubCopilotChat/0.35.0"}}
+              "User-Agent" "GitHubCopilotChat/0.35.0"}
+    :compat {:force-adaptive-thinking true}}
    "claude-sonnet-4"
    {:id "claude-sonnet-4"
     :name "Claude Sonnet 4 (latest)"
@@ -145,7 +149,8 @@
     :headers {"Copilot-Integration-Id" "vscode-chat"
               "Editor-Plugin-Version" "copilot-chat/0.35.0"
               "Editor-Version" "vscode/1.107.0"
-              "User-Agent" "GitHubCopilotChat/0.35.0"}}
+              "User-Agent" "GitHubCopilotChat/0.35.0"}
+    :compat {:force-adaptive-thinking true}}
    "claude-sonnet-5"
    {:id "claude-sonnet-5"
     :name "Claude Sonnet 5"
@@ -161,7 +166,8 @@
     :headers {"Copilot-Integration-Id" "vscode-chat"
               "Editor-Plugin-Version" "copilot-chat/0.35.0"
               "Editor-Version" "vscode/1.107.0"
-              "User-Agent" "GitHubCopilotChat/0.35.0"}}}
+              "User-Agent" "GitHubCopilotChat/0.35.0"}
+    :compat {:force-adaptive-thinking true}}}
   :openai-completions
   {"claude-fable-5"
    {:id "claude-fable-5"

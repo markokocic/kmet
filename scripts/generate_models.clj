@@ -108,7 +108,32 @@
                :default-model "accounts/fireworks/models/kimi-k2p6"}
    :vercel-ai-gateway {:name "Vercel AI Gateway"
                        :env-vars ["AI_GATEWAY_API_KEY"]
-                       :default-model "zai/glm-5.1"}))
+                       :default-model "zai/glm-5.1"}
+   :zai {:name "Z.AI"
+         :env-vars ["ZAI_API_KEY"]
+         :default-model "glm-5.1"}
+   :zai-coding-cn {:name "Z.AI (CN)"
+                   :env-vars ["ZAI_CODING_CN_API_KEY"]
+                   :default-model "glm-5.1"}
+   :together {:name "Together AI"
+              :env-vars ["TOGETHER_API_KEY"]
+              :default-model "moonshotai/Kimi-K2.6"}
+   :baseten {:name "Baseten"
+             :env-vars ["BASETEN_API_KEY"]
+             :default-model "zai-org/GLM-5.2"}
+   :ant-ling {:name "Ant Ling"
+              :env-vars ["ANT_LING_API_KEY"]
+              :default-model "Ring-2.6-1T"}
+   :kimi-coding {:name "Kimi For Coding"
+                 :env-vars ["KIMI_API_KEY"]
+                 :default-model "kimi-for-coding"}
+   :cloudflare-workers-ai {:name "Cloudflare Workers AI"
+                           :env-vars ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"]
+                           :default-model "@cf/moonshotai/kimi-k2.6"}
+   :cloudflare-ai-gateway {:name "Cloudflare AI Gateway"
+                           :env-vars ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"
+                                      "CLOUDFLARE_GATEWAY_ID"]
+                           :default-model "workers-ai/@cf/moonshotai/kimi-k2.6"}))
 
 (def opencode-variants
   "pi opencodeVariants: models.dev key → kmet provider id + API base path."
@@ -279,10 +304,14 @@
            :reasoning (true? (get m "reasoning"))
            :input (input-modalities m)
            :cost (if cost
-                   (array-map :input (or (get-in m ["cost" "input"]) (:input cost))
-                              :output (or (get-in m ["cost" "output"]) (:output cost))
-                              :cache-read (or (get-in m ["cost" "cache_read"]) (:cache-read cost))
-                              :cache-write (or (get-in m ["cost" "cache_write"]) (:cache-write cost)))
+                   (array-map :input (let [v (get-in m ["cost" "input"])]
+                                       (if (pos? (or v 0)) v (or (:input cost) 0)))
+                              :output (let [v (get-in m ["cost" "output"])]
+                                        (if (pos? (or v 0)) v (or (:output cost) 0)))
+                              :cache-read (let [v (get-in m ["cost" "cache_read"])]
+                                            (if (pos? (or v 0)) v (or (:cache-read cost) 0)))
+                              :cache-write (let [v (get-in m ["cost" "cache_write"])]
+                                             (if (pos? (or v 0)) v (or (:cache-write cost) 0))))
                    (cost-map m))
            :context-window (or (get-in m ["limit" "context"]) context-default 4096)
            :max-tokens (or (get-in m ["limit" "output"]) max-default 4096))
@@ -535,6 +564,26 @@
            :context-window (get azure-context-window-overrides (:id mm)
                                 (:context-window mm)))))
 
+(def ^:private thinking-levels
+  [:minimal :low :medium :high :xhigh :max])
+
+(defn- effort-thinking-level-map
+  "pi getEffortThinkingLevelMap: reasoning_options effort values →
+   {level -> wire string | nil}. :off ← \"none\" (nil when unsupported);
+   levels without a verified value are nil (unsupported). Returns nil when
+   there are no usable effort values."
+  [reasoning-options]
+  (let [effort-values (into []
+                            (comp (filter #(= "effort" (get % "type")))
+                                  (mapcat #(get % "values")))
+                            reasoning-options)
+        supported (set effort-values)]
+    (when (and (seq effort-values)
+               (or (some supported (map name thinking-levels))
+                   (contains? supported "none")))
+      (into (array-map :off (if (contains? supported "none") "none" nil))
+            (for [level thinking-levels]
+              [level (if (contains? supported (name level)) (name level) nil)])))))
 ;; ─── Batch 2: providers on the existing wire APIs (pi loadModelsDevData  ──
 ;;     sections; A.3 thinking formats — zai/together/baseten/ant-ling — and
 ;;     kimi-coding's adaptive thinking stay deferred) ───────────────────────
@@ -947,6 +996,371 @@
            mm))
        fetched))
 
+;; ─── A.3 slice: zai, together, baseten, ant-ling, kimi-coding, cloudflare  ──
+;;     (pi loadModelsDevData sections + detectOpenAICompletionsCompat) ───────
+
+(def ^:private zai-base-urls
+  [{:provider :zai :base-url "https://api.z.ai/api/coding/paas/v4"}
+   {:provider :zai-coding-cn :base-url "https://open.bigmodel.cn/api/coding/paas/v4"}])
+(def ^:private zai-tool-stream-unsupported-models
+  #{"glm-4.5" "glm-4.5-air" "glm-4.5-flash" "glm-4.5v"})
+(def ^:private zai-glm52-thinking-level-map
+  (array-map :minimal nil :low "high" :medium "high" :high "high" :max "max"))
+
+(defn- process-zai
+  "pi: the zai-coding-plan catalog → zai / zai-coding-cn with the zai
+   thinking format (glm-5.2 gets native effort + the level map; the
+   tool-stream models exclude the zaiToolStream flag)."
+  [data]
+  (doall
+   (for [{:keys [provider base-url]} zai-base-urls
+         [mid m] (or (get-in data ["zai-coding-plan" "models"]) {})
+         :when (true? (get m "tool_call"))]
+     (let [glm52? (= mid "glm-5.2")
+           compat (cond-> (array-map :supports-developer-role false
+                                     :thinking-format :zai
+                                     :max-tokens-field :max-tokens)
+                    glm52? (assoc :supports-reasoning-effort true)
+                    (not (contains? zai-tool-stream-unsupported-models mid))
+                    (assoc :zai-tool-stream true))]
+       (apply-thinking-maps
+        (model-map provider :openai-completions base-url m mid
+                   {:compat compat
+                    :thinking-level-map (when glm52? zai-glm52-thinking-level-map)})
+        m)))))
+
+;; ─── together (pi getTogetherCompat / getTogetherThinkingLevelMap) ────────
+
+(def ^:private together-base-url "https://api.together.ai/v1")
+(def ^:private together-base-compat
+  (array-map :supports-store false :supports-developer-role false
+             :supports-reasoning-effort false :max-tokens-field :max-tokens
+             :supports-strict-mode false :supports-long-cache-retention false))
+(def ^:private together-toggle-reasoning-compat
+  (assoc together-base-compat :thinking-format :together))
+(def ^:private together-reasoning-effort-compat
+  (assoc together-base-compat :supports-reasoning-effort true
+         :thinking-format :openai))
+(def ^:private together-toggle-reasoning-effort-compat
+  (assoc together-toggle-reasoning-compat :supports-reasoning-effort true))
+(def ^:private together-reasoning-only-models
+  #{"deepseek-ai/DeepSeek-R1" "MiniMaxAI/MiniMax-M2.7"})
+(def ^:private together-reasoning-effort-models
+  #{"openai/gpt-oss-20b" "openai/gpt-oss-120b"})
+(def ^:private together-toggle-reasoning-effort-models
+  #{"deepseek-ai/DeepSeek-V4-Pro"})
+(def ^:private together-fixed-reasoning-level-map
+  (array-map :off nil :minimal nil :low nil :medium nil))
+(def ^:private together-reasoning-effort-level-map
+  (array-map :off nil :minimal nil))
+(def ^:private together-deepseek-v4-thinking-level-map
+  (array-map :minimal nil :low nil :medium nil :high "high" :xhigh nil))
+(def ^:private together-toggle-reasoning-level-map
+  (array-map :minimal nil :low nil :medium nil))
+
+(defn- together-compat
+  [mid reasoning?]
+  (cond
+    (not reasoning?) together-base-compat
+    (contains? together-reasoning-effort-models mid) together-reasoning-effort-compat
+    (contains? together-toggle-reasoning-effort-models mid) together-toggle-reasoning-effort-compat
+    (contains? together-reasoning-only-models mid) together-base-compat
+    :else together-toggle-reasoning-compat))
+
+(defn- together-thinking-level-map
+  [mid reasoning?]
+  (when reasoning?
+    (cond
+      (contains? together-reasoning-effort-models mid) together-reasoning-effort-level-map
+      (contains? together-toggle-reasoning-effort-models mid) together-deepseek-v4-thinking-level-map
+      (contains? together-reasoning-only-models mid) together-fixed-reasoning-level-map
+      :else together-toggle-reasoning-level-map)))
+
+(defn- process-together
+  "pi: the together catalog (models.dev keys together/togetherai/together-ai)
+   → openai-completions with the per-model reasoning compat + level map."
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["together" "models"])
+                     (get-in data ["togetherai" "models"])
+                     (get-in data ["together-ai" "models"])
+                     {})
+         :when (and (true? (get m "tool_call"))
+                    (not= "deprecated" (get m "status")))]
+     (let [reasoning? (true? (get m "reasoning"))]
+       (apply-thinking-maps
+        (model-map :together :openai-completions together-base-url m mid
+                   {:compat (together-compat mid reasoning?)
+                    :thinking-level-map (together-thinking-level-map mid reasoning?)})
+        m)))))
+
+;; ─── baseten (pi processBasetenModels) ────────────────────────────────────
+
+(def ^:private baseten-base-url "https://inference.baseten.co/v1")
+(def ^:private baseten-base-compat
+  (array-map :supports-store false :supports-developer-role false
+             :supports-reasoning-effort false :supports-strict-mode true
+             :max-tokens-field :max-tokens :supports-long-cache-retention false))
+(def ^:private baseten-reasoning-effort-compat
+  (assoc baseten-base-compat :supports-reasoning-effort true :thinking-format :openai))
+(def ^:private baseten-toggle-reasoning-compat
+  (assoc baseten-base-compat :thinking-format :baseten
+         :chat-template-args (array-map :enable_thinking (array-map :var "thinking.enabled"))))
+(def ^:private baseten-toggle-reasoning-effort-compat
+  (assoc baseten-reasoning-effort-compat :thinking-format :baseten
+         :chat-template-args (array-map :enable_thinking (array-map :var "thinking.enabled"))))
+(def ^:private baseten-toggle-thinking-level-map
+  (array-map :off "off" :minimal nil :low nil :medium nil :high "high" :xhigh nil :max nil))
+(def ^:private baseten-glm52-thinking-level-map
+  (array-map :off "none" :minimal nil :low nil :medium nil :high "high" :xhigh nil :max "max"))
+
+(defn- process-baseten
+  "pi processBasetenModels: toggle/effort compat from the reasoning
+   options; glm-5.2 is always both."
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["baseten" "models"]) {})
+         :when (not= "deprecated" (get m "status"))]
+     (let [reasoning? (true? (get m "reasoning"))
+           reasoning-options (get m "reasoning_options")
+           glm52? (or (= mid "zai-org/GLM-5.2") (= mid "zai-org/GLM-5.2-Fast"))
+           toggle? (or glm52? (some #(= "toggle" (get % "type")) reasoning-options))
+           effort? (or glm52? (some #(= "effort" (get % "type")) reasoning-options))
+           compat (cond
+                    (and toggle? effort?) baseten-toggle-reasoning-effort-compat
+                    toggle? baseten-toggle-reasoning-compat
+                    effort? baseten-reasoning-effort-compat
+                    :else baseten-base-compat)
+           tlm (cond
+                 glm52? baseten-glm52-thinking-level-map
+                 toggle? baseten-toggle-thinking-level-map
+                 :else (effort-thinking-level-map reasoning-options))]
+       (apply-thinking-maps
+        (model-map :baseten :openai-completions baseten-base-url m mid
+                   {:compat compat :thinking-level-map tlm})
+        m)))))
+
+;; ─── ant-ling (pi antLingModels — hardcoded, kept small) ──────────────────
+
+(def ^:private ant-ling-base-url "https://api.ant-ling.com/v1")
+(def ^:private ant-ling-compat
+  (array-map :supports-store false :supports-developer-role false
+             :supports-reasoning-effort false :max-tokens-field :max-tokens
+             :supports-long-cache-retention false))
+(def ^:private ant-ling-ring-thinking-level-map
+  (array-map :off nil :minimal nil :low nil :medium nil
+             :high "high" :xhigh "xhigh"))
+
+(defn- process-ant-ling
+  "pi antLingModels: Ling-2.6-flash/-1T (non-reasoning) + Ring-2.6-1T
+   (reasoning, ant-ling thinking format — thinks by default, ignores
+   effort)."
+  []
+  [(array-map :id "Ling-2.6-flash" :name "Ling 2.6 Flash"
+              :provider :ant-ling :api :openai-completions
+              :base-url ant-ling-base-url
+              :reasoning false :input [:text]
+              :cost (array-map :input 0.01 :output 0.02 :cache-read 0 :cache-write 0)
+              :context-window 262144 :max-tokens 65536
+              :compat ant-ling-compat)
+   (array-map :id "Ling-2.6-1T" :name "Ling 2.6 1T"
+              :provider :ant-ling :api :openai-completions
+              :base-url ant-ling-base-url
+              :reasoning false :input [:text]
+              :cost (array-map :input 0.06 :output 0.25 :cache-read 0 :cache-write 0)
+              :context-window 262144 :max-tokens 65536
+              :compat ant-ling-compat)
+   (apply-thinking-maps
+    (array-map :id "Ring-2.6-1T" :name "Ring 2.6 1T"
+               :provider :ant-ling :api :openai-completions
+               :base-url ant-ling-base-url
+               :reasoning true :input [:text]
+               :cost (array-map :input 0.06 :output 0.25 :cache-read 0 :cache-write 0)
+               :context-window 262144 :max-tokens 65536
+               :compat (assoc ant-ling-compat :thinking-format :ant-ling)
+               :thinking-level-map ant-ling-ring-thinking-level-map)
+    nil)])
+
+;; ─── kimi-coding (pi: the kimi-for-coding catalog, Anthropic-compatible) ───
+
+(def ^:private kimi-static-headers (array-map "User-Agent" "KimiCLI/1.5"))
+(def ^:private kimi-coding-implied-costs
+  {"k3" (array-map :input 3 :output 15 :cache-read 0.3 :cache-write 0)
+   "kimi-for-coding" (array-map :input 0.95 :output 4 :cache-read 0.19 :cache-write 0)
+   "kimi-for-coding-highspeed" (array-map :input 1.9 :output 8 :cache-read 0.38 :cache-write 0)
+   "kimi-k2-thinking" (array-map :input 0.6 :output 2.5 :cache-read 0.15 :cache-write 0)})
+(def ^:private kimi-aliases #{"k2p5" "k2p6" "k2p7"})
+
+(defn- process-kimi-coding
+  "pi: the kimi-for-coding catalog → anthropic-messages with adaptive
+   thinking compat, static headers and the subscription implied costs;
+   versioned aliases normalize to the canonical id."
+  [data]
+  (let [models (get-in data ["kimi-for-coding" "models"] {})
+        canonical? (contains? models "kimi-for-coding")]
+    (doall
+     (for [[mid m] models
+           :when (and (true? (get m "tool_call"))
+                      (not (and (contains? kimi-aliases mid) canonical?)))
+           :let [normalized (if (contains? kimi-aliases mid) "kimi-for-coding" mid)
+                 normalized-name (if (contains? kimi-aliases mid)
+                                   "Kimi For Coding"
+                                   (or (get m "name") normalized))
+                 k3? (= normalized "k3")
+                 implied (get kimi-coding-implied-costs normalized)
+                 compat (cond-> {:force-adaptive-thinking true}
+                          (or k3? (= normalized "kimi-for-coding"))
+                          (assoc :allow-empty-signature true))]]
+       (apply-thinking-maps
+        (model-map :kimi-coding :anthropic-messages
+                   "https://api.kimi.com/coding" m normalized
+                   {:compat compat :headers kimi-static-headers :cost implied})
+        m)))))
+
+;; ─── cloudflare (pi cloudflare-workers-ai / cloudflare-ai-gateway; the   ──
+;;     base URLs carry {CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}
+;;     placeholders interpolated at request time) ───────────────────────────
+
+(def ^:private cloudflare-workers-ai-base-url
+  "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1")
+(def ^:private cloudflare-ai-gateway-compat-base-url
+  "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat")
+(def ^:private cloudflare-ai-gateway-openai-base-url
+  "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/openai")
+(def ^:private cloudflare-ai-gateway-anthropic-base-url
+  "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic")
+(def ^:private cloudflare-session-affinity-compat
+  (array-map :send-session-affinity-headers true))
+
+(defn- process-cloudflare-workers-ai
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["cloudflare-workers-ai" "models"]) {})
+         :when (true? (get m "tool_call"))]
+     (apply-thinking-maps
+      (model-map :cloudflare-workers-ai :openai-completions
+                 cloudflare-workers-ai-base-url m mid
+                 {:compat cloudflare-session-affinity-compat})
+      m))))
+
+(defn- process-cloudflare-ai-gateway
+  "pi: the prefixed gateway catalog — openai/ → openai-responses,
+   anthropic/ → anthropic-messages, workers-ai/ → openai-completions (the
+   prefixed id kept for the compat route)."
+  [data]
+  (doall
+   (for [[prefixed m] (or (get-in data ["cloudflare-ai-gateway" "models"]) {})
+         :when (true? (get m "tool_call"))
+         :let [slash (str/index-of prefixed "/")
+               upstream (when slash (subs prefixed 0 slash))
+               native (when slash (subs prefixed (inc slash)))]
+         :when (contains? #{"openai" "anthropic" "workers-ai"} upstream)]
+     (let [[api base id compat]
+           (case upstream
+             "openai" [:openai-responses cloudflare-ai-gateway-openai-base-url native nil]
+             "anthropic" [:anthropic-messages cloudflare-ai-gateway-anthropic-base-url
+                          native cloudflare-session-affinity-compat]
+             "workers-ai" [:openai-completions cloudflare-ai-gateway-compat-base-url
+                           prefixed cloudflare-session-affinity-compat])]
+       (apply-thinking-maps
+        (model-map :cloudflare-ai-gateway api base m id {:compat compat})
+        m)))))
+
+;; ─── applyOpenAICompletionsCompatMetadata (pi detectOpenAICompletionsCompat ──
+;;     + openAICompletionsCompatDelta): URL-based compat auto-detection
+;;     merged under the model's explicit compat — fills the gaps the section
+;;     compat leaves (data parity with pi's catalogs) ────────────────────────
+
+(def ^:private openai-completions-default-compat
+  {:supports-store true :supports-developer-role true
+   :supports-reasoning-effort true :max-tokens-field :max-completion-tokens
+   :requires-reasoning-content-on-assistant-messages false
+   :thinking-format :openai :zai-tool-stream false
+   :supports-strict-mode true :send-session-affinity-headers false
+   :supports-long-cache-retention true})
+
+(defn- detect-openai-completions-compat
+  "pi detectOpenAICompletionsCompat: the URL/provider-based detection for an
+   openai-completions model."
+  [mm]
+  (let [provider (:provider mm)
+        base-url (:base-url mm)
+        id (:id mm)
+        is-zai? (or (= :zai provider) (= :zai-coding-cn provider)
+                    (str/includes? base-url "api.z.ai")
+                    (str/includes? base-url "open.bigmodel.cn"))
+        is-together? (or (= :together provider)
+                         (str/includes? base-url "api.together.ai")
+                         (str/includes? base-url "api.together.xyz"))
+        is-moonshot? (or (= :moonshotai provider) (= :moonshotai-cn provider)
+                         (str/includes? base-url "api.moonshot."))
+        is-openrouter? (or (= :openrouter provider) (str/includes? base-url "openrouter.ai"))
+        is-cloudflare-workers-ai? (or (= :cloudflare-workers-ai provider)
+                                      (str/includes? base-url "api.cloudflare.com"))
+        is-cloudflare-ai-gateway? (or (= :cloudflare-ai-gateway provider)
+                                      (str/includes? base-url "gateway.ai.cloudflare.com"))
+        is-nvidia? (or (= :nvidia provider) (str/includes? base-url "integrate.api.nvidia.com"))
+        is-ant-ling? (or (= :ant-ling provider) (str/includes? base-url "api.ant-ling.com"))
+        together-reasoning-only? (and is-together?
+                                     (contains? together-reasoning-only-models id))
+        is-deepseek? (or (= :deepseek provider)
+                         (str/includes? (str/lower-case base-url) "deepseek.com"))
+        is-non-standard? (or is-nvidia? (= :cerebras provider)
+                              (str/includes? base-url "cerebras.ai")
+                              (= :xai provider) (str/includes? base-url "api.x.ai")
+                              is-together? (str/includes? base-url "chutes.ai")
+                              is-deepseek? is-zai? is-moonshot?
+                              (= :opencode provider) (str/includes? base-url "opencode.ai")
+                              is-cloudflare-workers-ai? is-cloudflare-ai-gateway? is-ant-ling?)
+        use-max-tokens? (or (str/includes? base-url "chutes.ai") is-deepseek?
+                            is-moonshot? is-cloudflare-ai-gateway? is-together?
+                            is-nvidia? is-ant-ling? is-zai?)
+        is-grok? (or (= :xai provider) (str/includes? base-url "api.x.ai"))
+        openrouter-dev-role? (and is-openrouter?
+                                  (or (str/starts-with? id "anthropic/")
+                                      (str/starts-with? id "openai/")))
+        thinking-format (cond
+                          is-deepseek? :deepseek
+                          is-zai? :zai
+                          (and is-together? (not together-reasoning-only?)) :together
+                          is-ant-ling? :ant-ling
+                          is-openrouter? :openrouter
+                          :else :openai)]
+    {:supports-store (not is-non-standard?)
+     :supports-developer-role (or openrouter-dev-role?
+                                  (and (not is-non-standard?) (not is-openrouter?)))
+     :supports-reasoning-effort (not (or is-grok? is-zai? is-moonshot? is-together?
+                                         is-cloudflare-ai-gateway? is-nvidia? is-ant-ling?))
+     :max-tokens-field (if use-max-tokens? :max-tokens :max-completion-tokens)
+     :requires-reasoning-content-on-assistant-messages is-deepseek?
+     :thinking-format thinking-format
+     :zai-tool-stream false
+     :supports-strict-mode (not (or is-moonshot? is-together?
+                                     is-cloudflare-ai-gateway? is-nvidia?))
+     :send-session-affinity-headers false
+     :supports-long-cache-retention (not (or is-together? is-cloudflare-workers-ai?
+                                             is-cloudflare-ai-gateway? is-nvidia? is-ant-ling?))}))
+
+(defn- compat-delta
+  "pi openAICompletionsCompatDelta: only keys differing from the defaults."
+  [compat]
+  (into {}
+        (remove (fn [[k v]] (= v (get openai-completions-default-compat k))))
+        compat))
+
+(defn- apply-openai-completions-compat-metadata
+  "pi applyOpenAICompletionsCompatMetadata: merge the detected compat under
+   the model's explicit compat (explicit wins), emitting only the
+   non-default keys."
+  [mm]
+  (if (= :openai-completions (:api mm))
+    (let [detected (compat-delta (detect-openai-completions-compat mm))
+          merged (merge detected (:compat mm))]
+      (cond-> mm
+        (seq merged) (assoc :compat merged)
+        (empty? merged) (dissoc :compat)))
+    mm))
+
 ;; ─── deepseek-v4 compat normalization (pi, after all providers) ────────────
 
 (defn- normalize-deepseek-v4
@@ -970,30 +1384,15 @@
 ;; ─── Thinking level maps (pi applyModelsDevReasoningOptionMetadata +
 ;;     applyThinkingLevelMetadata, kmet's providers only) ─────────────────────
 
-(def ^:private thinking-levels
-  [:minimal :low :medium :high :xhigh :max])
 
-(defn- effort-thinking-level-map
-  "pi getEffortThinkingLevelMap: reasoning_options effort values →
-   {level -> wire string | nil}. :off ← \"none\" (nil when unsupported);
-   levels without a verified value are nil (unsupported). Returns nil when
-   there are no usable effort values."
-  [reasoning-options]
-  (let [effort-values (into []
-                            (comp (filter #(= "effort" (get % "type")))
-                                  (mapcat #(get % "values")))
-                            reasoning-options)
-        supported (set effort-values)]
-    (when (and (seq effort-values)
-               (or (some supported (map name thinking-levels))
-                   (contains? supported "none")))
-      (into (array-map :off (if (contains? supported "none") "none" nil))
-            (for [level thinking-levels]
-              [level (if (contains? supported (name level)) (name level) nil)])))))
 
 (defn- merge-thinking-level-map
   [mm extra]
   (update mm :thinking-level-map merge extra))
+
+(defn- merge-compat
+  [mm ks]
+  (update mm :compat merge ks))
 
 (defn- apply-effort-thinking-map
   "pi applyModelsDevReasoningOptionMetadata: reasoning_options effort values
@@ -1097,6 +1496,14 @@
       (and (= :opencode-go provider) (= id "glm-5.2"))
       (merge-thinking-level-map {:off nil :minimal nil :low nil :medium nil
                                  :high "high" :max "max"})
+      (and (contains? #{:zai :zai-coding-cn} provider) (= id "glm-5.2"))
+      (merge-thinking-level-map {:xhigh "xhigh"})
+      ;; pi: adaptive thinking models carry the compat (kimi-coding always;
+      ;; claude 4.6+ on anthropic-messages) — the xhigh/max maps already
+      ;; merge above
+      (and (= :anthropic-messages (:api mm)) (or adaptive-max?
+                                                  (str/includes? id "fable-5")))
+      (merge-compat {:force-adaptive-thinking true})
       (and (= :opencode-go provider) (= id "kimi-k2.6"))
       (merge-thinking-level-map {:minimal nil :low nil :medium nil})
       (and (= :opencode provider) (= id "grok-build-0.1"))
@@ -1146,15 +1553,12 @@
 
 ;; ─── Responses-family compat metadata (pi apply*CompatMetadata passes) ────
 
-(defn- merge-compat
-  [mm ks]
-  (update mm :compat merge ks))
-
 (defn- apply-strict-tool-compat
   "pi applyStrictToolCompatMetadata: openai responses models accept strict
    JSON-schema tool definitions."
   [mm]
-  (if (and (= :openai (:provider mm)) (= :openai-responses (:api mm)))
+  (if (and (contains? #{:openai :cloudflare-ai-gateway} (:provider mm))
+           (= :openai-responses (:api mm)))
     (merge-compat mm {:supports-strict-mode true})
     mm))
 
@@ -1208,10 +1612,11 @@
     mm))
 
 (defn- apply-compat-metadata
-  "The post-processing compat passes (pi order: strict tools, grammar tools,
-   tool search, explicit prompt cache)."
+  "The post-processing compat passes (pi order: URL detection, strict tools,
+   grammar tools, tool search, explicit prompt cache)."
   [mm]
-  (-> mm apply-strict-tool-compat
+  (-> mm apply-openai-completions-compat-metadata
+      apply-strict-tool-compat
       apply-openai-grammar-tool-compat
       apply-openai-tool-search-metadata
       apply-openai-explicit-prompt-cache-metadata))
@@ -1318,9 +1723,16 @@
                          (process-minimax data)
                          (process-nvidia data nim-ids)
                          (process-fireworks data)
+                         (process-zai data)
+                         (process-together data)
+                         (process-baseten data)
+                         (process-kimi-coding data)
+                         (process-cloudflare-workers-ai data)
+                         (process-cloudflare-ai-gateway data)
                          (map #(apply-thinking-maps % nil) (process-openrouter openrouter-models))
                          (map #(apply-thinking-maps % nil)
                               (process-vercel-ai-gateway ai-gateway-models))
+                         (map #(apply-thinking-maps % nil) (process-ant-ling))
                          (map #(apply-thinking-maps % nil) deepseek-v4-models)
                          (map #(apply-thinking-maps % nil) (process-codex)))
                  (remove nil?))
@@ -1442,6 +1854,10 @@
          :supports-long-cache-retention :supports-strict-mode
          :supports-openai-grammar-tools :supports-tool-search
          :supports-additional-tools :supports-explicit-prompt-cache-mode
+         :zai-tool-stream :force-adaptive-thinking :allow-empty-signature
+         :chat-template-args :chat-template-kwargs
+         :send-session-affinity-headers :supports-cache-control-on-tools
+         :supports-eager-tool-input-streaming
          :structure-hash :files]))
 
 (defn- key-rank

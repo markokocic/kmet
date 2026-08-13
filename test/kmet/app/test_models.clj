@@ -104,7 +104,8 @@
                :xiaomi-token-plan-cn :xiaomi-token-plan-ams :xiaomi-token-plan-sgp
                :qwen-token-plan :qwen-token-plan-cn :qwen-token-plan-individual
                :minimax :minimax-cn :nvidia :openrouter :fireworks
-               :vercel-ai-gateway}
+               :vercel-ai-gateway :zai :zai-coding-cn :together :baseten
+               :ant-ling :kimi-coding :cloudflare-workers-ai :cloudflare-ai-gateway}
              (set (keys providers))))
     (t/testing "provider records carry catalog metadata"
       (let [og (m/get-provider :opencode-go)]
@@ -144,6 +145,15 @@
       (t/is (= ["QWEN_TOKEN_PLAN_API_KEY"]
                (:env-vars (m/get-provider :qwen-token-plan-individual))))
       (t/is (= "moonshotai/kimi-k2.6" (:default-model (m/get-provider :openrouter))))
+      (t/is (= #{:openai-completions} (:api-types (m/get-provider :zai))))
+      (t/is (= #{:anthropic-messages} (:api-types (m/get-provider :kimi-coding))))
+      (t/is (= #{:openai-completions :anthropic-messages :openai-responses}
+               (:api-types (m/get-provider :cloudflare-ai-gateway))))
+      (t/is (= ["ZAI_API_KEY"] (:env-vars (m/get-provider :zai))))
+      (t/is (= ["KIMI_API_KEY"] (:env-vars (m/get-provider :kimi-coding))))
+      (t/is (= ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID" "CLOUDFLARE_GATEWAY_ID"]
+               (:env-vars (m/get-provider :cloudflare-ai-gateway))))
+      (t/is (= "Ring-2.6-1T" (:default-model (m/get-provider :ant-ling))))
       (t/is (= ["DEEPSEEK_API_KEY"] (:env-vars (m/get-provider :deepseek))))
       (t/is (= ["COPILOT_GITHUB_TOKEN"] (:env-vars (m/get-provider :github-copilot))))
       (t/is (= ["OPENAI_API_KEY"] (:env-vars (m/get-provider :openai))))
@@ -378,7 +388,7 @@
         (m/load-models-config!))
       (t/testing "parse failure → error surfaced, built-ins kept"
         (t/is (some? (m/get-model-config-error)))
-        (t/is (= 28 (count (m/get-providers)))))
+        (t/is (= 36 (count (m/get-providers)))))
       (t/testing "composition failure falls back to the builtin provider"
         (spit path "{:providers {:broken {:models [{:id \"x\"}]}}}\n")
         (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
@@ -414,7 +424,7 @@
           (m/load-models-config!))
         (t/is (nil? (m/get-provider :temp-provider)) "removed provider disappears on reload")
         (t/is (= 888 (:context-window (m/get-model :deepseek "deepseek-v4-pro"))) "override replaces the old value")
-        (t/is (= 28 (count (m/get-providers))) "registry back to builtin count"))
+        (t/is (= 36 (count (m/get-providers))) "registry back to builtin count"))
       (finally
         (fs/delete-tree tmp)
         (m/load-catalogs!)))))
@@ -533,7 +543,7 @@
        (m/map->Provider {:id :ext-b :name "B" :api-types #{:openai-completions}
                          :models [(ext-model "b1")] :env-vars [] :default-model nil}))
       (t/is (= [:ext-a :ext-b] (m/get-registered-provider-ids)))
-      (t/is (= 30 (count (m/get-providers))) "builtins + 2 extension providers"))
+      (t/is (= 38 (count (m/get-providers))) "builtins + 2 extension providers"))
     (finally
       (m/clear-extension-providers!)
       (m/load-catalogs!))))

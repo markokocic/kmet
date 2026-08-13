@@ -1,0 +1,252 @@
+{:schema-version 1
+ :generated-at "2026-08-13T15:35:00Z"
+ :provider {:id :cloudflare-workers-ai
+            :name "Cloudflare Workers AI"
+            :env-vars ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"]
+            :default-model "@cf/moonshotai/kimi-k2.6"}
+ :models
+ {:openai-completions
+  {"@cf/google/gemma-4-26b-a4b-it"
+   {:id "@cf/google/gemma-4-26b-a4b-it"
+    :name "Gemma 4 26B A4B IT"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :thinking-level-map {:high "HIGH"
+                         :low nil
+                         :max nil
+                         :medium nil
+                         :minimal "MINIMAL"
+                         :off nil
+                         :xhigh nil}
+    :input [:text :image]
+    :cost {:input 0.1 :output 0.3 :cache-read 0 :cache-write 0}
+    :context-window 256000
+    :max-tokens 16384
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/ibm-granite/granite-4.0-h-micro"
+   {:id "@cf/ibm-granite/granite-4.0-h-micro"
+    :name "Granite 4.0 H Micro"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.017 :output 0.112 :cache-read 0 :cache-write 0}
+    :context-window 131000
+    :max-tokens 131000
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+   {:id "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+    :name "Llama 3.3 70B Instruct fp8 Fast"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.293 :output 2.253 :cache-read 0 :cache-write 0}
+    :context-window 24000
+    :max-tokens 24000
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/meta/llama-4-scout-17b-16e-instruct"
+   {:id "@cf/meta/llama-4-scout-17b-16e-instruct"
+    :name "Llama 4 Scout 17B 16E Instruct"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.27 :output 0.85 :cache-read 0 :cache-write 0}
+    :context-window 131000
+    :max-tokens 16384
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/mistralai/mistral-small-3.1-24b-instruct"
+   {:id "@cf/mistralai/mistral-small-3.1-24b-instruct"
+    :name "Mistral Small 3.1 24B Instruct"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.351 :output 0.555 :cache-read 0 :cache-write 0}
+    :context-window 128000
+    :max-tokens 128000
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/moonshotai/kimi-k2.6"
+   {:id "@cf/moonshotai/kimi-k2.6"
+    :name "Kimi K2.6"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text :image]
+    :cost {:input 0.95 :output 4 :cache-read 0.16 :cache-write 0}
+    :context-window 262144
+    :max-tokens 256000
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/moonshotai/kimi-k2.7-code"
+   {:id "@cf/moonshotai/kimi-k2.7-code"
+    :name "Kimi K2.7 Code"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text :image]
+    :cost {:input 0.95 :output 4 :cache-read 0.19 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/nvidia/nemotron-3-120b-a12b"
+   {:id "@cf/nvidia/nemotron-3-120b-a12b"
+    :name "Nemotron 3 Super 120B"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text]
+    :cost {:input 0.5 :output 1.5 :cache-read 0 :cache-write 0}
+    :context-window 256000
+    :max-tokens 256000
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/openai/gpt-oss-120b"
+   {:id "@cf/openai/gpt-oss-120b"
+    :name "GPT OSS 120B"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text]
+    :cost {:input 0.35 :output 0.75 :cache-read 0 :cache-write 0}
+    :context-window 128000
+    :max-tokens 16384
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/openai/gpt-oss-20b"
+   {:id "@cf/openai/gpt-oss-20b"
+    :name "GPT OSS 20B"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0.2 :output 0.3 :cache-read 0 :cache-write 0}
+    :context-window 128000
+    :max-tokens 16384
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/qwen/qwen3-30b-a3b-fp8"
+   {:id "@cf/qwen/qwen3-30b-a3b-fp8"
+    :name "Qwen3 30B A3b fp8"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0.0509 :output 0.335 :cache-read 0 :cache-write 0}
+    :context-window 32768
+    :max-tokens 32768
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/zai-org/glm-4.7-flash"
+   {:id "@cf/zai-org/glm-4.7-flash"
+    :name "GLM-4.7-Flash"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text]
+    :cost {:input 0.0605 :output 0.4 :cache-read 0 :cache-write 0}
+    :context-window 131072
+    :max-tokens 131072
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/zai-org/glm-5.2"
+   {:id "@cf/zai-org/glm-5.2"
+    :name "Glm 5.2"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text]
+    :cost {:input 1.4 :output 4.4 :cache-read 0.26 :cache-write 0}
+    :context-window 262144
+    :max-tokens 256000
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}}}}

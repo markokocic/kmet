@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T14:54:47Z"
+ :generated-at "2026-08-13T15:35:00Z"
  :provider {:id :anthropic
             :name "Anthropic"
             :env-vars ["ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_OAUTH_TOKEN" "ANTHROPIC_API_KEY"]
@@ -17,7 +17,8 @@
     :input [:text :image]
     :cost {:input 10 :output 50 :cache-read 1 :cache-write 12.5}
     :context-window 1000000
-    :max-tokens 128000}
+    :max-tokens 128000
+    :compat {:force-adaptive-thinking true}}
    "claude-haiku-4-5"
    {:id "claude-haiku-4-5"
     :name "Claude Haiku 4.5 (latest)"
@@ -73,7 +74,8 @@
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
-    :max-tokens 128000}
+    :max-tokens 128000
+    :compat {:force-adaptive-thinking true}}
    "claude-opus-4-7"
    {:id "claude-opus-4-7"
     :name "Claude Opus 4.7"
@@ -85,7 +87,8 @@
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
-    :max-tokens 128000}
+    :max-tokens 128000
+    :compat {:force-adaptive-thinking true}}
    "claude-opus-4-8"
    {:id "claude-opus-4-8"
     :name "Claude Opus 4.8"
@@ -97,7 +100,8 @@
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
-    :max-tokens 128000}
+    :max-tokens 128000
+    :compat {:force-adaptive-thinking true}}
    "claude-opus-5"
    {:id "claude-opus-5"
     :name "Claude Opus 5"
@@ -109,7 +113,8 @@
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
-    :max-tokens 128000}
+    :max-tokens 128000
+    :compat {:force-adaptive-thinking true}}
    "claude-sonnet-4-5"
    {:id "claude-sonnet-4-5"
     :name "Claude Sonnet 4.5 (latest)"
@@ -143,7 +148,8 @@
     :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 3.75}
     :context-window 1000000
-    :max-tokens 128000}
+    :max-tokens 128000
+    :compat {:force-adaptive-thinking true}}
    "claude-sonnet-5"
    {:id "claude-sonnet-5"
     :name "Claude Sonnet 5"
@@ -155,4 +161,5 @@
     :input [:text :image]
     :cost {:input 2 :output 10 :cache-read 0.2 :cache-write 2.5}
     :context-window 1000000
-    :max-tokens 128000}}}}
+    :max-tokens 128000
+    :compat {:force-adaptive-thinking true}}}}}

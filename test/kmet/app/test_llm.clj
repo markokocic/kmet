@@ -14,7 +14,7 @@
 (t/deftest test-llm-loaded
   (t/is (fn? llm/send-message))
   (m/load-catalogs!)
-  (t/is (= 28 (count (m/get-providers))))
+  (t/is (= 36 (count (m/get-providers))))
   (t/is (fn? m/get-model)))
 
 ;; ─── Model resolution & dispatch ───────────────────────────────────────────
@@ -404,14 +404,15 @@
 
 (t/deftest test-llm-all-providers-resolve
   (m/load-catalogs!)
-  (t/is (= 28 (count (m/get-providers))))
+  (t/is (= 36 (count (m/get-providers))))
   (doseq [p [:opencode-go :opencode :deepseek :github-copilot :openai :xai
              :openai-codex :azure-openai-responses :anthropic :google :groq
              :cerebras :huggingface :moonshotai :moonshotai-cn :xiaomi
              :xiaomi-token-plan-cn :xiaomi-token-plan-ams :xiaomi-token-plan-sgp
              :qwen-token-plan :qwen-token-plan-cn :qwen-token-plan-individual
              :minimax :minimax-cn :nvidia :openrouter :fireworks
-             :vercel-ai-gateway]]
+             :vercel-ai-gateway :zai :zai-coding-cn :together :baseten
+             :ant-ling :kimi-coding :cloudflare-workers-ai :cloudflare-ai-gateway]]
     (t/is (some? (m/get-provider p)) (str p " has a catalog entry"))))
 
 ;; ─── Image block conversion ───────────────────────────────────────────────
@@ -660,18 +661,77 @@
     (t/is (= {} (@#'llm/openai-thinking-params no-effort :high))
           "supports-reasoning-effort false → no effort params")
     (t/is (= {} (@#'llm/openai-thinking-params (tmodel :reasoning false) :high))
-          "non-reasoning model → no thinking params")))
+          "non-reasoning model → no thinking params")
+    (t/testing "A.3 formats (pi buildParams thinking)"
+      (let [zai (tmodel :compat {:thinking-format :zai :supports-reasoning-effort true})
+            zai-no-effort (tmodel :compat {:thinking-format :zai})
+            together (tmodel :compat {:thinking-format :together :supports-reasoning-effort true})
+            together-no-effort (tmodel :compat {:thinking-format :together})
+            baseten (tmodel :compat {:thinking-format :baseten
+                                     :supports-reasoning-effort false
+                                     :chat-template-args {:enable_thinking {:var "thinking.enabled"}}})
+            chat-template (tmodel :compat {:thinking-format :chat-template
+                                           :chat-template-kwargs {:enable_thinking {:var "thinking.enabled"}}})
+            adaptive (tmodel :compat {:force-adaptive-thinking true})
+            adaptive-mapped (tmodel :compat {:force-adaptive-thinking true}
+                                    :tlm {:minimal "low"})]
+        (t/is (= {:thinking {:type "enabled" :clear_thinking false}
+                  :reasoning_effort "high"}
+                 (@#'llm/openai-thinking-params zai :high))
+              "zai on: thinking enabled + reasoning_effort")
+        (t/is (= {:thinking {:type "disabled"}}
+                 (@#'llm/openai-thinking-params zai-no-effort nil))
+              "zai off: thinking disabled")
+        (t/is (= {:reasoning {:enabled true} :reasoning_effort "high"}
+                 (@#'llm/openai-thinking-params together :high))
+              "together on: reasoning enabled + reasoning_effort")
+        (t/is (= {:reasoning {:enabled false}}
+                 (@#'llm/openai-thinking-params together-no-effort nil))
+              "together off: reasoning disabled")
+        (t/is (= {:chat_template_args {:enable_thinking true}}
+                 (@#'llm/openai-thinking-params baseten :high))
+              "baseten on: chat_template_args enable_thinking true")
+        (t/is (= {:chat_template_args {:enable_thinking false}}
+                 (@#'llm/openai-thinking-params baseten nil))
+              "baseten off: chat_template_args enable_thinking false")
+        (t/is (= {} (@#'llm/openai-thinking-params
+                     (tmodel :compat {:thinking-format :ant-ling}) :high))
+              "ant-ling: no params (Ring reasons by default, pi's empty branch)")
+        (t/is (= {:thinking "high"}
+                 (@#'llm/openai-thinking-params
+                  (tmodel :compat {:thinking-format :string-thinking}) :high))
+              "string-thinking on")
+        (t/is (= {:chat_template_kwargs {:enable_thinking true :preserve_thinking true}}
+                 (@#'llm/openai-thinking-params
+                  (tmodel :compat {:thinking-format :qwen-chat-template}) :high))
+              "qwen-chat-template on")
+        (t/is (= {:chat_template_kwargs {:enable_thinking false}}
+                 (@#'llm/openai-thinking-params chat-template nil))
+              "chat-template off: enable_thinking false")
+        (t/is (= {:thinking {:type "adaptive" :display "summarized"}
+                  :output_config {:effort "high"}
+                  :max-tokens 32000}
+                 (@#'llm/anthropic-thinking adaptive :high))
+              "adaptive thinking: output_config effort (pi forceAdaptiveThinking)")
+        (t/is (= {:thinking {:type "adaptive" :display "summarized"}
+                  :output_config {:effort "low"}
+                  :max-tokens 32000}
+                 (@#'llm/anthropic-thinking adaptive-mapped :minimal))
+              "adaptive effort uses the thinking-level-map mapping when present")
+        (t/is (= {:thinking {:type "disabled"} :max-tokens 32000}
+                 (@#'llm/anthropic-thinking adaptive nil))
+              "adaptive models still disable thinking when off")))))
 
 (t/deftest test-anthropic-thinking
   (let [model (tmodel :max-tokens 32000)]
-    (t/is (= {:thinking {:type "enabled" :budget_tokens 2048}
+    (t/is (= {:thinking {:type "enabled" :budget_tokens 2048 :display "summarized"}
               :max-tokens 32000}
              (@#'llm/anthropic-thinking model :low))
           "budget-based thinking, max_tokens from the model")
-    (t/is (= {:thinking {:type "enabled" :budget_tokens 16384}
+    (t/is (= {:thinking {:type "enabled" :budget_tokens 16384 :display "summarized"}
               :max-tokens 32000}
              (@#'llm/anthropic-thinking model :high)))
-    (t/is (= {:thinking {:type "enabled" :budget_tokens 16384}
+    (t/is (= {:thinking {:type "enabled" :budget_tokens 16384 :display "summarized"}
               :max-tokens 32000}
              (@#'llm/anthropic-thinking model :max))
           ":max clamps to :high budget")
@@ -682,7 +742,7 @@
                  (tmodel :tlm {:off nil}) nil))
           "off with :off null → no thinking param")
     (t/is (nil? (@#'llm/anthropic-thinking (tmodel :reasoning false) :high)))
-    (t/is (= {:thinking {:type "enabled" :budget_tokens 2048} :max-tokens 4096}
+    (t/is (= {:thinking {:type "enabled" :budget_tokens 2048 :display "summarized"} :max-tokens 4096}
              (@#'llm/anthropic-thinking (tmodel :max-tokens nil) :low))
           "legacy anthropic (no max-tokens) falls back to 4096")))
 

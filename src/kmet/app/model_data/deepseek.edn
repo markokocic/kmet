@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T14:54:47Z"
+ :generated-at "2026-08-13T15:35:00Z"
  :provider {:id :deepseek
             :name "DeepSeek"
             :env-vars ["DEEPSEEK_API_KEY"]
@@ -22,8 +22,11 @@
     :cost {:input 0.14 :output 0.28 :cache-read 0.0028 :cache-write 0}
     :context-window 1000000
     :max-tokens 384000
-    :compat {:requires-reasoning-content-on-assistant-messages true
-             :thinking-format :deepseek}}
+    :compat {:supports-store false
+             :supports-developer-role false
+             :requires-reasoning-content-on-assistant-messages true
+             :thinking-format :deepseek
+             :max-tokens-field :max-tokens}}
    "deepseek-v4-pro"
    {:id "deepseek-v4-pro"
     :name "DeepSeek V4 Pro"
@@ -40,5 +43,8 @@
     :cost {:input 0.435 :output 0.87 :cache-read 0.003625 :cache-write 0}
     :context-window 1000000
     :max-tokens 384000
-    :compat {:requires-reasoning-content-on-assistant-messages true
-             :thinking-format :deepseek}}}}}
+    :compat {:supports-store false
+             :supports-developer-role false
+             :requires-reasoning-content-on-assistant-messages true
+             :thinking-format :deepseek
+             :max-tokens-field :max-tokens}}}}}

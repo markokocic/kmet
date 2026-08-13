@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T14:54:47Z"
+ :generated-at "2026-08-13T15:35:00Z"
  :provider {:id :fireworks
             :name "Fireworks AI"
             :env-vars ["FIREWORKS_API_KEY"]
@@ -247,8 +247,8 @@
              :requires-reasoning-content-on-assistant-messages true
              :thinking-format :openai
              :supports-long-cache-retention false
-             :deferred-tools-mode :kimi
-             :send-session-affinity-headers true}}
+             :send-session-affinity-headers true
+             :deferred-tools-mode :kimi}}
    "accounts/fireworks/routers/glm-5p2-fast"
    {:id "accounts/fireworks/routers/glm-5p2-fast"
     :name "GLM 5.2 Fast"
@@ -294,5 +294,5 @@
              :requires-reasoning-content-on-assistant-messages true
              :thinking-format :openai
              :supports-long-cache-retention false
-             :deferred-tools-mode :kimi
-             :send-session-affinity-headers true}}}}}
+             :send-session-affinity-headers true
+             :deferred-tools-mode :kimi}}}}}

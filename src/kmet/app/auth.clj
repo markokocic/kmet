@@ -56,7 +56,16 @@
    :nvidia ["NVIDIA_API_KEY"]
    :openrouter ["OPENROUTER_API_KEY"]
    :fireworks ["FIREWORKS_API_KEY"]
-   :vercel-ai-gateway ["AI_GATEWAY_API_KEY"]})
+   :vercel-ai-gateway ["AI_GATEWAY_API_KEY"]
+   :zai ["ZAI_API_KEY"]
+   :zai-coding-cn ["ZAI_CODING_CN_API_KEY"]
+   :together ["TOGETHER_API_KEY"]
+   :baseten ["BASETEN_API_KEY"]
+   :ant-ling ["ANT_LING_API_KEY"]
+   :kimi-coding ["KIMI_API_KEY"]
+   :cloudflare-workers-ai ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"]
+   :cloudflare-ai-gateway ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"
+                           "CLOUDFLARE_GATEWAY_ID"]})
 
 (defn provider-env-vars
   "Env var names for a provider, in pi's order (empty vector when unknown)."

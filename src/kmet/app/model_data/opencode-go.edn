@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T14:54:47Z"
+ :generated-at "2026-08-13T15:35:00Z"
  :provider {:id :opencode-go
             :name "OpenCode Go"
             :env-vars ["OPENCODE_API_KEY"]
@@ -77,7 +77,9 @@
     :cost {:input 0.07 :output 0.14 :cache-read 0.0014 :cache-write 0}
     :context-window 1000000
     :max-tokens 384000
-    :compat {:requires-reasoning-content-on-assistant-messages true
+    :compat {:supports-store false
+             :supports-developer-role false
+             :requires-reasoning-content-on-assistant-messages true
              :thinking-format :deepseek
              :max-tokens-field :max-tokens}}
    "deepseek-v4-pro"
@@ -98,7 +100,9 @@
     :cost {:input 0.435 :output 0.87 :cache-read 0.003625 :cache-write 0}
     :context-window 1000000
     :max-tokens 384000
-    :compat {:requires-reasoning-content-on-assistant-messages true
+    :compat {:supports-store false
+             :supports-developer-role false
+             :requires-reasoning-content-on-assistant-messages true
              :thinking-format :deepseek
              :max-tokens-field :max-tokens}}
    "glm-5.1"
@@ -112,7 +116,9 @@
     :cost {:input 1.4 :output 4.4 :cache-read 0.26 :cache-write 0}
     :context-window 202752
     :max-tokens 32768
-    :compat {:max-tokens-field :max-tokens}}
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
    "glm-5.2"
    {:id "glm-5.2"
     :name "GLM-5.2"
@@ -131,7 +137,9 @@
     :cost {:input 1.4 :output 4.4 :cache-read 0.26 :cache-write 0}
     :context-window 1000000
     :max-tokens 131072
-    :compat {:max-tokens-field :max-tokens}}
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
    "hy3"
    {:id "hy3"
     :name "Hy3"
@@ -150,7 +158,9 @@
     :cost {:input 0.14 :output 0.58 :cache-read 0.035 :cache-write 0}
     :context-window 256000
     :max-tokens 64000
-    :compat {:max-tokens-field :max-tokens}}
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
    "kimi-k2.6"
    {:id "kimi-k2.6"
     :name "Kimi K2.6"
@@ -163,7 +173,9 @@
     :cost {:input 0.95 :output 4 :cache-read 0.16 :cache-write 0}
     :context-window 262144
     :max-tokens 65536
-    :compat {:supports-reasoning-effort false
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
              :thinking-format :deepseek
              :max-tokens-field :max-tokens}}
    "kimi-k2.7-code"
@@ -177,7 +189,9 @@
     :cost {:input 0.95 :output 4 :cache-read 0.19 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
-    :compat {:max-tokens-field :max-tokens}}
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
    "kimi-k3"
    {:id "kimi-k3"
     :name "Kimi K3"
@@ -196,7 +210,9 @@
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 0}
     :context-window 1048576
     :max-tokens 131072
-    :compat {:max-tokens-field :max-tokens}}
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
    "mimo-v2.5"
    {:id "mimo-v2.5"
     :name "MiMo V2.5"
@@ -208,7 +224,9 @@
     :cost {:input 0.14 :output 0.28 :cache-read 0.0028 :cache-write 0}
     :context-window 1000000
     :max-tokens 128000
-    :compat {:max-tokens-field :max-tokens}}
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
    "mimo-v2.5-pro"
    {:id "mimo-v2.5-pro"
     :name "MiMo V2.5 Pro"
@@ -220,7 +238,9 @@
     :cost {:input 0.435 :output 0.87 :cache-read 0.003625 :cache-write 0}
     :context-window 1048576
     :max-tokens 128000
-    :compat {:max-tokens-field :max-tokens}}
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
    "minimax-m2.7"
    {:id "minimax-m2.7"
     :name "MiniMax-M2.7"
@@ -232,7 +252,9 @@
     :cost {:input 0.3 :output 1.2 :cache-read 0.06 :cache-write 0}
     :context-window 204800
     :max-tokens 131072
-    :compat {:max-tokens-field :max-tokens}}
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
    "qwen3.6-plus"
    {:id "qwen3.6-plus"
     :name "Qwen3.6 Plus"
@@ -248,7 +270,10 @@
            :cache-write 0.625}
     :context-window 1000000
     :max-tokens 65536
-    :compat {:thinking-format :qwen :max-tokens-field :max-tokens}}}
+    :compat {:supports-store false
+             :supports-developer-role false
+             :thinking-format :qwen
+             :max-tokens-field :max-tokens}}}
   :openai-responses
   {"gpt-5.6-luna"
    {:id "gpt-5.6-luna"
