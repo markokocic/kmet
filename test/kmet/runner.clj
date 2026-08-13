@@ -6,87 +6,14 @@
    subprocess spawns — bash tool, shell commands, git).
    `bb test` runs all tests except ^:slow ones; `bb test-ext` runs only the
    ^:slow tests. Both are selected at the individual test level — no whole
-   namespaces are excluded."
+   namespaces are excluded.
+
+   Test namespaces load lazily: the full run requires all of them; a
+   filtered run (`bb test test-llm-loaded` or
+   `bb test-ext kmet.app.test-loop/test-…`) loads only the namespaces it
+   needs, so single-test runs skip most of the require phase."
   (:require [clojure.string :as str]
-            [clojure.test :as t]
-            [kmet.test-utils]
-            [kmet.test-keys]
-            [kmet.app.test-session]
-            [kmet.app.test-session-export]
-            [kmet.app.test-compaction]
-            [kmet.app.test-tools]
-            [kmet.app.test-llm]
-            [kmet.app.test-attribution]
-            [kmet.app.test-models]
-            [kmet.app.test-model-resolver]
-            [kmet.app.test-config-value]
-            [kmet.app.test-model-config]
-            [kmet.app.test-provider-composer]
-            [kmet.app.test-auth]
-            [kmet.app.test-oauth]
-            [kmet.app.test-model-data]
-            [kmet.app.test-proxy]
-            [kmet.app.test-loop]
-            [kmet.test-theme]
-            [kmet.test-config]
-            [kmet.app.test-skills]
-            [kmet.app.test-context]
-            [kmet.app.test-prompts]
-            [kmet.app.test-extensions]
-            [kmet.app.test-extensions-ui]
-            [kmet.app.test-interactive-ui]
-            [kmet.app.test-event-bus]
-            [kmet.app.test-theme-controller]
-            [kmet.app.test-commands]
-            [kmet.app.test-keybindings]
-            [kmet.test-editing]
-            [kmet.tui.test-fuzzy]
-            [kmet.tui.test-autocomplete]
-            [kmet.tui.test-core]
-            [kmet.tui.components.test-text]
-            [kmet.tui.components.test-spacer]
-            [kmet.tui.components.test-container]
-            [kmet.tui.components.test-box]
-            [kmet.tui.components.test-input]
-            [kmet.tui.components.test-editor]
-            [kmet.tui.components.test-select-list]
-            [kmet.tui.components.test-settings-list]
-            [kmet.tui.components.test-markdown]
-            [kmet.tui.components.test-track]
-            [kmet.tui.components.test-caching-conventions]
-            [kmet.tui.components.test-scroll-view]
-            [kmet.tui.components.test-stack]
-            [kmet.tui.components.test-v-stack]
-            [kmet.tui.components.test-h-stack]
-            [kmet.tui.components.test-truncated-text]
-            [kmet.tui.components.test-alt-screen-flash]
-            [kmet.tui.components.test-cancellable-loader]
-            [kmet.tui.components.test-dynamic-border]
-            [kmet.tui.components.test-spinner]
-            [kmet.tui.components.test-expandable-text]
-            [kmet.tui.test-overlay]
-            [kmet.tui.test-negotiation]
-            [kmet.tui.test-terminal-response]
-            [kmet.tui.test-render-loop]
-            [kmet.libs.test-self-contained]
-            [kmet.libs.test-sse]
-            [kmet.libs.test-terminal-image]
-            [kmet.libs.test-yaml-lite]
-            [kmet.libs.test-markdown]
-            [kmet.libs.test-highlight]
-            [kmet.app.ui.test-chat-history]
-            [kmet.app.ui.test-user-message]
-            [kmet.app.ui.test-assistant-message]
-            [kmet.app.ui.test-tool-execution]
-            [kmet.app.ui.test-custom-message]
-            [kmet.app.ui.test-bash-execution]
-            [kmet.app.ui.test-extension-dialogs]
-            [kmet.app.ui.test-footer]
-            [kmet.app.ui.test-footer-data-provider]
-            [kmet.app.ui.test-pending-messages]
-            [kmet.app.ui.test-loaded-resources]
-            [kmet.app.ui.test-scoped-models-selector]
-            [kmet.test-core]))
+            [clojure.test :as t]))
 
 (def all-namespaces
   "Every test namespace. The slow/fast split happens per test var via ^:slow
@@ -167,16 +94,64 @@
     kmet.app.ui.test-scoped-models-selector
     kmet.test-core])
 
+(defn- ns-vars
+  "Require NS-SYM (lazily) and return all its interned test vars."
+  [ns-sym]
+  (require ns-sym)
+  (vals (ns-interns ns-sym)))
+
 (defn- selected-vars
   "All test vars whose :slow metadata matches the requested selection."
   [slow?]
   (for [ns-sym all-namespaces
-        v (vals (ns-interns ns-sym))
+        v (ns-vars ns-sym)
         :when (and (:test (meta v))
                    (if slow?
                      (:slow (meta v))
                      (not (:slow (meta v)))))]
     v))
+
+(defn- var-matches-filter?
+  "True when a test var matches any filter (plain name or ns/var)."
+  [v filters]
+  (let [vn (name (:name (meta v)))
+        ns-full (str (:ns (meta v)))]
+    (some #(or (= % vn)
+               (= % (str ns-full "/" vn)))
+          filters)))
+
+(defn- filtered-vars
+  "The test vars matching FILTERS, loading namespaces lazily. Plain-name
+   filters scan all-namespaces in order and stop once every plain filter
+   has matched at least one var — so `bb test test-llm-loaded` requires
+   only the namespaces up to the first match, not all 76. ns/var filters
+   load only their own namespace."
+  [filters]
+  (let [filters (map str filters)
+        plain (remove #(str/includes? % "/") filters)]
+    (if (seq plain)
+      (loop [nss all-namespaces
+             remaining (set plain)
+             acc []]
+        (if-let [ns-sym (first nss)]
+          (let [vars (ns-vars ns-sym)
+                acc (into acc (filter #(var-matches-filter? % filters)) vars)
+                remaining (apply disj remaining
+                                 (keep #(when (some (fn [f] (= f (name (:name (meta %))))) plain)
+                                          (name (:name (meta %))))
+                                       vars))]
+            (if (seq remaining)
+              (recur (rest nss) remaining acc)
+              (distinct acc)))
+          (distinct acc)))
+      ;; all filters are ns/var — load exactly those namespaces
+      (->> filters
+           (map #(let [slash (str/index-of % "/")]
+                   [(symbol (subs % 0 slash)) (subs % (inc slash))]))
+           (mapcat (fn [[ns-sym var-name]]
+                     (filter #(= var-name (name (:name (meta %))))
+                             (ns-vars ns-sym))))
+           distinct))))
 
 (defn- join-fixtures*
   "Compose fixture fns. bb's join-fixtures only works with >= 2 fixtures:
@@ -253,14 +228,7 @@
    or `bb test-ext kmet.app.test-loop/test-loop-parallel-tool-execution`)."
   [slow? & filters]
   (let [vars (if (seq filters)
-               (filter (fn [v]
-                         (let [vn (name (:name (meta v)))
-                               ns-full (str (:ns (meta v)))]
-                           (some #(let [f (str %)]
-                                    (or (= f vn)
-                                        (= f (str ns-full "/" vn))))
-                                 filters)))
-                       (concat (selected-vars true) (selected-vars false)))
+               (filtered-vars filters)
                (selected-vars slow?))
         start-ms (System/currentTimeMillis)
         results (binding [t/*report-counters* (ref t/*initial-report-counters*)]

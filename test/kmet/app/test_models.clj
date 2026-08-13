@@ -164,44 +164,53 @@
       (t/is (= "deepseek-v4-flash" (:id (m/default-model-for :opencode-go)))))))
 
 (t/deftest test-catalog-edn-shape
+  ;; Per-model structural validation of the committed catalogs lives in
+  ;; test-model-data (the generator's validate-groups! runs over every
+  ;; model) — this fast-suite test samples one model per provider for the
+  ;; registry integration aspects (Model records + get-model reachability)
+  ;; instead of iterating all 1058 models.
   (m/load-catalogs!)
-  (let [models (m/get-models)
+  (let [providers (m/get-providers)
+        sampled (mapv (fn [p] (first (:models p))) providers)
         api-set #{:openai-completions :openai-responses
                   :openai-codex-responses :azure-openai-responses
                   :anthropic-messages :google-generative-ai}
         violations (into []
                          (keep (fn [mod]
-                                 (let [bad (cond
-                                             (not (record? mod)) "not a Model record"
-                                             (not (every? #(contains? mod %)
-                                                          [:id :name :provider :api :base-url
-                                                           :reasoning :input :cost
-                                                           :context-window :max-tokens]))
-                                             "missing required field"
-                                             (not (string? (:id mod))) "id not a string"
-                                             (not (string? (:name mod))) "name not a string"
-                                             (not (keyword? (:provider mod))) "provider not a keyword"
-                                             (not (contains? api-set (:api mod))) "unknown api"
-                                             (not (string? (:base-url mod))) "base-url not a string"
-                                             (not (boolean? (:reasoning mod))) "reasoning not a boolean"
-                                             (not (and (vector? (:input mod)) (seq (:input mod))))
-                                             "input not a non-empty vector"
-                                             (not (every? number?
-                                                          ((juxt :input :output :cache-read
-                                                                 :cache-write) (:cost mod))))
-                                             "cost lacks 4 numeric fields"
-                                             (not (pos? (:context-window mod))) "context-window not positive"
-                                             (not (pos? (:max-tokens mod))) "max-tokens not positive"
-                                             (not= (:id mod) (:id (m/get-model (:provider mod)
-                                                                               (:id mod))))
-                                             "not reachable via get-model"
-                                             :else nil)]
-                                   (when bad (str (:provider mod) "/" (:id mod) ": " bad)))))
-                         models)]
-    (t/is (seq models))
+                                 (when mod
+                                   (let [bad (cond
+                                               (not (record? mod)) "not a Model record"
+                                               (not (every? #(contains? mod %)
+                                                            [:id :name :provider :api :base-url
+                                                             :reasoning :input :cost
+                                                             :context-window :max-tokens]))
+                                               "missing required field"
+                                               (not (string? (:id mod))) "id not a string"
+                                               (not (string? (:name mod))) "name not a string"
+                                               (not (keyword? (:provider mod))) "provider not a keyword"
+                                               (not (contains? api-set (:api mod))) "unknown api"
+                                               (not (string? (:base-url mod))) "base-url not a string"
+                                               (not (boolean? (:reasoning mod))) "reasoning not a boolean"
+                                               (not (and (vector? (:input mod)) (seq (:input mod))))
+                                               "input not a non-empty vector"
+                                               (not (every? number?
+                                                            ((juxt :input :output :cache-read
+                                                                   :cache-write) (:cost mod))))
+                                               "cost lacks 4 numeric fields"
+                                               (not (pos? (:context-window mod))) "context-window not positive"
+                                               (not (pos? (:max-tokens mod))) "max-tokens not positive"
+                                               (not= (:id mod) (:id (m/get-model (:provider mod)
+                                                                                 (:id mod))))
+                                               "not reachable via get-model"
+                                               :else nil)]
+                                     (when bad (str (:provider mod) "/" (:id mod) ": " bad))))))
+                         sampled)]
+    (t/is (seq sampled))
     (t/is (= [] violations)
-          (str "every catalog model is well-formed, first violations: "
+          (str "sampled catalog models are well-formed, first violations: "
                (pr-str (take 5 violations))))
+    (t/is (every? some? (map #(m/get-model (:id %) (:id (first (:models %)))) providers))
+          "every provider's first model is reachable via get-model")
     (t/testing "copilot models carry static headers (COPILOT_STATIC_HEADERS)"
       (let [copilot (m/get-model :github-copilot "claude-sonnet-4.5")]
         (t/is (= "GitHubCopilotChat/0.35.0" (get-in copilot [:headers "User-Agent"]))))
