@@ -91,7 +91,7 @@
                        thinking      ;; :off :low :medium :high :max
                        on-event      ;; callback for state updates
                        base-url      ;; full endpoint URL override (default: derived from the Model record)
-                       api-type      ;; wire api override (:openai-completions | :anthropic-messages | :google-generative-ai)
+                       api-type      ;; wire api override (:openai-completions | :openai-responses | :anthropic-messages | :google-generative-ai)
                        steering      ;; atom of vector of queued steer messages
                        follow-up     ;; atom of vector of queued follow-up messages
                        steering-mode ;; :all | :one-at-a-time (drain mode)
@@ -846,6 +846,7 @@ Be precise and concise in your responses."}}]
           :signal signal
           :idle-timeout-ms (:http-idle-timeout-ms agent)
           :session-id (some-> (:session agent) :id)
+          :cache-retention :none
           :on-text (fn [t] (swap! text-buf str t))
           :on-done (fn [_] (deliver done @text-buf))
           :on-error (fn [_] (when-not (realized? done) (deliver done nil)))})
@@ -886,6 +887,7 @@ Be precise and concise in your responses."}}]
           :signal signal
           :idle-timeout-ms (:http-idle-timeout-ms agent)
           :session-id (some-> (:session agent) :id)
+          :cache-retention :none
           :on-text (fn [t] (swap! text-buf str t))
           :on-done (fn [_] (deliver done @text-buf))
           :on-error (fn [_] (when-not (realized? done) (deliver done nil)))})

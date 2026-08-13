@@ -845,6 +845,16 @@
              (s/entry-usage {:input_tokens 100 :output_tokens 20
                              :cache_read_input_tokens 30
                              :cache_creation_input_tokens 10}))))
+  (t/testing "OpenAI Responses shape — input_tokens includes cache tokens,
+             subtracted from the details sub-map (pi normalizeUsage)"
+    (t/is (= {:input 65 :output 20 :cache-read 30 :cache-write 5 :cost 0.0}
+             (s/entry-usage {:input_tokens 100 :output_tokens 20 :total_tokens 120
+                             :input_tokens_details {:cached_tokens 30
+                                                    :cache_write_tokens 5}
+                             :output_tokens_details {:reasoning_tokens 10}}))))
+  (t/testing "Responses usage without a cache details sub-map passes through"
+    (t/is (= {:input 100 :output 20 :cache-read 0 :cache-write 0 :cost 0.0}
+             (s/entry-usage {:input_tokens 100 :output_tokens 20 :total_tokens 120}))))
   (t/testing "Google's already-normalized shape (sse/google-usage)"
     (t/is (= {:input 10 :output 20 :cache-read 5 :cache-write 0 :cost 0.0}
              (s/entry-usage {:input 10 :output 20 :cache-read 5 :cache-write 0}))))

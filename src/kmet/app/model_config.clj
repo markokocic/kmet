@@ -99,19 +99,55 @@
           errors input))
 
 (defn- validate-cost-rates
-  "All four rate fields required numbers (pi ModelCostSchema)."
+  "All four rate fields required numbers; optional :tiers (pi ModelCostSchema)
+   — each tier an array entry with a positive :input-tokens-above and the
+   four rate fields."
   [errors path cost]
-  (reduce (fn [errors k]
-            (check errors (number? (get cost k)) (str path "." (name k)) "expected number"))
-          errors cost-rate-keys))
+  (let [errors (reduce (fn [errors k]
+                         (check errors (number? (get cost k)) (str path "." (name k)) "expected number"))
+                       errors cost-rate-keys)
+        tiers (:tiers cost)]
+    (if (nil? tiers)
+      errors
+      (if-not (vector? tiers)
+        (conj errors (str path ".tiers: expected array"))
+        (reduce (fn [errors [i tier]]
+                  (if-not (map? tier)
+                    (conj errors (str path ".tiers[" i "]: expected map"))
+                    (let [tp (str path ".tiers[" i "]")]
+                      (reduce (fn [errors k]
+                                (check errors (number? (get tier k))
+                                       (str tp "." (name k)) "expected number"))
+                              (check errors (number? (:input-tokens-above tier))
+                                     (str tp ".input-tokens-above") "expected number")
+                              cost-rate-keys))))
+                errors
+                (map-indexed vector tiers))))))
 
 (defn- validate-optional-cost-rates
-  "Override cost: present fields must be numbers (pi ModelOverrideSchema —
-   partial)."
+  "Override cost: present fields must be numbers; :tiers, when present, is
+   the full tier array (pi ModelOverrideSchema — cost tiers replace)."
   [errors path cost]
-  (reduce (fn [errors [k v]]
-            (check errors (number? v) (str path "." (name k)) "expected number"))
-          errors cost))
+  (let [errors (reduce (fn [errors [k v]]
+                         (check errors (number? v) (str path "." (name k)) "expected number"))
+                       errors (dissoc cost :tiers))
+        tiers (:tiers cost)]
+    (if (nil? tiers)
+      errors
+      (if-not (vector? tiers)
+        (conj errors (str path ".tiers: expected array"))
+        (reduce (fn [errors [i tier]]
+                  (if-not (map? tier)
+                    (conj errors (str path ".tiers[" i "]: expected map"))
+                    (let [tp (str path ".tiers[" i "]")]
+                      (reduce (fn [errors k]
+                                (check errors (number? (get tier k))
+                                       (str tp "." (name k)) "expected number"))
+                              (check errors (number? (:input-tokens-above tier))
+                                     (str tp ".input-tokens-above") "expected number")
+                              cost-rate-keys))))
+                errors
+                (map-indexed vector tiers))))))
 
 (defn- validate-model-definition
   "models.edn model definition (pi ModelDefinitionSchema): id required;

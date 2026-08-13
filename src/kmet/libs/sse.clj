@@ -120,6 +120,187 @@
     {:type :ping}
     {:type :unknown :event event :data data}))
 
+;; ─── OpenAI Responses stream (pi: api/openai-responses-shared.ts           ──
+;;    processResponsesStream — ported to kmet's event vocabulary; the
+;;    output-slot state (per output_index tool-call partial JSON) lives in
+;;    the state atom owned by process-responses-stream) ─────────────────────
+
+(declare stream-loop)
+
+(defn- responses-tool-call-id
+  "The stored tool call id for a responses function_call item: pi's
+   `call_id|item_id` format so replay can split it back into the
+   function_call_output call_id."
+  [item]
+  (str (or (:call_id item) "") "|" (or (:id item) "")))
+
+(defn- responses-terminal-events
+  "Events for the terminal response.completed / response.incomplete events
+   (pi finalizeResponse): the provider-native usage (input_tokens includes
+   cached/cache-write tokens — session/entry-usage subtracts them) and the
+   stop reason. Completed responses with tool-call slots map :stop to
+   :tool-use (pi: output.content has a toolCall). Non-max-output incomplete
+   responses surface as an error (pi: stopReason 'error' + errorMessage)."
+  [d state]
+  (let [response (:response d)
+        status (:status response)
+        incomplete-reason (get-in response [:incomplete_details :reason])
+        usage (:usage response)
+        tool-calls? (seq (:slots @state))]
+    (swap! state assoc :saw-terminal? true)
+    (cond-> []
+      usage (conj {:type :usage :usage usage})
+      (and (= "completed" status) tool-calls?) (conj {:type :done :stop-reason :tool-use})
+      (and (= "completed" status) (not tool-calls?)) (conj {:type :done :stop-reason :stop})
+      (and (= "incomplete" status) (= "max_output_tokens" incomplete-reason))
+      (conj {:type :done :stop-reason :length})
+      (and (= "incomplete" status) (not= "max_output_tokens" incomplete-reason))
+      (conj {:type :error
+             :message (str "Response incomplete: " (or incomplete-reason "unknown reason"))}))))
+
+(defn- responses-failed-message
+  "pi response.failed handling: the error code+message, else the
+   incomplete_details reason."
+  [d]
+  (let [response (:response d)
+        error (:error response)
+        details (:incomplete_details response)]
+    (cond
+      error (str (or (:code error) "unknown") ": " (or (:message error) "no message"))
+      details (str "incomplete: " (:reason details))
+      :else "Unknown error (no error details in response)")))
+
+(defn parse-responses-event
+  "Parse one OpenAI Responses SSE (event-name, data) pair into a vector of
+   kmet events: :text, :thinking, :tool-call (start, with the id/name),
+   :tool-call-args (argument deltas), :usage, :done (with :stop-reason), or
+   :error. STATE is the processor's atom — it owns the per-output-index
+   tool-call slots (partial JSON accumulation, pi processResponsesStream's
+   outputSlots) and the terminal-event flag.
+
+   Text/thinking content arrives as deltas (response.output_text.delta,
+   response.reasoning_*.delta); tool arguments stream via
+   response.function_call_arguments.delta with a final .done that may
+   extend the accumulated partial. function_call items are created on
+   response.output_item.added; the id is `call_id|item_id` (pi), so the
+   tool executor and session replay treat it opaquely."
+  [event data state]
+  (if (nil? data)
+    []
+    (try
+      (let [d (json/parse-string data true)
+            slots (:slots @state)
+            add-slot! (fn [idx slot] (swap! state assoc-in [:slots idx] slot))]
+        (case event
+          "response.output_item.added"
+          (let [item (:item d) idx (:output_index d)]
+            (case (:type item)
+              "function_call"
+              (let [slot {:kind :tool-call
+                          :id (responses-tool-call-id item)
+                          :name (:name item)
+                          :partial-json (or (:arguments item) "")}]
+                (add-slot! idx slot)
+                [{:type :tool-call :id (:id slot) :name (:name slot)
+                  :arguments (or (:arguments item) "") :index idx}])
+              []))
+
+          "response.reasoning_summary_text.delta"
+          [{:type :thinking :content (:delta d)}]
+          "response.reasoning_summary_part.done"
+          [{:type :thinking :content "\n\n"}]
+          "response.reasoning_text.delta"
+          [{:type :thinking :content (:delta d)}]
+          "response.output_text.delta"
+          [{:type :text :content (:delta d)}]
+          "response.refusal.delta"
+          [{:type :text :content (:delta d)}]
+
+          "response.function_call_arguments.delta"
+          (let [slot (get slots (:output_index d))]
+            (if (and slot (= :tool-call (:kind slot)))
+              (do (swap! state assoc-in [:slots (:output_index d) :partial-json]
+                         (str (:partial-json slot) (:delta d)))
+                  [{:type :tool-call-args :arguments (:delta d)
+                    :index (:output_index d)}])
+              []))
+
+          "response.function_call_arguments.done"
+          (let [slot (get slots (:output_index d))
+                final (or (:arguments d) "")]
+            (if (and slot (= :tool-call (:kind slot)))
+              (let [previous (:partial-json slot)]
+                (swap! state assoc-in [:slots (:output_index d) :partial-json] final)
+                ;; The final arguments normally extend the accumulated partial
+                ;; (pi: emit only the extension as a delta); when they don't
+                ;; (complete arguments arrived in the item), nothing to add.
+                (if (and (str/starts-with? final previous)
+                         (pos? (- (count final) (count previous))))
+                  [{:type :tool-call-args :arguments (subs final (count previous))
+                    :index (:output_index d)}]
+                  []))
+              []))
+
+          "response.output_item.done"
+          ;; Text/thinking/tool-call content already streamed as deltas; the
+          ;; final item only carries the same values (no signature replay in
+          ;; kmet — sessions don't persist signatures).
+          []
+
+          "response.completed" (responses-terminal-events d state)
+          "response.incomplete" (responses-terminal-events d state)
+          "response.failed"
+          (do (swap! state assoc :saw-terminal? true)
+              [{:type :error :message (responses-failed-message d)}])
+          "error"
+          [{:type :error :message (str "Error Code " (:code d) ": " (:message d))}]
+          []))
+      (catch Exception e
+        [{:type :error :message (str "Parse error: " (ex-message e))}]))))
+
+(defn process-responses-stream
+  "Read an OpenAI Responses stream response body, buffering multi-line event
+   data (like process-anthropic-stream). Calls handler with each parsed
+   event; the processor's output-slot state lives in an internal atom.
+   signal (an atom) cancels the loop; errors via {:type :error} events;
+   idle-timeout-ms is the per-byte idle timeout; abort-fn kills the transport
+   on stall.
+
+   Detects premature stream end: when the stream ends before a terminal
+   event (response.completed / response.incomplete / response.failed) is
+   received, reports {:type :error} (pi: 'OpenAI Responses stream ended
+   before a terminal response event')."
+  [response handler signal & [idle-timeout-ms abort-fn]]
+  (try
+    (let [rdr (io/reader (:body response))
+          state (atom {:event-name nil :buf "" :slots {} :saw-terminal? false})
+          saw-done (atom false)
+          end-reason (stream-loop rdr idle-timeout-ms signal abort-fn
+                                  (fn [line]
+                                    (let [[ev data] (parse-sse-line line)
+                                          {:keys [event-name buf]} @state]
+                                      (cond
+                                        ev (swap! state assoc :event-name ev)
+                                        data (swap! state assoc :buf (str buf data))
+                                        (and (empty? line) (seq buf))
+                                        (do (doseq [event (parse-responses-event event-name buf state)]
+                                              (when (= :done (:type event))
+                                                (reset! saw-done true))
+                                              (handler event))
+                                            (swap! state assoc :event-name nil :buf ""))
+                                        :else nil)))
+                                  (fn
+                                    ([] (handler {:type :error
+                                                  :message (str "Stream idle timeout after " (or idle-timeout-ms 0)
+                                                                " ms (no data received)")}))
+                                    ([e] (handler {:type :error
+                                                   :message (str "Stream error: " (ex-message e))}))))]
+      (when (and (= :eof end-reason) (not @saw-done) (not (:saw-terminal? @state)) (not @signal))
+        (handler {:type :error
+                  :message "OpenAI Responses stream ended before a terminal response event"})))
+    (catch Exception e
+      (handler {:type :error :message (str "Stream error: " (ex-message e))}))))
+
 (defn- google-stop-reason
   "pi mapStopReasonString: STOP → :stop, MAX_TOKENS → :length, rest :error."
   [reason]
@@ -362,7 +543,7 @@
                                     (let [[ev data] (parse-sse-line line)
                                           {:keys [event-name buf]} @state]
                                       (cond
-                                        ev (reset! state {:event-name data :buf buf})
+                                        ev (reset! state {:event-name ev :buf buf})
                                         data (reset! state {:event-name event-name :buf (str buf data)})
                                         (and (empty? line) (seq buf))
                                         (do (when-let [evt (parse-anthropic-event event-name buf)]

@@ -1,7 +1,9 @@
 {:schema-version 1
- :generated-at "2026-08-08T15:46:47Z"
- :structure-hash "727002f7a5acfe1a94e3c2e629858689f11253c638c58b8d32711641ab8f341a"
- :files {"deepseek.edn" "69afa8f7e2ed5a90bac2bf8dde9755d7949108a18fc6580829fb5f2829105a41"
-         "github-copilot.edn" "e7e62665ddeddba5971c3655db8c3516e75844ce17f1eeb87460fb20efda5f1b"
-         "opencode-go.edn" "469ed17b8fbd1da014c9f18c940d7bbbdffb984f28006c0ab06afac76b7e5e0f"
-         "opencode.edn" "6e3eaf7556dceb2add4c3ecbb5ddba938b6469c8774eb98ce386dfa41dd5b67a"}}
+ :generated-at "2026-08-13T10:56:54Z"
+ :structure-hash "041eee112ce3b5206eb65b7f7d04a18b815701289a9da480433d548f6664ca2e"
+ :files {"deepseek.edn" "5aec702edfb93b8a3afaeabb7932985c67b1b203013dc34ee59c0025d66afbda"
+         "github-copilot.edn" "e3b9e651734873cb8cb13be8b6ed107e3bec27aaca4e823878e04c5a30ab83b6"
+         "openai.edn" "6adb038c8ce503e7b48e7190ab92f36da03e5f0538817c3db530e693ff887f73"
+         "opencode-go.edn" "79e89fabd734b36d924c7285bffb0cd03c4d2943385c64a87f19968f45b6e78b"
+         "opencode.edn" "3b94ba88220961bea94cbc66ca8a256c5355f23f6e7c41e26202168585425b07"
+         "xai.edn" "18d5bd3b1831312f158dbb9875edfa53e560ae78da50f1647933e5068dd4a73f"}}

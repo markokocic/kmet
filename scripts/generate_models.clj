@@ -1,11 +1,12 @@
 ;; scripts/generate_models.clj — regenerate src/kmet/app/model_data/*.edn from
-;; models.dev (pi: packages/ai/scripts/generate-models.ts, ported to the 4
-;; providers kmet ships: opencode-go, opencode, deepseek, github-copilot).
+;; models.dev (pi: packages/ai/scripts/generate-models.ts, ported to the 6
+;; providers kmet ships: opencode-go, opencode, deepseek, github-copilot,
+;; openai, xai).
 ;;
-;; Wire APIs out of kmet's scope (openai-responses etc.) are skipped and
-;; logged. The generated EDN + manifest.edn are committed; the offline
-;; half (validate-committed!) also runs as test/kmet/app/test_model_data.clj
-;; so drift is caught without network.
+;; Wire APIs out of kmet's scope (openai-codex-responses, bedrock, azure,
+;; etc.) are skipped and logged. The generated EDN + manifest.edn are
+;; committed; the offline half (validate-committed!) also runs as
+;; test/kmet/app/test_model_data.clj so drift is caught without network.
 ;;
 ;; Run via: bb generate-models   (network)
 ;; Check via: bb check-model-data (offline)
@@ -34,7 +35,13 @@
               :default-model "deepseek-v4-pro"}
    :github-copilot {:name "GitHub Copilot"
                     :env-vars ["COPILOT_GITHUB_TOKEN"]
-                    :default-model "claude-sonnet-4.5"}))
+                    :default-model "claude-sonnet-4.5"}
+   :openai {:name "OpenAI"
+            :env-vars ["OPENAI_API_KEY"]
+            :default-model "gpt-5.5"}
+   :xai {:name "xAI"
+         :env-vars ["XAI_API_KEY"]
+         :default-model "grok-4.5"}))
 
 (def opencode-variants
   "pi opencodeVariants: models.dev key → kmet provider id + API base path."
@@ -51,6 +58,60 @@
 (def deepseek-compat
   {:requires-reasoning-content-on-assistant-messages true
    :thinking-format :deepseek})
+
+;; ─── OpenAI / xAI constants (pi generate-models.ts, ported verbatim) ───────
+
+(def ^:private openai-long-context-input-threshold 272000)
+
+(def ^:private models-dev-openai-unsupported-model-ids
+  "models.dev lists this alias, but it is not accepted by OpenAI APIs."
+  #{"gpt-5.6"})
+
+(def ^:private openai-tool-search-model-ids
+  #{"gpt-5.4" "gpt-5.4-mini" "gpt-5.4-pro" "gpt-5.5"
+    "gpt-5.6-sol" "gpt-5.6-terra" "gpt-5.6-luna"})
+
+;; Public OpenAI documents additional_tools for applications that load tools
+;; outside the normal tool-search flow; the openai provider supports both.
+(def ^:private openai-additional-tools-model-ids openai-tool-search-model-ids)
+
+(def ^:private openai-short-context-capped-model-ids
+  #{"gpt-5.4" "gpt-5.5" "gpt-5.6-sol" "gpt-5.6-terra" "gpt-5.6-luna"})
+
+(def ^:private openai-long-context-pricing-model-ids
+  #{"gpt-5.4" "gpt-5.4-pro" "gpt-5.5" "gpt-5.5-pro"
+    "gpt-5.6-sol" "gpt-5.6-terra" "gpt-5.6-luna"})
+
+;; OpenAI reduced GPT-5.6 Terra and Luna prices on 2026-07-30. Keep these
+;; authoritative values until models.dev and passthrough catalogs catch up.
+;; https://developers.openai.com/api/docs/pricing
+(def ^:private openai-gpt-56-standard-costs
+  {"gpt-5.6-luna" {:input 0.2 :output 1.2 :cache-read 0.02 :cache-write 0.25}
+   "gpt-5.6-terra" {:input 2 :output 12 :cache-read 0.2 :cache-write 2.5}})
+
+;; Models that accept `reasoning: {effort: "none"}` to disable thinking;
+;; every other gpt-5* responses model pins :off to null (always-thinking).
+(def ^:private openai-responses-none-reasoning-models
+  #{"gpt-5.1" "gpt-5.2" "gpt-5.3-codex" "gpt-5.4" "gpt-5.4-mini"
+    "gpt-5.4-nano" "gpt-5.5" "gpt-5.6-sol" "gpt-5.6-terra" "gpt-5.6-luna"})
+
+(def ^:private xai-responses-model-id "grok-4.5")
+
+(def ^:private xai-builtin-excluded-model-ids
+  #{"grok-3" "grok-3-fast" "grok-4.20-0309-non-reasoning"
+    "grok-4.20-0309-reasoning" "grok-code-fast-1"})
+
+(def ^:private xai-responses-effort-level-map
+  {:off nil :minimal nil})
+
+(def ^:private xai-responses-compat
+  {:supports-long-cache-retention false})
+
+;; Copilot models served with an extended 1M context (pi override).
+(def ^:private github-copilot-extended-context-models
+  #{"claude-fable-5" "claude-opus-4.6" "claude-opus-4.7" "claude-opus-4.8"
+    "claude-opus-5" "claude-sonnet-4.6" "claude-sonnet-5"
+    "gpt-5.3-codex" "gpt-5.4" "gpt-5.5"})
 
 (def deepseek-v4-models
   "Hardcoded V4 pair — models.dev lags the DeepSeek API, pi carries them as
@@ -98,12 +159,42 @@
     [:text]))
 
 (defn- cost-map
-  "pi getModelsDevCost, flat 4-field form (kmet has no cost tiers)."
+  "pi getModelsDevCost: the flat 4-field form plus context tiers
+   (tier.tier.type === 'context' with a size → inputTokensAbove; each tier
+   supplies a complete alternate rate set for the whole request)."
   [m]
-  (array-map :input (or (get-in m ["cost" "input"]) 0)
-             :output (or (get-in m ["cost" "output"]) 0)
-             :cache-read (or (get-in m ["cost" "cache_read"]) 0)
-             :cache-write (or (get-in m ["cost" "cache_write"]) 0)))
+  (let [tiers (->> (get-in m ["cost" "tiers"])
+                   (keep (fn [tier]
+                           (let [ctx (get tier "tier")]
+                             (when (and (= "context" (get ctx "type"))
+                                        (some? (get ctx "size")))
+                               (array-map :input-tokens-above (long (get ctx "size"))
+                                          :input (or (get tier "input") 0)
+                                          :output (or (get tier "output") 0)
+                                          :cache-read (or (get tier "cache_read") 0)
+                                          :cache-write (or (get tier "cache_write") 0))))))
+                   vec)]
+    (cond-> (array-map :input (or (get-in m ["cost" "input"]) 0)
+                       :output (or (get-in m ["cost" "output"]) 0)
+                       :cache-read (or (get-in m ["cost" "cache_read"]) 0)
+                       :cache-write (or (get-in m ["cost" "cache_write"]) 0))
+      (seq tiers) (assoc :tiers tiers))))
+
+(defn- round-cost
+  "pi roundCost — toFixed(6)."
+  [v]
+  (Double/parseDouble (format "%.6f" (double v))))
+
+(defn- with-openai-long-context-pricing
+  "pi withOpenAiLongContextPricing: keep the short-context tier as the base
+   rates, add the long-context tier at the 272000-token threshold."
+  [cost]
+  (assoc cost
+         :tiers [(array-map :input-tokens-above openai-long-context-input-threshold
+                            :input (round-cost (* 2 (or (:input cost) 0)))
+                            :output (round-cost (* 1.5 (or (:output cost) 0)))
+                            :cache-read (round-cost (* 2 (or (:cache-read cost) 0)))
+                            :cache-write (round-cost (* 2 (or (:cache-write cost) 0))))]))
 
 (defn- model-map
   "One Model in canonical EDN field order (pi Model shape, kmet key names).
@@ -135,7 +226,7 @@
   (let [npm (get-in m ["provider" "npm"])
         base-path (:base-path variant)
         api (cond
-              (= npm "@ai-sdk/openai") nil
+              (= npm "@ai-sdk/openai") :openai-responses
               (= npm "@ai-sdk/anthropic") :anthropic-messages
               (= npm "@ai-sdk/google") :google-generative-ai
               :else :openai-completions)
@@ -150,6 +241,10 @@
         api (if go-override? :openai-completions api)
         base (if go-override? (str base-path "/v1") base)
         compat (cond-> {}
+                 (= api :openai-responses)
+                 ;; opencode zen's responses path has no session affinity
+                 ;; (pi: sessionAffinityFormat "openai-nosession")
+                 (assoc :session-affinity-format :openai-nosession)
                  (and (= :opencode (:provider variant)) (= mid "grok-build-0.1"))
                  (assoc :supports-reasoning-effort false)
                  (and (#{:opencode :opencode-go} (:provider variant)) (= mid "kimi-k2.6"))
@@ -165,59 +260,130 @@
     (when api
       (apply-thinking-maps (model-map (:provider variant) api base m mid {:compat compat}) m))))
 
-(defn- log-skips
-  [label ids]
-  (when (seq ids)
-    (println (str "  skipped (" label "): " (str/join ", " (sort ids))))))
-
 (defn- process-opencode
   [data]
-  (let [skipped (volatile! [])]
-    (let [models (doall
-                  (for [variant opencode-variants
-                        [mid m] (or (get-in data [(:key variant) "models"]) {})
-                        :when (and (true? (get m "tool_call"))
-                                   (not= "deprecated" (get m "status")))]
-                    (let [mm (opencode-model variant mid m)]
-                      (when (nil? mm)
-                        (vswap! skipped conj mid))
-                      mm)))]
-      (log-skips "opencode, openai-responses" @skipped)
-      models)))
+  (doall
+   (for [variant opencode-variants
+         [mid m] (or (get-in data [(:key variant) "models"]) {})
+         :when (and (true? (get m "tool_call"))
+                    (not= "deprecated" (get m "status"))
+                    ;; pi drops this alias from the opencode variants
+                    (not= mid "gpt-5.3-codex-spark"))]
+     (opencode-model variant mid m))))
 
 ;; ─── github-copilot ────────────────────────────────────────────────────────
 
 (defn- process-copilot
   [data]
-  (let [skipped (volatile! [])]
-    (let [models (doall
-                  (for [[mid m] (or (get-in data ["github-copilot" "models"]) {})
-                        :when (and (true? (get m "tool_call"))
-                                   (not= "deprecated" (get m "status")))]
-                    (let [claude? (boolean (re-find #"^claude-(haiku|sonnet|opus)-[45]([.\-]|$)" mid))
-                          needs-responses? (or (= mid "grok-4.5")
-                                               (str/starts-with? mid "gpt-5")
-                                               (str/starts-with? mid "oswe")
-                                               (str/starts-with? mid "mai-"))]
-                      (cond
-                        claude? (apply-thinking-maps
-                                 (model-map :github-copilot :anthropic-messages
-                                            "https://api.individual.githubcopilot.com" m mid
-                                            {:headers copilot-static-headers
-                                             :context-default 128000 :max-default 8192})
-                                 m)
-                        needs-responses? (do (vswap! skipped conj mid) nil)
-                        :else (apply-thinking-maps
-                               (model-map :github-copilot :openai-completions
-                                          "https://api.individual.githubcopilot.com" m mid
-                                          {:headers copilot-static-headers
-                                           :context-default 128000 :max-default 8192
-                                           :compat {:supports-store false
-                                                    :supports-developer-role false
-                                                    :supports-reasoning-effort false}})
-                               m)))))]
-      (log-skips "github-copilot, openai-responses" @skipped)
-      models)))
+  (doall
+   (for [[mid m] (or (get-in data ["github-copilot" "models"]) {})
+         :when (and (true? (get m "tool_call"))
+                    (not= "deprecated" (get m "status")))]
+     (let [claude? (boolean (re-find #"^claude-(haiku|sonnet|opus)-[45]([.\-]|$)" mid))
+           needs-responses? (or (= mid "grok-4.5")
+                                (str/starts-with? mid "gpt-5")
+                                (str/starts-with? mid "oswe")
+                                (str/starts-with? mid "mai-"))]
+       (cond
+         claude? (apply-thinking-maps
+                  (model-map :github-copilot :anthropic-messages
+                             "https://api.individual.githubcopilot.com" m mid
+                             {:headers copilot-static-headers
+                              :context-default 128000 :max-default 8192})
+                  m)
+         needs-responses? (apply-thinking-maps
+                           ;; Grok 4.5 / gpt-5 / oswe / MAI-Code models are only
+                           ;; served through the Copilot /responses endpoint
+                           ;; (pi: needsResponsesApi). No explicit compat — the
+                           ;; strict/tool-search/explicit-cache passes don't
+                           ;; apply to copilot (pi), only grammar tools do.
+                           (model-map :github-copilot :openai-responses
+                                      "https://api.individual.githubcopilot.com" m mid
+                                      {:headers copilot-static-headers
+                                       :context-default 128000 :max-default 8192})
+                           m)
+         :else (apply-thinking-maps
+                (model-map :github-copilot :openai-completions
+                           "https://api.individual.githubcopilot.com" m mid
+                           {:headers copilot-static-headers
+                            :context-default 128000 :max-default 8192
+                            :compat {:supports-store false
+                                     :supports-developer-role false
+                                     :supports-reasoning-effort false}})
+                m))))))
+
+;; ─── openai (pi: all models.dev openai models → :openai-responses) ─────────
+
+(def ^:private openai-base-url "https://api.openai.com/v1")
+
+(defn- process-openai
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["openai" "models"]) {})
+         :when (and (true? (get m "tool_call"))
+                    (not= "deprecated" (get m "status"))
+                    (not (contains? models-dev-openai-unsupported-model-ids mid)))]
+     (apply-thinking-maps
+      (model-map :openai :openai-responses openai-base-url m mid {})
+      m))))
+
+;; ─── xai (pi: grok-4.5 → :openai-responses, the rest openai-completions) ──
+
+(def ^:private xai-base-url "https://api.x.ai/v1")
+
+(defn- process-xai
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["xai" "models"]) {})
+         :when (and (true? (get m "tool_call"))
+                    (not= "deprecated" (get m "status"))
+                    (not (contains? xai-builtin-excluded-model-ids mid)))]
+     (let [responses? (= mid xai-responses-model-id)]
+       (apply-thinking-maps
+        (model-map :xai (if responses? :openai-responses :openai-completions)
+                   xai-base-url m mid
+                   {:compat (if responses?
+                              xai-responses-compat
+                              {:supports-store false
+                               :supports-developer-role false
+                               :supports-reasoning-effort false})})
+        m)))))
+
+;; ─── Missing openai models (pi: added when models.dev lags) ───────────────
+
+(defn- missing-openai-models
+  [existing-ids]
+  (remove (fn [mm] (contains? existing-ids (:id mm)))
+          [(array-map :id "gpt-5.6-sol" :name "GPT-5.6 Sol"
+                      :provider :openai :api :openai-responses
+                      :base-url openai-base-url
+                      :reasoning true :input [:text :image]
+                      :cost (with-openai-long-context-pricing
+                              {:input 5 :output 30 :cache-read 0.5 :cache-write 6.25})
+                      :context-window openai-long-context-input-threshold
+                      :max-tokens 128000)
+           (array-map :id "gpt-5.6-terra" :name "GPT-5.6 Terra"
+                      :provider :openai :api :openai-responses
+                      :base-url openai-base-url
+                      :reasoning true :input [:text :image]
+                      :cost (with-openai-long-context-pricing
+                              (get openai-gpt-56-standard-costs "gpt-5.6-terra"))
+                      :context-window openai-long-context-input-threshold
+                      :max-tokens 128000)
+           (array-map :id "gpt-5.6-luna" :name "GPT-5.6 Luna"
+                      :provider :openai :api :openai-responses
+                      :base-url openai-base-url
+                      :reasoning true :input [:text :image]
+                      :cost (with-openai-long-context-pricing
+                              (get openai-gpt-56-standard-costs "gpt-5.6-luna"))
+                      :context-window openai-long-context-input-threshold
+                      :max-tokens 128000)
+           (array-map :id "gpt-5-chat-latest" :name "GPT-5 Chat Latest"
+                      :provider :openai :api :openai-responses
+                      :base-url openai-base-url
+                      :reasoning false :input [:text :image]
+                      :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0}
+                      :context-window 128000 :max-tokens 16384)]))
 
 ;; ─── deepseek-v4 compat normalization (pi, after all providers) ────────────
 
@@ -268,11 +434,12 @@
   "pi applyModelsDevReasoningOptionMetadata: reasoning_options effort values
    → thinking-level-map for openai-completions models using the default
    (openai) thinking format and supporting reasoning_effort (kmet: no
-   explicit :thinking-format, :supports-reasoning-effort not false). pi
-   gates supportsDirectReasoningEffort to openai-completions (google/anthropic
-   models get their maps from the explicit metadata rules only)."
+   explicit :thinking-format, :supports-reasoning-effort not false), and
+   unconditionally for openai-responses models (pi supportsDirectReasoningEffort
+   — the responses API has native reasoning.effort). google/anthropic models
+   get their maps from the explicit metadata rules only."
   [mm m]
-  (if (and (= :openai-completions (:api mm))
+  (if (and (contains? #{:openai-completions :openai-responses} (:api mm))
            (:reasoning mm)
            (nil? (:thinking-format (:compat mm)))
            (not= false (:supports-reasoning-effort (:compat mm)))
@@ -281,6 +448,22 @@
       (assoc mm :thinking-level-map tlm)
       mm)
     mm))
+
+(defn- supports-openai-xhigh?
+  "pi supportsOpenAiXhigh: gpt-5.2+ models expose xhigh."
+  [id]
+  (or (str/includes? id "gpt-5.2")
+      (str/includes? id "gpt-5.3")
+      (str/includes? id "gpt-5.4")
+      (str/includes? id "gpt-5.5")
+      (str/includes? id "gpt-5.6")))
+
+(defn- supports-openai-max?
+  "pi supportsOpenAiMax: gpt-5.6 on the responses/completions family."
+  [mm]
+  (and (str/includes? (:id mm) "gpt-5.6")
+       (contains? #{:openai-responses :azure-openai-responses
+                    :openai-codex-responses :openai-completions} (:api mm))))
 
 (defn- apply-thinking-level-metadata
   "pi applyThinkingLevelMetadata rules for kmet's providers (deepseek-v4
@@ -309,6 +492,29 @@
                                "claude-sonnet-4.6" {:minimal "low" :max "max"}}
                               id)]
     (cond-> mm
+      ;; openai-responses gpt-5* cannot disable thinking (pi: off: null);
+      ;; the explicit none-reasoning set below overrides back to "none".
+      (and (contains? #{:openai-responses :azure-openai-responses} (:api mm))
+           (str/starts-with? id "gpt-5"))
+      (merge-thinking-level-map {:off nil})
+      (and (= :github-copilot provider) (str/starts-with? id "gpt-5"))
+      (merge-thinking-level-map {:minimal "low"})
+      (and (= :openai-responses (:api mm))
+           (= :openai provider)
+           (contains? openai-responses-none-reasoning-models id))
+      (merge-thinking-level-map {:off "none"})
+      (and (= :xai provider)
+           (= :openai-responses (:api mm))
+           (= id xai-responses-model-id))
+      (merge-thinking-level-map xai-responses-effort-level-map)
+      (supports-openai-xhigh? id)
+      (merge-thinking-level-map {:xhigh "xhigh"})
+      (supports-openai-max? mm)
+      (merge-thinking-level-map {:max "max"})
+      (and (= :openai provider) (= id "gpt-5.5"))
+      (merge-thinking-level-map {:minimal nil})
+      (str/ends-with? id "gpt-5.5-pro")
+      (merge-thinking-level-map {:off nil :minimal nil :low nil})
       deepseek-v4?
       (merge-thinking-level-map {:minimal nil :low nil :medium nil
                                  :high "high" :max "max"})
@@ -342,6 +548,116 @@
   [mm m]
   (-> mm (apply-effort-thinking-map m) apply-thinking-level-metadata))
 
+;; ─── Responses-family compat metadata (pi apply*CompatMetadata passes) ────
+
+(defn- merge-compat
+  [mm ks]
+  (update mm :compat merge ks))
+
+(defn- apply-strict-tool-compat
+  "pi applyStrictToolCompatMetadata: openai responses models accept strict
+   JSON-schema tool definitions."
+  [mm]
+  (if (and (= :openai (:provider mm)) (= :openai-responses (:api mm)))
+    (merge-compat mm {:supports-strict-mode true})
+    mm))
+
+(defn- apply-openai-grammar-tool-compat
+  "pi applyOpenAIGrammarToolCompatMetadata: responses endpoints verified to
+   pass OpenAI custom grammar tools through — gpt-5+ only (OpenAI rejects
+   type: 'custom' tools for pre-GPT-5 models)."
+  [mm]
+  (if (and (= :openai-responses (:api mm))
+           (contains? #{:openai :openai-codex :azure-openai-responses
+                        :github-copilot :opencode :cloudflare-ai-gateway}
+                      (:provider mm))
+           (let [match (re-matches #"gpt-(\d+).*" (:id mm))]
+             (and match (<= 5 (Long/parseLong (second match))))))
+    (merge-compat mm {:supports-openai-grammar-tools true})
+    mm))
+
+(defn- apply-openai-tool-search-metadata
+  "pi applyOpenAIToolSearchMetadata: gpt-5.4+ openai responses models can
+   load tools at a specific point in the input (tool search) and accept
+   additional_tools items."
+  [mm]
+  (if (and (= :openai (:provider mm)) (= :openai-responses (:api mm))
+           (contains? openai-tool-search-model-ids (:id mm)))
+    (merge-compat mm (cond-> {:supports-tool-search true}
+                       (contains? openai-additional-tools-model-ids (:id mm))
+                       (assoc :supports-additional-tools true)))
+    mm))
+
+(defn- apply-openai-explicit-prompt-cache-metadata
+  "pi applyOpenAIExplicitPromptCacheMetadata: OpenAI charges prompt-cache
+   writes starting with the GPT-5.6 family, and exactly those models accept
+   prompt_cache_options (older models reject the parameter)."
+  [mm]
+  (if (and (= :openai (:provider mm)) (= :openai-responses (:api mm))
+           (pos? (or (get-in mm [:cost :cache-write]) 0)))
+    (merge-compat mm {:supports-explicit-prompt-cache-mode true})
+    mm))
+
+(defn- apply-compat-metadata
+  "The post-processing compat passes (pi order: strict tools, grammar tools,
+   tool search, explicit prompt cache)."
+  [mm]
+  (-> mm apply-strict-tool-compat
+      apply-openai-grammar-tool-compat
+      apply-openai-tool-search-metadata
+      apply-openai-explicit-prompt-cache-metadata))
+
+;; ─── Post-merge overrides (pi generateModels temporary overrides) ──────────
+
+(defn- normalize-openai
+  "Keep direct OpenAI requests in the short-context pricing tier by default
+   (users can opt into the larger context through model overrides, so the
+   long-context cost metadata stays on the capped models); apply the
+   long-context pricing tiers and the reduced GPT-5.6 standard costs."
+  [mm]
+  (let [id (:id mm)]
+    (cond-> mm
+      (and (= :openai (:provider mm))
+           (contains? openai-short-context-capped-model-ids id))
+      (assoc :context-window openai-long-context-input-threshold
+             :max-tokens 128000)
+
+      (and (= :openai (:provider mm))
+           (contains? openai-long-context-pricing-model-ids id))
+      (assoc :cost (with-openai-long-context-pricing
+                    (or (get openai-gpt-56-standard-costs id)
+                        (:cost mm))))
+
+      ;; models.dev reports gpt-5-pro output as 272000 (a duplicate of the
+      ;; input sub-limit); the actual max output is 128000.
+      (and (= :openai (:provider mm)) (= id "gpt-5-pro"))
+      (assoc :max-tokens 128000))))
+
+(defn- normalize-context-overrides
+  "pi generateModels override loop for kmet's providers: the opencode
+   variants' claude/gpt-5.4 limits, copilot's extended-context models, and
+   the opencode 1M-context claude pair."
+  [mm]
+  (let [id (:id mm)
+        prov (:provider mm)
+        variant? (contains? #{:opencode :opencode-go} prov)]
+    (cond-> mm
+      (and (= :github-copilot prov)
+           (contains? github-copilot-extended-context-models id))
+      (assoc :context-window 1000000)
+
+      (and variant? (contains? #{"claude-opus-4-6" "claude-sonnet-4-6"
+                                 "claude-opus-4.6" "claude-sonnet-4.6"} id))
+      (assoc :context-window 1000000)
+
+      ;; OpenCode variants list Claude Sonnet 4/4.5 with 1M context, actual
+      ;; limit is 200K.
+      (and variant? (contains? #{"claude-sonnet-4-5" "claude-sonnet-4"} id))
+      (assoc :context-window 200000)
+
+      (and variant? (= id "gpt-5.4"))
+      (assoc :context-window 272000 :max-tokens 128000))))
+
 ;; ─── Generation ────────────────────────────────────────────────────────────
 
 (defn- fetch-models-dev
@@ -367,13 +683,27 @@
              [api (models-by-id ms)])))
 
 (defn- generate-models-data
-  "Build {provider-id -> [model-map ...]} from a models.dev payload."
+  "Build {provider-id -> [model-map ...]} from a models.dev payload (pi
+   generateModels order: all model sources, context/cost overrides, missing
+   gpt models, deepseek-v4 compat normalization, then the metadata passes)."
   [data]
   (let [all (->> (concat (process-opencode data)
                          (process-copilot data)
+                         (process-xai data)
+                         (process-openai data)
                          (map #(apply-thinking-maps % nil) deepseek-v4-models))
                  (remove nil?))
-        grouped (group-by :provider (normalize-deepseek-v4 all))]
+        ;; Hardcoded fallbacks still get the thinking metadata rules (pi runs
+        ;; applyThinkingLevelMetadata over allModels — the missing models
+        ;; carry no models.dev reasoning_options, so no effort map).
+        with-missing (concat all (map #(apply-thinking-maps % nil)
+                                      (missing-openai-models (set (map :id all)))))
+        normalized (map #(-> % normalize-openai normalize-context-overrides)
+                        with-missing)
+        grouped (group-by :provider
+                          (->> normalized
+                               (map apply-compat-metadata)
+                               (normalize-deepseek-v4)))]
     (into (array-map)
           (for [[pid _] providers]
             [pid (get grouped pid [])]))))
@@ -411,8 +741,19 @@
         (when-not (and (map? (:cost mm))
                        (every? (fn [k] (let [v (get-in mm [:cost k])]
                                          (and (number? v) (not (neg? v)))))
-                               [:input :output :cache-read :cache-write]))
-          (fail! label "has invalid cost (4 non-negative numeric fields)"))))
+                               [:input :output :cache-read :cache-write])
+                       (let [tiers (get-in mm [:cost :tiers])]
+                         (or (nil? tiers)
+                             (and (vector? tiers)
+                                  (every? (fn [tier]
+                                            (and (map? tier)
+                                                 (number? (get tier :input-tokens-above))
+                                                 (pos? (get tier :input-tokens-above))
+                                                 (every? (fn [k] (let [v (get tier k)]
+                                                                   (and (number? v) (not (neg? v)))))
+                                                         [:input :output :cache-read :cache-write])))
+                                          tiers)))))
+          (fail! label "has invalid cost (4 non-negative numeric fields + optional context tiers)"))))
     (doseq [[api models] groups]
       (doseq [dup (->> (vals (group-by key models))
                        (filter #(< 1 (count %))))]
@@ -450,11 +791,15 @@
         [:schema-version :generated-at
          :id :name :env-vars :default-model
          :provider :api :base-url :reasoning :thinking-level-map :input :cost
+         :tiers :input-tokens-above
          :context-window :max-tokens :headers :compat
          :output :cache-read :cache-write
          :supports-store :supports-developer-role :supports-reasoning-effort
          :requires-reasoning-content-on-assistant-messages :thinking-format
-         :max-tokens-field
+         :max-tokens-field :session-affinity-format
+         :supports-long-cache-retention :supports-strict-mode
+         :supports-openai-grammar-tools :supports-tool-search
+         :supports-additional-tools :supports-explicit-prompt-cache-mode
          :structure-hash :files]))
 
 (defn- key-rank

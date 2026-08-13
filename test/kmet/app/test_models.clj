@@ -98,21 +98,30 @@
 (t/deftest test-load-catalogs
   (let [providers (m/load-catalogs!)]
     (t/is (map? providers))
-    (t/is (= #{:opencode-go :opencode :deepseek :github-copilot} (set (keys providers))))
+    (t/is (= #{:opencode-go :opencode :deepseek :github-copilot :openai :xai}
+             (set (keys providers))))
     (t/testing "provider records carry catalog metadata"
       (let [og (m/get-provider :opencode-go)]
         (t/is (= "OpenCode Go" (:name og)))
         (t/is (= ["OPENCODE_API_KEY"] (:env-vars og)))
         (t/is (= "deepseek-v4-flash" (:default-model og)))
-        (t/is (= #{:openai-completions :anthropic-messages}
+        (t/is (= #{:openai-completions :anthropic-messages :openai-responses}
                  (:api-types og))))
-      (t/is (= #{:openai-completions :anthropic-messages :google-generative-ai}
+      (t/is (= #{:openai-completions :anthropic-messages :google-generative-ai
+                 :openai-responses}
                (:api-types (m/get-provider :opencode))))
       (t/is (= #{:openai-completions} (:api-types (m/get-provider :deepseek))))
-      (t/is (= #{:openai-completions :anthropic-messages}
+      (t/is (= #{:openai-completions :anthropic-messages :openai-responses}
                (:api-types (m/get-provider :github-copilot))))
+      (t/is (= #{:openai-responses} (:api-types (m/get-provider :openai))))
+      (t/is (= #{:openai-responses :openai-completions}
+               (:api-types (m/get-provider :xai))))
       (t/is (= ["DEEPSEEK_API_KEY"] (:env-vars (m/get-provider :deepseek))))
-      (t/is (= ["COPILOT_GITHUB_TOKEN"] (:env-vars (m/get-provider :github-copilot)))))
+      (t/is (= ["COPILOT_GITHUB_TOKEN"] (:env-vars (m/get-provider :github-copilot))))
+      (t/is (= ["OPENAI_API_KEY"] (:env-vars (m/get-provider :openai))))
+      (t/is (= ["XAI_API_KEY"] (:env-vars (m/get-provider :xai))))
+      (t/is (= "gpt-5.5" (:default-model (m/get-provider :openai))))
+      (t/is (= "grok-4.5" (:default-model (m/get-provider :xai)))))
     (t/testing "default provider/model resolves against the opencode-go catalog"
       (t/is (= "deepseek-v4-flash" (:id (m/default-model-for :opencode-go)))))))
 
@@ -129,7 +138,8 @@
       (t/is (string? (:id mod)) (str "id is a string: " (:id mod)))
       (t/is (string? (:name mod)))
       (t/is (keyword? (:provider mod)))
-      (t/is (contains? #{:openai-completions :anthropic-messages :google-generative-ai}
+      (t/is (contains? #{:openai-completions :openai-responses :anthropic-messages
+                         :google-generative-ai}
                        (:api mod)))
       (t/is (string? (:base-url mod)))
       (t/is (boolean? (:reasoning mod)))
@@ -212,7 +222,7 @@
     (t/is (= "deepseek-v4-flash" (m/resolve-config-model {:provider :opencode-go})))
     (t/is (= "deepseek-v4-pro" (m/resolve-config-model {:provider :deepseek}))))
   (t/testing "unknown provider → nil"
-    (t/is (nil? (m/resolve-config-model {:provider :openai})))))
+    (t/is (nil? (m/resolve-config-model {:provider :nosuch-provider})))))
 
 ;; ─── Cost (pi: models.ts calculateCost) ────────────────────────────────────
 
@@ -238,7 +248,38 @@
                                 :reasoning false :input [:text] :cost {}
                                 :context-window 1 :max-tokens 1})]
         (t/is (= 0.0 (:total (m/calculate-cost bare {:input 100 :output 100
-                                                     :cache-read 0 :cache-write 0}))))))))
+                                                     :cache-read 0 :cache-write 0}))))))
+    (t/testing "cost tiers: the highest threshold the total input exceeds wins"
+      (let [tiered (assoc model :cost {:input 2.0 :output 8.0 :cache-read 0.1 :cache-write 0.0
+                                       :tiers [{:input-tokens-above 200000 :input 4.0 :output 12.0
+                                                :cache-read 0.2 :cache-write 0.0}
+                                               {:input-tokens-above 272000 :input 10.0 :output 24.0
+                                                :cache-read 0.5 :cache-write 0.0}]})]
+        (t/is (= 0.002 (:input (m/calculate-cost tiered {:input 1000 :output 500
+                                                         :cache-read 200 :cache-write 0})))
+              "below every threshold → base rates")
+        (t/is (= 0.8 (:input (m/calculate-cost tiered {:input 200000 :output 500
+                                                       :cache-read 100 :cache-write 0})))
+              "total input (input + cache) crosses the 200K tier")
+        (t/is (= 0.006 (:output (m/calculate-cost tiered {:input 200000 :output 500
+                                                          :cache-read 100 :cache-write 0})))
+              "tier rates replace the base rates wholesale")
+        (t/is (= 2.72 (:input (m/calculate-cost tiered {:input 272000 :output 500
+                                                        :cache-read 100 :cache-write 100})))
+              "crosses 272K → the highest matching tier")
+        (t/is (= 0.00005 (:cache-read (m/calculate-cost tiered {:input 272000 :output 500
+                                                                :cache-read 100 :cache-write 100}))))
+        (t/is (= 0.0 (:cache-write (m/calculate-cost tiered {:input 272000 :output 500
+                                                             :cache-read 100 :cache-write 100})))
+              "the 272K tier's cache-write rate is 0"))
+      (t/testing "a threshold met exactly (not exceeded) does not trigger the tier"
+        (let [tiered (assoc model :cost {:input 1.0 :output 1.0 :cache-read 0 :cache-write 0
+                                         :tiers [{:input-tokens-above 100 :input 9.0 :output 9.0
+                                                  :cache-read 0 :cache-write 0}]})]
+          (t/is (= 0.0001 (:input (m/calculate-cost tiered {:input 100 :output 0
+                                                            :cache-read 0 :cache-write 0}))))
+          (t/is (= 0.000909 (:input (m/calculate-cost tiered {:input 101 :output 0
+                                                              :cache-read 0 :cache-write 0})))))))))
 
 ;; ─── models.edn composition (pi: ModelRuntime.rebuildProviders) ────────────
 
@@ -308,7 +349,7 @@
         (m/load-models-config!))
       (t/testing "parse failure → error surfaced, built-ins kept"
         (t/is (some? (m/get-model-config-error)))
-        (t/is (= 4 (count (m/get-providers)))))
+        (t/is (= 6 (count (m/get-providers)))))
       (t/testing "composition failure falls back to the builtin provider"
         (spit path "{:providers {:broken {:models [{:id \"x\"}]}}}\n")
         (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
@@ -344,7 +385,7 @@
           (m/load-models-config!))
         (t/is (nil? (m/get-provider :temp-provider)) "removed provider disappears on reload")
         (t/is (= 888 (:context-window (m/get-model :deepseek "deepseek-v4-pro"))) "override replaces the old value")
-        (t/is (= 4 (count (m/get-providers))) "registry back to builtin count"))
+        (t/is (= 6 (count (m/get-providers))) "registry back to builtin count"))
       (finally
         (fs/delete-tree tmp)
         (m/load-catalogs!)))))
@@ -463,7 +504,7 @@
        (m/map->Provider {:id :ext-b :name "B" :api-types #{:openai-completions}
                          :models [(ext-model "b1")] :env-vars [] :default-model nil}))
       (t/is (= [:ext-a :ext-b] (m/get-registered-provider-ids)))
-      (t/is (= 6 (count (m/get-providers))) "builtins + 2 extension providers"))
+      (t/is (= 8 (count (m/get-providers))) "builtins + 2 extension providers"))
     (finally
       (m/clear-extension-providers!)
       (m/load-catalogs!))))

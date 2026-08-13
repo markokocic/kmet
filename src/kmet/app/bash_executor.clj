@@ -249,16 +249,22 @@
                             ;; open) — closing early truncates the tail. Java
                             ;; process-pipe reads can't be unblocked (close and
                             ;; interrupt are no-ops on a blocked
-                            ;; FileInputStream.read), so the join is a bounded
+                            ;; FileInputStream.read), so the drain is a bounded
                             ;; settle: readers that already EOF'd join
                             ;; instantly, while a reader blocked on a pipe held
                             ;; open by a detached descendant is abandoned after
                             ;; the grace period and the stream is closed to
                             ;; release it (it terminates on its own when the
-                            ;; descendant exits).
-                            (doseq [f [out-future err-future]]
-                              (when f
-                                (try (deref f 2000 nil) (catch Exception _ nil))))
+                            ;; descendant exits). Both readers share ONE grace
+                            ;; deadline — draining them sequentially would
+                            ;; double (or worse) the bounded return time for
+                            ;; commands with a detached descendant holding both
+                            ;; pipes.
+                            (let [deadline (+ (System/currentTimeMillis) 2000)]
+                              (doseq [f [out-future err-future]]
+                                (when f
+                                  (try (deref f (max 0 (- deadline (System/currentTimeMillis))) nil)
+                                       (catch Exception _ nil)))))
                             (doseq [stream [(:out p) (:err p)]]
                               (when stream
                                 (try (.close stream) (catch Exception _ nil))))

@@ -25,7 +25,8 @@ with the agent having access to filesystem tools (read, write, edit, bash, grep,
 
 - [Babashka](https://babashka.org/) ≥ 1.12.215 (bundles JLine 4.3.1)
 - API keys: `OPENCODE_API_KEY` (opencode-go/opencode), `DEEPSEEK_API_KEY`,
-  `COPILOT_GITHUB_TOKEN` (or `/login` inside kmet to store `auth.edn`
+  `OPENAI_API_KEY` (openai), `XAI_API_KEY` (xai), `COPILOT_GITHUB_TOKEN`
+  (or `/login` inside kmet to store `auth.edn`
   credentials; `/logout` removes them). GitHub Copilot also supports an
   OAuth device-code login (`/login github-copilot` → "Sign in with an
   account") for subscription plans.
@@ -53,7 +54,7 @@ bb run --print "list files in current directory"
   -c, --continue        Continue most recent session
   -r, --resume          Browse sessions
   --model <id>          Model to use (pattern: provider/model[:thinking])
-  --provider <name>     Provider (opencode-go, opencode, deepseek, github-copilot)
+  --provider <name>     Provider (opencode-go, opencode, deepseek, github-copilot, openai, xai)
   --models <patterns>   Comma-separated model patterns for Ctrl+P cycling
   --list-models [search] List available models (with optional fuzzy search)
   -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)
@@ -137,8 +138,9 @@ Example `~/.kmet/agent/settings.edn`:
 ```
 
 `kmet` reads its provider catalog from `src/kmet/app/model_data/*.edn`
-(opencode-go, opencode, deepseek, github-copilot). Models, base URLs and
-defaults are registry data — see `models.md` for the subsystem plan.
+(opencode-go, opencode, deepseek, github-copilot, openai, xai). Models,
+base URLs and defaults are registry data — see `models.md` for the
+subsystem plan.
 
 The system prompt (pi-compatible) is built from: the default (or `:system-prompt`)
 base, the active tools with one-line snippets, guidelines, `:append-system-prompt`,

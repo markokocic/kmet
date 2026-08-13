@@ -22,12 +22,13 @@
 (defrecord Model [id            ;; string, e.g. "deepseek-v4-flash"
                   name          ;; string
                   provider      ;; keyword, e.g. :deepseek
-                  api           ;; :openai-completions | :anthropic-messages | :google-generative-ai
+                  api           ;; :openai-completions | :anthropic-messages | :google-generative-ai | :openai-responses
                   base-url      ;; string API base, e.g. "https://api.deepseek.com"
                   reasoning     ;; boolean
                   thinking-level-map ;; {level -> string|nil}, pi ThinkingLevelMap; optional
                   input         ;; [:text] | [:text :image]
-                  cost          ;; {:input $/M :output $/M :cache-read $/M :cache-write $/M}
+                  cost          ;; {:input $/M :output $/M :cache-read $/M :cache-write $/M
+                                ;;  :tiers [{:input-tokens-above N + 4 rates}] (pi ModelCost.tiers)}
                   context-window
                   max-tokens
                   sampling-params ;; optional map merged verbatim into openai-completions request bodies
@@ -49,7 +50,7 @@
                      oauth       ;; OAuthAuth record (Phase 10; github-copilot)
                      ])
 
-;; ─── Cost (pi: models.ts calculateCost, minus tiers/cacheWrite1h) ──────────
+;; ─── Cost (pi: models.ts calculateCost, minus cacheWrite1h) ─────────────────
 
 (defn calculate-cost
   "USD cost of a normalized usage map ({:input :output :cache-read
@@ -59,12 +60,25 @@
    {:input :output :cache-read :cache-write :total}. Models with zero rates
    yield zero cost. Called at response time (llm) so each message is priced
    with the model that produced it, keeping totals correct across model
-   switches."
+   switches.
+
+   Cost tiers (pi ModelCost.tiers): a tier supplies a complete alternate
+   rate set applied to the whole request when total input usage
+   (input + cacheRead + cacheWrite) exceeds :input-tokens-above; the
+   highest matching threshold wins (openai gpt-5.x long-context pricing)."
   [model usage]
   (let [{tokens-in :input tokens-out :output
          tokens-cr :cache-read tokens-cw :cache-write} usage
+        total-in (+ (long (or tokens-in 0))
+                    (long (or tokens-cr 0))
+                    (long (or tokens-cw 0)))
+        rates (or (->> (:tiers (:cost model))
+                       (filter #(< (:input-tokens-above %) total-in))
+                       (sort-by :input-tokens-above)
+                       last)
+                  (:cost model))
         {rate-in :input rate-out :output
-         rate-cr :cache-read rate-cw :cache-write} (:cost model)
+         rate-cr :cache-read rate-cw :cache-write} rates
         f (fn [tokens rate]
             (/ (* (double (long (or tokens 0))) (double (or rate 0))) 1000000.0))
         cost-in (f tokens-in rate-in)

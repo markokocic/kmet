@@ -1576,17 +1576,24 @@
 
 (t/deftest ^:slow test-loop-parallel-tool-execution
   (let [events (atom [])
-        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))
+        ;; Wall-clock concurrency bounds are load-sensitive (a loaded host
+        ;; stretches two 400ms sleeps past any fixed threshold) — assert the
+        ;; actual property instead: the two tool executions overlap.
+        intervals (atom [])]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-two-tool-calls-then-text (atom 0))
                   tools/execute-tool
                   (fn [_ _ _]
-                    (Thread/sleep 400)
-                    {:content "ok" :is-error false})]
-      (let [start (System/currentTimeMillis)]
-        @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])})
-        (t/is (< (- (System/currentTimeMillis) start) 700)
-              "two 400ms tools run concurrently in well under 700ms")))
+                    (let [s (System/currentTimeMillis)]
+                      (Thread/sleep 400)
+                      (swap! intervals conj [s (System/currentTimeMillis)])
+                      {:content "ok" :is-error false}))]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (t/is (= 2 (count @intervals)))
+    (t/is (let [[[s1 e1] [s2 e2]] @intervals]
+            (< (max s1 s2) (min e1 e2)))
+          "the two 400ms tools overlap — executed concurrently, not sequentially")
     (t/is (= 2 (count (filter #(= :tool-execution-start (:type %)) @events))))
     (t/is (= 2 (count (filter #(= :tool-execution-end (:type %)) @events))))
     (let [te (first (filter #(= :turn-end (:type %)) @events))]
@@ -1661,7 +1668,9 @@
                                 (when-let [on-done (:on-done opts)]
                                   (on-done :stop))))
                           ;; summarization call (no tools)
-                          (do (when-let [on-text (:on-text opts)]
+                          (do (t/is (= :none (:cache-retention opts))
+                                    "compaction summaries disable prompt caching (pi)")
+                              (when-let [on-text (:on-text opts)]
                                 (on-text "summary of the old conversation"))
                               (when-let [on-done (:on-done opts)]
                                 (on-done :stop))))

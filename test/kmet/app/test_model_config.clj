@@ -127,6 +127,32 @@
   (t/testing "full path-style messages"
     (t/is (= ["providers.my.models[0].cost: expected map"]
              (mc/validate-config {:providers {:my {:models [{:id "m" :cost 5}]}}})))
+    (t/is (= ["providers.my.models[0].cost.tiers: expected array"]
+             (mc/validate-config {:providers {:my {:models [{:id "m" :cost {:input 1 :output 1
+                                                                            :cache-read 0 :cache-write 0
+                                                                            :tiers 5}}]}}})))
+    (t/is (= ["providers.my.models[0].cost.tiers[0]: expected map"]
+             (mc/validate-config {:providers {:my {:models [{:id "m" :cost {:input 1 :output 1
+                                                                            :cache-read 0 :cache-write 0
+                                                                            :tiers [5]}}]}}})))
+    (t/is (= ["providers.my.models[0].cost.tiers[0].input-tokens-above: expected number"]
+             (mc/validate-config {:providers {:my {:models [{:id "m" :cost {:input 1 :output 1
+                                                                            :cache-read 0 :cache-write 0
+                                                                            :tiers [{:input-tokens-above "big"
+                                                                                     :input 2 :output 2
+                                                                                     :cache-read 0 :cache-write 0}]}}]}}})))
+    (t/is (= ["providers.my.models[0].cost.tiers[0].output: expected number"]
+             (mc/validate-config {:providers {:my {:models [{:id "m" :cost {:input 1 :output 1
+                                                                            :cache-read 0 :cache-write 0
+                                                                            :tiers [{:input-tokens-above 100
+                                                                                     :input 2 :output "x"
+                                                                                     :cache-read 0 :cache-write 0}]}}]}}})))
+    (t/testing "a valid tier array validates clean"
+      (t/is (= [] (mc/validate-config {:providers {:my {:models [{:id "m" :cost {:input 1 :output 1
+                                                                                 :cache-read 0 :cache-write 0
+                                                                                 :tiers [{:input-tokens-above 272000
+                                                                                          :input 2 :output 1.5
+                                                                                          :cache-read 0 :cache-write 0}]}}]}}}))))
     (t/is (= ["providers.my.models[0].context-window: expected number"]
              (mc/validate-config {:providers {:my {:models [{:id "m" :context-window "big"}]}}})))
     (t/is (= ["providers.my.model-overrides.deepseek-v4-flash.cost.input: expected number"]

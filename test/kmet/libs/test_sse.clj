@@ -66,6 +66,146 @@
                  "{\"id\":\"a\",\"index\":0,\"function\":{\"name\":\"read\"}},"
                  "{\"id\":\"b\",\"index\":1,\"function\":{\"name\":\"bash\"}}]}}]}")))))
 
+;; ─── OpenAI Responses event parsing (pi processResponsesStream) ────────────
+
+(declare make-pipe)
+
+(defn- responses-state [] (atom {:event-name nil :buf "" :slots {} :saw-terminal? false}))
+
+(t/deftest test-parse-responses-event-text-and-thinking
+  (t/is (= [{:type :text :content "hel"}]
+           (sse/parse-responses-event
+            "response.output_text.delta"
+            "{\"output_index\":0,\"delta\":\"hel\"}"
+            (responses-state))))
+  (t/is (= [{:type :thinking :content "let me think"}]
+           (sse/parse-responses-event
+            "response.reasoning_text.delta"
+            "{\"output_index\":0,\"delta\":\"let me think\"}"
+            (responses-state))))
+  (t/is (= [{:type :thinking :content "summary"}]
+           (sse/parse-responses-event
+            "response.reasoning_summary_text.delta"
+            "{\"output_index\":0,\"delta\":\"summary\"}"
+            (responses-state))))
+  ;; refusal deltas stream as text (pi appends them to the text block)
+  (t/is (= [{:type :text :content "I cannot"}]
+           (sse/parse-responses-event
+            "response.refusal.delta"
+            "{\"output_index\":0,\"delta\":\"I cannot\"}"
+            (responses-state)))))
+
+(t/deftest test-parse-responses-event-tool-call
+  (let [st (responses-state)
+        start (sse/parse-responses-event
+               "response.output_item.added"
+               "{\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_123\",\"call_id\":\"call_abc\",\"name\":\"read\",\"arguments\":\"\"}}"
+               st)]
+    (t/is (= [{:type :tool-call :id "call_abc|fc_123" :name "read"
+               :arguments "" :index 0}]
+             start)
+          "function_call items create a :tool-call with the pi id format")
+    (t/is (= [{:type :tool-call-args :arguments "{\"path\":\"" :index 0}]
+             (sse/parse-responses-event
+              "response.function_call_arguments.delta"
+              "{\"output_index\":0,\"delta\":\"{\\\"path\\\":\\\"\"}"
+              st))
+          "argument deltas stream as :tool-call-args")
+    (t/is (= [{:type :tool-call-args :arguments "a.txt\"}" :index 0}]
+             (sse/parse-responses-event
+              "response.function_call_arguments.done"
+              "{\"output_index\":0,\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}"
+              st))
+          "the final arguments emit only the delta past the accumulated partial")
+    (t/is (= {:kind :tool-call :id "call_abc|fc_123" :name "read"
+              :partial-json "{\"path\":\"a.txt\"}"}
+             (get-in @st [:slots 0]))
+          "the slot accumulates the full partial JSON")))
+
+(t/deftest test-parse-responses-event-terminal
+  (t/testing "completed → usage + :done :stop"
+    (let [st (responses-state)
+          evts (sse/parse-responses-event
+                "response.completed"
+                (str "{\"response\":{\"id\":\"resp_1\",\"status\":\"completed\","
+                     "\"usage\":{\"input_tokens\":100,\"output_tokens\":50,\"total_tokens\":150,"
+                     "\"input_tokens_details\":{\"cached_tokens\":10,\"cache_write_tokens\":5},"
+                     "\"output_tokens_details\":{\"reasoning_tokens\":20}}}}")
+                st)]
+      (t/is (= [{:type :usage
+                 :usage {:input_tokens 100 :output_tokens 50 :total_tokens 150
+                         :input_tokens_details {:cached_tokens 10 :cache_write_tokens 5}
+                         :output_tokens_details {:reasoning_tokens 20}}}
+                {:type :done :stop-reason :stop}]
+               evts))
+      (t/is (:saw-terminal? @st))))
+  (t/testing "completed with a tool-call slot → :done :tool-use (pi remap)"
+    (let [st (responses-state)
+          _ (sse/parse-responses-event
+             "response.output_item.added"
+             "{\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"bash\",\"arguments\":\"\"}}"
+             st)
+          evts (sse/parse-responses-event
+                "response.completed"
+                "{\"response\":{\"status\":\"completed\"}}"
+                st)]
+      (t/is (= [{:type :done :stop-reason :tool-use}] evts))))
+  (t/testing "incomplete + max_output_tokens → :done :length"
+    (let [evts (sse/parse-responses-event
+                "response.incomplete"
+                "{\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}"
+                (responses-state))]
+      (t/is (= [{:type :done :stop-reason :length}] evts))))
+  (t/testing "incomplete + other reason → error (pi stopReason 'error')"
+    (let [evts (sse/parse-responses-event
+                "response.incomplete"
+                "{\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"content_filter\"}}}"
+                (responses-state))]
+      (t/is (= [{:type :error :message "Response incomplete: content_filter"}] evts))))
+  (t/testing "failed → error with the provider code+message"
+    (let [evts (sse/parse-responses-event
+                "response.failed"
+                "{\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"boom\"}}}"
+                (responses-state))]
+      (t/is (= [{:type :error :message "server_error: boom"}] evts)))))
+
+(t/deftest test-responses-stream-completes
+  (let [[in out] (make-pipe)
+        events (atom [])
+        f (future
+            (sse/process-responses-stream {:body in}
+                                          (fn [e] (swap! events conj e))
+                                          nil)
+            :done)]
+    (.write out (.getBytes "event: response.output_text.delta\ndata: {\"output_index\":0,\"delta\":\"hi\"}\n\n"))
+    (.write out (.getBytes "event: response.completed\ndata: {\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}\n\n"))
+    (.flush out)
+    ;; pipes don't unblock on close-while-reading — let the reader consume first
+    (Thread/sleep 50)
+    (.close out)
+    (t/is (= :done (deref f 3000 :timeout)))
+    (t/is (= [{:type :text :content "hi"}
+              {:type :usage :usage {:input_tokens 10 :output_tokens 5 :total_tokens 15}}
+              {:type :done :stop-reason :stop}]
+             @events))
+    (.close in)))
+
+(t/deftest test-responses-stream-premature-end
+  ;; no terminal event before EOF → error (pi: 'OpenAI Responses stream
+  ;; ended before a terminal response event'). signal is always an atom in
+  ;; production (the loop passes :signal), so pass one here — SCI derefs nil
+  ;; as an NPE.
+  (let [events (atom [])
+        body (java.io.ByteArrayInputStream.
+              (.getBytes "event: response.output_text.delta\ndata: {\"output_index\":0,\"delta\":\"hi\"}\n\n"))]
+    (sse/process-responses-stream {:body body}
+                                  (fn [e] (swap! events conj e))
+                                  (atom false))
+    (t/is (= [{:type :text :content "hi"}
+              {:type :error
+               :message "OpenAI Responses stream ended before a terminal response event"}]
+             @events))))
+
 ;; ─── Idle timeout (pi: httpIdleTimeoutMs / undici bodyTimeout) ────────────
 
 (defn- make-pipe
@@ -153,6 +293,30 @@
     (t/is (= :done (deref f 3000 :timeout)))
     (t/is (= :error (:type (first @events))))
     (t/is (str/includes? (:message (first @events)) "idle timeout"))
+    (.close in)))
+
+(t/deftest test-anthropic-stream-completes
+  ;; Regression: the event-name from an `event:` line must survive the
+  ;; buffering (the cond previously stored the data value, so every event
+  ;; parsed as :unknown and the stream produced no text).
+  (let [[in out] (make-pipe)
+        events (atom [])
+        f (future
+            (sse/process-anthropic-stream {:body in}
+                                          (fn [e] (swap! events conj e))
+                                          nil)
+            :done)]
+    (.write out (.getBytes (str "event: content_block_delta\n"
+                                "data: {\"type\":\"content_block_delta\",\"index\":0,"
+                                "\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n")))
+    (.write out (.getBytes "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+    (.flush out)
+    (Thread/sleep 50)
+    (.close out)
+    (t/is (= :done (deref f 3000 :timeout)))
+    (t/is (= [{:type :text :content "hi"}
+              {:type :done :stop-reason :end-turn}]
+             @events))
     (.close in)))
 
 (t/deftest test-openai-stream-read-error-surfaces-immediately

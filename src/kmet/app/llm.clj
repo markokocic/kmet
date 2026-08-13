@@ -27,6 +27,7 @@
   [api base model-id]
   (case api
     :openai-completions (str base "/chat/completions")
+    :openai-responses (str base "/responses")
     :anthropic-messages (str base "/v1/messages")
     :google-generative-ai (str base "/models/" model-id ":streamGenerateContent?alt=sse")))
 
@@ -565,6 +566,279 @@
         (catch Exception e
           (when on-error (on-error (transport-error-message e))))))))
 
+;; ─── OpenAI Responses request ─────────────────────────────────────────────
+
+(defn- normalize-id-part
+  "pi normalizeIdPart: sanitize a tool-call id to [a-zA-Z0-9_-], cap at 64
+   chars, strip trailing underscores; nil for a blank id (omitted from the
+   wire, like pi's `id: undefined`)."
+  [s]
+  (when (seq s)
+    (let [sanitized (str/replace s #"[^a-zA-Z0-9_-]" "_")]
+      (-> (if (> (count sanitized) 64) (subs sanitized 0 64) sanitized)
+          (str/replace #"_+$" "")))))
+
+(defn- responses-user-content
+  "User content blocks → responses input content (input_text / input_image
+   items; pi convertResponsesMessages)."
+  [content]
+  (if (some image-block? content)
+    (into []
+          (for [b content]
+            (if (image-block? b)
+              {:type "input_image" :detail "auto"
+               :image_url (str "data:" (:mime-type b) ";base64," (:data b))}
+              {:type "input_text" :text (or (:text b) "")})))
+    [{:type "input_text" :text (content-text content)}]))
+
+(defn- responses-tool-result-output
+  "pi convertToolResultOutput: the joined tool-result text, plus
+   input_image items when the model accepts images; otherwise the plain text
+   with pi's image/output placeholders."
+  [model m]
+  (let [text (or (-> m :content first :content) "")
+        images (:images m)]
+    (if (and (seq images) (some #{:image} (:input model)))
+      (into (if (seq text) [{:type "input_text" :text text}] [])
+            (for [i images]
+              {:type "input_image" :detail "auto"
+               :image_url (str "data:" (:mime-type i) ";base64," (:data i))}))
+      (cond
+        (seq text) text
+        (seq images) "(see attached image)"
+        :else "(no tool output)"))))
+
+(defn- responses-message-items
+  "One agent message → responses input items (possibly none). pi
+   convertResponsesMessages, simplified: no thinking-signature replay (kmet
+   sessions don't persist signatures — omitted reasoning is legal with
+   store: false) and no deferred/grammar tools (kmet always sends its tools
+   up front). Assistant text blocks become message items (stable fallback
+   ids), tool calls become function_call items whose call_id matches the
+   tool result's; cross-provider ids (no `|` separator) replay as call_id
+   only, like pi's different-model path (id omitted avoids the fc_/rs_
+   pairing validation)."
+  [model m msg-idx]
+  (case (name (:role m))
+    "bash"
+    (when-not (:exclude-from-context? m)
+      [{:role "user"
+        :content [{:type "input_text" :text (bash-execution-text m)}]}])
+
+    "tool"
+    [{:type "function_call_output"
+      :call_id (normalize-id-part (first (str/split (-> m :content first :tool_use_id) #"\|")))
+      :output (responses-tool-result-output model m)}]
+
+    "assistant"
+    (let [blocks (into []
+                       (concat
+                        (for [[i b] (map-indexed vector (:content m))
+                              :when (= :text (:type b))]
+                          {:type "message" :role "assistant"
+                           :content [{:type "output_text" :text (or (:text b) "")
+                                      :annotations []}]
+                           :status "completed"
+                           :id (str "msg_pi_" msg-idx (when (pos? i) (str "_" i)))})
+                        (for [tc (:tool-calls m)]
+                          (let [[call-id item-id] (str/split (str (:id tc)) #"\|")]
+                            {:type "function_call"
+                             :call_id (normalize-id-part call-id)
+                             :id (normalize-id-part item-id)
+                             :name (:name tc)
+                             :arguments (cheshire.core/generate-string (:arguments tc))}))))]
+      (when (seq blocks) blocks))
+
+    ;; custom messages (pi: convertToLlm custom→user)
+    "custom"
+    [{:role "user"
+      :content [{:type "input_text" :text (content-text (:content m))}]}]
+
+    [{:role "user" :content (responses-user-content (:content m))}]))
+
+(defn- responses-messages
+  "Map agent messages to OpenAI Responses input items (pi
+   convertResponsesMessages): the system prompt becomes the first developer
+   message (system when the model doesn't support the developer role),
+   followed by the converted messages."
+  [model messages]
+  (let [system (first (for [m messages :when (= :system (:role m))]
+                        (content-text (:content m))))
+        role (if (and (:reasoning model)
+                      (not= false (:supports-developer-role (:compat model))))
+               "developer" "system")]
+    (loop [msgs (remove #(= :system (:role %)) messages)
+           idx 0
+           acc []]
+      (if-let [m (first msgs)]
+        (recur (rest msgs) (inc idx) (into acc (responses-message-items model m idx)))
+        (into (if system [{:role role :content system}] []) acc)))))
+
+(defn- responses-tools
+  "pi convertResponsesTools: flat function tools with the JSON schema; the
+   strict flag is emitted when the provider accepts strict schemas (no
+   grammar/custom tools — kmet has no constrained sampling)."
+  [tools strict?]
+  (mapv (fn [tool]
+          (cond-> {:type "function"
+                   :name (:name tool)
+                   :description (:description tool)
+                   :parameters (:parameters tool)}
+            strict? (assoc :strict false)))
+        tools))
+
+(defn- copilot-vision-input?
+  "pi hasCopilotVisionInput: any user or tool-result message carries image
+   content (Copilot-Vision-Request header)."
+  [messages]
+  (boolean
+   (some (fn [m]
+           (case (name (:role m))
+             "user" (some image-block? (:content m))
+             "tool" (seq (:images m))
+             false))
+         messages)))
+
+(defn- copilot-dynamic-headers
+  "pi buildCopilotDynamicHeaders: per-request Copilot headers — X-Initiator
+   (user vs agent, from the last message role) and Openai-Intent, plus
+   Copilot-Vision-Request when any input has images."
+  [messages]
+  (let [last-role (some-> (peek (vec messages)) :role name)
+        ;; pi inferCopilotInitiator: no messages → "user"
+        initiator (if (= "user" last-role) "user" "agent")
+        headers (array-map "X-Initiator" initiator
+                           "Openai-Intent" "conversation-edits")]
+    (cond-> headers
+      (copilot-vision-input? messages) (assoc "Copilot-Vision-Request" "true"))))
+
+(defn- responses-affinity-headers
+  "pi createClient session-affinity headers from the session id (prompt
+   caching): openai format sends session_id + x-client-request-id,
+   openai-nosession (opencode zen) only x-client-request-id, openrouter
+   x-session-id. A nil session-id (or cache-retention :none) → none."
+  [model session-id]
+  (when session-id
+    (let [fmt (or (:session-affinity-format (:compat model))
+                  (if (or (= :openrouter (:provider model))
+                          (str/includes? (:base-url model) "openrouter.ai"))
+                    :openrouter
+                    :openai))]
+      (case fmt
+        :openrouter {"x-session-id" session-id}
+        :openai {"session_id" session-id "x-client-request-id" session-id}
+        ;; :openai-nosession — no session_id header (opencode zen)
+        {"x-client-request-id" session-id}))))
+
+(defn- clamp-prompt-cache-key
+  "pi clampOpenAIPromptCacheKey: session ids longer than 64 chars are
+   truncated (OpenAI's prompt_cache_key limit)."
+  [session-id]
+  (when session-id
+    (let [chars (count session-id)]
+      (if (<= chars 64) session-id (subs session-id 0 64)))))
+
+(defn- responses-payload
+  "Request body for an openai-responses request (pi buildParams):
+   model/input/stream/store, tools, thinking (reasoning: {effort, summary}
+   for a clamped level; reasoning: {effort: off-map-value} when thinking is
+   disabled but the model allows it — :xhigh/:max and gpt-5* off:null
+   models omit the param and think by default), include for the reasoning
+   content (effort requests + xai always), max_output_tokens (min 16),
+   prompt-cache params (key from the session id, a 24h retention when long
+   and supported, explicit mode when caching is off on a cache-enabled
+   model), then :sampling-params merged last so their keys win."
+  [model-record effort messages tools model-id cache-retention session-id]
+  (let [effort-reasoning (when (and (:reasoning model-record) effort)
+                           {:effort (effort-value model-record effort)
+                            :summary "auto"})
+        off-reasoning (when (and (:reasoning model-record) (nil? effort)
+                                 (not (off-explicitly-null? model-record)))
+                        {:effort (or (get-in model-record [:thinking-level-map :off]) "none")})
+        reasoning (or effort-reasoning off-reasoning)
+        retention (or cache-retention :short)
+        caching? (not= :none retention)
+        compat (:compat model-record)]
+    (cond-> {:model model-id
+             :input (responses-messages model-record messages)
+             :stream true
+             :store false}
+      (seq tools) (assoc :tools (responses-tools tools
+                                                 (:supports-strict-mode compat)))
+      (:max-tokens model-record) (assoc :max_output_tokens (max (:max-tokens model-record) 16))
+      reasoning (assoc :reasoning reasoning)
+      (or effort-reasoning
+          (and (= :xai (:provider model-record)) (:reasoning model-record)))
+      (assoc :include ["reasoning.encrypted_content"])
+      (and caching? session-id) (assoc :prompt_cache_key (clamp-prompt-cache-key session-id))
+      ;; pi getCompat: supportsLongCacheRetention defaults to true when absent
+      (and (= :long retention) (not= false (:supports-long-cache-retention compat)))
+      (assoc :prompt_cache_retention "24h")
+      (and (= :none retention) (:supports-explicit-prompt-cache-mode compat))
+      (assoc :prompt_cache_options {:mode "explicit"})
+      (seq (:sampling-params model-record)) (merge (:sampling-params model-record)))))
+
+(defn- responses-request-headers
+  "The full header map for a responses request (pi createClient + the
+   request-headers merge): the session-affinity headers (gated on caching
+   like pi's cacheSessionId — :none sends neither the key nor the headers)
+   + the per-request Copilot dynamic headers, then request-headers' standard
+   merge so the request's own headers win collisions."
+  [model-record provider-record api-key session-id retention messages]
+  (let [dynamic-headers (merge (when (not= :none retention)
+                                 (responses-affinity-headers model-record session-id))
+                               (when (= :github-copilot (:provider model-record))
+                                 (copilot-dynamic-headers messages)))]
+    (request-headers
+     (merge dynamic-headers
+            {"Authorization" (str "Bearer " api-key)
+             "Content-Type" "application/json"})
+     model-record provider-record api-key session-id)))
+
+(defn- responses-request
+  [{:keys [model-record provider-record effort api-key messages tools signal base-url
+           idle-timeout-ms session-id cache-retention
+           on-text on-thinking on-tool-call on-done on-error on-usage]
+    :as opts}]
+  (future
+    (let [model-id (or (:model opts) (:id model-record))
+          url (or base-url (endpoint-url :openai-responses (:base-url model-record) model-id))
+          retention (or cache-retention :short)
+          payload (responses-payload model-record effort messages tools model-id
+                                     retention session-id)
+          headers (responses-request-headers model-record provider-record api-key
+                                             session-id retention messages)]
+      (try
+        (let [response (proxy/post-stream url
+                                          {:headers headers
+                                           :body (json/generate-string payload)
+                                           :as :stream
+                                           :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
+                                          signal)]
+          (sse/process-responses-stream response
+                                        (fn [event]
+                                          (case (:type event)
+                                            :text (when on-text (on-text (:content event)))
+                                            :thinking (when on-thinking (on-thinking (:content event)))
+                                            :tool-call (when on-tool-call
+                                                         (on-tool-call {:id (:id event)
+                                                                        :name (:name event)
+                                                                        :arguments (:arguments event)
+                                                                        :index (:index event)}))
+                                            :tool-call-args (when on-tool-call
+                                                              (on-tool-call {:arguments (:arguments event)
+                                                                             :index (:index event)}))
+                                            :done (when on-done (on-done (:stop-reason event)))
+                                            :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
+                                            :error (when on-error (on-error (:message event)))
+                                            nil))
+                                        signal
+                                        idle-timeout-ms
+                                        (fn [] (proxy/abort-stream! response)))
+          (proxy/finish-curl! response signal on-error))
+        (catch Exception e
+          (when on-error (on-error (transport-error-message e))))))))
+
 ;; ─── Anthropic messages request ────────────────────────────────────────────
 
 (defn- anthropic-auth-headers
@@ -745,11 +1019,11 @@
 
    opts:
      :provider    — provider keyword (:opencode-go, :opencode, :deepseek,
-                    :github-copilot)
+                    :github-copilot, :openai, :xai)
      :model       — model id string, resolved against the provider's catalog
      :api-type    — wire api override (:openai-completions,
-                    :anthropic-messages, :google-generative-ai); wins over
-                    the resolved model's :api
+                    :openai-responses, :anthropic-messages,
+                    :google-generative-ai); wins over the resolved model's :api
      :base-url    — full endpoint URL override (e.g. local test servers);
                     wins over the model-derived URL
      :api-key     — API key (required — resolved by caller via cfg/get-api-key)
@@ -761,6 +1035,10 @@
      :idle-timeout-ms — per-byte idle timeout on the stream in ms (pi:
                      httpIdleTimeoutMs — undici bodyTimeout semantics); nil
                      or non-positive disables it
+     :cache-retention — :short (default) | :long | :none — prompt-cache
+                     params for openai-responses (pi CacheRetention; :none
+                     disables the cache key + affinity headers — compaction
+                     summaries pass it); ignored by the other apis
      :on-text     — (fn [text-delta])
      :on-tool-call — (fn [{:keys [id name arguments]}])
      :on-done     — (fn [stop-reason])
@@ -811,6 +1089,8 @@
             (case api
               :openai-completions (openai-request (assoc opts :model-record m :provider-record p
                                                          :effort effort :api-key api-key))
+              :openai-responses (responses-request (assoc opts :model-record m :provider-record p
+                                                          :effort effort :api-key api-key))
               :anthropic-messages (anthropic-request (assoc opts :model-record m :provider-record p
                                                             :effort effort :api-key api-key))
               :google-generative-ai (google-request (assoc opts :model-record m :provider-record p
