@@ -165,32 +165,43 @@
 
 (t/deftest test-catalog-edn-shape
   (m/load-catalogs!)
-  (let [models (m/get-models)]
+  (let [models (m/get-models)
+        api-set #{:openai-completions :openai-responses
+                  :openai-codex-responses :azure-openai-responses
+                  :anthropic-messages :google-generative-ai}
+        violations (into []
+                         (keep (fn [mod]
+                                 (let [bad (cond
+                                             (not (record? mod)) "not a Model record"
+                                             (not (every? #(contains? mod %)
+                                                          [:id :name :provider :api :base-url
+                                                           :reasoning :input :cost
+                                                           :context-window :max-tokens]))
+                                             "missing required field"
+                                             (not (string? (:id mod))) "id not a string"
+                                             (not (string? (:name mod))) "name not a string"
+                                             (not (keyword? (:provider mod))) "provider not a keyword"
+                                             (not (contains? api-set (:api mod))) "unknown api"
+                                             (not (string? (:base-url mod))) "base-url not a string"
+                                             (not (boolean? (:reasoning mod))) "reasoning not a boolean"
+                                             (not (and (vector? (:input mod)) (seq (:input mod))))
+                                             "input not a non-empty vector"
+                                             (not (every? number?
+                                                          ((juxt :input :output :cache-read
+                                                                 :cache-write) (:cost mod))))
+                                             "cost lacks 4 numeric fields"
+                                             (not (pos? (:context-window mod))) "context-window not positive"
+                                             (not (pos? (:max-tokens mod))) "max-tokens not positive"
+                                             (not= (:id mod) (:id (m/get-model (:provider mod)
+                                                                               (:id mod))))
+                                             "not reachable via get-model"
+                                             :else nil)]
+                                   (when bad (str (:provider mod) "/" (:id mod) ": " bad)))))
+                         models)]
     (t/is (seq models))
-    (doseq [mod models]
-      (t/is (record? mod) "catalog entries become Model records")
-      (t/is (every? #(contains? mod %) [:id :name :provider :api :base-url
-                                        :reasoning :input :cost
-                                        :context-window :max-tokens])
-            "Model record carries every required field")
-      (t/is (string? (:id mod)) (str "id is a string: " (:id mod)))
-      (t/is (string? (:name mod)))
-      (t/is (keyword? (:provider mod)))
-      (t/is (contains? #{:openai-completions :openai-responses
-                         :openai-codex-responses :azure-openai-responses
-                         :anthropic-messages :google-generative-ai}
-                       (:api mod)))
-      (t/is (string? (:base-url mod)))
-      (t/is (boolean? (:reasoning mod)))
-      (t/is (vector? (:input mod)))
-      (t/is (seq (:input mod)))
-      (let [{:keys [input output cache-read cache-write]} (:cost mod)]
-        (t/is (every? number? [input output cache-read cache-write])
-              (str "cost has 4 numeric fields: " (:cost mod))))
-      (t/is (pos? (:context-window mod)))
-      (t/is (pos? (:max-tokens mod)))
-      (t/is (= (:id mod) (-> (m/get-model (:provider mod) (:id mod)) :id))
-            "registered model is reachable via get-model"))
+    (t/is (= [] violations)
+          (str "every catalog model is well-formed, first violations: "
+               (pr-str (take 5 violations))))
     (t/testing "copilot models carry static headers (COPILOT_STATIC_HEADERS)"
       (let [copilot (m/get-model :github-copilot "claude-sonnet-4.5")]
         (t/is (= "GitHubCopilotChat/0.35.0" (get-in copilot [:headers "User-Agent"]))))

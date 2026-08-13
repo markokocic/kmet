@@ -769,45 +769,45 @@
            on-text on-thinking on-tool-call on-done on-error
            on-usage] :as opts}]
   (future
-    (let [model-id (or (:model opts) (:id model-record))
-          url (or base-url (endpoint-url :openai-completions (:base-url model-record) model-id))
-          payload (openai-payload model-record effort messages tools model-id)]
-      (try
-        (let [response (proxy/post-stream url
-                                          {:headers (request-headers
-                                                     {"Authorization" (str "Bearer " api-key)
-                                                      "Content-Type" "application/json"}
-                                                     model-record provider-record api-key
-                                                     session-id)
-                                           :body (json/generate-string payload)
-                                           :as :stream
-                                           ;; Total request deadline = the idle timeout (pi: SDK
-                                           ;; timeoutMs ?? httpIdleTimeoutMs); nil when disabled
-                                           :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
-                                          signal)]
-          (sse/process-openai-stream response
-                                     (fn [event]
-                                       (case (:type event)
-                                         :text (when on-text (on-text (:content event)))
-                                         :thinking (when on-thinking (on-thinking (:content event)))
-                                         :tool-call (when on-tool-call
-                                                      (on-tool-call {:id (:id event)
-                                                                     :name (:name event)
-                                                                     :arguments (:arguments event)
-                                                                     :index (:index event)}))
-                                         :tool-call-args (when on-tool-call
-                                                           (on-tool-call {:arguments (:arguments event)
-                                                                          :index (:index event)}))
-                                         :done (when on-done (on-done (:stop-reason event)))
-                                         :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
-                                         :error (when on-error (on-error (:message event)))
-                                         nil))
-                                     signal
-                                     idle-timeout-ms
-                                     (fn [] (proxy/abort-stream! response)))
-          (proxy/finish-curl! response signal on-error))
-        (catch Exception e
-          (when on-error (on-error (transport-error-message e))))))))
+    (try
+      (let [model-id (or (:model opts) (:id model-record))
+            url (or base-url (endpoint-url :openai-completions (:base-url model-record) model-id))
+            payload (openai-payload model-record effort messages tools model-id)
+            response (proxy/post-stream url
+                                        {:headers (request-headers
+                                                   {"Authorization" (str "Bearer " api-key)
+                                                    "Content-Type" "application/json"}
+                                                   model-record provider-record api-key
+                                                   session-id)
+                                         :body (json/generate-string payload)
+                                         :as :stream
+                                         ;; Total request deadline = the idle timeout (pi: SDK
+                                         ;; timeoutMs ?? httpIdleTimeoutMs); nil when disabled
+                                         :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
+                                        signal)]
+        (sse/process-openai-stream response
+                                   (fn [event]
+                                     (case (:type event)
+                                       :text (when on-text (on-text (:content event)))
+                                       :thinking (when on-thinking (on-thinking (:content event)))
+                                       :tool-call (when on-tool-call
+                                                    (on-tool-call {:id (:id event)
+                                                                   :name (:name event)
+                                                                   :arguments (:arguments event)
+                                                                   :index (:index event)}))
+                                       :tool-call-args (when on-tool-call
+                                                         (on-tool-call {:arguments (:arguments event)
+                                                                        :index (:index event)}))
+                                       :done (when on-done (on-done (:stop-reason event)))
+                                       :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
+                                       :error (when on-error (on-error (:message event)))
+                                       nil))
+                                   signal
+                                   idle-timeout-ms
+                                   (fn [] (proxy/abort-stream! response)))
+        (proxy/finish-curl! response signal on-error))
+      (catch Exception e
+        (when on-error (on-error (transport-error-message e)))))))
 
 ;; ─── OpenAI Responses request ─────────────────────────────────────────────
 
@@ -1052,28 +1052,30 @@
            idle-timeout-ms session-id cache-retention on-error]
     :as opts}]
   (future
-    (let [model-id (or (:model opts) (:id model-record))
-          url (or base-url (endpoint-url :openai-responses (:base-url model-record) model-id))
-          retention (or cache-retention :short)
-          payload (responses-payload model-record effort messages tools model-id
-                                     retention session-id)
-          headers (responses-request-headers model-record provider-record api-key
-                                             session-id retention messages)]
-      (try
-        (let [response (proxy/post-stream url
-                                          {:headers headers
-                                           :body (json/generate-string payload)
-                                           :as :stream
-                                           :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
-                                          signal)]
-          (sse/process-responses-stream response
-                                        (responses-events-handler opts model-record)
-                                        signal
-                                        idle-timeout-ms
-                                        (fn [] (proxy/abort-stream! response)))
-          (proxy/finish-curl! response signal on-error))
-        (catch Exception e
-          (when on-error (on-error (transport-error-message e))))))))
+    ;; the URL interpolation (cloudflare placeholders) can throw for a
+    ;; missing env var — report it via on-error, never hang the caller
+    (try
+      (let [model-id (or (:model opts) (:id model-record))
+            url (or base-url (endpoint-url :openai-responses (:base-url model-record) model-id))
+            retention (or cache-retention :short)
+            payload (responses-payload model-record effort messages tools model-id
+                                       retention session-id)
+            headers (responses-request-headers model-record provider-record api-key
+                                               session-id retention messages)
+            response (proxy/post-stream url
+                                        {:headers headers
+                                         :body (json/generate-string payload)
+                                         :as :stream
+                                         :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
+                                        signal)]
+        (sse/process-responses-stream response
+                                      (responses-events-handler opts model-record)
+                                      signal
+                                      idle-timeout-ms
+                                      (fn [] (proxy/abort-stream! response)))
+        (proxy/finish-curl! response signal on-error))
+      (catch Exception e
+        (when on-error (on-error (transport-error-message e)))))))
 
 ;; ─── OpenAI Codex responses request (pi: api/openai-codex-responses.ts,  ──
 ;;    SSE path only — no WebSocket/zstd transports in kmet; the stream

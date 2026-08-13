@@ -1679,3 +1679,16 @@
           (t/is (= 32768 (:max_tokens payload)))))
       (finally
         (.close ss)))))
+
+(t/deftest test-llm-cloudflare-missing-env-reports-error
+  (m/load-catalogs!)
+  (let [errors (atom [])]
+    ;; the interpolation runs inside the request future, so the env redef
+    ;; must stay active until the future completes
+    (with-redefs [llm/getenv (fn [_] nil)]
+      @(llm/send-message {:provider :cloudflare-workers-ai
+                          :model "@cf/moonshotai/kimi-k2.6"
+                          :api-key "k"
+                          :on-error (fn [e] (swap! errors conj e))}))
+    (t/is (= ["Cloudflare requires the env vars: CLOUDFLARE_ACCOUNT_ID"] @errors)
+          "a missing cloudflare account id reports via on-error (never hangs)")))
