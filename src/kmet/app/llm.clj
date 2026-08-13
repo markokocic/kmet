@@ -464,13 +464,23 @@
 
 (defn- openai-thinking-params
   "Thinking params for an openai-completions payload (pi buildParams thinking
-   section; kmet's formats: default/openai, deepseek, qwen). EFFORT is the
-   clamped level, nil when off."
+   section; kmet's formats: default/openai, deepseek, qwen, openrouter — the
+   openrouter format came forward from Deferred A.3 with the openrouter
+   provider). EFFORT is the clamped level, nil when off."
   [model effort]
   (let [reasoning? (:reasoning model)
         fmt (:thinking-format (:compat model))
         effort? (not= false (:supports-reasoning-effort (:compat model)))]
     (cond
+      (and reasoning? (= fmt :openrouter))
+      ;; OpenRouter normalizes reasoning across providers via a nested
+      ;; reasoning object (pi thinkingFormat "openrouter"); off →
+      ;; reasoning: {effort: "none"} unless the model pins :off to null.
+      (cond-> {}
+        effort (assoc :reasoning {:effort (effort-value model effort)})
+        (and (nil? effort) (not (off-explicitly-null? model)))
+        (assoc :reasoning {:effort (or (get-in model [:thinking-level-map :off]) "none")}))
+
       (and reasoning? (= fmt :deepseek))
       (cond-> {}
         effort (assoc :thinking {:type "enabled"})

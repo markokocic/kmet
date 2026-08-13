@@ -1,12 +1,13 @@
 ;; scripts/generate_models.clj — regenerate src/kmet/app/model_data/*.edn from
-;; models.dev (pi: packages/ai/scripts/generate-models.ts, ported to the 8
-;; providers kmet ships: opencode-go, opencode, deepseek, github-copilot,
-;; openai, xai, openai-codex, azure-openai-responses).
+;; models.dev + the live catalogs (pi: packages/ai/scripts/generate-models.ts,
+;; ported to kmet's 28 providers).
 ;;
-;; Wire APIs out of kmet's scope (bedrock, google-vertex, mistral, etc.)
-;; are skipped and logged. The generated EDN + manifest.edn are committed;
-;; the offline half (validate-committed!) also runs as
-;; test/kmet/app/test_model_data.clj so drift is caught without network.
+;; Wire APIs out of kmet's scope (bedrock, google-vertex, mistral, radius),
+;; the A.3 thinking-format providers (zai, together, baseten, ant-ling) and
+;; kimi-coding (adaptive thinking) are not generated. The generated EDN +
+;; manifest.edn are committed; the offline half (validate-committed!) also
+;; runs as test/kmet/app/test_model_data.clj so drift is caught without
+;; network.
 ;;
 ;; Run via: bb generate-models   (network)
 ;; Check via: bb check-model-data (offline)
@@ -47,7 +48,67 @@
                   :default-model "gpt-5.5"}
    :azure-openai-responses {:name "Azure OpenAI"
                             :env-vars ["AZURE_OPENAI_API_KEY"]
-                            :default-model "gpt-5.4"}))
+                            :default-model "gpt-5.4"}
+   :anthropic {:name "Anthropic"
+               :env-vars ["ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_OAUTH_TOKEN" "ANTHROPIC_API_KEY"]
+               :default-model "claude-opus-4-8"}
+   :google {:name "Google"
+            :env-vars ["GEMINI_API_KEY"]
+            :default-model "gemini-3.1-pro-preview"}
+   :groq {:name "Groq"
+          :env-vars ["GROQ_API_KEY"]
+          :default-model "openai/gpt-oss-120b"}
+   :cerebras {:name "Cerebras"
+              :env-vars ["CEREBRAS_API_KEY"]
+              :default-model "zai-glm-4.7"}
+   :huggingface {:name "Hugging Face"
+                 :env-vars ["HF_TOKEN"]
+                 :default-model "moonshotai/Kimi-K2.6"}
+   :moonshotai {:name "Moonshot AI"
+                :env-vars ["MOONSHOT_API_KEY"]
+                :default-model "kimi-k2.6"}
+   :moonshotai-cn {:name "Moonshot AI (CN)"
+                   :env-vars ["MOONSHOT_API_KEY"]
+                   :default-model "kimi-k2.6"}
+   :xiaomi {:name "Xiaomi MiMo"
+            :env-vars ["XIAOMI_API_KEY"]
+            :default-model "mimo-v2.5-pro"}
+   :xiaomi-token-plan-cn {:name "Xiaomi MiMo Token Plan (CN)"
+                          :env-vars ["XIAOMI_TOKEN_PLAN_CN_API_KEY"]
+                          :default-model "mimo-v2.5-pro"}
+   :xiaomi-token-plan-ams {:name "Xiaomi MiMo Token Plan (AMS)"
+                           :env-vars ["XIAOMI_TOKEN_PLAN_AMS_API_KEY"]
+                           :default-model "mimo-v2.5-pro"}
+   :xiaomi-token-plan-sgp {:name "Xiaomi MiMo Token Plan (SGP)"
+                           :env-vars ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"]
+                           :default-model "mimo-v2.5-pro"}
+   :qwen-token-plan {:name "Qwen Token Plan"
+                     :env-vars ["QWEN_TOKEN_PLAN_API_KEY"]
+                     :default-model "qwen3.7-max"}
+   :qwen-token-plan-cn {:name "Qwen Token Plan (CN)"
+                        :env-vars ["QWEN_TOKEN_PLAN_CN_API_KEY"]
+                        :default-model "qwen3.7-max"}
+   :qwen-token-plan-individual {:name "Qwen Token Plan (Individual)"
+                                :env-vars ["QWEN_TOKEN_PLAN_API_KEY"]
+                                :default-model "qwen3.8-max"}
+   :minimax {:name "MiniMax"
+             :env-vars ["MINIMAX_API_KEY"]
+             :default-model "MiniMax-M2.7"}
+   :minimax-cn {:name "MiniMax (CN)"
+                :env-vars ["MINIMAX_CN_API_KEY"]
+                :default-model "MiniMax-M2.7"}
+   :nvidia {:name "NVIDIA NIM"
+            :env-vars ["NVIDIA_API_KEY"]
+            :default-model "nvidia/nemotron-3-super-120b-a12b"}
+   :openrouter {:name "OpenRouter"
+                :env-vars ["OPENROUTER_API_KEY"]
+                :default-model "moonshotai/kimi-k2.6"}
+   :fireworks {:name "Fireworks AI"
+               :env-vars ["FIREWORKS_API_KEY"]
+               :default-model "accounts/fireworks/models/kimi-k2p6"}
+   :vercel-ai-gateway {:name "Vercel AI Gateway"
+                       :env-vars ["AI_GATEWAY_API_KEY"]
+                       :default-model "zai/glm-5.1"}))
 
 (def opencode-variants
   "pi opencodeVariants: models.dev key → kmet provider id + API base path."
@@ -204,8 +265,11 @@
 
 (defn- model-map
   "One Model in canonical EDN field order (pi Model shape, kmet key names).
-   OPT: :compat (ordered), :headers (copilot static headers)."
-  [provider api base-url m mid {:keys [compat headers context-default max-default]}]
+   OPT: :compat (ordered), :headers (static headers), :cost — a fallback
+   rate map used per-field when models.dev reports none (pi: m.cost?.x ||
+   fallback)."
+  [provider api base-url m mid {:keys [compat headers context-default max-default cost
+                                       thinking-level-map]}]
   (cond-> (array-map
            :id mid
            :name (or (get m "name") mid)
@@ -214,10 +278,16 @@
            :base-url base-url
            :reasoning (true? (get m "reasoning"))
            :input (input-modalities m)
-           :cost (cost-map m)
+           :cost (if cost
+                   (array-map :input (or (get-in m ["cost" "input"]) (:input cost))
+                              :output (or (get-in m ["cost" "output"]) (:output cost))
+                              :cache-read (or (get-in m ["cost" "cache_read"]) (:cache-read cost))
+                              :cache-write (or (get-in m ["cost" "cache_write"]) (:cache-write cost)))
+                   (cost-map m))
            :context-window (or (get-in m ["limit" "context"]) context-default 4096)
            :max-tokens (or (get-in m ["limit" "output"]) max-default 4096))
     (seq compat) (assoc :compat compat)
+    thinking-level-map (assoc :thinking-level-map thinking-level-map)
     headers (assoc :headers headers)))
 
 (declare apply-thinking-maps)
@@ -465,18 +535,432 @@
            :context-window (get azure-context-window-overrides (:id mm)
                                 (:context-window mm)))))
 
+;; ─── Batch 2: providers on the existing wire APIs (pi loadModelsDevData  ──
+;;     sections; A.3 thinking formats — zai/together/baseten/ant-ling — and
+;;     kimi-coding's adaptive thinking stay deferred) ───────────────────────
+
+(def ^:private anthropic-base-url "https://api.anthropic.com")
+(def ^:private google-base-url "https://generativelanguage.googleapis.com/v1beta")
+(def ^:private groq-base-url "https://api.groq.com/openai/v1")
+(def ^:private cerebras-base-url "https://api.cerebras.ai/v1")
+(def ^:private huggingface-base-url "https://router.huggingface.co/v1")
+(def ^:private nvidia-base-url "https://integrate.api.nvidia.com/v1")
+(def ^:private nvidia-headers (array-map "NVCF-POLL-SECONDS" "3600"))
+(def ^:private nvidia-openai-compat
+  (array-map :supports-store false :supports-developer-role false
+             :supports-reasoning-effort false :max-tokens-field :max-tokens
+             :supports-strict-mode false :supports-long-cache-retention false))
+(def ^:private nvidia-nim-unsupported-models
+  #{"abacusai/dracarys-llama-3.1-70b-instruct" "bytedance/seed-oss-36b-instruct"
+    "deepseek-ai/deepseek-v4-flash" "deepseek-ai/deepseek-v4-pro"
+    "google/gemma-2-2b-it" "google/gemma-3n-e2b-it" "google/gemma-3n-e4b-it"
+    "google/gemma-4-31b-it" "meta/llama-3.2-1b-instruct"
+    "meta/llama-4-maverick-17b-128e-instruct" "microsoft/phi-4-mini-instruct"
+    "minimaxai/minimax-m2.7" "mistralai/mistral-nemotron"
+    "nvidia/nemotron-mini-4b-instruct" "qwen/qwen3-next-80b-a3b-instruct"
+    "qwen/qwen3.5-397b-a17b" "sarvamai/sarvam-m" "upstage/solar-10.7b-instruct"})
+(def ^:private moonshot-compat
+  (array-map :supports-store false :supports-developer-role false
+             :supports-reasoning-effort false :max-tokens-field :max-tokens
+             :supports-strict-mode false :thinking-format :deepseek))
+(def ^:private kimi-k3-cost (array-map :input 3 :output 15 :cache-read 0.3 :cache-write 0))
+(def ^:private kimi-k3-max-tokens 131072)
+(def ^:private xiaomi-compat
+  (array-map :requires-reasoning-content-on-assistant-messages true
+             :thinking-format :deepseek))
+(def ^:private qwen-token-plan-compat
+  (array-map :thinking-format :qwen :supports-developer-role false
+             :supports-store false :supports-reasoning-effort true))
+(def ^:private qwen-token-plan-high-max-thinking-level-map
+  (array-map :minimal nil :low nil :medium nil :high "high" :xhigh nil :max "max"))
+(def ^:private qwen-token-plan-qwen38-thinking-level-map
+  (array-map :minimal nil :low "low" :medium "medium" :high nil :xhigh "xhigh" :max nil))
+(def ^:private qwen-token-plan-reasoning-effort-unsupported-model-ids
+  #{"MiniMax-M2.5" "deepseek-v3.2" "kimi-k2.5" "kimi-k2.6" "kimi-k2.7-code"
+    "qwen3.6-flash" "qwen3.6-plus" "qwen3.7-max" "qwen3.7-plus"})
+(def ^:private qwen-token-plan-excluded-model-ids #{"qwen3.8-max-preview"})
+(def ^:private qwen-token-plan-provider-ids
+  #{:qwen-token-plan :qwen-token-plan-cn :qwen-token-plan-individual})
+;; QwenCloud Token Plan Individual text-model allowlist (pi, verified 2026-08-05).
+(def ^:private qwen-token-plan-individual-model-ids
+  #{"deepseek-v4-flash-0731" "deepseek-v4-pro" "glm-5.2" "qwen3.6-flash"
+    "qwen3.7-max" "qwen3.7-plus" "qwen3.8-max"})
+(def ^:private ai-gateway-models-url "https://ai-gateway.vercel.sh/v1")
+(def ^:private ai-gateway-base-url "https://ai-gateway.vercel.sh")
+(def ^:private openrouter-base-url "https://openrouter.ai/api/v1")
+(def ^:private openrouter-kimi-k3-model-ids #{"moonshotai/kimi-k3" "~moonshotai/kimi-latest"})
+(def ^:private minimax-direct-supported-ids
+  #{"MiniMax-M2.7" "MiniMax-M2.7-highspeed" "MiniMax-M3"})
+
+(defn- parse-cost
+  "Parse a pricing string to a number, nil-safe (pi parseFloat)."
+  [v]
+  (when (string? v)
+    (try (Double/parseDouble v) (catch Exception _ 0))))
+
+(defn- cost-per-million
+  "Pricing value → $/M tokens, clamped to 0 — OpenRouter uses -1 as the
+   'unknown pricing' sentinel, which would otherwise produce negative rates."
+  [v]
+  (round-cost (* (max 0 (or (parse-cost v) 0)) 1000000)))
+
+(defn- process-anthropic
+  "pi: all models.dev anthropic models → :anthropic-messages
+   (https://api.anthropic.com). Adaptive-thinking level maps come from the
+   shared metadata rules; kmet's builder sends budget-based thinking
+   (classic claude format) regardless."
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["anthropic" "models"]) {})
+         :when (true? (get m "tool_call"))]
+     (apply-thinking-maps
+      (model-map :anthropic :anthropic-messages anthropic-base-url m mid {}) m))))
+
+(defn- process-google
+  "pi: all models.dev google models → :google-generative-ai
+   (https://generativelanguage.googleapis.com/v1beta). The -latest aliases
+   take their capabilities from the named source model (pi)."
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["google" "models"]) {})
+         :when (true? (get m "tool_call"))]
+     (let [source (cond
+                    (= mid "gemini-flash-latest")
+                    (get-in data ["google" "models" "gemini-3.5-flash"])
+                    (= mid "gemini-flash-lite-latest")
+                    (get-in data ["google" "models" "gemini-3.1-flash-lite"])
+                    :else m)
+           merged (merge m (select-keys source ["reasoning" "modalities" "cost" "limit"]))]
+       (apply-thinking-maps
+        (model-map :google :google-generative-ai google-base-url merged mid {}) m)))))
+
+(defn- process-groq
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["groq" "models"]) {})
+         :when (true? (get m "tool_call"))]
+     (apply-thinking-maps
+      (model-map :groq :openai-completions groq-base-url m mid {}) m))))
+
+(defn- process-cerebras
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["cerebras" "models"]) {})
+         :when (true? (get m "tool_call"))]
+     (apply-thinking-maps
+      (model-map :cerebras :openai-completions cerebras-base-url m mid
+                 {:compat (array-map :supports-store false
+                                     :supports-developer-role false
+                                     :max-tokens-field :max-tokens)})
+      m))))
+
+(defn- process-huggingface
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["huggingface" "models"]) {})
+         :when (true? (get m "tool_call"))]
+     (apply-thinking-maps
+      (model-map :huggingface :openai-completions huggingface-base-url m mid
+                 {:compat (array-map :supports-developer-role false)})
+      m))))
+
+(def ^:private moonshot-variants
+  [{:key "moonshotai" :provider :moonshotai :base-url "https://api.moonshot.ai/v1"}
+   {:key "moonshotai-cn" :provider :moonshotai-cn :base-url "https://api.moonshot.cn/v1"}])
+
+(defn- process-moonshot
+  "pi: moonshot models → openai-completions with the deepseek thinking
+   format; kimi-k3 gets native reasoning effort + the KIMI_K3 cost fallback."
+  [data]
+  (doall
+   (for [{:keys [key provider base-url]} moonshot-variants
+         [mid m] (or (get-in data [key "models"]) {})
+         :when (true? (get m "tool_call"))]
+     (let [k3? (= mid "kimi-k3")
+           compat (if k3?
+                    (assoc moonshot-compat
+                           :requires-reasoning-content-on-assistant-messages true
+                           :deferred-tools-mode :kimi
+                           :thinking-format :openai
+                           :supports-reasoning-effort true)
+                    moonshot-compat)]
+       (apply-thinking-maps
+        (model-map provider :openai-completions base-url m mid
+                   {:compat compat :cost (when k3? kimi-k3-cost)})
+        m)))))
+
+(def ^:private xiaomi-variants
+  [{:key "xiaomi" :provider :xiaomi :base-url "https://api.xiaomimimo.com/v1"}
+   {:key "xiaomi-token-plan-cn" :provider :xiaomi-token-plan-cn
+    :base-url "https://token-plan-cn.xiaomimimo.com/v1"}
+   {:key "xiaomi-token-plan-ams" :provider :xiaomi-token-plan-ams
+    :base-url "https://token-plan-ams.xiaomimimo.com/v1"}
+   {:key "xiaomi-token-plan-sgp" :provider :xiaomi-token-plan-sgp
+    :base-url "https://token-plan-sgp.xiaomimimo.com/v1"}])
+
+(defn- process-xiaomi
+  [data]
+  (doall
+   (for [{:keys [key provider base-url]} xiaomi-variants
+         [mid m] (or (get-in data [key "models"]) {})
+         :when (true? (get m "tool_call"))]
+     (apply-thinking-maps
+      (model-map provider :openai-completions base-url m mid
+                 {:compat xiaomi-compat})
+      m))))
+
+(def ^:private qwen-token-plan-variants
+  [{:key "alibaba-token-plan" :provider :qwen-token-plan
+    :base-url "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+    :model-ids nil}
+   {:key "alibaba-token-plan" :provider :qwen-token-plan-individual
+    :base-url "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+    :model-ids qwen-token-plan-individual-model-ids}
+   {:key "alibaba-token-plan-cn" :provider :qwen-token-plan-cn
+    :base-url "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+    :model-ids nil}])
+
+(defn- process-qwen-token-plan
+  "pi: the Alibaba Cloud Token Plan catalogs → openai-completions with the
+   qwen thinking format; individual is the international allowlist view."
+  [data]
+  (doall
+   (for [{:keys [key provider base-url model-ids]} qwen-token-plan-variants
+         [mid m] (or (get-in data [key "models"]) {})
+         :when (and (true? (get m "tool_call"))
+                    (not (contains? qwen-token-plan-excluded-model-ids mid))
+                    (or (nil? model-ids) (contains? model-ids mid)))]
+     (let [effort? (not (contains? qwen-token-plan-reasoning-effort-unsupported-model-ids mid))]
+       (apply-thinking-maps
+        (model-map provider :openai-completions base-url m mid
+                   {:compat (if effort?
+                              qwen-token-plan-compat
+                              (assoc qwen-token-plan-compat
+                                     :supports-reasoning-effort false))
+                    :thinking-level-map (when effort?
+                                          (if (= mid "qwen3.8-max")
+                                            qwen-token-plan-qwen38-thinking-level-map
+                                            qwen-token-plan-high-max-thinking-level-map))})
+        m)))))
+
+(def ^:private minimax-variants
+  [{:key "minimax" :provider :minimax :base-url "https://api.minimax.io/anthropic"}
+   {:key "minimax-cn" :provider :minimax-cn :base-url "https://api.minimaxi.com/anthropic"}])
+
+(defn- process-minimax
+  "pi: minimax models → anthropic-messages (the Anthropic-compatible API);
+   the direct-supported-ids filter runs after all sources (pi)."
+  [data]
+  (doall
+   (for [{:keys [key provider base-url]} minimax-variants
+         [mid m] (or (get-in data [key "models"]) {})
+         :when (true? (get m "tool_call"))]
+     (apply-thinking-maps
+      (model-map provider :anthropic-messages base-url m mid {}) m))))
+
+(defn- normalize-nvidia-model-id
+  "pi normalizeNvidiaModelId: lower-case, underscores → dots."
+  [model-id]
+  (-> model-id str/lower-case (str/replace "_" ".")))
+
+(defn- fetch-nvidia-nim-model-ids
+  "pi fetchNvidiaNimModelIds: the live NVIDIA NIM /models list — the
+   catalog ids that actually exist on the endpoint (throws on failure, like
+   fetch-models-dev)."
+  []
+  (let [resp (http/get (str nvidia-base-url "/models")
+                       {:headers {"User-Agent" "kmet-generate-models"}
+                        :timeout 60000})]
+    (when-not (= 200 (:status resp))
+      (throw (ex-info (str "NVIDIA NIM API returned HTTP " (:status resp))
+                      {:type :http-error :status (:status resp)})))
+    (let [data (json/parse-string (:body resp) false)]
+      (into {}
+            (for [model (get data "data")]
+              [(get model "id") (get model "id")])))))
+
+(defn- process-nvidia
+  "pi: nvidia models whose id exists on the live NIM endpoint (unsupported
+   ids dropped), openai-completions with the NIM headers + compat."
+  [data nim-ids]
+  (doall
+   (for [[mid m] (or (get-in data ["nvidia" "models"]) {})
+         :when (and (true? (get m "tool_call"))
+                    (some #{"text"} (get-in m ["modalities" "input"]))
+                    (some #{"text"} (get-in m ["modalities" "output"])))
+         :let [live-id (or (get nim-ids mid)
+                           (get nim-ids (normalize-nvidia-model-id mid)))]
+         :when (and live-id
+                    (not (contains? nvidia-nim-unsupported-models live-id)))]
+     (apply-thinking-maps
+      (model-map :nvidia :openai-completions nvidia-base-url m live-id
+                 {:compat nvidia-openai-compat :headers nvidia-headers})
+      m))))
+
+(defn- fetch-openrouter-models
+  "pi fetchOpenRouterModels: the live OpenRouter catalog — tool-capable
+   models only, pricing converted to $/M. Returns kmet-shaped model maps
+   with the openrouter thinking-format compat (nested reasoning: {effort}, pi
+   detectOpenAICompletionsCompat)."
+  []
+  (let [resp (http/get "https://openrouter.ai/api/v1/models"
+                       {:headers {"User-Agent" "kmet-generate-models"}
+                        :timeout 60000})]
+    (when-not (= 200 (:status resp))
+      (throw (ex-info (str "OpenRouter API returned HTTP " (:status resp))
+                      {:type :http-error :status (:status resp)})))
+    (let [data (json/parse-string (:body resp) false)
+          models (get data "data")]
+      (when-not (vector? models)
+        (throw (ex-info "Invalid OpenRouter models response" {:type :http-error})))
+      (for [model models
+            :when (some #(= "tools" %) (get model "supported_parameters"))]
+        (let [cost (fn [k] (cost-per-million (get-in model ["pricing" k])))]
+          (array-map :id (get model "id")
+                     :name (or (get model "name") (get model "id"))
+                     :provider :openrouter
+                     :api :openai-completions
+                     :base-url openrouter-base-url
+                     :reasoning (boolean (some #(= "reasoning" %)
+                                               (get model "supported_parameters")))
+                     :input (if (some #(= "image" %) (get-in model ["architecture" "modality"]))
+                              [:text :image] [:text])
+                     :cost (array-map :input (cost "prompt")
+                                      :output (cost "completion")
+                                      :cache-read (cost "input_cache_read")
+                                      :cache-write (cost "input_cache_write"))
+                     :context-window (or (get-in model ["top_provider" "context_length"])
+                                         (get model "context_length") 4096)
+                     :max-tokens (or (get-in model ["top_provider" "max_completion_tokens"]) 4096)
+                     :compat (array-map :thinking-format :openrouter)))))))
+
+(defn- process-openrouter
+  "pi fetchOpenRouterModels + the post-merge openrouter additions/overrides:
+   the auto/fusion aliases, Kimi K3's canonical max tokens, and the kimi-k2.5
+   cost override."
+  [fetched]
+  (let [with-k3 (map (fn [mm]
+                       (cond-> mm
+                         (contains? openrouter-kimi-k3-model-ids (:id mm))
+                         (assoc :max-tokens kimi-k3-max-tokens)
+                         (= "moonshotai/kimi-k2.5" (:id mm))
+                         (assoc :cost (array-map :input 0.41 :output 2.06
+                                                 :cache-read 0.07 :cache-write 0)
+                                :max-tokens 4096)))
+                     fetched)
+        ids (set (map :id with-k3))]
+    (concat with-k3
+            (remove #(contains? ids (:id %))
+                    [(array-map :id "auto" :name "Auto"
+                                :provider :openrouter :api :openai-completions
+                                :base-url openrouter-base-url
+                                :reasoning true :input [:text :image]
+                                :cost (array-map :input 0 :output 0 :cache-read 0 :cache-write 0)
+                                :context-window 2000000 :max-tokens 30000
+                                :compat (array-map :thinking-format :openrouter))
+                     (array-map :id "openrouter/fusion" :name "OpenRouter: Fusion"
+                                :provider :openrouter :api :openai-completions
+                                :base-url openrouter-base-url
+                                :reasoning true :input [:text]
+                                :cost (array-map :input 0 :output 0 :cache-read 0 :cache-write 0)
+                                :context-window 1000000 :max-tokens 30000
+                                :compat (array-map :thinking-format :openrouter))]))))
+
+(defn- process-fireworks
+  "pi processFireworksModels: glm-5p2 + kimi-k3 → openai-completions, the
+   rest → anthropic-messages (the Anthropic-compatible API; the
+   session-affinity/eager-streaming compat keys are data-only in kmet)."
+  [data]
+  (let [anthropic-compat (array-map :send-session-affinity-headers true
+                                    :supports-eager-tool-input-streaming false
+                                    :supports-cache-control-on-tools false
+                                    :supports-long-cache-retention false)
+        openai-compat (array-map :supports-store false :supports-developer-role false
+                                 :send-session-affinity-headers true
+                                 :supports-long-cache-retention false)
+        kimi-k3-compat (assoc openai-compat
+                              :requires-reasoning-content-on-assistant-messages true
+                              :thinking-format :openai
+                              :deferred-tools-mode :kimi)]
+    (doall
+     (for [[mid m] (or (get-in data ["fireworks-ai" "models"]) {})
+           :when (true? (get m "tool_call"))]
+       (cond
+         (str/includes? mid "glm-5p2")
+         (apply-thinking-maps
+          (model-map :fireworks :openai-completions
+                     "https://api.fireworks.ai/inference/v1" m mid
+                     {:compat openai-compat})
+          m)
+         (str/includes? mid "kimi-k3")
+         (apply-thinking-maps
+          (model-map :fireworks :openai-completions
+                     "https://api.fireworks.ai/inference/v1" m mid
+                     {:compat kimi-k3-compat})
+          m)
+         :else
+         (apply-thinking-maps
+          (model-map :fireworks :anthropic-messages
+                     "https://api.fireworks.ai/inference" m mid
+                     {:compat anthropic-compat})
+          m))))))
+
+(defn- fetch-ai-gateway-models
+  "pi fetchAiGatewayModels: the live Vercel AI Gateway catalog — tool-use
+   tagged models, pricing converted to $/M (throws on failure)."
+  []
+  (let [resp (http/get (str ai-gateway-models-url "/models")
+                       {:headers {"User-Agent" "kmet-generate-models"}
+                        :timeout 60000})]
+    (when-not (= 200 (:status resp))
+      (throw (ex-info (str "Vercel AI Gateway API returned HTTP " (:status resp))
+                      {:type :http-error :status (:status resp)})))
+    (let [data (json/parse-string (:body resp) false)
+          items (get data "data")]
+      (when-not (vector? items)
+        (throw (ex-info "Invalid Vercel AI Gateway models response" {:type :http-error})))
+      (for [model items
+            :when (some #(= "tool-use" %) (get model "tags"))]
+        (let [cost (fn [k] (cost-per-million (get-in model ["pricing" k])))
+              input (if (some #(= "vision" %) (get model "tags")) [:text :image] [:text])]
+          (array-map :id (get model "id")
+                     :name (or (get model "name") (get model "id"))
+                     :provider :vercel-ai-gateway
+                     :api :anthropic-messages
+                     :base-url ai-gateway-base-url
+                     :reasoning (boolean (some #(= "reasoning" %) (get model "tags")))
+                     :input input
+                     :cost (array-map :input (cost "input")
+                                      :output (cost "output")
+                                      :cache-read (cost "input_cache_read")
+                                      :cache-write (cost "input_cache_write"))
+                     :context-window (or (get model "context_window") 4096)
+                     :max-tokens (or (get model "max_tokens") 4096)))))))
+
+(defn- process-vercel-ai-gateway
+  "pi fetchAiGatewayModels + the kimi-k3 max-tokens override."
+  [fetched]
+  (map (fn [mm]
+         (if (= "moonshotai/kimi-k3" (:id mm))
+           (assoc mm :max-tokens kimi-k3-max-tokens)
+           mm))
+       fetched))
+
 ;; ─── deepseek-v4 compat normalization (pi, after all providers) ────────────
 
 (defn- normalize-deepseek-v4
-  "Every openai-completions deepseek-v4 model gets DeepSeek's thinking compat.
-   opencode (zen) preserves native reasoning effort, so it only gains
-   requires-reasoning-content-on-assistant-messages (pi behavior)."
+  "Every openai-completions deepseek-v4 model gets DeepSeek's thinking compat
+   (pi, after all providers): opencode/zen and openrouter preserve native
+   reasoning effort, so they only gain
+   requires-reasoning-content-on-assistant-messages; the qwen-token-plan
+   catalogs keep their qwen thinking format entirely."
   [models]
   (map (fn [mm]
          (if (and (= :openai-completions (:api mm))
-                  (str/includes? (:id mm) "deepseek-v4"))
+                  (str/includes? (:id mm) "deepseek-v4")
+                  (not (contains? qwen-token-plan-provider-ids (:provider mm))))
            (update mm :compat
-                   merge (if (= :opencode (:provider mm))
+                   merge (if (contains? #{:opencode :openrouter} (:provider mm))
                            {:requires-reasoning-content-on-assistant-messages true}
                            deepseek-compat))
            mm))
@@ -554,11 +1038,17 @@
         provider (:provider mm)
         deepseek-v4? (and (= :openai-completions (:api mm))
                           (str/includes? id "deepseek-v4"))
-        adaptive-high? (or (str/includes? id "opus-4.7")
+        adaptive-high? (or (str/includes? id "opus-4-7")
+                           (str/includes? id "opus-4.7")
+                           (str/includes? id "opus-4-8")
                            (str/includes? id "opus-4.8")
                            (str/includes? id "opus-5")
-                           (str/includes? id "sonnet-5"))
-        adaptive-max? (or (str/includes? id "opus-4.6")
+                           (str/includes? id "opus.5")
+                           (str/includes? id "sonnet-5")
+                           (str/includes? id "sonnet.5"))
+        adaptive-max? (or (str/includes? id "opus-4-6")
+                          (str/includes? id "opus-4.6")
+                          (str/includes? id "sonnet-4-6")
                           (str/includes? id "sonnet-4.6")
                           adaptive-high?)
         gemini3-pro? (re-matches #"(?i).*gemini-3(?:\.\d+)?-pro.*" id)
@@ -622,7 +1112,27 @@
       (merge-thinking-level-map {:off nil})
       gemma4?
       (merge-thinking-level-map {:off nil :minimal "MINIMAL" :low nil
-                                 :medium nil :high "HIGH"}))))
+                                 :medium nil :high "HIGH"})
+      ;; Batch 2 rules (pi applyThinkingLevelMetadata): groq's qwen
+      ;; reasoning toggle, fireworks glm-5p2 effort levels, openrouter
+      ;; mercury-2 (always-thinking) + z-ai/glm-5.2, the openrouter
+      ;; deepseek-v4 variant (native effort + xhigh), and moonshot
+      ;; kimi-k2.7-code (always-thinking)
+      (and (= :groq provider) (= id "qwen/qwen3.6-27b"))
+      (merge-thinking-level-map {:minimal nil :low nil :medium nil
+                                 :high "default"})
+      (and (= :fireworks provider) (str/includes? id "glm-5p2"))
+      (merge-thinking-level-map {:off "none" :minimal nil :low "high"
+                                 :medium "high" :max "max"})
+      (and (= :openrouter provider) (str/starts-with? id "inception/mercury-2"))
+      (merge-thinking-level-map {:off nil})
+      (and (= :openrouter provider) (= id "z-ai/glm-5.2"))
+      (merge-thinking-level-map {:xhigh "xhigh"})
+      (and (= :openrouter provider) deepseek-v4?)
+      (merge-thinking-level-map {:xhigh "xhigh" :max nil})
+      (and (contains? #{:moonshotai :moonshotai-cn} provider)
+           (contains? #{"kimi-k2.7-code" "kimi-k2.7-code-highspeed"} id))
+      (merge-thinking-level-map {:off nil}))))
 
 (defn- apply-thinking-maps
   "thinking-level-map pipeline (pi order): effort maps from the models.dev
@@ -783,18 +1293,40 @@
              [api (models-by-id ms)])))
 
 (defn- generate-models-data
-  "Build {provider-id -> [model-map ...]} from a models.dev payload (pi
-   generateModels order: all model sources, context/cost overrides, missing
-   gpt models, codex + the azure mirror, deepseek-v4 compat normalization,
-   then the metadata passes)."
-  [data]
+  "Build {provider-id -> [model-map ...]} from a models.dev payload + the
+   live fetch results (pi generateModels order: all model sources, the
+   minimax direct-supported filter, context/cost overrides, missing gpt
+   models, codex + the azure mirror, deepseek-v4 compat normalization, then
+   the metadata passes)."
+  [data nim-ids openrouter-models ai-gateway-models]
   (let [all (->> (concat (process-opencode data)
                          (process-copilot data)
                          (process-xai data)
                          (process-openai data)
+                         (process-anthropic data)
+                         (process-google data)
+                         (process-groq data)
+                         (process-cerebras data)
+                         (process-huggingface data)
+                         (process-moonshot data)
+                         (process-xiaomi data)
+                         (process-qwen-token-plan data)
+                         (process-minimax data)
+                         (process-nvidia data nim-ids)
+                         (process-fireworks data)
+                         (map #(apply-thinking-maps % nil) (process-openrouter openrouter-models))
+                         (map #(apply-thinking-maps % nil)
+                              (process-vercel-ai-gateway ai-gateway-models))
                          (map #(apply-thinking-maps % nil) deepseek-v4-models)
                          (map #(apply-thinking-maps % nil) (process-codex)))
                  (remove nil?))
+        ;; pi: minimax models are filtered to the ids the direct API serves
+        ;; (MiniMax-M2.7/-highspeed/M3) after all sources
+        minimax-supported (set minimax-direct-supported-ids)
+        all (remove (fn [mm]
+                      (and (contains? #{:minimax :minimax-cn} (:provider mm))
+                           (not (contains? minimax-supported (:id mm)))))
+                    all)
         ;; Hardcoded fallbacks still get the thinking metadata rules (pi runs
         ;; applyThinkingLevelMetadata over allModels — the missing models
         ;; carry no models.dev reasoning_options, so no effort map).
@@ -1087,11 +1619,18 @@
   (System/exit 1))
 
 (defn -main
-  "Fetch models.dev, regenerate the committed catalogs + manifest, validate."
+  "Fetch models.dev + the live catalogs, regenerate the committed catalogs
+   + manifest, validate."
   [& _]
   (println "Fetching https://models.dev/api.json ...")
   (let [data (fetch-models-dev)
-        catalogs (generate-models-data data)
+        nim-ids (do (println "Fetching NVIDIA NIM model ids ...")
+                    (fetch-nvidia-nim-model-ids))
+        openrouter-models (do (println "Fetching OpenRouter models ...")
+                              (fetch-openrouter-models))
+        ai-gateway-models (do (println "Fetching Vercel AI Gateway models ...")
+                              (fetch-ai-gateway-models))
+        catalogs (generate-models-data data nim-ids openrouter-models ai-gateway-models)
         errors (into []
                      (mapcat (fn [[pid models]]
                                (validate-groups! pid (group-models models)))

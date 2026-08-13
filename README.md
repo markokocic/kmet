@@ -28,8 +28,15 @@ with the agent having access to filesystem tools (read, write, edit, bash, grep,
   `OPENAI_API_KEY` (openai), `XAI_API_KEY` (xai), `AZURE_OPENAI_API_KEY`
   (azure-openai-responses; base URL/deployment from `AZURE_OPENAI_BASE_URL` /
   `AZURE_OPENAI_RESOURCE_NAME` / `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`),
-  `COPILOT_GITHUB_TOKEN` (or `/login` inside kmet to store `auth.edn`
-  credentials; `/logout` removes them). GitHub Copilot and OpenAI Codex
+  `COPILOT_GITHUB_TOKEN`, `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`
+  (anthropic), `GEMINI_API_KEY` (google), `GROQ_API_KEY` (groq),
+  `CEREBRAS_API_KEY` (cerebras), `HF_TOKEN` (huggingface),
+  `MOONSHOT_API_KEY` (moonshotai), `XIAOMI_API_KEY` + `XIAOMI_TOKEN_PLAN_*_API_KEY`
+  (xiaomi token plans), `QWEN_TOKEN_PLAN_API_KEY` (+ `_CN_`), `MINIMAX_API_KEY` /
+  `MINIMAX_CN_API_KEY`, `NVIDIA_API_KEY` (nvidia), `OPENROUTER_API_KEY`
+  (openrouter), `FIREWORKS_API_KEY` (fireworks), `AI_GATEWAY_API_KEY`
+  (vercel-ai-gateway) — or `/login` inside kmet to store `auth.edn`
+  credentials; `/logout` removes them. GitHub Copilot and OpenAI Codex
   support an OAuth device-code login (`/login github-copilot` →
   "Sign in with an account"; `/login openai-codex` → ChatGPT device flow).
 
@@ -57,7 +64,10 @@ bb run --print "list files in current directory"
   -r, --resume          Browse sessions
   --model <id>          Model to use (pattern: provider/model[:thinking])
   --provider <name>     Provider (opencode-go, opencode, deepseek, github-copilot,
-                        openai, xai, openai-codex, azure-openai-responses)
+                        openai, xai, openai-codex, azure-openai-responses,
+                        anthropic, google, groq, cerebras, huggingface,
+                        moonshotai, xiaomi, qwen-token-plan, minimax, nvidia,
+                        openrouter, fireworks, vercel-ai-gateway, ...)
   --models <patterns>   Comma-separated model patterns for Ctrl+P cycling
   --list-models [search] List available models (with optional fuzzy search)
   -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)
@@ -141,8 +151,8 @@ Example `~/.kmet/agent/settings.edn`:
 ```
 
 `kmet` reads its provider catalog from `src/kmet/app/model_data/*.edn`
-(opencode-go, opencode, deepseek, github-copilot, openai, xai, openai-codex,
-azure-openai-responses). Models,
+(28 providers incl. anthropic, google, groq, cerebras, openrouter, nvidia,
+openrouter live catalog, ...). Models,
 base URLs and defaults are registry data — see `models.md` for the
 subsystem plan.
 

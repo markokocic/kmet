@@ -1,0 +1,182 @@
+{:schema-version 1
+ :generated-at "2026-08-13T14:42:02Z"
+ :provider {:id :moonshotai
+            :name "Moonshot AI"
+            :env-vars ["MOONSHOT_API_KEY"]
+            :default-model "kimi-k2.6"}
+ :models
+ {:openai-completions
+  {"kimi-k2-0711-preview"
+   {:id "kimi-k2-0711-preview"
+    :name "Kimi K2 0711"
+    :provider :moonshotai
+    :api :openai-completions
+    :base-url "https://api.moonshot.ai/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.6 :output 2.5 :cache-read 0.15 :cache-write 0}
+    :context-window 131072
+    :max-tokens 16384
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :deepseek
+             :max-tokens-field :max-tokens
+             :supports-strict-mode false}}
+   "kimi-k2-0905-preview"
+   {:id "kimi-k2-0905-preview"
+    :name "Kimi K2 0905"
+    :provider :moonshotai
+    :api :openai-completions
+    :base-url "https://api.moonshot.ai/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.6 :output 2.5 :cache-read 0.15 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :deepseek
+             :max-tokens-field :max-tokens
+             :supports-strict-mode false}}
+   "kimi-k2-thinking"
+   {:id "kimi-k2-thinking"
+    :name "Kimi K2 Thinking"
+    :provider :moonshotai
+    :api :openai-completions
+    :base-url "https://api.moonshot.ai/v1"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0.6 :output 2.5 :cache-read 0.15 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :deepseek
+             :max-tokens-field :max-tokens
+             :supports-strict-mode false}}
+   "kimi-k2-thinking-turbo"
+   {:id "kimi-k2-thinking-turbo"
+    :name "Kimi K2 Thinking Turbo"
+    :provider :moonshotai
+    :api :openai-completions
+    :base-url "https://api.moonshot.ai/v1"
+    :reasoning true
+    :input [:text]
+    :cost {:input 1.15 :output 8 :cache-read 0.15 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :deepseek
+             :max-tokens-field :max-tokens
+             :supports-strict-mode false}}
+   "kimi-k2-turbo-preview"
+   {:id "kimi-k2-turbo-preview"
+    :name "Kimi K2 Turbo"
+    :provider :moonshotai
+    :api :openai-completions
+    :base-url "https://api.moonshot.ai/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 2.4 :output 10 :cache-read 0.6 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :deepseek
+             :max-tokens-field :max-tokens
+             :supports-strict-mode false}}
+   "kimi-k2.5"
+   {:id "kimi-k2.5"
+    :name "Kimi K2.5"
+    :provider :moonshotai
+    :api :openai-completions
+    :base-url "https://api.moonshot.ai/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.6 :output 3 :cache-read 0.1 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :deepseek
+             :max-tokens-field :max-tokens
+             :supports-strict-mode false}}
+   "kimi-k2.6"
+   {:id "kimi-k2.6"
+    :name "Kimi K2.6"
+    :provider :moonshotai
+    :api :openai-completions
+    :base-url "https://api.moonshot.ai/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.95 :output 4 :cache-read 0.16 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :deepseek
+             :max-tokens-field :max-tokens
+             :supports-strict-mode false}}
+   "kimi-k2.7-code"
+   {:id "kimi-k2.7-code"
+    :name "Kimi K2.7 Code"
+    :provider :moonshotai
+    :api :openai-completions
+    :base-url "https://api.moonshot.ai/v1"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 0.95 :output 4 :cache-read 0.19 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :deepseek
+             :max-tokens-field :max-tokens
+             :supports-strict-mode false}}
+   "kimi-k2.7-code-highspeed"
+   {:id "kimi-k2.7-code-highspeed"
+    :name "Kimi K2.7 Code HighSpeed"
+    :provider :moonshotai
+    :api :openai-completions
+    :base-url "https://api.moonshot.ai/v1"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 1.9 :output 8 :cache-read 0.38 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :deepseek
+             :max-tokens-field :max-tokens
+             :supports-strict-mode false}}
+   "kimi-k3"
+   {:id "kimi-k3"
+    :name "Kimi K3"
+    :provider :moonshotai
+    :api :openai-completions
+    :base-url "https://api.moonshot.ai/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 131072
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort true
+             :requires-reasoning-content-on-assistant-messages true
+             :thinking-format :openai
+             :max-tokens-field :max-tokens
+             :supports-strict-mode false
+             :deferred-tools-mode :kimi}}}}}

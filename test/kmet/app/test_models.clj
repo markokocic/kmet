@@ -99,7 +99,12 @@
   (let [providers (m/load-catalogs!)]
     (t/is (map? providers))
     (t/is (= #{:opencode-go :opencode :deepseek :github-copilot :openai :xai
-               :openai-codex :azure-openai-responses}
+               :openai-codex :azure-openai-responses :anthropic :google :groq
+               :cerebras :huggingface :moonshotai :moonshotai-cn :xiaomi
+               :xiaomi-token-plan-cn :xiaomi-token-plan-ams :xiaomi-token-plan-sgp
+               :qwen-token-plan :qwen-token-plan-cn :qwen-token-plan-individual
+               :minimax :minimax-cn :nvidia :openrouter :fireworks
+               :vercel-ai-gateway}
              (set (keys providers))))
     (t/testing "provider records carry catalog metadata"
       (let [og (m/get-provider :opencode-go)]
@@ -123,6 +128,22 @@
       (t/is (= [] (:env-vars (m/get-provider :openai-codex)))
             "codex is OAuth-only — no env var")
       (t/is (= ["AZURE_OPENAI_API_KEY"] (:env-vars (m/get-provider :azure-openai-responses))))
+      (t/is (= #{:anthropic-messages} (:api-types (m/get-provider :anthropic))))
+      (t/is (= #{:google-generative-ai} (:api-types (m/get-provider :google))))
+      (t/is (= #{:openai-completions} (:api-types (m/get-provider :groq))))
+      (t/is (= #{:openai-completions} (:api-types (m/get-provider :cerebras))))
+      (t/is (= #{:openai-completions :anthropic-messages}
+               (:api-types (m/get-provider :fireworks))))
+      (t/is (= #{:anthropic-messages} (:api-types (m/get-provider :minimax))))
+      (t/is (= ["GROQ_API_KEY"] (:env-vars (m/get-provider :groq))))
+      (t/is (= ["GEMINI_API_KEY"] (:env-vars (m/get-provider :google))))
+      (t/is (= ["ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_OAUTH_TOKEN" "ANTHROPIC_API_KEY"]
+               (:env-vars (m/get-provider :anthropic))))
+      (t/is (= ["NVIDIA_API_KEY"] (:env-vars (m/get-provider :nvidia))))
+      (t/is (= ["OPENROUTER_API_KEY"] (:env-vars (m/get-provider :openrouter))))
+      (t/is (= ["QWEN_TOKEN_PLAN_API_KEY"]
+               (:env-vars (m/get-provider :qwen-token-plan-individual))))
+      (t/is (= "moonshotai/kimi-k2.6" (:default-model (m/get-provider :openrouter))))
       (t/is (= ["DEEPSEEK_API_KEY"] (:env-vars (m/get-provider :deepseek))))
       (t/is (= ["COPILOT_GITHUB_TOKEN"] (:env-vars (m/get-provider :github-copilot))))
       (t/is (= ["OPENAI_API_KEY"] (:env-vars (m/get-provider :openai))))
@@ -357,7 +378,7 @@
         (m/load-models-config!))
       (t/testing "parse failure → error surfaced, built-ins kept"
         (t/is (some? (m/get-model-config-error)))
-        (t/is (= 8 (count (m/get-providers)))))
+        (t/is (= 28 (count (m/get-providers)))))
       (t/testing "composition failure falls back to the builtin provider"
         (spit path "{:providers {:broken {:models [{:id \"x\"}]}}}\n")
         (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
@@ -393,7 +414,7 @@
           (m/load-models-config!))
         (t/is (nil? (m/get-provider :temp-provider)) "removed provider disappears on reload")
         (t/is (= 888 (:context-window (m/get-model :deepseek "deepseek-v4-pro"))) "override replaces the old value")
-        (t/is (= 8 (count (m/get-providers))) "registry back to builtin count"))
+        (t/is (= 28 (count (m/get-providers))) "registry back to builtin count"))
       (finally
         (fs/delete-tree tmp)
         (m/load-catalogs!)))))
@@ -512,7 +533,7 @@
        (m/map->Provider {:id :ext-b :name "B" :api-types #{:openai-completions}
                          :models [(ext-model "b1")] :env-vars [] :default-model nil}))
       (t/is (= [:ext-a :ext-b] (m/get-registered-provider-ids)))
-      (t/is (= 10 (count (m/get-providers))) "builtins + 2 extension providers"))
+      (t/is (= 30 (count (m/get-providers))) "builtins + 2 extension providers"))
     (finally
       (m/clear-extension-providers!)
       (m/load-catalogs!))))

@@ -1,0 +1,293 @@
+{:schema-version 1
+ :generated-at "2026-08-13T14:42:02Z"
+ :provider {:id :google
+            :name "Google"
+            :env-vars ["GEMINI_API_KEY"]
+            :default-model "gemini-3.1-pro-preview"}
+ :models
+ {:google-generative-ai
+  {"deep-research-max-preview-04-2026"
+   {:id "deep-research-max-preview-04-2026"
+    :name "Deep Research Max Preview (Apr-21-2026)"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 2
+           :tiers [{:input 4 :input-tokens-above 200000 :output 18 :cache-read 0.4 :cache-write 0}]
+           :output 12
+           :cache-read 0.2
+           :cache-write 0}
+    :context-window 131072
+    :max-tokens 65536}
+   "deep-research-preview-04-2026"
+   {:id "deep-research-preview-04-2026"
+    :name "Deep Research Preview (Apr-21-2026)"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 2
+           :tiers [{:input 4 :input-tokens-above 200000 :output 18 :cache-read 0.4 :cache-write 0}]
+           :output 12
+           :cache-read 0.2
+           :cache-write 0}
+    :context-window 131072
+    :max-tokens 65536}
+   "gemini-2.5-computer-use-preview-10-2025"
+   {:id "gemini-2.5-computer-use-preview-10-2025"
+    :name "Gemini 2.5 Computer Use Preview 10-2025"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 1.25
+           :tiers [{:input 2.5 :input-tokens-above 200000 :output 15 :cache-read 0 :cache-write 0}]
+           :output 10
+           :cache-read 0
+           :cache-write 0}
+    :context-window 131072
+    :max-tokens 65536}
+   "gemini-2.5-flash"
+   {:id "gemini-2.5-flash"
+    :name "Gemini 2.5 Flash"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.3 :output 2.5 :cache-read 0.03 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-2.5-flash-lite"
+   {:id "gemini-2.5-flash-lite"
+    :name "Gemini 2.5 Flash-Lite"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.1 :output 0.4 :cache-read 0.01 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-2.5-pro"
+   {:id "gemini-2.5-pro"
+    :name "Gemini 2.5 Pro"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 1.25
+           :tiers [{:input 2.5 :input-tokens-above 200000 :output 15 :cache-read 0.25 :cache-write 0}]
+           :output 10
+           :cache-read 0.125
+           :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-3-flash-preview"
+   {:id "gemini-3-flash-preview"
+    :name "Gemini 3 Flash Preview"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 0.5 :output 3 :cache-read 0.05 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-3.1-flash-lite"
+   {:id "gemini-3.1-flash-lite"
+    :name "Gemini 3.1 Flash Lite"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 0.25 :output 1.5 :cache-read 0.025 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-3.1-flash-lite-image"
+   {:id "gemini-3.1-flash-lite-image"
+    :name "Nano Banana 2 Lite"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 0.25 :output 30 :cache-read 0 :cache-write 0}
+    :context-window 65536
+    :max-tokens 65536}
+   "gemini-3.1-flash-lite-preview"
+   {:id "gemini-3.1-flash-lite-preview"
+    :name "Gemini 3.1 Flash Lite Preview"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 0.25 :output 1.5 :cache-read 0.025 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-3.1-flash-live-preview"
+   {:id "gemini-3.1-flash-live-preview"
+    :name "Gemini 3.1 Flash Live Preview"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 0.75 :output 4.5 :cache-read 0 :cache-write 0}
+    :context-window 131072
+    :max-tokens 65536}
+   "gemini-3.1-pro-preview"
+   {:id "gemini-3.1-pro-preview"
+    :name "Gemini 3.1 Pro Preview"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:high "HIGH"
+                         :low "LOW"
+                         :medium nil
+                         :minimal nil
+                         :off nil}
+    :input [:text :image]
+    :cost {:input 2
+           :tiers [{:input 4 :input-tokens-above 200000 :output 18 :cache-read 0.4 :cache-write 0}]
+           :output 12
+           :cache-read 0.2
+           :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-3.1-pro-preview-customtools"
+   {:id "gemini-3.1-pro-preview-customtools"
+    :name "Gemini 3.1 Pro Preview Custom Tools"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:high "HIGH"
+                         :low "LOW"
+                         :medium nil
+                         :minimal nil
+                         :off nil}
+    :input [:text :image]
+    :cost {:input 2
+           :tiers [{:input 4 :input-tokens-above 200000 :output 18 :cache-read 0.4 :cache-write 0}]
+           :output 12
+           :cache-read 0.2
+           :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-3.5-flash"
+   {:id "gemini-3.5-flash"
+    :name "Gemini 3.5 Flash"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 1.5 :output 9 :cache-read 0.15 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-3.5-flash-lite"
+   {:id "gemini-3.5-flash-lite"
+    :name "Gemini 3.5 Flash Lite"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 0.3 :output 2.5 :cache-read 0.03 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-3.6-flash"
+   {:id "gemini-3.6-flash"
+    :name "Gemini 3.6 Flash"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-flash-latest"
+   {:id "gemini-flash-latest"
+    :name "Gemini Flash Latest"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 1.5 :output 9 :cache-read 0.15 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-flash-lite-latest"
+   {:id "gemini-flash-lite-latest"
+    :name "Gemini Flash-Lite Latest"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 0.25 :output 1.5 :cache-read 0.025 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-robotics-er-1.6-preview"
+   {:id "gemini-robotics-er-1.6-preview"
+    :name "Gemini Robotics-ER 1.6 Preview"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 1 :output 5 :cache-read 0 :cache-write 0}
+    :context-window 131072
+    :max-tokens 65536}
+   "gemma-4-26b-a4b-it"
+   {:id "gemma-4-26b-a4b-it"
+    :name "Gemma 4 26B A4B IT"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:high "HIGH"
+                         :low nil
+                         :medium nil
+                         :minimal "MINIMAL"
+                         :off nil}
+    :input [:text :image]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 262144
+    :max-tokens 32768}
+   "gemma-4-31b-it"
+   {:id "gemma-4-31b-it"
+    :name "Gemma 4 31B IT"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:high "HIGH"
+                         :low nil
+                         :medium nil
+                         :minimal "MINIMAL"
+                         :off nil}
+    :input [:text :image]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 262144
+    :max-tokens 32768}}}}

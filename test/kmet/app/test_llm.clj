@@ -14,7 +14,7 @@
 (t/deftest test-llm-loaded
   (t/is (fn? llm/send-message))
   (m/load-catalogs!)
-  (t/is (= 8 (count (m/get-providers))))
+  (t/is (= 28 (count (m/get-providers))))
   (t/is (fn? m/get-model)))
 
 ;; ─── Model resolution & dispatch ───────────────────────────────────────────
@@ -404,9 +404,14 @@
 
 (t/deftest test-llm-all-providers-resolve
   (m/load-catalogs!)
-  (t/is (= 8 (count (m/get-providers))))
+  (t/is (= 28 (count (m/get-providers))))
   (doseq [p [:opencode-go :opencode :deepseek :github-copilot :openai :xai
-             :openai-codex :azure-openai-responses]]
+             :openai-codex :azure-openai-responses :anthropic :google :groq
+             :cerebras :huggingface :moonshotai :moonshotai-cn :xiaomi
+             :xiaomi-token-plan-cn :xiaomi-token-plan-ams :xiaomi-token-plan-sgp
+             :qwen-token-plan :qwen-token-plan-cn :qwen-token-plan-individual
+             :minimax :minimax-cn :nvidia :openrouter :fireworks
+             :vercel-ai-gateway]]
     (t/is (some? (m/get-provider p)) (str p " has a catalog entry"))))
 
 ;; ─── Image block conversion ───────────────────────────────────────────────
@@ -640,6 +645,18 @@
           "qwen on: enable_thinking + reasoning_effort")
     (t/is (= {:enable_thinking false} (@#'llm/openai-thinking-params qwen nil))
           "qwen off: enable_thinking false")
+    (t/is (= {:reasoning {:effort "high"}}
+             (@#'llm/openai-thinking-params
+              (tmodel :compat {:thinking-format :openrouter}) :high))
+          "openrouter on: nested reasoning: {effort}")
+    (t/is (= {:reasoning {:effort "none"}}
+             (@#'llm/openai-thinking-params
+              (tmodel :compat {:thinking-format :openrouter}) nil))
+          "openrouter off: reasoning: {effort: none} (pi)")
+    (t/is (= {}
+             (@#'llm/openai-thinking-params
+              (tmodel :compat {:thinking-format :openrouter} :tlm {:off nil}) nil))
+          "openrouter off pinned to null → no params (always thinking)")
     (t/is (= {} (@#'llm/openai-thinking-params no-effort :high))
           "supports-reasoning-effort false → no effort params")
     (t/is (= {} (@#'llm/openai-thinking-params (tmodel :reasoning false) :high))

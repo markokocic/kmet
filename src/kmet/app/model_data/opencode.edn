@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T13:31:21Z"
+ :generated-at "2026-08-13T14:42:02Z"
  :provider {:id :opencode
             :name "OpenCode (Zen)"
             :env-vars ["OPENCODE_API_KEY"]
@@ -47,6 +47,7 @@
     :api :anthropic-messages
     :base-url "https://opencode.ai/zen"
     :reasoning true
+    :thinking-level-map {:max "max"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -58,6 +59,7 @@
     :api :anthropic-messages
     :base-url "https://opencode.ai/zen"
     :reasoning true
+    :thinking-level-map {:max "max" :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -69,6 +71,7 @@
     :api :anthropic-messages
     :base-url "https://opencode.ai/zen"
     :reasoning true
+    :thinking-level-map {:max "max" :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -122,6 +125,7 @@
     :api :anthropic-messages
     :base-url "https://opencode.ai/zen"
     :reasoning true
+    :thinking-level-map {:max "max"}
     :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 3.75}
     :context-window 1000000
