@@ -211,6 +211,12 @@
   (try (edn/read-string (slurp path))
        (catch Exception _ nil)))
 
+;; Parsed catalog blobs keyed by file path → {:mtime ms :size bytes :data}.
+;; The committed catalogs are static at runtime, and tests reload them many
+;; times, so a fresh EDN parse per load-catalogs! is pure waste; the cache
+;; invalidates on any file change (mtime+size).
+(defonce ^:private catalog-cache (atom {}))
+
 (def ^:private required-model-keys
   [:id :name :provider :api :base-url :reasoning :input :cost
    :context-window :max-tokens])
@@ -262,12 +268,19 @@
        (sort-by fs/file-name)))
 
 (defn- load-catalog-file
-  "Read + validate one catalog file; nil when missing."
+  "Read + validate one catalog file (parsed result cached by mtime+size);
+   nil when missing."
   [file]
-  (let [data (read-edn-file file)]
-    (when data
-      (validate-catalog! file data)
-      data)))
+  (let [path (str file)
+        stat {:mtime (fs/last-modified-time file) :size (fs/size file)}
+        cached (get @catalog-cache path)]
+    (if (= stat (select-keys cached [:mtime :size]))
+      (:data cached)
+      (let [data (read-edn-file path)]
+        (when data
+          (validate-catalog! file data)
+          (swap! catalog-cache assoc path (assoc stat :data data))
+          data)))))
 
 (defn- catalog->provider
   "Build a Provider record from a catalog blob: provider info from the

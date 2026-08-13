@@ -101,21 +101,17 @@
               (recur (inc pi) (inc ti))
               (recur pi (inc ti)))))))))
 
-(defn- model-by-id [models id]
-  (first (filter #(= id (full-id %)) models)))
-
 (defn- filtered-items
   "Sorted visible items for the current search (pi refresh — fuzzy filter
    over \"provider/id\" + model name)."
   [st]
-  (let [models (:models st)
-        query (str/lower-case (:search st))
+  (let [query (str/lower-case (:search st))
         items (mapv (fn [id]
-                      (let [m (model-by-id models id)]
+                      (let [m (get (:model-map st) id)]
                         {:full-id id
                          :model m
                          :enabled (and m (is-enabled? (:enabled-ids st) id))}))
-                    (sorted-ids (:enabled-ids st) (mapv full-id models)))]
+                    (sorted-ids (:enabled-ids st) (:all-ids st)))]
     (if (str/blank? query)
       items
       (vec (filter (fn [{:keys [full-id model]}]
@@ -180,7 +176,7 @@
         ;; app.models.enableAll)
         (kb/matches-key kmgr data "app.models.enableAll")
         (let [targets (when (seq (:search st)) (mapv :full-id filtered))
-              ids (enable-all (:enabled-ids st) (mapv full-id (:models st)) targets)]
+              ids (enable-all (:enabled-ids st) (:all-ids st) targets)]
           (swap! state-atom assoc :enabled-ids ids :dirty true)
           (when-let [cb @on-change-atom] (cb ids))
           (scoped-models-refresh! this)
@@ -189,7 +185,7 @@
         ;; Clear all — filtered to the search query when active
         (kb/matches-key kmgr data "app.models.clearAll")
         (let [targets (when (seq (:search st)) (mapv :full-id filtered))
-              ids (clear-all (:enabled-ids st) (mapv full-id (:models st)) targets)]
+              ids (clear-all (:enabled-ids st) (:all-ids st) targets)]
           (swap! state-atom assoc :enabled-ids ids :dirty true)
           (when-let [cb @on-change-atom] (cb ids))
           (scoped-models-refresh! this)
@@ -199,9 +195,9 @@
         (kb/matches-key kmgr data "app.models.toggleProvider")
         (let [item (when (pos? n) (nth filtered (min (:selected-idx st) (dec n))))]
           (when-let [m (:model item)]
-            (let [all-ids (mapv full-id (:models st))
+            (let [all-ids (:all-ids st)
                   provider (:provider m)
-                  provider-ids (filterv #(= provider (:provider (model-by-id (:models st) %)))
+                  provider-ids (filterv #(= provider (:provider (get (:model-map st) %)))
                                         all-ids)
                   all-on? (every? #(is-enabled? (:enabled-ids st) %) provider-ids)
                   ids (if all-on?
@@ -249,7 +245,7 @@
 
 (defn- footer-text-str
   [st]
-  (let [all-ids (mapv full-id (:models st))
+  (let [all-ids (:all-ids st)
         enabled-ids (:enabled-ids st)
         all-set (set all-ids)
         enabled-count (if (nil? enabled-ids)
@@ -345,7 +341,10 @@
    (fn [ids|nil]) — Ctrl+S; :on-cancel."
   [models enabled-ids & {:keys [on-change on-persist on-cancel]}]
   (let [th (theme/get-current-theme)
-        st (atom {:models (vec models)
+        model-map (into {} (map (fn [m] [(full-id m) m])) models)
+        all-ids (mapv full-id models)
+        st (atom {:all-ids all-ids
+                  :model-map model-map
                   :enabled-ids enabled-ids
                   :selected-idx 0
                   :search ""

@@ -1215,24 +1215,35 @@
   [path]
   (try
     (with-open [r (io/reader path :encoding "UTF-8")]
-      (let [cbuf (char-array header-read-buffer-size)]
-        (loop [scanned 0 pending ""]
+      (let [sb (StringBuilder.)
+            cbuf (char-array header-read-buffer-size)]
+        (loop [scanned 0]
           (if (>= scanned max-header-scan-chars)
             ;; At the limit a final header ending exactly here (no further
             ;; characters) is still accepted — probe EOF (pi: readSessionHeader).
             (if (neg? (.read r))
-              (let [decision (parse-header-candidate pending)]
+              (let [decision (parse-header-candidate (str sb))]
                 (when-not (= ::continue decision) decision))
               nil)
             (let [n (.read r cbuf)]
               (if (neg? n)
-                (let [decision (parse-header-candidate pending)]
+                (let [decision (parse-header-candidate (str sb))]
                   (when-not (= ::continue decision) decision))
-                (let [[decision remaining]
-                      (consume-header-lines (str pending (String. cbuf 0 n)))]
-                  (if (= ::continue decision)
-                    (recur (+ scanned n) remaining)
-                    decision))))))))
+                ;; pending never holds a newline between iterations (complete
+                ;; lines are consumed eagerly), so scanning the chunk alone is
+                ;; enough — the whole-builder concat stays O(n) even for a
+                ;; 1 MB single-line header
+                (let [chunk (String. cbuf 0 n)]
+                  (if (str/includes? chunk "\n")
+                    (let [[decision remaining]
+                          (consume-header-lines (str (.append sb chunk)))]
+                      (if (= ::continue decision)
+                        (do (.setLength sb 0)
+                            (.append sb remaining)
+                            (recur (+ scanned n)))
+                        decision))
+                    (do (.append sb chunk)
+                        (recur (+ scanned n)))))))))))
     (catch Exception _ nil)))
 
 (defn find-most-recent-session

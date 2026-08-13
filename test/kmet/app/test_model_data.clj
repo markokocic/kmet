@@ -12,11 +12,14 @@
             [kmet.app.models :as m]))
 
 (defn- validate-dir
-  "Load scripts/generate_models.clj and run its offline validation over DIR
-   (defaults to the committed catalog dir)."
+  "Run the generator script's offline validation over DIR (defaults to the
+   committed catalog dir). The script is loaded once and cached — its
+   validate-committed! is a pure read of the catalog files."
   [& [dir]]
-  (load-file "scripts/generate_models.clj")
-  (let [f (ns-resolve 'generate-models 'validate-committed!)]
+  (let [f (force
+           (delay
+             (load-file "scripts/generate_models.clj")
+             (ns-resolve 'generate-models 'validate-committed!)))]
     (when-not f
       (throw (ex-info "scripts/generate_models.clj did not define validate-committed!"
                       {:type :script-invalid})))

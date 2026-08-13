@@ -22,6 +22,15 @@
   (binding [*err* (java.io.StringWriter.)]
     (f)))
 
+(defn- pad-string
+  "A string of N copies of C. char-array + Arrays/fill is one native call,
+   ~100× faster than (apply str (repeat n c)) in babashka — used to build
+   the >1 MB test payloads."
+  [n c]
+  (let [a (char-array n)]
+    (java.util.Arrays/fill a c)
+    (String. a)))
+
 (t/deftest test-session-create
   (let [session (s/create-session test-dir)]
     (t/is (string? (:id session)))
@@ -256,7 +265,7 @@
   ;; limit is treated as headerless, never read to the end
   (let [dir (str "target/test-sess-hdr-limit-" (System/currentTimeMillis))
         cwd-dir (s/session-dir-for-cwd dir "/home/user/proj")
-        big-cwd (str "/home/user/" (apply str (repeat 1100000 "d")))
+        big-cwd (str "/home/user/" (pad-string 1100000 \d))
         sess (s/create-session cwd-dir {:cwd big-cwd})
         _ (s/append-entry sess {:role :assistant :content "a"})
         other (s/create-session cwd-dir {:cwd "/home/user/proj"})
@@ -535,8 +544,10 @@
   ;; round-trips whole, including entries straddling a chunk boundary
   (let [dir (str "target/test-sess-stream-" (System/currentTimeMillis))
         sess (s/create-session dir)
-        n 12000  ;; ~1.3 MB of lines, well past one 1 MB chunk
-        entry (fn [i] {:role :user :content [{:type :text :text (str "msg " i " " (apply str (repeat 90 "x")))}]})]
+        n 500  ;; ~1.3 MB of lines (500 × 2.6 KB), well past one 1 MB chunk —
+              ;; fewer, longer lines keep the same total size with a fraction
+              ;; of the per-line EDN parse cost
+        entry (fn [i] {:role :user :content [{:type :text :text (str "msg " i " " (pad-string 2500 \x))}]})]
     (try
       (s/append-entry sess {:role :assistant :content "start"})  ;; persist (lazy G4)
       (spit (:file sess)
@@ -638,7 +649,7 @@
         ;; 漢's 3 bytes span byte 1048575..1048577 — right across the 1 MB
         ;; read boundary
         line (prn-str {:id "1" :role :user
-                       :content (str (apply str (repeat 1048541 "a")) "漢")})]
+                       :content (str (pad-string 1048541 \a) "漢")})]
     (try
       (fs/create-dirs dir)
       (spit file (str line "\n"))
