@@ -73,6 +73,14 @@
                    (assoc opts :models (mapv str/trim (str/split (first rest-args) #","))))
             (recur rest-args opts))
 
+          (#{"--list-models"} arg)
+          ;; pi: the next arg is a search pattern unless it's a flag or @file
+          (if (and (seq rest-args)
+                   (not (str/starts-with? (first rest-args) "-"))
+                   (not (str/starts-with? (first rest-args) "@")))
+            (recur (rest rest-args) (assoc opts :list-models (first rest-args)))
+            (recur rest-args (assoc opts :list-models true)))
+
           (#{"-h" "--help"} arg)
           (assoc opts :help true)
 
@@ -102,6 +110,7 @@
   (println "  --model <id>          Model to use (pattern: provider/model[:thinking])")
   (println "  --provider <name>     Provider (opencode-go, opencode, deepseek,\n                        github-copilot)")
   (println "  --models <patterns>   Comma-separated model patterns for Ctrl+P cycling")
+  (println "  --list-models [search] List available models (with optional fuzzy search)")
   (println "  --system-prompt <txt> Replace the system prompt (or path to a file)")
   (println "  --append-system-prompt <txt> Append to the system prompt (repeatable)")
   (println "  -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)")
@@ -114,6 +123,76 @@
   (println "  kmet @tasks.md         Start with file content"))
 
 ;; ─── Main ──────────────────────────────────────────────────────────────────
+
+(defn- fuzzy-match?
+  "Subsequence fuzzy match (pi: fuzzyFilter — used by --list-models)."
+  [pattern text]
+  (let [pl (count pattern) tl (count text)]
+    (if (zero? pl)
+      true
+      (loop [pi 0 ti 0]
+        (if (>= pi pl)
+          true
+          (if (>= ti tl)
+            false
+            (if (= (nth pattern pi) (nth text ti))
+              (recur (inc pi) (inc ti))
+              (recur pi (inc ti)))))))))
+
+(defn- format-token-count
+  "pi formatTokenCount — 200000 → \"200K\", 1000000 → \"1M\", 1500000 →
+   \"1.5M\", else the plain number."
+  [n]
+  (let [fmt (fn [div]
+              (let [s (format "%.1f" (/ n div))]
+                (if (str/ends-with? s ".0")
+                  (subs s 0 (- (count s) 2))
+                  s)))]
+    (cond
+      (>= n 1000000) (str (fmt 1000000.0) "M")
+      (>= n 1000) (str (fmt 1000.0) "K")
+      :else (str n))))
+
+(defn- list-models
+  "pi cli/list-models.ts — print available models (provider | model | context
+   | max-out | thinking | images), optional fuzzy search over provider + id."
+  [search-pattern]
+  (when-let [err (models/get-model-config-error)]
+    (binding [*out* *err*]
+      (println "Warning: errors loading models.edn:" err)))
+  (let [available (models/get-available)]
+    (if (empty? available)
+      (println "No models available. Use /login to configure a provider.")
+      (let [filtered (if (seq search-pattern)
+                       (vec (filter #(fuzzy-match? (str/lower-case search-pattern)
+                                                   (str/lower-case (str (name (:provider %)) " " (:id %))))
+                                    available))
+                       (vec available))]
+        (if (empty? filtered)
+          (println (str "No models matching \"" search-pattern "\""))
+          (let [rows (mapv (fn [m]
+                             {:provider (name (:provider m))
+                              :model (:id m)
+                              :context (format-token-count (or (:context-window m) 0))
+                              :max-out (format-token-count (or (:max-tokens m) 0))
+                              :thinking (if (:reasoning m) "yes" "no")
+                              :images (if (some #{:image} (:input m)) "yes" "no")})
+                           (sort-by (juxt :provider :id) filtered))
+                headers {:provider "provider" :model "model" :context "context"
+                         :max-out "max-out" :thinking "thinking" :images "images"}
+                cols (keys headers)
+                widths (into {}
+                             (for [k cols]
+                               [k (reduce max (count (get headers k))
+                                          (map (comp count k) rows))]))
+                line (fn [row]
+                       (str/join "  " (for [k cols]
+                                        (str (get row k)
+                                             (apply str (repeat (max 0 (- (get widths k)
+                                                                          (count (get row k))))
+                                                                \space))))))]
+            (println (line headers))
+            (doseq [r rows] (println (line r)))))))))
 
 (defn- resolve-cli-model-opts
   "Resolve CLI --model/--models against the catalog registry (pi
@@ -169,6 +248,13 @@
     (let [config (cfg/init!)]
       (doseq [d (cfg/resource-dirs config :extensions-dir ".kmet/extensions")]
         (extensions/load-extensions-from-dir d))
+
+      ;; --list-models prints the available table and exits (pi: main.ts
+      ;; listModels — after catalogs, models.edn, and extensions load so
+      ;; custom providers appear)
+      (when (:list-models opts)
+        (list-models (when (string? (:list-models opts)) (:list-models opts)))
+        (System/exit 0))
 
       ;; CLI --model/--models patterns resolve against the registry (pi
       ;; resolveCliModel at dispatch) before mode dispatch

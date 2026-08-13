@@ -240,6 +240,33 @@
   [hidden?]
   (save-setting! [:hide-thinking-block] (boolean hidden?)))
 
+(defn get-enabled-models
+  "Enabled model patterns for Ctrl+P cycling (pi: settingsManager
+   enabledModels — same format as the --models flag). nil = all enabled."
+  [config]
+  (:enabled-models config))
+
+(defn get-enabled-models-live
+  "Live :enabled-models patterns from the global settings file (pi: the
+   SettingsManager holds mutable settings — kmet's in-memory config is a
+   startup snapshot, so /scoped-models re-reads after a Ctrl+S persist).
+   Falls back to the CONFIG value when the file is missing or unreadable."
+  [config]
+  (let [file (io/file (global-settings-path))]
+    (if-not (fs/exists? file)
+      (:enabled-models config)
+      (let [parsed (try (edn/read-string (slurp file)) (catch Exception _ nil))]
+        (if (map? parsed)
+          (:enabled-models parsed)
+          (:enabled-models config))))))
+
+(defn set-enabled-models!
+  "Persist the enabled-model patterns to the global settings file (pi:
+   settingsManager.setEnabledModels). nil removes the filter — all models
+   enabled."
+  [patterns]
+  (save-setting! [:enabled-models] patterns))
+
 ;; ─── System prompt sources (pi: resolvePromptInput + discoverSystemPromptFile) ──
 
 (defn- resolve-prompt-input

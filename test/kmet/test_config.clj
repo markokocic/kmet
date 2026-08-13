@@ -247,6 +247,43 @@
   (t/is (false? (cfg/get-hide-thinking-block {:hide-thinking-block false})))
   (t/is (true? (cfg/get-hide-thinking-block {:hide-thinking-block true}))))
 
+(t/deftest test-get-enabled-models
+  (t/is (nil? (cfg/get-enabled-models {})))
+  (t/is (= ["a" "b"] (cfg/get-enabled-models {:enabled-models ["a" "b"]}))))
+
+(t/deftest test-get-enabled-models-live
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-enabled-models-live-" (System/currentTimeMillis)))))
+        settings-file (str tmp "/settings.edn")]
+    (fs/create-dirs tmp)
+    (try
+      (with-redefs [cfg/global-settings-path (fn [] settings-file)]
+        (t/testing "reads the file (pi: mutable settings object)"
+          (spit settings-file "{:enabled-models [\"a\"]}\n")
+          (t/is (= ["a"] (cfg/get-enabled-models-live {:enabled-models ["stale"]}))))
+        (t/testing "missing file falls back to the config value"
+          (fs/delete-tree tmp)
+          (t/is (= ["stale"] (cfg/get-enabled-models-live {:enabled-models ["stale"]}))))
+        (t/testing "unreadable file falls back to the config value"
+          (fs/create-dirs tmp)
+          (spit settings-file "not-edn[")
+          (t/is (= ["stale"] (cfg/get-enabled-models-live {:enabled-models ["stale"]})))))
+      (finally (fs/delete-tree tmp)))))
+
+(t/deftest test-set-enabled-models!
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-enabled-models-" (System/currentTimeMillis)))))
+        settings-file (str tmp "/settings.edn")]
+    (fs/create-dirs tmp)
+    (try
+      (with-redefs [cfg/global-settings-path (fn [] settings-file)]
+        (cfg/set-enabled-models! ["opencode-go/deepseek-v4-flash"])
+        (t/is (= {:enabled-models ["opencode-go/deepseek-v4-flash"]}
+                 (edn/read-string (slurp settings-file))))
+        (t/testing "nil removes the filter (all enabled)"
+          (cfg/set-enabled-models! nil)
+          (t/is (= {:enabled-models nil} (edn/read-string (slurp settings-file))))
+          (t/is (nil? (cfg/get-enabled-models (edn/read-string (slurp settings-file)))))))
+      (finally (fs/delete-tree tmp)))))
+
 (t/deftest test-set-hide-thinking-block!
   (let [tmp (str (fs/absolutize (fs/file "target" (str "test-settings-" (System/currentTimeMillis)))))
         settings-file (str tmp "/settings.edn")]

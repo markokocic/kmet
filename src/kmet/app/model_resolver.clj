@@ -104,21 +104,31 @@
 
 ;; ─── Scoped models (pi resolveModelScopeFromModels essentials) ────────────
 
+(defn resolve-model-scope-models
+  "Resolve --models PATTERNS to Model records (pi resolveModelScopeFromModels
+   — the scoped list carries provider refs, unlike resolve-model-scope's bare
+   ids). Each pattern via parse-model-pattern; patterns carrying a thinking
+   level resolve to the model only (kmet drops scoped thinking levels).
+   Returns {:models [Model] :warnings [str]}."
+  [patterns models]
+  (loop [ps patterns acc [] warnings []]
+    (if-let [p (first ps)]
+      (let [{:keys [model warning]} (parse-model-pattern p models)]
+        (if model
+          (recur (rest ps) (conj acc model)
+                 (cond-> warnings warning (conj warning)))
+          (recur (rest ps) acc
+                 (conj warnings (str "No models match pattern \"" p "\"")))))
+      {:models (vec acc) :warnings (vec warnings)})))
+
 (defn resolve-model-scope
   "Resolve --models PATTERNS to model ids (pi resolveModelScopeFromModels
    essentials, no glob support): each pattern via parse-model-pattern;
    patterns carrying a thinking level resolve to the model only. Returns
    {:models [ids] :warnings [str]}."
   [patterns models]
-  (loop [ps patterns acc [] warnings []]
-    (if-let [p (first ps)]
-      (let [{:keys [model warning]} (parse-model-pattern p models)]
-        (if model
-          (recur (rest ps) (conj acc (:id model))
-                 (cond-> warnings warning (conj warning)))
-          (recur (rest ps) acc
-                 (conj warnings (str "No models match pattern \"" p "\"")))))
-      {:models (vec acc) :warnings (vec warnings)})))
+  (let [{:keys [models warnings]} (resolve-model-scope-models patterns models)]
+    {:models (mapv :id models) :warnings warnings}))
 
 ;; ─── /model reference (pi handleModelCommand — exact only) ────────────────
 

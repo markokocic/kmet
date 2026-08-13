@@ -35,6 +35,7 @@
    "ExtensionSelectorDialog"    :transparent-parent
    "ExtensionInputDialog"       :transparent-parent
    "ExtensionEditorDialog"      :transparent-parent
+   "ScopedModelsSelector"       :transparent-parent
    "Spinner"                    :time-animated
    "StatusIndicator"            :time-animated
    "RetryStatusIndicator"       :time-animated
@@ -118,7 +119,7 @@
    when components are added or removed; a mismatch means the scan below
    silently lost forms (a scanner regression), so the convention checks
    would otherwise pass vacuously."
-  37)
+  38)
 
 (deftest caching-conventions
   (let [checked (atom [])]

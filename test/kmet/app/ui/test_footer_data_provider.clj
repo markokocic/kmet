@@ -28,6 +28,15 @@
       (fdp/fdp-set-session! p :a-session)
       (is (= :a-session (fdp/fdp-get-session p))))))
 
+(deftest test-provider-count-swap
+  (testing "provider count is swappable (pi updateAvailableProviderCount)"
+    (let [p (fdp/make-footer-data-provider)]
+      (is (= 1 (fdp/fdp-get-provider-count p)))
+      (fdp/fdp-set-provider-count! p 3)
+      (is (= 3 (fdp/fdp-get-provider-count p)))
+      (fdp/fdp-set-provider-count! p 0)
+      (is (= 0 (fdp/fdp-get-provider-count p))))))
+
 (deftest test-usage-totals
   (testing "usage totals sum across session entries"
     (with-session

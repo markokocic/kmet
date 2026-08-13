@@ -5,6 +5,7 @@
             [babashka.fs :as fs]
             [kmet.app.loop :as agent]
             [kmet.app.models :as models]
+            [kmet.app.model-resolver :as resolver]
             [kmet.app.skills :as skills]
             [kmet.app.context :as context]
             [kmet.app.prompts :as prompts]
@@ -32,7 +33,11 @@
             :provider resolved-provider
             :system system-prompt)
         _ (when (seq (:models config))
-            (agent/set-models! ag (:models config)))
+            (let [{:keys [models]}
+                  (resolver/resolve-model-scope-models (:models config)
+                                                       (models/get-models))]
+              (agent/set-scoped-models!
+               ag (mapv (fn [m] (str (name (:provider m)) "/" (:id m))) models))))
         result-promise (promise)
         ;; pi: session.prompt expands skill commands + prompt templates
         message (-> (str/join " " messages)

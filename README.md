@@ -55,6 +55,7 @@ bb run --print "list files in current directory"
   --model <id>          Model to use (pattern: provider/model[:thinking])
   --provider <name>     Provider (opencode-go, opencode, deepseek, github-copilot)
   --models <patterns>   Comma-separated model patterns for Ctrl+P cycling
+  --list-models [search] List available models (with optional fuzzy search)
   -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)
   -h, --help            Show this help
 ```
@@ -65,7 +66,11 @@ bb run --print "list files in current directory"
 |---------|-------------|
 | `/quit` | Exit kmet |
 | `/help` | Show help |
-| `/model <provider:model[:thinking]>` | Switch model (Ctrl+L opens a selector) |
+| `/model <provider:model[:thinking]>` | Switch model (Ctrl+L opens a selector; refresh-on-miss falls through to the selector with the search term) |
+| `/scoped-models` | Enable/disable/reorder the models Ctrl+P cycles through (Ctrl+S saves to settings) |
+| `/settings` | Settings menu — thinking level + hide-thinking |
+| `/login [provider]` | Configure provider auth (API key or GitHub Copilot OAuth) |
+| `/logout [provider]` | Remove stored provider credentials |
 | `/new` | Start new session |
 | `/resume` | Browse past sessions |
 | `/tree` | Browse session entry tree |
@@ -80,7 +85,7 @@ bb run --print "list files in current directory"
 | `Ctrl+D` | Exit when editor is empty |
 | `Ctrl+C` | Clear editor (twice to quit) |
 | `Ctrl+L` | Select model |
-| `Ctrl+P` / `Shift+Ctrl+P` | Cycle scoped models (`--models`) |
+| `Ctrl+P` / `Shift+Ctrl+P` | Cycle scoped models (`--models` / `/scoped-models`) |
 | `Ctrl+Up/Down` | Scroll chat viewport |
 
 ## Project Structure

@@ -64,11 +64,11 @@
   [level]
   (some #{level} thinking-levels))
 
-(defn- supported-thinking-levels
-  "Levels a model can express (pi getSupportedThinkingLevels): non-reasoning
-   models only :off; :xhigh/:max require an entry in the model's
-   thinking-level-map; a null map value marks a level unsupported (absent
-   entries are supported)."
+(defn get-supported-thinking-levels
+  "Levels a model can express (pi getSupportedThinkingLevels — public for
+   the /settings selector): non-reasoning models only :off; :xhigh/:max
+   require an entry in the model's thinking-level-map; a null map value
+   marks a level unsupported (absent entries are supported)."
   [model]
   (if-not (:reasoning model)
     [:off]
@@ -86,7 +86,7 @@
    nearest supported level (searching up from the request, then down), else
    the first supported level."
   [model level]
-  (let [available (supported-thinking-levels model)]
+  (let [available (get-supported-thinking-levels model)]
     (if (some #{level} available)
       level
       (let [idx (first (keep-indexed (fn [i l] (when (= l level) i)) thinking-levels))]

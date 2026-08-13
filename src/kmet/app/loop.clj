@@ -42,8 +42,9 @@
    core/compaction) and replaces it with a summary entry; falls back to
    count-based truncation when summarization is unavailable.
 
-   Model management (pi: setModel / cycleModel): set-models! sets the scoped
-   model list; cycle-model! moves through it emitting :model-select.
+   Model management (pi: setModel / cycleModel): set-scoped-models! sets the
+   session scoped model list; cycle-model! moves through it emitting
+   :model-select.
    set-get-api-key! registers a dynamic API key resolver.
 
    Input hooks (pi: input extension event): applied at the interactive input
@@ -106,7 +107,7 @@
                        prepare-next-turn      ;; atom of (fn [ctx]) → update map | nil (pi: prepareNextTurn)
                        should-stop-after-turn ;; atom of (fn [ctx]) → boolean (pi: shouldStopAfterTurn)
                        get-api-key            ;; atom of (fn [provider]) → key | nil (dynamic auth)
-                       models                 ;; atom of vector of model ids (scoped list for cycling)
+                       scoped-models          ;; atom of vector of "provider/id" full ids (scoped list for cycling; pi: session.scopedModels)
                        overflow-recovered     ;; atom of bool: context-overflow compacted once this run
                        compact-token-threshold ;; int or nil: compact when estimated tokens exceed this
                        keep-recent-tokens     ;; int: cut-point budget in tokens (pi: keepRecentTokens, default 20000)
@@ -121,17 +122,17 @@
          :max-retries (default 3), :base-delay-ms (default 2000),
          :before-tool-call, :after-tool-call, :system-prompt-override,
          :transform-context, :prepare-next-turn, :should-stop-after-turn,
-         :get-api-key, :models (default []), :compact-token-threshold,
+         :get-api-key, :scoped-models (default []), :compact-token-threshold,
          :keep-recent-tokens (default 20000, pi: keepRecentTokens),
          :http-idle-timeout-ms (default 300000, pi: httpIdleTimeoutMs; 0 disables)"
-  [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key models compact-token-threshold keep-recent-tokens http-idle-timeout-ms]
+  [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key scoped-models compact-token-threshold keep-recent-tokens http-idle-timeout-ms]
       :or {provider :opencode-go
            thinking :off
            steering-mode :all
            follow-up-mode :all
            max-retries 3
            base-delay-ms 2000
-           models []
+           scoped-models []
            keep-recent-tokens 20000
            http-idle-timeout-ms 300000
            system "You are kmet, a minimal coding agent. Help the user with their tasks.
@@ -164,7 +165,7 @@ Be precise and concise in your responses."}}]
                     :prepare-next-turn (atom prepare-next-turn)
                     :should-stop-after-turn (atom should-stop-after-turn)
                     :get-api-key (atom get-api-key)
-                    :models (atom models)
+                    :scoped-models (atom scoped-models)
                     :overflow-recovered (atom false)
                     :compact-token-threshold compact-token-threshold
                     :keep-recent-tokens keep-recent-tokens
@@ -1440,31 +1441,75 @@ Be precise and concise in your responses."}}]
                    :previous-model previous
                    :source :set}))))
 
-(defn set-models!
-  "Set the scoped model list used by cycle-model! (pi: _scopedModels)."
+(defn set-scoped-models!
+  "Set the session scoped model list used by cycle-model! (pi:
+   session.setScopedModels — the list holds \"provider/id\" full ids; empty
+   = no scoping, cycle over all available models)."
   [agent models]
-  (reset! (:models agent) (vec models)))
+  (reset! (:scoped-models agent) (vec models)))
+
+(defn get-scoped-models
+  "The session scoped model list (pi: session.scopedModels) — \"provider/id\"
+   full ids, or [] when unset."
+  [agent]
+  @(:scoped-models agent))
+
+(defn- resolve-scoped-model
+  "Resolve a scoped-list entry (full \"provider/id\" or bare id) to a Model
+   record. Bare ids (the legacy --models/`:models` form) prefer the current
+   provider, then the unique cross-provider match."
+  [entry current-provider]
+  (let [s (str entry)
+        slash (str/index-of s "/")]
+    (if slash
+      (models/get-model (keyword (subs s 0 slash)) (subs s (inc slash)))
+      (or (models/get-model current-provider s)
+          (first (filter #(= s (:id %)) (models/get-models)))))))
+
+(defn- scoped-model-entries
+  "Resolve scoped-list entries to available Model records (pi
+   _cycleScopedModel — filtered to the available snapshot; entries with no
+   auth drop out). Bare ids resolve against CURRENT-PROVIDER first."
+  [entries current-provider]
+  (let [available (set (map (fn [m] [(name (:provider m)) (:id m)])
+                            (models/get-available)))]
+    (into []
+          (keep (fn [entry]
+                  (let [m (resolve-scoped-model entry current-provider)]
+                    (when (and m (contains? available [(name (:provider m)) (:id m)])) m))))
+          entries)))
 
 (defn cycle-model!
-  "Cycle to the next/previous model in the scoped model list (pi: cycleModel).
-   direction — 1 (forward) or -1 (backward). Returns the new model, or nil if
-   no models are registered."
+  "Cycle to the next/previous model in the scoped model list (pi: cycleModel
+   → _cycleScopedModel / _cycleAvailableModel). The session scoped list
+   (set via /scoped-models, seeded from config :models) is used when
+   non-empty; otherwise all available models cycle. Entries are filtered to
+   authenticated models; a scoped entry may switch the provider. Returns the
+   new model id, or nil when fewer than two models are available."
   [agent direction]
-  (let [models @(:models agent)]
-    (when (seq models)
-      (let [current @(:model agent)
-            idx (or (first (keep-indexed (fn [i m] (when (= m current) i)) models))
+  (let [current-provider @(:provider agent)
+        scoped (or (seq @(:scoped-models agent))
+                   (mapv (fn [m] (str (name (:provider m)) "/" (:id m)))
+                         (models/get-available)))
+        models (scoped-model-entries scoped current-provider)]
+    (when (> (count models) 1)
+      (let [current [(name @(:provider agent)) @(:model agent)]
+            idx (or (first (keep-indexed (fn [i m]
+                                           (when (= current [(name (:provider m)) (:id m)])
+                                             i))
+                                         models))
                     -1)
-            next-model (nth models (mod (+ idx direction) (count models)))]
-        (reset! (:model agent) next-model)
-        (when-not (= next-model current)
-          (when-let [sess (:session agent)]
-            (session/append-model-change! sess @(:provider agent) next-model)))
+            previous @(:model agent)
+            next (nth models (mod (+ idx direction) (count models)))]
+        (reset! (:provider agent) (:provider next))
+        (reset! (:model agent) (:id next))
+        (when-let [sess (:session agent)]
+          (session/append-model-change! sess (:provider next) (:id next)))
         (emit agent {:type :model-select
-                     :model next-model
-                     :previous-model current
+                     :model (:id next)
+                     :previous-model previous
                      :source :cycle})
-        next-model))))
+        (:id next)))))
 
 (defn set-thinking-level!
   "Set the thinking level, persisting a :thinking-level-change session entry

@@ -14,6 +14,8 @@
             [kmet.app.ui.chat-history :as ui]
             [kmet.tui.theme :as th]))
 
+(declare make-test-provider)
+
 ;; ─── State construction ───────────────────────────────────────────────────
 
 (t/deftest test-loop-make-agent-state-defaults
@@ -112,23 +114,29 @@
         (fs/delete-tree dir)))))
 
 (t/deftest test-loop-cycle-model-persists-change
-  (let [dir (str (fs/create-dirs (fs/path "target" "test-loop-cycle-model")))]
+  (let [dir (str (fs/create-dirs (fs/path "target" "test-loop-cycle-model")))
+        saved (models/get-providers)]
+    (models/clear-providers!)
+    (models/register-provider! (make-test-provider ["a" "b"]))
     (try
-      (let [sess (session/create-session dir)
-            agent (loop/make-agent-state :session sess
-                                         :provider :opencode-go
-                                         :model "a"
-                                         :models ["a" "b"])]
-        ;; lazy creation: file exists only after an assistant message
-        (session/append-entry sess {:role :user :content "q"})
-        (session/append-entry sess {:role :assistant :content "a"})
-        (loop/cycle-model! agent 1)
-        (t/is (= "b" @(:model agent)))
-        (t/is (= :model-change (:role (last (session/get-branch sess)))))
-        (let [loaded (session/load-session (:file sess))]
-          (t/is (= "b" (:model (last (session/get-branch loaded))))
-                "model change persisted to disk")))
+      (with-redefs [auth/auth-atom (atom {:test-prov {:key "sk"}})]
+        (let [sess (session/create-session dir)
+              agent (loop/make-agent-state :session sess
+                                           :provider :test-prov
+                                           :model "a"
+                                           :scoped-models ["test-prov/a" "test-prov/b"])]
+          ;; lazy creation: file exists only after an assistant message
+          (session/append-entry sess {:role :user :content "q"})
+          (session/append-entry sess {:role :assistant :content "a"})
+          (loop/cycle-model! agent 1)
+          (t/is (= "b" @(:model agent)))
+          (t/is (= :model-change (:role (last (session/get-branch sess)))))
+          (let [loaded (session/load-session (:file sess))]
+            (t/is (= "b" (:model (last (session/get-branch loaded))))
+                  "model change persisted to disk"))))
       (finally
+        (models/clear-providers!)
+        (doseq [p saved] (models/register-provider! p))
         (fs/delete-tree dir)))))
 
 (t/deftest test-loop-set-thinking-level-persists-change
@@ -1340,30 +1348,101 @@
     (t/is (instance? clojure.lang.Atom (:prepare-next-turn agent)))
     (t/is (instance? clojure.lang.Atom (:should-stop-after-turn agent)))
     (t/is (instance? clojure.lang.Atom (:get-api-key agent)))
-    (t/is (= [] @(:models agent)))
+    (t/is (= [] @(:scoped-models agent)))
     (t/is (false? @(:overflow-recovered agent)))
     (t/is (nil? (:compact-token-threshold agent)))
     (t/is (= 3 (:max-retries agent)) "pi default maxRetries")))
 
+(defn- make-test-provider
+  "A minimal test provider with models IDS (pi-shaped Model records)."
+  [ids]
+  (models/map->Provider
+   {:id :test-prov :name "Test"
+    :api-types #{:openai-completions}
+    :models (mapv (fn [id]
+                    (models/map->Model {:id id :name (str "Model " id)
+                                        :provider :test-prov
+                                        :api :openai-completions
+                                        :base-url "https://test"
+                                        :reasoning false :input [:text]
+                                        :cost {:input 0 :output 0 :cache-read 0
+                                               :cache-write 0}
+                                        :context-window 1000 :max-tokens 100}))
+                  ids)
+    :env-vars [] :default-model nil}))
+
+(defn- with-test-provider
+  "Register the test provider + auth and restore the registry after."
+  [f]
+  (let [saved (models/get-providers)]
+    (models/clear-providers!)
+    (models/register-provider! (make-test-provider ["a" "b" "c"]))
+    (try
+      (with-redefs [auth/auth-atom (atom {:test-prov {:key "sk"}})]
+        (f))
+      (finally
+        (models/clear-providers!)
+        (doseq [p saved] (models/register-provider! p))))))
+
 (t/deftest test-loop-cycle-model
-  (let [events (atom [])
-        agent (loop/make-agent-state
-               :model "a" :models ["a" "b" "c"]
-               :on-event (fn [e] (swap! events conj e)))]
-    (t/is (= "b" (loop/cycle-model! agent 1)))
-    (t/is (= "c" (loop/cycle-model! agent 1)))
-    (t/is (= "a" (loop/cycle-model! agent 1)) "wraps around at the end")
-    (t/is (= "c" (loop/cycle-model! agent -1)) "cycles backward")
-    (t/is (= "b" (loop/cycle-model! agent -1)))
-    (let [ev (last @events)]
-      (t/is (= :model-select (:type ev)) "cycle emits :model-select")
-      (t/is (= :cycle (:source ev)))
-      (t/is (= "b" (:model ev)))
-      (t/is (= "c" (:previous-model ev))))))
+  (with-test-provider
+    (fn []
+      (let [events (atom [])
+            agent (loop/make-agent-state
+                   :provider :test-prov :model "a"
+                   :scoped-models ["test-prov/a" "test-prov/b" "test-prov/c"]
+                   :on-event (fn [e] (swap! events conj e)))]
+        (t/is (= "b" (loop/cycle-model! agent 1)))
+        (t/is (= "c" (loop/cycle-model! agent 1)))
+        (t/is (= "a" (loop/cycle-model! agent 1)) "wraps around at the end")
+        (t/is (= "c" (loop/cycle-model! agent -1)) "cycles backward")
+        (t/is (= "b" (loop/cycle-model! agent -1)))
+        (let [ev (last @events)]
+          (t/is (= :model-select (:type ev)) "cycle emits :model-select")
+          (t/is (= :cycle (:source ev)))
+          (t/is (= "b" (:model ev)))
+          (t/is (= "c" (:previous-model ev))))))))
+
+(t/deftest test-loop-cycle-model-falls-back-to-available
+  ;; pi: no session scoped models → cycle over all available models
+  (with-test-provider
+    (fn []
+      (let [agent (loop/make-agent-state :provider :test-prov :model "b")]
+        (t/is (= "c" (loop/cycle-model! agent 1)))
+        (t/is (= "a" (loop/cycle-model! agent 1)))))))
+
+(t/deftest test-loop-cycle-model-switches-provider
+  ;; a scoped entry carries its provider — cycling can switch providers
+  (let [saved (models/get-providers)
+        prov2 (models/map->Provider
+               {:id :test-prov2 :name "Test2"
+                :api-types #{:openai-completions}
+                :models [(models/map->Model {:id "x" :name "X" :provider :test-prov2
+                                             :api :openai-completions :base-url "https://t"
+                                             :reasoning false :input [:text]
+                                             :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+                                             :context-window 1000 :max-tokens 100})]
+                :env-vars [] :default-model nil})]
+    (models/clear-providers!)
+    (models/register-provider! (make-test-provider ["a" "b"]))
+    (models/register-provider! prov2)
+    (try
+      (with-redefs [auth/auth-atom (atom {:test-prov {:key "sk"}
+                                          :test-prov2 {:key "sk2"}})]
+        (let [agent (loop/make-agent-state
+                     :provider :test-prov :model "a"
+                     :scoped-models ["test-prov/a" "test-prov2/x"])]
+          (t/is (= "x" (loop/cycle-model! agent 1)))
+          (t/is (= :test-prov2 @(:provider agent)))
+          (t/is (= "a" (loop/cycle-model! agent 1)))
+          (t/is (= :test-prov @(:provider agent)))))
+      (finally
+        (models/clear-providers!)
+        (doseq [p saved] (models/register-provider! p))))))
 
 (t/deftest test-loop-cycle-model-no-models
   (let [agent (loop/make-agent-state :model "a")]
-    (t/is (nil? (loop/cycle-model! agent 1)) "no scoped models → nil")))
+    (t/is (nil? (loop/cycle-model! agent 1)) "no scoped models and no available models → nil")))
 
 (t/deftest test-loop-set-model-emits-model-select
   (let [events (atom [])

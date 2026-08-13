@@ -342,6 +342,13 @@
   (reset! (:selected-idx-atom sl) 0)
   (reset! (:filter-atom sl) ""))
 
+(defn select-list-set-filter!
+  "Set the initial filter text (pi: ModelSelectorComponent initialSearch —
+   /model opens the selector with the failed search term pre-filled)."
+  [sl filter]
+  (reset! (:filter-atom sl) filter)
+  (reset! (:selected-idx-atom sl) 0))
+
 (defn select-list-get-selected [sl]
   (let [items @(:items-atom sl)
         filter-str @(:filter-atom sl)

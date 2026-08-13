@@ -12,7 +12,8 @@
             [kmet.app.ui.loaded-resources :as loaded-resources]
             [kmet.app.ui.chat-history :as chat-history]
             [kmet.app.ui.status-indicator :as status-indicator]
-            [kmet.app.ui.bash-execution :as bash-execution]))
+            [kmet.app.ui.bash-execution :as bash-execution]
+            [kmet.app.ui.scoped-models-selector :as scoped-models-selector]))
 
 ;; UserMessageComponent
 (def make-user-message user-message/make-user-message)
@@ -72,6 +73,11 @@
 ;; FooterDataProvider
 (def make-footer-data-provider footer-data-provider/make-footer-data-provider)
 (def fdp-set-session! footer-data-provider/fdp-set-session!)
+(def fdp-set-provider-count! footer-data-provider/fdp-set-provider-count!)
+
+;; ScopedModelsSelector
+(def make-scoped-models-selector scoped-models-selector/make-scoped-models-selector)
+(def scoped-models-get-enabled-ids scoped-models-selector/scoped-models-get-enabled-ids)
 
 ;; PendingMessages
 (def make-pending-messages pending-messages/make-pending-messages)

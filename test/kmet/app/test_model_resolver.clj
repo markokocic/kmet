@@ -136,6 +136,25 @@
     (let [{:keys [models]} (r/resolve-model-scope ["alpha-model:high"] all-models)]
       (t/is (= ["alpha-model"] models)))))
 
+(t/deftest test-resolve-model-scope-models
+  (t/testing "patterns resolve to full Model records (pi resolveModelScopeFromModels)"
+    (let [{:keys [models warnings]} (r/resolve-model-scope-models
+                                     ["alpha-model" "beta/beta-model"] all-models)]
+      (t/is (= [:alpha :beta] (mapv :provider models)))
+      (t/is (= ["alpha-model" "beta-model"] (mapv :id models)))
+      (t/is (every? map? models) "records are maps")
+      (t/is (empty? warnings))))
+  (t/testing "unmatched pattern → warning, no model"
+    (let [{:keys [models warnings]} (r/resolve-model-scope-models ["nope"] all-models)]
+      (t/is (empty? models))
+      (t/is (= ["No models match pattern \"nope\""] warnings))))
+  (t/testing "thinking suffix resolves to the model, level dropped (kmet deviation)"
+    (let [{:keys [models]} (r/resolve-model-scope-models ["alpha-model:high"] all-models)]
+      (t/is (= ["alpha-model"] (mapv :id models)))))
+  (t/testing "resolve-model-scope delegates with bare ids"
+    (let [{:keys [models]} (r/resolve-model-scope ["alpha-model"] all-models)]
+      (t/is (= ["alpha-model"] models)))))
+
 ;; ─── resolve-cli-model (--provider/--model) ────────────────────────────────
 
 (t/deftest test-resolve-cli-model

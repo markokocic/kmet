@@ -84,7 +84,9 @@
             [kmet.app.ui.test-footer]
             [kmet.app.ui.test-footer-data-provider]
             [kmet.app.ui.test-pending-messages]
-            [kmet.app.ui.test-loaded-resources]))
+            [kmet.app.ui.test-loaded-resources]
+            [kmet.app.ui.test-scoped-models-selector]
+            [kmet.test-core]))
 
 (def all-namespaces
   "Every test namespace. The slow/fast split happens per test var via ^:slow
@@ -161,7 +163,9 @@
     kmet.app.ui.test-footer
     kmet.app.ui.test-footer-data-provider
     kmet.app.ui.test-pending-messages
-    kmet.app.ui.test-loaded-resources])
+    kmet.app.ui.test-loaded-resources
+    kmet.app.ui.test-scoped-models-selector
+    kmet.test-core])
 
 (defn- selected-vars
   "All test vars whose :slow metadata matches the requested selection."

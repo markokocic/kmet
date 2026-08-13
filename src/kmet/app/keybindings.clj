@@ -23,6 +23,12 @@
    "app.model.cycleForward"     {:default-keys ["ctrl+p"]                 :description "Cycle to next model"}
    "app.model.cycleBackward"    {:default-keys ["shift+ctrl+p"]           :description "Cycle to previous model"}
    "app.model.select"           {:default-keys ["ctrl+l"]                 :description "Open model selector"}
+   "app.models.save"            {:default-keys ["ctrl+s"]                 :description "Save model selection to settings"}
+   "app.models.enableAll"       {:default-keys ["ctrl+a"]                 :description "Enable all models"}
+   "app.models.clearAll"        {:default-keys ["ctrl+x"]                 :description "Disable all models"}
+   "app.models.toggleProvider"  {:default-keys ["ctrl+p"]                 :description "Toggle all models of the provider"}
+   "app.models.reorderUp"       {:default-keys ["alt+up"]                 :description "Move model up in the cycle"}
+   "app.models.reorderDown"     {:default-keys ["alt+down"]               :description "Move model down in the cycle"}
    "app.tools.expand"           {:default-keys ["ctrl+o"]                 :description "Toggle tool output"}
    "app.thinking.toggle"        {:default-keys ["ctrl+t"]                 :description "Toggle thinking blocks"}
    "app.message.copy"           {:default-keys ["ctrl+x"]                 :description "Copy message to clipboard"}

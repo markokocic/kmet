@@ -577,3 +577,4 @@
     (finally
       (m/clear-extension-providers!)
       (m/load-catalogs!))))
+

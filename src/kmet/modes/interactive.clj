@@ -19,6 +19,7 @@
             [kmet.app.loop :as agent]
             [kmet.app.models :as models]
             [kmet.app.model-resolver :as resolver]
+            [kmet.app.llm :as llm]
             [kmet.app.auth :as auth]
             [kmet.app.session :as session]
             [kmet.app.session-export :as session-export]
@@ -43,6 +44,7 @@
             [kmet.app.ui.bash-execution :as be]
             [kmet.app.ui.extension-dialogs :as dialogs]
             [kmet.tui.components.spinner :as spinner]
+            [kmet.tui.components.settings-list :as settings-list]
             [kmet.tui.keys :as keys]
             [kmet.libs.process :as process]
             [kmet.libs.terminal :as lib-term]))
@@ -206,44 +208,208 @@
     (tui/tui-request-render (:tui cs))
     nil))
 
+(defn- model-full-id
+  "Full \"provider/id\" id of a Model record (pi: `${provider}/${id}`)."
+  [m]
+  (str (name (:provider m)) "/" (:id m)))
+
+(defn- scoped-model-snapshot
+  "Models matched against first (pi: session scoped models when set, else
+   the available snapshot) — feeds /model's cached match and the footer
+   provider count. Scoped entries that no longer resolve drop out."
+  [ag]
+  (let [scoped (agent/get-scoped-models ag)]
+    (if (seq scoped)
+      (vec (keep (fn [id]
+                   (let [slash (str/index-of id "/")]
+                     (when slash
+                       (models/get-model (keyword (subs id 0 slash))
+                                         (subs id (inc slash))))))
+                 scoped))
+      (models/get-available))))
+
+(defn- scoped-or-available-models
+  "pi: session scoped models when set, else the available snapshot (feeds
+   cycling's fallback, /model, and the footer provider count)."
+  [ag]
+  (if (seq (agent/get-scoped-models ag))
+    (scoped-model-snapshot ag)
+    (models/get-available)))
+
+(defn- update-available-provider-count!
+  "Footer provider count from the scoped models when set, else the available
+   snapshot (pi updateAvailableProviderCount)."
+  [cs]
+  (ui/fdp-set-provider-count!
+   (:footer-provider cs)
+   (count (distinct (map :provider (scoped-or-available-models @(:agent-state cs)))))))
+
+(defn- apply-model-switch!
+  "Switch the agent's model (and optional thinking level), report the switch
+   in the chat, and sync the footer (pi setModel + showStatus — shared by
+   /model, the selector, and cycling)."
+  [cs model thinking-level]
+  (let [ag @(:agent-state cs)]
+    (agent/set-provider! ag (:provider model))
+    (agent/set-model! ag (:id model))
+    (when thinking-level
+      (agent/set-thinking-level! ag thinking-level))
+    (ui/chat-history-add-message! (:chat-history cs)
+                                  {:role :assistant
+                                   :content (str "Switched to " (fmt-model (:provider model) (:id model))
+                                                 (when thinking-level
+                                                   (str " (thinking " (name thinking-level) ")")))})
+    (sync-footer-model! cs)))
+
 (defn- show-model-selector
   "Model selector overlay: a SelectList of available (authenticated) models
-   (pi ModelSelectorComponent, simplified — bound to Ctrl+L and bare
-   /model)."
+   (pi ModelSelectorComponent, simplified — bound to Ctrl+L, bare /model,
+   and the /model refresh-failure path with SEARCH-TERM pre-filled)."
+  ([cs] (show-model-selector cs nil))
+  ([cs search-term]
+   (let [available (models/get-available)]
+     (if (empty? available)
+       (ui/chat-history-add-message! (:chat-history cs)
+                                     {:role :assistant
+                                      :content "No models available. Configure a provider first (/login)."})
+       (let [items (mapv (fn [m]
+                           (let [v (str (name (:provider m)) "/" (:id m))]
+                             {:value v :label v}))
+                         available)
+             sl-ref (atom nil)
+             on-select (fn [_]
+                         (when-let [sel (select-list/select-list-get-selected @sl-ref)]
+                           (let [[prov model] (str/split (:value sel) #"/" 2)
+                                 m (models/get-model (keyword prov) model)]
+                             (tui/tui-hide-overlay (:tui cs))
+                             (apply-model-switch! cs m nil)
+                             (tui/tui-request-render (:tui cs)))))
+             on-escape (fn []
+                         (tui/tui-hide-overlay (:tui cs))
+                         (tui/tui-request-render (:tui cs)))
+             sl (select-list/make-select-list items
+                                              :height (min (count items) 15)
+                                              :header "Select model"
+                                              :on-select on-select
+                                              :on-escape on-escape)]
+         (reset! sl-ref sl)
+         (when search-term
+           (select-list/select-list-set-filter! sl search-term))
+         (tui/tui-show-overlay (:tui cs) sl :width 55 :height (min (count items) 15))
+         (tui/tui-request-render (:tui cs)))))))
+
+(defn- resolve-model-ref
+  "/model reference resolution against the cached snapshot (pi
+   findExactModelMatch — session scoped models when set, else available)."
+  [cs term]
+  (resolver/resolve-model-reference term (scoped-or-available-models @(:agent-state cs))))
+
+(defn- show-scoped-models-selector
+  "pi showModelsSelector — /scoped-models opens the enabled-models overlay
+   for Ctrl+P cycling. Initial enabled ids: session scoped models when set,
+   else the settings :enabled-models patterns resolved through
+   resolve-model-scope-models (unresolved patterns survive as [unavailable]
+   rows), else nil (all enabled). Changes are session-only until Ctrl+S
+   writes :enabled-models; the footer provider count updates live."
   [cs]
-  (let [available (models/get-available)]
-    (if (empty? available)
-      (ui/chat-history-add-message! (:chat-history cs)
-                                    {:role :assistant
-                                     :content "No models available. Configure a provider first (/login)."})
-      (let [items (mapv (fn [m]
-                          (let [v (str (name (:provider m)) "/" (:id m))]
-                            {:value v :label v}))
-                        available)
-            sl-ref (atom nil)
-            on-select (fn [_]
-                        (when-let [sel (select-list/select-list-get-selected @sl-ref)]
-                          (let [[prov model] (str/split (:value sel) #"/" 2)
-                                ag @(:agent-state cs)]
-                            (tui/tui-hide-overlay (:tui cs))
-                            (agent/set-provider! ag (keyword prov))
-                            (agent/set-model! ag model)
-                            (ui/chat-history-add-message! (:chat-history cs)
-                                                          {:role :assistant
-                                                           :content (str "Switched to " (:value sel))})
-                            (sync-footer-model! cs)
-                            (tui/tui-request-render (:tui cs)))))
-            on-escape (fn []
-                        (tui/tui-hide-overlay (:tui cs))
-                        (tui/tui-request-render (:tui cs)))
-            sl (select-list/make-select-list items
-                                             :height (min (count items) 15)
-                                             :header "Select model"
-                                             :on-select on-select
-                                             :on-escape on-escape)]
-        (reset! sl-ref sl)
-        (tui/tui-show-overlay (:tui cs) sl :width 55 :height (min (count items) 15))
-        (tui/tui-request-render (:tui cs))))))
+  (let [available (models/get-available)
+        ag @(:agent-state cs)
+        session-scoped (vec (agent/get-scoped-models ag))
+        patterns (cfg/get-enabled-models-live (:config cs))
+        configured-ids (fn []
+                         ;; resolve each pattern; unresolved ones survive as
+                         ;; [unavailable] rows (pi: no-match diagnostics are
+                         ;; appended to the enabled ids)
+                         (loop [ps patterns acc [] warnings []]
+                           (if-let [p (first ps)]
+                             (let [{:keys [model]}
+                                   (resolver/parse-model-pattern p available)]
+                               (if model
+                                 (recur (rest ps) (conj acc (model-full-id model)) warnings)
+                                 (recur (rest ps) (conj acc (str p))
+                                        (conj warnings
+                                              (str "No models match pattern \"" p "\"")))))
+                             (do (doseq [w warnings]
+                                   (ui/chat-history-add-message!
+                                    (:chat-history cs) {:role :assistant :content w}))
+                                 (vec acc)))))
+        initial (cond
+                  (seq session-scoped) session-scoped
+                  (seq patterns) (configured-ids)
+                  :else nil)
+        available-ids (set (map model-full-id available))
+        update-session-models (fn [enabled-ids]
+                                ;; pi updateSessionModels: a non-null list with
+                                ;; an enabled available model, not covering all
+                                ;; available models, becomes the session scoped
+                                ;; list; everything else (null = all enabled,
+                                ;; nothing enabled, all enabled) clears it
+                                (if (and enabled-ids
+                                         (some available-ids enabled-ids)
+                                         (not (every? (set enabled-ids)
+                                                      (map model-full-id available))))
+                                  (agent/set-scoped-models! ag enabled-ids)
+                                  (agent/set-scoped-models! ag []))
+                                (update-available-provider-count! cs)
+                                (tui/tui-request-render (:tui cs)))
+        sel (ui/make-scoped-models-selector
+             available initial
+             :on-change update-session-models
+             :on-persist (fn [enabled-ids]
+                           (let [all-enabled? (or (nil? enabled-ids)
+                                                  (and (= (count enabled-ids) (count available))
+                                                       (every? available-ids enabled-ids)))]
+                             (cfg/set-enabled-models! (when-not all-enabled? enabled-ids))
+                             (ui/chat-history-add-message!
+                              (:chat-history cs)
+                              {:role :assistant
+                               :content "Model selection saved to settings."})))
+             :on-cancel (fn []
+                          (tui/tui-hide-overlay (:tui cs))
+                          (tui/tui-request-render (:tui cs))))]
+    (tui/tui-show-overlay (:tui cs) sel :width 62 :max-height 24)
+    (tui/tui-request-render (:tui cs))))
+
+(defn- show-settings
+  "Settings selector (pi: showSettingsSelector) — kmet implements the
+   thinking-level row (the current model's available levels, persisted to
+   settings :thinking) and the hide-thinking toggle; the rest of pi's
+   settings surface stays on the not-implemented list."
+  [cs]
+  (let [ag @(:agent-state cs)
+        model (models/get-model @(:provider ag) @(:model ag))
+        levels (if model (llm/get-supported-thinking-levels model) [:off])
+        current (or (some #{(keyword @(:thinking ag))} levels) (first levels))
+        items [{:id :thinking
+                :label "Thinking level"
+                :value current
+                :values levels}
+               {:id :hide-thinking
+                :label "Hide thinking"
+                ;; the live chat-history flag, not the startup config
+                ;; snapshot — Ctrl+T toggles it at runtime
+                :value (if (ui/chat-history-get-thinking-hidden (:chat-history cs)) "on" "off")
+                :values ["off" "on"]}]
+        sl (settings-list/make-settings-list
+            items
+            :on-change (fn [id value]
+                         (case id
+                           :thinking
+                           (let [level (keyword value)]
+                             (agent/set-thinking-level! ag level)
+                             (cfg/save-setting! [:thinking] level)
+                             (sync-footer-model! cs))
+                           :hide-thinking
+                           (let [hidden? (= value "on")]
+                             (ui/chat-history-set-thinking-hidden!
+                              (:chat-history cs) hidden?)
+                             (cfg/set-hide-thinking-block! hidden?)))))]
+    (settings-list/settings-list-set-on-escape!
+     sl (fn []
+          (tui/tui-hide-overlay (:tui cs))
+          (tui/tui-request-render (:tui cs))))
+    (tui/tui-show-overlay (:tui cs) sl :width 55 :height 7)
+    (tui/tui-request-render (:tui cs))))
 
 ;; ─── Command handling ──────────────────────────────────────────────────────
 
@@ -636,24 +802,21 @@
     :handler
     (fn [cs args]
       (if (seq args)
-        (let [ag @(:agent-state cs)
-              {:keys [model thinking-level]}
-              (resolver/resolve-model-reference args (models/get-available))]
+        (let [{:keys [model thinking-level]} (resolve-model-ref cs args)]
           (if model
-            (do (agent/set-provider! ag (:provider model))
-                (agent/set-model! ag (:id model))
-                (when thinking-level
-                  (agent/set-thinking-level! ag thinking-level))
-                (ui/chat-history-add-message! (:chat-history cs)
-                                              {:role :assistant
-                                               :content (str "Switched to " (fmt-model (:provider model) (:id model))
-                                                             (when thinking-level
-                                                               (str " (thinking " (name thinking-level) ")")))})
-                (sync-footer-model! cs))
-            (ui/chat-history-add-message! (:chat-history cs)
-                                          {:role :assistant
-                                           :content (str "No model matches \"" args "\".")})))
+            (apply-model-switch! cs model thinking-level)
+            ;; pi: no cached match → selector with the term pre-filled (kmet
+            ;; catalogs are static — no catalog refresh on a miss)
+            (show-model-selector cs args)))
         (show-model-selector cs)))})
+  (commands/register-command!
+   {:name "scoped-models"
+    :description "Enable/disable models for Ctrl+P cycling"
+    :handler (fn [cs _] (show-scoped-models-selector cs))})
+  (commands/register-command!
+   {:name "settings"
+    :description "Open settings menu"
+    :handler (fn [cs _] (show-settings cs))})
   (commands/register-command!
    {:name "new"
     :description "Start a new session"
@@ -1069,9 +1232,7 @@
    /help and autocomplete show the full surface."
   []
   (doseq [{:keys [name description argument-hint]}
-          [{:name "settings" :description "Open settings menu"}
-           {:name "scoped-models" :description "Enable/disable models for Ctrl+P cycling"}
-           {:name "import" :description "Import and resume a session from a JSONL file"}
+          [{:name "import" :description "Import and resume a session from a JSONL file"}
            {:name "hotkeys" :description "Show all keyboard shortcuts"}]]
     (commands/register-command!
      {:name name
@@ -2552,9 +2713,17 @@
                                                        :label (:custom-type m)))))
                                         (tui/tui-request-render t))
                             nil))))
+            ;; Session scoped model list for cycle-model! / the scoped-models
+            ;; selector (pi: resolveModelScope → session.scopedModels at
+            ;; startup — full "provider/id" refs so cycling can switch
+            ;; providers)
         _ (when (seq (:models config))
-            ;; Scoped model list for cycle-model! (pi: _scopedModels)
-            (agent/set-models! ag (:models config)))
+            (let [{:keys [models warnings]}
+                  (resolver/resolve-model-scope-models (:models config)
+                                                       (models/get-models))]
+              (doseq [w warnings]
+                (binding [*out* *err*] (println "Warning:" w)))
+              (agent/set-scoped-models! ag (mapv model-full-id models))))
         sp2 (spacer/make-spacer 1)
         ;; B.1: welcome header — ExpandableText with compact/full variants
         ;; (pi: builtInHeader), toggled by app.tools.expand
@@ -2574,7 +2743,7 @@
         ;; B.6: footer data provider + two-line footer (pi: FooterComponent)
         fdp (ui/make-footer-data-provider
              :session session
-             :provider-count (count (models/get-providers))
+             :provider-count (count (distinct (map :provider (scoped-or-available-models ag))))
              ;; Phase 2: context window from the resolved Model record, falling
              ;; back to the settings value when the model is unknown (pi footer
              ;; contextPercentDisplay)
@@ -2749,18 +2918,30 @@
       (editor/editor-set-on-action! ed "app.message.dequeue"
                                     (fn [] (handle-dequeue cs)))
       ;; Model selection/cycling (pi: onAction selectModel/cycleModelForward/
-      ;; cycleModelBackward — scoped models come from --models / settings
-      ;; :models; cycling sets only the model id, the provider is unchanged)
+      ;; cycleModelBackward — the session scoped list feeds cycling (set via
+      ;; /scoped-models, seeded from --models / settings :models); without
+      ;; scoped models all available models cycle; a scoped entry may switch
+      ;; the provider)
       (editor/editor-set-on-action! ed "app.model.select"
                                     (fn [] (show-model-selector cs)))
       (editor/editor-set-on-action! ed "app.model.cycleForward"
                                     (fn []
-                                      (when (agent/cycle-model! @(:agent-state cs) 1)
-                                        (sync-footer-model! cs))))
+                                      (if (agent/cycle-model! @(:agent-state cs) 1)
+                                        (sync-footer-model! cs)
+                                        (ui/chat-history-show-status!
+                                         (:chat-history cs)
+                                         (if (seq (agent/get-scoped-models @(:agent-state cs)))
+                                           "Only one model in scope"
+                                           "Only one model available")))))
       (editor/editor-set-on-action! ed "app.model.cycleBackward"
                                     (fn []
-                                      (when (agent/cycle-model! @(:agent-state cs) -1)
-                                        (sync-footer-model! cs))))
+                                      (if (agent/cycle-model! @(:agent-state cs) -1)
+                                        (sync-footer-model! cs)
+                                        (ui/chat-history-show-status!
+                                         (:chat-history cs)
+                                         (if (seq (agent/get-scoped-models @(:agent-state cs)))
+                                           "Only one model in scope"
+                                           "Only one model available")))))
 
       ;; Initialize footer (header content is produced lazily by the
       ;; ExpandableText fns on first render)

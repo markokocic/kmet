@@ -282,17 +282,17 @@
    :thinking-level-map tlm :compat compat :max-tokens max-tokens})
 
 (t/deftest test-supported-thinking-levels
-  (t/is (= [:off] (@#'llm/supported-thinking-levels (tmodel :reasoning false)))
+  (t/is (= [:off] (llm/get-supported-thinking-levels (tmodel :reasoning false)))
         "non-reasoning models only support :off")
   (t/is (= [:off :minimal :low :medium :high]
-           (@#'llm/supported-thinking-levels (tmodel :tlm nil)))
+           (llm/get-supported-thinking-levels (tmodel :tlm nil)))
         "no map → everything except :xhigh/:max")
   (t/is (= [:off :high :max]
-           (@#'llm/supported-thinking-levels
+           (llm/get-supported-thinking-levels
             (tmodel :tlm {:minimal nil :low nil :medium nil :high "high" :max "max"})))
         "null map values mark levels unsupported")
   (t/is (= [:high]
-           (@#'llm/supported-thinking-levels
+           (llm/get-supported-thinking-levels
             (tmodel :tlm {:off nil :minimal nil :low nil :medium nil})))
         "a null :off means thinking cannot be disabled"))
 

@@ -10,11 +10,13 @@
             [kmet.tui.core :as tui]
             [kmet.modes.interactive :as inter]
             [kmet.app.commands :as commands]
+            [kmet.app.keybindings :as app-kb]
             [kmet.app.ui :as ui]
             [kmet.app.models :as m]
             [kmet.app.auth :as auth]
             [kmet.app.loop :as agent]
-            [kmet.config :as cfg]))
+            [kmet.config :as cfg]
+            [kmet.tui.keybindings :as tui-kb]))
 
 (defn- transfer-editor! [app-ed custom-ed kb]
   ((var inter/transfer-editor!) app-ed custom-ed kb))
@@ -130,11 +132,13 @@
         (testing ":thinking suffix sets the agent thinking level"
           ((:handler (commands/find-command "model")) cs "deepseek/deepseek-v4-pro:high")
           (t/is (= :high @(:thinking ag))))
-        (testing "unmatched pattern reports a clear failure"
-          (let [last-msg (atom nil)]
-            (with-redefs [ui/chat-history-add-message! (fn [_ msg] (reset! last-msg msg))]
+        (testing "unmatched pattern opens the selector with the failed term
+                  pre-filled (pi handleModelCommand — no catalog refresh:
+                  kmet's catalogs are static)"
+          (let [selector-term (atom nil)]
+            (with-redefs [inter/show-model-selector (fn [_ & [term]] (reset! selector-term term))]
               ((:handler (commands/find-command "model")) cs "nope")
-              (t/is (= "No model matches \"nope\"." (:content @last-msg))))))))))
+              (t/is (= "nope" @selector-term) "selector opened with the failed term"))))))))
 
 ;; ─── /continue command ─────────────────────────────────────────────────────
 
@@ -302,3 +306,128 @@
         ((var inter/clear-status-indicator!) cs :retry)
         (t/is (blank-status? sc))
         (t/is (nil? @(:active-status-kind cs)))))))
+
+;; ─── /scoped-models + /settings (missing slash commands) ───────────────────
+
+(defn- install-app-keybindings!
+  "Install the app keybindings manager (the interactive mode does this at
+   startup; tests drive overlay keys, which match app.models.* ids)."
+  []
+  (tui-kb/set-global-keybindings!
+   (app-kb/create-agent-keybindings-manager "target/test-interactive-ui-kb")))
+
+(deftest test-scoped-models-settings-registered
+  (testing "scoped-models and settings are real builtins (not not-implemented)"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [scoped (commands/find-command "scoped-models")
+          settings (commands/find-command "settings")]
+      (t/is (some? scoped))
+      (t/is (= "Enable/disable models for Ctrl+P cycling" (:description scoped)))
+      (t/is (some? (:handler scoped)))
+      (t/is (some? settings))
+      (t/is (some? (:handler settings))))))
+
+(deftest test-scoped-models-selector-initial-state
+  (testing "/scoped-models opens the selector with session scoped models, then
+            settings :enabled-models patterns, else nil (all enabled)"
+    (commands/clear-commands!)
+    (m/load-catalogs!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [ag (agent/make-agent-state :provider :opencode-go :model "deepseek-v4-flash")
+          cs {:agent-state (atom ag)
+              :chat-history nil
+              :footer-comp nil
+              :footer-provider nil
+              :config cfg/default-config
+              :tui nil}
+          sel-ref (atom nil)]
+      (with-redefs [auth/configured? (fn [_] true)
+                    ui/chat-history-add-message! (fn [_ _] nil)
+                    inter/update-available-provider-count! (fn [_] nil)
+                    tui/tui-show-overlay (fn [_ sel & _] (reset! sel-ref sel))
+                    tui/tui-request-render (fn [_])]
+        (testing "no session scoped models and no patterns → all enabled"
+          ((:handler (commands/find-command "scoped-models")) cs "")
+          (t/is (nil? (ui/scoped-models-get-enabled-ids @sel-ref))))
+        (testing "session scoped models win"
+          (agent/set-scoped-models! ag ["opencode-go/deepseek-v4-flash"])
+          ((:handler (commands/find-command "scoped-models")) cs "")
+          (t/is (= ["opencode-go/deepseek-v4-flash"]
+                   (ui/scoped-models-get-enabled-ids @sel-ref))))
+        (testing "settings :enabled-models patterns resolve"
+          (agent/set-scoped-models! ag [])
+          (with-redefs [cfg/get-enabled-models-live
+                        (fn [_] ["opencode-go/deepseek-v4-flash"])]
+            ((:handler (commands/find-command "scoped-models")) cs "")
+            (t/is (= ["opencode-go/deepseek-v4-flash"]
+                     (ui/scoped-models-get-enabled-ids @sel-ref)))))
+        (testing "unresolved patterns survive as [unavailable] rows alongside
+                  resolved ones (pi: no-match diagnostics appended)"
+          (agent/set-scoped-models! ag [])
+          (with-redefs [cfg/get-enabled-models-live
+                        (fn [_] ["opencode-go/deepseek-v4-flash" "ghost/model"])]
+            ((:handler (commands/find-command "scoped-models")) cs "")
+            (t/is (= ["opencode-go/deepseek-v4-flash" "ghost/model"]
+                     (ui/scoped-models-get-enabled-ids @sel-ref)))))))))
+
+(deftest test-scoped-models-edit-updates-session
+  (testing "selector edits write the session scoped list and clear on all-enabled"
+    (install-app-keybindings!)
+    (commands/clear-commands!)
+    (m/load-catalogs!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [ag (agent/make-agent-state :provider :opencode-go :model "deepseek-v4-flash")
+          cs {:agent-state (atom ag)
+              :chat-history nil
+              :footer-comp nil
+              :footer-provider nil
+              :config cfg/default-config
+              :tui nil}
+          sel-ref (atom nil)]
+      (with-redefs [auth/configured? (fn [_] true)
+                    ui/chat-history-add-message! (fn [_ _] nil)
+                    inter/update-available-provider-count! (fn [_] nil)
+                    tui/tui-show-overlay (fn [_ sel & _] (reset! sel-ref sel))
+                    tui/tui-request-render (fn [_])]
+        ((:handler (commands/find-command "scoped-models")) cs "")
+        (let [sel @sel-ref]
+          (protocols/handle-input sel "\r")  ;; enter — toggle the first model
+          (t/is (seq (agent/get-scoped-models ag))
+                "session scoped list updated after an edit")
+          ;; Ctrl+A (all enabled) clears the session scoping again
+          (protocols/handle-input sel "\u0001")
+          (t/is (= [] (agent/get-scoped-models ag))
+                "all-enabled clears the session scoped list (pi updateSessionModels)"))))))
+
+(deftest test-settings-thinking-row
+  (testing "/settings opens a settings list whose thinking row changes the
+            session level and persists to settings"
+    (install-app-keybindings!)
+    (commands/clear-commands!)
+    (m/load-catalogs!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [ag (agent/make-agent-state :provider :opencode-go :model "deepseek-v4-flash"
+                                     :thinking :off)
+          cs {:agent-state (atom ag)
+              :chat-history nil
+              :footer-comp nil
+              :footer-provider nil
+              :config cfg/default-config
+              :tui nil}
+          sl-ref (atom nil)
+          saved (atom nil)]
+      (with-redefs [auth/configured? (fn [_] true)
+                    inter/sync-footer-model! (fn [_] nil)
+                    ui/chat-history-get-thinking-hidden (fn [_] false)
+                    cfg/save-setting! (fn [path value] (reset! saved [path value]))
+                    tui/tui-show-overlay (fn [_ comp & _] (reset! sl-ref comp))
+                    tui/tui-request-render (fn [_])]
+        ((:handler (commands/find-command "settings")) cs "")
+        (let [sl @sl-ref]
+          (t/is (some? sl) "settings list shown")
+          ;; right arrow (raw terminal sequence) cycles the selected row
+          (protocols/handle-input sl "\u001b[C")
+          (t/is (not= :off @(:thinking ag)) "thinking row cycles the session level")
+          (t/is (= [[:thinking] @(:thinking ag)] @saved)
+                "thinking change persisted to settings (path + level)"))))))

@@ -80,6 +80,14 @@
 
 (defn fdp-get-provider-count [provider] @(:provider-count-atom provider))
 
+(defn fdp-set-provider-count!
+  "Set the configured provider count shown in the footer (pi:
+   FooterDataProvider.setAvailableProviderCount — updated live by the
+   /scoped-models selector and cycling)."
+  [provider count]
+  (reset! (:provider-count-atom provider) count)
+  nil)
+
 (defn fdp-get-context-window [provider] @(:context-window-atom provider))
 
 (defn fdp-get-model [provider] @(:model-atom provider))

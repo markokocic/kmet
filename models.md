@@ -1,5 +1,13 @@
 # kmet — providers & models subsystem: implementation plan
 
+> **Retry settings note**: pi exposes agent-level retry config via the `retry`
+> block in `~/.pi/agent/settings.json` (`retry.maxRetries`, default 3 — set to
+> 10 globally on this machine). kmet has the same mechanism internally
+> (`:max-retries` / `:base-delay-ms` on `kmet.app.loop/make-agent-state`,
+> defaults 3 / 2000) but does **not** expose it as a user-facing config key —
+> neither mode passes `:max-retries`, so kmet always uses the default. Wiring
+> it to a config key is deliberately deferred.
+
 Goal: bring kmet's provider/model subsystem to architectural parity with pi's
 (`packages/ai` + coding-agent `model-*` core modules), adapted to Babashka +
 EDN. This document is the working plan; update it as implementation proceeds.
@@ -976,110 +984,94 @@ kmet provider uses PKCE yet.
   flows land with those providers (later phase).
 - radius / azure / other subscription flows deferred with their providers.
 
-## Missing slash commands (model surface)
+## Missing slash commands (model surface) — **Status: implemented**
 
-Phase 4 wired `/model`, Phase 3/10 wired `/login` `/logout` — but two
-model-surface pi commands remain on kmet's not-implemented list (`/scoped-models`, `/settings`),
-and `/model` misses pi's catalog-refresh-on-miss behavior. This section is the
-plan for the model-related parts (pi interactive-mode: `handleModelCommand`,
-`showModelsSelector`, `ScopedModelsSelectorComponent`, settings-selector
-thinking-level row; pi `settings-manager.ts` `enabledModels`).
+Phase 4 wired `/model`, Phase 3/10 wired `/login` `/logout` — and the two
+model-surface pi commands that remained on kmet's not-implemented list
+(`/scoped-models`, `/settings`) plus `--list-models` are now done.
 
 ### `/scoped-models` — enabled-models selector for Ctrl+P cycling
 
-pi: `/scoped-models` opens `showModelsSelector()`, a
-`ScopedModelsSelectorComponent` overlay. Enabled-ids semantics: `null` = all
-enabled (no filter); `string[]` = explicit ordered list.
+**Implemented.** A port of pi's `ScopedModelsSelectorComponent`
+(`src/kmet/app/ui/scoped_models_selector.clj`) with the pi interactions:
+search input (fuzzy over `provider/id` + name), `[provider]` badge, ✓/✗
+status, "N/M enabled · K unavailable" footer line, "(unsaved)" dirty
+marker, scroll indicator, "No matching models". Keys: Enter toggles;
+Ctrl+A enables all (filtered to the search query when active); Ctrl+X
+clears all (filtered); Ctrl+P toggles the selected model's provider;
+Alt+Up/Alt+Down reorder enabled models; Ctrl+S persists; Escape (or
+Ctrl+C with an empty search) cancels. New `app.models.*` keybindings in
+`kmet.app.keybindings` (save/enableAll/clearAll/toggleProvider/reorderUp/
+reorderDown).
 
-- **Initial state**: session scoped-models (a session-level override from a
-  previous edit in this session) wins; otherwise settings `enabledModels`
-  patterns resolve through `resolveModelScopeFromModels` (the same matcher as
-  `--models`); unresolved patterns survive as `[unavailable]` rows.
-- **Refresh on open**: an async `modelRuntime.refresh({signal})` runs with a
-  15s timeout; the status line goes "Refreshing model catalogs…" →
-  "Model catalogs refreshed." (success) / "Model refresh timed out; showing
-  cached models." / "Could not refresh <providers>; showing cached models."
-  (warning); the selector then updates from the fresh snapshot.
-- **Interactions** (pi keybindings `app.models.*`): Enter toggles the selected
-  model; Ctrl+A enables all (filtered to the search query when active);
-  Ctrl+X clears all; Ctrl+P toggles every model of the selected model's
-  provider; Alt+Up/Alt+Down reorder enabled models (order feeds Ctrl+P
-  cycling); the search input fuzzy-filters over `provider id name`.
-- **Persist**: changes are session-only until Ctrl+S (`app.models.save`)
-  writes them to settings as `enabledModels` patterns (all-enabled →
-  undefined; `settingsManager.setEnabledModels`). The footer's available
-  provider count updates live (`updateAvailableProviderCount`).
-- **Consumption**: the session scoped list feeds Ctrl+P / Shift+Ctrl+P
-  cycling (`cycle-model!`) and `/model`'s cached-match search.
+- **Session-scoped state**: `agent/set-scoped-models!` (pi
+  `session.scopedModels`) — the agent `:models` atom was renamed to
+  `:scoped-models`, holding **"provider/id" full ids** so cycling can
+  switch providers (pi `_cycleScopedModel`); seeded at startup from config
+  `:models` via the new `resolver/resolve-model-scope-models` (patterns →
+  Model records). `cycle-model!` reworked: session scoped list when
+  non-empty, else **all available models** (pi `_cycleAvailableModel`);
+  entries filtered to authenticated models; provider switches; emits
+  `:model-select` with the new provider. Ctrl+P/Shift+Ctrl+P show pi's
+  "Only one model in scope/available" status on a nil cycle.
+- **Initial state**: session scoped models → resolved settings
+  `:enabled-models` patterns (unresolved patterns survive as [unavailable]
+  rows) → nil (all enabled).
+- **Persist**: Ctrl+S writes settings.edn `:enabled-models` (pi
+  `enabledModels` — same format as `--models`) via `cfg/set-enabled-models!`
+  (nil removes the filter); changes are session-only until then. The
+  selector re-reads the patterns live on open (`cfg/get-enabled-models-live`
+  — the in-memory config is a startup snapshot, so a same-session Ctrl+S is
+  visible on the next open, matching pi's mutable SettingsManager).
+- **Footer provider count**: `update-available-provider-count!` (pi
+  `updateAvailableProviderCount`) — scoped models when set, else the
+  available snapshot; `fdp-set-provider-count!` added; the startup value is
+  now the available-provider count (was: all registered providers).
 
-kmet state: `/scoped-models` is registered as not-implemented. `--models` /
-settings `:models` already seed the scoped list (`loop/set-models!`), but
-there is no overlay, no session-scoped edit, no persist path, and no
-refresh-on-open. Work items:
+### `/model` — search-term fallthrough
 
-1. `app.models.*` keybindings in `kmet.app.keybindings` (pi defaults: save
-   Ctrl+S, enableAll Ctrl+A, clearAll Ctrl+X, toggleProvider Ctrl+P,
-   reorderUp Alt+Up, reorderDown Alt+Down).
-2. A scoped-models selector port over the `/resume` overlay + fuzzy
-   select-list patterns: search input, provider badge (`[provider]`), ✓/✗
-   status, "N/M enabled · K unavailable" footer line, "(unsaved)" dirty
-   marker, scroll indicator, "No matching models".
-3. Session-scoped state: `set-scoped-models!` on the agent-state/session
-   (pi `session.scopedModels`), distinct from the settings-derived list.
-4. settings.edn `:enabled-models` (pattern vector) + `set-enabled-models!`
-   through the `kmet.libs.file-lock` machinery (Phase 3) — pi
-   `settings-manager.ts` `enabledModels` (global settings).
-5. `models/refresh` — see below; wire the timeout + status messages into the
-   overlay.
-6. `cycle-model!` / footer provider count read the session scoped list first
-   (pi `updateAvailableProviderCount`).
-
-### `/model` — refresh-on-miss + search-term fallthrough
-
-pi `handleModelCommand`:
-
-- no args → `showModelSelector()` (bare selector overlay);
-- exact match (`findExactModelReferenceMatch`) against the cached snapshot
-  (session scoped models when set, else the available snapshot) →
-  `session.setModel` + footer invalidate + `Model: <id>` status;
-- **no cached match (and no scoped models) → refresh catalogs** with the
-  same 15s timeout + status warnings, then resolve against the fresh
-  snapshot (pi `findExactModelMatch`);
-- still no match → open the selector with the search term pre-filled.
-
-kmet: `/model` resolves patterns incl. `:thinking` suffix and reports
-resolution failures, but never refreshes catalogs on a miss and opens a bare
-selector. Work items: refresh-on-miss (shared timeout/status handling with
-`/scoped-models`), and pass the failed term into `show-model-selector` as the
-initial search input.
-
-### Model catalog refresh (`models/refresh`)
-
-Shared by `/scoped-models` and `/model`. pi `ModelRuntime.refresh({signal})`:
-re-fetches dynamic provider catalogs (models.dev-backed) concurrently,
-returns per-provider errors, aborts on a 15s timeout, keeps the last known
-models on failure. kmet's catalogs are static committed EDN (no runtime
-network) — the pi behavior degrades to "already up to date"; the work item is
-the timeout/status plumbing around a no-op refresh (kept so a future
-dynamic-catalog provider slots in), plus `get-available` re-reading the
-registry after it.
+**Implemented.** `resolve-model-ref` matches against the cached snapshot
+(session scoped models when set, else available — pi `findExactModelMatch`);
+on a miss → `show-model-selector` opens with the failed term pre-filled
+(new `select-list-set-filter!`). `show-model-selector` gained an optional
+initial-search argument. kmet does **not** refresh catalogs on a miss — the
+catalogs are static committed EDN (pi's `ModelRuntime.refresh` is dropped;
+see deviations).
 
 ### `/settings` — thinking-level row
 
-pi's settings selector carries a **Thinking level** row (`session.thinkingLevel`
-+ the current model's available levels; there is no Model row in the settings
-menu — model selection stays on `/model`/Ctrl+L). kmet's `/settings` is
-not-implemented; the thinking row lands with the settings menu
-(`:thinking` settings key + `valid-thinking-level?` already exist).
+**Implemented.** A settings-list overlay (kmet's `SettingsList`) with the
+**Thinking level** row (the current model's `llm/get-supported-thinking-levels`
+— made public from the private helper — persisted to settings `:thinking`)
+and the hide-thinking toggle (`cfg/get-hide-thinking-block` /
+`set-hide-thinking-block!`). The rest of pi's settings surface stays
+not-implemented (deferred).
 
-### `--list-models` (CLI, model handling)
+### `--list-models` (CLI)
 
-pi `cli/list-models.ts`: prints `provider | model | context | max-out |
-thinking | images` (context/max-out in K/M), optional fuzzy search over
-`provider id`, sorted by provider then id, plus the models.json load-error
-warning and the "no models available" message. kmet has no `--list-models` —
-add it in `core.clj` with the same columns/format over
-`models/get-available`.
+**Implemented.** `core.clj` `--list-models [search]` (pi cli/list-models.ts):
+prints `provider | model | context | max-out | thinking | images` over
+`models/get-available` (context/max-out in K/M via `format-token-count`),
+optional fuzzy search over `provider id` (the next non-flag arg, pi's parse),
+sorted by provider then id, plus the models.edn load-error warning and the
+"No models available. Use /login…" message. Runs after catalogs, models.edn,
+and extension loading so custom providers appear.
+
+### Deviations from pi
+
+- **`cycle-model!` operates on full ids, not `{model, thinkingLevel}`
+  scoped entries** — kmet's `resolve-model-scope` drops scoped thinking
+  levels (pre-existing documented deviation), so a scoped entry carries no
+  per-entry thinking; cycling keeps the session thinking level.
+- **Static-catalog refresh is dropped** — pi's `ModelRuntime.refresh`
+  (refresh-on-miss for `/model`, refresh-on-open for `/scoped-models`) is
+  not ported: kmet's catalogs are static committed EDN, so the refresh
+  would be a no-op; a future dynamic-catalog provider reintroduces it with
+  pi's timeout/status plumbing.
+- **`/settings` is a minimal two-row selector**, not pi's full settings
+  surface (no submenu; the thinking row cycles inline via left/right).
+- **`/model` keeps kmet's "Switched to …" chat message** instead of pi's
+  `Model: <id>` status line.
 
 ---
 
@@ -1488,6 +1480,24 @@ providers.
   serialized credential ops (order + failed-op chain survival),
   available-model-ids filtering, `/login` auth-type selection (single-method
   direct start, method selector choose paths), `/logout` credential kinds.
+- Implemented (missing slash commands): `test/kmet/app/ui/test_scoped_models_selector.clj` —
+  enabled-ids helpers (toggle/enable-all/clear-all/move/sorted-ids), the
+  handle-input behaviors over raw key sequences (Enter toggle, Ctrl+A/X/P,
+  Alt+Up/Down reorder, Ctrl+S persist, Escape/Ctrl+C cancel, search filter,
+  unavailable-row survival); `test/kmet/test_core.clj` —
+  `--list-models` table + search + empty states, `format-token-count`;
+  `test_interactive_ui.clj` — `/scoped-models` + `/settings` registration,
+  selector initial-state precedence (session scoped → `:enabled-models`
+  patterns → nil), edit→session-scoped wiring, settings thinking-row cycle +
+  persistence; `test_loop.clj` — reworked cycle-model! (scoped full-ids,
+  provider switching, all-available fallback, persists-change);
+  `test_llm.clj` — `get-supported-thinking-levels` public;
+  `test_model_resolver.clj` — `resolve-model-scope-models`;
+  `test_config.clj` — `get/set-enabled-models!` + the live re-read
+  (`get-enabled-models-live`: file wins over the config snapshot, missing/
+  unreadable → config fallback); `test_footer_data_provider.clj` — `fdp-set-provider-count!`;
+  caching-conventions — `ScopedModelsSelector` allowlisted as a transparent
+  parent (count 37→38).
 - Generator script: `bb generate-models` must be deterministic (sorted output)
   and fail loudly on validation errors; run once and commit output.
 - Final gate unchanged: `bb lint` + `bb format-check` + `bb test` +
@@ -1552,7 +1562,8 @@ Phase 4 (resolver, /model, Ctrl+L) ──► Phase 5 (cost footer)
               Phase 10 (OAuth subscriptions)
                     │
                     ▼
-   Missing slash commands (/scoped-models, /model refresh, --list-models)
+   Missing slash commands (implemented: /scoped-models, /model fallthrough,
+   /settings thinking row, --list-models)
                     │
                     ▼
    Deferred A (more providers & wire APIs)   Deferred B (image models)
@@ -1564,8 +1575,7 @@ Phase 6 needs Phase 0 (registry) + Phase 3 (auth resolution); Phases 7–9
 build on Phase 6's composition; Phase 10 needs Phase 6 (provider `:oauth`
 carrying) + Phase 9 (auth-token variants) and reuses Phase 3's auth.edn + `/login`.
 The missing-slash-commands section builds on Phase 4 (resolver, selector
-overlay) + Phase 6 (settings persistence via file-lock) and is a
-prerequisite for Deferred A's runtime dispatch (it exercises the same
-`models/refresh` plumbing). Deferred A builds on Phases 2/5/10 (llm dispatch,
+overlay) + Phase 6 (settings persistence via file-lock). Deferred A builds
+on Phases 2/5/10 (llm dispatch,
 usage/cost, oauth); Deferred B is standalone (own registry + wire api) and
 reuses Phases 3/5/10 (auth resolution, cost, oauth).
