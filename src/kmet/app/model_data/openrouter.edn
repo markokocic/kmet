@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T14:42:02Z"
+ :generated-at "2026-08-13T14:54:47Z"
  :provider {:id :openrouter
             :name "OpenRouter"
             :env-vars ["OPENROUTER_API_KEY"]
@@ -61,7 +61,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.3 :output 2.5 :cache-read 0 :cache-write 0}
     :context-window 1000000
     :max-tokens 65535
@@ -73,7 +73,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.06 :output 0.24 :cache-read 0 :cache-write 0}
     :context-window 300000
     :max-tokens 5120
@@ -97,7 +97,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 12.5 :cache-read 0.625 :cache-write 0}
     :context-window 1000000
     :max-tokens 32000
@@ -109,7 +109,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.8 :output 3.2 :cache-read 0 :cache-write 0}
     :context-window 300000
     :max-tokens 5120
@@ -121,7 +121,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.25 :output 1.25 :cache-read 0.03 :cache-write 0.3}
     :context-window 200000
     :max-tokens 4096
@@ -134,7 +134,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :off nil :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 10 :output 50 :cache-read 1 :cache-write 12.5}
     :context-window 1000000
     :max-tokens 128000
@@ -147,7 +147,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :off nil :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
     :max-tokens 128000
@@ -159,7 +159,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1 :output 5 :cache-read 0.1 :cache-write 1.25}
     :context-window 200000
     :max-tokens 64000
@@ -171,7 +171,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.5 :output 2.5 :cache-read 0.05 :cache-write 0.625}
     :context-window 200000
     :max-tokens 64000
@@ -183,7 +183,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 15 :output 75 :cache-read 1.5 :cache-write 18.75}
     :context-window 200000
     :max-tokens 32000
@@ -195,7 +195,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 15 :output 75 :cache-read 1.5 :cache-write 18.75}
     :context-window 200000
     :max-tokens 32000
@@ -207,7 +207,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 7.5 :output 37.5 :cache-read 0.75 :cache-write 9.375}
     :context-window 200000
     :max-tokens 32000
@@ -219,7 +219,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 200000
     :max-tokens 64000
@@ -231,7 +231,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 12.5 :cache-read 0.25 :cache-write 3.125}
     :context-window 200000
     :max-tokens 64000
@@ -244,7 +244,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
     :max-tokens 128000
@@ -257,7 +257,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 12.5 :cache-read 0.25 :cache-write 3.125}
     :context-window 1000000
     :max-tokens 128000
@@ -270,7 +270,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
     :max-tokens 128000
@@ -283,7 +283,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 30 :output 150 :cache-read 3 :cache-write 37.5}
     :context-window 1000000
     :max-tokens 128000
@@ -296,7 +296,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 12.5 :cache-read 0.25 :cache-write 3.125}
     :context-window 1000000
     :max-tokens 128000
@@ -309,7 +309,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
     :max-tokens 128000
@@ -322,7 +322,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 10 :output 50 :cache-read 1 :cache-write 12.5}
     :context-window 1000000
     :max-tokens 128000
@@ -335,7 +335,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 12.5 :cache-read 0.25 :cache-write 3.125}
     :context-window 1000000
     :max-tokens 128000
@@ -348,7 +348,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
     :max-tokens 128000
@@ -361,7 +361,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 10 :output 50 :cache-read 1 :cache-write 12.5}
     :context-window 1000000
     :max-tokens 128000
@@ -374,7 +374,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 12.5 :cache-read 0.25 :cache-write 3.125}
     :context-window 1000000
     :max-tokens 128000
@@ -386,7 +386,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 3.75}
     :context-window 200000
     :max-tokens 64000
@@ -398,7 +398,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 3.75}
     :context-window 1000000
     :max-tokens 64000
@@ -410,7 +410,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 1.875}
     :context-window 1000000
     :max-tokens 64000
@@ -423,7 +423,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 3.75}
     :context-window 1000000
     :max-tokens 128000
@@ -436,7 +436,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 1.875}
     :context-window 1000000
     :max-tokens 128000
@@ -449,7 +449,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2 :output 10 :cache-read 0.2 :cache-write 2.5}
     :context-window 1000000
     :max-tokens 128000
@@ -462,7 +462,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1 :output 5 :cache-read 0.1 :cache-write 1.25}
     :context-window 1000000
     :max-tokens 128000
@@ -510,7 +510,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.25 :output 2 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 32768
@@ -522,7 +522,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.075 :output 0.3 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 32768
@@ -534,7 +534,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.5 :output 2.5 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
@@ -546,7 +546,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.5 :output 3 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 131072
@@ -558,7 +558,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.25 :output 2 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 131072
@@ -570,7 +570,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.4 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 131072
@@ -790,7 +790,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.3 :output 2.5 :cache-read 0.03 :cache-write 0.083333}
     :context-window 1048576
     :max-tokens 65535
@@ -802,7 +802,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.4 :cache-read 0.01 :cache-write 0.083333}
     :context-window 1048576
     :max-tokens 65535
@@ -814,7 +814,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.05 :output 0.2 :cache-read 0.01 :cache-write 0}
     :context-window 1048576
     :max-tokens 65535
@@ -826,7 +826,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.15 :output 1.25 :cache-read 0.03 :cache-write 0}
     :context-window 1048576
     :max-tokens 65535
@@ -838,7 +838,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0.375}
     :context-window 1048576
     :max-tokens 65536
@@ -850,7 +850,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0.375}
     :context-window 1048576
     :max-tokens 65536
@@ -862,7 +862,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0.375}
     :context-window 1048576
     :max-tokens 65535
@@ -874,7 +874,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.625 :output 5 :cache-read 0.125 :cache-write 0}
     :context-window 1048576
     :max-tokens 65536
@@ -887,7 +887,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.5 :output 3 :cache-read 0.05 :cache-write 0.083333}
     :context-window 1048576
     :max-tokens 65536
@@ -900,7 +900,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.25 :output 1.5 :cache-read 0 :cache-write 0}
     :context-window 1048576
     :max-tokens 65536
@@ -917,7 +917,7 @@
                          :medium nil
                          :minimal nil
                          :off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 0.375}
     :context-window 65536
     :max-tokens 32768
@@ -930,7 +930,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.25 :output 1.5 :cache-read 0.025 :cache-write 0.083333}
     :context-window 1048576
     :max-tokens 65536
@@ -943,7 +943,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.25 :output 1.5 :cache-read 0.025 :cache-write 0.083333}
     :context-window 1048576
     :max-tokens 65536
@@ -956,7 +956,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.125 :output 0.75 :cache-read 0.0125 :cache-write 0}
     :context-window 1048576
     :max-tokens 65536
@@ -973,7 +973,7 @@
                          :medium nil
                          :minimal nil
                          :off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 0.375}
     :context-window 1048576
     :max-tokens 65536
@@ -990,7 +990,7 @@
                          :medium nil
                          :minimal nil
                          :off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 0.375}
     :context-window 1048576
     :max-tokens 65536
@@ -1007,7 +1007,7 @@
                          :medium nil
                          :minimal nil
                          :off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1 :output 6 :cache-read 0 :cache-write 0}
     :context-window 1048576
     :max-tokens 65536
@@ -1020,7 +1020,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.5 :output 9 :cache-read 0.15 :cache-write 0.083333}
     :context-window 1048576
     :max-tokens 65536
@@ -1033,7 +1033,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.3 :output 2.5 :cache-read 0.03 :cache-write 0.083333}
     :context-window 1048576
     :max-tokens 65536
@@ -1046,7 +1046,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.15 :output 1.25 :cache-read 0.015 :cache-write 0}
     :context-window 1048576
     :max-tokens 65536
@@ -1059,7 +1059,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.75 :output 4.5 :cache-read 0.075 :cache-write 0}
     :context-window 1048576
     :max-tokens 65536
@@ -1072,7 +1072,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 0.083333}
     :context-window 1048576
     :max-tokens 65536
@@ -1085,7 +1085,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.75 :output 3.75 :cache-read 0.075 :cache-write 0.083333}
     :context-window 1048576
     :max-tokens 65536
@@ -1097,7 +1097,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.05 :output 0.15 :cache-read 0 :cache-write 0}
     :context-window 131072
     :max-tokens 16384
@@ -1109,7 +1109,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.08 :output 0.45 :cache-read 0.04 :cache-write 0}
     :context-window 131072
     :max-tokens 131072
@@ -1126,7 +1126,7 @@
                          :medium nil
                          :minimal "MINIMAL"
                          :off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.12 :output 0.4 :cache-read 0.05 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
@@ -1143,7 +1143,7 @@
                          :medium nil
                          :minimal "MINIMAL"
                          :off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 131072
     :max-tokens 32768
@@ -1160,7 +1160,7 @@
                          :medium nil
                          :minimal "MINIMAL"
                          :off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.34 :cache-read 0.1 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
@@ -1177,7 +1177,7 @@
                          :medium nil
                          :minimal "MINIMAL"
                          :off nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 32768
@@ -1358,7 +1358,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.2 :output 0.696 :cache-read 0 :cache-write 0}
     :context-window 128000
     :max-tokens 4096
@@ -1370,7 +1370,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.3 :cache-read 0 :cache-write 0}
     :context-window 327680
     :max-tokens 16384
@@ -1382,7 +1382,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.35 :output 1.5 :cache-read 0.04 :cache-write 0}
     :context-window 131072
     :max-tokens 4096
@@ -1394,7 +1394,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 4.25 :cache-read 0.15 :cache-write 0}
     :context-window 1048576
     :max-tokens 4096
@@ -1406,7 +1406,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 4.25 :cache-read 0.15 :cache-write 0}
     :context-window 1048576
     :max-tokens 4096
@@ -1478,7 +1478,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.3 :output 1.2 :cache-read 0.06 :cache-write 0}
     :context-window 524288
     :max-tokens 512000
@@ -1490,7 +1490,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.15 :output 0.6 :cache-read 0.03 :cache-write 0}
     :context-window 524288
     :max-tokens 4096
@@ -1514,7 +1514,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.2 :output 0.2 :cache-read 0.02 :cache-write 0}
     :context-window 262144
     :max-tokens 4096
@@ -1526,7 +1526,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.1 :cache-read 0.01 :cache-write 0}
     :context-window 131072
     :max-tokens 4096
@@ -1538,7 +1538,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.15 :output 0.15 :cache-read 0.015 :cache-write 0}
     :context-window 262144
     :max-tokens 4096
@@ -1574,7 +1574,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.5 :output 1.5 :cache-read 0.05 :cache-write 0}
     :context-window 262144
     :max-tokens 4096
@@ -1586,7 +1586,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.4 :output 2 :cache-read 0.04 :cache-write 0}
     :context-window 131072
     :max-tokens 4096
@@ -1598,7 +1598,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.5 :output 7.5 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 4096
@@ -1610,7 +1610,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.4 :output 2 :cache-read 0.04 :cache-write 0}
     :context-window 131072
     :max-tokens 4096
@@ -1646,7 +1646,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.15 :output 0.6 :cache-read 0.015 :cache-write 0}
     :context-window 262144
     :max-tokens 4096
@@ -1658,7 +1658,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.09375 :output 0.25 :cache-read 0 :cache-write 0}
     :context-window 256000
     :max-tokens 16384
@@ -1730,7 +1730,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.41 :output 2.06 :cache-read 0.07 :cache-write 0}
     :context-window 262144
     :max-tokens 4096
@@ -1742,7 +1742,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.5795 :output 2.44 :cache-read 0.0976 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
@@ -1754,7 +1754,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.67 :output 3.4 :cache-read 0.15 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
@@ -1766,7 +1766,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.475 :output 2 :cache-read 0.095 :cache-write 0}
     :context-window 262144
     :max-tokens 4096
@@ -1778,7 +1778,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 0}
     :context-window 1048576
     :max-tokens 131072
@@ -1790,7 +1790,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.025 :output 0.1 :cache-read 0.0025 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
@@ -1802,7 +1802,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.25 :output 1 :cache-read 0.025 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
@@ -1838,7 +1838,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 256000
     :max-tokens 65536
@@ -1934,7 +1934,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 128000
     :max-tokens 128000
@@ -2018,7 +2018,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 10 :output 30 :cache-read 0 :cache-write 0}
     :context-window 128000
     :max-tokens 4096
@@ -2042,7 +2042,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 15 :cache-read 0 :cache-write 0}
     :context-window 128000
     :max-tokens 4096
@@ -2054,7 +2054,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2 :output 8 :cache-read 0.5 :cache-write 0}
     :context-window 1047576
     :max-tokens 32768
@@ -2066,7 +2066,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.4 :output 1.6 :cache-read 0.1 :cache-write 0}
     :context-window 1047576
     :max-tokens 32768
@@ -2078,7 +2078,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.2 :output 0.8 :cache-read 0.05 :cache-write 0}
     :context-window 1047576
     :max-tokens 32768
@@ -2090,7 +2090,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.4 :cache-read 0.025 :cache-write 0}
     :context-window 1047576
     :max-tokens 32768
@@ -2102,7 +2102,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.05 :output 0.2 :cache-read 0.0125 :cache-write 0}
     :context-window 1047576
     :max-tokens 32768
@@ -2114,7 +2114,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1 :output 4 :cache-read 0.25 :cache-write 0}
     :context-window 1047576
     :max-tokens 32768
@@ -2126,7 +2126,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 10 :cache-read 1.25 :cache-write 0}
     :context-window 128000
     :max-tokens 16384
@@ -2138,7 +2138,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 15 :cache-read 0 :cache-write 0}
     :context-window 128000
     :max-tokens 4096
@@ -2150,7 +2150,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 10 :cache-read 1.25 :cache-write 0}
     :context-window 128000
     :max-tokens 16384
@@ -2162,7 +2162,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 10 :cache-read 1.25 :cache-write 0}
     :context-window 128000
     :max-tokens 16384
@@ -2174,7 +2174,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.15 :output 0.6 :cache-read 0.075 :cache-write 0}
     :context-window 128000
     :max-tokens 16384
@@ -2186,7 +2186,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.15 :output 0.6 :cache-read 0.075 :cache-write 0}
     :context-window 128000
     :max-tokens 16384
@@ -2198,7 +2198,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.075 :output 0.3 :cache-read 0.0375 :cache-write 0}
     :context-window 128000
     :max-tokens 16384
@@ -2210,7 +2210,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 5 :cache-read 0.625 :cache-write 0}
     :context-window 128000
     :max-tokens 16384
@@ -2222,7 +2222,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2234,7 +2234,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.625 :output 5 :cache-read 0.0625 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2246,7 +2246,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.25 :output 2 :cache-read 0.025 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2258,7 +2258,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.125 :output 1 :cache-read 0.0125 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2270,7 +2270,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.05 :output 0.4 :cache-read 0.005 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2282,7 +2282,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.025 :output 0.2 :cache-read 0.0025 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2294,7 +2294,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 15 :output 120 :cache-read 0 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2306,7 +2306,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 7.5 :output 60 :cache-read 0 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2318,7 +2318,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2330,7 +2330,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.13 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2342,7 +2342,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2354,7 +2354,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.25 :output 2 :cache-read 0.03 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2366,7 +2366,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.625 :output 5 :cache-read 0.0625 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2379,7 +2379,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.75 :output 14 :cache-read 0.175 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2392,7 +2392,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.75 :output 14 :cache-read 0.175 :cache-write 0}
     :context-window 128000
     :max-tokens 32000
@@ -2405,7 +2405,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.75 :output 14 :cache-read 0.175 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2418,7 +2418,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 21 :output 168 :cache-read 0 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2431,7 +2431,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 10.5 :output 84 :cache-read 0 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2444,7 +2444,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.875 :output 7 :cache-read 0.0875 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2457,7 +2457,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.75 :output 14 :cache-read 0.175 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2470,7 +2470,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 15 :cache-read 0.25 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2483,7 +2483,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.75 :output 4.5 :cache-read 0.075 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2496,7 +2496,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.375 :output 2.25 :cache-read 0.0375 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2509,7 +2509,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.2 :output 1.25 :cache-read 0.02 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2522,7 +2522,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.625 :cache-read 0.01 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2535,7 +2535,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 30 :output 180 :cache-read 0 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2548,7 +2548,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 15 :output 90 :cache-read 0 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2561,7 +2561,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 7.5 :cache-read 0.125 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2574,7 +2574,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2587,7 +2587,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:low nil :minimal nil :off nil :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 30 :output 180 :cache-read 0 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2600,7 +2600,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 15 :output 90 :cache-read 0 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2613,7 +2613,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 15 :cache-read 0.25 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2626,7 +2626,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.6 :cache-read 0.01 :cache-write 0.125}
     :context-window 1050000
     :max-tokens 128000
@@ -2639,7 +2639,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.6 :cache-read 0.01 :cache-write 0.125}
     :context-window 1050000
     :max-tokens 128000
@@ -2652,7 +2652,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.6 :cache-read 0.01 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2665,7 +2665,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.6 :cache-read 0.01 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2678,7 +2678,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 6.25}
     :context-window 1050000
     :max-tokens 128000
@@ -2691,7 +2691,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 6.25}
     :context-window 1050000
     :max-tokens 128000
@@ -2704,7 +2704,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 15 :cache-read 0.25 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2717,7 +2717,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.5 :output 15 :cache-read 0.25 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2730,7 +2730,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1 :output 6 :cache-read 0.1 :cache-write 1.25}
     :context-window 1050000
     :max-tokens 128000
@@ -2743,7 +2743,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1 :output 6 :cache-read 0.1 :cache-write 1.25}
     :context-window 1050000
     :max-tokens 128000
@@ -2756,7 +2756,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1 :output 6 :cache-read 0.1 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2769,7 +2769,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :thinking-level-map {:max "max" :xhigh "xhigh"}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1 :output 6 :cache-read 0.1 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
@@ -2781,7 +2781,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.625 :output 5 :cache-read 0.0625 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2817,7 +2817,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -2877,7 +2877,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 15 :output 60 :cache-read 7.5 :cache-write 0}
     :context-window 200000
     :max-tokens 100000
@@ -2889,7 +2889,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 7.5 :output 30 :cache-read 3.75 :cache-write 0}
     :context-window 200000
     :max-tokens 100000
@@ -2901,7 +2901,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2 :output 8 :cache-read 0.5 :cache-write 0}
     :context-window 200000
     :max-tokens 100000
@@ -2961,7 +2961,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 20 :output 80 :cache-read 0 :cache-write 0}
     :context-window 200000
     :max-tokens 100000
@@ -2973,7 +2973,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 10 :output 40 :cache-read 0 :cache-write 0}
     :context-window 200000
     :max-tokens 100000
@@ -2985,7 +2985,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1 :output 4 :cache-read 0.25 :cache-write 0}
     :context-window 200000
     :max-tokens 100000
@@ -2997,7 +2997,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.1 :output 4.4 :cache-read 0.275 :cache-write 0}
     :context-window 200000
     :max-tokens 100000
@@ -3009,7 +3009,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.1 :output 4.4 :cache-read 0.275 :cache-write 0}
     :context-window 200000
     :max-tokens 100000
@@ -3021,7 +3021,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.55 :output 2.2 :cache-read 0.1375 :cache-write 0}
     :context-window 200000
     :max-tokens 100000
@@ -3033,7 +3033,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.55 :output 2.2 :cache-read 0.1375 :cache-write 0}
     :context-window 200000
     :max-tokens 100000
@@ -3045,7 +3045,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 2000000
     :max-tokens 4096
@@ -3057,7 +3057,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 2000000
     :max-tokens 4096
@@ -3069,7 +3069,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 200000
     :max-tokens 4096
@@ -3417,7 +3417,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.26 :output 1.04 :cache-read 0 :cache-write 0}
     :context-window 131072
     :max-tokens 32768
@@ -3429,7 +3429,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.4 :output 4 :cache-read 0 :cache-write 0}
     :context-window 131072
     :max-tokens 32768
@@ -3441,7 +3441,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.15 :output 0.6 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 16384
@@ -3453,7 +3453,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.2 :output 2.4 :cache-read 0 :cache-write 0}
     :context-window 131072
     :max-tokens 32768
@@ -3465,7 +3465,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.104 :output 0.416 :cache-read 0 :cache-write 0}
     :context-window 131072
     :max-tokens 32768
@@ -3477,7 +3477,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.117 :output 0.455 :cache-read 0 :cache-write 0}
     :context-window 131072
     :max-tokens 32768
@@ -3489,7 +3489,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.18 :output 2.1 :cache-read 0 :cache-write 0}
     :context-window 131072
     :max-tokens 32768
@@ -3501,7 +3501,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.29 :output 2.4 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 81920
@@ -3513,7 +3513,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.195 :output 1.56 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 65536
@@ -3525,7 +3525,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.25 :output 1.25 :cache-read 0.25 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
@@ -3537,7 +3537,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.5 :output 3.6 :cache-read 0.3 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
@@ -3549,7 +3549,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.15 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
@@ -3561,7 +3561,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.065 :output 0.26 :cache-read 0 :cache-write 0}
     :context-window 1000000
     :max-tokens 65536
@@ -3573,7 +3573,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.26 :output 1.56 :cache-read 0 :cache-write 0}
     :context-window 1000000
     :max-tokens 65536
@@ -3585,7 +3585,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.3 :output 1.8 :cache-read 0 :cache-write 0.375}
     :context-window 1000000
     :max-tokens 65536
@@ -3597,7 +3597,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.6 :output 3.6 :cache-read 0.12 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
@@ -3609,7 +3609,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.15 :output 1 :cache-read 0.05 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
@@ -3621,7 +3621,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1875 :output 1.125 :cache-read 0 :cache-write 0.234375}
     :context-window 1000000
     :max-tokens 65536
@@ -3645,7 +3645,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.325 :output 1.95 :cache-read 0 :cache-write 0.40625}
     :context-window 1000000
     :max-tokens 65536
@@ -3657,7 +3657,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.03 :output 0.13 :cache-read 0.006 :cache-write 0.038}
     :context-window 1000000
     :max-tokens 65536
@@ -3681,7 +3681,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.32 :output 1.28 :cache-read 0.064 :cache-write 0.4}
     :context-window 1000000
     :max-tokens 131072
@@ -3705,7 +3705,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2 :output 6 :cache-read 0.25 :cache-write 2.5}
     :context-window 1000000
     :max-tokens 131072
@@ -3717,7 +3717,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.1 :output 0.1 :cache-read 0 :cache-write 0}
     :context-window 16384
     :max-tokens 16384
@@ -3741,7 +3741,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 0}
     :context-window 1000000
     :max-tokens 128000
@@ -3753,7 +3753,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.95 :output 4 :cache-read 0.15 :cache-write 0}
     :context-window 262144
     :max-tokens 65536
@@ -3789,7 +3789,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.2 :output 1.15 :cache-read 0.04 :cache-write 0}
     :context-window 256000
     :max-tokens 256000
@@ -3837,7 +3837,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.95 :output 4.05 :cache-read 0.16 :cache-write 0}
     :context-window 524288
     :max-tokens 262144
@@ -3849,7 +3849,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.45 :output 1.2 :cache-read 0.1 :cache-write 0}
     :context-window 524288
     :max-tokens 262144
@@ -3861,7 +3861,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.5 :output 2.025 :cache-read 0.085 :cache-write 0}
     :context-window 524288
     :max-tokens 4096
@@ -3897,7 +3897,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 2.5 :cache-read 0.2 :cache-write 0}
     :context-window 2000000
     :max-tokens 4096
@@ -3909,7 +3909,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.25 :output 2.5 :cache-read 0.2 :cache-write 0}
     :context-window 1000000
     :max-tokens 4096
@@ -3921,7 +3921,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2 :output 6 :cache-read 0.3 :cache-write 0}
     :context-window 500000
     :max-tokens 4096
@@ -3933,7 +3933,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2 :output 6 :cache-read 0.5 :cache-write 0}
     :context-window 500000
     :max-tokens 4096
@@ -3945,7 +3945,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1 :output 2 :cache-read 0.2 :cache-write 0}
     :context-window 256000
     :max-tokens 4096
@@ -3957,7 +3957,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.14 :output 0.28 :cache-read 0.0028 :cache-write 0}
     :context-window 1048576
     :max-tokens 131072
@@ -4005,7 +4005,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.6 :output 1.8 :cache-read 0.11 :cache-write 0}
     :context-window 65536
     :max-tokens 16384
@@ -4029,7 +4029,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.3 :output 0.9 :cache-read 0.055 :cache-write 0}
     :context-window 131072
     :max-tokens 32768
@@ -4126,7 +4126,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.2 :output 4 :cache-read 0.24 :cache-write 0}
     :context-window 202752
     :max-tokens 131072
@@ -4138,7 +4138,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 10 :output 50 :cache-read 1 :cache-write 12.5}
     :context-window 1000000
     :max-tokens 128000
@@ -4150,7 +4150,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1 :output 5 :cache-read 0.1 :cache-write 1.25}
     :context-window 200000
     :max-tokens 64000
@@ -4162,7 +4162,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
     :max-tokens 128000
@@ -4174,7 +4174,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2 :output 10 :cache-read 0.2 :cache-write 2.5}
     :context-window 1000000
     :max-tokens 128000
@@ -4205,7 +4205,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 0.083333}
     :context-window 1048576
     :max-tokens 65536
@@ -4217,7 +4217,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 0.375}
     :context-window 1048576
     :max-tokens 65536
@@ -4229,7 +4229,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.8 :output 14 :cache-read 0.29 :cache-write 0}
     :context-window 1048576
     :max-tokens 131072
@@ -4241,7 +4241,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 6.25}
     :context-window 1050000
     :max-tokens 128000
@@ -4253,7 +4253,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.75 :output 4.5 :cache-read 0.075 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
@@ -4265,7 +4265,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2 :output 6 :cache-read 0.5 :cache-write 0}
     :context-window 500000
     :max-tokens 4096

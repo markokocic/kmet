@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T14:42:02Z"
+ :generated-at "2026-08-13T14:54:47Z"
  :provider {:id :fireworks
             :name "Fireworks AI"
             :env-vars ["FIREWORKS_API_KEY"]
@@ -231,6 +231,13 @@
     :api :openai-completions
     :base-url "https://api.fireworks.ai/inference/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 0}
     :context-window 1048576
@@ -271,6 +278,13 @@
     :api :openai-completions
     :base-url "https://api.fireworks.ai/inference/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 4.5 :output 22.5 :cache-read 0.45 :cache-write 0}
     :context-window 1048576

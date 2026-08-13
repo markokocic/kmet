@@ -823,7 +823,8 @@
                      :base-url openrouter-base-url
                      :reasoning (boolean (some #(= "reasoning" %)
                                                (get model "supported_parameters")))
-                     :input (if (some #(= "image" %) (get-in model ["architecture" "modality"]))
+                     :input (if (str/includes? (or (get-in model ["architecture" "modality"]) "")
+                                              "image")
                               [:text :image] [:text])
                      :cost (array-map :input (cost "prompt")
                                       :output (cost "completion")
@@ -1005,7 +1006,10 @@
   [mm m]
   (if (and (contains? #{:openai-completions :openai-responses} (:api mm))
            (:reasoning mm)
-           (nil? (:thinking-format (:compat mm)))
+           ;; pi supportsDirectReasoningEffort: the default (openai) thinking
+           ;; format still takes effort maps — :openai counts as unset
+           (or (nil? (:thinking-format (:compat mm)))
+               (= :openai (:thinking-format (:compat mm))))
            (not= false (:supports-reasoning-effort (:compat mm)))
            (get m "reasoning_options"))
     (if-let [tlm (effort-thinking-level-map (get m "reasoning_options"))]

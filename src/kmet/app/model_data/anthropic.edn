@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T14:42:02Z"
+ :generated-at "2026-08-13T14:54:47Z"
  :provider {:id :anthropic
             :name "Anthropic"
             :env-vars ["ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_OAUTH_TOKEN" "ANTHROPIC_API_KEY"]
