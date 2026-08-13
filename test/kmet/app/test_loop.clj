@@ -1351,7 +1351,7 @@
     (t/is (= [] @(:scoped-models agent)))
     (t/is (false? @(:overflow-recovered agent)))
     (t/is (nil? (:compact-token-threshold agent)))
-    (t/is (= 3 (:max-retries agent)) "pi default maxRetries")))
+    (t/is (= 3 @(:max-retries agent)) "pi default maxRetries")))
 
 (defn- make-test-provider
   "A minimal test provider with models IDS (pi-shaped Model records)."
@@ -1443,6 +1443,15 @@
 (t/deftest test-loop-cycle-model-no-models
   (let [agent (loop/make-agent-state :model "a")]
     (t/is (nil? (loop/cycle-model! agent 1)) "no scoped models and no available models → nil")))
+
+(t/deftest test-loop-retry-setters
+  (let [agent (loop/make-agent-state)]
+    (t/is (= 3 @(:max-retries agent)))
+    (t/is (= 2000 @(:base-delay-ms agent)))
+    (loop/set-max-retries! agent 0)
+    (loop/set-base-delay-ms! agent 500)
+    (t/is (= 0 @(:max-retries agent)) "0 disables auto-retry")
+    (t/is (= 500 @(:base-delay-ms agent)))))
 
 (t/deftest test-loop-set-model-emits-model-select
   (let [events (atom [])

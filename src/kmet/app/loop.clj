@@ -97,8 +97,8 @@
                        steering-mode ;; :all | :one-at-a-time (drain mode)
                        follow-up-mode ;; :all | :one-at-a-time (drain mode)
                        active-call      ;; atom of in-flight LLM promise (for cancel)
-                       max-retries      ;; int: max auto-retry attempts on transient LLM errors (pi default 3)
-                       base-delay-ms    ;; int: exponential backoff base in ms (pi default 2000)
+                       max-retries      ;; atom of int: max auto-retry attempts on transient LLM errors (pi default 3)
+                       base-delay-ms    ;; atom of int: exponential backoff base in ms (pi default 2000)
                        retry-count      ;; atom of int: retries performed for the in-flight LLM call
                        before-tool-call ;; atom of (fn [ctx]) → {:block true :reason} | nil
                        after-tool-call  ;; atom of (fn [ctx]) → override map | nil
@@ -155,8 +155,8 @@ Be precise and concise in your responses."}}]
                     :steering-mode steering-mode
                     :follow-up-mode follow-up-mode
                     :active-call (atom nil)
-                    :max-retries max-retries
-                    :base-delay-ms base-delay-ms
+                    :max-retries (atom max-retries)
+                    :base-delay-ms (atom base-delay-ms)
                     :retry-count (atom 0)
                     :before-tool-call (atom before-tool-call)
                     :after-tool-call (atom after-tool-call)
@@ -1219,7 +1219,7 @@ Be precise and concise in your responses."}}]
                                                   {:aborted true}))
                                             (if (:error result)
                                               (let [err (:error result)
-                                                    max-retries (:max-retries agent)]
+                                                    max-retries @(:max-retries agent)]
                                                 (cond
                                                   ;; Context overflow → compact once, then retry
                                                   ;; (pi: overflow is compaction territory, not auto-retry)
@@ -1236,7 +1236,7 @@ Be precise and concise in your responses."}}]
                                                        (retryable-error? err))
                                                   ;; Auto-retry with exponential backoff (pi: _prepareRetry)
                                                   (let [attempt (inc @(:retry-count agent))
-                                                        delay-ms (* (:base-delay-ms agent)
+                                                        delay-ms (* @(:base-delay-ms agent)
                                                                     (long (Math/pow 2 (dec attempt))))]
                                                     (reset! (:retry-count agent) attempt)
                                                     (emit agent {:type :auto-retry-start
@@ -1453,6 +1453,17 @@ Be precise and concise in your responses."}}]
    full ids, or [] when unset."
   [agent]
   @(:scoped-models agent))
+
+(defn set-max-retries!
+  "Set the auto-retry attempt limit live (pi: retry settings change — the
+   /settings rows apply immediately). 0 disables auto-retry."
+  [agent n]
+  (reset! (:max-retries agent) n))
+
+(defn set-base-delay-ms!
+  "Set the auto-retry backoff base in ms live (pi: retry baseDelayMs)."
+  [agent ms]
+  (reset! (:base-delay-ms agent) ms))
 
 (defn- resolve-scoped-model
   "Resolve a scoped-list entry (full \"provider/id\" or bare id) to a Model

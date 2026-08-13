@@ -21,6 +21,7 @@
    :compact-threshold 400
    :compact-token-threshold nil
    :keep-recent-tokens 20000
+   :retry {:enabled true :max-retries 3 :base-delay-ms 2000}
    :models []
    :http-idle-timeout-ms 300000
    :system-prompt nil
@@ -246,19 +247,25 @@
   [config]
   (:enabled-models config))
 
+(defn- read-global-settings
+  "The parsed global settings map, or nil when the file is missing,
+   unreadable, or not a map."
+  []
+  (let [file (io/file (global-settings-path))]
+    (when (fs/exists? file)
+      (try (let [parsed (edn/read-string (slurp file))]
+             (when (map? parsed) parsed))
+           (catch Exception _ nil)))))
+
 (defn get-enabled-models-live
   "Live :enabled-models patterns from the global settings file (pi: the
    SettingsManager holds mutable settings — kmet's in-memory config is a
    startup snapshot, so /scoped-models re-reads after a Ctrl+S persist).
    Falls back to the CONFIG value when the file is missing or unreadable."
   [config]
-  (let [file (io/file (global-settings-path))]
-    (if-not (fs/exists? file)
-      (:enabled-models config)
-      (let [parsed (try (edn/read-string (slurp file)) (catch Exception _ nil))]
-        (if (map? parsed)
-          (:enabled-models parsed)
-          (:enabled-models config))))))
+  (if-let [settings (read-global-settings)]
+    (:enabled-models settings)
+    (:enabled-models config)))
 
 (defn set-enabled-models!
   "Persist the enabled-model patterns to the global settings file (pi:
@@ -266,6 +273,26 @@
    enabled."
   [patterns]
   (save-setting! [:enabled-models] patterns))
+
+(defn get-retry-settings
+  "Retry settings (pi: settings-manager retry block — enabled, maxRetries,
+   baseDelayMs). Returns {:enabled bool :max-retries n :base-delay-ms n};
+   the deep-merged config may carry a partial :retry map."
+  [config]
+  (let [retry (:retry config)]
+    {:enabled (if (contains? retry :enabled) (:enabled retry) true)
+     :max-retries (or (:max-retries retry) 3)
+     :base-delay-ms (or (:base-delay-ms retry) 2000)}))
+
+(defn get-retry-settings-live
+  "Live :retry settings from the global settings file (the in-memory config
+   is a startup snapshot — /settings re-reads after a same-session change,
+   like get-enabled-models-live). Falls back to the CONFIG value when the
+   file is missing or unreadable."
+  [config]
+  (get-retry-settings (if-let [settings (read-global-settings)]
+                        (assoc config :retry (:retry settings))
+                        config)))
 
 ;; ─── System prompt sources (pi: resolvePromptInput + discoverSystemPromptFile) ──
 

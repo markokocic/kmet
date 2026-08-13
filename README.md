@@ -68,7 +68,7 @@ bb run --print "list files in current directory"
 | `/help` | Show help |
 | `/model <provider:model[:thinking]>` | Switch model (Ctrl+L opens a selector; refresh-on-miss falls through to the selector with the search term) |
 | `/scoped-models` | Enable/disable/reorder the models Ctrl+P cycles through (Ctrl+S saves to settings) |
-| `/settings` | Settings menu — thinking level + hide-thinking |
+| `/settings` | Settings menu — thinking level, hide-thinking, retry (enabled / max retries / base delay) |
 | `/login [provider]` | Configure provider auth (API key or GitHub Copilot OAuth) |
 | `/logout [provider]` | Remove stored provider credentials |
 | `/new` | Start new session |

@@ -31,7 +31,12 @@
         ag (agent/make-agent-state
             :model resolved-model
             :provider resolved-provider
-            :system system-prompt)
+            :system system-prompt
+            ;; pi: retry settings (settings.edn :retry block — enabled gates
+            ;; max-retries to 0)
+            :max-retries (let [retry (cfg/get-retry-settings config)]
+                           (if (:enabled retry) (:max-retries retry) 0))
+            :base-delay-ms (:base-delay-ms (cfg/get-retry-settings config)))
         _ (when (seq (:models config))
             (let [{:keys [models]}
                   (resolver/resolve-model-scope-models (:models config)

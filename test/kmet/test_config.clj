@@ -269,6 +269,38 @@
           (t/is (= ["stale"] (cfg/get-enabled-models-live {:enabled-models ["stale"]})))))
       (finally (fs/delete-tree tmp)))))
 
+(t/deftest test-get-retry-settings
+  (t/testing "defaults when :retry is absent"
+    (t/is (= {:enabled true :max-retries 3 :base-delay-ms 2000}
+             (cfg/get-retry-settings {}))))
+  (t/testing "partial :retry maps merge with defaults (deep-merged config)"
+    (t/is (= {:enabled false :max-retries 5 :base-delay-ms 2000}
+             (cfg/get-retry-settings {:retry {:enabled false :max-retries 5}})))
+    (t/is (= {:enabled true :max-retries 0 :base-delay-ms 500}
+             (cfg/get-retry-settings {:retry {:max-retries 0 :base-delay-ms 500}}))
+          "0 is a valid max-retries (off)")))
+
+(t/deftest test-get-retry-settings-live
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-retry-live-" (System/currentTimeMillis)))))
+        settings-file (str tmp "/settings.edn")]
+    (fs/create-dirs tmp)
+    (try
+      (with-redefs [cfg/global-settings-path (fn [] settings-file)]
+        (t/testing "reads the file :retry block"
+          (spit settings-file "{:retry {:enabled false :max-retries 10}}\n")
+          (t/is (= {:enabled false :max-retries 10 :base-delay-ms 2000}
+                   (cfg/get-retry-settings-live {:retry {:max-retries 5}}))))
+        (t/testing "missing file falls back to the config value"
+          (fs/delete-tree tmp)
+          (t/is (= {:enabled true :max-retries 5 :base-delay-ms 2000}
+                   (cfg/get-retry-settings-live {:retry {:max-retries 5}}))))
+        (t/testing "unreadable file falls back to the config value"
+          (fs/create-dirs tmp)
+          (spit settings-file "not-edn[")
+          (t/is (= {:enabled true :max-retries 5 :base-delay-ms 2000}
+                   (cfg/get-retry-settings-live {:retry {:max-retries 5}})))))
+      (finally (fs/delete-tree tmp)))))
+
 (t/deftest test-set-enabled-models!
   (let [tmp (str (fs/absolutize (fs/file "target" (str "test-enabled-models-" (System/currentTimeMillis)))))
         settings-file (str tmp "/settings.edn")]

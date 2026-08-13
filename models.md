@@ -1,12 +1,13 @@
 # kmet — providers & models subsystem: implementation plan
 
-> **Retry settings note**: pi exposes agent-level retry config via the `retry`
-> block in `~/.pi/agent/settings.json` (`retry.maxRetries`, default 3 — set to
-> 10 globally on this machine). kmet has the same mechanism internally
-> (`:max-retries` / `:base-delay-ms` on `kmet.app.loop/make-agent-state`,
-> defaults 3 / 2000) but does **not** expose it as a user-facing config key —
-> neither mode passes `:max-retries`, so kmet always uses the default. Wiring
-> it to a config key is deliberately deferred.
+> **Retry settings**: pi exposes agent-level retry config via the `retry`
+> block in `~/.pi/agent/settings.json` (`retry.enabled` default true,
+> `retry.maxRetries` default 3, `retry.baseDelayMs` default 2000). kmet
+> mirrors it as the `:retry` map in settings.edn (`:enabled` / `:max-retries`
+> / `:base-delay-ms`), wired through `kmet.app.loop/make-agent-state` in both
+> modes (disabled gates max-retries to 0) and editable live from the
+> `/settings` menu (the agent fields are atoms with `set-max-retries!` /
+> `set-base-delay-ms!`).
 
 Goal: bring kmet's provider/model subsystem to architectural parity with pi's
 (`packages/ai` + coding-agent `model-*` core modules), adapted to Babashka +
@@ -1038,14 +1039,17 @@ initial-search argument. kmet does **not** refresh catalogs on a miss — the
 catalogs are static committed EDN (pi's `ModelRuntime.refresh` is dropped;
 see deviations).
 
-### `/settings` — thinking-level row
+### `/settings` — thinking + retry rows
 
 **Implemented.** A settings-list overlay (kmet's `SettingsList`) with the
 **Thinking level** row (the current model's `llm/get-supported-thinking-levels`
-— made public from the private helper — persisted to settings `:thinking`)
-and the hide-thinking toggle (`cfg/get-hide-thinking-block` /
-`set-hide-thinking-block!`). The rest of pi's settings surface stays
-not-implemented (deferred).
+— made public from the private helper — persisted to settings `:thinking`),
+the hide-thinking toggle (`cfg/get-hide-thinking-block` /
+`set-hide-thinking-block!`; reads the live chat-history flag), and the
+**retry block** (`:retry {:enabled :max-retries :base-delay-ms}` — see the
+retry note at the top; rows apply live via `agent/set-max-retries!` /
+`set-base-delay-ms!` and persist through `save-setting!`). The rest of pi's
+settings surface stays not-implemented (deferred).
 
 ### `--list-models` (CLI)
 
@@ -1068,8 +1072,9 @@ and extension loading so custom providers appear.
   not ported: kmet's catalogs are static committed EDN, so the refresh
   would be a no-op; a future dynamic-catalog provider reintroduces it with
   pi's timeout/status plumbing.
-- **`/settings` is a minimal two-row selector**, not pi's full settings
-  surface (no submenu; the thinking row cycles inline via left/right).
+- **`/settings` is a minimal five-row selector** (thinking, hide-thinking,
+  auto-retry, max-retries, base-delay), not pi's full settings surface (no
+  submenu; the rows cycle inline via left/right).
 - **`/model` keeps kmet's "Switched to …" chat message** instead of pi's
   `Model: <id>` status line.
 
@@ -1489,13 +1494,15 @@ providers.
   `test_interactive_ui.clj` — `/scoped-models` + `/settings` registration,
   selector initial-state precedence (session scoped → `:enabled-models`
   patterns → nil), edit→session-scoped wiring, settings thinking-row cycle +
-  persistence; `test_loop.clj` — reworked cycle-model! (scoped full-ids,
-  provider switching, all-available fallback, persists-change);
-  `test_llm.clj` — `get-supported-thinking-levels` public;
+  persistence, settings retry rows (live agent application + persistence,
+  enabled-gate); `test_loop.clj` — reworked cycle-model! (scoped full-ids,
+  provider switching, all-available fallback, persists-change) + retry
+  setters; `test_llm.clj` — `get-supported-thinking-levels` public;
   `test_model_resolver.clj` — `resolve-model-scope-models`;
   `test_config.clj` — `get/set-enabled-models!` + the live re-read
   (`get-enabled-models-live`: file wins over the config snapshot, missing/
-  unreadable → config fallback); `test_footer_data_provider.clj` — `fdp-set-provider-count!`;
+  unreadable → config fallback) + `get-retry-settings`
+  defaults/partial-merge/0; `test_footer_data_provider.clj` — `fdp-set-provider-count!`;
   caching-conventions — `ScopedModelsSelector` allowlisted as a transparent
   parent (count 37→38).
 - Generator script: `bb generate-models` must be deterministic (sorted output)

@@ -431,3 +431,44 @@
           (t/is (not= :off @(:thinking ag)) "thinking row cycles the session level")
           (t/is (= [[:thinking] @(:thinking ag)] @saved)
                 "thinking change persisted to settings (path + level)"))))))
+
+(deftest test-settings-retry-rows
+  (testing "/settings retry rows apply live to the agent and persist"
+    (install-app-keybindings!)
+    (commands/clear-commands!)
+    (m/load-catalogs!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [ag (agent/make-agent-state :provider :opencode-go :model "deepseek-v4-flash")
+          cs {:agent-state (atom ag)
+              :chat-history nil
+              :footer-comp nil
+              :footer-provider nil
+              :config cfg/default-config
+              :tui nil}
+          sl-ref (atom nil)
+          saved (atom nil)]
+      (with-redefs [auth/configured? (fn [_] true)
+                    ui/chat-history-get-thinking-hidden (fn [_] false)
+                    cfg/save-setting! (fn [path value] (reset! saved [path value]))
+                    tui/tui-show-overlay (fn [_ comp & _] (reset! sl-ref comp))
+                    tui/tui-request-render (fn [_])]
+        (t/is (= 3 @(:max-retries ag)) "default retry wired at startup")
+        ((:handler (commands/find-command "settings")) cs "")
+        (let [sl @sl-ref]
+          ;; rows: thinking(0) hide-thinking(1) auto-retry(2) max-retries(3)
+          ;; base-delay(4)
+          (protocols/handle-input sl "\u001b[B") ;; down → hide-thinking
+          (protocols/handle-input sl "\u001b[B") ;; down → auto-retry
+          (protocols/handle-input sl "\u001b[C") ;; right — auto-retry true -> false
+          (t/is (= 0 @(:max-retries ag)) "disabled retry gates max-retries to 0")
+          (t/is (= [[:retry :enabled] false] @saved) "auto-retry persisted")
+          (protocols/handle-input sl "\u001b[C") ;; right — auto-retry back on
+          (t/is (= 3 @(:max-retries ag)) "re-enabled retry restores max-retries")
+          (protocols/handle-input sl "\u001b[B") ;; down → max-retries
+          (protocols/handle-input sl "\u001b[C") ;; right — 3 -> 5
+          (t/is (= 5 @(:max-retries ag)) "max-retries applies live")
+          (t/is (= [[:retry :max-retries] 5] @saved) "max-retries persisted")
+          (protocols/handle-input sl "\u001b[B") ;; down → base-delay
+          (protocols/handle-input sl "\u001b[C") ;; right — 2000 -> 4000
+          (t/is (= 4000 @(:base-delay-ms ag)) "base delay applies live")
+          (t/is (= [[:retry :base-delay-ms] 4000] @saved) "base delay persisted"))))))
