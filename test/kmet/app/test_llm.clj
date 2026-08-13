@@ -57,6 +57,30 @@
   (t/is (= "https://api.openai.com/v1/responses"
            (@#'llm/endpoint-url :openai-responses "https://api.openai.com/v1" "gpt-5.4"))))
 
+(t/deftest test-interpolate-base-url
+  (let [workers "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+        gateway "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/openai"]
+    (t/testing "placeholders substitute from the env"
+      (with-redefs [llm/getenv (fn [k]
+                                 (case k
+                                   "CLOUDFLARE_ACCOUNT_ID" "acc-1"
+                                   "CLOUDFLARE_GATEWAY_ID" "gw-1"
+                                   nil))]
+        (t/is (= "https://gateway.ai.cloudflare.com/v1/acc-1/gw-1/openai"
+                 (@#'llm/interpolate-base-url gateway)))
+        (t/is (= "https://api.cloudflare.com/client/v4/accounts/acc-1/ai/v1"
+                 (@#'llm/interpolate-base-url workers)))
+        (t/is (= "https://api.deepseek.com"
+                 (@#'llm/interpolate-base-url "https://api.deepseek.com"))
+              "non-cloudflare bases pass through")))
+    (t/testing "missing ids are a clear config error (pi resolveCloudflareEnv)"
+      (with-redefs [llm/getenv (fn [_] nil)]
+        (t/is (thrown-with-msg? Exception #"CLOUDFLARE_ACCOUNT_ID"
+                                (@#'llm/interpolate-base-url workers))))
+      (with-redefs [llm/getenv (fn [k] (when (= k "CLOUDFLARE_ACCOUNT_ID") "acc"))]
+        (t/is (thrown-with-msg? Exception #"CLOUDFLARE_GATEWAY_ID"
+                                (@#'llm/interpolate-base-url gateway)))))))
+
 ;; ─── OpenAI Codex + Azure responses (shared processor, new URL + auth) ────
 
 (defn- test-jwt
@@ -1590,5 +1614,68 @@
         (let [payload (json/parse-string @request-body true)]
           (t/is (= "my-deploy" (:model payload)))
           (t/is (= "sess-azure" (:prompt_cache_key payload)))))
+      (finally
+        (.close ss)))))
+
+;; ─── Kimi adaptive thinking e2e (anthropic-messages, forceAdaptiveThinking) ─
+
+(t/deftest ^:slow test-llm-kimi-adaptive-thinking-end-to-end
+  (m/load-catalogs!)
+  (let [ss (java.net.ServerSocket. 0)
+        port (.getLocalPort ss)
+        request-body (atom nil)
+        _ (doto (Thread.
+                 (fn []
+                   (try
+                     (let [s (.accept ss)
+                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. (.getInputStream s)))
+                           _ (.readLine rdr)
+                           clen (atom 0)
+                           _ (loop []
+                               (let [l (.readLine rdr)]
+                                 (when-not (empty? l)
+                                   (when (str/starts-with? (str/lower-case (or l "")) "content-length:")
+                                     (reset! clen (Long/parseLong (str/trim (subs l 15)))))
+                                   (recur))))
+                           sb (StringBuilder.)
+                           _ (loop [n 0]
+                               (if (< n @clen)
+                                 (let [buf (char-array (- @clen n)) m (.read rdr buf)]
+                                   (when (pos? m) (.append sb buf 0 m) (recur (+ n m))))
+                                 nil))
+                           _ (reset! request-body (str sb))
+                           out (.getOutputStream s)
+                           stream-body (str "event: content_block_delta\n"
+                                            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n"
+                                            "event: message_stop\n"
+                                            "data: {\"type\":\"message_stop\"}\n\n")]
+                       (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: text/event-stream\r\n"
+                                                   "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                   stream-body)))
+                       (.flush out)
+                       (.close s))
+                     (catch Exception _ nil))))
+            (.setDaemon true)
+            (.start))
+        errors (atom [])
+        text (atom "")
+        fut (llm/send-message {:provider :kimi-coding
+                               :model "kimi-for-coding"
+                               :api-key "k"
+                               :base-url (str "http://localhost:" port)
+                               :thinking :medium
+                               :messages [{:role :user :content [{:type :text :text "hi"}]}]
+                               :on-text (fn [t] (swap! text str t))
+                               :on-error (fn [e] (swap! errors conj e))})]
+    (try
+      @fut
+      (t/is (= [] @errors) (str "no stream errors: " @errors))
+      (t/is (= "hi" @text))
+      (t/testing "the adaptive thinking payload is on the wire (pi forceAdaptiveThinking)"
+        (let [payload (json/parse-string @request-body true)]
+          (t/is (= {:type "adaptive" :display "summarized"} (:thinking payload)))
+          (t/is (= {:effort "medium"} (:output_config payload)))
+          (t/is (= 32768 (:max_tokens payload)))))
       (finally
         (.close ss)))))

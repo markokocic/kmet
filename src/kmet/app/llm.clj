@@ -34,12 +34,27 @@
 (defn- interpolate-base-url
   "Substitute the {CLOUDFLARE_ACCOUNT_ID} / {CLOUDFLARE_GATEWAY_ID}
    placeholders in a cloudflare base URL from the env (pi cloudflare-auth
-   resolve — the account/gateway ids are ambient; a missing id leaves the
-   placeholder, which fails the request like pi's missing-auth error)."
+   resolve — the account/gateway ids are ambient). A missing id is a
+   configuration error, not a transport failure: pi's resolveCloudflareEnv
+   returns undefined (not configured) unless all of api key + account id
+   (+ gateway id for the gateway) are present."
   [base]
-  (-> base
-      (str/replace "{CLOUDFLARE_ACCOUNT_ID}" (or (getenv "CLOUDFLARE_ACCOUNT_ID") ""))
-      (str/replace "{CLOUDFLARE_GATEWAY_ID}" (or (getenv "CLOUDFLARE_GATEWAY_ID") ""))))
+  (if (str/includes? base "{CLOUDFLARE_")
+    (let [account (getenv "CLOUDFLARE_ACCOUNT_ID")
+          gateway (getenv "CLOUDFLARE_GATEWAY_ID")
+          missing (cond-> []
+                    (and (str/includes? base "{CLOUDFLARE_ACCOUNT_ID}") (nil? account))
+                    (conj "CLOUDFLARE_ACCOUNT_ID")
+                    (and (str/includes? base "{CLOUDFLARE_GATEWAY_ID}") (nil? gateway))
+                    (conj "CLOUDFLARE_GATEWAY_ID"))]
+      (when (seq missing)
+        (throw (ex-info (str "Cloudflare requires the env vars: "
+                             (str/join ", " missing))
+                        {:type :cloudflare-config-missing})))
+      (-> base
+          (str/replace "{CLOUDFLARE_ACCOUNT_ID}" account)
+          (str/replace "{CLOUDFLARE_GATEWAY_ID}" gateway)))
+    base))
 
 (defn- endpoint-url
   "Full request URL from a wire api + API base + model id (pi: the SDK
@@ -1234,7 +1249,10 @@
                            :messages (anthropic-messages messages)
                            :stream true}
                     (seq tools) (assoc :tools (mapv tools/tool->anthropic-schema tools))
-                    (:thinking thinking) (assoc :thinking (:thinking thinking)))]
+                    (:thinking thinking) (assoc :thinking (:thinking thinking))
+                    ;; adaptive thinking (pi forceAdaptiveThinking): the
+                    ;; output_config effort rides alongside the thinking block
+                    (:output_config thinking) (assoc :output_config (:output_config thinking)))]
       (try
         (let [response (proxy/post-stream (or base-url (endpoint-url :anthropic-messages (:base-url model-record) model-id))
                                           {:headers (request-headers
