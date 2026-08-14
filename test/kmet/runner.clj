@@ -50,6 +50,7 @@
     kmet.app.test-commands
     kmet.app.test-keybindings
     kmet.modes.test-print
+    kmet.modes.test-interactive
     kmet.test-editing
     kmet.tui.test-fuzzy
     kmet.tui.test-autocomplete

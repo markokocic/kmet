@@ -1374,8 +1374,11 @@ Be precise and concise in your responses."}}]
 
             (catch Exception e
               (reset! (:status agent) :error)
-              (emit agent {:type :error :message (ex-message e)})
-              (when on-error (on-error (ex-message e))))
+              ;; Report to the UI first — the :error emit goes to the
+              ;; extension event bus, which must not be able to skip the
+              ;; user-visible error path.
+              (when on-error (on-error (ex-message e)))
+              (emit agent {:type :error :message (ex-message e)}))
             (finally
               ;; pi: _flushPendingBashMessages — bash results recorded while
               ;; streaming are queued to preserve tool_use/tool_result ordering

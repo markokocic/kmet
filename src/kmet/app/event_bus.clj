@@ -134,6 +134,23 @@
     and no further events for this run will be emitted (pi: agent_settled,
     emitted from a finally block after the run)."})
 
+(def app-event-types
+  "Event types emitted OUTSIDE the agent loop (the interactive mode and
+   extensions) — routed straight to the event bus (emit-event!), never
+   through the loop's :on-event UI callback. The UI handler only needs to
+   consume loop-event-types."
+  #{:session-start
+    :user-bash
+    :session-before-tree
+    :session-tree
+    :session-info-changed})
+
+(def loop-event-types
+  "The subset of event-types emitted by the agent loop (kmet.app.loop/emit —
+   routed to the UI :on-event callback and the extension bus). The UI event
+   handler must consume every one of these."
+  (apply dissoc event-types app-event-types))
+
 (defn known-event-type?
   "True if the keyword is part of the documented vocabulary."
   [type]
