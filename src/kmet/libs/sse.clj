@@ -140,7 +140,7 @@
 (defn- responses-terminal-events
   "Events for the terminal response.completed / response.incomplete events
    (pi finalizeResponse): the provider-native usage (input_tokens includes
-   cached/cache-write tokens — session/entry-usage subtracts them) and the
+   cached/cache-write tokens — usage/entry-usage (kmet.ai.usage) subtracts them) and the
    stop reason. Completed responses with tool-call slots map :stop to
    :tool-use (pi: output.content has a toolCall). Non-max-output incomplete
    responses surface as an error (pi: stopReason 'error' + errorMessage).

@@ -56,7 +56,7 @@
 
 (defn calculate-cost
   "USD cost of a normalized usage map ({:input :output :cache-read
-   :cache-write} — e.g. session/entry-usage's output (whose :input already
+   :cache-write} — e.g. usage/entry-usage (kmet.ai.usage) output (whose :input already
    excludes cache tokens, so cached tokens are never double-priced) at the
    model's $/M rates. Returns the pi-shaped breakdown map
    {:input :output :cache-read :cache-write :total}. Models with zero rates

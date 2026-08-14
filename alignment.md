@@ -10,10 +10,13 @@ semantics (EDN/Clojure adaptation); gaps are pi features with no kmet counterpar
 ## Summary
 
 kmet is a close port of pi's interactive TUI + agent core: the component/TUI
-framework, agent loop, tools, provider/auth subsystem, sessions (EDNL), compaction,
-skills, prompt templates, themes, and the extension input/event/UI surfaces are
+framework, agent loop, tools, provider/auth subsystem (kmet.ai), sessions (EDNL),
+compaction, skills, prompt templates, themes, and the extension API (hooks,
+events, commands, tools, flags, renderers, agent control, tool hooks) are
 functionally aligned. The remaining gaps cluster in the CLI surface, rendering
-(mermaid/latex/search/images), the settings surface, and the extension API.
+(mermaid/latex/search/images), the settings surface, and a few extension items
+(registerShortcut, registerMarkdownTransformer, registerProvider streamSimple/
+refreshModels, the provider/session-before-* events).
 
 ## Deliberately out of scope (locked decisions)
 
