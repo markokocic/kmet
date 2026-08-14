@@ -177,50 +177,59 @@
    For tool messages, looks up render functions from the tool registry.
    Assistant messages inherit the current thinking-hidden flag/label and
    tool components the current expansion flag (pi: hideThinkingBlock /
-   toolOutputExpanded / hiddenThinkingLabel)."
+   toolOutputExpanded / hiddenThinkingLabel). A message carrying a pre-built
+   :component (extension renderers returning a component directly, and
+   replayed :bash executions) uses it as-is."
   [msg theme output-pad tools-expanded? thinking-hidden? hidden-label]
-  (case (:role msg)
-    :user (um/make-user-message
-           :text (content->display-text (:content msg ""))
-           :theme theme :output-pad output-pad)
-    :assistant (am/make-assistant-message
-                :text (content->display-text (:content msg ""))
-                :thinking (:thinking msg "")
-                :theme theme
-                :output-pad output-pad
-                :hide-thinking? thinking-hidden?
-                :hidden-label hidden-label)
-    :tool (let [comp (te/make-tool-execution
-                      :name (:name msg "")
-                      :args (:args msg {})
-                      :content (content->display-text (:content msg ""))
-                      :is-error (:is-error msg false)
-                      :truncation (:truncation msg)
-                      :details (:details msg)
-                      :theme theme
-                      :output-pad output-pad
-                      :expanded? tools-expanded?)]
+  (cond
+    ;; Pre-built component — extension entry/message renderers may return a
+    ;; bare component (pi: renderers produce components); the interactive
+    ;; wraps those as {:component comp}. :bash messages carry theirs too.
+    (:component msg) (:component msg)
+
+    :else
+    (case (:role msg)
+      :user (um/make-user-message
+             :text (content->display-text (:content msg ""))
+             :theme theme :output-pad output-pad)
+      :assistant (am/make-assistant-message
+                  :text (content->display-text (:content msg ""))
+                  :thinking (:thinking msg "")
+                  :theme theme
+                  :output-pad output-pad
+                  :hide-thinking? thinking-hidden?
+                  :hidden-label hidden-label)
+      :tool (let [comp (te/make-tool-execution
+                        :name (:name msg "")
+                        :args (:args msg {})
+                        :content (content->display-text (:content msg ""))
+                        :is-error (:is-error msg false)
+                        :truncation (:truncation msg)
+                        :details (:details msg)
+                        :theme theme
+                        :output-pad output-pad
+                        :expanded? tools-expanded?)]
             ;; Pi: replayed/persisted tool results are final — mark ended so
             ;; they render with success/error bg, footer strip, and Took.
             ;; Live pending messages (content "" + is-error false) are skipped.
-            (when (or (seq (:content msg)) (:is-error msg))
-              (te/tool-execution-set-error! comp (:is-error msg false)))
-            (when-let [images (:images msg)]
-              (te/tool-execution-set-images! comp images))
-            comp)
-    :bash (:component msg)  ;; Already-constructed BashExecutionComponent
-    :info (cm/make-custom-message :label (:label msg)
-                                  :content (:content msg "")
-                                  :theme theme
-                                  :output-pad output-pad)
-    :error (make-plain-msg (theme/fg theme :error (str "Error: " (:content msg ""))))
-    :warning (make-plain-msg (theme/fg theme :warning (str "Warning: " (:content msg ""))))
-    :status (make-status-line (:content msg ""))
+              (when (or (seq (:content msg)) (:is-error msg))
+                (te/tool-execution-set-error! comp (:is-error msg false)))
+              (when-let [images (:images msg)]
+                (te/tool-execution-set-images! comp images))
+              comp)
+      :bash (:component msg)  ;; Already-constructed BashExecutionComponent
+      :info (cm/make-custom-message :label (:label msg)
+                                    :content (:content msg "")
+                                    :theme theme
+                                    :output-pad output-pad)
+      :error (make-plain-msg (theme/fg theme :error (str "Error: " (:content msg ""))))
+      :warning (make-plain-msg (theme/fg theme :warning (str "Warning: " (:content msg ""))))
+      :status (make-status-line (:content msg ""))
     ;; Fallback for roles with no dedicated component (e.g. :system compaction
     ;; summaries, unknown roles from session data): render content as markdown
     ;; (pi renders compaction summaries via Markdown) rather than dropping it.
-    (make-plain-md-msg (content->display-text (:content msg "")) theme
-                       (fn [s] (theme/fg theme :text s)))))
+      (make-plain-md-msg (content->display-text (:content msg "")) theme
+                         (fn [s] (theme/fg theme :text s))))))
 
 (defn chat-history-add-message!
   "Add a message to the chat history.

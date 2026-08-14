@@ -469,3 +469,12 @@
       (let [lines (plain-lines ch 40)]
         (is (some #(re-find #"Thinking\.\.\." %) lines)
             "nil restores the default label")))))
+
+(deftest test-render-prebuilt-component
+  (testing "a message carrying a pre-built :component renders it as-is"
+    (let [ch (ch/make-chat-history)
+          comp (core/make-text "prebuilt!")]
+      (ch/chat-history-add-message! ch {:component comp})
+      (let [lines (plain-lines ch 40)]
+        (is (some #(re-find #"prebuilt!" %) lines)
+            "the pre-built component's text should be visible, not empty")))))
