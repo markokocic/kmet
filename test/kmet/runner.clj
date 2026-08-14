@@ -97,7 +97,8 @@
     kmet.app.ui.test-pending-messages
     kmet.app.ui.test-loaded-resources
     kmet.app.ui.test-scoped-models-selector
-    kmet.test-core])
+    kmet.test-core
+    kmet.test-changed])
 
 (defn- ns-vars
   "Require NS-SYM (lazily) and return all its interned test vars."
@@ -225,17 +226,11 @@
   (doseq [[ns-sym ns-vars] (sort-by key (group-by (comp ns-name :ns meta) vars))]
     (run-ns-vars ns-sym ns-vars)))
 
-(defn -main
-  "Run the test suites.
-   slow? selects ^:slow vs non-slow vars; nil means filter by var name only.
-   Remaining args are test var filters (plain name or ns/var): when given,
-   only matching vars run, regardless of :slow (e.g. `bb test test-tool-bash`
-   or `bb test-ext kmet.app.test-loop/test-loop-parallel-tool-execution`)."
-  [slow? & filters]
-  (let [vars (if (seq filters)
-               (filtered-vars filters)
-               (selected-vars slow?))
-        start-ms (System/currentTimeMillis)
+(defn- run-and-summarize
+  "Run VARS, print the summary, exit with status 0/1. When MARK-VALIDATED?
+   and everything passed, records the changed-files baseline (kmet.changed)."
+  [vars mark-validated?]
+  (let [start-ms (System/currentTimeMillis)
         results (binding [t/*report-counters* (ref t/*initial-report-counters*)]
                   (run-selected vars)
                   @t/*report-counters*)
@@ -253,4 +248,35 @@
                                   (cond-> [(str (:pass results) " passed")]
                                     (pos? fails) (conj (str fails " failed"))
                                     (pos? errs) (conj (plural errs "error" "errors")))))
+    (when (and mark-validated? (zero? (+ fails errs)))
+      (try ((requiring-resolve 'kmet.changed/mark-validated!))
+           (catch Throwable e
+             (.println System/err
+                       (str "warning: could not update changed-files baseline: "
+                            (.getMessage e))))))
     (System/exit (if (pos? (+ fails errs)) 1 0))))
+
+(defn -main
+  "Run the test suites.
+   slow? selects ^:slow vs non-slow vars; nil means filter by var name only.
+   Remaining args are test var filters (plain name or ns/var): when given,
+   only matching vars run, regardless of :slow (e.g. `bb test test-tool-bash`
+   or `bb test-ext kmet.app.test-loop/test-loop-parallel-tool-execution`).
+   A full run without filters (either suite) records the changed-files
+   baseline after a green result, so `bb test-changed` sees a clean slate."
+  [slow? & filters]
+  (run-and-summarize (if (seq filters)
+                       (filtered-vars filters)
+                       (selected-vars slow?))
+                     (empty? filters)))
+
+(defn run-ns-syms
+  "Run the test vars of NS-SYMS matching SLOW? (true = ^:slow only, false =
+   non-slow only), for `bb test-ext-changed` / `bb test-changed`."
+  [ns-syms slow?]
+  (run-and-summarize
+   (for [ns-sym ns-syms
+         v (ns-vars ns-sym)
+         :when (and (:test (meta v)) (= slow? (boolean (:slow (meta v)))))]
+     v)
+   false))

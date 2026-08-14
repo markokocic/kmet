@@ -14,6 +14,45 @@
            :requires ([kmet.runner :as runner])
            :task (apply runner/-main true *command-line-args*)
            :override-builtin true}
+  changed {:doc "List files changed since the last commit (git; mtime-since-baseline fallback without git)"
+           :requires ([kmet.changed :as changed])
+           :task (doseq [f (changed/changed-files)] (println f))}
+  changed-baseline {:doc "Record 'all gates green as of now' for the mtime fallback (no-op with git); run after a full validation"
+                    :requires ([kmet.changed :as changed])
+                    :task (do (changed/mark-validated!)
+                              (println "Changed-files baseline updated."))}
+  test-changed {:doc "Run the non-slow tests of namespaces affected by changed files (require-graph closure). Full gate: bb test"
+                :requires ([kmet.changed :as changed] [kmet.runner :as runner])
+                :task (let [nss (changed/affected-test-nss)]
+                        (if (seq nss)
+                          (runner/run-ns-syms nss false)
+                          (println "No affected test namespaces — nothing to run.")))}
+  test-ext-changed {:doc "Run ONLY the slow (^:slow) tests of namespaces affected by changed files. Full gate: bb test-ext"
+                    :requires ([kmet.changed :as changed] [kmet.runner :as runner])
+                    :task (let [nss (changed/affected-test-nss)]
+                            (if (seq nss)
+                              (runner/run-ns-syms nss true)
+                              (println "No affected test namespaces — nothing to run.")))}
+  lint-changed {:doc "Lint changed files plus affected dependents (full gate: bb lint; lints everything when .clj-kondo changed)"
+                :requires ([kmet.changed :as changed] [babashka.process :as p])
+                :task (let [config? (changed/config-changed?)
+                            paths (if config? (changed/all-clj-files) (changed/affected-lint-files))]
+                        (if (seq paths)
+                          (do (when config? (println "clj-kondo config/hooks changed — linting all files."))
+                              (apply p/shell "clj-kondo" "--lint" paths))
+                          (println "No changed files to lint.")))}
+  format-changed {:doc "Format changed files in place (full gate: bb format)"
+                  :requires ([kmet.changed :as changed] [cljfmt.tool :as fmt])
+                  :task (let [paths (changed/changed-clj-files)]
+                          (if (seq paths)
+                            (fmt/fix {:paths paths})
+                            (println "No changed files to format.")))}
+  format-check-changed {:doc "Check formatting of changed files (full gate: bb format-check)"
+                        :requires ([kmet.changed :as changed] [cljfmt.tool :as fmt])
+                        :task (let [paths (changed/changed-clj-files)]
+                                (if (seq paths)
+                                  (fmt/check {:paths paths})
+                                  (println "No changed files to check.")))}
   nrepl  {:doc "Start nREPL server for interactive development"
           :task (do (require 'babashka.nrepl.server)
                     (println "Starting nREPL on port 1667...")
@@ -57,5 +96,5 @@
                                     ["src" "test"])]
                         (fmt/check {:paths paths}))}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests; args: test names)\n  test-ext      Run ONLY slow (^:slow) test suites (args: test names; pre-commit validation)\n  check         Verify compilation\n  generate-models  Regenerate provider model catalogs from models.dev (network)\n  check-model-data Offline validation of committed provider catalogs + manifest\n  lint          Lint src/test with clj-kondo (args: files/dirs)\n  format        Format src/test with cljfmt (fix in place; args: files/dirs)\n  format-check  Check src/test formatting with cljfmt (no changes; args: files/dirs)")
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests; args: test names)\n  test-ext      Run ONLY slow (^:slow) test suites (args: test names; pre-commit validation)\n  check         Verify compilation\n  generate-models  Regenerate provider model catalogs from models.dev (network)\n  check-model-data Offline validation of committed provider catalogs + manifest\n  lint          Lint src/test with clj-kondo (args: files/dirs)\n  format        Format src/test with cljfmt (fix in place; args: files/dirs)\n  format-check  Check src/test formatting with cljfmt (no changes; args: files/dirs)\n\n  Changed-file dev loop (validation of the current changes only):\n  changed       List files changed since the last commit (git; mtime fallback)\n  test-changed      Run tests of namespaces affected by changed files\n  test-ext-changed  Run ONLY the slow (^:slow) tests of affected namespaces\n  lint-changed      Lint changed files plus affected dependents\n  format-changed    Format changed files in place\n  format-check-changed  Check formatting of changed files\n  changed-baseline  Reset the mtime baseline after a manual full validation (no-op with git)")
            :override-builtin true}}}

@@ -11,6 +11,21 @@
 - **Format**: `bb format` (fix) / `bb format-check` (verify) — cljfmt over `src`/`test`.
   `cljfmt.edn` carries `:extra-indents` for the custom macros; default arg alignment is
   align-to-first-argument (modern cljfmt). Run `bb format` after structural edits (e.g. let merges).
+- **Changed-file dev loop** (fast validation of only the current changes): the `bb *-changed`
+  tasks are backed by `kmet.changed` (`test/kmet/changed.clj`) — a require-graph scan over
+  src/test with reverse-transitive closure, so a source change also re-runs the tests that
+  transitively require it. `bb changed` lists files changed since the last commit
+  (git diff vs HEAD + untracked; mtime-since-baseline fallback when the project has no git).
+  `bb test-changed` runs the non-slow tests of affected namespaces and
+  `bb test-ext-changed` the slow (^:slow) ones (full gates: `bb test` / `bb test-ext`);
+  `bb lint-changed` lints changed files plus affected
+  dependents (a changed signature is only flagged at the call site), falling back to a full
+  lint when `.clj-kondo/` config/hooks changed; `bb format-check-changed` / `bb format-changed`
+  cover just the changed files. Full gates stay `bb test`/`bb test-ext`/`bb lint`/`bb format-check`.
+  Caveats: "changed" is since-last-commit, so a full gate without committing re-runs those
+  files next time (over-inclusive, never under); green full `bb test`/`bb test-ext` runs
+  (no filters) update the mtime baseline via `kmet.runner` → `kmet.changed/mark-validated!`,
+  which is a no-op with git.
 - **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`;
   tooling deps (`cljfmt`) in `bb.edn` `:deps`; JLine **4.3.1** bundled with Babashka (see
   babashka `deps.edn`: `org.jline/jline-terminal`, `org.jline/jline-reader`).
@@ -253,6 +268,10 @@ src/kmet/
   calls; and subprocess spawns — bash tool, shell commands, git). Mark
   slow tests with `^:slow` on the deftest; selection happens per test var
   in `kmet.runner`.
+- New test namespaces must be registered in `kmet.runner/all-namespaces` (the full run loads
+  exactly that list).
+- During development, validate only what changed with `bb test-changed` / `bb lint-changed` /
+  `bb format-check-changed` (see Build & Run); the full suite stays the pre-wrap-up gate.
 
 ### Final validation
 `bb lint` and `bb format-check` are slow — don't run them during iterative
