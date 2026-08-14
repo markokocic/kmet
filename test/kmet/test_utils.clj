@@ -88,7 +88,7 @@
   ;; A styled word that must be broken across lines (ASCII fast path) — the
   ;; FIRST piece starts a fresh line and must re-open the style, not just
   ;; the continuations (pi: breakLongWord starts with getActiveCodes).
-  (let [styled (str "\u001b[31mone two three\u001b[0m")
+  (let [styled "\u001b[31mone two three\u001b[0m"
         lines (u/wrap-text-with-ansi styled 3)]
     (doseq [l lines]
       (t/is (clojure.string/includes? l "\u001b[31m")

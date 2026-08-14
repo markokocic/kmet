@@ -184,7 +184,7 @@
                (str "<div class=\"tool-param\">"
                     (escape-html (name pname))
                     (when (contains? required (name pname)) " (required)")
-                    (str " — " (escape-html (or (:description p) "")))
+                    " — " (escape-html (or (:description p) ""))
                     "</div>"))))))
 
 (defn- tool->html
@@ -260,9 +260,9 @@
                 (when (:parent-session header) (str " · parent: " (escape-html (:parent-session header))))))
          (when (seq models) (str "<br>Models: " (escape-html (str/join ", " models))))
          (when (seq msg-parts) (str "<br>Messages: " (escape-html (str/join ", " msg-parts))))
-         (str "<br>Tool Calls: " (:tool-calls stats))
+         "<br>Tool Calls: " (:tool-calls stats)
          (when (seq token-parts) (str "<br>Tokens: " (escape-html (str/join " " token-parts))))
-         (str "<br>Cost: $" (format "%.3f" (:cost stats)))
+         "<br>Cost: $" (format "%.3f" (:cost stats))
          "</div>\n"
          (when system-prompt
            (str "<details class=\"system-prompt\"><summary>System Prompt</summary><pre>"
