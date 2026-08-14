@@ -1123,7 +1123,8 @@
           (ui/chat-history-add-message!
            (:chat-history cs)
            (if-let [renderer (extensions/get-message-renderer (:custom-type e))]
-             (renderer e)
+             (let [msg (renderer e)]
+               (if (map? msg) msg {:component msg}))
              {:role :info
               :content (custom-message-text e)
               :label (:custom-type e)})))
@@ -2240,7 +2241,8 @@
                                       (if (and (= :custom (:role m)) (:display m))
                                         (if-let [renderer (extensions/get-message-renderer
                                                            (:custom-type m))]
-                                          (renderer m)
+                                          (let [msg (renderer m)]
+                                            (if (map? msg) msg {:component msg}))
                                           (assoc m :role :info
                                                  :content (custom-message-text m)
                                                  :label (:custom-type m)))
@@ -3001,7 +3003,9 @@
      (fn [entry]
        (when-let [renderer (extensions/get-entry-renderer (:custom-type entry))]
          (when-let [msg (renderer entry)]
-           (ui/chat-history-add-message! (:chat-history cs) msg)))))
+           (ui/chat-history-add-message!
+            (:chat-history cs)
+            (if (map? msg) msg {:component msg}))))))
     registry))
 
 ;; ─── Run ───────────────────────────────────────────────────────────────────

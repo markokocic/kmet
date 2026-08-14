@@ -563,9 +563,10 @@
 
 (defn register-entry-renderer!
   "Register a renderer for a custom entry type (pi: registerEntryRenderer).
-   RENDERER — (fn [entry]) returning a chat message map or nil. Custom
-   entries without a registered renderer stay hidden (pi renders only
-   registered custom types)."
+   RENDERER — (fn [entry]) returning a chat message map (or a bare
+   component, wrapped automatically) or nil. Custom entries without a
+   registered renderer stay hidden (pi renders only registered custom
+   types)."
   [custom-type renderer]
   (swap! entry-renderers assoc custom-type renderer)
   nil)
@@ -577,8 +578,9 @@
 
 (defn register-message-renderer!
   "Register a renderer for a custom MESSAGE type (pi: registerMessageRenderer).
-   RENDERER — (fn [message]) returning a chat message map or component,
-   overriding the default labeled info box."
+   RENDERER — (fn [message]) returning a chat message map (or a bare
+   component, wrapped automatically), overriding the default labeled info
+   box."
   [custom-type renderer]
   (swap! message-renderers assoc custom-type renderer)
   nil)

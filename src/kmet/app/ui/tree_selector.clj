@@ -122,7 +122,10 @@
                                   (reset! filter-mode nxt)
                                   (refresh!)))
                 on-key (fn [_ data]
-                         (let [kmgr (tui-kb/get-global-keybindings)
+                         (let [kmgr (or (tui-kb/get-global-keybindings)
+                                        ;; no manager installed (tests,
+                                        ;; pre-startup) — use the defaults
+                                        (tui-kb/make-tui-keybindings-manager))
                                filter-key? (fn [id]
                                              (tui-kb/matches-key kmgr data id))]
                            (cond
