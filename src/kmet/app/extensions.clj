@@ -213,8 +213,7 @@
   (reset! extensions [])
   (clear-input-hooks!)
   (clear-before-agent-start-hooks!)
-  (reset! entry-renderers {})
-  (reset! entry-sink-atom nil))
+  (reset! entry-renderers {}))
 
 ;; ─── Extension UI registry (pi: ExtensionUIContext) ────────────────────────
 ;; The interactive mode installs the live UI implementations after building

@@ -106,7 +106,6 @@ Missing (pi `docs/settings.md`):
 | `shellPath`, `shellCommandPrefix` | shell customization |
 | `markdown.codeBlockIndent`, `markdown.mermaid` | markdown rendering |
 | `enableSkillCommands` | register skills as `/skill:name` commands |
-| `showCacheMissNotices` | cache-miss transcript notices |
 | `thinkingBudgets` | per-level thinking token budgets |
 
 ### 5. Extension API

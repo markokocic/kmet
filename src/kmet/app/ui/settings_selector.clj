@@ -2,8 +2,9 @@
   "Settings selector overlay (pi: showSettingsSelector +
    settings-selector.ts, simplified) — the thinking-level row (the current
    model's available levels, persisted to settings :thinking), the
-   hide-thinking toggle, and the retry block (settings.edn :retry —
-   enabled / max-retries / base-delay-ms, applied live to the agent)."
+   hide-thinking toggle, the retry block (settings.edn :retry —
+   enabled / max-retries / base-delay-ms, applied live to the agent), and a
+   theme row (name switch + persist)."
   (:require [kmet.app.loop :as agent]
             [kmet.app.theme-controller :as theme-ctrl]
             [kmet.ai.api.shared :as shared]

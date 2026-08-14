@@ -892,6 +892,8 @@
                  (if (seq args)
                    (let [name (first args)
                          result (theme-ctrl/set-theme-name! tc name)]
+                     (when (:success result)
+                       (cfg/save-setting! [:theme] name))
                      (ui/chat-history-add-message! (:chat-history cs)
                                                    {:role :assistant
                                                     :content (if (:success result)
@@ -2913,8 +2915,10 @@
 
 (defn- maybe-show-cache-miss-notice!
   "pi: maybeShowCacheMissNotice — when :show-cache-miss-notices is on and
-   the last assistant message paid for a significant prompt-cache miss
-   (>= 20k tokens re-billed, pi's display floor), add a transcript notice."
+   the last assistant message paid for a significant prompt-cache miss, add
+   a transcript notice. Display floor: >= 20k tokens re-billed (pi's
+   `missedTokens < 20_000 && missedCost < 0.1` is simplified to the token
+   arm — kmet has no per-message price lookup here)."
   [cs]
   (when (cfg/get-show-cache-miss-notices (:config cs))
     (when-let [sess @(:session-atom cs)]
