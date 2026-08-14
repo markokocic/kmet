@@ -2,7 +2,8 @@
   "Scoped-models selector tests — enabled-ids helpers and handle-input
    behaviors (toggle on Enter, Ctrl+A/X/P, Alt+Up/Down reorder, Ctrl+S save,
    search filter, cancel)."
-  (:require [clojure.test :as t]
+  (:require [clojure.string :as str]
+            [clojure.test :as t]
             [babashka.fs :as fs]
             [kmet.app.keybindings :as kb]
             [kmet.app.ui.scoped-models-selector :as sms]
@@ -84,6 +85,22 @@
   (t/is (= ["a" "b"] (@#'sms/sorted-ids nil ["a" "b"]))))
 
 ;; ─── handle-input behaviors ────────────────────────────────────────────────
+
+(t/deftest test-arrow-keys-move-selection
+  ;; navigation must rebuild the rows (pi updateList), not just move the
+  ;; state — the rendered selection arrow follows the selection
+  (let [sel (selector nil)
+        row (fn [i] @(:text-atom (nth @(:children (:rows-container sel)) i)))]
+    (t/is (str/includes? (row 0) "→") "initially the first row is selected")
+    (press sel "down")
+    (t/is (str/includes? (row 1) "→") "down moves the arrow to the next row")
+    (t/is (not (str/includes? (row 0) "→")) "and off the previous row")
+    (press sel "up")
+    (t/is (str/includes? (row 0) "→") "up moves the arrow back")
+    (press sel "down")
+    (press sel "down")
+    (press sel "down")
+    (t/is (str/includes? (row 0) "→") "down wraps to the top at the bottom")))
 
 (t/deftest test-enter-toggles-selected
   (let [changed (atom ::none)

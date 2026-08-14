@@ -135,28 +135,25 @@
           filtered (filtered-items st)
           n (count filtered)]
       (cond
-        ;; Escape — cancel
-        (keys/matches-key? data "escape")
-        (do (when-let [cb @on-cancel-atom] (cb)) nil)
+        ;; Navigation (pi tui.select.up/down — wraps; rebuilds the rows so
+        ;; the selection arrow moves, pi updateList)
+        (kb/matches-key kmgr data "tui.select.up")
+        (do (when (pos? n)
+              (swap! state-atom assoc
+                     :selected-idx (if (zero? (:selected-idx st))
+                                     (dec n)
+                                     (dec (:selected-idx st))))
+              (scoped-models-refresh! this))
+            nil)
 
-        ;; Ctrl+C — clear the search, or cancel when already empty
-        (keys/matches-key? data (keys/ctrl "c"))
-        (if (str/blank? (:search st))
-          (do (when-let [cb @on-cancel-atom] (cb)) nil)
-          (do (swap! state-atom assoc :search "" :selected-idx 0)
-              (input/input-set-value! search-input "")
-              (scoped-models-refresh! this)
-              nil))
-
-        ;; Enter — toggle the selected model (pi tui.select.confirm)
-        (kb/matches-key kmgr data "tui.select.confirm")
-        (let [item (when (pos? n) (nth filtered (min (:selected-idx st) (dec n))))]
-          (when item
-            (let [ids (toggle (:enabled-ids st) (:full-id item))]
-              (swap! state-atom assoc :enabled-ids ids :dirty true)
-              (when-let [cb @on-change-atom] (cb ids))
-              (scoped-models-refresh! this)))
-          nil)
+        (kb/matches-key kmgr data "tui.select.down")
+        (do (when (pos? n)
+              (swap! state-atom assoc
+                     :selected-idx (if (= (:selected-idx st) (dec n))
+                                     0
+                                     (inc (:selected-idx st))))
+              (scoped-models-refresh! this))
+            nil)
 
         ;; Reorder enabled models (pi app.models.reorderUp/Down)
         (or (kb/matches-key kmgr data "app.models.reorderUp")
@@ -168,6 +165,16 @@
               (swap! state-atom assoc
                      :enabled-ids ids :dirty true
                      :selected-idx (max 0 (min (+ (:selected-idx st) delta) (dec n))))
+              (when-let [cb @on-change-atom] (cb ids))
+              (scoped-models-refresh! this)))
+          nil)
+
+        ;; Enter — toggle the selected model (pi tui.select.confirm)
+        (kb/matches-key kmgr data "tui.select.confirm")
+        (let [item (when (pos? n) (nth filtered (min (:selected-idx st) (dec n))))]
+          (when item
+            (let [ids (toggle (:enabled-ids st) (:full-id item))]
+              (swap! state-atom assoc :enabled-ids ids :dirty true)
               (when-let [cb @on-change-atom] (cb ids))
               (scoped-models-refresh! this)))
           nil)
@@ -215,22 +222,18 @@
             (scoped-models-refresh! this)
             nil)
 
-        ;; Navigation (pi tui.select.up/down — wraps)
-        (kb/matches-key kmgr data "tui.select.up")
-        (do (when (pos? n)
-              (swap! state-atom assoc
-                     :selected-idx (if (zero? (:selected-idx st))
-                                     (dec n)
-                                     (dec (:selected-idx st)))))
-            nil)
+        ;; Ctrl+C — clear the search, or cancel when already empty
+        (keys/matches-key? data (keys/ctrl "c"))
+        (if (str/blank? (:search st))
+          (do (when-let [cb @on-cancel-atom] (cb)) nil)
+          (do (swap! state-atom assoc :search "" :selected-idx 0)
+              (input/input-set-value! search-input "")
+              (scoped-models-refresh! this)
+              nil))
 
-        (kb/matches-key kmgr data "tui.select.down")
-        (do (when (pos? n)
-              (swap! state-atom assoc
-                     :selected-idx (if (= (:selected-idx st) (dec n))
-                                     0
-                                     (inc (:selected-idx st)))))
-            nil)
+        ;; Escape — cancel
+        (keys/matches-key? data "escape")
+        (do (when-let [cb @on-cancel-atom] (cb)) nil)
 
         ;; Everything else — the search input
         :else
