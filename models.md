@@ -1781,10 +1781,12 @@ server-side (kmet's flow closes the server in the finally).
 
 ## Deferred (re-evaluate when reached)
 
-Each is a substantial project; the detail below is the pi surface to port
-(verified against `packages/ai/src/{api,providers,images*,image-models*}`,
-`packages/ai/scripts/generate-models.ts` and
-`packages/ai/scripts/generate-image-models.ts`). Plan deeper when started.
+**Status: all ported.** Deferred A (providers & wire APIs) finished with
+Phase 15; Deferred B (image models registry) finished with Phase 17. The
+detail below is the historical pi surface — kept for reference. Remaining
+non-ported items are the documented data-only compat keys and the
+qwen-token-plan / xiaomi-token-plan subscription OAuth flows (pi has no
+OAuth reference for them).
 
 ### Deferred A — More providers & wire APIs
 
@@ -2077,64 +2079,94 @@ api groups changes hashes; regenerate once per provider batch.
   apis each normalize to the same usage map + `:cost` (Phase 5) so
   `usage-breakdown`/footer need no changes.
 
-### Deferred B — Image models registry
+## Phase 17 — Image models registry (Deferred B)
 
-pi `packages/ai/src/{images.ts, images-models.ts, images-api-registry.ts,
-image-models.ts, image-models.generated.ts}` — the image-generation mirror of
-the chat model subsystem. No coding-agent consumer exists in pi (pure ai
-package API surface); kmet ports the subsystem, not a `/imagine` tool.
+**Status: implemented.** The image-generation mirror of the chat model
+subsystem (pi: images.ts + images-models.ts + images-api-registry.ts +
+api/openrouter-images.ts + image-models.generated.ts), adapted to Babashka +
+static EDN. A pure API surface — pi has no coding-agent consumer and kmet
+ports it as-is (no `/imagine` tool). New `kmet.app.image-models` namespace;
+catalog at `src/kmet/app/image_model_data/image-models.edn` (generated live
+from OpenRouter 2026-08-14: **45 models** — pi's committed snapshot had 42;
+the generator is the single source of truth).
 
-**Types** (pi `types.ts`):
+### Types & registry (`kmet.app.image-models`)
 
-```clojure
-(defrecord ImagesModel [id name api provider base-url input output cost])
-;; input/output: [:text] [:image] [:text :image]; cost: 4 rates, no tiers
-;; ImagesApi = :openrouter-images (extensible)
-```
-
-- `ImagesContext` — `{:input [{:type :text :text ..} | {:type :image :mime-type .. :data ..}]}`.
+- `ImagesModel` record `[id name api provider base-url input output cost]`
+  (pi types.ts; input/output `[:text] | [:image] | [:text :image]`; cost = 4
+  $/M rates, no tiers).
+- `ImagesProvider` record `[id name models]` + a registry atom mirroring
+  `kmet.app.models`: `register-provider!` / `unregister-provider!` /
+  `clear-providers!` / `get-providers` / `get-provider` / `get-models` /
+  `get-model`.
 - `AssistantImages` — `{:api :provider :model :output [text|image blocks]
-  :response-id :usage :stop-reason :stop|:error|:aborted :error-message :timestamp}`.
+  :response-id :usage :stop-reason :stop|:error|:aborted :error-message
+  :timestamp}`.
+- `ImagesContext` — `{:input [{:type :text :text ..} | {:type :image
+  :mime-type .. :data ..}]}`.
 
-**ImagesProvider / ImagesModels collection** (`images-models.ts` port):
-provider record `{:id :name :auth :models :refresh-models-fn :generate-fn}`
-and a registry atom mirroring `kmet.app.models` — `get-providers` /
-`get-provider` / `get-models` / `get-model` / `refresh` (dynamic providers,
-shared in-flight fetch, best-effort allSettled) / `get-auth` (reuses
-`kmet.app.auth` resolution) / `generate-images` (auth merge, failures →
-`AssistantImages` with `stop-reason :error`, unknown provider → error).
+### Wire-api registry + the :openrouter-images api
 
-**images-api-registry**: `register-images-api-provider` /
-`get-images-api-provider` keyed by `:api`, with the api-match guard;
-builtin registration lazy-loads the wire module (pi
-`providers/images/register-builtins.ts`).
+- `register-images-api-provider!` / `get-images-api-provider` keyed by
+  `:api` (pi images-api-registry.ts; the api-match guard is structural —
+  lookup is keyed by the model's `:api`, so a mismatched model never
+  reaches a wire fn). The builtin `:openrouter-images` wire is registered
+  by `load-image-catalogs!`.
+- `generate-openrouter-images` (pi api/openrouter-images.ts): non-stream
+  POST `(str base-url "/chat/completions")` with `{model, messages: [{role
+  "user", content: [text | image_url data: URLs]}], modalities: ["image" |
+  "image","text"] (per model output), stream: false}`; response
+  `choices[0].message.content` (string → text block) +
+  `choices[0].message.images[]` (data: URLs → `{:type :image :mime-type ..
+  :data ..}` — both the string and `{url}` image_url shapes), `id` →
+  response-id, usage parsed like openai (prompt_tokens minus
+  cached/cache_write) + cost via the Phase 5 `models/calculate-cost`. No
+  streaming.
 
-**Catalog** (`image-models.generated.ts`): static `IMAGE_MODELS` — one
-provider today: `openrouter` (42 models: flux.2 flex/klein/max/pro,
-seedream-4.5, gemini-2.5-flash-image / gemini-3-pro-image(-preview) Nano
-Banana, etc.), all `:openrouter-images`, base-url
-`https://openrouter.ai/api/v1`. Generator (`generate-image-models.ts`):
-fetch `https://openrouter.ai/api/v1/models?output_modalities=image`, keep
-models whose output modalities include `image`, input/output modalities from
-`architecture`, cost = pricing × 1e6, `--strict` fails on empty; sorted,
-committed. kmet: `src/kmet/app/image_model_data/image-models.edn` + a
-`bb generate-image-models` task (or fold into `generate_models.clj`).
+### Generation & auth
 
-**openrouter-images wire API** (`api/openrouter-images.ts` port): non-stream
-POST `(str base-url "/chat/completions")` with
-`{model, messages: [{role: :user, content: [text | image_url data: URLs]}],
-modalities: ["image"|"image","text"] (per model output), stream: false}`;
-response `choices[0].message.content` (string → text block) +
-`choices[0].message.images[]` (data: URLs → `{:type :image :mime-type ..
-:data ..}`), `response.id` → response-id, usage parsed like openai
-(prompt_tokens minus cached/cache_write) + cost via the Phase 5
-`calculate-cost`. No streaming.
+- `generate-images` (pi ImagesModels.generateImages): resolves auth via
+  `kmet.app.auth` (`:openrouter` already resolves OPENROUTER_API_KEY + the
+  Phase 16 OAuth credential — no new auth rows), merges an explicit
+  `:api-key` option over it, and calls the wire. **Never throws** —
+  failures (unknown provider, missing key, unregistered api, transport/
+  parse) are returned as an `AssistantImages` with `:stop-reason :error`
+  (`:aborted` when the `:signal` atom option is set).
 
-**Auth**: same ProviderAuth machinery — openrouter: env
-`OPENROUTER_API_KEY` + OAuth (pi `lazyOAuth`/`loadOpenRouterOAuth`). kmet:
-add `:openrouter` to `auth/env-vars-by-provider`; `/login` uses the Phase 10
-select machinery; openrouter loopback OAuth is done (Phase 16).
+### Generator & data
 
+- `scripts/generate_image_models.clj` (pi generate-image-models.ts) +
+  `bb generate-image-models`: fetch
+  `https://openrouter.ai/api/v1/models?output_modalities=image`, keep
+  models whose output modalities include `image`, input/output from
+  `architecture` (input defaults `[:text]`), cost = pricing × 1e6 with
+  negative sentinels clamped to 0 (kmet chat openrouter convention — pi
+  leaves -1e6 in its file), `--strict` fails on empty; sorted, committed.
+  `validate-committed!` is the offline half (run by the test).
+- `load-image-catalogs!` (startup, next to `models/load-catalogs!`)
+  validates the committed catalog (required fields) and registers the
+  `:openrouter` provider.
+
+### Tests
+
+`test/kmet/app/test_image_models.clj` — catalog load (45 models, required
+fields, no duplicates), the offline `validate-committed!` gate, registry
+semantics, the wire over a mocked `request-json` (text + both image_url
+shapes, modalities, data-URL content parts, usage/cost, request headers),
+`parse-images-usage` (cached-token subtraction + cache_write split + cost
+rates), and the generate-images contract (unknown provider / missing key /
+unregistered api / wire failure → `:error`, signal → `:aborted`, explicit
+key wins without resolving auth).
+
+**Deviations from pi**: no dynamic-provider `refreshModels` machinery (kmet
+has one static catalog provider — the collection's refresh is not ported
+until a dynamic provider ships); the api-match guard is structural (keyed
+lookup) instead of a wrapped call-time check; `generate-images` does not
+merge configured headers/env (kmet's auth resolution returns the api key;
+no provider needs extra headers today); no `auth` field on the provider
+record (auth resolves through `kmet.app.auth` by provider id).
+
+---
 ---
 
 ## Testing & validation gates
@@ -2317,6 +2349,11 @@ Phase 4 (resolver, /model, Ctrl+L) ──► Phase 5 (cost footer)
    Phase 16 (OAuth PKCE loopback batch: the shared callback server,
             anthropic Pro/Max, openai-codex browser, openrouter permanent
             key)
+                    │
+                    ▼
+   Phase 17 (Deferred B: image models registry — ImagesModel/Provider
+            records, the :openrouter-images wire, the live OpenRouter
+            catalog + generator, never-throw generate-images)
 ```
 
 

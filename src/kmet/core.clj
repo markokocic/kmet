@@ -7,6 +7,7 @@
             [kmet.modes.print :as print-mode]
             [kmet.config :as cfg]
             [kmet.app.extensions :as extensions]
+            [kmet.app.image-models :as image-models]
             [kmet.app.models :as models]
             [kmet.app.model-resolver :as resolver]
             [kmet.debug :as debug]
@@ -236,6 +237,7 @@
     ;; its generated providers at startup), then the models.edn user config
     ;; layer (custom providers + overrides; errors surface as warnings)
     (models/load-catalogs!)
+    (image-models/load-image-catalogs!)
     (models/load-models-config!)
     (when-let [err (models/get-model-config-error)]
       (binding [*out* *err*]

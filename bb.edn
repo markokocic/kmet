@@ -27,6 +27,9 @@
   generate-models {:doc "Regenerate provider model catalogs from models.dev (network)"
                    :task (do (load-file "scripts/generate_models.clj")
                              ((ns-resolve 'generate-models '-main)))}
+  generate-image-models {:doc "Regenerate the image model catalog from OpenRouter (network)"
+                         :task (do (load-file "scripts/generate_image_models.clj")
+                                   ((ns-resolve 'generate-image-models '-main)))}
   check-model-data {:doc "Offline validation of committed provider catalogs + manifest"
                     :task (let [errors (do (load-file "scripts/generate_models.clj")
                                            ((ns-resolve 'generate-models 'validate-committed!)))]

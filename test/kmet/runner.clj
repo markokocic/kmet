@@ -33,6 +33,7 @@
     kmet.app.test-aws-sigv4
     kmet.app.test-google-adc
     kmet.app.test-oauth
+    kmet.app.test-image-models
     kmet.app.test-model-data
     kmet.app.test-proxy
     kmet.app.test-loop
