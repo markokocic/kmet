@@ -3,6 +3,7 @@
    lifecycle, per-extension deregistration, and the nullable api fixture
    (kmet.extension/create-nullable-api) for testing extensions in isolation."
   (:require [clojure.test :as t :refer [testing]]
+            [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.extension :as ext]
             [kmet.app.extensions :as extensions]
@@ -41,7 +42,7 @@
 (t/deftest test-nullable-api-extension-init
   (testing "a sample extension's init registers what it declares"
     (let [{:keys [api state]} (ext/create-nullable-api)]
-      (load-file "target/test-ext-single/hello_ext.clj")
+      (load-file "test/fixtures/ext-single/hello_ext.clj")
       (let [ns-sym (find-ns 'hello-ext)
             init-var (ns-resolve ns-sym 'init)]
         (init-var api)
@@ -57,7 +58,7 @@
 
 (t/deftest test-load-single-file-extension
   (extensions/clear-extensions!)
-  (let [result (extensions/load-extension! "target/test-ext-single/hello_ext.clj")]
+  (let [result (extensions/load-extension! "test/fixtures/ext-single/hello_ext.clj")]
     (t/is (nil? (:error result)) (str "loaded: " (:error result)))
     (t/is (some #(= "hello_ext.clj" (:name %)) (extensions/get-loaded-extensions)))
     (testing "registrations live in the real registries"
@@ -69,21 +70,54 @@
       (t/is (empty? (extensions/get-loaded-extensions)))
       (t/is (nil? (commands/find-command "hello-ext")))
       (t/is (nil? (tools/get-tool "hello-ext-tool")))
-      (t/is (nil? (extensions/get-flag "ext-hello"))))
-    (remove-ns 'hello-ext)))
+      (t/is (nil? (extensions/get-flag "ext-hello"))))))
 
 (t/deftest test-load-manifest-extension
   (extensions/clear-extensions!)
-  (let [result (extensions/load-extension! "target/test-ext-dir")]
+  (let [result (extensions/load-extension! "test/fixtures/ext-dir")]
     (t/is (nil? (:error result)) (str "loaded: " (:error result)))
-    (testing "multi-file: helper ns + entry ns both load; tool from helper"
+    (testing "multi-file: helper ns + entry ns load isolated; tool from helper works"
       (t/is (some? (tools/get-tool "multi-ext-tool")))
-      (t/is (= "multi-ok" (:content (tools/execute-tool "multi-ext-tool" {})))))
-    (testing "unload removes the tool and the namespaces"
+      (t/is (= "multi-ok" (:content (tools/execute-tool "multi-ext-tool" {}))))
+      (t/is (nil? (find-ns 'multi-ext.main))
+            "extension namespaces never enter the global registry")
+      (t/is (nil? (find-ns 'multi-ext.helper))))
+    (testing "unload removes the tool"
       (extensions/unload-all-extensions!)
       (t/is (nil? (tools/get-tool "multi-ext-tool")))
-      (t/is (nil? (find-ns 'multi-ext.main)))
-      (t/is (nil? (find-ns 'multi-ext.helper))))))
+      (t/is (empty? (extensions/get-loaded-extensions))))))
+
+(t/deftest ^:slow test-extension-lib-version-isolation
+  (extensions/clear-extensions!)
+  (let [ra (extensions/load-extension! "test/fixtures/ext-iso-a")
+        rb (extensions/load-extension! "test/fixtures/ext-iso-b")]
+    (t/is (nil? (:error ra)) (str "a: " (:error ra)))
+    (t/is (nil? (:error rb)) (str "b: " (:error rb)))
+    (testing "each extension serves its own declared version"
+      (let [jars-a (extensions/extension-jars "iso-a")
+            jars-b (extensions/extension-jars "iso-b")]
+        (t/is (some #(str/includes? % "tools.cli-0.4.1.jar") jars-a))
+        (t/is (some #(str/includes? % "tools.cli-1.0.206.jar") jars-b))
+        (t/is (not-any? #(str/includes? % "tools.cli-1.0.206.jar") jars-a))
+        (t/is (not-any? #(str/includes? % "tools.cli-0.4.1.jar") jars-b))))
+    (testing "both extensions' tools work simultaneously"
+      (t/is (= "iso-a" (:content (tools/execute-tool "iso-a" {}))))
+      (t/is (= "iso-b" (:content (tools/execute-tool "iso-b" {})))))
+    (testing "reload keeps each extension on its declared version"
+      (extensions/unload-all-extensions!)
+      (t/is (nil? (:error (extensions/load-extension! "test/fixtures/ext-iso-a"))))
+      (t/is (nil? (:error (extensions/load-extension! "test/fixtures/ext-iso-b"))))
+      (t/is (some #(str/includes? % "tools.cli-0.4.1.jar")
+                  (extensions/extension-jars "iso-a")))
+      (t/is (some #(str/includes? % "tools.cli-1.0.206.jar")
+                  (extensions/extension-jars "iso-b")))
+      (t/is (= "iso-a" (:content (tools/execute-tool "iso-a" {}))))
+      (t/is (= "iso-b" (:content (tools/execute-tool "iso-b" {})))))
+    (testing "unload releases both"
+      (extensions/unload-all-extensions!)
+      (t/is (empty? (extensions/get-loaded-extensions)))
+      (t/is (nil? (tools/get-tool "iso-a")))
+      (t/is (nil? (tools/get-tool "iso-b"))))))
 
 (t/deftest test-load-failure-rolls-back
   (extensions/clear-extensions!)
@@ -95,15 +129,29 @@
       (let [result (extensions/load-extension! (str dir "/bad.clj"))]
         (t/is (some? (:error result)))
         (t/is (empty? (extensions/get-loaded-extensions))))
-      (remove-ns 'bad-ext)
       (fs/delete-tree dir))))
+
+(t/deftest ^:slow test-extension-bad-deps-fails-load
+  (extensions/clear-extensions!)
+  (let [dir "target/test-ext-bad-deps"]
+    (fs/create-dirs dir)
+    (spit (str dir "/extension.edn") "{:name \"bad-deps\" :entry \"src/main.clj\"}\n")
+    (spit (str dir "/deps.edn") "{:deps {org.clojure/does-not-exist {:mvn/version \"9.9.9\"}}}\n")
+    (fs/create-dirs (str dir "/src"))
+    (spit (str dir "/src/main.clj")
+          "(ns bad-deps.main (:require [org.clojure.does-not-exist :as bad]))\n(defn init [api] nil)\n")
+    (testing "an unresolvable dep fails the load without killing the process"
+      (let [result (extensions/load-extension! dir)]
+        (t/is (some? (:error result)))
+        (t/is (empty? (extensions/get-loaded-extensions)))))
+    (fs/delete-tree dir)))
 
 (t/deftest test-reload-extensions
   (testing "reload-extensions! (container dirs) unloads + reloads"
     (let [container (str "target/test-ext-container-" (System/currentTimeMillis))]
       (fs/create-dirs container)
-      (fs/copy-tree "target/test-ext-single" container)
-      (fs/copy-tree "target/test-ext-dir" (str container "/multi-ext"))
+      (fs/copy-tree "test/fixtures/ext-single" container)
+      (fs/copy-tree "test/fixtures/ext-dir" (str container "/multi-ext"))
       (extensions/clear-extensions!)
       (let [results (extensions/reload-extensions! [container])]
         (t/is (= 2 (count (filter #(nil? (:error %)) results)))
@@ -117,10 +165,7 @@
                 "no duplicate extensions after reload")
           (t/is (some? (commands/find-command "hello-ext")))))
       (extensions/unload-all-extensions!)
-      (fs/delete-tree container)
-      (remove-ns 'hello-ext)
-      (remove-ns 'multi-ext.main)
-      (remove-ns 'multi-ext.helper))))
+      (fs/delete-tree container))))
 
 ;; ─── Session facades through the api ──────────────────────────────────────
 

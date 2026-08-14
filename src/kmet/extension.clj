@@ -12,10 +12,12 @@
 
    Layout: extensions are either single .clj files, or directories
    containing an extension.edn manifest:
-     {:name \"my-ext\" :entry \"src/my_ext.clj\" :files [\"src/util.clj\"]}
-   — :files load first (the extension's own source dependencies), then
-   :entry. External library deps are not loadable at runtime in Babashka
-   (the classpath is fixed at startup); add them to kmet's deps.edn instead.
+     {:name \"my-ext\" :entry \"src/my_ext.clj\"}
+   — the manifest lists only the initial namespace; internal namespaces are
+   required from there. An extension directory may also carry a deps.edn
+   declaring library dependencies; kmet serves them to that extension only
+   (each extension runs in its own isolated context, so different
+   extensions may pin different versions of the same library).
 
    Lifecycle: loaded at startup (and via /reload), reloadable and unloadable
    at runtime. Unload calls shutdown (if defined), then unregisters

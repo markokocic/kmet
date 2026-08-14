@@ -1,6 +1,9 @@
 {:min-bb-version "1.12.215"
  :paths ["src" "test"]
- :deps {dev.weavejester/cljfmt {:mvn/version "0.16.5"}}
+ :deps {dev.weavejester/cljfmt {:mvn/version "0.16.5"}
+        ;; in-process Maven closure resolution for extension deps.edn
+        ;; (0.0.21 = last version without the clojure-tools installer)
+        borkdude/deps.clj {:mvn/version "0.0.21"}}
  :tasks
  {run     {:doc "Run kmet (interactive TUI)"
            :requires ([kmet.core :as core])

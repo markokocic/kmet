@@ -6,8 +6,14 @@
 
    An extension is a .clj file defining (defn init [api]) in its namespace,
    or a directory containing an extension.edn manifest:
-     {:name \"my-ext\" :entry \"src/my_ext.clj\" :files [\"src/util.clj\"]}
-   :files load first (the extension's source deps), then :entry. Optional
+     {:name \"my-ext\" :entry \"src/my_ext.clj\"}
+   The manifest lists only the initial namespace (:entry); everything else
+   is required from there. Each extension evaluates in its own isolated SCI
+   context: internal namespaces are served from the extension directory,
+   declared libraries from its deps.edn (resolved in-process via
+   borkdude.deps) — so
+   different extensions can use different versions of the same library, and
+   unloading an extension releases everything it pulled in. Optional
    (defn shutdown [api]) runs on unload, which also unregisters everything
    the extension registered (each registration tracks its deregister fn).
 
@@ -17,16 +23,20 @@
   (:require [clojure.java.io :as io]
             [clojure.edn :as edn]
             [clojure.string :as str]
+            [babashka.classes]
             [babashka.fs :as fs]
             [babashka.process :as proc]
+            [borkdude.deps :as bdeps]
+            [sci.core :as sci]
             [kmet.ai.models :as models]
             [kmet.app.commands :as commands]
             [kmet.app.event-bus :as event-bus]
             [kmet.app.session :as session]
-            [kmet.app.tools.core :as tools]))
+            [kmet.app.tools.core :as tools]
+            [kmet.extension]))
 
 ;; ─── Extension records ────────────────────────────────────────────────────
-(defrecord Extension [name path entry-ns loaded-ns api deregister-fns initialized?])
+(defrecord Extension [name path entry-ns ctx jars api deregister-fns initialized?])
 
 ;; ─── Registries (the storage; api capabilities wire into these) ──────────
 (defonce ^:private extensions (atom []))
@@ -426,22 +436,150 @@
      :models (api-models)
      :session (api-session)}))
 
-;; ─── Discovery / loading / unloading ──────────────────────────────────────
+;; ─── Isolated extension contexts (sci) ───────────────────────────────────
+;; Each extension evaluates inside its own sci context: a private namespace
+;; registry plus a per-extension loader that serves (1) the extension's own
+;; files, (2) the jars its deps.edn declares (the complete transitive
+;; closure, resolved in-process via borkdude.deps), and (3) anything else on
+;; the classpath. Global namespaces the extension may touch (kmet.extension,
+;; clojure.*, babashka.*) are injected as shared references — never
+;; re-evaluated, so kmet's registries are not duplicated. kmet.* namespaces
+;; other than the contract are not served at all: re-evaluating kmet
+;; internals in a context would create context-local copies of their
+;; registries.
 
 (declare unload-extension!)
+
+(def ^:private bb-imports
+  "babashka's default imports (babashka.impl.classes/imports): the
+   unqualified classnames lib sources may use."
+  '{AbstractMethodError java.lang.AbstractMethodError
+    Appendable java.lang.Appendable
+    ArithmeticException java.lang.ArithmeticException
+    AssertionError java.lang.AssertionError
+    BigDecimal java.math.BigDecimal
+    BigInteger java.math.BigInteger
+    Boolean java.lang.Boolean
+    Byte java.lang.Byte
+    Callable java.util.concurrent.Callable
+    Character java.lang.Character
+    CharSequence java.lang.CharSequence
+    Class java.lang.Class
+    ClassCastException java.lang.ClassCastException
+    ClassNotFoundException java.lang.ClassNotFoundException
+    Comparable java.lang.Comparable
+    Compiler clojure.lang.Compiler
+    Double java.lang.Double
+    Error java.lang.Error
+    Exception java.lang.Exception
+    ExceptionInInitializerError java.lang.ExceptionInInitializerError
+    IndexOutOfBoundsException java.lang.IndexOutOfBoundsException
+    IllegalArgumentException java.lang.IllegalArgumentException
+    IllegalStateException java.lang.IllegalStateException
+    Integer java.lang.Integer
+    InterruptedException java.lang.InterruptedException
+    Iterable java.lang.Iterable
+    File java.io.File
+    Float java.lang.Float
+    Long java.lang.Long
+    LinkageError java.lang.LinkageError
+    Math java.lang.Math
+    NullPointerException java.lang.NullPointerException
+    Number java.lang.Number
+    NumberFormatException java.lang.NumberFormatException
+    Object java.lang.Object
+    Runnable java.lang.Runnable
+    Runtime java.lang.Runtime
+    RuntimeException java.lang.RuntimeException
+    Process java.lang.Process
+    ProcessBuilder java.lang.ProcessBuilder
+    SecurityException java.lang.SecurityException
+    Short java.lang.Short
+    StackOverflowError java.lang.StackOverflowError
+    StackTraceElement java.lang.StackTraceElement
+    String java.lang.String
+    StringBuilder java.lang.StringBuilder
+    System java.lang.System
+    Thread java.lang.Thread
+    ThreadLocal java.lang.ThreadLocal
+    Thread$UncaughtExceptionHandler java.lang.Thread$UncaughtExceptionHandler
+    Throwable java.lang.Throwable
+    VirtualMachineError java.lang.VirtualMachineError
+    ThreadDeath java.lang.ThreadDeath
+    UnsupportedOperationException java.lang.UnsupportedOperationException})
+
+(def ^:private bb-bundled-libs
+  "Libraries babashka ships adapted (SCI implementations baked into the
+   binary) whose raw Maven versions generally fail in bb. Extensions should
+   omit them from deps.edn and use the bundled copy. Plain-bundled libs
+   whose Maven copies run fine (tools.cli, data.json, tools.reader, ...)
+   are not listed — they resolve to declared versions normally."
+  #{"cheshire/cheshire"
+    "org.clojure/core.async"
+    "org.clojure/core.cache"
+    "org.clojure/core.memoize"
+    "org.clojure/core.rrb-vector"
+    "potemkin/potemkin"
+    "ring/ring-core"
+    "selmer/selmer"})
+
+(defonce ^:private context-classes
+  (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
+                (remove #(str/starts-with? (.getName ^Class %) "[")
+                        (babashka.classes/all-classes)))))
+
+(defonce ^:private context-namespaces
+  (into {'kmet.extension (ns-interns 'kmet.extension)}
+        (keep (fn [ns-obj]
+                (let [n (str (ns-name ns-obj))]
+                  (when (and (not (str/starts-with? n "sci."))
+                             (not= n "clojure.core")
+                             ;; bundled libraries (clojure.tools.cli, data.json, ...)
+                             ;; are NOT injected — they resolve through the load-fn,
+                             ;; so a declared Maven version wins over the bundled copy.
+                             ;; (Only clojure.tools.* / clojure.data.*: the ones whose
+                             ;; Maven versions actually run in bb. The adapted libs —
+                             ;; core.async, cheshire, ... — stay injected: their Maven
+                             ;; copies fail anyway, so the bundled copy is correct.)
+                             (not (or (str/starts-with? n "clojure.tools.")
+                                      (str/starts-with? n "clojure.data.")))
+                             (or (str/starts-with? n "clojure.")
+                                 (str/starts-with? n "babashka.")))
+                    [(ns-name ns-obj) (ns-interns ns-obj)])))
+              (all-ns))))
+
+(defn- read-ns-form
+  "The (ns ...) form at the start of FILE, or nil when the file doesn't
+   start with one (or can't be read)."
+  [file]
+  (try
+    (with-open [rdr (java.io.PushbackReader. (io/reader file))]
+      (let [form (read rdr)]
+        (when (and (list? form) (= 'ns (first form)))
+          form)))
+    (catch Exception _ nil)))
 
 (defn- read-ns-sym
   "The namespace symbol of a file's (ns ...) form, or nil."
   [file]
-  (with-open [rdr (java.io.PushbackReader. (io/reader file))]
-    (let [form (read rdr)]
-      (when (and (list? form) (= 'ns (first form)))
-        (second form)))))
+  (some-> (read-ns-form file) second))
+
+(defn- scan-ns-files
+  "Map namespace symbol → file for every .clj file under DIR with a
+   (ns ...) form."
+  [dir]
+  (reduce (fn [acc f]
+            (let [f (io/file (str f))]
+              (if-let [ns-sym (read-ns-sym f)]
+                (assoc acc ns-sym f)
+                acc)))
+          {}
+          (fs/glob dir "**/*.clj")))
 
 (defn- resolve-extension
-  "Resolve PATH into {:name str :files [io.File ...]}. A directory must
-   contain extension.edn {:name :entry :files}; a plain file is the entry
-   itself."
+  "Resolve PATH into {:name str :entry io.File}. A directory must contain
+   extension.edn {:name :entry} — the manifest lists only the initial
+   namespace; a plain file is the entry itself."
   [path]
   (let [f (io/file path)]
     (if (.isDirectory f)
@@ -450,57 +588,202 @@
           (throw (ex-info (str "Extension dir " path " has no extension.edn")
                           {:path path})))
         (let [m (edn/read-string (slurp manifest-file))
-              entry (io/file f (:entry m))
-              extra (mapv #(io/file f %) (:files m []))]
+              entry (io/file f (:entry m))]
           (when-not (and (:entry m) (.exists entry))
             (throw (ex-info (str "extension.edn :entry not found: " (:entry m))
                             {:path path :manifest m})))
-          (doseq [ef extra]
-            (when-not (.exists ef)
-              (throw (ex-info (str "extension.edn :files entry not found: " ef)
-                              {:path path :manifest m}))))
           {:name (or (:name m) (fs/file-name f))
-           :files (concat extra [entry])}))
+           :entry entry}))
       {:name (fs/file-name f)
-       :files [f]})))
+       :entry f})))
 
-(defn- load-extension-files!
-  "load-file each file (proper namespace loading) and record its ns."
-  [ext files]
-  (doseq [f files]
-    (load-file (str f))
-    (when-let [ns-sym (read-ns-sym f)]
-      (swap! (:loaded-ns ext) conj ns-sym))))
+(defn- deps-of-dir
+  "The extension dir's :deps map from deps.edn, or nil."
+  [dir]
+  (let [f (io/file (str dir) "deps.edn")]
+    (when (.exists f)
+      (:deps (edn/read-string (slurp f))))))
 
-(defn- unload-namespaces!
-  "remove-ns every namespace the extension loaded (fresh reload)."
-  [ext]
-  (doseq [ns-sym @(:loaded-ns ext)]
-    (when (find-ns ns-sym)
-      (remove-ns ns-sym))))
+(def ^:private bundled-artifacts
+  "Artifacts babashka ships (clojure + spec are always bundled) — excluded
+   from extension closures, matching bb's add-deps classpath-overrides."
+  #{"org.clojure/clojure"
+    "org.clojure/spec.alpha"
+    "org.clojure/core.specs.alpha"})
+
+(defn- bundled-artifact?
+  [entry]
+  (some #(str/includes? entry (str "repository/" (str/replace % "." "/") "/"))
+        bundled-artifacts))
+
+(defn- closure-jars
+  "The complete transitive jar set for DEPS-MAP, computed in-process via
+   borkdude.deps (the tools.deps port) — no subprocess, no global classpath
+   changes, nothing written outside ~/.m2. Resolution failures throw
+   (borkdude.deps' default *exit-fn* would kill the process)."
+  [deps-map]
+  (let [cp (with-out-str
+             (binding [*print-namespace-maps* false
+                       bdeps/*exit-fn* (fn [{:keys [message]}]
+                                         (throw (ex-info (or message "deps resolution failed")
+                                                         {:deps deps-map})))]
+               (bdeps/-main "-Srepro" "-Spath"
+                            "-Sdeps" (pr-str {:deps deps-map})
+                            "-Sdeps-file" "__kmet_no_deps__.edn")))]
+    (->> (str/split (str/trim cp) (re-pattern (System/getProperty "path.separator")))
+         (filter #(or (str/includes? % ".m2") (str/includes? % ".gitlibs")))
+         (remove bundled-artifact?)
+         vec)))
+
+(defonce ^:private jars-cache (atom {}))
+
+(defn- jars-for
+  "The jar set for DEPS-MAP, cached by the map across loads (reloads and
+   extensions sharing the same deps reuse it; a deps.edn change is a new
+   key and re-resolves)."
+  [deps-map]
+  (let [key (pr-str deps-map)]
+    (or (get @jars-cache key)
+        (let [jars (closure-jars deps-map)]
+          (swap! jars-cache assoc key jars)
+          jars))))
+
+(defn- make-deps-resolver
+  "Memoized per-extension closure resolver: resolves the extension's jar
+   set on first library require (via jars-for), records it on the record's
+   :jars (for introspection), reuses it after. nil when the extension has
+   no deps.edn."
+  [deps-map jars-atom]
+  (when deps-map
+    (let [resolved (volatile! nil)]
+      (fn []
+        (or @resolved
+            (let [jars (jars-for deps-map)]
+              (reset! jars-atom jars)
+              (vreset! resolved jars)))))))
+
+(defn- ns-path
+  "The classpath path for NS-SYM: namespace-munged (dashes → underscores),
+   dots as slashes — matching how jars and source dirs store files."
+  [ns-sym]
+  (str/replace (namespace-munge (str ns-sym)) "." "/"))
+
+(defn- jar-source
+  "The source of NS-SYM inside JAR-PATH, or nil."
+  [jar-path ns-sym]
+  (let [jar (java.util.jar.JarFile. jar-path)
+        base (ns-path ns-sym)]
+    (try
+      (let [entry (or (.getJarEntry jar (str base ".cljc"))
+                      (.getJarEntry jar (str base ".clj"))
+                      (.getJarEntry jar (str base ".bb")))]
+        (when entry
+          (with-open [is (.getInputStream jar entry)]
+            (slurp is))))
+      (finally (.close jar)))))
+
+(defn- resource-source
+  "The source of NS-SYM from the classpath, or nil."
+  [ns-sym]
+  (let [base (ns-path ns-sym)]
+    (some (fn [ext] (when-let [r (io/resource (str base ext))]
+                      {:file (str r) :source (slurp r)}))
+          [".cljc" ".clj" ".bb"])))
+
+(defn- make-load-fn
+  "Per-extension namespace resolver, evaluated inside the extension's
+   context: own files, declared deps (closure resolved lazily on first
+   library require), then bb-bundled classpath namespaces. kmet.* beyond
+   the contract and undeclared non-bundled libraries are rejected with
+   actionable errors — extensions must depend only on kmet.extension."
+  [ext-name ns-files deps-resolver]
+  (fn [{:keys [namespace]}]
+    (or (when-let [f (get ns-files namespace)]
+          {:file (str f) :source (slurp f)})
+        (when-let [jars (deps-resolver)]
+          (some (fn [j] (when-let [s (jar-source j namespace)]
+                          {:file (str j) :source s}))
+                jars))
+        (when-not (str/starts-with? (str namespace) "kmet.")
+          (resource-source namespace))
+        (throw (ex-info
+                (if (str/starts-with? (str namespace) "kmet.")
+                  (str "Extension " ext-name " requires " namespace
+                       " — extensions may only depend on kmet.extension")
+                  (str "Extension " ext-name " requires " namespace
+                       " — not declared in deps.edn and not a babashka-bundled library"))
+                {:extension ext-name :ns namespace})))))
+
+(defn- create-context
+  "Build the isolated sci context for one extension: full bb classes and
+   imports, shared global namespaces, and the per-extension load-fn that
+   checks deps — own files, declared deps (resolved lazily on first library
+   require), bb-bundled namespaces, with actionable errors for everything
+   else."
+  [ext-name ns-files deps-resolver]
+  (sci/init {:classes context-classes
+             :imports bb-imports
+             :features #{:bb :clj}
+             :namespaces context-namespaces
+             :load-fn (make-load-fn ext-name ns-files deps-resolver)}))
+
+(defn- eval-forms!
+  "Evaluate every top-level form of FILE in CTX. *ns* is bound around the
+   whole eval so sci's ns handling cannot leak a namespace change into kmet
+   (a per-form binding would reset sci's current-ns and break alias
+   resolution between forms)."
+  [ctx file]
+  (binding [*ns* (or (find-ns 'user) *ns*)]
+    (with-open [r (java.io.PushbackReader. (io/reader file))]
+      (loop [form (read r false ::eof)]
+        (when-not (= ::eof form)
+          (sci/eval-form ctx form)
+          (recur (read r false ::eof)))))))
+
+(defn- extension-var
+  "The value of VAR-NAME in ENTRY-NS of EXT's context, or nil."
+  [ext entry-ns var-name]
+  (when-let [ctx @(:ctx ext)]
+    (get-in @(:env ctx) [:namespaces entry-ns var-name])))
 
 (defn load-extension!
   "Load a single extension from PATH (.clj file or dir with extension.edn).
-   Calls the extension's init with its api. On failure, everything is rolled
-   back (unloaded) and {:extension nil :error msg} is returned."
+   Each extension evaluates in its own isolated context; deps.edn jars are
+   served only to that context, so different extensions may pin different
+   versions of the same library. Calls the extension's init with its api.
+   On failure everything is rolled back and {:extension nil :error msg} is
+   returned."
   [path]
-  (let [ext (map->Extension
-             {:name (fs/file-name path)
-              :path (str (fs/canonicalize (io/file path)))
+  (let [f (io/file path)
+        {:keys [name entry]} (resolve-extension path)
+        dir (if (fs/directory? f) f (fs/parent f))
+        ext (map->Extension
+             {:name name
+              :path (str (fs/canonicalize f))
               :entry-ns (atom nil)
-              :loaded-ns (atom [])
+              :ctx (atom nil)
+              :jars (atom [])
               :api (atom nil)
               :deregister-fns (atom [])
               :initialized? (atom false)})]
     (try
-      (let [{:keys [files]} (resolve-extension path)]
-        (load-extension-files! ext files)
-        (let [ns-sym (last @(:loaded-ns ext))
+      (let [deps (when (fs/directory? f) (deps-of-dir dir))
+            ns-files (when (fs/directory? f) (scan-ns-files (str f)))
+            ctx (create-context name (or ns-files {}) (make-deps-resolver deps (:jars ext)))]
+        (doseq [lib (keys deps)]
+          (when (contains? bb-bundled-libs (str lib))
+            (binding [*out* *err*]
+              (println "Warning: extension" (:name ext) "pins" lib
+                       "which babashka bundles — the Maven copy may not run;"
+                       "omit it from deps.edn to use the bundled version."))))
+        (reset! (:ctx ext) ctx)
+        (eval-forms! ctx entry)
+        (let [ns-sym (read-ns-sym entry)
               _ (when-not ns-sym
                   (throw (ex-info (str "Extension " (:name ext)
                                        " file does not start with (ns ...)")
                                   {:path path})))
-              init-var (ns-resolve (find-ns ns-sym) 'init)
+              init-var (extension-var ext ns-sym 'init)
               _ (when-not init-var
                   (throw (ex-info (str "Extension " (:name ext)
                                        " does not define an init fn")
@@ -518,18 +801,19 @@
 
 (defn unload-extension!
   "Unload an extension: shutdown (if initialized), deregister everything it
-   registered, remove its namespaces."
+   registered, then drop its isolated context — namespaces and jars become
+   unreachable, nothing global is touched."
   [ext]
-  (when @(:initialized? ext)
-    (when-let [ns-sym @(:entry-ns ext)]
-      (when-let [shutdown (ns-resolve (find-ns ns-sym) 'shutdown)]
-        (try (shutdown @(:api ext))
-             (catch Exception e
-               (binding [*out* *err*]
-                 (println "Warning: extension shutdown error:" (ex-message e))))))))
+  (when (and @(:initialized? ext) @(:entry-ns ext))
+    (when-let [shutdown (extension-var ext @(:entry-ns ext) 'shutdown)]
+      (try (shutdown @(:api ext))
+           (catch Exception e
+             (binding [*out* *err*]
+               (println "Warning: extension shutdown error:" (ex-message e)))))))
   (doseq [f @(:deregister-fns ext)]
     (try (f) (catch Exception _)))
-  (unload-namespaces! ext)
+  (reset! (:ctx ext) nil)
+  (reset! (:jars ext) [])
   (swap! extensions (fn [exts] (remove #(identical? % ext) exts)))
   nil)
 
@@ -541,9 +825,17 @@
   nil)
 
 (defn get-loaded-extensions
-  "Loaded extensions as {:name str :path str} maps."
+  "Loaded extensions as {:name str :path str :entry-ns symbol} maps."
   []
-  (mapv (fn [ext] {:name (:name ext) :path (:path ext)}) @extensions))
+  (mapv (fn [ext] {:name (:name ext) :path (:path ext)
+                   :entry-ns @(:entry-ns ext)})
+        @extensions))
+
+(defn extension-jars
+  "Jar paths of the named loaded extension (its deps.edn closure), or nil."
+  [name]
+  (some-> (first (filter #(= name (:name %)) @extensions))
+          :jars deref))
 
 (defn clear-extensions!
   "Unload all extensions (used by /reload and tests)."
@@ -566,7 +858,7 @@
                              (fs/directory? entry)
                              ;; only directories with an extension.edn manifest are
                              ;; extensions — an extension's own src/ subdirs are
-                             ;; loaded via its manifest :files, not here
+                             ;; loaded via the entry's requires, not here
                              (if (fs/exists? (io/file (str entry) "extension.edn"))
                                (load-extension! path)
                                nil)

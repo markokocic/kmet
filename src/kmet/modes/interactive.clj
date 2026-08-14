@@ -2000,7 +2000,7 @@
                    (conj {:name "Extensions"
                           :items (mapv :name extensions)
                           :expanded-items (mapv (fn [e]
-                                                  (str "  " (display-path (:file e))))
+                                                  (str "  " (display-path (:path e))))
                                                 extensions)}))]
     sections))
 

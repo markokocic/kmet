@@ -1,0 +1,2 @@
+{:name "multi-ext"
+ :entry "src/main.clj"}
