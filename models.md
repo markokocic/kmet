@@ -26,7 +26,7 @@ Reference: `~/src/cvstree/pi/packages/ai/` and
 | Data generation | **`bb generate-models`** bb task (network at generation time; committed data is static) |
 | Wire APIs | **`openai-completions`, `anthropic-messages`, `google-generative-ai`** (no responses/bedrock/vertex/azure yet) |
 | Thinking levels | Adopt pi's 7 levels (`off/minimal/low/medium/high/xhigh/max`) + per-model `thinking-level-map` |
-| OAuth (Phase 10) | **done** — GitHub Copilot device-code (RFC 8628) fully implemented; generic OAuthAuth/device-code/PKCE plumbing; anthropic/openai-codex/openrouter loopback callback deferred with those providers |
+| OAuth (Phase 10) | **done** — GitHub Copilot device-code (RFC 8628), openai-codex device-code + **browser PKCE loopback**, anthropic (Claude Pro/Max) PKCE loopback, openrouter PKCE loopback (permanent key) — all fully implemented (Phase 16) |
 
 ## Architecture overview
 
@@ -839,11 +839,12 @@ and never take the bearer branch (pi: the token is anthropic-provider-specific).
 infrastructure (`packages/ai/src/auth/types.ts` + `auth/oauth/device-code.ts`
 + `auth/oauth/github-copilot.ts`) and its `/login` integration (pi
 interactive-mode `handleLoginCommand` / `showLoginAuthTypeSelector` /
-`showLoginDialog`). kmet's only OAuth-capable catalog provider is
-**github-copilot** (device-code, RFC 8628); the generic OAuthAuth record +
-device-code poll flow + PKCE machinery are built so anthropic (Pro/Max),
-openai-codex (ChatGPT), openrouter, and future subscription providers plug
-in.
+`showLoginDialog`). OAuth-capable catalog providers: **github-copilot**
+(device-code, RFC 8628), **openai-codex** (device-code + browser PKCE
+loopback), **anthropic** (Claude Pro/Max, PKCE loopback), **openrouter**
+(PKCE loopback, permanent key) — the last three landed in Phase 16; the
+generic OAuthAuth record + device-code poll flow + PKCE machinery were
+built first so they plug in.
 
 ### Credential model (pi auth/types.ts + auth-storage.ts)
 
@@ -892,8 +893,7 @@ in.
 **PKCE** — `generate-pkce` (pi pkce.ts): verifier = 32 random bytes
 base64url; challenge = SHA-256(verifier) base64url (java.security.SecureRandom
 + MessageDigest — no Web Crypto in bb). The loopback-callback machinery
-(anthropic/openai-codex/openrouter) is deferred with those providers — no
-kmet provider uses PKCE yet.
+(anthropic/openai-codex/openrouter) landed in Phase 16.
 
 ### Registry + auth integration
 
@@ -942,10 +942,17 @@ kmet provider uses PKCE yet.
 
 **Deviations from the plan sketch**:
 
-- **No loopback callback server** — only `generate-pkce` is built; the
-  callback machinery (ports 53692/1455, `/callback` route, `code#state` /
-  `code=...` manual-paste race) lands with the PKCE providers. kmet's only
-  OAuth provider uses device-code, which needs no callback.
+- **Loopback callback server is a plain `java.net.ServerSocket`** — no node
+  http (Babashka has no bundled HTTP server): a shared one-shot callback
+  primitive (`oauth/start-callback-server`) reads one HTTP request per
+  connection, answers it, closes; each flow builds its handler on it
+  (anthropic port 53692 `/callback`, codex port 1455 `/auth/callback`,
+  openrouter ephemeral port + fresh `/oauth/callback/<uuid>` path).
+- **The oauth-page HTML drops pi's logo** (kmet-brandless dark page) and the
+  flows are adapted to kmet's synchronous prompt: the manual-paste prompt
+  runs on a future raced against the callback promise, and the interaction
+  gains an optional `:abort-prompt!` hook (UI-provided) that closes the
+  pending dialog when the browser callback wins (pi manualAbort.abort()).
 - **No `models/register-oauth!`** — the builtin OAuthAuth is attached in
   `load-catalogs!` (`builtin-oauth`) instead of a register fn.
 - **`filter-models` is not a Provider field** — the available-model-ids
@@ -979,11 +986,11 @@ kmet provider uses PKCE yet.
 
 ### Scope cuts (first pass)
 
-- **github-copilot device-code is fully implemented** (kmet's only oauth
-  provider) + the generic OAuthAuth/device-code/pkce/auth.edn plumbing.
-- Anthropic/openai-codex/openrouter PKCE + loopback callback: `generate-pkce`
-  built (no provider uses it yet); the callback server and per-provider
-  flows land with those providers (later phase).
+- **github-copilot device-code is fully implemented** + the generic
+  OAuthAuth/device-code/pkce/auth.edn plumbing.
+- **anthropic, openai-codex browser, openrouter loopback — implemented
+  (Phase 16)**: the shared callback server, the manual-paste race, and the
+  per-provider flows (codex keeps its device-code method alongside).
 - azure / other subscription flows deferred with their providers.
 
 ## Missing slash commands (model surface) — **Status: implemented**
@@ -1471,16 +1478,18 @@ sections. Catalogs regenerated from models.dev (2026-08-13): 8 providers,
   the 1.05M context overrides for gpt-5.4/5.5/5.6-*); default-model
   `gpt-5.4`; env `AZURE_OPENAI_API_KEY`.
 - **codex OAuth** (`kmet.app.oauth/make-openai-codex-oauth`, pi
-  openaiCodexOAuth): device-code login (RFC 8628 — `auth.openai.com`
-  usercode/token endpoints, the authorization code exchanged with the PKCE
-  verifier from the device flow; kmet's `poll-oauth-device-code-flow`
-  machinery; 403/404 → pending like pi). **Browser PKCE loopback login is
-  deferred** with the callback server (the plan's Phase 10 deviation stands);
-  login runs the device flow directly (no method selector). Refresh via
+  openaiCodexOAuth): **two login methods** — browser PKCE loopback on the
+  fixed port 1455 (`/auth/callback`, default; the authorize URL carries
+  `id_token_add_organizations`, `codex_cli_simplified_flow`, `originator`)
+  and device-code (RFC 8628 — `auth.openai.com` usercode/token endpoints,
+  the authorization code exchanged with the PKCE verifier from the device
+  flow; kmet's `poll-oauth-device-code-flow` machinery; 403/404 → pending
+  like pi). Login prompts a method selector (pi). Refresh via
   `grant_type=refresh_token`; `to-auth` passes the access token through.
 - `/login openai-codex` starts the oauth flow directly: `login-methods` only
   offers the api-key path when the provider has one (env vars, configured
-  key, or `:auth-header`) — codex is oauth-only.
+  key, or `:auth-header`) — codex is oauth-only; the flow's own method
+  selector (browser vs device code) is pi's `login` prompt.
 - Thinking maps follow pi: codex gpt-5+ gains `minimal: "low"` (xhigh models)
   + xhigh/max; azure gpt-5* pins `:off` null (always-thinking) via the
   responses-family rules. Compat passes extended: grammar tools for the
@@ -1508,7 +1517,8 @@ sections. Catalogs regenerated from models.dev (2026-08-13): 8 providers,
   set + regenerated catalog validation.
 
 **Deviations from pi**: codex uses the SSE transport only (no WebSocket/zstd
-or retry-after/rate-limit machinery); no browser PKCE loopback login; azure
+or retry-after/rate-limit machinery); the browser PKCE loopback login uses
+kmet's shared ServerSocket callback server; azure
 sends no `strict` key on tools (kmet emits it only with
 `:supports-strict-mode` compat; pi's runtime defaults it to true); the
 prompt-cache key honors kmet's `:cache-retention` gating (pi's azure
@@ -1524,8 +1534,10 @@ kmet's shared responses payload; no app path passes `:long` today).
 `:bedrock-converse-stream`, `:google-vertex`, `:mistral-conversations` —
 plus their A.2 providers (amazon-bedrock, google-vertex, mistral). Catalogs
 regenerated from models.dev (2026-08-13): **39 providers, 1227 models**
-(the generator header + `models.md` A.2 tables updated; radius remains the
-only pi provider without a wire API in kmet).
+(the generator header + `models.md` A.2 tables updated; **radius is
+deliberately dropped** — it needs `:pi-messages` (pi-proprietary, dropped)
+and a dynamic gateway catalog (`radius.pi.dev`), both out of kmet's scope;
+radius is pi's only provider without a static catalog entry).
 
 ### mistral-conversations (`kmet.app.llm` + `kmet.libs.sse`)
 
@@ -1686,6 +1698,87 @@ now enforces the no-lib-deps rule for real (the ns regex DOTALL fix).
 
 ---
 
+## Phase 16 — OAuth PKCE loopback batch (anthropic, codex browser, openrouter)
+
+**Status: implemented.** The deferred loopback OAuth flows: the shared
+callback server primitive (`kmet.app.oauth`), the anthropic (Claude
+Pro/Max) PKCE loopback, the openai-codex browser PKCE loopback (the
+device-code method stays), and the openrouter permanent-key loopback.
+Four catalog providers now carry an OAuthAuth: github-copilot,
+openai-codex, **anthropic**, **openrouter**.
+
+### Callback server (`kmet.app.oauth`)
+
+- **`start-callback-server`** — a one-shot HTTP callback over a plain
+  `java.net.ServerSocket` (pi uses node http; Babashka has no bundled HTTP
+  server): the accept loop runs on a future, each connection answers one
+  request (request line + headers parsed; query-string → keyword map),
+  `Content-Length`/`Connection: close` responses, `:close` releases the
+  port. Port 0 binds an ephemeral port (openrouter).
+- **`oauth-page`** — port of pi's oauth-page.ts (dark success/error page;
+  the pi logo is dropped — kmet-brandless).
+- **`wait-for-callback-or-manual`** — the pi race: the manual-paste prompt
+  runs on a future (kmet's `oauth-prompt!` blocks its caller) against the
+  callback promise; the flow's optional `:abort-prompt!` interaction hook
+  (UI-provided) closes the pending dialog when the callback wins.
+  Returns `:callback | :manual | :error | :cancelled | :timeout`.
+
+### Flows (pi ports)
+
+- **anthropic** (`make-anthropic-oauth`, pi anthropicOAuth): client id
+  `9d1c250a-…` (base64-decoded like pi), authorize
+  `https://claude.ai/oauth/authorize` (`code=true` + scopes), callback on
+  the fixed port 53692 `/callback` (state = the PKCE verifier, pi),
+  exchange/refresh at `platform.claude.com/v1/oauth/token` (JSON, 30s
+  timeout), credential with the 5-min expiry skew; `to-auth` → api-key.
+- **openai-codex** (`make-openai-codex-oauth`, pi openaiCodexOAuth): login
+  now prompts a method selector — browser (default) or device code. The
+  browser flow: authorize with `id_token_add_organizations` /
+  `codex_cli_simplified_flow` / `originator=pi` + PKCE, callback on the
+  fixed port 1455 `/auth/callback` (state = 16 random bytes hex),
+  form-urlencoded exchange; the device flow is unchanged.
+- **openrouter** (`make-open-router-oauth`, pi openRouterOAuth): ephemeral
+  port + a fresh `/oauth/callback/<uuid>` path (an old callback cannot
+  claim a new login); the callback handler itself exchanges the code at
+  `openrouter.ai/api/v1/auth/keys` (claimed → 409, pi) and settles the
+  credential promise; the response is a permanent user-controlled key
+  (`:refresh ""`, `:expires Long/MAX_VALUE`, refresh is the identity);
+  5-min login timeout, 30s exchange timeout.
+
+### UI (`kmet.modes.interactive`)
+
+- `oauth-prompt!` gains the prompt-state atom (tracks the active dialog so
+  `:abort-prompt!` can close it) and passes `:placeholder` as the input
+  prefill (the manual-paste dialogs show the redirect URI).
+- `oauth-login!` provides the `:abort-prompt!` interaction hook: hides the
+  overlay and cancels the pending manual prompt when the callback wins
+  (pi manualAbort.abort()); `oauth-prompt!` also hides a stale dialog if
+  an abort won the race with the overlay show.
+
+### Tests
+
+`test_oauth.clj` — parse-authorization-input (URL/`code#state`/`code=`/
+bare), oauth-page HTML escaping, the callback server HTTP roundtrip,
+wait-for-callback-or-manual (callback wins / cancel / timeout), anthropic
+callback server paths (404/400s/200, bad requests never settle), anthropic
+exchange/refresh request shape + skew + invalid JSON, anthropic + codex
+login end-to-end over a real local callback (state from the notified
+authorize URL) and the manual-paste paths, the codex method selector,
+openrouter exchange (permanent key / missing key), openrouter callback
+server (404/400/200/409 + error-description preference), openrouter login
+via handler-side exchange and via manual paste, and the builtin oauth
+attachment (anthropic/openrouter/copilot/codex carry an OAuthAuth). The
+login tests run over the fixed test ports 54601/54603/54604.
+
+**Deviations from pi**: the callback server is a raw ServerSocket (no node
+http); the oauth page drops pi's logo; the codex/anthropic factories accept
+an optional callback-port (test seam — pi has none); openai-codex stores
+no `accountId` in the credential (kmet's llm decodes it from the token at
+request time); the openrouter login timeout lives in the race helper, not
+server-side (kmet's flow closes the server in the finally).
+
+---
+
 ## Deferred (re-evaluate when reached)
 
 Each is a substantial project; the detail below is the pi surface to port
@@ -1839,12 +1932,13 @@ Auth per provider (pi `env-api-keys.ts`, complete table for Phase 3's
 | `:vercel-ai-gateway` | `AI_GATEWAY_API_KEY` |
 | `:zai` / `:zai-coding-cn` | `ZAI_API_KEY` / `ZAI_CODING_CN_API_KEY` |
 
-OAuth flows to land with their providers (Phase 10's PKCE loopback + device
-machinery): anthropic Pro/Max (PKCE loopback, ports 53692/1455, `/callback`
-route, `code#state` race), **openai-codex ChatGPT — device-code login
-implemented (Phase 12), browser PKCE loopback still deferred**, openrouter;
-qwen-token-plan / xiaomi-token-plan subscription providers extend the
-copilot-style device flow.
+OAuth flows (Phase 10's PKCE loopback + device machinery): **anthropic
+Pro/Max — PKCE loopback (port 53692, `/callback`), openai-codex — device-code
+(Phase 12) + browser PKCE loopback (port 1455, `/auth/callback`), openrouter
+— PKCE loopback (ephemeral port + fresh `/oauth/callback/<uuid>`, permanent
+key) — all implemented (Phase 16)**; qwen-token-plan / xiaomi-token-plan
+subscription providers (copilot-style device flows) remain deferred with
+those providers.
 
 #### A.3 Compat surface completion — **thinking formats + adaptive thinking
 implemented (Phase 14); the data-only compat keys ride along in the
@@ -2039,8 +2133,7 @@ response `choices[0].message.content` (string → text block) +
 **Auth**: same ProviderAuth machinery — openrouter: env
 `OPENROUTER_API_KEY` + OAuth (pi `lazyOAuth`/`loadOpenRouterOAuth`). kmet:
 add `:openrouter` to `auth/env-vars-by-provider`; `/login` uses the Phase 10
-select machinery; openrouter loopback OAuth lands with the other PKCE
-providers.
+select machinery; openrouter loopback OAuth is done (Phase 16).
 
 ---
 
@@ -2220,6 +2313,10 @@ Phase 4 (resolver, /model, Ctrl+L) ──► Phase 5 (cost footer)
             google-vertex (ADC auth), bedrock-converse-stream (SigV4 +
             AWS event-stream frames) — and the mistral / google-vertex /
             amazon-bedrock providers)
+                    ▼
+   Phase 16 (OAuth PKCE loopback batch: the shared callback server,
+            anthropic Pro/Max, openai-codex browser, openrouter permanent
+            key)
 ```
 
 

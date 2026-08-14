@@ -205,6 +205,10 @@
      (fn [] (mapv :id (:models provider))))
     :openai-codex
     (oauth/make-openai-codex-oauth)
+    :anthropic
+    (oauth/make-anthropic-oauth)
+    :openrouter
+    (oauth/make-open-router-oauth)
     nil))
 
 (defn- read-edn-file

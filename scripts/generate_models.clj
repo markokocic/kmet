@@ -2,7 +2,8 @@
 ;; models.dev + the live catalogs (pi: packages/ai/scripts/generate-models.ts,
 ;; ported to kmet's 39 providers).
 ;;
-;; Radius is out of kmet's scope (no wire API); every other pi provider is
+;; Radius is deliberately dropped (pi-messages API + dynamic gateway
+;; catalog, both out of kmet's scope); every other pi provider is
 ;; generated. The generated EDN +
 ;; manifest.edn are committed; the offline half (validate-committed!) also
 ;; runs as test/kmet/app/test_model_data.clj so drift is caught without

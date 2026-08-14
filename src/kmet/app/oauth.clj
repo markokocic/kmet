@@ -1,11 +1,13 @@
 (ns kmet.app.oauth
-  "OAuth subscription auth (pi: packages/ai/src/auth/types.ts +
+  "OAuth subscriptions (pi: packages/ai/src/auth/types.ts +
    auth/oauth/*.ts, adapted to Babashka).
 
-   kmet's only OAuth-capable catalog provider is github-copilot (device-code,
-   RFC 8628); the generic OAuthAuth record + device-code poll flow + PKCE
-   machinery are built so anthropic (Pro/Max), openai-codex, openrouter, and
-   future subscription providers plug in.
+   kmet's OAuth-capable catalog providers: github-copilot (device-code,
+   RFC 8628), openai-codex (browser PKCE loopback + device code), anthropic
+   (Claude Pro/Max, PKCE loopback), openrouter (PKCE loopback, permanent
+   key). The generic OAuthAuth record, device-code poll flow, PKCE
+   machinery and the loopback callback server are shared plumbing for
+   future subscription providers.
 
    Credential model (pi): OAuth credentials are plain maps
    {:type :oauth :access str :refresh str :expires ms
@@ -142,6 +144,192 @@
         digest (.digest (java.security.MessageDigest/getInstance "SHA-256")
                         (.getBytes verifier "UTF-8"))]
     {:verifier verifier :challenge (base64url digest)}))
+
+(defn- random-hex
+  "N random bytes as lowercase hex (pi createState — 16 bytes for the codex
+   state, 16 for the openrouter callback path)."
+  [n]
+  (apply str (map #(format "%02x" %) (random-bytes n))))
+
+;; ─── OAuth callback server + login pages (pi: node http.createServer in
+;;    auth/oauth/{anthropic,openai-codex,openrouter}.ts + oauth-page.ts) ────
+;; Babashka has no bundled HTTP server, so the one-shot loopback callback is
+;; a plain java.net.ServerSocket: read one HTTP request, answer it, close.
+
+(defn- escape-html
+  "Escape & < > \" for HTML text (pi escapeHtml)."
+  [s]
+  (-> (str s)
+      (str/replace "&" "&amp;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")
+      (str/replace "\"" "&quot;")))
+
+(defn- oauth-page
+  "Port of pi's oauth-page.ts renderPage: a dark browser page shown after
+   the OAuth callback. The pi logo is dropped (kmet-brandless)."
+  [heading message details]
+  (str "<!doctype html>\n<html lang=\"en\">\n<head>\n"
+       "  <meta charset=\"utf-8\" />\n"
+       "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n"
+       "  <title>" (escape-html heading) "</title>\n"
+       "  <style>"
+       ":root{--text:#fafafa;--text-dim:#a1a1aa;--page-bg:#09090b;"
+       "--font-sans:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,\"Helvetica Neue\",Arial,\"Noto Sans\",sans-serif,\"Apple Color Emoji\",\"Segoe UI Emoji\",\"Segoe UI Symbol\",\"Noto Color Emoji\";"
+       "--font-mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,\"Liberation Mono\",\"Courier New\",monospace;}"
+       "*{box-sizing:border-box}html{color-scheme:dark}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--page-bg);color:var(--text);font-family:var(--font-sans);text-align:center}"
+       "main{width:100%;max-width:560px;display:flex;flex-direction:column;align-items:center;justify-content:center}"
+       "h1{margin:0 0 10px;font-size:28px;line-height:1.15;font-weight:650;color:var(--text)}"
+       "p{margin:0;line-height:1.7;color:var(--text-dim);font-size:15px}"
+       ".details{margin-top:16px;font-family:var(--font-mono);font-size:13px;color:var(--text-dim);white-space:pre-wrap;word-break:break-word}"
+       "</style>\n</head>\n<body>\n  <main>\n"
+       "    <h1>" (escape-html heading) "</h1>\n"
+       "    <p>" (escape-html message) "</p>\n"
+       (when details (str "    <div class=\"details\">" (escape-html details) "</div>\n"))
+       "  </main>\n</body>\n</html>"))
+
+(defn- oauth-success-html
+  "The success page shown after a completed callback (pi oauthSuccessHtml)."
+  [message]
+  (oauth-page "Authentication successful" message nil))
+
+(defn- oauth-error-html
+  "The failure page shown for a bad/denied callback (pi oauthErrorHtml)."
+  [message & [details]]
+  (oauth-page "Authentication failed" message details))
+
+(defn- callback-host
+  "Loopback bind host for the callback servers (pi getProviderEnvValue
+   PI_OAUTH_CALLBACK_HOST): default 127.0.0.1."
+  []
+  (or (System/getenv "PI_OAUTH_CALLBACK_HOST") "127.0.0.1"))
+
+(defn- parse-query-string
+  "Parse an HTTP query string into {decoded-keyword decoded-value}
+   (+ = space, like URLSearchParams)."
+  [query-string]
+  (when (seq query-string)
+    (into {} (for [pair (str/split query-string #"&")
+                   :let [[k v] (str/split pair #"=" 2)]
+                   :when (seq k)]
+               [(keyword (java.net.URLDecoder/decode k "UTF-8"))
+                (java.net.URLDecoder/decode (or v "") "UTF-8")]))))
+
+(defn- read-http-request
+  "Read one HTTP/1.1 request from IN: the request line + headers (discarded;
+   the OAuth callbacks are GET requests with no body). Returns {:method ..
+   :path .. :query-params {..}} or nil on EOF."
+  [in]
+  (let [reader (java.io.BufferedReader. (java.io.InputStreamReader. in "UTF-8"))
+        request-line (try (.readLine reader) (catch Exception _ nil))]
+    (when (seq request-line)
+      (loop []
+        (let [line (try (.readLine reader) (catch Exception _ nil))]
+          (when (and line (seq line)) (recur))))
+      (let [[method target] (str/split request-line #"\s+" 3)
+            [path query-string] (str/split (or target "") #"\?" 2)]
+        {:method (or method "")
+         :path (or path "")
+         :query-params (parse-query-string query-string)}))))
+
+(defn- write-http-response
+  "Write an HTTP/1.1 response (status + text/html body, Connection: close)
+   to OUT."
+  [out {:keys [status body]}]
+  (let [status (or status 200)
+        reason ({200 "OK" 400 "Bad Request" 404 "Not Found"
+                 409 "Conflict" 500 "Internal Server Error" 502 "Bad Gateway"}
+                status)
+        body-bytes (.getBytes (str (or body "")) "UTF-8")
+        head (str "HTTP/1.1 " status " " reason "\r\n"
+                  "Content-Type: text/html; charset=utf-8\r\n"
+                  "Cache-Control: no-store\r\n"
+                  "Content-Length: " (alength body-bytes) "\r\n"
+                  "Connection: close\r\n\r\n")]
+    (.write out (.getBytes head "UTF-8"))
+    (.write out body-bytes)
+    (.flush out)))
+
+(defn start-callback-server
+  "One-shot HTTP callback server (pi: node http.createServer in the loopback
+   OAuth flows). PORT 0 binds an ephemeral port (:port in the result).
+   HANDLER receives {:method .. :path .. :query-params {..}} and returns
+   {:status n :body html} (nil → no response). The accept loop runs on a
+   future and every connection is answered on its own future, one request,
+   then closed; :close stops listening and releases the port."
+  [port handler]
+  (let [server (java.net.ServerSocket. port 10
+                                       (java.net.InetAddress/getByName (callback-host)))
+        closed (atom false)
+        close! (fn []
+                 (when-not @closed
+                   (reset! closed true)
+                   (try (.close server) (catch Exception _ nil))))]
+    (future
+      (while (not @closed)
+        (try
+          (let [socket (.accept server)]
+            (future
+              (try
+                (with-open [s socket
+                            in (.getInputStream s)
+                            out (.getOutputStream s)]
+                  (when-let [req (read-http-request in)]
+                    (when-let [resp (handler req)]
+                      (write-http-response out resp))))
+                (catch Exception _ nil))))
+          (catch Exception _ nil))))
+    {:port (.getLocalPort server) :close close!}))
+
+(defn- parse-authorization-input
+  "pi parseAuthorizationInput (anthropic/codex): extract {:code .. :state ..}
+   from a full URL, 'code#state', a 'code=...' query, or a bare code."
+  [input]
+  (let [value (str/trim (or input ""))]
+    (when (seq value)
+      (cond
+        (str/includes? value "://")
+        (let [uri (try (java.net.URI. value) (catch Exception _ nil))]
+          (if uri
+            (parse-query-string (.getQuery uri))
+            {}))
+        (str/includes? value "#")
+        (let [[code state] (str/split value #"#" 2)]
+          {:code code :state state})
+        (str/includes? value "code=")
+        (parse-query-string value)
+        :else {:code value}))))
+
+(defn- wait-for-callback-or-manual
+  "Race the callback server's CODE-P promise against a manual-paste prompt
+   (pi: interaction.prompt(...) raced with server.waitForCode()). The manual
+   prompt runs on a future — kmet's UI prompt blocks its caller — and the
+   flow's :abort-prompt! (an optional UI-provided interaction hook) closes
+   the pending dialog when the callback wins. Returns {:source :callback
+   :value v} | {:source :manual :value input} | {:source :error :error ex}
+   | {:source :cancelled} | {:source :timeout}."
+  [interaction code-p prompt-map timeout-ms]
+  (let [result-p (promise)
+        deadline (+ (System/currentTimeMillis) (or timeout-ms 600000))
+        _ (future
+            (try
+              (deliver result-p {:source :manual
+                                 :value ((:prompt interaction) prompt-map)})
+              (catch Exception e
+                (deliver result-p {:source :error :error e}))))
+        _ (future (deliver result-p {:source :callback :value (deref code-p)}))]
+    ;; The finally settles CODE-P so the callback future above never stays
+    ;; blocked on a login that ended via manual/timeout/cancel (a no-op when
+    ;; the callback already won — deliver is one-shot).
+    (try
+      (loop []
+        (let [result (deref result-p 200 :pending)]
+          (cond
+            (not= :pending result) result
+            @(:signal interaction) {:source :cancelled}
+            (< deadline (System/currentTimeMillis)) {:source :timeout}
+            :else (recur))))
+      (finally (deliver code-p nil)))))
 
 ;; ─── GitHub Copilot device-code flow (pi: auth/oauth/github-copilot.ts) ───
 
@@ -458,11 +646,11 @@
                            (copilot-enterprise-domain credential))})}))
 
 ;; ─── OpenAI Codex (ChatGPT) OAuth (pi: auth/oauth/openai-codex.ts) ────────
-;; Device-code login (RFC 8628, the headless path — same machinery as
-;; copilot); the browser PKCE loopback login is deferred with the callback
-;; server (no kmet provider uses loopback yet), so login always runs the
-;; device flow. The device flow yields an authorization_code + PKCE verifier
-;; that are exchanged at the auth.openai.com token endpoint.
+;; Two login methods (pi): the browser PKCE loopback on the fixed port 1455
+;; (/auth/callback, default) and the RFC 8628 device-code flow (headless,
+;; same machinery as copilot). Both exchange the resulting authorization
+;; code at the auth.openai.com token endpoint; the device flow yields an
+;; authorization_code + PKCE verifier of its own.
 
 (def ^:private codex-client-id "app_EMoamEEZ73f0CkXaXp7hrann")
 (def ^:private codex-auth-base-url "https://auth.openai.com")
@@ -475,6 +663,13 @@
   (str codex-auth-base-url "/deviceauth/callback"))
 (def ^:private codex-token-url (str codex-auth-base-url "/oauth/token"))
 (def ^:private codex-device-code-timeout-seconds (* 15 60))
+(def ^:private codex-callback-port 1455)
+(def ^:private codex-callback-path "/auth/callback")
+(def ^:private codex-redirect-uri
+  (str "http://localhost:" codex-callback-port codex-callback-path))
+(def ^:private codex-scope "openid profile email offline_access")
+(def ^:private codex-browser-login-method "browser")
+(def ^:private codex-device-code-login-method "device_code")
 
 (defn- codex-credential-from-token
   "pi credentialsFromToken: the access/refresh/expires trio as an oauth
@@ -617,17 +812,431 @@
                                         (:code-verifier result)
                                         codex-device-redirect-uri))))
 
+;; ─── Codex browser PKCE loopback (pi openai-codex.ts loginOpenAICodex) ────
+
+(defn- codex-authorize-url
+  "pi createAuthorizationFlow: the authorize URL with the PKCE challenge and
+   the codex CLI params (id_token_add_organizations, simplified flow,
+   originator)."
+  [challenge state]
+  (str codex-auth-base-url "/oauth/authorize?response_type=code"
+       "&client_id=" codex-client-id
+       "&redirect_uri=" (url-encode codex-redirect-uri)
+       "&scope=" (url-encode codex-scope)
+       "&code_challenge=" (url-encode challenge)
+       "&code_challenge_method=S256"
+       "&state=" (url-encode state)
+       "&id_token_add_organizations=true"
+       "&codex_cli_simplified_flow=true"
+       "&originator=pi"))
+
+(defn- start-codex-callback-server
+  "pi startLocalOAuthServer (codex): listen on the fixed port 1455 and
+   settle the code promise when the browser hits /auth/callback with a
+   matching state. PORT override is a test seam."
+  [expected-state & [port]]
+  (let [code-p (promise)
+        server (start-callback-server
+                (or port codex-callback-port)
+                (fn [{:keys [path query-params]}]
+                  (cond
+                    (not= path codex-callback-path)
+                    {:status 404 :body (oauth-error-html "Callback route not found.")}
+
+                    (not= (:state query-params) expected-state)
+                    {:status 400 :body (oauth-error-html "State mismatch.")}
+
+                    (nil? (:code query-params))
+                    {:status 400 :body (oauth-error-html "Missing authorization code.")}
+
+                    :else
+                    (do (deliver code-p {:code (:code query-params)})
+                        {:status 200
+                         :body (oauth-success-html
+                                "OpenAI authentication completed. You can close this window.")}))))]
+    {:server server :code-p code-p :close (:close server)}))
+
+(defn- login-openai-codex-browser
+  "pi loginOpenAICodex (browser): PKCE loopback on port 1455 — notify the
+   authorize URL, race the callback against the manual-paste prompt,
+   exchange the code for the credential. PORT override is a test seam."
+  [interaction & [port]]
+  (let [{:keys [verifier challenge]} (generate-pkce)
+        state (random-hex 16)
+        url (codex-authorize-url challenge state)
+        {:keys [server code-p]} (start-codex-callback-server state port)]
+    (try
+      ((:notify interaction)
+       {:type :auth-url :url url
+        :instructions "A browser window should open. Complete login to finish."})
+      (let [result (wait-for-callback-or-manual
+                    interaction code-p
+                    {:type :manual-code
+                     :message "Complete login in your browser, or paste the authorization code / redirect URL here:"
+                     :placeholder codex-redirect-uri}
+                    600000)
+            code (case (:source result)
+                   :callback (:code (:value result))
+                   :manual (let [parsed (parse-authorization-input (:value result))]
+                             (when (and (:state parsed)
+                                        (not= (:state parsed) state))
+                               (throw (ex-info "State mismatch"
+                                               {:type :oauth-state-mismatch})))
+                             (:code parsed))
+                   :cancelled (throw (ex-info cancel-message {:type :login-cancelled}))
+                   :timeout (throw (ex-info "OAuth login timed out" {:type :oauth-timeout}))
+                   :error (throw (:error result)))]
+        (when-not code
+          (throw (ex-info "Missing authorization code" {:type :oauth-missing-code})))
+        (codex-credential-from-token
+         (codex-exchange-authorization-code code verifier codex-redirect-uri)))
+      (finally
+        (some-> (:abort-prompt! interaction))
+        ((:close server))))))
+
 (defn make-openai-codex-oauth
-  "The openai-codex OAuthAuth (pi openaiCodexOAuth). Device-code login only
-   — the browser PKCE loopback method is deferred with the callback server
-   (no kmet provider uses loopback yet). to-auth passes the access token
-   through; the request builder decodes the chatgpt-account-id from it."
-  []
+  "The openai-codex OAuthAuth (pi openaiCodexOAuth). Login prompts for the
+   method — browser PKCE loopback (default) or device code (headless).
+   PORT override is a test seam for the browser callback server."
+  [& [port]]
   (map->OAuthAuth
    {:name "OpenAI (ChatGPT Plus/Pro)"
     :is-subscription? true
-    :login (fn [interaction] (login-openai-codex-device-code interaction))
+    :login (fn [interaction]
+             (let [method ((:prompt interaction)
+                           {:type :select
+                            :message "Select OpenAI Codex login method:"
+                            :options [{:id codex-browser-login-method
+                                       :label "Browser login (default)"}
+                                      {:id codex-device-code-login-method
+                                       :label "Device code login (headless)"}]})]
+               (cond
+                 (= method codex-browser-login-method)
+                 (login-openai-codex-browser interaction port)
+
+                 (= method codex-device-code-login-method)
+                 (login-openai-codex-device-code interaction)
+
+                 :else
+                 (throw (ex-info (str "Unknown OpenAI Codex login method: " method)
+                                 {:type :oauth-invalid-method})))))
     :refresh (fn [credential _signal]
                (codex-credential-from-token
                 (codex-refresh-access-token (:refresh credential))))
+    :to-auth (fn [credential] {:api-key (:access credential)})}))
+
+;; ─── Anthropic (Claude Pro/Max) OAuth (pi: auth/oauth/anthropic.ts) ───────
+;; PKCE loopback flow: browser → claude.ai authorize → local callback server
+;; on the fixed port 53692 (/callback) → the authorization code is exchanged
+;; at platform.claude.com for an access/refresh pair (5-min expiry skew).
+
+(def ^:private anthropic-client-id
+  "The Anthropic OAuth client id (pi decodes the same literal)."
+  "9d1c250a-e61b-44d9-88ed-5944d1962f5e")
+(def ^:private anthropic-authorize-url "https://claude.ai/oauth/authorize")
+(def ^:private anthropic-token-url "https://platform.claude.com/v1/oauth/token")
+(def ^:private anthropic-callback-port 53692)
+(def ^:private anthropic-callback-path "/callback")
+(def ^:private anthropic-redirect-uri
+  (str "http://localhost:" anthropic-callback-port anthropic-callback-path))
+(def ^:private anthropic-scopes
+  "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload")
+
+(defn- start-anthropic-callback-server
+  "pi startCallbackServer (anthropic): listen on the fixed CALLBACK_PORT and
+   settle the code promise when the browser hits /callback with a code +
+   matching state (the state is the PKCE verifier, pi). PORT override is a
+   test seam."
+  [expected-state & [port]]
+  (let [code-p (promise)
+        server (start-callback-server
+                (or port anthropic-callback-port)
+                (fn [{:keys [path query-params]}]
+                  (cond
+                    (not= path anthropic-callback-path)
+                    {:status 404 :body (oauth-error-html "Callback route not found.")}
+
+                    (:error query-params)
+                    {:status 400
+                     :body (oauth-error-html "Anthropic authentication did not complete."
+                                             (str "Error: " (:error query-params)))}
+
+                    (or (nil? (:code query-params)) (nil? (:state query-params)))
+                    {:status 400 :body (oauth-error-html "Missing code or state parameter.")}
+
+                    (not= (:state query-params) expected-state)
+                    {:status 400 :body (oauth-error-html "State mismatch.")}
+
+                    :else
+                    (do (deliver code-p {:code (:code query-params)
+                                         :state (:state query-params)})
+                        {:status 200
+                         :body (oauth-success-html
+                                "Anthropic authentication completed. You can close this window.")}))))]
+    {:server server :code-p code-p :close (:close server)}))
+
+(defn- exchange-anthropic-authorization-code
+  "pi exchangeAuthorizationCode (anthropic): POST the token endpoint with the
+   authorization code + verifier; returns the oauth credential with the
+   5-min expiry skew applied."
+  [code state verifier]
+  (let [data (fetch-json anthropic-token-url
+                         {:method :post
+                          :headers {"Content-Type" "application/json"
+                                    "Accept" "application/json"}
+                          :body {"grant_type" "authorization_code"
+                                 "client_id" anthropic-client-id
+                                 "code" code
+                                 "state" state
+                                 "redirect_uri" anthropic-redirect-uri
+                                 "code_verifier" verifier}
+                          :timeout 30000})
+        access (:access_token data)
+        refresh (:refresh_token data)
+        expires-in (:expires_in data)]
+    (when-not (and (string? access) (string? refresh) (number? expires-in))
+      (throw (ex-info "Token exchange returned invalid JSON"
+                      {:type :oauth-invalid-response})))
+    {:type :oauth
+     :refresh refresh
+     :access access
+     :expires (- (+ (System/currentTimeMillis) (* expires-in 1000))
+                 (* 5 60 1000))}))
+
+(defn- refresh-anthropic-token
+  "pi refreshAnthropicToken: grant_type=refresh_token; same credential shape
+   (5-min skew)."
+  [refresh-token]
+  (let [data (fetch-json anthropic-token-url
+                         {:method :post
+                          :headers {"Content-Type" "application/json"
+                                    "Accept" "application/json"}
+                          :body {"grant_type" "refresh_token"
+                                 "client_id" anthropic-client-id
+                                 "refresh_token" refresh-token}
+                          :timeout 30000})
+        access (:access_token data)
+        refresh (:refresh_token data)
+        expires-in (:expires_in data)]
+    (when-not (and (string? access) (string? refresh) (number? expires-in))
+      (throw (ex-info "Anthropic token refresh returned invalid JSON"
+                      {:type :oauth-invalid-response})))
+    {:type :oauth
+     :refresh refresh
+     :access access
+     :expires (- (+ (System/currentTimeMillis) (* expires-in 1000))
+                 (* 5 60 1000))}))
+
+(defn- login-anthropic
+  "pi loginAnthropic: generate PKCE, start the callback server, notify the
+   authorize URL, race the browser callback against the manual-paste prompt,
+   exchange the code. PORT override is a test seam."
+  [interaction & [port]]
+  (let [{:keys [verifier challenge]} (generate-pkce)
+        {:keys [server code-p]} (start-anthropic-callback-server verifier port)
+        authorize-url (str anthropic-authorize-url "?code=true"
+                           "&client_id=" anthropic-client-id
+                           "&response_type=code"
+                           "&redirect_uri=" (url-encode anthropic-redirect-uri)
+                           "&scope=" (url-encode anthropic-scopes)
+                           "&code_challenge=" (url-encode challenge)
+                           "&code_challenge_method=S256"
+                           "&state=" (url-encode verifier))]
+    (try
+      ((:notify interaction)
+       {:type :auth-url
+        :url authorize-url
+        :instructions "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here."})
+      (let [result (wait-for-callback-or-manual
+                    interaction code-p
+                    {:type :manual-code
+                     :message "Complete login in your browser, or paste the authorization code / redirect URL here:"
+                     :placeholder anthropic-redirect-uri}
+                    600000)
+            {:keys [code state]} (case (:source result)
+                                   :callback (:value result)
+                                   :manual (let [parsed (parse-authorization-input (:value result))]
+                                             (when (and (:state parsed)
+                                                        (not= (:state parsed) verifier))
+                                               (throw (ex-info "OAuth state mismatch"
+                                                               {:type :oauth-state-mismatch})))
+                                             {:code (:code parsed)
+                                              :state (or (:state parsed) verifier)})
+                                   :cancelled (throw (ex-info cancel-message
+                                                              {:type :login-cancelled}))
+                                   :timeout (throw (ex-info "OAuth login timed out"
+                                                            {:type :oauth-timeout}))
+                                   :error (throw (:error result)))]
+        (when-not code
+          (throw (ex-info "Missing authorization code" {:type :oauth-missing-code})))
+        ((:notify interaction)
+         {:type :progress :message "Exchanging authorization code for tokens..."})
+        (exchange-anthropic-authorization-code code state verifier))
+      (finally
+        (some-> (:abort-prompt! interaction))
+        ((:close server))))))
+
+(defn make-anthropic-oauth
+  "The anthropic OAuthAuth (pi anthropicOAuth) — the Claude Pro/Max
+   subscription via PKCE loopback login. PORT override is a test seam."
+  [& [port]]
+  (map->OAuthAuth
+   {:name "Anthropic (Claude Pro/Max)"
+    :is-subscription? true
+    :login (fn [interaction] (login-anthropic interaction port))
+    :refresh (fn [credential _signal]
+               (refresh-anthropic-token (:refresh credential)))
+    :to-auth (fn [credential] {:api-key (:access credential)})}))
+
+;; ─── OpenRouter OAuth (pi: auth/oauth/openrouter.ts) ───────────────────────
+;; PKCE loopback on an ephemeral port: the callback server itself exchanges
+;; the code for a permanent user-controlled API key (the /auth/keys endpoint
+;; — no expiring token pair, refresh is the identity). The callback URL is a
+;; fresh /oauth/callback/<uuid> path so an old callback cannot claim a new
+;; login.
+
+(def ^:private openrouter-authorize-url "https://openrouter.ai/auth")
+(def ^:private openrouter-token-url "https://openrouter.ai/api/v1/auth/keys")
+(def ^:private openrouter-login-timeout-ms (* 5 60 1000))
+(def ^:private openrouter-exchange-timeout-ms 30000)
+
+(defn- parse-openrouter-code
+  "pi parseAuthorizationInput (openrouter): the code from a redirect URL, a
+   'code=...' query, or a bare code (no state — the openrouter flow's code
+   is one-shot)."
+  [input]
+  (let [value (str/trim (or input ""))]
+    (when (seq value)
+      (cond
+        (str/includes? value "://")
+        (let [uri (try (java.net.URI. value) (catch Exception _ nil))]
+          (when uri (:code (parse-query-string (.getQuery uri)))))
+        (str/includes? value "code=")
+        (:code (parse-query-string value))
+        :else value))))
+
+(defn- exchange-openrouter-code
+  "pi exchangeAuthorizationCode (openrouter): POST the keys endpoint with
+   code + verifier; the response carries the permanent 'key' — refresh is
+   empty and expires is effectively never (pi)."
+  [code verifier]
+  (let [data (fetch-json openrouter-token-url
+                         {:method :post
+                          :headers {"Accept" "application/json"
+                                    "Content-Type" "application/json"}
+                          :body {"code" code
+                                 "code_verifier" verifier
+                                 "code_challenge_method" "S256"}
+                          :timeout openrouter-exchange-timeout-ms})]
+    (when-not (and (string? (:key data)) (seq (:key data)))
+      (throw (ex-info "OpenRouter OAuth response carries no \"key\""
+                      {:type :oauth-invalid-response})))
+    {:type :oauth
+     :access (:key data)
+     :refresh ""
+     :expires Long/MAX_VALUE}))
+
+(defn- start-openrouter-callback-server
+  "pi startCallbackServer (openrouter): ephemeral-port loopback server on a
+   fresh /oauth/callback/<uuid> path. The handler itself exchanges the code
+   (the manual-paste fallback exchanges in the flow) and settles the
+   credential promise with the credential map or the exchange exception. A
+   claimed callback answers 409 (pi)."
+  [callback-path verifier]
+  (let [credential-p (promise)
+        claimed (atom false)
+        server (start-callback-server
+                0
+                (fn [{:keys [method path query-params]}]
+                  (cond
+                    (or (not= method "GET") (not= path callback-path))
+                    {:status 404 :body (oauth-error-html "OAuth callback route not found.")}
+
+                    @claimed
+                    {:status 409 :body (oauth-error-html "This OAuth callback has already been used.")}
+
+                    (:error query-params)
+                    (let [description (or (:error_description query-params)
+                                          (:error query-params))]
+                      (deliver credential-p
+                               (ex-info (str "OpenRouter authorization failed: " description)
+                                        {:type :oauth-authorization-failed}))
+                      {:status 400
+                       :body (oauth-error-html "OpenRouter authorization was denied." description)})
+
+                    (nil? (:code query-params))
+                    {:status 400 :body (oauth-error-html "OpenRouter returned no authorization code.")}
+
+                    :else
+                    (do (reset! claimed true)
+                        (try
+                          (let [credential (exchange-openrouter-code
+                                            (:code query-params) verifier)]
+                            (deliver credential-p credential)
+                            {:status 200
+                             :body (oauth-success-html
+                                    "Signed in to OpenRouter. You may now close this page.")})
+                          (catch Exception e
+                            (deliver credential-p e)
+                            {:status 502
+                             :body (oauth-error-html "OpenRouter key exchange failed."
+                                                     (ex-message e))}))))))]
+    {:callback-url (str "http://" (callback-host) ":" (:port server) callback-path)
+     :code-p credential-p
+     :close (:close server)}))
+
+(defn- login-open-router
+  "pi loginOpenRouter: PKCE + ephemeral callback server; the callback
+   exchanges the code itself, the manual-paste fallback exchanges it in the
+   flow."
+  [interaction]
+  (let [{:keys [verifier challenge]} (generate-pkce)
+        callback-path (str "/oauth/callback/" (random-hex 16))
+        callback (start-openrouter-callback-server callback-path verifier)]
+    (try
+      ((:notify interaction)
+       {:type :progress
+        :message (str "Listening for OpenRouter OAuth callback on " (:callback-url callback))})
+      ((:notify interaction)
+       {:type :auth-url
+        :url (str openrouter-authorize-url
+                  "?callback_url=" (url-encode (:callback-url callback))
+                  "&code_challenge=" (url-encode challenge)
+                  "&code_challenge_method=S256")
+        :instructions "Complete sign-in in your browser. If the browser is on another machine, paste the final redirect URL here."})
+      (let [result (wait-for-callback-or-manual
+                    interaction (:code-p callback)
+                    {:type :manual-code
+                     :message "Complete sign-in in your browser, or paste the authorization code / redirect URL here:"
+                     :placeholder (:callback-url callback)}
+                    openrouter-login-timeout-ms)]
+        (case (:source result)
+          :callback
+          (let [v (:value result)]
+            (if (instance? Exception v) (throw v) v))
+
+          :manual
+          (let [code (parse-openrouter-code (:value result))]
+            (when-not code
+              (throw (ex-info "Missing authorization code" {:type :oauth-missing-code})))
+            ((:notify interaction)
+             {:type :progress :message "Exchanging authorization code for an API key..."})
+            (exchange-openrouter-code code verifier))
+
+          :cancelled (throw (ex-info cancel-message {:type :login-cancelled}))
+          :timeout (throw (ex-info "OpenRouter OAuth login timed out" {:type :oauth-timeout}))
+          :error (throw (:error result))))
+      (finally
+        (some-> (:abort-prompt! interaction))
+        ((:close callback))))))
+
+(defn make-open-router-oauth
+  "The openrouter OAuthAuth (pi openRouterOAuth): the permanent-key loopback
+   flow; refresh is the identity (the key never expires)."
+  []
+  (map->OAuthAuth
+   {:name "OpenRouter OAuth"
+    :login-label "Sign in with OpenRouter"
+    :login login-open-router
+    :refresh (fn [credential _signal] credential)
     :to-auth (fn [credential] {:api-key (:access credential)})}))

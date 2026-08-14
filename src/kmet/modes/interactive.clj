@@ -643,15 +643,23 @@
   "Show a dialog for an OAuth prompt and return the entered string (pi
    AuthPrompt → LoginDialogComponent; the flow runs on a future, so kmet
    blocks on the overlay promise). :select shows a select-list; :text/
-   :secret/:manual-code show an input dialog. Dialog cancel sets SIGNAL and
-   throws \"Login cancelled\" (the flow's own signal checks stay consistent)."
-  [cs prompt signal]
+   :secret/:manual-code show an input dialog (the prompt's :placeholder
+   becomes the input prefill). Dialog cancel sets SIGNAL and throws
+   \"Login cancelled\". PROMPT-STATE — an atom tracking the active dialog
+   {:promise p :tui tui} — lets a loopback flow's :abort-prompt! close a
+   still-open dialog when the browser callback wins the race."
+  [cs prompt signal prompt-state]
   (let [p (promise)
-        finish (fn [v] (deliver p v))
-        cancel (fn [] (reset! signal true) (deliver p ::cancelled))]
+        ;; Resolving (submit or cancel) clears the tracked dialog so the
+        ;; throw-path hide below can never pop an overlay twice (or one the
+        ;; user already dismissed).
+        finish (fn [v] (reset! prompt-state nil) (deliver p v))
+        cancel (fn [] (reset! prompt-state nil) (reset! signal true) (deliver p ::cancelled))
+        track! (fn [] (reset! prompt-state {:promise p :tui (:tui cs)}))]
     (case (:type prompt)
       :select
       (let [options (:options prompt)]
+        (track!)
         (tui/tui-show-overlay
          (:tui cs)
          (dialogs/make-extension-selector
@@ -666,26 +674,34 @@
             (cancel))
           (th/get-current-theme))
          :width 60 :height (min (count options) 10)))
-      (tui/tui-show-overlay
-       (:tui cs)
-       (dialogs/make-extension-input
-        (:message prompt)
-        (fn [value]
-          (tui/tui-hide-overlay (:tui cs))
-          (finish value))
-        (fn []
-          (tui/tui-hide-overlay (:tui cs))
-          (cancel))
-        (th/get-current-theme))
-       :width 60 :height 9))
+      (do
+        (track!)
+        (tui/tui-show-overlay
+         (:tui cs)
+         (dialogs/make-extension-input
+          (:message prompt)
+          (fn [value]
+            (tui/tui-hide-overlay (:tui cs))
+            (finish value))
+          (fn []
+            (tui/tui-hide-overlay (:tui cs))
+            (cancel))
+          (th/get-current-theme)
+          (:placeholder prompt))
+         :width 60 :height 9)))
     (tui/tui-request-render (:tui cs))
     ;; Block until the dialog resolves; a 10-min safety timeout or any
-    ;; non-string delivery (::cancelled) aborts the flow like pi's abort
-    ;; signal.
+    ;; non-string delivery (::cancelled — user cancel or the loopback
+    ;; flow's :abort-prompt!) throws "Login cancelled" like pi's abort
+    ;; signal. A stale dialog from an abort that won the race with the
+    ;; overlay show is hidden here.
     (let [value (deref p 600000 :timeout)]
       (if (string? value)
         value
-        (throw (ex-info "Login cancelled" {:type :login-cancelled}))))))
+        (do (when (and @prompt-state (= p (:promise @prompt-state)))
+              (tui/tui-hide-overlay (:tui @prompt-state))
+              (tui/tui-request-render (:tui @prompt-state)))
+            (throw (ex-info "Login cancelled" {:type :login-cancelled})))))))
 
 (defn- oauth-notify!
   "Map an OAuth AuthEvent onto the chat history (pi notifyAuthDialog):
@@ -722,12 +738,27 @@
    interaction prompts via overlays and notifies via the chat history; on
    success the credential is persisted to auth.edn. Availability refreshes
    automatically — models/get-available reads the auth atom live, and the
-   oauth credential's :available-model-ids shrink the model list."
+   oauth credential's :available-model-ids shrink the model list.
+   :abort-prompt! — the loopback flows' race hook — closes the manual-paste
+   dialog when the browser callback wins (pi manualAbort.abort())."
   [cs provider]
   (let [oauth (:oauth provider)
         signal (atom false)
+        prompt-cancelled (atom false)
+        prompt-state (atom nil)
+        abort-prompt! (fn []
+                        (reset! prompt-cancelled true)
+                        (when-let [{:keys [promise tui]} @prompt-state]
+                          (deliver promise ::cancelled)
+                          (tui/tui-hide-overlay tui)
+                          (tui/tui-request-render tui)))
+        prompt-fn (fn [prompt]
+                    (when @prompt-cancelled
+                      (throw (ex-info "Login cancelled" {:type :login-cancelled})))
+                    (oauth-prompt! cs prompt signal prompt-state))
         interaction {:signal signal
-                     :prompt (fn [prompt] (oauth-prompt! cs prompt signal))
+                     :prompt prompt-fn
+                     :abort-prompt! abort-prompt!
                      :notify (fn [event] (oauth-notify! cs event))}]
     (future
       (try

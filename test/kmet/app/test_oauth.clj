@@ -8,6 +8,7 @@
             [clojure.test :as t :refer [testing]]
             [clojure.edn :as edn]
             [babashka.fs :as fs]
+            [babashka.http-client :as http]
             [kmet.app.auth :as auth]
             [kmet.app.commands :as commands]
             [kmet.app.models :as models]
@@ -277,7 +278,7 @@
 (t/deftest test-codex-login-flow
   (let [notified (atom [])
         interaction {:signal (atom false)
-                     :prompt (fn [_] nil)
+                     :prompt (fn [_] "device_code")
                      :notify (fn [e] (swap! notified conj e))}
         oauth (oauth/make-openai-codex-oauth)]
     (with-redefs [oauth/start-codex-device-auth
@@ -604,7 +605,11 @@
     (t/is (= [:oauth :api-key] ((var inter/login-methods) (models/get-provider :github-copilot)))
           "github-copilot offers both methods")
     (t/is (= [:oauth] ((var inter/login-methods) (models/get-provider :openai-codex)))
-          "openai-codex is oauth-only — no api-key login (Phase 12)")))
+          "openai-codex is oauth-only — no api-key login (Phase 12)")
+    (t/is (= [:oauth :api-key] ((var inter/login-methods) (models/get-provider :anthropic)))
+          "anthropic offers oauth + api-key (Phase 16)")
+    (t/is (= [:oauth :api-key] ((var inter/login-methods) (models/get-provider :openrouter)))
+          "openrouter offers oauth + api-key (Phase 16)")))
 
 (t/deftest test-login-command-auth-type-selection
   (commands/clear-commands!)
@@ -668,3 +673,345 @@
                 "logout names the credential kind")
           (t/is (nil? (auth/stored-credential :github-copilot))
                 "credential removed"))))))
+
+;; ─── PKCE loopback batch (anthropic + codex browser + openrouter) ──────────
+
+(defn- wait-for
+  "Poll (fn [] value) until truthy or TIMEOUT-MS elapses (25ms slices)."
+  [f timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      (let [v (f)]
+        (if (or v (< deadline (System/currentTimeMillis)))
+          v
+          (do (Thread/sleep 25) (recur)))))))
+
+(t/deftest test-parse-authorization-input
+  (testing "full URL → code + state"
+    (t/is (= {:code "abc" :state "xyz"}
+             (@#'oauth/parse-authorization-input
+              "http://localhost:53692/callback?code=abc&state=xyz"))))
+  (testing "code#state"
+    (t/is (= {:code "abc" :state "xyz"} (@#'oauth/parse-authorization-input "abc#xyz"))))
+  (testing "code= query"
+    (t/is (= {:code "abc" :state "xyz"}
+             (@#'oauth/parse-authorization-input "code=abc&state=xyz"))))
+  (testing "bare code"
+    (t/is (= {:code "abc"} (@#'oauth/parse-authorization-input "abc"))))
+  (testing "blank → nil"
+    (t/is (nil? (@#'oauth/parse-authorization-input "  ")))))
+
+(t/deftest test-oauth-pages
+  (let [html (@#'oauth/oauth-success-html "Done!")]
+    (t/is (str/includes? html "Authentication successful"))
+    (t/is (str/includes? html "Done!")))
+  (let [html (@#'oauth/oauth-error-html "Failed" "<b>detail</b>")]
+    (t/is (str/includes? html "Authentication failed"))
+    (t/is (str/includes? html "&lt;b&gt;detail&lt;/b&gt;"))
+    (t/is (str/includes? html "class=\"details\""))))
+
+(t/deftest test-callback-server-http
+  (let [received (atom nil)
+        server (oauth/start-callback-server
+                0
+                (fn [req] (reset! received req)
+                  {:status 200 :body "<html>ok</html>"}))]
+    (try
+      (let [resp (http/get (str "http://127.0.0.1:" (:port server) "/path?code=abc&state=xyz")
+                           {:throw false})]
+        (t/is (= 200 (:status resp)))
+        (t/is (str/includes? (:body resp) "ok")))
+      (let [{:keys [method path query-params]} @received]
+        (t/is (= "GET" method))
+        (t/is (= "/path" path))
+        (t/is (= "abc" (:code query-params)))
+        (t/is (= "xyz" (:state query-params))))
+      (finally ((:close server))))))
+
+(t/deftest test-wait-for-callback-or-manual
+  (testing "callback wins the race"
+    (let [manual-p (promise)
+          interaction {:signal (atom false)
+                       :prompt (fn [_] (deref manual-p))}
+          code-p (promise)
+          _ (future (Thread/sleep 150) (deliver code-p {:code "c"}))]
+      (try
+        (let [r (@#'oauth/wait-for-callback-or-manual
+                 interaction code-p {:type :manual-code :message "m"} 5000)]
+          (t/is (= :callback (:source r)))
+          (t/is (= "c" (get-in r [:value :code]))))
+        (finally (deliver manual-p "x")))))
+  (testing "flow cancel → :cancelled"
+    (let [manual-p (promise)
+          signal (atom false)
+          interaction {:signal signal
+                       :prompt (fn [_] (deref manual-p))}
+          code-p (promise)
+          _ (future (Thread/sleep 300) (reset! signal true))]
+      (try
+        (t/is (= :cancelled
+                 (:source (@#'oauth/wait-for-callback-or-manual
+                           interaction code-p {:type :manual-code :message "m"} 10000))))
+        (finally (deliver manual-p "x")))))
+  (testing "deadline → :timeout"
+    (let [manual-p (promise)
+          interaction {:signal (atom false)
+                       :prompt (fn [_] (deref manual-p))}
+          code-p (promise)]
+      (t/is (= :timeout
+               (:source (@#'oauth/wait-for-callback-or-manual
+                         interaction code-p {:type :manual-code :message "m"} 100))))
+      (deliver manual-p "x"))))
+
+(t/deftest test-anthropic-callback-server
+  (let [server (@#'oauth/start-anthropic-callback-server "exp-state" 54603)]
+    (try
+      (let [base "http://127.0.0.1:54603"]
+        (testing "wrong path → 404"
+          (t/is (= 404 (:status (http/get (str base "/nope") {:throw false})))))
+        (testing "error param → 400"
+          (t/is (= 400 (:status (http/get (str base "/callback?error=denied") {:throw false})))))
+        (testing "missing code → 400"
+          (t/is (= 400 (:status (http/get (str base "/callback?state=x") {:throw false})))))
+        (testing "state mismatch → 400"
+          (t/is (= 400 (:status (http/get (str base "/callback?code=c&state=wrong")
+                                          {:throw false})))))
+        (testing "bad requests never settle the code promise"
+          (t/is (= :pending (deref (:code-p server) 50 :pending))))
+        (testing "valid callback → 200 + code/state delivered"
+          (let [resp (http/get (str base "/callback?code=the-code&state=exp-state")
+                               {:throw false})]
+            (t/is (= 200 (:status resp)))
+            (t/is (= {:code "the-code" :state "exp-state"}
+                     (deref (:code-p server) 100 :timeout))))))
+      (finally ((:close server))))))
+
+(t/deftest test-anthropic-exchange-and-refresh
+  (let [captured (atom nil)]
+    (with-redefs [oauth/fetch-json
+                  (fn [url opts]
+                    (reset! captured [url opts])
+                    {:access_token "acc" :refresh_token "ref" :expires_in 3600})]
+      (let [cred (@#'oauth/exchange-anthropic-authorization-code "code" "state" "verifier")]
+        (t/is (= "acc" (:access cred)))
+        (t/is (= "ref" (:refresh cred)))
+        (t/is (number? (:expires cred)))
+        (t/is (< (:expires cred) (+ (System/currentTimeMillis) (* 3600 1000)))
+              "5-min skew applied")
+        (let [[url opts] @captured]
+          (t/is (= "https://platform.claude.com/v1/oauth/token" url))
+          (t/is (= "authorization_code" (get-in opts [:body "grant_type"])))
+          (t/is (= "code" (get-in opts [:body "code"])))
+          (t/is (= "state" (get-in opts [:body "state"])))
+          (t/is (= "verifier" (get-in opts [:body "code_verifier"])))))
+      (let [cred (@#'oauth/refresh-anthropic-token "ref-token")]
+        (t/is (= "acc" (:access cred)))
+        (let [[_ opts] @captured]
+          (t/is (= "refresh_token" (get-in opts [:body "grant_type"])))
+          (t/is (= "ref-token" (get-in opts [:body "refresh_token"]))))))
+    (with-redefs [oauth/fetch-json (fn [_ _] {})]
+      (t/is (thrown-with-msg? Exception #"invalid JSON"
+                              (@#'oauth/exchange-anthropic-authorization-code "c" "s" "v"))))))
+
+(t/deftest test-anthropic-login-callback
+  (let [test-port 54601
+        auth-url (atom nil)
+        manual-p (promise)
+        interaction {:signal (atom false)
+                     :prompt (fn [_] (deref manual-p 15000 :cancelled))
+                     :abort-prompt! (fn [] (deliver manual-p "aborted"))
+                     :notify (fn [e] (when (= :auth-url (:type e))
+                                       (reset! auth-url (:url e))))}
+        result-p (promise)]
+    (with-redefs [oauth/exchange-anthropic-authorization-code
+                  (fn [_code _state _verifier]
+                    {:type :oauth :access "acc" :refresh "ref" :expires 1})]
+      (future (deliver result-p
+                       (try ((:login (oauth/make-anthropic-oauth test-port)) interaction)
+                            (catch Exception e e))))
+      (t/is (some? (wait-for (fn [] @auth-url) 5000)) "auth-url notified (server listening)")
+      (let [state (second (re-find #"state=([^&]+)" @auth-url))]
+        (t/is (some? state) "state = PKCE verifier, present in the authorize URL")
+        (let [resp (http/get (str "http://127.0.0.1:" test-port "/callback?code=the-code&state=" state)
+                             {:throw false})]
+          (t/is (= 200 (:status resp))))
+        (let [credential (deref result-p 5000 :timeout)]
+          (t/is (map? credential) "no exception — a credential")
+          (t/is (= "acc" (:access credential)))
+          (t/is (= "ref" (:refresh credential))))))))
+
+(t/deftest test-anthropic-login-manual
+  (let [interaction {:signal (atom false)
+                     :prompt (fn [_] "manual-code")
+                     :notify (fn [_] nil)}
+        exchanged (atom nil)]
+    (with-redefs [oauth/exchange-anthropic-authorization-code
+                  (fn [code _state _verifier]
+                    (reset! exchanged [code _state _verifier])
+                    {:type :oauth :access "a" :refresh "r" :expires 1})]
+      (let [cred ((:login (oauth/make-anthropic-oauth 0)) interaction)]
+        (t/is (= "a" (:access cred)))
+        (t/is (= "manual-code" (first @exchanged)))
+        (t/is (some? (second @exchanged)) "state falls back to the verifier")))))
+
+(t/deftest test-codex-browser-login-callback
+  (let [test-port 54604
+        auth-url (atom nil)
+        manual-p (promise)
+        interaction {:signal (atom false)
+                     :prompt (fn [p] (if (= :select (:type p))
+                                       "browser"
+                                       (deref manual-p 15000 :cancelled)))
+                     :abort-prompt! (fn [] (deliver manual-p "aborted"))
+                     :notify (fn [e] (when (= :auth-url (:type e))
+                                       (reset! auth-url (:url e))))}
+        result-p (promise)]
+    (with-redefs [oauth/codex-exchange-authorization-code
+                  (fn [_code _verifier _redirect-uri]
+                    {:access "acc" :refresh "ref" :expires 9999999999999})]
+      (future (deliver result-p
+                       (try ((:login (oauth/make-openai-codex-oauth test-port)) interaction)
+                            (catch Exception e e))))
+      (t/is (some? (wait-for (fn [] @auth-url) 5000)) "auth-url notified")
+      (let [state (second (re-find #"state=([^&]+)" @auth-url))]
+        (t/is (some? state))
+        (t/is (re-find #"codex_cli_simplified_flow=true" @auth-url))
+        (let [resp (http/get (str "http://127.0.0.1:" test-port "/auth/callback?code=cx&state=" state)
+                             {:throw false})]
+          (t/is (= 200 (:status resp))))
+        (let [credential (deref result-p 5000 :timeout)]
+          (t/is (= "acc" (:access credential))))))))
+
+(t/deftest test-codex-browser-login-manual
+  (let [interaction {:signal (atom false)
+                     :prompt (fn [p] (if (= :select (:type p))
+                                       "browser"
+                                       "manual-code"))
+                     :notify (fn [_] nil)}
+        exchanged (atom nil)]
+    (with-redefs [oauth/codex-exchange-authorization-code
+                  (fn [code _verifier redirect-uri]
+                    (reset! exchanged [code _verifier redirect-uri])
+                    {:access "a" :refresh "r" :expires 1})]
+      (let [cred ((:login (oauth/make-openai-codex-oauth 0)) interaction)]
+        (t/is (= "a" (:access cred)))
+        (t/is (= "manual-code" (first @exchanged)))
+        (t/is (= "http://localhost:1455/auth/callback" (nth @exchanged 2)))))))
+
+(t/deftest test-codex-method-selector
+  (let [prompts (atom [])
+        interaction {:signal (atom false)
+                     :prompt (fn [p] (swap! prompts conj p) "device_code")
+                     :notify (fn [_] nil)}
+        oauth (oauth/make-openai-codex-oauth)]
+    (with-redefs [oauth/start-codex-device-auth
+                  (fn [] {:device-auth-id "da" :user-code "UC" :interval 5})
+                  oauth/poll-codex-device-auth
+                  (fn [_ _] {:status :complete
+                             :value {:authorization-code "ac" :code-verifier "v"}})
+                  oauth/codex-exchange-authorization-code
+                  (fn [_ _ _] {:access "a" :refresh "r" :expires 1})]
+      (let [cred ((:login oauth) interaction)]
+        (t/is (= "a" (:access cred)))
+        (let [sel (first @prompts)]
+          (t/is (= :select (:type sel)))
+          (t/is (= 2 (count (:options sel))))
+          (t/is (= "browser" (:id (first (:options sel)))))
+          (t/is (= "device_code" (:id (second (:options sel))))))))))
+
+(t/deftest test-parse-openrouter-code
+  (testing "redirect URL → code"
+    (t/is (= "abc" (@#'oauth/parse-openrouter-code
+                    "http://127.0.0.1:12345/oauth/callback/x?code=abc"))))
+  (testing "code= query"
+    (t/is (= "abc" (@#'oauth/parse-openrouter-code "code=abc&state=ignored"))))
+  (testing "bare code"
+    (t/is (= "abc" (@#'oauth/parse-openrouter-code "abc"))))
+  (testing "blank → nil"
+    (t/is (nil? (@#'oauth/parse-openrouter-code "  ")))))
+
+(t/deftest test-openrouter-exchange
+  (with-redefs [oauth/fetch-json (fn [_ _] {:key "sk-or-v1-xyz"})]
+    (let [cred (@#'oauth/exchange-openrouter-code "code" "verifier")]
+      (t/is (= "sk-or-v1-xyz" (:access cred)))
+      (t/is (= "" (:refresh cred)))
+      (t/is (= Long/MAX_VALUE (:expires cred)))))
+  (with-redefs [oauth/fetch-json (fn [_ _] {})]
+    (t/is (thrown-with-msg? Exception #"no \"key\""
+                            (@#'oauth/exchange-openrouter-code "c" "v")))))
+
+(t/deftest test-openrouter-callback-server
+  (with-redefs [oauth/exchange-openrouter-code
+                (fn [_ _] {:type :oauth :access "key" :refresh "" :expires 1})]
+    (let [server (@#'oauth/start-openrouter-callback-server "/oauth/callback/abc" "verifier")]
+      (try
+        (let [base (str/replace (:callback-url server) "/oauth/callback/abc" "")]
+          (testing "wrong path → 404"
+            (t/is (= 404 (:status (http/get (str base "/other") {:throw false})))))
+          (testing "no code → 400"
+            (t/is (= 400 (:status (http/get (:callback-url server) {:throw false})))))
+          (testing "valid callback → 200 + credential delivered by the handler"
+            (let [resp (http/get (str (:callback-url server) "?code=xyz") {:throw false})]
+              (t/is (= 200 (:status resp)))
+              (t/is (str/includes? (:body resp) "Signed in"))
+              (t/is (= "key" (:access (deref (:code-p server) 100 :timeout))))))
+          (testing "already-claimed callback → 409"
+            (t/is (= 409 (:status (http/get (str (:callback-url server) "?code=again")
+                                            {:throw false}))))))
+        (finally ((:close server))))))
+  (let [server (@#'oauth/start-openrouter-callback-server "/oauth/callback/err" "v")]
+    (try
+      (let [resp (http/get (str (:callback-url server) "?error=access_denied&error_description=nope")
+                           {:throw false})]
+        (t/is (= 400 (:status resp)))
+        (let [v (deref (:code-p server) 100 :timeout)]
+          (t/is (instance? Exception v))
+          (t/is (str/includes? (ex-message v) "nope")
+                "error_description is preferred over error")))
+      (finally ((:close server))))))
+
+(t/deftest test-openrouter-login-callback
+  (let [callback-url (atom nil)
+        manual-p (promise)
+        interaction {:signal (atom false)
+                     :prompt (fn [_] (deref manual-p 15000 :cancelled))
+                     :abort-prompt! (fn [] (deliver manual-p "aborted"))
+                     :notify (fn [e]
+                               (when (= :progress (:type e))
+                                 (when-let [u (second (re-find #"callback on (http\S+)" (:message e)))]
+                                   (reset! callback-url u))))}
+        result-p (promise)]
+    (with-redefs [oauth/exchange-openrouter-code
+                  (fn [_code _verifier]
+                    {:type :oauth :access "or-key" :refresh "" :expires Long/MAX_VALUE})]
+      (future (deliver result-p
+                       (try ((:login (oauth/make-open-router-oauth)) interaction)
+                            (catch Exception e e))))
+      (t/is (some? (wait-for (fn [] @callback-url) 5000)) "callback URL notified")
+      (let [resp (http/get (str @callback-url "?code=xyz") {:throw false})]
+        (t/is (= 200 (:status resp)))
+        (t/is (str/includes? (:body resp) "Signed in")))
+      (let [credential (deref result-p 5000 :timeout)]
+        (t/is (map? credential))
+        (t/is (= "or-key" (:access credential)))))))
+
+(t/deftest test-openrouter-login-manual
+  (let [interaction {:signal (atom false)
+                     :prompt (fn [_] "or-code")
+                     :notify (fn [_] nil)}
+        exchanged (atom nil)]
+    (with-redefs [oauth/exchange-openrouter-code
+                  (fn [code verifier]
+                    (reset! exchanged [code verifier])
+                    {:type :oauth :access "k" :refresh "" :expires Long/MAX_VALUE})]
+      (let [cred ((:login (oauth/make-open-router-oauth)) interaction)]
+        (t/is (= "k" (:access cred)))
+        (t/is (= "or-code" (first @exchanged)))))))
+
+(t/deftest test-builtin-oauth-providers
+  (models/load-catalogs!)
+  (doseq [id [:github-copilot :openai-codex :anthropic :openrouter]]
+    (t/is (some? (:oauth (models/get-provider id)))
+          (str (name id) " carries an OAuthAuth")))
+  (t/is (nil? (:oauth (models/get-provider :deepseek)))
+        "non-oauth providers carry none"))
