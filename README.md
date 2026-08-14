@@ -229,7 +229,12 @@ Create EDN theme files in `~/.kmet/agent/themes/`. See `examples/themes/` for fo
 
 - **Skills**: Place `name/SKILL.md` directories (or flat `.md` files) with YAML frontmatter (`name`, `description`) in `~/.kmet/agent/skills/` or `.kmet/skills/` — listed in the system prompt as `<available_skills>`; `/skill:name` loads one on demand (Agent Skills standard, pi-compatible)
 - **Prompt Templates**: Place `.md` files in `~/.kmet/agent/prompts/` or `.kmet/prompts/` — `/name args` expands to the template body with `$1`, `$@`, `${1:-default}`, `${@:N}` placeholders; unknown `/cmd` falls through to the agent (pi-compatible)
-- **Extensions**: Place `.clj` files in `~/.kmet/agent/extensions/` — loaded at startup
+- **Extensions**: Place `.clj` files (or directories with `extension.edn`) in
+  `~/.kmet/agent/extensions/` or `.kmet/extensions/`. An extension is a Clojure
+  namespace defining `(defn init [api])` (and optionally `(defn shutdown [api])`),
+  depending only on `kmet.extension`. A manifest dir declares `{:name :entry
+  :files}` — its own source deps. Loaded at startup, reloadable via `/reload`, and
+  unloadable at runtime; unload runs shutdown + deregisters everything
 
 ## Development
 

@@ -111,8 +111,13 @@ src/kmet/
 │   ├── skills.clj      — Skills loading + system prompt
 │   ├── prompts.clj     — Prompt template loading + /name expansion (pi: core/prompt-templates.js)
 │   ├── frontmatter.clj — YAML frontmatter parsing shared by skills/prompts (pi: utils/frontmatter.js)
-│   ├── extensions.clj  — Extension loading, input/before-agent-start hooks,
-│   │                     UI registry + ui-* API (pi: ExtensionUIContext)
+│   ├── extension.clj   — THE extension contract (root): the only namespace
+│   │                     extensions depend on — init/shutdown contract, api
+│   │                     wrappers, create-nullable-api test fixture
+│   ├── extensions.clj  — Extension runtime: discover/load/reload/unload
+│   │                     (single .clj or extension.edn manifest dirs),
+│   │                     per-extension deregistration, api construction,
+│   │                     UI registry + dispatchers (pi: ExtensionUIContext)
 │   ├── event_bus.clj   — Event vocabulary + extension event bus
 │   ├── commands.clj    — Slash command registry (builtins, skills, extensions)
 │   ├── keybindings.clj — App keybindings
