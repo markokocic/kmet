@@ -155,7 +155,7 @@ pi events (`core/extensions/types.ts`) → kmet status (`app/event_bus.clj` `eve
 | pi event | kmet | notes |
 |---|---|---|
 | `session_start` | ✅ `:session-start` | reason startup/reload/new/resume/fork; kmet lacks `reload` reason flag granularity |
-| `session_info_changed` | ❌ | kmet `:name`/`session` commands mutate state without an event |
+| `session_info_changed` | ✅ `:session-info-changed` | emitted by `/name` |
 | `session_before_switch` / `session_before_fork` | ❌ | kmet has `:session-before-tree` but no switch/fork counterparts |
 | `session_before_compact` / `session_compact` | ~ | kmet emits `:compaction-start`/`:compaction-end` (reason manual/threshold/overflow/auto) |
 | `session_before_tree` / `session_tree` | ✅ `:session-before-tree` / `:session-tree` | incl. cancel/summary/extension-summary results |
@@ -168,7 +168,7 @@ pi events (`core/extensions/types.ts`) → kmet status (`app/event_bus.clj` `eve
 | `tool_execution_start` / `_update` / `_end` | ✅ | |
 | `tool_call` / `tool_result` | ~ | kmet emits execution events but no call/result with result-transform |
 | `model_select` | ✅ `:model-select` | kmet adds `:source` (:set/:cycle) |
-| `thinking_level_select` | ❌ | |
+| `thinking_level_select` | ✅ `:thinking-level-select` | emitted by `set-thinking-level!` on actual change |
 | `user_bash` | ✅ `:user-bash` | |
 | `input` | ✅ | input hooks (transform/handled) |
 | `before_provider_request` / `before_provider_headers` / `after_provider_response` | ❌ | no provider request/response hooks |
