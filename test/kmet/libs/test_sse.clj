@@ -398,3 +398,190 @@
     (t/is (= 8 (count (filter #(= :text (:type %)) @events))))
     (t/is (= :done (:type (last @events))))
     (.close in)))
+
+;; ─── Mistral chat-completions parsing ─────────────────────────────────────
+
+(t/deftest test-parse-mistral-event
+  (t/is (= [{:type :done :stop-reason :stop}]
+           (sse/parse-mistral-event "[DONE]")))
+  (t/is (= [{:type :text :content "hi"} {:type :done :stop-reason :stop}]
+           (sse/parse-mistral-event
+            "{\"data\": {\"choices\": [{\"delta\": {\"content\": \"hi\"}, \"finish_reason\": \"stop\"}]}}")))
+  (t/is (= [{:type :text :content "answer"}
+            {:type :thinking :content "reason1reason2"}
+            {:type :done :stop-reason :tool-use}]
+           (sse/parse-mistral-event
+            (str "{\"data\": {\"choices\": [{\"delta\": {\"content\": ["
+                 "{\"type\": \"text\", \"text\": \"answer\"}, "
+                 "{\"type\": \"thinking\", \"thinking\": ["
+                 "{\"type\": \"text\", \"text\": \"reason1\"},"
+                 "{\"type\": \"text\", \"text\": \"reason2\"}]}]}, "
+                 "\"finish_reason\": \"tool_calls\"}]}}"))))
+  (t/is (= [{:type :tool-call :id "t1" :name "read" :arguments "" :index 0}]
+           (sse/parse-mistral-event
+            (str "{\"data\": {\"choices\": [{\"delta\": {\"tool_calls\": ["
+                 "{\"id\": \"t1\", \"index\": 0, \"function\": {\"name\": \"read\"}}]}}]}}"))))
+  (t/is (= [{:type :tool-call-args :id "t1" :arguments "{\"path\":\"/x\"}" :index 0}
+            {:type :done :stop-reason :length}]
+           (sse/parse-mistral-event
+            (str "{\"data\": {\"choices\": [{\"delta\": {\"tool_calls\": ["
+                 "{\"id\": \"t1\", \"index\": 0, \"function\": {\"arguments\": {\"path\": \"/x\"}}}]},"
+                 "\"finish_reason\": \"length\"}]}}"))))
+  (let [events (sse/parse-mistral-event
+                (str "{\"data\": {\"choices\": [{\"delta\": {\"tool_calls\": ["
+                     "{\"index\": 3, \"function\": {\"name\": \"read\"}}]}}]}}"))]
+    (t/is (= 9 (count (:id (first events))))))
+  (t/is (= [{:type :usage
+             :usage {:prompt_tokens 10 :completion_tokens 5 :total_tokens 15}}]
+           (sse/parse-mistral-event
+            "{\"data\": {\"usage\": {\"prompt_tokens\": 10, \"completion_tokens\": 5, \"total_tokens\": 15}}}")))
+  (t/is (= [{:type :done :stop-reason :error
+             :error-message "Provider stopped with: weird"}]
+           (sse/parse-mistral-event
+            "{\"data\": {\"choices\": [{\"delta\": {}, \"finish_reason\": \"weird\"}]}}"))))
+(t/deftest test-mistral-stream-completes
+  (let [[in out] (make-pipe)
+        events (atom [])
+        f (future
+            (sse/process-mistral-stream {:body in}
+                                        (fn [e] (swap! events conj e))
+                                        nil)
+            :done)]
+    (.write out (.getBytes "data: {\"data\": {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}}\n\n"))
+    (.write out (.getBytes "data: {\"data\": {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}}\n\n"))
+    (.write out (.getBytes "data: [DONE]\n\n"))
+    (.flush out)
+    (.close out)
+    (t/is (= :done (deref f 3000 :timeout)))
+    (t/is (= :text (:type (first @events))))
+    (t/is (= :done (:type (last @events))))
+    (.close in)))
+
+(t/deftest test-mistral-stream-premature-end
+  (let [[in out] (make-pipe)
+        events (atom [])
+        f (future
+            (sse/process-mistral-stream {:body in}
+                                        (fn [e] (swap! events conj e))
+                                        nil)
+            :done)]
+    (.write out (.getBytes "data: {\"data\": {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}}\n\n"))
+    (.flush out)
+    (.close out)
+    (t/is (= :done (deref f 3000 :timeout)))
+    (t/is (= :error (:type (last @events))))
+    (t/is (= "Mistral stream ended without a finish reason" (:message (last @events))))
+    (.close in)))
+
+;; ─── AWS Bedrock ConverseStream frame parsing ─────────────────────────────
+
+(defn- bedrock-u32-be [n]
+  [(bit-and (bit-shift-right n 24) 0xFF) (bit-and (bit-shift-right n 16) 0xFF)
+   (bit-and (bit-shift-right n 8) 0xFF) (bit-and n 0xFF)])
+(defn- bedrock-u16-be [n] [(bit-and (bit-shift-right n 8) 0xFF) (bit-and n 0xFF)])
+(defn- bedrock-crc [bytes]
+  (let [c (java.util.zip.CRC32.)]
+    (.update c bytes 0 (alength bytes))
+    (.getValue c)))
+(defn- bedrock-ba [ints] (byte-array (map #(bit-and (long %) 0xFF) ints)))
+(defn- bedrock-header [name value]
+  (let [nb (map int (.getBytes name "UTF-8"))
+        vb (map int (.getBytes value "UTF-8"))]
+    (concat [(count nb)] nb [7] (bedrock-u16-be (count vb)) vb)))
+(defn- bedrock-frame
+  "Build one AWS event-stream frame with the standard message-type/event-type
+   headers and a JSON payload (valid CRCs — the parser checks both)."
+  ([event-type payload]
+   (bedrock-frame "event" event-type payload))
+  ([message-type event-type payload]
+   (let [payload-bytes (map int (.getBytes payload "UTF-8"))
+         hdrs (concat (bedrock-header ":message-type" message-type)
+                      (bedrock-header ":event-type" event-type))
+         total (+ 12 (count hdrs) (count payload-bytes) 4)
+         prelude (bedrock-ba (concat (bedrock-u32-be total) (bedrock-u32-be (count hdrs))
+                                     (bedrock-u32-be 0)))
+         prelude-crc (bedrock-crc (java.util.Arrays/copyOfRange prelude 0 8))
+         prelude-full (bedrock-ba (concat (bedrock-u32-be total) (bedrock-u32-be (count hdrs))
+                                          (bedrock-u32-be prelude-crc)))
+         msg-body (mapv #(bit-and (long %) 0xFF)
+                        (concat (mapv int prelude-full) hdrs payload-bytes))
+         msg-crc (bedrock-crc (bedrock-ba msg-body))]
+     (bedrock-ba (concat msg-body (bedrock-u32-be msg-crc))))))
+
+(defn- bedrock-frames [& frames]
+  (bedrock-ba (mapcat #(mapv int %) frames)))
+
+(t/deftest test-bedrock-stream-events
+  (let [frames (bedrock-frames
+                (bedrock-frame "messageStart" "{\"role\":\"assistant\"}")
+                (bedrock-frame "contentBlockStart"
+                               "{\"contentBlockIndex\":0,\"start\":{\"toolUse\":{\"toolUseId\":\"t1\",\"name\":\"read\"}}}")
+                (bedrock-frame "contentBlockDelta"
+                               "{\"contentBlockIndex\":0,\"delta\":{\"toolUse\":{\"input\":\"{\\\"path\\\":\\\"/x\\\"}\"}}}")
+                (bedrock-frame "contentBlockDelta"
+                               "{\"contentBlockIndex\":0,\"delta\":{\"text\":\"Hello \"}}")
+                (bedrock-frame "contentBlockDelta"
+                               "{\"contentBlockIndex\":0,\"delta\":{\"reasoningContent\":{\"reasoningText\":{\"text\":\"hmm\"}}}}")
+                (bedrock-frame "contentBlockStop" "{\"contentBlockIndex\":0}")
+                (bedrock-frame "messageStop" "{\"stopReason\":\"tool_use\"}")
+                (bedrock-frame "metadata"
+                               "{\"usage\":{\"inputTokens\":10,\"outputTokens\":5,\"totalTokens\":15,\"cacheReadInputTokens\":2,\"cacheWriteInputTokens\":1}}"))
+        events (atom [])]
+    (sse/process-bedrock-stream {:body (java.io.ByteArrayInputStream. frames)}
+                                (fn [e] (swap! events conj e))
+                                nil)
+    (t/is (= [{:type :tool-call :index 0 :id "t1" :name "read" :arguments ""}
+              {:type :tool-call-args :index 0 :arguments "{\"path\":\"/x\"}"}
+              {:type :text :content "Hello "}
+              {:type :thinking :content "hmm"}
+              {:type :done :stop-reason :tool-use}
+              {:type :usage
+               :usage {:input_tokens 10 :output_tokens 5 :total_tokens 15
+                       :cache_read_input_tokens 2 :cache_write_input_tokens 1}}]
+             @events))))
+
+(t/deftest test-bedrock-stream-stop-reasons
+  (doseq [[reason expected] [["end_turn" :stop] ["stop_sequence" :stop]
+                             ["max_tokens" :length] ["model_context_window_exceeded" :length]
+                             ["tool_use" :tool-use]]]
+    (let [frames (bedrock-frames (bedrock-frame "messageStop" (str "{\"stopReason\":\"" reason "\"}")))
+          events (atom [])]
+      (sse/process-bedrock-stream {:body (java.io.ByteArrayInputStream. frames)}
+                                  (fn [e] (swap! events conj e))
+                                  nil)
+      (t/is (= [{:type :done :stop-reason expected}] @events) (str reason)))))
+
+(t/deftest test-bedrock-stream-corrupt-crc
+  (let [frame (bedrock-frame "messageStart" "{\"role\":\"assistant\"}")
+        corrupt (byte-array (alength frame))
+        _ (System/arraycopy frame 0 corrupt 0 (alength frame))
+        ;; flip one payload byte — the message CRC then mismatches
+        _ (aset-byte corrupt (dec (alength corrupt)) (unchecked-byte 0))
+        events (atom [])]
+    (sse/process-bedrock-stream {:body (java.io.ByteArrayInputStream. corrupt)}
+                                (fn [e] (swap! events conj e))
+                                nil)
+    (t/is (= 1 (count @events)))
+    (t/is (= :error (:type (first @events))))
+    (t/is (= "Stream error: Bedrock stream frame CRC mismatch" (:message (first @events))))))
+
+(t/deftest test-bedrock-stream-exception-frame
+  (let [frames (bedrock-frames
+                (bedrock-frame "exception" "validationException"
+                               "{\"message\":\"bad request\"}")
+                (bedrock-frame "messageStop" "{\"stopReason\":\"end_turn\"}"))
+        events (atom [])]
+    (sse/process-bedrock-stream {:body (java.io.ByteArrayInputStream. frames)}
+                                (fn [e] (swap! events conj e))
+                                nil)
+    (t/is (= :error (:type (first @events))))
+    (t/is (= "Bedrock validationException: bad request" (:message (first @events))))))
+
+(t/deftest test-bedrock-stream-premature-end
+  (let [frames (bedrock-frames (bedrock-frame "messageStart" "{\"role\":\"assistant\"}"))
+        events (atom [])]
+    (sse/process-bedrock-stream {:body (java.io.ByteArrayInputStream. frames)}
+                                (fn [e] (swap! events conj e))
+                                nil)
+    (t/is (= :error (:type (last @events))))
+    (t/is (= "Bedrock stream ended without a stop reason" (:message (last @events))))))

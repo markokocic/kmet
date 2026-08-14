@@ -1518,6 +1518,174 @@ kmet's shared responses payload; no app path passes `:long` today).
 
 ---
 
+## Phase 15 — Deferred A.1/A.2: bedrock, google-vertex, mistral (the last 3 wire APIs)
+
+**Status: implemented.** The three remaining Deferred A.1 wire APIs —
+`:bedrock-converse-stream`, `:google-vertex`, `:mistral-conversations` —
+plus their A.2 providers (amazon-bedrock, google-vertex, mistral). Catalogs
+regenerated from models.dev (2026-08-13): **39 providers, 1227 models**
+(the generator header + `models.md` A.2 tables updated; radius remains the
+only pi provider without a wire API in kmet).
+
+### mistral-conversations (`kmet.app.llm` + `kmet.libs.sse`)
+
+- **URL**: `(str base "/v1/chat/completions")` (pi URL-joins the base).
+- **Payload** (pi buildChatPayload + toMistralWirePayload): OpenAI-compatible
+  chat body with the snake_case wire names — `max_tokens`, `prompt_mode`
+  ("reasoning" for models without a reasoning_effort option),
+  `reasoning_effort` (tlm-mapped ?? "high", only for mistral-small-2603 /
+  -latest / mistral-medium-3.5), `prompt_cache_key` (session id when
+  caching); tools are function tools with the JSON schema + `strict: false`.
+- **Messages** (pi toChatMessages): user content with text/image_url parts
+  (image-only content on a text-only model degrades to pi's placeholder),
+  assistant content with thinking blocks + tool_calls whose ids are
+  normalized to 9-char alphanumeric (`make-mistral-tool-call-id-normalizer`,
+  pi createMistralToolCallIdNormalizer — collisions resolved with attempt
+  counters; `kmet.libs.hash/short-hash` is a byte-exact port of pi's
+  shortHash, verified against node), tool results with toolCallId + text/
+  image parts and pi's placeholder strings.
+- **Stream** (`parse-mistral-event` / `process-mistral-stream`): the SSE
+  wire format matches OpenAI's (data: lines + [DONE]); delta content is a
+  string or an array of text/thinking items; tool-call deltas carry
+  name/arguments (a missing/"null" id falls back to a derived 9-char id);
+  finish_reason maps per pi mapChatStopReason (stop/length/model_length/
+  tool_calls/error).
+- **Headers**: `x-affinity: <session-id>` when caching unless the model or
+  request headers already set it (pi hasMistralHeaderOverride).
+- **Usage**: `prompt_tokens` minus `prompt_tokens_details.cached_tokens` —
+  the existing entry-usage shape.
+
+### google-vertex (`kmet.app.llm` + `kmet.app.google-adc`)
+
+- **URL**: `https://{location}-aiplatform.googleapis.com/v1/projects/{p}/
+  locations/{l}/publishers/google/models/{id}:streamGenerateContent?alt=sse`
+  (pi VERTEX_BASE_URL; project from GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT,
+  location from GOOGLE_CLOUD_LOCATION; a custom model base-url is used
+  verbatim).
+- **Body**: the google-generative-ai payload (google-messages,
+  google-thinking-config, functionDeclarations tools, maxOutputTokens) —
+  kmet shares the google converter across both google apis like pi.
+  google-messages now echoes tool-call ids on functionCall/functionResponse
+  parts for models that require them (gemini-3+/claude/gpt-oss, pi
+  requiresToolCallId — sanitized to [a-zA-Z0-9_-], capped at 64).
+- **Auth**: `GOOGLE_CLOUD_API_KEY` → x-goog-api-key; otherwise ADC — the
+  new `kmet.app.google-adc` fetches an OAuth2 token from the credentials
+  file (service-account self-signed RS256 JWT grant or authorized_user
+  refresh grant), cached per file with the 5-min expiry window; the token
+  travels as `Authorization: Bearer`.
+- **`configured?`/availability**: `env-vars-by-provider :google-vertex` =
+  ["GOOGLE_CLOUD_API_KEY"]; the ambient path (`auth/ambient-configured?`)
+  requires the credentials file + project + location (pi getEnvApiKey).
+  The loop's auth guards (run-agent-turn, compaction/branch summaries)
+  use `auth/configured?` so ambient-auth providers run without an
+  api-key.
+
+### bedrock-converse-stream (`kmet.app.llm` + `kmet.app.aws-sigv4`)
+
+- **SigV4** (`kmet.app.aws-sigv4/sign-request`): canonical request /
+  string-to-sign / signing-key chain implemented over javax.crypto — the
+  AWS SDK default chain is replaced by env keys or the shared-credentials
+  file profile (parse-ini); `AWS_BEDROCK_SKIP_AUTH=1` signs with dummy
+  creds and disables the bearer path (pi); content-type is included in the
+  signature and the SigV4/bearer headers are merged LAST so caller
+  configured headers can never override authorization/x-amz-* (pi
+  addCustomHeadersMiddleware skips reserved headers); the signing-key chain
+  is pinned against the AWS-documented kSigning value in the tests.
+- **URL**: `(str base "/model/" model-id "/converse-stream")` — standard
+  bedrock-runtime endpoints unless a region/AWS_PROFILE overrides them
+  (then the regional endpoint wins), custom endpoints always win (pi
+  shouldUseExplicitBedrockEndpoint).
+- **Payload** (ConverseStream): messages (user text/image blocks — blank
+  text degrades to the <empty> placeholder; assistant toolUse blocks;
+  consecutive tool results merged into one user message; Claude thinking
+  replay as plain text — kmet stores no reasoning signatures and Bedrock
+  rejects a signature-less reasoningContent block, pi's no-signature
+  fallback; non-Claude thinking replays as reasoningContent without a
+  signature per pi), system blocks with the cache point for cache-capable
+  Claude models (pi buildSystemPrompt), toolConfig (toolSpec +
+  inputSchema.json), inferenceConfig.maxTokens for Claude models,
+  additionalModelRequestFields (adaptive thinking for opus-4.6+/
+  sonnet-4.6+/fable-5 with output_config.effort; budget-based thinking +
+  the interleaved-thinking beta otherwise — pi
+  buildAdditionalModelRequestFields).
+- **Stream** (`kmet.libs.sse`): the AWS event-stream binary framing (prelude
+  + headers + payload + CRC-32 checksums) parsed in `process-bedrock-stream`
+  — contentBlockStart/Delta/Stop (text/toolUse/reasoningContent),
+  messageStop (end_turn/stop_sequence/max_tokens/model_context_window_exceeded/
+  tool_use), metadata usage (inputTokens includes cache — subtracted by
+  entry-usage like the responses shape), exception frames → :error.
+- **Auth**: `env-vars-by-provider :amazon-bedrock` is [] (pi getApiKeyEnvVars
+  has no bedrock key); `auth/ambient-configured?` covers AWS keys/profile/
+  bearer token/ECS/IRSA + AWS_BEDROCK_SKIP_AUTH; the request uses the
+  stored credential key or AWS_BEARER_TOKEN_BEDROCK as `Authorization:
+  Bearer`, else SigV4.
+
+### Generator & data
+
+- `process-mistral` (models.dev loop; cache-read falls back to 10% of input
+  per pi; mistral-medium-3.5 hardcoded until models.dev ships it),
+  `process-google-vertex` (gemini-only, -latest aliases take capabilities
+  from the named source, gemini-2.5-flash cache rate pinned), and
+  `process-amazon-bedrock` (inference-profile-only / ai21.jamba* /
+  mistral.mistral-7b-instruct-v0* excluded; eu.* ids hit eu-central-1;
+  structured_output → supportsStrictMode). Env vars: MISTRAL_API_KEY,
+  GOOGLE_CLOUD_API_KEY (+ the ADC envs via ambient detection).
+- **kmet.libs.hash** (new): the pi shortHash port (32-bit imul/ushr
+  arithmetic — Clojure's bit ops are 64-bit, and the unsigned shifts must
+  mask to the int32 pattern), verified byte-for-byte against node. The
+  sse.clj copy is inlined so kmet.libs.* stays self-contained (the
+  self-contained test's ns regex was fixed — it matched only the first
+  line of multi-line ns docstrings, so lib→lib requires were never
+  caught).
+- **Bug fixed along the way**: `process-data-stream`/`process-responses-stream`/
+  `process-anthropic-stream` dereferenced the possibly-nil cancel signal in
+  the premature-end check — babashka's sci `(deref nil)` throws NPE, so a
+  stream ending early with no signal atom reported "Stream error: " instead
+  of the premature-end message.
+
+### Deviations from pi
+
+- **Bedrock**: no AWS SDK — SigV4 over babashka.http-client with env
+  keys/shared-credentials-file only (no ECS/IRSA/web-identity token
+  fetch — the vars mark the provider configured but the request falls
+  back to the env-key/profile/bearer paths); no profile expansion via the
+  config file's role_arn (shared-credentials only); `interleavedThinking`
+  defaults on like pi.
+- **Vertex**: no @google/genai SDK — the URL/token flow is built in; ADC
+  supports service_account + authorized_user files only (no external
+  account / workload identity federation).
+- **Mistral**: no `streamSimple` tool-choice/temperature options (kmet has
+  no temperature plumbing); 60s SDK timeout not applied (kmet uses the
+  idle-timeout machinery).
+
+### Tests
+
+`test_sse.clj` (mistral event parsing incl. content-item arrays, derived
+ids, usage, stop reasons; bedrock frame builder + event parsing, stop
+reasons, corrupt-CRC, exception frames, premature end), `test_llm.clj`
+(mistral messages/payload/thinking/tool-call-id normalizer, vertex URL
+resolution + config errors, bedrock classification/messages (incl.
+images + cache points)/endpoint/additional-fields/tool-config),
+`test_aws_sigv4.clj` (AWS-documented kSigning chain, bedrock shape,
+stability/sensitivity, session token, profile credentials),
+`test_google_adc.clj` (service-account JWT flow with a real RSA key — the
+mock token endpoint verifies the assertion signature — authorized_user
+flow, credentials-path/configured?), `test_auth.clj` (env rows +
+ambient-configured? for both ambient providers), `test_models.clj` /
+`test_llm.clj` (provider counts 36 → 39), `test_session.clj` (bedrock
+usage shape in entry-usage), and `^:slow` mock-server e2e tests for all
+three new wire APIs: bedrock (send-message → SigV4-signed ConverseStream
+request → binary frame response → events/usage/cost, asserting the system
+prompt + cache point ride in `:system`, the budget thinking, the signed
+content-type, and the per-message cost), mistral (the wire payload with
+normalized 9-char tool-call ids correlating assistant tool_calls to the
+tool result, x-affinity + prompt_cache_key, reasoning_effort, thinking +
+usage events), and vertex (the body with gemini-3 thinkingConfig, contents,
+maxOutputTokens over the base-url override). The self-contained lib test
+now enforces the no-lib-deps rule for real (the ns regex DOTALL fix).
+
+---
+
 ## Deferred (re-evaluate when reached)
 
 Each is a substantial project; the detail below is the pi surface to port
@@ -1539,9 +1707,9 @@ tool-schema conversion in `kmet.app.llm` + `kmet.libs.sse`:
 | ~~`:openai-responses`~~ | ~~`(str base-url "/responses")`~~ | ~~responses body~~ | ~~`response.*` SSE~~ — **implemented (Phase 11)** |
 | ~~`:openai-codex-responses`~~ | ~~same as responses (ChatGPT oauth; codex base)~~ | ~~same~~ | ~~same (shared processor)~~ — **implemented (Phase 12)** |
 | ~~`:azure-openai-responses`~~ | ~~`base-url + "/deployments/" + model-id + "/responses?api-version=" + v`; `normalizeAzureBaseUrl` forces azure hosts to `/openai/v1` base~~ | ~~same; model = deployment~~ | ~~same~~ — **implemented (Phase 12)** |
-| `:bedrock-converse-stream` | AWS `ConverseStream` (region from model-ARN / `AWS_REGION` / endpoint host / `us-east-1`; endpoint = model base-url unless a region/profile is configured) | `ConverseStreamCommand {modelId, messages, system, inferenceConfig{maxTokens, temperature}, toolConfig, additionalModelRequestFields}` | ConverseStream frames: `messageStart/Stop`, `contentBlockStart/Deltas` (text/thinking/toolUse), `metadata` (usage) |
-| `:google-vertex` | `https://{location}-aiplatform.googleapis.com/v1/projects/{p}/locations/{l}/publishers/google/models/{id}:streamGenerateContent?alt=sse` (project/location from `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION`; custom `base-url` may override) | same body as google-generative-ai; client adds `vertexai: true` + project/location (`API_VERSION` v1) | same SSE as google |
-| `:mistral-conversations` | `(str base-url "/v1/chat/completions")` (URL-joined) | OpenAI-compatible chat body with Mistral field names (`tool_calls`, `tool_call_id`, `image_url`, `top_p`, `max_tokens`, `random_seed`, `reasoning_effort`, `prompt_mode: "reasoning"`, `prompt_cache_key`); `x-affinity: <session-id>` header when caching | SSE chat-chunk stream (Mistral event boundary; thinking deltas) |
+| ~~`:bedrock-converse-stream`~~ | ~~AWS `ConverseStream` (region from model-ARN / `AWS_REGION` / endpoint host / `us-east-1`; endpoint = model base-url unless a region/profile is configured)~~ | ~~`ConverseStreamCommand {modelId, messages, system, inferenceConfig{maxTokens, temperature}, toolConfig, additionalModelRequestFields}`~~ | ~~ConverseStream frames: `messageStart/Stop`, `contentBlockStart/Deltas` (text/thinking/toolUse), `metadata` (usage)~~ — **implemented (Phase 15)** |
+| ~~`:google-vertex`~~ | ~~`https://{location}-aiplatform.googleapis.com/v1/projects/{p}/locations/{l}/publishers/google/models/{id}:streamGenerateContent?alt=sse` (project/location from `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION`; custom `base-url` may override)~~ | ~~same body as google-generative-ai; client adds `vertexai: true` + project/location (`API_VERSION` v1)~~ | ~~same SSE as google~~ — **implemented (Phase 15)** |
+| ~~`:mistral-conversations`~~ | ~~`(str base-url "/v1/chat/completions")` (URL-joined)~~ | ~~OpenAI-compatible chat body with Mistral field names (`tool_calls`, `tool_call_id`, `image_url`, `top_p`, `max_tokens`, `random_seed`, `reasoning_effort`, `prompt_mode: "reasoning"`, `prompt_cache_key`); `x-affinity: <session-id>` header when caching~~ | ~~SSE chat-chunk stream (Mistral event boundary; thinking deltas)~~ — **implemented (Phase 15)** |
 
 **openai-responses family** (`openai-responses-shared.ts` port):
 `convertResponsesMessages` (input items: developer message for the system
@@ -1609,10 +1777,10 @@ deepseek, github-copilot, openai, xai). The remaining 34 (pi
 | `:openai-responses` | cloudflare-ai-gateway (+), github-copilot (+) (gpt-5*/grok-4.5/oswe*/mai* — now generated), openai (+), xai (+), opencode (+) (`@ai-sdk/openai` npm models), opencode-go (+) |
 | ~~`:openai-codex-responses`~~ | ~~openai-codex~~ — **implemented (Phase 12)** |
 | ~~`:azure-openai-responses`~~ | ~~azure-openai-responses~~ — **implemented (Phase 12)** |
-| `:bedrock-converse-stream` | amazon-bedrock |
+| ~~`:bedrock-converse-stream`~~ | ~~amazon-bedrock~~ — **implemented (Phase 15)** |
 | `:google-generative-ai` | google |
-| `:google-vertex` | google-vertex |
-| `:mistral-conversations` | mistral |
+| ~~`:google-vertex`~~ | ~~google-vertex~~ — **implemented (Phase 15)** |
+| ~~`:mistral-conversations`~~ | ~~mistral~~ — **implemented (Phase 15)** |
 
 (`+` = provider also keeps models on apis kmet already has; the generator
 splits by models.dev `provider.npm`: `@ai-sdk/openai` → openai-responses,
@@ -2046,7 +2214,14 @@ Phase 4 (resolver, /model, Ctrl+L) ──► Phase 5 (cost footer)
             adaptive thinking, the URL-based compat detection pass,
             cloudflare placeholder interpolation + zai/zai-coding-cn,
             together, baseten, ant-ling, kimi-coding, cloudflare x2)
+                    │
+                    ▼
+   Phase 15 (Deferred A.1/A.2: the last 3 wire APIs — mistral-conversations,
+            google-vertex (ADC auth), bedrock-converse-stream (SigV4 +
+            AWS event-stream frames) — and the mistral / google-vertex /
+            amazon-bedrock providers)
 ```
+
 
 Phases 1 and 3 are independent of each other after Phase 0; Phase 2 needs
 Phase 1 (catalogs) but can be built against hand-written EDN fixtures first.

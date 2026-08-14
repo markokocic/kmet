@@ -13,7 +13,9 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [babashka.fs :as fs]
+            [kmet.app.aws-sigv4 :as aws-sigv4]
             [kmet.app.config-value :as config-value]
+            [kmet.app.google-adc :as google-adc]
             [kmet.libs.file-lock :as file-lock]))
 
 ;; ─── Env var table (pi env-api-keys.ts) ────────────────────────────────────
@@ -65,7 +67,12 @@
    :kimi-coding ["KIMI_API_KEY"]
    :cloudflare-workers-ai ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"]
    :cloudflare-ai-gateway ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"
-                           "CLOUDFLARE_GATEWAY_ID"]})
+                           "CLOUDFLARE_GATEWAY_ID"]
+   :mistral ["MISTRAL_API_KEY"]
+   :google-vertex ["GOOGLE_CLOUD_API_KEY"]
+   ;; amazon-bedrock has no api-key env var (pi getApiKeyEnvVars): auth is
+   ;; ambient — AWS keys/profile/bearer token/role vars (ambient-configured?)
+   :amazon-bedrock []})
 
 (defn provider-env-vars
   "Env var names for a provider, in pi's order (empty vector when unknown)."
@@ -343,6 +350,22 @@
   [provider]
   (boolean (some getenv (provider-env-vars provider))))
 
+(defn ambient-configured?
+  "True when a provider that resolves its own ambient auth (no api key) is
+   configured. google-vertex: ADC credentials file + project + location (pi
+   getEnvApiKey hasVertexAdcCredentials + resolveProject/Location).
+   amazon-bedrock: any AWS credential source (profile, access keys, bearer
+   token, ECS/IRSA vars) or AWS_BEDROCK_SKIP_AUTH=1 (pi getEnvApiKey
+   amazon-bedrock)."
+  [provider]
+  (case provider
+    :google-vertex (and (google-adc/configured?)
+                        (or (getenv "GOOGLE_CLOUD_PROJECT") (getenv "GCLOUD_PROJECT"))
+                        (getenv "GOOGLE_CLOUD_LOCATION"))
+    :amazon-bedrock (or (aws-sigv4/ambient-configured?)
+                        (= "1" (getenv "AWS_BEDROCK_SKIP_AUTH")))
+    false))
+
 (defn configured?
   "True when the provider has a credential: auth.edn entry — an api-key
    always, an oauth credential only when the provider has a registered
@@ -359,4 +382,5 @@
        stored true
        :else (or (when-let [raw (configured-api-key provider)]
                    (config-value/is-config-value-configured? raw))
-                 (env-key-present? provider))))))
+                 (env-key-present? provider)
+                 (ambient-configured? provider))))))

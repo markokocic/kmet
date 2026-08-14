@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T15:35:00Z"
+ :generated-at "2026-08-13T22:50:59Z"
  :provider {:id :google
             :name "Google"
             :env-vars ["GEMINI_API_KEY"]
@@ -222,6 +222,18 @@
     :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-3.7-flash"
+   {:id "gemini-3.7-flash"
+    :name "Gemini 3.7 Flash"
+    :provider :google
+    :api :google-generative-ai
+    :base-url "https://generativelanguage.googleapis.com/v1beta"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 0.75 :output 3.75 :cache-read 0.075 :cache-write 0}
     :context-window 1048576
     :max-tokens 65536}
    "gemini-flash-latest"

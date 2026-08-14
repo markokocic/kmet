@@ -13,7 +13,8 @@
 
 (defn- kmet-requires [path]
   (let [content (slurp path)
-        ns-block (re-find #"\(ns\s+[\w.-]+(?:\s+.*?)?\)" content)]
+        ;; DOTALL — the ns docstring spans lines, so .* must cross \n
+        ns-block (re-find #"(?s)\(ns\s+[\w.-]+(?:\s+.*?)?\)" content)]
     (when ns-block
       (->> (re-seq #"\[([\w.-]+)(?:\s+:as\s+\w+)?\]" ns-block)
            (map second)

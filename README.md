@@ -35,8 +35,13 @@ with the agent having access to filesystem tools (read, write, edit, bash, grep,
   (xiaomi token plans), `QWEN_TOKEN_PLAN_API_KEY` (+ `_CN_`), `MINIMAX_API_KEY` /
   `MINIMAX_CN_API_KEY`, `NVIDIA_API_KEY` (nvidia), `OPENROUTER_API_KEY`
   (openrouter), `FIREWORKS_API_KEY` (fireworks), `AI_GATEWAY_API_KEY`
-  (vercel-ai-gateway) — or `/login` inside kmet to store `auth.edn`
-  credentials; `/logout` removes them. GitHub Copilot and OpenAI Codex
+  (vercel-ai-gateway), `MISTRAL_API_KEY` (mistral),
+  `GOOGLE_CLOUD_API_KEY` (google-vertex; or Application Default
+  Credentials — `GOOGLE_APPLICATION_CREDENTIALS` + project + location) —
+  or `/login` inside kmet to store `auth.edn` credentials; `/logout`
+  removes them. Amazon Bedrock authenticates via the ambient AWS
+  credential sources (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`,
+  `AWS_PROFILE`, `AWS_BEARER_TOKEN_BEDROCK`, ECS/IRSA vars). GitHub Copilot and OpenAI Codex
   support an OAuth device-code login (`/login github-copilot` →
   "Sign in with an account"; `/login openai-codex` → ChatGPT device flow).
 
@@ -151,10 +156,11 @@ Example `~/.kmet/agent/settings.edn`:
 ```
 
 `kmet` reads its provider catalog from `src/kmet/app/model_data/*.edn`
-(36 providers incl. anthropic, google, groq, cerebras, openrouter, nvidia,
+(39 providers incl. anthropic, google, groq, cerebras, openrouter, nvidia,
 moonshotai, qwen-token-plan, minimax, fireworks, vercel-ai-gateway, zai,
-together, baseten, kimi-coding, cloudflare, ...; the openrouter/nvidia/
-vercel-ai-gateway catalogs are fetched live at generation time). Models,
+together, baseten, kimi-coding, cloudflare, mistral, google-vertex,
+amazon-bedrock, ...; the openrouter/nvidia/vercel-ai-gateway catalogs are
+fetched live at generation time). Models,
 base URLs and defaults are registry data — see `models.md` for the
 subsystem plan.
 

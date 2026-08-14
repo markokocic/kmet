@@ -878,6 +878,11 @@
                                            :cost {:input 0.0014 :output 0.0028
                                                   :cache-read 0.0 :cache-write 0.0
                                                   :total 0.0042}})))))
+  (t/testing "Bedrock ConverseStream shape — cache_read/write input tokens"
+    (t/is (= {:input 7 :output 5 :cache-read 2 :cache-write 1 :cost 0.0}
+             (s/entry-usage {:input_tokens 10 :output_tokens 5 :total_tokens 15
+                             :cache_read_input_tokens 2
+                             :cache_write_input_tokens 1}))))
   (t/testing "unknown shape returns nil"
     (t/is (nil? (s/entry-usage {:foo 1})))
     (t/is (nil? (s/entry-usage nil)))))

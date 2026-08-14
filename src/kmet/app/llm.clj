@@ -10,9 +10,12 @@
   (:require [clojure.string :as str]
             [cheshire.core :as json]
             [kmet.libs.sse :as sse]
+            [kmet.libs.hash :as hash]
             [kmet.app.attribution :as attribution]
             [kmet.app.auth :as auth]
+            [kmet.app.aws-sigv4 :as aws-sigv4]
             [kmet.app.config-value :as config-value]
+            [kmet.app.google-adc :as google-adc]
             [kmet.app.models :as models]
             [kmet.app.proxy :as proxy]
             [kmet.app.session :as session]
@@ -28,6 +31,13 @@
 (def ^:private getenv
   "Process env lookup (System/getenv returns nil for unset vars)."
   (fn [k] (System/getenv k)))
+
+(defn- ambient-auth-available?
+  "True when a provider that resolves its own ambient auth (no api key)
+   is configured — google-vertex ADC or amazon-bedrock AWS credentials
+   (auth/ambient-configured?)."
+  [provider]
+  (auth/ambient-configured? provider))
 
 ;; ─── Wire api + URL construction ───────────────────────────────────────────
 
@@ -65,7 +75,8 @@
       :openai-completions (str base "/chat/completions")
       :openai-responses (str base "/responses")
       :anthropic-messages (str base "/v1/messages")
-      :google-generative-ai (str base "/models/" model-id ":streamGenerateContent?alt=sse"))))
+      :google-generative-ai (str base "/models/" model-id ":streamGenerateContent?alt=sse")
+      :mistral-conversations (str base "/v1/chat/completions"))))
 
 (defn- codex-endpoint-url
   "pi resolveCodexUrl: the default codex base
@@ -442,13 +453,22 @@
                                                   (:tool-calls m)))))))))))
         messages))
 
+(defn- google-requires-tool-call-id?
+  [model-id]
+  (let [major (second (re-find #"(?i)^gemini(?:-live)?-(\d+)" model-id))]
+    (or (str/starts-with? model-id "claude-")
+        (str/starts-with? model-id "gpt-oss-")
+        (and major (<= 3 (Long/parseLong major))))))
+
+(defn- google-normalize-tool-call-id
+  [id]
+  (let [sanitized (str/replace (or id "") #"[^a-zA-Z0-9_-]" "_")]
+    (if (> (count sanitized) 64) (subs sanitized 0 64) sanitized)))
+
 (defn- google-messages
-  "Convert kmet messages to Google contents (pi convertMessages for
-   google-generative-ai): text/image parts, functionCall parts on model
-   turns, functionResponse parts on user turns. Returns [contents system] —
-   the :system message (if any) becomes the systemInstruction."
-  [messages]
-  (let [system (first (for [m messages
+  [messages model]
+  (let [requires-id? (google-requires-tool-call-id? (:id model))
+        system (first (for [m messages
                             :when (= :system (:role m))]
                         (content-text (:content m))))
         msgs (remove #(= :system (:role %)) messages)]
@@ -461,18 +481,21 @@
                      "tool"
                      (let [r (first (:content m))
                            text (or (:content r) "")
-                           resp (if (:is-error m) {:error text} {:output text})]
-                       {:role "user"
-                        :parts [{:functionResponse {:name (:tool-name m)
-                                                    :response resp}}]})
+                           resp (if (:is-error m) {:error text} {:output text})
+                           fc (cond-> {:name (:tool-name m)
+                                       :response resp}
+                                requires-id? (assoc :id (google-normalize-tool-call-id
+                                                         (-> m :content first :tool_use_id))))]
+                       {:role "user" :parts [{:functionResponse fc}]})
                      "assistant"
                      (let [parts (into []
                                        (concat
                                         (for [b (:content m) :when (= :text (:type b))]
                                           {:text (:text b)})
                                         (for [tc (:tool-calls m)]
-                                          {:functionCall {:name (:name tc)
-                                                          :args (:arguments tc)}})))]
+                                          {:functionCall (cond-> {:name (:name tc)
+                                                                  :args (:arguments tc)}
+                                                           requires-id? (assoc :id (google-normalize-tool-call-id (:id tc))))})))]
                        (when (seq parts) {:role "model" :parts parts}))
                      ;; user
                      (let [parts (if (some image-block? (:content m))
@@ -482,8 +505,8 @@
                                                      :data (:data b)}}
                                        {:text (or (:text b) "")}))
                                    [{:text (content-text (:content m))}])]
-                       {:role "user" :parts parts})))
-                 msgs))
+                       {:role "user" :parts parts}))))
+           msgs)
      system]))
 
 ;; ─── Thinking request shaping (pi per-api) ─────────────────────────────────
@@ -1359,7 +1382,7 @@
     :as opts}]
   (future
     (let [model-id (or (:model opts) (:id model-record))
-          [contents system] (google-messages messages)
+          [contents system] (google-messages messages model-record)
           thinking-config (google-thinking-config model-record effort)
           payload (cond-> {:contents contents
                            :generationConfig (cond-> {}
@@ -1402,6 +1425,576 @@
         (catch Exception e
           (when on-error (on-error (transport-error-message e))))))))
 
+;; ─── Mistral request (pi: api/mistral-conversations.ts) ───────────────────
+
+(def ^:private mistral-tool-call-id-length 9)
+
+(defn- derive-mistral-tool-call-id
+  "pi deriveMistralToolCallId: attempt 0 returns the id when it is already 9
+   alphanumeric chars; otherwise a 9-char shortHash of the seed (attempts
+   append :N to break collisions)."
+  [id attempt]
+  (let [normalized (str/replace id #"[^a-zA-Z0-9]" "")]
+    (if (and (zero? attempt) (= mistral-tool-call-id-length (count normalized)))
+      normalized
+      (let [seed-base (if (seq normalized) normalized id)
+            seed (if (zero? attempt) seed-base (str seed-base ":" attempt))]
+        (-> (hash/short-hash seed)
+            (str/replace #"[^a-zA-Z0-9]" "")
+            (subs 0 mistral-tool-call-id-length))))))
+
+(defn- make-mistral-tool-call-id-normalizer
+  "pi createMistralToolCallIdNormalizer: per-request map from session tool
+   call ids to 9-char alphanumeric ids (collisions resolved by appending
+   attempt counters)."
+  []
+  (let [id-map (atom {})
+        reverse-map (atom {})]
+    (fn [id]
+      (if-let [existing (get @id-map id)]
+        existing
+        (loop [attempt 0]
+          (let [candidate (derive-mistral-tool-call-id id attempt)
+                owner (get @reverse-map candidate)]
+            (if (and owner (not= owner id))
+              (recur (inc attempt))
+              (do (swap! id-map assoc id candidate)
+                  (swap! reverse-map assoc candidate id)
+                  candidate))))))))
+
+(defn- mistral-tool-result-text
+  "pi buildToolResultText: the tool text with the error prefix; image-only
+   results degrade to pi's placeholder strings."
+  [text has-images? supports-images? is-error?]
+  (let [trimmed (str/trim text)
+        error-prefix (when is-error? "[tool error] ")]
+    (cond
+      (seq trimmed)
+      (str error-prefix trimmed
+           (when (and has-images? (not supports-images?))
+             "\n[tool image omitted: model does not support images]"))
+      has-images?
+      (if supports-images?
+        (if is-error? "[tool error] (see attached image)" "(see attached image)")
+        (if is-error?
+          "[tool error] (image omitted: model does not support images)"
+          "(image omitted: model does not support images)"))
+      :else (if is-error? "[tool error] (no tool output)" "(no tool output)"))))
+
+(defn- mistral-messages
+  "Map agent messages to Mistral chat messages (pi toChatMessages): user
+   content with text/image_url parts, assistant content with thinking +
+   tool_calls (ids normalized to 9-char alphanumeric), tool results with
+   toolCallId + text/image parts. Bash entries become user messages; custom
+   messages map to user (pi convertToLlm)."
+  [messages model normalize-id]
+  (let [supports-images? (some #{:image} (:input model))]
+    (into []
+          (keep (fn [m]
+                  (let [role (name (:role m))]
+                    (case role
+                      "bash"
+                      (when-not (:exclude-from-context? m)
+                        {:role "user" :content (bash-execution-text m)})
+                      "system"
+                      {:role "system" :content (content-text (:content m))}
+                      "tool"
+                      (let [text (or (-> m :content first :content) "")
+                            images (:images m)
+                            parts (into [{:type "text"
+                                          :text (mistral-tool-result-text text (seq images)
+                                                                          supports-images? (:is-error m))}]
+                                        (when (and supports-images? (seq images))
+                                          (for [i images]
+                                            {:type "image_url"
+                                             :image_url (str "data:" (:mime-type i) ";base64," (:data i))})))]
+                        {:role "tool"
+                         :tool_call_id (normalize-id (or (-> m :content first :tool_use_id) ""))
+                         :name (:tool-name m)
+                         :content parts})
+                      "assistant"
+                      (let [parts (into []
+                                        (concat
+                                         (when-let [t (not-empty (content-text (:content m)))]
+                                           [{:type "text" :text t}])
+                                         (when-let [th (not-empty (str/trim (or (:thinking m) "")))]
+                                           [{:type "thinking"
+                                             :thinking [{:type "text" :text th}]}])))
+                            tool-calls (mapv (fn [tc]
+                                               {:id (normalize-id (:id tc))
+                                                :type "function"
+                                                :function {:name (:name tc)
+                                                           :arguments (json/generate-string (:arguments tc))}
+                                                :index 0})
+                                             (:tool-calls m))]
+                        (when (or (seq parts) (seq tool-calls))
+                          (cond-> {:role "assistant"}
+                            (seq parts) (assoc :content parts)
+                            (seq tool-calls) (assoc :tool_calls tool-calls))))
+                      ;; custom + user
+                      (let [had-images? (some image-block? (:content m))
+                            parts (remove nil?
+                                          (for [b (:content m)]
+                                            (cond
+                                              (= :text (:type b)) {:type "text" :text (:text b)}
+                                              (and (image-block? b) supports-images?)
+                                              {:type "image_url"
+                                               :image_url (str "data:" (:mime-type b) ";base64," (:data b))}
+                                              :else nil)))]
+                        (cond
+                          (seq parts) {:role "user" :content parts}
+                          had-images? {:role "user"
+                                       :content [{:type "text"
+                                                  :text "(image omitted: model does not support images)"}]}
+                          :else nil))))))
+          messages)))
+
+(defn- mistral-uses-reasoning-effort?
+  "pi usesReasoningEffort: models that expose the reasoning_effort option
+   (the others use prompt_mode: \"reasoning\")."
+  [model]
+  (contains? #{"mistral-small-2603" "mistral-small-latest" "mistral-medium-3.5"}
+             (:id model)))
+
+(defn- mistral-thinking
+  "pi streamSimple thinking: prompt_mode \"reasoning\" for models without a
+   reasoning_effort option; reasoning_effort (tlm-mapped ?? \"high\") for
+   the effort models. EFFORT is the clamped level, nil when off."
+  [model effort]
+  (cond
+    (not (and (:reasoning model) effort)) {}
+    (mistral-uses-reasoning-effort? model)
+    {:reasoning_effort (or (get-in model [:thinking-level-map effort]) "high")}
+    :else {:prompt_mode "reasoning"}))
+
+(defn- mistral-tool
+  "pi toFunctionTools: Mistral function tool with the JSON schema and
+   strict: false (kmet has no constrained sampling)."
+  [tool]
+  {:type "function"
+   :function {:name (:name tool)
+              :description (:description tool)
+              :parameters (:parameters tool)
+              :strict false}})
+
+(defn- mistral-payload
+  "Mistral chat payload (pi buildChatPayload + toMistralWirePayload — the
+   camelCase options are remapped to their snake_case wire names: maxTokens
+   → max_tokens, reasoningEffort → reasoning_effort, promptMode →
+   prompt_mode, promptCacheKey → prompt_cache_key)."
+  [model-record effort messages tools model-id session-id cache-retention]
+  (let [thinking (mistral-thinking model-record effort)]
+    (cond-> {:model model-id
+             :stream true
+             :messages messages}
+      (seq tools) (assoc :tools (mapv mistral-tool tools))
+      (seq thinking) (merge thinking)
+      (:max-tokens model-record) (assoc :max_tokens (:max-tokens model-record))
+      (and (not= :none cache-retention) (seq session-id))
+      (assoc :prompt_cache_key session-id))))
+
+(defn- mistral-request
+  [{:keys [model-record provider-record effort api-key messages tools signal base-url
+           idle-timeout-ms session-id cache-retention on-error]
+    :as opts}]
+  (future
+    (try
+      (let [model-id (or (:model opts) (:id model-record))
+            url (or base-url (endpoint-url :mistral-conversations (:base-url model-record) model-id))
+            payload (mistral-payload model-record effort
+                                     (mistral-messages messages model-record
+                                                       (make-mistral-tool-call-id-normalizer))
+                                     tools model-id session-id cache-retention)
+            base-headers (request-headers
+                          {"Authorization" (str "Bearer " api-key)
+                           "Content-Type" "application/json"
+                           "Accept" "text/event-stream"}
+                          model-record provider-record api-key session-id)
+            ;; pi: x-affinity session header when caching, unless the model
+            ;; or request headers already set it explicitly
+            headers (if (and (not= :none cache-retention) (seq session-id)
+                             (not-any? #(str/includes? (str/lower-case (name %)) "x-affinity")
+                                       (keys base-headers)))
+                      (assoc base-headers "x-affinity" session-id)
+                      base-headers)
+            response (proxy/post-stream url
+                                        {:headers headers
+                                         :body (json/generate-string payload)
+                                         :as :stream
+                                         :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
+                                        signal)]
+        (sse/process-mistral-stream response
+                                    (responses-events-handler opts model-record)
+                                    signal
+                                    idle-timeout-ms
+                                    (fn [] (proxy/abort-stream! response)))
+        (proxy/finish-curl! response signal on-error))
+      (catch Exception e
+        (when on-error (on-error (transport-error-message e)))))))
+
+;; ─── Google Vertex request (pi: api/google-vertex.ts) ──────────────────────
+
+(def ^:private vertex-base-url
+  "The Vertex endpoint template (pi VERTEX_BASE_URL — the SDK substitutes
+   project/location; kmet constructs the URL itself)."
+  "https://{location}-aiplatform.googleapis.com")
+
+(defn- vertex-endpoint-url
+  "pi: the Vertex streamGenerateContent URL with project/location from the
+   env (GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT / GOOGLE_CLOUD_LOCATION). A
+   model base-url containing {location} (or empty) resolves the location
+   from the env; any other base-url is used verbatim (custom endpoints)."
+  [model-base-url model-id]
+  (let [project (or (getenv "GOOGLE_CLOUD_PROJECT") (getenv "GCLOUD_PROJECT"))
+        location (getenv "GOOGLE_CLOUD_LOCATION")]
+    (when-not (seq project)
+      (throw (ex-info "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT."
+                      {:type :vertex-config-missing})))
+    (when-not (seq location)
+      (throw (ex-info "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION."
+                      {:type :vertex-config-missing})))
+    (let [base (if (str/includes? (or model-base-url "") "{location}")
+                 (str/replace vertex-base-url "{location}" location)
+                 model-base-url)]
+      (str base "/v1/projects/" project "/locations/" location
+           "/publishers/google/models/" model-id ":streamGenerateContent?alt=sse"))))
+
+(defn- vertex-request
+  [{:keys [model-record provider-record effort api-key messages tools signal base-url
+           idle-timeout-ms session-id on-error]
+    :as opts}]
+  (future
+    (let [model-id (or (:model opts) (:id model-record))
+          [contents system] (google-messages messages model-record)
+          thinking-config (google-thinking-config model-record effort)
+          payload (cond-> {:contents contents
+                           :generationConfig (cond-> {}
+                                               (:max-tokens model-record)
+                                               (assoc :maxOutputTokens (:max-tokens model-record))
+                                               thinking-config
+                                               (assoc :thinkingConfig thinking-config))}
+                    system (assoc :systemInstruction {:parts [{:text system}]})
+                    (seq tools) (assoc :tools [{:functionDeclarations
+                                                (mapv tools/tool->google-schema tools)}]))
+          ;; auth: GOOGLE_CLOUD_API_KEY (x-goog-api-key) or ADC
+          ;; (Authorization: Bearer — the token is fetched + cached here)
+          api-key (or api-key (auth/resolve-api-key :google-vertex))
+          auth-header (if api-key "x-goog-api-key" "Authorization")
+          auth-value (or api-key (google-adc/access-token!))]
+      (if-not auth-value
+        (when on-error
+          (on-error (str "No API key for google-vertex. Set GOOGLE_CLOUD_API_KEY "
+                         "or configure Application Default Credentials.")))
+        (try
+          (let [response (proxy/post-stream (or base-url (vertex-endpoint-url (:base-url model-record) model-id))
+                                            {:headers (request-headers
+                                                       {auth-header (str (when-not api-key "Bearer ") auth-value)
+                                                        "Content-Type" "application/json"}
+                                                       model-record provider-record api-key session-id)
+                                             :body (json/generate-string payload)
+                                             :as :stream
+                                             :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
+                                            signal)]
+            (sse/process-google-stream response
+                                       (responses-events-handler opts model-record)
+                                       signal
+                                       idle-timeout-ms
+                                       (fn [] (proxy/abort-stream! response)))
+            (proxy/finish-curl! response signal on-error))
+          (catch Exception e
+            (when on-error (on-error (transport-error-message e)))))))))
+
+;; ─── AWS Bedrock request (pi: api/bedrock-converse-stream.ts; SigV4 ───────
+;;    signing + the binary ConverseStream frames replace the AWS SDK) ──────
+
+(defn- bedrock-is-claude?
+  "pi isAnthropicClaudeModel: id/name mention Anthropic Claude (also matches
+   application inference profiles whose ARNs don't contain the name)."
+  [model]
+  (let [id (str/lower-case (:id model))
+        name (str/lower-case (or (:name model) ""))]
+    (or (str/includes? id "anthropic.claude")
+        (str/includes? id "anthropic/claude")
+        (str/includes? name "anthropic.claude")
+        (str/includes? name "anthropic/claude")
+        (str/includes? name "claude"))))
+
+(defn- bedrock-model-candidates
+  "id and normalized name (pi getModelMatchCandidates — application
+   inference profiles may carry the model name only in :name)."
+  [model]
+  (let [id (str/lower-case (:id model))
+        name (str/lower-case (or (:name model) ""))]
+    (into [id] (when (seq name) [(str/replace name #"[\s_.:]+" "-")]))))
+
+(defn- bedrock-supports-adaptive-thinking?
+  "pi supportsAdaptiveThinking: Opus 4.6+/Sonnet 4.6/Fable 5 (id AND name)."
+  [model]
+  (let [adaptive? #(or (str/includes? % "opus-4-6") (str/includes? % "opus-4-7")
+                       (str/includes? % "opus-4-8") (str/includes? % "opus-5")
+                       (str/includes? % "sonnet-4-6") (str/includes? % "sonnet-5")
+                       (str/includes? % "fable-5"))]
+    (boolean (some adaptive? (bedrock-model-candidates model)))))
+
+(defn- bedrock-supports-prompt-caching?
+  "pi supportsPromptCaching: Claude 3.5 Haiku / 3.7 Sonnet / 4.x / 5 (or
+   AWS_BEDROCK_FORCE_CACHE=1 for application inference profiles)."
+  [model]
+  (let [candidates (bedrock-model-candidates model)]
+    (cond
+      (not (some #(str/includes? % "claude") candidates))
+      (= "1" (getenv "AWS_BEDROCK_FORCE_CACHE"))
+      (some #(or (str/includes? % "fable-5") (str/includes? % "opus-5")
+                 (str/includes? % "sonnet-5"))
+            candidates)
+      true
+      (some #(str/includes? % "-4-") candidates)
+      true
+      (some #(str/includes? % "claude-3-7-sonnet") candidates)
+      true
+      (some #(str/includes? % "claude-3-5-haiku") candidates)
+      true
+      :else false)))
+
+(defn- bedrock-image-block
+  "pi createImageBlock: the Converse image block (source.bytes carries the
+   base64 string — the wire format's bytes field is base64-encoded text)."
+  [mime-type data]
+  {:image {:format (case mime-type
+                     "image/jpeg" "jpeg"
+                     "image/jpg" "jpeg"
+                     "image/png" "png"
+                     "image/gif" "gif"
+                     "image/webp" "webp"
+                     (throw (ex-info (str "Unknown image type: " mime-type)
+                                     {:type :bedrock-image-type})))
+           :source {:bytes data}}})
+
+(def ^:private bedrock-empty-text-placeholder "<empty>")
+
+(defn- bedrock-text-block
+  "A non-blank text block; nil when the text is blank (pi
+   createNonBlankTextBlock)."
+  [text]
+  (when (seq (str/trim (or text "")))
+    {:text text}))
+
+(defn- bedrock-tool-result-content
+  "Tool result content blocks (pi convertToolResultContent): text blocks
+   plus image blocks; an empty result degrades to the <empty> placeholder."
+  [text images]
+  (let [blocks (into (if (seq (str/trim (or text ""))) [{:text text}] [])
+                     (for [i images]
+                       (bedrock-image-block (:mime-type i) (:data i))))]
+    (if (seq blocks) blocks [{:text bedrock-empty-text-placeholder}])))
+
+(defn- bedrock-messages
+  "ConverseStream messages (pi convertMessages): user content with
+   text/image blocks (blank text degrades to the <empty> placeholder),
+   assistant content with text/toolUse/reasoningContent blocks, consecutive
+   tool results merged into one user message with toolResult blocks. A
+   cache point is appended to the last user message for cache-capable
+   Claude models when caching is enabled.
+
+   Returns [messages system-blocks] — the system prompt (pi
+   buildSystemPrompt) carries its own cache point."
+  [messages model cache-retention]
+  (let [system (first (for [m messages
+                            :when (= :system (:role m))]
+                        (content-text (:content m))))
+        caching? (and (not= :none cache-retention)
+                      (bedrock-supports-prompt-caching? model))
+        cache-block {:cachePoint (cond-> {:type "default"}
+                                   (= :long cache-retention) (assoc :ttl "1h"))}
+        system-blocks (when (seq system)
+                        (cond-> [{:text system}]
+                          caching? (conj cache-block)))
+        result (loop [msgs (remove #(= :system (:role %)) messages)
+                      out []]
+                 (if-let [m (first msgs)]
+                   (let [role (name (:role m))]
+                     (cond
+                       (= role "bash")
+                       (if (:exclude-from-context? m)
+                         (recur (rest msgs) out)
+                         (recur (rest msgs)
+                                (conj out {:role "user"
+                                           :content [{:text (bash-execution-text m)}]})))
+                       (= role "tool")
+                       ;; merge consecutive tool results into one user message
+                       (let [tool-results (take-while #(= :tool (:role %)) msgs)
+                             blocks (mapv (fn [tr]
+                                            {:toolResult {:toolUseId (-> tr :content first :tool_use_id)
+                                                          :content (bedrock-tool-result-content
+                                                                    (or (-> tr :content first :content) "")
+                                                                    (:images tr))
+                                                          :status (if (:is-error tr) "error" "success")}})
+                                          tool-results)]
+                         (recur (drop (count tool-results) msgs)
+                                (conj out {:role "user" :content blocks})))
+                       (= role "assistant")
+                       (let [content-blocks (into []
+                                                  (concat
+                                                   (keep (fn [b]
+                                                           (when (= :text (:type b))
+                                                             (bedrock-text-block (:text b))))
+                                                         (:content m))
+                                                   (for [tc (:tool-calls m)]
+                                                     {:toolUse {:toolUseId (:id tc)
+                                                                :name (:name tc)
+                                                                :input (:arguments tc {})}})
+                                                   ;; kmet stores thinking as text only — no
+                                                   ;; reasoning signatures — so Claude's replayed
+                                                   ;; reasoning falls back to plain text (pi's
+                                                   ;; no-signature path: Bedrock rejects a
+                                                   ;; reasoningContent block without a signature);
+                                                   ;; non-Claude models take reasoningContent
+                                                   ;; without a signature (pi)
+                                                   (when-let [th (not-empty (str/trim (or (:thinking m) "")))]
+                                                     (if (bedrock-is-claude? model)
+                                                       [{:text th}]
+                                                       [{:reasoningContent {:reasoningText {:text th}}}]))))]
+                         (if (seq content-blocks)
+                           (recur (rest msgs) (conj out {:role "assistant" :content content-blocks}))
+                           (recur (rest msgs) out)))
+                       :else
+                       ;; user
+                       (let [content (:content m)
+                             blocks (if (string? content)
+                                      [{:text content}]
+                                      (let [blocks (into []
+                                                         (keep (fn [b]
+                                                                 (cond
+                                                                   (= :text (:type b)) (bedrock-text-block (:text b))
+                                                                   (image-block? b) (bedrock-image-block (:mime-type b) (:data b))
+                                                                   :else nil)))
+                                                         content)]
+                                        (if (seq blocks) blocks [{:text bedrock-empty-text-placeholder}])))]
+                         (recur (rest msgs) (conj out {:role "user" :content blocks})))))
+                   out))]
+    [(cond-> result
+       (and caching? (seq result)
+            (= "user" (get-in result [(dec (count result)) :role])))
+       (update (dec (count result)) update :content conj cache-block))
+     system-blocks]))
+
+(defn- bedrock-tool-config
+  "ConverseStream toolConfig (pi convertToolConfig): toolSpec blocks with
+   the JSON input schema; toolChoice auto when tools are present."
+  [tools]
+  (when (seq tools)
+    {:tools (mapv (fn [tool]
+                    {:toolSpec {:name (:name tool)
+                                :description (:description tool)
+                                :inputSchema {:json (:parameters tool)}
+                                :strict false}})
+                  tools)
+     :toolChoice {:auto {}}}))
+
+(defn- bedrock-additional-fields
+  "pi buildAdditionalModelRequestFields: the thinking config for Claude
+   models — adaptive (opus-4.6+/sonnet-4.6+/fable-5) or budget-based with
+   the interleaved-thinking beta; non-Claude models get no thinking.
+   EFFORT is the clamped level, nil when off."
+  [model effort]
+  (when (and (:reasoning model) effort (bedrock-is-claude? model))
+    (let [display "summarized"]
+      (if (bedrock-supports-adaptive-thinking? model)
+        {:thinking {:type "adaptive" :display display}
+         :output_config {:effort (anthropic-adaptive-effort model effort)}}
+        (let [level (if (contains? #{:xhigh :max} effort) :high effort)
+              budget (min (get thinking-budgets level 0)
+                          (max 0 (- (or (:max-tokens model) 4096) min-answer-tokens)))]
+          {:thinking {:type "enabled" :budget_tokens budget :display display}
+           :anthropic_beta ["interleaved-thinking-2025-05-14"]})))))
+
+(defn- bedrock-endpoint-url
+  "pi: the ConverseStream URL. Standard bedrock-runtime endpoints are used
+   as-is unless a region or ambient AWS_PROFILE overrides them (then the
+   regional endpoint wins); custom endpoints always win."
+  [model-base-url model-id]
+  (let [endpoint-region (when-let [host (some-> (java.net.URI. model-base-url) .getHost)]
+                          (second (re-find #"(?i)^bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$"
+                                           host)))
+        configured-region (or (getenv "AWS_REGION") (getenv "AWS_DEFAULT_REGION"))
+        ambient-profile? (boolean (getenv "AWS_PROFILE"))
+        explicit? (or (nil? endpoint-region)
+                      (and (nil? configured-region) (not ambient-profile?)))
+        region (if explicit?
+                 (or endpoint-region configured-region "us-east-1")
+                 (or configured-region "us-east-1"))]
+    {:url (if explicit?
+            (str model-base-url "/model/" model-id "/converse-stream")
+            (str "https://bedrock-runtime." region ".amazonaws.com/model/" model-id "/converse-stream"))
+     :region region}))
+
+(defn- bedrock-request
+  [{:keys [model-record provider-record effort api-key messages tools signal base-url
+           idle-timeout-ms session-id cache-retention on-error]
+    :as opts}]
+  (future
+    (try
+      (let [model-id (or (:model opts) (:id model-record))
+            retention (or cache-retention :short)
+            {:keys [url region]} (if base-url
+                                   {:url (str base-url "/model/" model-id "/converse-stream")
+                                    :region (or (getenv "AWS_REGION") "us-east-1")}
+                                   (bedrock-endpoint-url (:base-url model-record) model-id))
+            bearer (or api-key (getenv "AWS_BEARER_TOKEN_BEDROCK"))
+            skip-auth? (= "1" (getenv "AWS_BEDROCK_SKIP_AUTH"))
+            creds (when-not (or bearer skip-auth?)
+                    (aws-sigv4/resolve-credentials))]
+        (if-not (or bearer creds skip-auth?)
+          (when on-error
+            (on-error (str "No API key for amazon-bedrock. Set AWS_ACCESS_KEY_ID + "
+                           "AWS_SECRET_ACCESS_KEY, AWS_PROFILE, AWS_BEARER_TOKEN_BEDROCK, "
+                           "or configure AWS credentials.")))
+          (let [additional (bedrock-additional-fields model-record effort)
+                [msgs system-blocks] (bedrock-messages messages model-record retention)
+                payload (json/generate-string
+                         (cond-> {:modelId model-id
+                                  :messages msgs
+                                  :inferenceConfig (cond-> {}
+                                                     (and (bedrock-is-claude? model-record)
+                                                          (:max-tokens model-record))
+                                                     (assoc :maxTokens (:max-tokens model-record)))}
+                           (seq system-blocks) (assoc :system system-blocks)
+                           (seq tools) (assoc :toolConfig (bedrock-tool-config tools))
+                           (seq additional) (assoc :additionalModelRequestFields additional)))
+                sha (aws-sigv4/sha256-hex payload)
+                ;; the request's own headers (attribution + configured) first,
+                ;; then the SigV4/bearer headers — AWS requires content-type
+                ;; in the signature and reserved headers (authorization,
+                ;; x-amz-*) must never be overridden by caller headers (pi
+                ;; addCustomHeadersMiddleware skips them)
+                headers (merge (request-headers {"Content-Type" "application/json"}
+                                                model-record provider-record api-key session-id)
+                               (if (and bearer (not skip-auth?))
+                                 {"Authorization" (str "Bearer " bearer)}
+                                 (aws-sigv4/sign-request {:method "POST"
+                                                          :url url
+                                                          :region region
+                                                          :service "bedrock"
+                                                          :access-key (or (:access-key creds) "dummy-access-key")
+                                                          :secret-key (or (:secret-key creds) "dummy-secret-key")
+                                                          :session-token (:session-token creds)
+                                                          :headers {"Content-Type" "application/json"}
+                                                          :payload-hash sha})))
+                response (proxy/post-stream url
+                                            {:headers headers
+                                             :body payload
+                                             :as :stream
+                                             :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
+                                            signal)]
+            (sse/process-bedrock-stream response
+                                        (responses-events-handler opts model-record)
+                                        signal
+                                        idle-timeout-ms
+                                        (fn [] (proxy/abort-stream! response)))
+            (proxy/finish-curl! response signal on-error))))
+      (catch Exception e
+        (when on-error (on-error (transport-error-message e)))))))
+
 ;; ─── Public API ────────────────────────────────────────────────────────────
 
 (defn send-message
@@ -1410,12 +2003,15 @@
    opts:
      :provider    — provider keyword (:opencode-go, :opencode, :deepseek,
                     :github-copilot, :openai, :xai, :openai-codex,
-                    :azure-openai-responses)
+                    :azure-openai-responses, :mistral, :google-vertex,
+                    :amazon-bedrock, ...)
      :model       — model id string, resolved against the provider's catalog
      :api-type    — wire api override (:openai-completions,
                     :openai-responses, :openai-codex-responses,
                     :azure-openai-responses, :anthropic-messages,
-                    :google-generative-ai); wins over the resolved model's :api
+                    :google-generative-ai, :mistral-conversations,
+                    :google-vertex, :bedrock-converse-stream); wins over the
+                    resolved model's :api
      :base-url    — full endpoint URL override (e.g. local test servers);
                     wins over the model-derived URL
      :api-key     — API key (required — resolved by caller via cfg/get-api-key)
@@ -1453,7 +2049,10 @@
                (and (:base-url auth) (nil? (:base-url opts)))
                (assoc :base-url (:base-url auth)))]
     (cond
-      (and (nil? api-key) (nil? (:bearer auth)))
+      ;; google-vertex (ADC) and amazon-bedrock (ambient AWS credentials)
+      ;; resolve their own auth — the api-key check is per-request below
+      (and (nil? api-key) (nil? (:bearer auth))
+           (not (ambient-auth-available? provider)))
       (future
         (when-let [on-error (:on-error opts)]
           (on-error (str "No API key for " (name provider)
@@ -1491,6 +2090,12 @@
                                                             :effort effort :api-key api-key))
               :google-generative-ai (google-request (assoc opts :model-record m :provider-record p
                                                            :effort effort :api-key api-key))
+              :mistral-conversations (mistral-request (assoc opts :model-record m :provider-record p
+                                                             :effort effort :api-key api-key))
+              :google-vertex (vertex-request (assoc opts :model-record m :provider-record p
+                                                    :effort effort :api-key api-key))
+              :bedrock-converse-stream (bedrock-request (assoc opts :model-record m :provider-record p
+                                                               :effort effort :api-key api-key))
               (future
                 (when-let [on-error (:on-error opts)]
                   (on-error (str "Unknown api-type: " (name (:api-type opts)))))))))))))

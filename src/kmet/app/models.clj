@@ -22,7 +22,9 @@
 (defrecord Model [id            ;; string, e.g. "deepseek-v4-flash"
                   name          ;; string
                   provider      ;; keyword, e.g. :deepseek
-                  api           ;; :openai-completions | :anthropic-messages | :google-generative-ai | :openai-responses
+                  api           ;; :openai-completions | :openai-responses | :openai-codex-responses
+                                ;; | :azure-openai-responses | :anthropic-messages | :google-generative-ai
+                                ;; | :mistral-conversations | :google-vertex | :bedrock-converse-stream
                   base-url      ;; string API base, e.g. "https://api.deepseek.com"
                   reasoning     ;; boolean
                   thinking-level-map ;; {level -> string|nil}, pi ThinkingLevelMap; optional

@@ -1,0 +1,349 @@
+{:schema-version 1
+ :generated-at "2026-08-13T22:50:59Z"
+ :provider {:id :mistral
+            :name "Mistral"
+            :env-vars ["MISTRAL_API_KEY"]
+            :default-model "devstral-medium-latest"}
+ :models
+ {:mistral-conversations
+  {"codestral-latest"
+   {:id "codestral-latest"
+    :name "Codestral (latest)"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.3 :output 0.9 :cache-read 0.03 :cache-write 0}
+    :context-window 256000
+    :max-tokens 4096}
+   "devstral-2512"
+   {:id "devstral-2512"
+    :name "Devstral 2"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.4 :output 2 :cache-read 0.04 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144}
+   "devstral-latest"
+   {:id "devstral-latest"
+    :name "Devstral 2"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.4 :output 2 :cache-read 0.04 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144}
+   "devstral-medium-2507"
+   {:id "devstral-medium-2507"
+    :name "Devstral Medium"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.4 :output 2 :cache-read 0.04 :cache-write 0}
+    :context-window 128000
+    :max-tokens 128000}
+   "devstral-medium-latest"
+   {:id "devstral-medium-latest"
+    :name "Devstral 2 (latest)"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.4 :output 2 :cache-read 0.04 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144}
+   "devstral-small-2505"
+   {:id "devstral-small-2505"
+    :name "Devstral Small 2505"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.1 :output 0.3 :cache-read 0.01 :cache-write 0}
+    :context-window 128000
+    :max-tokens 128000}
+   "devstral-small-2507"
+   {:id "devstral-small-2507"
+    :name "Devstral Small"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.1 :output 0.3 :cache-read 0.01 :cache-write 0}
+    :context-window 128000
+    :max-tokens 128000}
+   "labs-devstral-small-2512"
+   {:id "labs-devstral-small-2512"
+    :name "Devstral Small 2"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 256000
+    :max-tokens 256000}
+   "magistral-medium-latest"
+   {:id "magistral-medium-latest"
+    :name "Magistral Medium (latest)"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning true
+    :input [:text]
+    :cost {:input 2 :output 5 :cache-read 0.2 :cache-write 0}
+    :context-window 128000
+    :max-tokens 16384}
+   "magistral-small"
+   {:id "magistral-small"
+    :name "Magistral Small"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0.5 :output 1.5 :cache-read 0.05 :cache-write 0}
+    :context-window 128000
+    :max-tokens 128000}
+   "ministral-3b-latest"
+   {:id "ministral-3b-latest"
+    :name "Ministral 3B (latest)"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.04 :output 0.04 :cache-read 0.004 :cache-write 0}
+    :context-window 128000
+    :max-tokens 128000}
+   "ministral-8b-latest"
+   {:id "ministral-8b-latest"
+    :name "Ministral 8B (latest)"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.1 :output 0.1 :cache-read 0.01 :cache-write 0}
+    :context-window 128000
+    :max-tokens 128000}
+   "mistral-large-2411"
+   {:id "mistral-large-2411"
+    :name "Mistral Large 2.1"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 2 :output 6 :cache-read 0.2 :cache-write 0}
+    :context-window 131072
+    :max-tokens 16384}
+   "mistral-large-2512"
+   {:id "mistral-large-2512"
+    :name "Mistral Large 3"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.5 :output 1.5 :cache-read 0.05 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144}
+   "mistral-large-latest"
+   {:id "mistral-large-latest"
+    :name "Mistral Large (latest)"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.5 :output 1.5 :cache-read 0.05 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144}
+   "mistral-medium-2505"
+   {:id "mistral-medium-2505"
+    :name "Mistral Medium 3"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.4 :output 2 :cache-read 0.04 :cache-write 0}
+    :context-window 131072
+    :max-tokens 131072}
+   "mistral-medium-2508"
+   {:id "mistral-medium-2508"
+    :name "Mistral Medium 3.1"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.4 :output 2 :cache-read 0.04 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144}
+   "mistral-medium-2604"
+   {:id "mistral-medium-2604"
+    :name "Mistral Medium 3.5"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144}
+   "mistral-medium-3.5"
+   {:id "mistral-medium-3.5"
+    :name "Mistral Medium 3.5"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 1.5 :output 7.5 :cache-read 0 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144}
+   "mistral-medium-latest"
+   {:id "mistral-medium-latest"
+    :name "Mistral Medium (latest)"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144}
+   "mistral-nemo"
+   {:id "mistral-nemo"
+    :name "Mistral Nemo"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.15 :output 0.15 :cache-read 0.015 :cache-write 0}
+    :context-window 128000
+    :max-tokens 128000}
+   "mistral-small-2506"
+   {:id "mistral-small-2506"
+    :name "Mistral Small 3.2"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.1 :output 0.3 :cache-read 0.01 :cache-write 0}
+    :context-window 128000
+    :max-tokens 16384}
+   "mistral-small-2603"
+   {:id "mistral-small-2603"
+    :name "Mistral Small 4"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.15 :output 0.6 :cache-read 0.015 :cache-write 0}
+    :context-window 256000
+    :max-tokens 256000}
+   "mistral-small-latest"
+   {:id "mistral-small-latest"
+    :name "Mistral Small (latest)"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.15 :output 0.6 :cache-read 0.015 :cache-write 0}
+    :context-window 256000
+    :max-tokens 256000}
+   "open-mistral-7b"
+   {:id "open-mistral-7b"
+    :name "Mistral 7B"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.25 :output 0.25 :cache-read 0.025 :cache-write 0}
+    :context-window 8000
+    :max-tokens 8000}
+   "open-mistral-nemo"
+   {:id "open-mistral-nemo"
+    :name "Open Mistral Nemo"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.15 :output 0.15 :cache-read 0.015 :cache-write 0}
+    :context-window 128000
+    :max-tokens 128000}
+   "open-mixtral-8x22b"
+   {:id "open-mixtral-8x22b"
+    :name "Mixtral 8x22B"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 2 :output 6 :cache-read 0.2 :cache-write 0}
+    :context-window 64000
+    :max-tokens 64000}
+   "open-mixtral-8x7b"
+   {:id "open-mixtral-8x7b"
+    :name "Mixtral 8x7B"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.7 :output 0.7 :cache-read 0.07 :cache-write 0}
+    :context-window 32000
+    :max-tokens 32000}
+   "pixtral-12b"
+   {:id "pixtral-12b"
+    :name "Pixtral 12B"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.15 :output 0.15 :cache-read 0.015 :cache-write 0}
+    :context-window 128000
+    :max-tokens 128000}
+   "pixtral-large-latest"
+   {:id "pixtral-large-latest"
+    :name "Pixtral Large (latest)"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 2 :output 6 :cache-read 0.2 :cache-write 0}
+    :context-window 128000
+    :max-tokens 128000}
+   "voxtral-small-latest"
+   {:id "voxtral-small-latest"
+    :name "Voxtral Small (latest)"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.1 :output 0.3 :cache-read 0.01 :cache-write 0}
+    :context-window 32000
+    :max-tokens 32000}}}}

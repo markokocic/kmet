@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T15:35:00Z"
+ :generated-at "2026-08-13T22:50:59Z"
  :provider {:id :opencode
             :name "OpenCode (Zen)"
             :env-vars ["OPENCODE_API_KEY"]
@@ -231,6 +231,18 @@
    "gemini-3.6-flash"
    {:id "gemini-3.6-flash"
     :name "Gemini 3.6 Flash"
+    :provider :opencode
+    :api :google-generative-ai
+    :base-url "https://opencode.ai/zen/v1"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-3.7-flash"
+   {:id "gemini-3.7-flash"
+    :name "Gemini 3.7 Flash"
     :provider :opencode
     :api :google-generative-ai
     :base-url "https://opencode.ai/zen/v1"

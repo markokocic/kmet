@@ -830,7 +830,9 @@ Be precise and concise in your responses."}}]
   (let [provider @(:provider agent)
         ep (resolve-endpoint agent)
         api-key (resolve-api-key agent)]
-    (when (or api-key (auth/resolve-provider-auth provider))
+    ;; ambient-auth providers (google-vertex ADC, amazon-bedrock AWS
+    ;; credentials) resolve no api-key — configured? covers them
+    (when (or api-key (auth/configured? provider))
       (let [done (promise)
             text-buf (atom "")
             signal (:signal agent)
@@ -870,7 +872,9 @@ Be precise and concise in your responses."}}]
   (let [provider @(:provider agent)
         ep (resolve-endpoint agent)
         api-key (resolve-api-key agent)]
-    (when (or api-key (auth/resolve-provider-auth provider))
+    ;; ambient-auth providers (google-vertex ADC, amazon-bedrock AWS
+    ;; credentials) resolve no api-key — configured? covers them
+    (when (or api-key (auth/configured? provider))
       (let [done (promise)
             text-buf (atom "")
             signal (or signal (:signal agent))
@@ -1122,7 +1126,7 @@ Be precise and concise in your responses."}}]
   (reset! (:signal agent) false)
   (let [provider @(:provider agent)
         api-key (resolve-api-key agent)]
-    (if (nil? (or api-key (auth/resolve-provider-auth provider)))
+    (if (not (or api-key (auth/configured? provider)))
       (do (when message
             ;; The run cannot start, but the submitted message is still shown
             ;; in the chat (pi emits message_start for prompt messages before

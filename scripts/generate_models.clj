@@ -1,10 +1,9 @@
 ;; scripts/generate_models.clj — regenerate src/kmet/app/model_data/*.edn from
 ;; models.dev + the live catalogs (pi: packages/ai/scripts/generate-models.ts,
-;; ported to kmet's 28 providers).
+;; ported to kmet's 39 providers).
 ;;
-;; Wire APIs out of kmet's scope (bedrock, google-vertex, mistral, radius),
-;; the A.3 thinking-format providers (zai, together, baseten, ant-ling) and
-;; kimi-coding (adaptive thinking) are not generated. The generated EDN +
+;; Radius is out of kmet's scope (no wire API); every other pi provider is
+;; generated. The generated EDN +
 ;; manifest.edn are committed; the offline half (validate-committed!) also
 ;; runs as test/kmet/app/test_model_data.clj so drift is caught without
 ;; network.
@@ -111,10 +110,10 @@
                        :default-model "zai/glm-5.1"}
    :zai {:name "Z.AI"
          :env-vars ["ZAI_API_KEY"]
-         :default-model "glm-5.1"}
+         :default-model "glm-5.2"}
    :zai-coding-cn {:name "Z.AI (CN)"
                    :env-vars ["ZAI_CODING_CN_API_KEY"]
-                   :default-model "glm-5.1"}
+                   :default-model "glm-5.2"}
    :together {:name "Together AI"
               :env-vars ["TOGETHER_API_KEY"]
               :default-model "moonshotai/Kimi-K2.6"}
@@ -133,7 +132,16 @@
    :cloudflare-ai-gateway {:name "Cloudflare AI Gateway"
                            :env-vars ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"
                                       "CLOUDFLARE_GATEWAY_ID"]
-                           :default-model "workers-ai/@cf/moonshotai/kimi-k2.6"}))
+                           :default-model "workers-ai/@cf/moonshotai/kimi-k2.6"}
+   :mistral {:name "Mistral"
+             :env-vars ["MISTRAL_API_KEY"]
+             :default-model "devstral-medium-latest"}
+   :google-vertex {:name "Google Vertex AI"
+                   :env-vars ["GOOGLE_CLOUD_API_KEY"]
+                   :default-model "gemini-3.1-pro-preview"}
+   :amazon-bedrock {:name "Amazon Bedrock"
+                    :env-vars []          ;; ambient AWS credentials (no api-key var)
+                    :default-model "us.anthropic.claude-opus-4-6-v1"}))
 
 (def opencode-variants
   "pi opencodeVariants: models.dev key → kmet provider id + API base path."
@@ -1266,6 +1274,96 @@
         (model-map :cloudflare-ai-gateway api base m id {:compat compat})
         m)))))
 
+;; ─── Deferred A.2: mistral / google-vertex / amazon-bedrock (pi            ──
+;;    loadModelsDevData sections) ──────────────────────────────────────────
+
+(def ^:private mistral-base-url "https://api.mistral.ai")
+(def ^:private vertex-base-url "https://{location}-aiplatform.googleapis.com")
+(def ^:private bedrock-inference-profile-only-model-ids #{"anthropic.claude-opus-5"})
+
+(defn- process-mistral
+  "pi: all models.dev mistral models → :mistral-conversations
+   (https://api.mistral.ai). The cache-read rate falls back to 10% of the
+   input rate when models.dev reports none (pi)."
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["mistral" "models"]) {})
+         :when (true? (get m "tool_call"))]
+     (let [input (get-in m ["cost" "input"])
+           cache-read (get-in m ["cost" "cache_read"])
+           cost (array-map :input (or input 0)
+                           :output (or (get-in m ["cost" "output"]) 0)
+                           :cache-read (if (pos? (or cache-read 0))
+                                         cache-read
+                                         (round-cost (* (or input 0) 0.1)))
+                           :cache-write (or (get-in m ["cost" "cache_write"]) 0))]
+       (apply-thinking-maps
+        (assoc (model-map :mistral :mistral-conversations mistral-base-url m mid {})
+               :cost cost)
+        m)))))
+
+;; mistral-medium-3.5 (pi: hardcoded until models.dev includes it)
+(def ^:private mistral-medium-35-model
+  (array-map :id "mistral-medium-3.5" :name "Mistral Medium 3.5"
+             :provider :mistral :api :mistral-conversations
+             :base-url mistral-base-url :reasoning true :input [:text :image]
+             :cost (array-map :input 1.5 :output 7.5 :cache-read 0 :cache-write 0)
+             :context-window 262144 :max-tokens 262144))
+
+(defn- process-google-vertex
+  "pi: the google-vertex models.dev catalog (gemini models only — the MaaS
+   claude/openai entries use other APIs). The -latest aliases take their
+   capabilities from the named source model; gemini-2.5-flash's models.dev
+   cache rate doesn't match the official pricing, so it is pinned (pi)."
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["google-vertex" "models"]) {})
+         :when (and (true? (get m "tool_call"))
+                    (str/starts-with? mid "gemini-")
+                    (not= mid "gemini-3.1-flash-lite-preview"))
+         :let [source (cond
+                        (= mid "gemini-flash-latest")
+                        (get-in data ["google-vertex" "models" "gemini-3.5-flash"])
+                        (= mid "gemini-flash-lite-latest")
+                        (get-in data ["google-vertex" "models" "gemini-3.1-flash-lite"])
+                        :else m)
+               merged (merge m (select-keys source ["reasoning" "modalities" "cost" "limit"]))
+               cost (assoc (cost-map merged)
+                           :cache-read (if (= mid "gemini-2.5-flash")
+                                         0.03
+                                         (or (get-in merged ["cost" "cache_read"]) 0))
+                           :cache-write 0)]]
+     (apply-thinking-maps
+      (assoc (model-map :google-vertex :google-vertex vertex-base-url merged mid {})
+             :cost cost)
+      m))))
+
+(defn- bedrock-base-url
+  "pi getBedrockBaseUrl: eu.* ids hit the eu-central-1 endpoint."
+  [mid]
+  (if (str/starts-with? mid "eu.")
+    "https://bedrock-runtime.eu-central-1.amazonaws.com"
+    "https://bedrock-runtime.us-east-1.amazonaws.com"))
+
+(defn- process-amazon-bedrock
+  "pi: all models.dev amazon-bedrock models → :bedrock-converse-stream.
+   Excluded: inference-profile-only ids, ai21.jamba* (no tool-use
+   streaming), mistral.mistral-7b-instruct-v0* (no system messages).
+   structured_output models get supportsStrictMode."
+  [data]
+  (doall
+   (for [[mid m] (or (get-in data ["amazon-bedrock" "models"]) {})
+         :when (and (true? (get m "tool_call"))
+                    (not (contains? bedrock-inference-profile-only-model-ids mid))
+                    (not (str/starts-with? mid "ai21.jamba"))
+                    (not (str/starts-with? mid "mistral.mistral-7b-instruct-v0")))
+         :let [compat (when (true? (get m "structured_output"))
+                        (array-map :supports-strict-mode true))]]
+     (apply-thinking-maps
+      (model-map :amazon-bedrock :bedrock-converse-stream (bedrock-base-url mid) m mid
+                 {:compat compat})
+      m))))
+
 ;; ─── applyOpenAICompletionsCompatMetadata (pi detectOpenAICompletionsCompat ──
 ;;     + openAICompletionsCompatDelta): URL-based compat auto-detection
 ;;     merged under the model's explicit compat — fills the gaps the section
@@ -1729,6 +1827,9 @@
                          (process-kimi-coding data)
                          (process-cloudflare-workers-ai data)
                          (process-cloudflare-ai-gateway data)
+                         (process-mistral data)
+                         (process-google-vertex data)
+                         (process-amazon-bedrock data)
                          (map #(apply-thinking-maps % nil) (process-openrouter openrouter-models))
                          (map #(apply-thinking-maps % nil)
                               (process-vercel-ai-gateway ai-gateway-models))
@@ -1736,6 +1837,13 @@
                          (map #(apply-thinking-maps % nil) deepseek-v4-models)
                          (map #(apply-thinking-maps % nil) (process-codex)))
                  (remove nil?))
+        ;; pi: mistral-medium-3.5 is hardcoded until models.dev includes it
+        all (if (some #(and (= :mistral (:provider %))
+                            (= "mistral-medium-3.5" (:id %)))
+                      all)
+              all
+              (concat all (map #(apply-thinking-maps % nil)
+                               [mistral-medium-35-model])))
         ;; pi: minimax models are filtered to the ids the direct API serves
         ;; (MiniMax-M2.7/-highspeed/M3) after all sources
         minimax-supported (set minimax-direct-supported-ids)

@@ -5,6 +5,8 @@
             [kmet.app.llm :as llm]
             [kmet.app.models :as models]
             [kmet.app.auth :as auth]
+            [kmet.app.aws-sigv4 :as aws-sigv4]
+            [kmet.app.google-adc :as google-adc]
             [kmet.app.tools.core :as tools]
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
@@ -304,6 +306,64 @@
     (t/is (true? (deref done 2000 :timeout)) "error callback fires")
     (t/is (pos? (count @errors)))
     (t/is (.contains (first @errors) "No API key"))))
+
+(t/deftest test-loop-run-agent-turn-ambient-auth
+  ;; google-vertex (ADC) and amazon-bedrock (AWS credentials) resolve no
+  ;; api-key — the run guard must accept them as configured (the request
+  ;; path resolves ambient auth itself), i.e. send-message is called
+  ;; instead of the "No API key" refusal.
+  (t/testing "amazon-bedrock with ambient AWS credentials"
+    (let [agent (loop/make-agent-state)
+          sent (atom nil)
+          errors (atom [])]
+      (with-redefs [aws-sigv4/getenv (fn [k] (case k "AWS_ACCESS_KEY_ID" "AKID"
+                                                   "AWS_SECRET_ACCESS_KEY" "SECRET" nil))
+                    auth/auth-atom (atom {})
+                    llm/send-message
+                    (fn [opts]
+                      (reset! sent opts)
+                      (future
+                        (when-let [on-text (:on-text opts)] (on-text "ok"))
+                        (when-let [on-done (:on-done opts)] (on-done :stop))
+                        :done))]
+        ;; deref inside the redef — the run's future reads the env at runtime
+        @(loop/run-agent-turn (assoc agent :provider (atom :amazon-bedrock))
+                              {:message "hello"
+                               :on-error (fn [e] (swap! errors conj e))}))
+      (t/is (= [] @errors))
+      (t/is (some? @sent) "send-message ran — the ambient guard passed")))
+  (t/testing "google-vertex with ADC configured"
+    (let [agent (loop/make-agent-state)
+          sent (atom nil)
+          errors (atom [])]
+      (with-redefs [google-adc/configured? (constantly true)
+                    auth/getenv (fn [k] (case k "GOOGLE_CLOUD_PROJECT" "p"
+                                              "GCLOUD_PROJECT" nil
+                                              "GOOGLE_CLOUD_LOCATION" "loc" nil))
+                    llm/send-message
+                    (fn [opts]
+                      (reset! sent opts)
+                      (future
+                        (when-let [on-text (:on-text opts)] (on-text "ok"))
+                        (when-let [on-done (:on-done opts)] (on-done :stop))
+                        :done))]
+        @(loop/run-agent-turn (assoc agent :provider (atom :google-vertex))
+                              {:message "hello"
+                               :on-error (fn [e] (swap! errors conj e))}))
+      (t/is (= [] @errors))
+      (t/is (some? @sent) "send-message ran — the ambient guard passed")))
+  (t/testing "unconfigured provider still refuses with No API key"
+    (let [agent (loop/make-agent-state)
+          errors (atom [])
+          done (promise)]
+      (with-redefs [auth/getenv (fn [_] nil)
+                    google-adc/configured? (constantly false)
+                    aws-sigv4/getenv (fn [_] nil)]
+        (loop/run-agent-turn (assoc agent :provider (atom :deepseek))
+                             {:message "hello"
+                              :on-error (fn [e] (swap! errors conj e) (deliver done true))}))
+      (t/is (true? (deref done 2000 :timeout)))
+      (t/is (.contains (first @errors) "No API key")))))
 
 ;; ─── run-agent-turn with valid state ─────────────────────────────────────
 

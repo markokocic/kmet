@@ -785,13 +785,18 @@
           cache-write (or (get-in usage [:prompt_tokens_details :cache_write_tokens])
                           (get-in usage [:input_tokens_details :cache_write_tokens])
                           (:cache_creation_input_tokens usage)
+                          (:cache_write_input_tokens usage)
                           (:cache-write usage))
           prompt (:prompt_tokens usage)
-          ;; OpenAI responses' input_tokens includes cached/cache-write tokens
-          ;; — subtract them exactly like chat's prompt_tokens (pi
-          ;; normalizeUsage; the details sub-map marks the responses shape).
+          ;; OpenAI responses' and Bedrock ConverseStream input_tokens include
+          ;; cached/cache-write tokens — subtract them exactly like chat's
+          ;; prompt_tokens (pi normalizeUsage; the details sub-map marks the
+          ;; responses shape, the cache_*_input_tokens keys the bedrock one).
           responses? (or (get-in usage [:input_tokens_details :cached_tokens])
-                         (get-in usage [:input_tokens_details :cache_write_tokens]))
+                         (get-in usage [:input_tokens_details :cache_write_tokens])
+                         ;; Bedrock ConverseStream (anthropic's shape uses
+                         ;; cache_creation_input_tokens for writes instead)
+                         (contains? usage :cache_write_input_tokens))
           input (cond
                   responses? (max 0 (- (long (or (:input_tokens usage) 0))
                                        (long (or cache-read 0))

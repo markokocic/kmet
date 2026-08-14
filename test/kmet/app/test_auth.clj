@@ -5,6 +5,8 @@
             [clojure.edn :as edn]
             [babashka.fs :as fs]
             [kmet.app.auth :as auth]
+            [kmet.app.aws-sigv4 :as aws-sigv4]
+            [kmet.app.google-adc :as google-adc]
             [kmet.config :as cfg]))
 
 (defn- with-auth-file
@@ -58,7 +60,11 @@
     (t/is (= ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"]
              (auth/provider-env-vars :cloudflare-workers-ai)))
     (t/is (= ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID" "CLOUDFLARE_GATEWAY_ID"]
-             (auth/provider-env-vars :cloudflare-ai-gateway))))
+             (auth/provider-env-vars :cloudflare-ai-gateway)))
+    (t/is (= ["MISTRAL_API_KEY"] (auth/provider-env-vars :mistral)))
+    (t/is (= ["GOOGLE_CLOUD_API_KEY"] (auth/provider-env-vars :google-vertex)))
+    (t/is (= [] (auth/provider-env-vars :amazon-bedrock))
+          "bedrock auth is ambient AWS credentials — no api-key env var"))
   (t/testing "unknown provider → empty"
     (t/is (= [] (auth/provider-env-vars :nonexistent)))))
 
@@ -238,3 +244,34 @@
     (with-redefs [auth/auth-atom (atom {})
                   auth/getenv (fn [_] nil)]
       (t/is (nil? (auth/resolve-provider-auth :anthropic))))))
+
+(t/deftest test-ambient-configured
+  (t/testing "amazon-bedrock: any AWS credential source configures the provider"
+    (with-redefs [auth/getenv (fn [_] nil)
+                  aws-sigv4/getenv (fn [_] nil)]
+      (t/is (not (auth/ambient-configured? :amazon-bedrock)))
+      (t/is (not (auth/configured? :amazon-bedrock))))
+    (with-redefs [aws-sigv4/getenv (fn [k] (when (= k "AWS_ACCESS_KEY_ID") "AKID"))]
+      (t/is (not (auth/ambient-configured? :amazon-bedrock)) "key alone is not enough"))
+    (with-redefs [aws-sigv4/getenv (fn [k] (case k "AWS_ACCESS_KEY_ID" "AKID"
+                                                 "AWS_SECRET_ACCESS_KEY" "SECRET" nil))]
+      (t/is (auth/ambient-configured? :amazon-bedrock)))
+    (with-redefs [aws-sigv4/getenv (fn [k] (when (= k "AWS_BEARER_TOKEN_BEDROCK") "tok"))]
+      (t/is (auth/ambient-configured? :amazon-bedrock)))
+    (with-redefs [aws-sigv4/getenv (fn [k] (when (= k "AWS_PROFILE") "default"))]
+      (t/is (auth/ambient-configured? :amazon-bedrock)))
+    (with-redefs [auth/getenv (fn [k] (when (= k "AWS_BEDROCK_SKIP_AUTH") "1"))]
+      (t/is (auth/ambient-configured? :amazon-bedrock)) "skip-auth counts as configured"))
+  (t/testing "google-vertex: ADC credentials + project + location (pi)"
+    (with-redefs [google-adc/configured? (constantly false)
+                  auth/getenv (fn [_] nil)]
+      (t/is (not (auth/ambient-configured? :google-vertex))))
+    (with-redefs [google-adc/configured? (constantly true)
+                  auth/getenv (fn [k] (case k "GOOGLE_CLOUD_PROJECT" "p"
+                                            "GCLOUD_PROJECT" nil
+                                            "GOOGLE_CLOUD_LOCATION" "us-central1" nil))]
+      (t/is (auth/ambient-configured? :google-vertex)))
+    (with-redefs [google-adc/configured? (constantly true)
+                  auth/getenv (fn [_] nil)]
+      (t/is (not (auth/ambient-configured? :google-vertex)) "project/location required")))
+  (t/is (not (auth/ambient-configured? :openai)) "api-key providers are never ambient"))

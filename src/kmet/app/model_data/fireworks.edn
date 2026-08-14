@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T15:35:00Z"
+ :generated-at "2026-08-13T22:50:59Z"
  :provider {:id :fireworks
             :name "Fireworks AI"
             :env-vars ["FIREWORKS_API_KEY"]
@@ -81,6 +81,21 @@
              :send-session-affinity-headers true
              :supports-cache-control-on-tools false
              :supports-eager-tool-input-streaming false}}
+   "accounts/fireworks/models/inkling"
+   {:id "accounts/fireworks/models/inkling"
+    :name "Inkling"
+    :provider :fireworks
+    :api :anthropic-messages
+    :base-url "https://api.fireworks.ai/inference"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 1 :output 4.05 :cache-read 0.17 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 1048576
+    :compat {:supports-long-cache-retention false
+             :send-session-affinity-headers true
+             :supports-cache-control-on-tools false
+             :supports-eager-tool-input-streaming false}}
    "accounts/fireworks/models/kimi-k2p6"
    {:id "accounts/fireworks/models/kimi-k2p6"
     :name "Kimi K2.6"
@@ -141,6 +156,51 @@
              :send-session-affinity-headers true
              :supports-cache-control-on-tools false
              :supports-eager-tool-input-streaming false}}
+   "accounts/fireworks/models/muse-glimmer-30b"
+   {:id "accounts/fireworks/models/muse-glimmer-30b"
+    :name "Muse Glimmer 30B"
+    :provider :fireworks
+    :api :anthropic-messages
+    :base-url "https://api.fireworks.ai/inference"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.35 :output 1.5 :cache-read 0.04 :cache-write 0}
+    :context-window 131072
+    :max-tokens 131072
+    :compat {:supports-long-cache-retention false
+             :send-session-affinity-headers true
+             :supports-cache-control-on-tools false
+             :supports-eager-tool-input-streaming false}}
+   "accounts/fireworks/models/nemotron-3-ultra-nvfp4"
+   {:id "accounts/fireworks/models/nemotron-3-ultra-nvfp4"
+    :name "Nemotron 3 Ultra 550B A55B"
+    :provider :fireworks
+    :api :anthropic-messages
+    :base-url "https://api.fireworks.ai/inference"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0.6 :output 2.4 :cache-read 0.119 :cache-write 0}
+    :context-window 262144
+    :max-tokens 128000
+    :compat {:supports-long-cache-retention false
+             :send-session-affinity-headers true
+             :supports-cache-control-on-tools false
+             :supports-eager-tool-input-streaming false}}
+   "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b"
+   {:id "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b"
+    :name "Nemotron 3.5 Lightning 30B A3B"
+    :provider :fireworks
+    :api :anthropic-messages
+    :base-url "https://api.fireworks.ai/inference"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0.05 :output 0.2 :cache-read 0.01 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144
+    :compat {:supports-long-cache-retention false
+             :send-session-affinity-headers true
+             :supports-cache-control-on-tools false
+             :supports-eager-tool-input-streaming false}}
    "accounts/fireworks/models/qwen3p7-plus"
    {:id "accounts/fireworks/models/qwen3p7-plus"
     :name "Qwen 3.7 Plus"
@@ -152,6 +212,21 @@
     :cost {:input 0.4 :output 1.6 :cache-read 0.08 :cache-write 0}
     :context-window 262144
     :max-tokens 65536
+    :compat {:supports-long-cache-retention false
+             :send-session-affinity-headers true
+             :supports-cache-control-on-tools false
+             :supports-eager-tool-input-streaming false}}
+   "accounts/fireworks/models/qwen3p8-max"
+   {:id "accounts/fireworks/models/qwen3p8-max"
+    :name "Qwen3.8 Max"
+    :provider :fireworks
+    :api :anthropic-messages
+    :base-url "https://api.fireworks.ai/inference"
+    :reasoning true
+    :input [:text]
+    :cost {:input 2 :output 6 :cache-read 0.25 :cache-write 0}
+    :context-window 262144
+    :max-tokens 131072
     :compat {:supports-long-cache-retention false
              :send-session-affinity-headers true
              :supports-cache-control-on-tools false

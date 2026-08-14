@@ -105,7 +105,8 @@
                :qwen-token-plan :qwen-token-plan-cn :qwen-token-plan-individual
                :minimax :minimax-cn :nvidia :openrouter :fireworks
                :vercel-ai-gateway :zai :zai-coding-cn :together :baseten
-               :ant-ling :kimi-coding :cloudflare-workers-ai :cloudflare-ai-gateway}
+               :ant-ling :kimi-coding :cloudflare-workers-ai :cloudflare-ai-gateway
+               :mistral :google-vertex :amazon-bedrock}
              (set (keys providers))))
     (t/testing "provider records carry catalog metadata"
       (let [og (m/get-provider :opencode-go)]
@@ -159,7 +160,15 @@
       (t/is (= ["OPENAI_API_KEY"] (:env-vars (m/get-provider :openai))))
       (t/is (= ["XAI_API_KEY"] (:env-vars (m/get-provider :xai))))
       (t/is (= "gpt-5.5" (:default-model (m/get-provider :openai))))
-      (t/is (= "grok-4.5" (:default-model (m/get-provider :xai)))))
+      (t/is (= "grok-4.5" (:default-model (m/get-provider :xai))))
+      (t/is (= #{:mistral-conversations} (:api-types (m/get-provider :mistral))))
+      (t/is (= ["MISTRAL_API_KEY"] (:env-vars (m/get-provider :mistral))))
+      (t/is (= "devstral-medium-latest" (:default-model (m/get-provider :mistral))))
+      (t/is (= #{:google-vertex} (:api-types (m/get-provider :google-vertex))))
+      (t/is (= ["GOOGLE_CLOUD_API_KEY"] (:env-vars (m/get-provider :google-vertex))))
+      (t/is (= #{:bedrock-converse-stream} (:api-types (m/get-provider :amazon-bedrock))))
+      (t/is (= [] (:env-vars (m/get-provider :amazon-bedrock)))
+            "bedrock auth is ambient AWS credentials — no api-key var"))
     (t/testing "default provider/model resolves against the opencode-go catalog"
       (t/is (= "deepseek-v4-flash" (:id (m/default-model-for :opencode-go)))))))
 
@@ -174,7 +183,9 @@
         sampled (mapv (fn [p] (first (:models p))) providers)
         api-set #{:openai-completions :openai-responses
                   :openai-codex-responses :azure-openai-responses
-                  :anthropic-messages :google-generative-ai}
+                  :anthropic-messages :google-generative-ai
+                  :mistral-conversations :google-vertex
+                  :bedrock-converse-stream}
         violations (into []
                          (keep (fn [mod]
                                  (when mod
@@ -408,7 +419,7 @@
         (m/load-models-config!))
       (t/testing "parse failure → error surfaced, built-ins kept"
         (t/is (some? (m/get-model-config-error)))
-        (t/is (= 36 (count (m/get-providers)))))
+        (t/is (= 39 (count (m/get-providers)))))
       (t/testing "composition failure falls back to the builtin provider"
         (spit path "{:providers {:broken {:models [{:id \"x\"}]}}}\n")
         (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
@@ -444,7 +455,7 @@
           (m/load-models-config!))
         (t/is (nil? (m/get-provider :temp-provider)) "removed provider disappears on reload")
         (t/is (= 888 (:context-window (m/get-model :deepseek "deepseek-v4-pro"))) "override replaces the old value")
-        (t/is (= 36 (count (m/get-providers))) "registry back to builtin count"))
+        (t/is (= 39 (count (m/get-providers))) "registry back to builtin count"))
       (finally
         (fs/delete-tree tmp)
         (m/load-catalogs!)))))
@@ -563,7 +574,7 @@
        (m/map->Provider {:id :ext-b :name "B" :api-types #{:openai-completions}
                          :models [(ext-model "b1")] :env-vars [] :default-model nil}))
       (t/is (= [:ext-a :ext-b] (m/get-registered-provider-ids)))
-      (t/is (= 38 (count (m/get-providers))) "builtins + 2 extension providers"))
+      (t/is (= 41 (count (m/get-providers))) "builtins + 2 extension providers"))
     (finally
       (m/clear-extension-providers!)
       (m/load-catalogs!))))
