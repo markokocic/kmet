@@ -84,7 +84,7 @@
   (let [sb (StringBuilder.)
         _ (.append sb "{:schema-version 1\n")
         _ (.append sb " :generated-at \"")
-        _ (.append sb (str/replace (str (java.time.Instant/now)) "T" "T"))
+        _ (.append sb (str (java.time.Instant/now)))
         _ (.append sb "\"\n")
         _ (.append sb " :provider {:id :openrouter\n")
         _ (.append sb "            :name \"OpenRouter\"}\n")

@@ -229,18 +229,18 @@
    into the registry, replacing whatever was registered before. Also ensures
    the builtin :openrouter-images wire api is registered."
   []
-  (let [path (fs/file catalog-dir "image-models.edn")
-        data (when (fs/exists? path)
-               (try (edn/read-string (slurp path))
-                    (catch Exception _ nil)))
-        provider-info (:provider data)]
-    (when-not (and (map? data) (map? provider-info) (map? (:models data)))
-      (throw (ex-info "Invalid image-model catalog" {:type :images-invalid-catalog})))
-    (register-images-api-provider! :openrouter-images generate-openrouter-images)
-    (clear-providers!)
-    (register-provider!
-     (map->ImagesProvider {:id (:id provider-info)
-                           :name (:name provider-info)
-                           :models (mapv (fn [[id m]] (validate-model-entry id m))
-                                         (:models data))}))
-    nil))
+  (register-images-api-provider! :openrouter-images generate-openrouter-images)
+  (clear-providers!)
+  (let [path (fs/file catalog-dir "image-models.edn")]
+    (when (fs/exists? path)
+      (let [data (try (edn/read-string (slurp path))
+                      (catch Exception _ nil))
+            provider-info (:provider data)]
+        (when-not (and (map? data) (map? provider-info) (map? (:models data)))
+          (throw (ex-info "Invalid image-model catalog" {:type :images-invalid-catalog})))
+        (register-provider!
+         (map->ImagesProvider {:id (:id provider-info)
+                               :name (:name provider-info)
+                               :models (mapv (fn [[id m]] (validate-model-entry id m))
+                                             (:models data))})))))
+  nil)

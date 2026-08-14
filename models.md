@@ -2164,7 +2164,11 @@ until a dynamic provider ships); the api-match guard is structural (keyed
 lookup) instead of a wrapped call-time check; `generate-images` does not
 merge configured headers/env (kmet's auth resolution returns the api key;
 no provider needs extra headers today); no `auth` field on the provider
-record (auth resolves through `kmet.app.auth` by provider id).
+record (auth resolves through `kmet.app.auth` by provider id); the catalog
+costs use pi's formula (prompt/completion/cache rates × 1e6) — OpenRouter's
+newer per-image `image_output` pricing field is not recorded (pi's
+generator predates it, and the token-based cost model has no per-image
+dimension; pure-image models like flux.2 report 0 rates).
 
 ---
 ---
