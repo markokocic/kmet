@@ -15,7 +15,7 @@
 
 ;; ─── CLI argument parsing ──────────────────────────────────────────────────
 
-(defn- parse-args [args]
+(defn parse-args [args]
   (loop [args args
          opts {:provider nil
                :model nil
@@ -23,7 +23,8 @@
                :continue false
                :resume false
                :debug false
-               :messages []}]
+               :messages []
+               :ext-flags {}}]
     (if (empty? args)
       opts
       (let [arg (first args)
@@ -96,6 +97,17 @@
                 (recur rest-args (update opts :messages conj file-content)))
               (do (binding [*out* *err*] (println "Warning: empty path after @"))
                   (recur rest-args opts))))
+
+          (str/starts-with? arg "--")
+          ;; Unknown --flag: collected for extension registerFlag/getFlag
+          ;; (pi: registerFlag + getFlag). A following non-dash arg is the
+          ;; value; a bare --flag is boolean true.
+          (let [name (subs arg 2)]
+            (if (and (seq rest-args)
+                     (not (str/starts-with? (first rest-args) "-")))
+              (recur (rest rest-args)
+                     (assoc-in opts [:ext-flags name] (first rest-args)))
+              (recur rest-args (assoc-in opts [:ext-flags name] true))))
 
           :else
           (recur rest-args (update opts :messages conj arg)))))))
@@ -250,6 +262,10 @@
     (let [config (cfg/init!)]
       (doseq [d (cfg/resource-dirs config :extensions-dir ".kmet/extensions")]
         (extensions/load-extensions-from-dir d))
+
+      ;; Extension CLI flags: the collected --flags become readable via
+      ;; extensions/get-flag (pi: registerFlag + getFlag).
+      (extensions/set-cli-flags! (:ext-flags opts))
 
       ;; --list-models prints the available table and exits (pi: main.ts
       ;; listModels — after catalogs, models.edn, and extensions load so

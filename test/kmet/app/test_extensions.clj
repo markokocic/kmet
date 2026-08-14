@@ -1,10 +1,13 @@
 (ns kmet.app.test-extensions
   (:require [clojure.test :as t]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.app.extensions :as extensions]
             [kmet.ai.models :as models]
-            [kmet.app.session :as session]))
+            [kmet.app.commands :as commands]
+            [kmet.app.session :as session]
+            [kmet.app.tools.core :as tools]))
 
 ;; ─── Extension loading ────────────────────────────────────────────────────
 
@@ -299,3 +302,66 @@
       (finally
         (extensions/set-session! nil)
         (extensions/set-entry-sink! nil)))))
+
+;; ─── Commands, tools, flags, renderers, tool hooks ────────────────────────
+
+(t/deftest test-command-registration
+  (commands/clear-commands!)
+  (try
+    (extensions/register-command! {:name "ext-cmd" :description "ext"
+                                   :handler (fn [_ _] nil)})
+    (t/is (some? (commands/find-command "ext-cmd")))
+    (t/is (some #(= "ext-cmd" (:name %)) (extensions/get-commands)))
+    (t/testing "re-register replaces"
+      (extensions/register-command! {:name "ext-cmd" :description "v2"
+                                     :handler (fn [_ _] nil)})
+      (t/is (= "v2" (:description (commands/find-command "ext-cmd")))))
+    (finally
+      (commands/clear-commands!))))
+
+(t/deftest test-tool-registration
+  (extensions/register-tool! {:name "ext-tool"
+                              :description "ext"
+                              :params {:x {:type :string}}
+                              :execute (fn [_] {:content "ok"})})
+  (t/is (some? (tools/get-tool "ext-tool")))
+  (t/is (some #(= "ext-tool" (:name %)) (extensions/get-all-tools)))
+  (t/testing "execute works through the registry"
+    (t/is (= "ok" (:content (tools/execute-tool "ext-tool" {:x "a"})))))
+  (extensions/unregister-tool! "ext-tool")
+  (t/is (nil? (tools/get-tool "ext-tool"))))
+
+(t/deftest test-flag-registration
+  (extensions/set-cli-flags! {"ext-string" "hello" "ext-bool" true})
+  (try
+    (extensions/register-flag! "ext-string" {:type :string :default "dflt"})
+    (extensions/register-flag! "ext-bool" {:type :boolean})
+    (extensions/register-flag! "ext-default" {:type :string :default "fallback"})
+    (t/is (= "hello" (extensions/get-flag "ext-string")))
+    (t/is (true? (extensions/get-flag "ext-bool")))
+    (t/is (= "fallback" (extensions/get-flag "ext-default")))
+    (t/is (nil? (extensions/get-flag "unregistered")))
+    (finally
+      (extensions/set-cli-flags! {}))))
+
+(t/deftest test-message-renderer-registry
+  (extensions/register-message-renderer! "chart" (fn [_] {:role :info :content "rendered"}))
+  (t/is (some? (extensions/get-message-renderer "chart")))
+  (t/is (nil? (extensions/get-message-renderer "nope")))
+  (extensions/clear-extensions!)
+  (t/is (nil? (extensions/get-message-renderer "chart"))))
+
+(t/deftest test-tool-hook-registries
+  (extensions/register-tool-call-hook! (fn [_] nil))
+  (extensions/register-tool-result-hook! (fn [_] nil))
+  (t/is (= 1 (count (extensions/get-tool-call-hooks))))
+  (t/is (= 1 (count (extensions/get-tool-result-hooks))))
+  (extensions/clear-extensions!)
+  (t/is (empty? (extensions/get-tool-call-hooks)))
+  (t/is (empty? (extensions/get-tool-result-hooks))))
+
+(t/deftest ^:slow test-exec
+  (t/testing "exec runs a command and captures output"
+    (let [r (extensions/exec (if (fs/windows?) "cmd" "sh") ["-c" "echo hi"])]
+      (t/is (= 0 (:exit r)))
+      (t/is (str/includes? (str (:out r)) "hi")))))

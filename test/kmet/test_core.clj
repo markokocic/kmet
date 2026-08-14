@@ -62,3 +62,9 @@
                             models/get-available (fn [] [])]
                 (@#'core/list-models nil)))]
     (t/is (str/includes? out "No models available"))))
+
+(t/deftest test-parse-args-ext-flags
+  (let [opts (core/parse-args ["hello" "--ext-string" "v1" "--ext-bool"])]
+    (t/is (= ["hello"] (:messages opts)))
+    (t/is (= "v1" (get-in opts [:ext-flags "ext-string"])))
+    (t/is (true? (get-in opts [:ext-flags "ext-bool"])))))

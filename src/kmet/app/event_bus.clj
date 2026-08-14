@@ -96,6 +96,16 @@
    "Model was changed (pi: model_select).
     Payload: :model, :previous-model, :source (:set | :cycle)."
 
+   :thinking-level-select
+   "Thinking level changed (pi: thinking_level_select, emitted by
+    loop/set-thinking-level! on an actual change).
+    Payload: :level."
+
+   :session-info-changed
+   "Session display name changed (pi: session_info_changed, emitted by the
+    /name command).
+    Payload: :session-file, :name."
+
    :context-replaced
    "Fired when prepareNextTurn replaces the conversation context.
     Payload: :messages — the new conversation messages."

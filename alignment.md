@@ -120,15 +120,19 @@ Missing (pi `core/extensions/types.ts`):
 
 | API | purpose |
 |---|---|
-| `registerTool` | extension-defined tools (kmet `app/tools/registry.clj` has `register-tool!` but no extension-facing wrapper) |
-| `registerCommand`, `registerShortcut`, `registerFlag`/`getFlag` | extension commands/shortcuts/CLI flags |
-| `registerMessageRenderer`, `registerMarkdownTransformer` | custom message/markdown rendering (`registerEntryRenderer` is done — `extensions/register-entry-renderer!`) |
-| `sendUserMessage` (deliverAs steer/followUp) | queue user messages from extensions |
-| `setModel`, `getThinkingLevel`, `setThinkingLevel` | model/thinking control |
-| `exec` | shell command helper |
-| `getActiveTools`/`getAllTools`/`setActiveTools`, `getCommands` | tool/command introspection |
-| `registerProvider` `streamSimple`/`refreshModels` | custom wire APIs + live model refresh |
-| Events: `resources_discover`, `session_info_changed`, `session_before_switch`, `session_before_fork`, `session_before_compact`, `context`, `before_provider_request`, `before_provider_headers`, `after_provider_response`, `thinking_level_select`, `tool_call`, `tool_result` | see Appendix |
+| `registerTool` | **Done** — `extensions/register-tool!` (Tool record or `make-tool` kwargs) |
+| `registerCommand` / `getCommands` | **Done** — `extensions/register-command!` / `get-commands` (slash registry wrapper) |
+| `registerShortcut` | Missing — needs runtime keybinding-definition support in the tui manager |
+| `registerFlag`/`getFlag` | **Done** — unknown `--flag [value]` collected by `core.clj`, `extensions/register-flag!`/`get-flag` with :type coercion + defaults |
+| `registerMessageRenderer` | **Done** — `extensions/register-message-renderer!` overrides the custom-message info box at replay + live (`registerMarkdownTransformer` still missing) |
+| `sendUserMessage` (deliverAs steer/followUp) | **Done** — `extensions/send-user-message` → loop steer!/follow-up! |
+| `setModel`, `getThinkingLevel`, `setThinkingLevel` | **Done** — via the ui registry (auth-gated setModel, validated levels) |
+| `exec` | **Done** — `extensions/exec` (babashka.process, string capture) |
+| `getActiveTools`/`getAllTools`/`setActiveTools` | **Done** — `:enabled-tools` filter on the agent state, applied to the wire `:tools`; `get-all-tools` returns the array |
+| `registerProvider` `streamSimple`/`refreshModels` | Missing — needs wire-layer custom-handler support |
+| Events: `resources_discover`, `session_before_switch`, `session_before_fork`, `session_before_compact`, `context`, `before_provider_request`, `before_provider_headers`, `after_provider_response` | Missing — see Appendix |
+| Events: `session_info_changed`, `thinking_level_select` | **Done** — emitted by `/name` and `set-thinking-level!` |
+| Events: `tool_call`/`tool_result` (transform) | **Done** — `extensions/register-tool-call-hook!`/`register-tool-result-hook!` chained as the agent's before/after-tool-call hooks (block / arg-rewrite / result-rewrite) |
 
 ### 6. Smaller gaps
 

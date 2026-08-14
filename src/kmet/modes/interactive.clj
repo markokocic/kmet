@@ -726,6 +726,12 @@
                    (if (seq args)
                      (let [sanitized (session/sanitize-session-name args)]
                        (session/append-session-info! sess sanitized)
+                       ;; pi: session_info_changed — extensions track the
+                       ;; display name
+                       (event-bus/emit-event!
+                        {:type :session-info-changed
+                         :session-file (:file sess)
+                         :name sanitized})
                        (when-not (= args sanitized)
                          ;; pi: warn when normalization changed the input
                          (ui/show-warning!
@@ -1111,12 +1117,16 @@
         (= role :custom-message)
         ;; extension custom messages render only when display is set (pi:
         ;; the display flag controls TUI rendering); content may be a string
-        ;; or a block vector (pi CustomMessageEntry)
+        ;; or a block vector (pi CustomMessageEntry). A registered message
+        ;; renderer overrides the default labeled info box.
         (when (:display e)
-          (ui/chat-history-add-message! (:chat-history cs)
-                                        {:role :info
-                                         :content (custom-message-text e)
-                                         :label (:custom-type e)}))
+          (ui/chat-history-add-message!
+           (:chat-history cs)
+           (if-let [renderer (extensions/get-message-renderer (:custom-type e))]
+             (renderer e)
+             {:role :info
+              :content (custom-message-text e)
+              :label (:custom-type e)})))
 
         :else
         (let [content (if (contains? #{:compaction :branch-summary} role)
@@ -2050,6 +2060,45 @@
             :max-retries (let [retry (cfg/get-retry-settings config)]
                            (if (:enabled retry) (:max-retries retry) 0))
             :base-delay-ms (:base-delay-ms (cfg/get-retry-settings config))
+            ;; Extension tool hooks (pi: tool_call / tool_result transforms):
+            ;; chained in registration order; later hooks see earlier
+            ;; rewrites. Captured at layout build — extensions register at
+            ;; load, before the agent state exists.
+            :before-tool-call (fn [ctx]
+                                (loop [hooks (extensions/get-tool-call-hooks)
+                                       blocked nil
+                                       args (:args ctx)]
+                                  (if-let [hook (first hooks)]
+                                    (let [r (try (hook (assoc ctx :args args))
+                                                 (catch Exception e
+                                                   {:block true
+                                                    :reason (str "tool-call hook error: "
+                                                                 (ex-message e))}))]
+                                      (cond
+                                        (:block r)
+                                        (recur (next hooks)
+                                               (or blocked {:block true :reason (:reason r)})
+                                               args)
+                                        (contains? r :args)
+                                        (recur (next hooks) blocked (:args r))
+                                        :else
+                                        (recur (next hooks) blocked args)))
+                                    (or blocked
+                                        (when (not= args (:args ctx)) {:args args})))))
+            :after-tool-call (fn [ctx]
+                               (reduce (fn [result hook]
+                                         (if-let [r (try (hook (assoc ctx :result result
+                                                                      :is-error (:is-error result false)))
+                                                         (catch Exception e
+                                                           {:content (str "tool-result hook error: "
+                                                                          (ex-message e))
+                                                            :is-error true}))]
+                                           (cond-> result
+                                             (:content r) (assoc :content (:content r))
+                                             (contains? r :is-error) (assoc :is-error (:is-error r)))
+                                           result))
+                                       (:result ctx)
+                                       (extensions/get-tool-result-hooks)))
             :on-event (fn [evt]
                         (case (:type evt)
                           :tool-execution-start
@@ -2189,9 +2238,12 @@
                                ch
                                (map (fn [m]
                                       (if (and (= :custom (:role m)) (:display m))
-                                        (assoc m :role :info
-                                               :content (custom-message-text m)
-                                               :label (:custom-type m))
+                                        (if-let [renderer (extensions/get-message-renderer
+                                                           (:custom-type m))]
+                                          (renderer m)
+                                          (assoc m :role :info
+                                                 :content (custom-message-text m)
+                                                 :label (:custom-type m)))
                                         m))
                                     (remove #(and (= :custom (:role %))
                                                   (not (:display %)))
@@ -2853,6 +2905,36 @@
                                  (when (not= current? expanded?)
                                    (ui/chat-history-toggle-tool-expanded! ch)))
                                (tui/tui-request-render t))
+         ;; Agent control (pi: ctx.setModel / getThinkingLevel /
+         ;; setThinkingLevel / sendUserMessage / getActiveTools /
+         ;; setActiveTools)
+         :set-model (fn [model]
+                      (if (and model (models/has-configured-auth model))
+                        (let [ag @(:agent-state cs)]
+                          (agent/set-provider! ag (:provider model))
+                          (agent/set-model! ag (:id model))
+                          (sync-footer-model! cs)
+                          true)
+                        false))
+         :set-thinking-level (fn [level]
+                               (when (contains? #{:off :minimal :low :medium
+                                                  :high :xhigh :max} level)
+                                 (agent/set-thinking-level! @(:agent-state cs) level)
+                                 (sync-footer-model! cs))
+                               nil)
+         :get-thinking-level (fn []
+                               (agent/get-thinking-level @(:agent-state cs)))
+         :send-user-message (fn [text & [{:keys [deliver-as]}]]
+                              (let [ag @(:agent-state cs)]
+                                (if (= :steer deliver-as)
+                                  (agent/steer! ag text)
+                                  (agent/follow-up! ag text))))
+         :get-active-tools (fn []
+                             (agent/get-active-tools @(:agent-state cs)))
+         :set-active-tools (fn [names]
+                             (agent/set-active-tools! @(:agent-state cs) names)
+                             (tui/tui-request-render t)
+                             nil)
          :reset (fn []
                   ;; pi: resetExtensionUI — dispose widgets, restore
                   ;; footer/header/editor, clear statuses + working

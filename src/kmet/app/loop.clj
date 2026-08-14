@@ -147,6 +147,7 @@ Be precise and concise in your responses."}}]
                     :signal (atom false)
                     :compact-threshold compact-threshold
                     :thinking (atom thinking)
+                    :enabled-tools (atom nil)
                     :on-event on-event
                     :base-url base-url
                     :api-type api-type
@@ -173,6 +174,33 @@ Be precise and concise in your responses."}}]
                     :pending-bash (atom [])
                     :http-idle-timeout-ms http-idle-timeout-ms}))
 
+;; ─── Active tools (pi: ctx.getActiveTools / setActiveTools) ─────────────
+
+(defn- active-tools
+  "The tools sent to the LLM: the registry filtered to the :enabled-tools
+   set (nil = all), preserving registry order."
+  [agent]
+  (if-let [enabled @(:enabled-tools agent)]
+    (filterv #(contains? enabled (:name %)) (vals (tools/get-all-tools)))
+    (vals (tools/get-all-tools))))
+
+(defn get-active-tools
+  "Names of the currently active tools; nil = all tools active
+   (pi: getActiveTools)."
+  [agent]
+  @(:enabled-tools agent))
+
+(defn set-active-tools!
+  "Restrict the tools sent to the LLM to NAMES (a set or seq of tool
+   names); nil restores all tools (pi: setActiveTools)."
+  [agent names]
+  (reset! (:enabled-tools agent) (when names (set names)))
+  nil)
+
+(defn get-thinking-level
+  "The agent's current thinking level (pi: getThinkingLevel)."
+  [agent]
+  @(:thinking agent))
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
 (defn- emit
@@ -436,8 +464,9 @@ Be precise and concise in your responses."}}]
 
 (defn- before-tool-hook-result
   "Run the before-tool-call hook if registered (pi: beforeToolCall).
-   Returns {:block true :reason ...} to block execution, or nil to allow.
-   A throwing hook blocks with the error message as reason."
+   Returns nil to allow, {:block true :reason ...} to block, or
+   {:args transformed-args} to rewrite the call's arguments. A throwing
+   hook blocks with the error message as reason."
   [agent tc-id tc-name tc-args assistant-msg]
   (when-let [hook @(:before-tool-call agent)]
     (try
@@ -499,11 +528,16 @@ Be precise and concise in your responses."}}]
                                         :tool-name tc-name
                                         :args tc-args})
                            (let [before (before-tool-hook-result agent tc-id tc-name tc-args assistant-msg)]
-                             (if (:block before)
+                             (cond
+                               (:block before)
                                (assoc tc :kmet/blocked
                                       {:content (or (:reason before) "Tool execution was blocked")
                                        :is-error true})
-                               tc))))
+
+                               (contains? before :args)
+                               (assoc tc :arguments (:args before))
+
+                               :else tc))))
                        tool-calls)
         pending (filterv #(not (contains? % :kmet/blocked)) prepared)
         ;; pi: tools receive the session AbortSignal — Escape during a tool
@@ -677,7 +711,7 @@ Be precise and concise in your responses."}}]
       :api-key api-key
       :base-url (:base-url ep)
       :messages messages
-      :tools (vals (tools/get-all-tools))
+      :tools (active-tools agent)
       :signal (:signal agent)
       :idle-timeout-ms (:http-idle-timeout-ms agent)
       :thinking @(:thinking agent)
@@ -1536,7 +1570,8 @@ Be precise and concise in your responses."}}]
   (when-not (= level @(:thinking agent))
     (reset! (:thinking agent) level)
     (when-let [sess (:session agent)]
-      (session/append-thinking-level-change! sess level))))
+      (session/append-thinking-level-change! sess level))
+    (emit agent {:type :thinking-level-select :level level})))
 
 (defn set-system-prompt-override!
   "Set the per-run system prompt override (pi: _systemPromptOverride).

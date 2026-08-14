@@ -14,8 +14,73 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [babashka.fs :as fs]
+            [babashka.process :as proc]
             [kmet.ai.models :as models]
-            [kmet.app.session :as session]))
+            [kmet.app.commands :as commands]
+            [kmet.app.session :as session]
+            [kmet.app.tools.core :as tools]))
+
+;; ─── Extension commands, tools, exec (pi: registerCommand / registerTool /
+;; ─── exec / getCommands / getAllTools) ────────────────────────────────────
+;; Plain wrappers over the existing registries — extensions register slash
+;; commands and tools exactly like builtins do.
+
+(defn register-command!
+  "Register (or replace by :name) a slash command (pi: registerCommand).
+   CMD — {:name string :description string :argument-hint optional
+   :get-argument-completions optional :handler (fn [cs args])}."
+  [cmd]
+  (commands/register-command! cmd)
+  nil)
+
+(defn unregister-command!
+  "Remove a slash command by :name (pi: unregisterCommand)."
+  [name]
+  (commands/unregister-command! name)
+  nil)
+
+(defn get-commands
+  "All registered slash commands (pi: getCommands)."
+  []
+  (commands/get-commands))
+
+(defn register-tool!
+  "Register a custom tool (pi: registerTool). Accepts a Tool record (as built
+   by kmet.app.tools.core/make-tool) or the same keyword args directly:
+   :name :description :params/:parameters :execute :render-call
+   :render-result :prepare-arguments :streams? :constrained-sampling ..."
+  [tool-or-kwargs]
+  (let [tool (if (map? tool-or-kwargs)
+               (apply tools/make-tool (apply concat (seq tool-or-kwargs)))
+               tool-or-kwargs)]
+    (tools/register-tool! tool))
+  nil)
+
+(defn unregister-tool!
+  "Remove a custom tool by :name (pi: unregisterTool)."
+  [name]
+  (tools/unregister-tool! name)
+  nil)
+
+(defn get-all-tools
+  "All configured tools with parameter schema (pi: getAllTools — returns
+   an array, not the name-keyed registry map)."
+  []
+  (vals (tools/get-all-tools)))
+
+(defn exec
+  "Execute a shell command and return {:exit n :out str :err str}
+   (pi: exec). Options: :dir (working directory), :env (extra env map),
+   :timeout-ms. Raises on process launch failure (pi rejects)."
+  [command args & [{:keys [dir env timeout-ms]}]]
+  (let [p (proc/process (concat [command] args)
+                        (cond-> {:out :string :err :string}
+                          dir (assoc :dir dir)
+                          env (assoc :env env)
+                          timeout-ms (assoc :timeout timeout-ms)))]
+    {:exit (:exit @p)
+     :out (:out @p)
+     :err (:err @p)}))
 
 ;; ─── Extension input / before-agent-start hooks ────────────────────────────
 ;; pi: extensions register via pi.on("input") and pi.on("before_agent_start");
@@ -31,6 +96,17 @@
 ;; interactive entry sink; entries without a renderer stay hidden.
 (defonce ^:private entry-renderers (atom {}))
 (defonce ^:private entry-sink-atom (atom nil))
+;; Custom-message renderers (pi: registerMessageRenderer): override the
+;; default labeled info-box rendering of :custom-message entries/messages.
+(defonce ^:private message-renderers (atom {}))
+;; Tool hooks (pi: tool_call / tool_result with result transforms): chained
+;; per call by the interactive's combined before/after-tool-call hooks.
+(defonce ^:private tool-call-hooks (atom []))
+(defonce ^:private tool-result-hooks (atom []))
+;; Extension CLI flags (pi: registerFlag/getFlag): registrations + the
+;; collected --flags from argv (set by core.clj -main after extension load).
+(defonce ^:private flags (atom {}))
+(defonce ^:private cli-flags (atom {}))
 
 (defn register-input-hook!
   "Register an input hook (pi: pi.on('input')).
@@ -213,7 +289,11 @@
   (reset! extensions [])
   (clear-input-hooks!)
   (clear-before-agent-start-hooks!)
-  (reset! entry-renderers {}))
+  (reset! entry-renderers {})
+  (reset! message-renderers {})
+  (reset! tool-call-hooks [])
+  (reset! tool-result-hooks [])
+  (reset! flags {}))
 
 ;; ─── Extension UI registry (pi: ExtensionUIContext) ────────────────────────
 ;; The interactive mode installs the live UI implementations after building
@@ -426,6 +506,52 @@
   []
   (ui-call :reset))
 
+;; ─── Agent control (pi: ctx.setModel / getThinkingLevel / setThinkingLevel /
+;; ─── sendUserMessage / getActiveTools / setActiveTools) ──────────────────
+;; These dispatch through the UI registry installed by interactive mode
+;; (like the ui-* fns); before the layout exists they are no-ops (matching
+;; pi, where agent-control calls before startup are inert).
+
+(defn set-model
+  "Set the active model (pi: setModel). MODEL — a Model record from
+   get-all-models/find-model. Returns false when the provider has no
+   configured auth (pi returns false)."
+  [model]
+  (ui-call :set-model model))
+
+(defn get-thinking-level
+  "The current thinking level (pi: getThinkingLevel)."
+  []
+  (ui-call :get-thinking-level))
+
+(defn set-thinking-level
+  "Set the thinking level, clamped to the known levels
+   (pi: setThinkingLevel)."
+  [level]
+  (ui-call :set-thinking-level level)
+  nil)
+
+(defn send-user-message
+  "Send a user message to the agent (pi: sendUserMessage). Always triggers
+   a turn. When the agent is streaming, DELIVER-AS controls how the message
+   is queued: :steer injects it mid-run (between turns), :follow-up (the
+   default) processes it after the current run settles."
+  [text & [{:keys [deliver-as]}]]
+  (ui-call :send-user-message text {:deliver-as deliver-as})
+  nil)
+
+(defn get-active-tools
+  "Names of the currently active tools (nil = all); pi: getActiveTools."
+  []
+  (ui-call :get-active-tools))
+
+(defn set-active-tools
+  "Restrict the tools sent to the LLM to NAMES (a set or seq of tool
+   names); nil restores all tools (pi: setActiveTools)."
+  [names]
+  (ui-call :set-active-tools names)
+  nil)
+
 ;; ─── Extension-facing session API (pi: ctx.sessionManager / ctx.session) ──
 ;; kmet extensions append custom entries for durable state and custom
 ;; messages for LLM-context injection, and set/read labels on entries. The
@@ -448,6 +574,47 @@
   "The renderer registered for CUSTOM-TYPE, or nil."
   [custom-type]
   (get @entry-renderers custom-type))
+
+(defn register-message-renderer!
+  "Register a renderer for a custom MESSAGE type (pi: registerMessageRenderer).
+   RENDERER — (fn [message]) returning a chat message map or component,
+   overriding the default labeled info box."
+  [custom-type renderer]
+  (swap! message-renderers assoc custom-type renderer)
+  nil)
+
+(defn get-message-renderer
+  "The renderer registered for a custom message type, or nil."
+  [custom-type]
+  (get @message-renderers custom-type))
+
+;; ─── Tool hooks (pi: tool_call / tool_result) ─────────────────────────────
+;; Extensions chain tool-call hooks (block / rewrite args) and tool-result
+;; hooks (rewrite content/is-error) — pi's tool_call/tool_result events with
+;; result transforms. The interactive installs them as the agent's
+;; before/after-tool-call hooks; hooks run in registration order, later
+;; hooks see earlier rewrites.
+
+(defn register-tool-call-hook!
+  "Register a tool-call hook (pi: on('tool_call')).
+   HOOK — (fn [{:keys [tool-name tool-call-id args assistant-message]})
+   returning nil (pass), {:block true :reason str} (block execution), or
+   {:args transformed} (rewrite the call's arguments)."
+  [hook]
+  (swap! tool-call-hooks conj hook)
+  nil)
+
+(defn register-tool-result-hook!
+  "Register a tool-result hook (pi: on('tool_result')).
+   HOOK — (fn [{:keys [tool-name tool-call-id args result is-error
+   assistant-message]}) returning nil or a map of :content / :is-error
+   overrides merged into the result."
+  [hook]
+  (swap! tool-result-hooks conj hook)
+  nil)
+
+(defn get-tool-call-hooks [] @tool-call-hooks)
+(defn get-tool-result-hooks [] @tool-result-hooks)
 
 (defn set-entry-sink!
   "Install the live custom-entry sink — (fn [entry]) called after a custom
@@ -533,6 +700,39 @@
   [entry-id]
   (when-let [sess @session-atom]
     (session/get-label sess entry-id)))
+
+;; ─── Extension CLI flags (pi: registerFlag / getFlag) ─────────────────────
+
+(defn register-flag!
+  "Register a CLI flag extensions can read with get-flag (pi: registerFlag).
+   NAME — the flag name without the leading --; options: :type
+   (:boolean | :string, default :string) and :default. The flag value comes
+   from the argv --name [value] collected by core.clj; a bare --name is
+   boolean true."
+  [name & [{:keys [type default]}]]
+  (swap! flags assoc name {:type (or type :string) :default default})
+  nil)
+
+(defn set-cli-flags!
+  "Install the collected --flags from argv (called by core.clj -main after
+   extensions load, so registered flags are visible to session_start
+   handlers)."
+  [flag-map]
+  (reset! cli-flags (or flag-map {}))
+  nil)
+
+(defn get-flag
+  "Value of a registered CLI flag (pi: getFlag): the argv value coerced by
+   the registered :type, falling back to :default. nil for unregistered
+   flags (pi returns undefined)."
+  [name]
+  (let [{:keys [type default]} (get @flags name)]
+    (when (contains? @flags name)
+      (let [raw (get @cli-flags name)]
+        (case type
+          :boolean (boolean (if (nil? raw) default raw))
+          :string (or (when (string? raw) raw) default)
+          raw)))))
 
 (defn load-extensions-from-dir
   "Load all .clj extension files from a directory.

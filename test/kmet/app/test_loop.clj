@@ -2130,3 +2130,24 @@
                                    (= :user (:role (:message %))))
                              @events)))
             "one :message-start :user per consumed message, in order"))))
+
+;; ─── Active tools + thinking-level event (pi: setActiveTools / ───────────
+;; ─── thinking_level_select) ──────────────────────────────────────────────
+
+(t/deftest test-active-tools
+  (t/testing "nil = all tools; set restricts; nil restores"
+    (let [ag (loop/make-agent-state :provider :opencode-go :model "deepseek-v4-flash")]
+      (t/is (nil? (loop/get-active-tools ag)))
+      (loop/set-active-tools! ag ["read" "write"])
+      (t/is (= #{"read" "write"} (loop/get-active-tools ag)))
+      (loop/set-active-tools! ag nil)
+      (t/is (nil? (loop/get-active-tools ag))))))
+
+(t/deftest test-thinking-level-select-event
+  (let [events (atom [])
+        ag (loop/make-agent-state :provider :opencode-go :model "deepseek-v4-flash"
+                                  :thinking :off
+                                  :on-event (fn [evt] (swap! events conj (:type evt))))]
+    (loop/set-thinking-level! ag :high)
+    (loop/set-thinking-level! ag :high) ;; no change → no event
+    (t/is (= [:thinking-level-select] @events))))
