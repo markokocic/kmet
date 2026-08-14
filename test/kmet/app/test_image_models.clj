@@ -63,6 +63,14 @@
   (t/is (= :ok ((im/get-images-api-provider :fake) nil nil nil)))
   (t/is (nil? (im/get-images-api-provider :unregistered))))
 
+(t/deftest test-image-get-auth
+  (testing "unconfigured provider → nil"
+    (with-redefs [auth/resolve-provider-auth (fn [_] nil)]
+      (t/is (nil? (im/get-auth :openrouter)))))
+  (testing "configured → the resolved api key"
+    (with-redefs [auth/resolve-provider-auth (fn [_] {:api-key "k"})]
+      (t/is (= "k" (:api-key (im/get-auth :openrouter)))))))
+
 ;; ─── :openrouter-images wire (mocked HTTP) ─────────────────────────────────
 
 (t/deftest test-images-context->content

@@ -76,6 +76,13 @@
   [provider-id model-id]
   (first (filter #(= model-id (:id %)) (get-models provider-id))))
 
+(defn get-auth
+  "Resolved request auth for an image provider (pi ImagesModels.getAuth):
+   {:api-key str} (+ :base-url for oauth credentials), or nil when the
+   provider is unconfigured. Reuses kmet.app.auth."
+  [provider-id]
+  (auth/resolve-provider-auth provider-id))
+
 ;; ─── Wire-api registry (pi images-api-registry.ts) ─────────────────────────
 ;; Lookup is keyed by the model's :api, so a mismatched model can never reach
 ;; a wire fn through generate-images (pi's wrapGenerateImages guard is
