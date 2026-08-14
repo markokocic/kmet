@@ -64,3 +64,18 @@
 (deftest agent-event-handler-default-is-safe
   (testing "unknown event types fall through the :default clause"
     (is (nil? ((make-handler) {:type :some-future-event})))))
+
+(deftest submit-command-line-gate
+  (testing "multiline submit text (e.g. pasted blocks) is never a command"
+    (let [command-line? @#'inter/command-line?]
+      ;; single-line slash/bang input stays a command
+      (is (true? (command-line? "/model gpt-4o")))
+      (is (true? (command-line? "/model")))
+      (is (true? (command-line? "!ls -la")))
+      (is (true? (command-line? "!!ls -la")))
+      ;; multiline input whose first line starts with a command prefix is a
+      ;; message, not a command (regression: pasting text starting with
+      ;; "/model ..." ran the /model command)
+      (is (false? (command-line? "/model gpt-4o\nsecond line")))
+      (is (false? (command-line? "/model\n\nrest")))
+      (is (false? (command-line? "!ls\n!echo hi"))))))

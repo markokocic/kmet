@@ -1824,14 +1824,26 @@
         (editor/editor-push-history! ed text)))
     (send-message cs text)))
 
+(defn- command-line?
+  "True when TRIMMED submit text is a single line. Slash and bang commands
+   are single-line by nature; a multiline input — e.g. pasted text whose
+   first line happens to start with / or ! — is a message, never a command
+   (pi: command matching is exact-match or name-then-space, so a newline
+   after the command name never dispatches)."
+  [trimmed]
+  (not (str/includes? trimmed "\n")))
+
 (defn- handle-submit [cs text]
   (let [trimmed (str/trim text)]
     (when (seq trimmed)
       (cond
         ;; Slash command; else skill command (/skill:name), prompt template
         ;; (/name), or fall through to the agent (pi: commands dispatch
-        ;; first, then skill/template expansion)
-        (str/starts-with? trimmed "/")
+        ;; first, then skill/template expansion). Only single-line input is
+        ;; a command — a pasted block whose first line starts with / must
+        ;; not dispatch (see command-line?).
+        (and (str/starts-with? trimmed "/")
+             (command-line? trimmed))
         (let [space (str/index-of trimmed " ")
               cmd (if (nil? space) (subs trimmed 1) (subs trimmed 1 space))
               args (if (nil? space) "" (str/trim (subs trimmed (inc space))))]
@@ -1846,8 +1858,9 @@
                                 (skills/expand-skill-command)
                                 (prompts/expand-prompt-template (prompts/get-prompt-templates)))))))
 
-        ;; Bash command (! or !!)
-        (str/starts-with? trimmed "!")
+        ;; Bash command (! or !!) — single-line like slash commands
+        (and (str/starts-with? trimmed "!")
+             (command-line? trimmed))
         (let [exclude-from-context? (str/starts-with? trimmed "!!")
               command (str/trim (subs trimmed (if exclude-from-context? 2 1)))]
           (when (seq command)
