@@ -100,6 +100,16 @@
     (press sel "enter")
     (t/is (= "a" (:id @selected)) "Enter hands the highlighted model to on-select")))
 
+(t/deftest test-enter-with-no-match-is-noop
+  ;; filtering to nothing must not fire on-select with nil (pi guards on
+  ;; selectedModel — a nil model would wipe the agent's provider)
+  (let [selected (atom ::none)
+        sel (selector :on-select (fn [m] (reset! selected m)))]
+    (press sel "z")
+    (t/is (str/includes? (row-text sel 0) "No matching models"))
+    (press sel "enter")
+    (t/is (= ::none @selected) "Enter with no match does nothing")))
+
 (t/deftest test-escape-cancels
   (let [cancelled (atom false)
         sel (selector :on-cancel (fn [] (reset! cancelled true)))]

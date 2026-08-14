@@ -144,11 +144,13 @@
               (model-refresh! this))
             nil)
 
-        ;; Enter — select the highlighted model (pi tui.select.confirm)
+        ;; Enter — select the highlighted model (pi tui.select.confirm; no-op
+        ;; when nothing is filtered — pi guards on selectedModel)
         (kb/matches-key kmgr data "tui.select.confirm")
         (let [item (when (pos? n) (nth filtered (min (:selected-idx st) (dec n))))]
-          (when-let [cb @on-select-atom]
-            (cb (:model item)))
+          (when (and item (:model item))
+            (when-let [cb @on-select-atom]
+              (cb (:model item))))
           nil)
 
         ;; Escape / Ctrl+C — cancel (pi tui.select.cancel)
