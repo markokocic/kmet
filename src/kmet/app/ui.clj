@@ -13,6 +13,7 @@
             [kmet.app.ui.chat-history :as chat-history]
             [kmet.app.ui.status-indicator :as status-indicator]
             [kmet.app.ui.bash-execution :as bash-execution]
+            [kmet.app.ui.model-selector :as model-selector]
             [kmet.app.ui.scoped-models-selector :as scoped-models-selector]))
 
 ;; UserMessageComponent
@@ -78,6 +79,9 @@
 ;; ScopedModelsSelector
 (def make-scoped-models-selector scoped-models-selector/make-scoped-models-selector)
 (def scoped-models-get-enabled-ids scoped-models-selector/scoped-models-get-enabled-ids)
+
+;; ModelSelector
+(def make-model-selector model-selector/make-model-selector)
 
 ;; PendingMessages
 (def make-pending-messages pending-messages/make-pending-messages)

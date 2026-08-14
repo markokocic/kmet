@@ -232,3 +232,20 @@
     (core/handle-input inp (str (char 2)))  ;; ctrl+b — cursor left
     (core/handle-input inp (str "\u001b[200~" "X" "\u001b[201~"))
     (t/is (= "hellXo" (input/input-get-value inp)))))
+
+(t/deftest test-input-paste-streamed-per-char
+  ;; the TUI dispatches the bracketed-paste markers and the content as
+  ;; separate events (marker, then each char, then the end marker) — every
+  ;; buffered char must be tolerated until the end marker lands (regression:
+  ;; the end-marker index was nil mid-stream and NPE'd, leaving the input
+  ;; stuck in :buffering)
+  (let [inp (input/make-input)]
+    (core/handle-input inp "\u001b[200~")
+    (doseq [c "hello"] (core/handle-input inp (str c)))
+    (core/handle-input inp "\u001b[201~")
+    (t/is (= "hello" (input/input-get-value inp))))
+  (let [inp (input/make-input)]
+    (core/handle-input inp "\u001b[200~")
+    (doseq [c "a\r\nb"] (core/handle-input inp (str c)))
+    (core/handle-input inp "\u001b[201~")
+    (t/is (= "ab" (input/input-get-value inp)) "newlines stripped from the streamed paste")))

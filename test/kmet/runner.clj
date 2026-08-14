@@ -98,6 +98,7 @@
     kmet.app.ui.test-pending-messages
     kmet.app.ui.test-loaded-resources
     kmet.app.ui.test-scoped-models-selector
+    kmet.app.ui.test-model-selector
     kmet.test-core
     kmet.test-changed])
 

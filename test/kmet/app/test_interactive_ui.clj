@@ -13,6 +13,7 @@
             [kmet.app.keybindings :as app-kb]
             [kmet.app.theme-controller :as theme-ctrl]
             [kmet.app.ui :as ui]
+            [kmet.app.ui.chat-history :as chat-history]
             [kmet.app.ui.model-selector :as model-selector]
             [kmet.ai.models :as m]
             [kmet.ai.auth :as auth]
@@ -125,7 +126,7 @@
               :config cfg/default-config
               :tui nil}]
       (with-redefs [auth/configured? (fn [_] true)
-                    ui/chat-history-add-message! (fn [_ _] nil)
+                    chat-history/chat-history-add-message! (fn [_ _] nil)
                     model-selector/sync-footer-model! (fn [_] nil)]
         (testing "provider/model pattern"
           ((:handler (commands/find-command "model")) cs "deepseek/deepseek-v4-pro")
@@ -345,7 +346,7 @@
               :tui nil}
           sel-ref (atom nil)]
       (with-redefs [auth/configured? (fn [_] true)
-                    ui/chat-history-add-message! (fn [_ _] nil)
+                    chat-history/chat-history-add-message! (fn [_ _] nil)
                     model-selector/update-available-provider-count! (fn [_] nil)
                     tui/tui-show-overlay (fn [_ sel & _] (reset! sel-ref sel))
                     tui/tui-request-render (fn [_])]
@@ -388,7 +389,7 @@
               :tui nil}
           sel-ref (atom nil)]
       (with-redefs [auth/configured? (fn [_] true)
-                    ui/chat-history-add-message! (fn [_ _] nil)
+                    chat-history/chat-history-add-message! (fn [_ _] nil)
                     model-selector/update-available-provider-count! (fn [_] nil)
                     tui/tui-show-overlay (fn [_ sel & _] (reset! sel-ref sel))
                     tui/tui-request-render (fn [_])]

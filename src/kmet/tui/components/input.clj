@@ -224,7 +224,7 @@
         (do (swap! paste-buffer str data)
             (let [buf @paste-buffer
                   end-idx (clojure.string/index-of buf "\u001b[201~")]
-              (when (>= end-idx 0)
+              (when (and end-idx (>= end-idx 0))
                 (let [paste-text (subs buf 0 end-idx)
                       ;; pi: handlePaste removes newlines (single-line input),
                       ;; tabs become 4 spaces
@@ -233,9 +233,10 @@
                   (undo-push undo-stack {:value value :cursor cursor})
                   (reset! last-action nil)
                   (reset! value-atom (str (subs value 0 cursor) clean (subs value cursor)))
-                  (reset! cursor-atom (+ cursor (count clean)))))
-              (reset! paste-state :idle)
-              (reset! paste-buffer ""))
+                  (reset! cursor-atom (+ cursor (count clean)))
+                  ;; Only leave buffering once the end marker arrives
+                  (reset! paste-state :idle)
+                  (reset! paste-buffer ""))))
             nil)
 
         ;; Escape / Cancel
