@@ -41,9 +41,11 @@ with the agent having access to filesystem tools (read, write, edit, bash, grep,
   or `/login` inside kmet to store `auth.edn` credentials; `/logout`
   removes them. Amazon Bedrock authenticates via the ambient AWS
   credential sources (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`,
-  `AWS_PROFILE`, `AWS_BEARER_TOKEN_BEDROCK`, ECS/IRSA vars). GitHub Copilot and OpenAI Codex
-  support an OAuth device-code login (`/login github-copilot` →
-  "Sign in with an account"; `/login openai-codex` → ChatGPT device flow).
+  `AWS_PROFILE`, `AWS_BEARER_TOKEN_BEDROCK`, ECS/IRSA vars). OAuth
+  subscription logins (`/login <provider>`): GitHub Copilot device-code
+  ("Sign in with an account"), OpenAI Codex (browser PKCE loopback or
+  device code), Anthropic Claude Pro/Max (browser PKCE loopback), and
+  OpenRouter (browser PKCE loopback, permanent key).
 
 ## Usage
 

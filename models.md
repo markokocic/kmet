@@ -293,7 +293,9 @@ openai-completions `deepseek-v4*` model gets the deepseek compat; opencode
   :supports-reasoning-effort false}` (the three keys kmet's builder needs).
 - context-window/max-tokens defaults 128000/8192 (pi); cost flat 4-field
   `getModelsDevCost` (tiers dropped — kmet's Model has no cost tiers).
-- `filterModels` (OAuth availableModelIds) deferred — no OAuth in scope.
+- `filterModels` (OAuth availableModelIds) was deferred at Phase 1 — Phase 10
+  made it a runtime concern (available-model-ids shrink in
+  `models/get-available`).
 
 4. **Strict validation** (pi `validateModelValue`): every model has non-empty
    `id`/`name`, matching provider/api, `base-url` string, `reasoning` bool,
@@ -500,8 +502,8 @@ test_interactive_ui.clj).
 - `resolve-cli-model` — CLI `--provider`/`--model` with the same fallback
   chain (provider given → its default; model pattern → resolution).
 - Scoped models (`--models` list for Ctrl+P cycling) — flag added to
-  `core.clj` parse-args; `/scoped-models` command stays stubbed until the
-  settings menu exists.
+  `core.clj` parse-args; `/scoped-models` was stubbed at Phase 4 and is
+  implemented in the missing-slash-commands section below.
 
 UI:
 - `/model` upgrade: argument completions from `models/get-available`
