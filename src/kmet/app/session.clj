@@ -345,6 +345,15 @@
   [session entry-id]
   (some #(when (= (:id %) entry-id) %) @(:entries session)))
 
+(defn session-entry-text
+  "Plain trimmed text of an entry's content blocks (pi:
+   extractUserMessageText — used for fork/tree editor restore)."
+  [e]
+  (let [content (:content e)]
+    (if (string? content)
+      (str/trim content)
+      (str/trim (str/join (map :text (filter #(= :text (:type %)) content)))))))
+
 ;; ─── Branching (pi: SessionManager.branch / resetLeaf) ────────────────────
 
 (defn branch!

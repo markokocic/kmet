@@ -12,6 +12,7 @@
             [kmet.app.commands :as commands]
             [kmet.app.keybindings :as app-kb]
             [kmet.app.ui :as ui]
+            [kmet.app.ui.model-selector :as model-selector]
             [kmet.app.models :as m]
             [kmet.app.auth :as auth]
             [kmet.app.loop :as agent]
@@ -124,7 +125,7 @@
               :tui nil}]
       (with-redefs [auth/configured? (fn [_] true)
                     ui/chat-history-add-message! (fn [_ _] nil)
-                    inter/sync-footer-model! (fn [_] nil)]
+                    model-selector/sync-footer-model! (fn [_] nil)]
         (testing "provider/model pattern"
           ((:handler (commands/find-command "model")) cs "deepseek/deepseek-v4-pro")
           (t/is (= :deepseek @(:provider ag)))
@@ -136,7 +137,7 @@
                   pre-filled (pi handleModelCommand — no catalog refresh:
                   kmet's catalogs are static)"
           (let [selector-term (atom nil)]
-            (with-redefs [inter/show-model-selector (fn [_ & [term]] (reset! selector-term term))]
+            (with-redefs [model-selector/show-model-selector (fn [_ & [term]] (reset! selector-term term))]
               ((:handler (commands/find-command "model")) cs "nope")
               (t/is (= "nope" @selector-term) "selector opened with the failed term"))))))))
 
@@ -344,7 +345,7 @@
           sel-ref (atom nil)]
       (with-redefs [auth/configured? (fn [_] true)
                     ui/chat-history-add-message! (fn [_ _] nil)
-                    inter/update-available-provider-count! (fn [_] nil)
+                    model-selector/update-available-provider-count! (fn [_] nil)
                     tui/tui-show-overlay (fn [_ sel & _] (reset! sel-ref sel))
                     tui/tui-request-render (fn [_])]
         (testing "no session scoped models and no patterns → all enabled"
@@ -387,7 +388,7 @@
           sel-ref (atom nil)]
       (with-redefs [auth/configured? (fn [_] true)
                     ui/chat-history-add-message! (fn [_ _] nil)
-                    inter/update-available-provider-count! (fn [_] nil)
+                    model-selector/update-available-provider-count! (fn [_] nil)
                     tui/tui-show-overlay (fn [_ sel & _] (reset! sel-ref sel))
                     tui/tui-request-render (fn [_])]
         ((:handler (commands/find-command "scoped-models")) cs "")
@@ -418,7 +419,7 @@
           sl-ref (atom nil)
           saved (atom nil)]
       (with-redefs [auth/configured? (fn [_] true)
-                    inter/sync-footer-model! (fn [_] nil)
+                    model-selector/sync-footer-model! (fn [_] nil)
                     ui/chat-history-get-thinking-hidden (fn [_] false)
                     cfg/save-setting! (fn [path value] (reset! saved [path value]))
                     tui/tui-show-overlay (fn [_ comp & _] (reset! sl-ref comp))

@@ -12,6 +12,16 @@
             [kmet.tui.components.expandable-text :as expandable-text]
             [kmet.tui.components.container :as container]
             [kmet.app.ui :as ui]
+            [kmet.app.ui.external-editor :refer [editor-text-get editor-text-get-expanded
+                                                 editor-text-set! handle-external-editor]]
+            [kmet.app.ui.fork-selector :refer [show-fork-selector]]
+            [kmet.app.ui.model-selector :refer [apply-model-switch! model-full-id
+                                                resolve-model-ref scoped-or-available-models
+                                                show-model-selector show-scoped-models-selector
+                                                sync-footer-model!]]
+            [kmet.app.ui.settings-selector :refer [show-settings]]
+            [kmet.app.ui.session-selector :refer [show-session-selector]]
+            [kmet.app.ui.tree-selector :refer [show-session-tree]]
             [kmet.app.ui.footer :as footer]
             [kmet.app.ui.footer-data-provider :as fdp]
             [kmet.app.theme-controller :as theme-ctrl]
@@ -19,7 +29,6 @@
             [kmet.app.loop :as agent]
             [kmet.app.models :as models]
             [kmet.app.model-resolver :as resolver]
-            [kmet.app.llm :as llm]
             [kmet.app.auth :as auth]
             [kmet.app.session :as session]
             [kmet.app.session-export :as session-export]
@@ -44,14 +53,11 @@
             [kmet.app.ui.bash-execution :as be]
             [kmet.app.ui.extension-dialogs :as dialogs]
             [kmet.tui.components.spinner :as spinner]
-            [kmet.tui.components.settings-list :as settings-list]
-            [kmet.tui.keys :as keys]
             [kmet.libs.process :as process]
             [kmet.libs.terminal :as lib-term]))
 
-(declare resume-session show-session-tree show-fork-selector clone-current-session!
+(declare clone-current-session! fork-at! restore-session!
          build-extension-ui-registry ask-branch-summary
-         editor-text-get editor-text-set! editor-text-get-expanded
          build-loaded-resource-sections start-agent-run!
          show-status-indicator! clear-status-indicator!)
 
@@ -118,9 +124,6 @@
                       active-status-kind])
 
 ;; ─── Formatting helpers ────────────────────────────────────────────────────
-
-(defn- fmt-model [provider model]
-  (str (name provider) ":" model))
 
 (defn- fmt-key-hint
   "Pi: keyHint — dim key + muted description, from the live keybindings."
@@ -189,258 +192,6 @@
   (protocols/invalidate (:footer-comp cs))
   (tui/tui-request-render (:tui cs))
   nil)
-
-(defn- sync-footer-model!
-  "Push the agent's current model/provider/thinking into the footer data
-   provider and re-render (the fdp atoms are set once at startup; /model,
-   the selector, and cycling must refresh them). The context window follows
-   the resolved Model record, falling back to the settings value."
-  [cs]
-  (let [ag @(:agent-state cs)
-        fdp (:footer-provider cs)]
-    (fdp/fdp-set-model! fdp @(:model ag))
-    (fdp/fdp-set-provider! fdp @(:provider ag))
-    (fdp/fdp-set-thinking! fdp @(:thinking ag))
-    (fdp/fdp-set-context-window!
-     fdp (or (:context-window (models/get-model @(:provider ag) @(:model ag)))
-             (:context-window (:config cs))))
-    (protocols/invalidate (:footer-comp cs))
-    (tui/tui-request-render (:tui cs))
-    nil))
-
-(defn- model-full-id
-  "Full \"provider/id\" id of a Model record (pi: `${provider}/${id}`)."
-  [m]
-  (str (name (:provider m)) "/" (:id m)))
-
-(defn- scoped-model-snapshot
-  "Models matched against first (pi: session scoped models when set, else
-   the available snapshot) — feeds /model's cached match and the footer
-   provider count. Scoped entries that no longer resolve drop out."
-  [ag]
-  (let [scoped (agent/get-scoped-models ag)]
-    (if (seq scoped)
-      (vec (keep (fn [id]
-                   (let [slash (str/index-of id "/")]
-                     (when slash
-                       (models/get-model (keyword (subs id 0 slash))
-                                         (subs id (inc slash))))))
-                 scoped))
-      (models/get-available))))
-
-(defn- scoped-or-available-models
-  "pi: session scoped models when set, else the available snapshot (feeds
-   cycling's fallback, /model, and the footer provider count)."
-  [ag]
-  (if (seq (agent/get-scoped-models ag))
-    (scoped-model-snapshot ag)
-    (models/get-available)))
-
-(defn- update-available-provider-count!
-  "Footer provider count from the scoped models when set, else the available
-   snapshot (pi updateAvailableProviderCount)."
-  [cs]
-  (ui/fdp-set-provider-count!
-   (:footer-provider cs)
-   (count (distinct (map :provider (scoped-or-available-models @(:agent-state cs)))))))
-
-(defn- apply-model-switch!
-  "Switch the agent's model (and optional thinking level), report the switch
-   in the chat, and sync the footer (pi setModel + showStatus — shared by
-   /model, the selector, and cycling)."
-  [cs model thinking-level]
-  (let [ag @(:agent-state cs)]
-    (agent/set-provider! ag (:provider model))
-    (agent/set-model! ag (:id model))
-    (when thinking-level
-      (agent/set-thinking-level! ag thinking-level))
-    (ui/chat-history-add-message! (:chat-history cs)
-                                  {:role :assistant
-                                   :content (str "Switched to " (fmt-model (:provider model) (:id model))
-                                                 (when thinking-level
-                                                   (str " (thinking " (name thinking-level) ")")))})
-    (sync-footer-model! cs)))
-
-(defn- show-model-selector
-  "Model selector overlay: a SelectList of available (authenticated) models
-   (pi ModelSelectorComponent, simplified — bound to Ctrl+L, bare /model,
-   and the /model refresh-failure path with SEARCH-TERM pre-filled)."
-  ([cs] (show-model-selector cs nil))
-  ([cs search-term]
-   (let [available (models/get-available)]
-     (if (empty? available)
-       (ui/chat-history-add-message! (:chat-history cs)
-                                     {:role :assistant
-                                      :content "No models available. Configure a provider first (/login)."})
-       (let [items (mapv (fn [m]
-                           (let [v (str (name (:provider m)) "/" (:id m))]
-                             {:value v :label v}))
-                         available)
-             sl-ref (atom nil)
-             on-select (fn [_]
-                         (when-let [sel (select-list/select-list-get-selected @sl-ref)]
-                           (let [[prov model] (str/split (:value sel) #"/" 2)
-                                 m (models/get-model (keyword prov) model)]
-                             (tui/tui-hide-overlay (:tui cs))
-                             (apply-model-switch! cs m nil)
-                             (tui/tui-request-render (:tui cs)))))
-             on-escape (fn []
-                         (tui/tui-hide-overlay (:tui cs))
-                         (tui/tui-request-render (:tui cs)))
-             sl (select-list/make-select-list items
-                                              :height (min (count items) 15)
-                                              :header "Select model"
-                                              :on-select on-select
-                                              :on-escape on-escape)]
-         (reset! sl-ref sl)
-         (when search-term
-           (select-list/select-list-set-filter! sl search-term))
-         (tui/tui-show-overlay (:tui cs) sl :width 55 :height (min (count items) 15))
-         (tui/tui-request-render (:tui cs)))))))
-
-(defn- resolve-model-ref
-  "/model reference resolution against the cached snapshot (pi
-   findExactModelMatch — session scoped models when set, else available)."
-  [cs term]
-  (resolver/resolve-model-reference term (scoped-or-available-models @(:agent-state cs))))
-
-(defn- show-scoped-models-selector
-  "pi showModelsSelector — /scoped-models opens the enabled-models overlay
-   for Ctrl+P cycling. Initial enabled ids: session scoped models when set,
-   else the settings :enabled-models patterns resolved through
-   resolve-model-scope-models (unresolved patterns survive as [unavailable]
-   rows), else nil (all enabled). Changes are session-only until Ctrl+S
-   writes :enabled-models; the footer provider count updates live."
-  [cs]
-  (let [available (models/get-available)
-        ag @(:agent-state cs)
-        session-scoped (vec (agent/get-scoped-models ag))
-        patterns (cfg/get-enabled-models-live (:config cs))
-        configured-ids (fn []
-                         ;; resolve each pattern; unresolved ones survive as
-                         ;; [unavailable] rows (pi: no-match diagnostics are
-                         ;; appended to the enabled ids)
-                         (loop [ps patterns acc [] warnings []]
-                           (if-let [p (first ps)]
-                             (let [{:keys [model]}
-                                   (resolver/parse-model-pattern p available)]
-                               (if model
-                                 (recur (rest ps) (conj acc (model-full-id model)) warnings)
-                                 (recur (rest ps) (conj acc (str p))
-                                        (conj warnings
-                                              (str "No models match pattern \"" p "\"")))))
-                             (do (doseq [w warnings]
-                                   (ui/chat-history-add-message!
-                                    (:chat-history cs) {:role :assistant :content w}))
-                                 (vec acc)))))
-        initial (cond
-                  (seq session-scoped) session-scoped
-                  (seq patterns) (configured-ids)
-                  :else nil)
-        available-ids (set (map model-full-id available))
-        update-session-models (fn [enabled-ids]
-                                ;; pi updateSessionModels: a non-null list with
-                                ;; an enabled available model, not covering all
-                                ;; available models, becomes the session scoped
-                                ;; list; everything else (null = all enabled,
-                                ;; nothing enabled, all enabled) clears it
-                                (if (and enabled-ids
-                                         (some available-ids enabled-ids)
-                                         (not (every? (set enabled-ids)
-                                                      (map model-full-id available))))
-                                  (agent/set-scoped-models! ag enabled-ids)
-                                  (agent/set-scoped-models! ag []))
-                                (update-available-provider-count! cs)
-                                (tui/tui-request-render (:tui cs)))
-        sel (ui/make-scoped-models-selector
-             available initial
-             :on-change update-session-models
-             :on-persist (fn [enabled-ids]
-                           (let [all-enabled? (or (nil? enabled-ids)
-                                                  (and (= (count enabled-ids) (count available))
-                                                       (every? available-ids enabled-ids)))]
-                             (cfg/set-enabled-models! (when-not all-enabled? enabled-ids))
-                             (ui/chat-history-add-message!
-                              (:chat-history cs)
-                              {:role :assistant
-                               :content "Model selection saved to settings."})))
-             :on-cancel (fn []
-                          (tui/tui-hide-overlay (:tui cs))
-                          (tui/tui-request-render (:tui cs))))]
-    (tui/tui-show-overlay (:tui cs) sel :width 62 :max-height 24)
-    (tui/tui-request-render (:tui cs))))
-
-(defn- show-settings
-  "Settings selector (pi: showSettingsSelector) — kmet implements the
-   thinking-level row (the current model's available levels, persisted to
-   settings :thinking), the hide-thinking toggle, and the retry block
-   (settings.edn :retry — enabled / max-retries / base-delay-ms, applied
-   live to the agent); the rest of pi's settings surface stays on the
-   not-implemented list."
-  [cs]
-  (let [ag @(:agent-state cs)
-        model (models/get-model @(:provider ag) @(:model ag))
-        levels (if model (llm/get-supported-thinking-levels model) [:off])
-        current (or (some #{(keyword @(:thinking ag))} levels) (first levels))
-        retry-atom (atom (cfg/get-retry-settings-live (:config cs)))
-        apply-retry! (fn []
-                       (let [r @retry-atom]
-                         (agent/set-max-retries! ag (if (:enabled r) (:max-retries r) 0))
-                         (agent/set-base-delay-ms! ag (:base-delay-ms r))))
-        save-retry! (fn [path value]
-                      (cfg/save-setting! path value)
-                      (apply-retry!))
-        items [{:id :thinking
-                :label "Thinking level"
-                :value current
-                :values levels}
-               {:id :hide-thinking
-                :label "Hide thinking"
-                ;; the live chat-history flag, not the startup config
-                ;; snapshot — Ctrl+T toggles it at runtime
-                :value (if (ui/chat-history-get-thinking-hidden (:chat-history cs)) "on" "off")
-                :values ["off" "on"]}
-               {:id :auto-retry
-                :label "Auto retry"
-                :value (:enabled @retry-atom)
-                :values [true false]}
-               {:id :max-retries
-                :label "Max retries"
-                :value (:max-retries @retry-atom)
-                :values [0 1 2 3 5 8 10]}
-               {:id :base-delay-ms
-                :label "Base delay (ms)"
-                :value (:base-delay-ms @retry-atom)
-                :values [500 1000 2000 4000 8000]}]
-        sl (settings-list/make-settings-list
-            items
-            :on-change (fn [id value]
-                         (case id
-                           :thinking
-                           (let [level (keyword value)]
-                             (agent/set-thinking-level! ag level)
-                             (cfg/save-setting! [:thinking] level)
-                             (sync-footer-model! cs))
-                           :hide-thinking
-                           (let [hidden? (= value "on")]
-                             (ui/chat-history-set-thinking-hidden!
-                              (:chat-history cs) hidden?)
-                             (cfg/set-hide-thinking-block! hidden?))
-                           :auto-retry
-                           (do (swap! retry-atom assoc :enabled (boolean value))
-                               (save-retry! [:retry :enabled] (boolean value)))
-                           :max-retries
-                           (do (swap! retry-atom assoc :max-retries value)
-                               (save-retry! [:retry :max-retries] value))
-                           :base-delay-ms
-                           (do (swap! retry-atom assoc :base-delay-ms value)
-                               (save-retry! [:retry :base-delay-ms] value)))))]
-    (settings-list/settings-list-set-on-escape!
-     sl (fn []
-          (tui/tui-hide-overlay (:tui cs))
-          (tui/tui-request-render (:tui cs))))
-    (tui/tui-show-overlay (:tui cs) sl :width 55 :height 9)
-    (tui/tui-request-render (:tui cs))))
 
 ;; ─── Command handling ──────────────────────────────────────────────────────
 
@@ -904,7 +655,15 @@
     :description "Browse past sessions"
     :handler (fn [cs _]
                (debug/log "/resume command")
-               (resume-session cs ensure-session-dir))})
+               (show-session-selector cs ensure-session-dir
+                                      (fn [path]
+                                        (let [sess (session/load-session path)
+                                              short-id (subs (:id sess) 0 (min 8 (count (:id sess))))]
+                                          (restore-session! cs sess true)
+                                          (ui/chat-history-add-message! (:chat-history cs)
+                                                                        {:role :assistant
+                                                                         :content (str "Resumed session " short-id ".")})
+                                          (tui/tui-request-render (:tui cs))))))})
   (commands/register-command!
    {:name "continue"
     :description "Continue where the agent left off (e.g. after a network error)"
@@ -940,12 +699,14 @@
    {:name "tree"
     :description "Navigate session tree (switch branches)"
     :handler (fn [cs _]
-               (show-session-tree cs))})
+               (show-session-tree cs
+                                  (fn [entry]
+                                    (ask-branch-summary cs @(:session-atom cs) entry))))})
   (commands/register-command!
    {:name "fork"
     :description "Create a new fork from a previous user message"
     :handler (fn [cs _]
-               (show-fork-selector cs))})
+               (show-fork-selector cs (fn [entry-id] (fork-at! cs entry-id))))})
   (commands/register-command!
    {:name "clone"
     :description "Duplicate the current session at the current position"
@@ -1311,22 +1072,6 @@
 
 ;; ─── Resume session ────────────────────────────────────────────────────────
 
-(defn- format-session-age
-  "pi: formatSessionDate — now / Nm / Nh / Nd / Nw / Nmo / Ny."
-  [ms]
-  (let [diff (- (System/currentTimeMillis) ms)
-        mins (quot diff 60000)
-        hours (quot mins 60)
-        days (quot hours 24)]
-    (cond
-      (< mins 1) "now"
-      (< mins 60) (str mins "m")
-      (< days 1) (str hours "h")
-      (< days 7) (str days "d")
-      (< days 30) (str (quot days 7) "w")
-      (< days 365) (str (quot days 30) "mo")
-      :else (str (quot days 365) "y"))))
-
 (defn- custom-message-text
   "Plain text of a :custom message's content (string or text blocks) — the
    display text for custom_message entries/messages in the TUI (pi renders
@@ -1402,70 +1147,6 @@
   (replay-branch! cs sess)
   (update-footer! cs))
 
-(defn- resume-session
-  "Browse past sessions via SelectList overlay (pi: SessionSelectorComponent —
-   rows show the session name or first message with message count + age on
-   the right; typing filters). Session files are streamed per-file with
-   bounded concurrency (pi: buildSessionInfosWithConcurrency — G15); the
-   overlay header shows loading progress (loaded/total) until the list is
-   ready. Escaping during the load cancels the pending population."
-  [cs session-dir-fn]
-  (let [cancelled (atom false)
-        sl-ref (atom nil)
-        on-select-fn (fn [_]
-                       (when-let [sel (select-list/select-list-get-selected @sl-ref)]
-                         (let [sess (session/load-session (:value sel))
-                               short-id (subs (:id sess) 0 (min 8 (count (:id sess))))]
-                           (restore-session! cs sess true)
-                           (ui/chat-history-add-message! (:chat-history cs)
-                                                         {:role :assistant
-                                                          :content (str "Resumed session " short-id ".")})
-                           (tui/tui-hide-overlay (:tui cs))
-                           (tui/tui-request-render (:tui cs)))))
-        sl (select-list/make-select-list []
-                                         :height 15
-                                         :header "Loading sessions…"
-                                         :no-match-text "  No sessions found"
-                                         :on-select on-select-fn
-                                         :on-escape (fn []
-                                                      (reset! cancelled true)
-                                                      (tui/tui-hide-overlay (:tui cs))
-                                                      (tui/tui-request-render (:tui cs))))
-        handle (tui/tui-show-overlay (:tui cs) sl :width 60 :height 15)]
-    (reset! sl-ref sl)
-    (tui/tui-request-render (:tui cs))
-    (future
-      (try
-        (let [infos (session/list-sessions-info
-                     (session-dir-fn)
-                     (fn [loaded total]
-                       (when-not @cancelled
-                         (select-list/select-list-set-header!
-                          sl (str "Loading sessions… (" loaded "/" total ")"))
-                         (tui/tui-request-render (:tui cs)))))]
-          (when-not @cancelled
-            (if (empty? infos)
-              ;; identity-based hide: the user may have escaped and opened a new
-              ;; overlay between the cancelled check and this call — tui-hide-
-              ;; overlay pops the topmost, which could be the wrong one
-              (do ((:hide handle))
-                  (tui/tui-request-render (:tui cs))
-                  (ui/chat-history-add-message! (:chat-history cs)
-                                                {:role :assistant :content "No past sessions found."}))
-              (let [items (vec (for [info infos]
-                                 {:label (or (:name info) (:first-message info))
-                                  :description (str (:message-count info) " "
-                                                    (format-session-age (:modified info)))
-                                  :value (:path info)}))]
-                (select-list/select-list-set-header! sl "Resume Session")
-                (select-list/select-list-set-items! sl items)
-                (tui/tui-request-render (:tui cs))))))
-        (catch Exception e
-          (debug/log "resume-session: " e)
-          (when-not @cancelled
-            ((:hide handle))
-            (tui/tui-request-render (:tui cs))))))))
-
 ;; ─── Session tree navigation (pi: TreeSelectorComponent) ──────────────────
 
 (defn- session-entry-text
@@ -1476,13 +1157,6 @@
     (if (string? content)
       (str/trim content)
       (str/trim (str/join (map :text (filter #(= :text (:type %)) content)))))))
-
-(defn- order-tree-for-selector
-  "Order tree nodes for the selector: nodes on the active branch path first,
-   the rest in file order (pi: TreeSelectorComponent current-branch-first)."
-  [nodes active-ids]
-  (let [{on-path true off-path false} (group-by #(contains? active-ids (:id %)) nodes)]
-    (concat on-path off-path)))
 
 (defn- complete-tree-navigation!
   "Apply a tree navigation (pi: navigateTree tail): branch the session leaf
@@ -1592,7 +1266,7 @@
   (let [old-leaf @(:leaf-id sess)
         target-leaf (if (= :user (:role entry)) (:parent-id entry) (:id entry))
         entries (session/branch-summary-entries sess old-leaf (:id entry))
-        user-msg-text (when (= :user (:role entry)) (session-entry-text entry))
+        user-msg-text (when (= :user (:role entry)) (session/session-entry-text entry))
         abort-atom (atom false)
         prep {:target-id (:id entry)
               :old-leaf-id old-leaf
@@ -1665,7 +1339,9 @@
                         "custom" (prompt-custom-summary! cs sess entry))))
         on-escape (fn []
                     (tui/tui-hide-overlay (:tui cs))
-                    (show-session-tree cs))
+                    (show-session-tree cs
+                                       (fn [entry]
+                                         (ask-branch-summary cs @(:session-atom cs) entry))))
         sl (select-list/make-select-list items
                                          :height 3
                                          :header "Summarize branch?"
@@ -1674,159 +1350,6 @@
     (reset! sl-ref sl)
     (tui/tui-show-overlay (:tui cs) sl :width 42 :height 3)
     (tui/tui-request-render (:tui cs))))
-
-(def ^:private tree-filter-modes
-  "pi: FilterMode — the /tree selector filter modes (default hides
-   bookkeeping entries; children of hidden nodes are hidden with them)."
-  [:default :no-tools :user-only :labeled-only :all])
-
-(defn- tree-filter-mode-label
-  [mode]
-  (case mode
-    :no-tools " [no-tools]"
-    :user-only " [user]"
-    :labeled-only " [labeled]"
-    :all " [all]"
-    ""))
-
-(defn- passes-tree-filter?
-  "True when a tree node passes MODE (pi: TreeSelectorComponent applyFilter —
-   default hides bookkeeping entries: labels, session_info, model/thinking
-   change entries)."
-  [node mode]
-  (let [settings-entry? (contains? #{:label :session_info :model-change :thinking-level-change}
-                                   (:role node))]
-    (case mode
-      :user-only (= :user (:role node))
-      :no-tools (and (not= :tool (:role node)) (not settings-entry?))
-      :labeled-only (some? (:label node))
-      :all true
-      (not settings-entry?))))
-
-(defn- show-session-tree
-  "Session tree navigation overlay (pi: TreeSelectorComponent): browse the
-   entry tree (active branch first, labels shown, current leaf marked) and
-   select an entry to branch there. Filter modes (ctrl+d/t/u/l/a/o) and
-   label editing (shift+l) work inside the overlay."
-  [cs]
-  (let [sess @(:session-atom cs)]
-    (if (nil? sess)
-      (ui/chat-history-add-message! (:chat-history cs)
-                                    {:role :assistant :content "No active session."})
-      (let [leaf-id @(:leaf-id sess)
-            active-ids (set (map :id (session/get-branch sess)))
-            tree (session/get-tree sess)]
-        (if (empty? tree)
-          (ui/chat-history-add-message! (:chat-history cs)
-                                        {:role :assistant :content "Session is empty."})
-          (let [filter-mode (atom :default)
-                sl-ref (atom nil)
-                build-items (fn []
-                              (let [flatten-tree (fn flatten-tree [nodes depth]
-                                                   (mapcat (fn [n]
-                                                             (if (passes-tree-filter? n @filter-mode)
-                                                               (let [prefix (apply str (repeat depth "  "))
-                                                                     role-str (name (:role n))
-                                                                     label (str prefix role-str ": " (:summary n)
-                                                                                (when (:label n) (str " [" (:label n) "]"))
-                                                                                (when (= (:id n) leaf-id) " ◀"))]
-                                                                 (cons {:label label
-                                                                        :value (:id n)
-                                                                        :depth depth
-                                                                        :entry n}
-                                                                       (flatten-tree (order-tree-for-selector (:children n) active-ids)
-                                                                                     (inc depth))))
-                                                               nil))
-                                                           (order-tree-for-selector nodes active-ids)))]
-                                (vec (flatten-tree tree 0))))
-                refresh! (fn []
-                           (select-list/select-list-set-items! @sl-ref (build-items))
-                           (select-list/select-list-set-header!
-                            @sl-ref (str "Session tree" (tree-filter-mode-label @filter-mode)))
-                           (tui/tui-request-render (:tui cs)))
-                edit-label! (fn []
-                              (when-let [sel (select-list/select-list-get-selected @sl-ref)]
-                                (let [entry-id (:value sel)
-                                      current (session/get-label sess entry-id)]
-                                  (tui/tui-show-overlay
-                                   (:tui cs)
-                                   (dialogs/make-extension-input
-                                    "Edit tree label"
-                                    (fn [label]
-                                      (tui/tui-hide-overlay (:tui cs))
-                                      (let [label (str/trim label)]
-                                        (session/set-label! sess entry-id
-                                                            (when (seq label) label))
-                                        (refresh!)))
-                                    (fn []
-                                      (tui/tui-hide-overlay (:tui cs))
-                                      (tui/tui-request-render (:tui cs)))
-                                    (th/get-current-theme)
-                                    ;; pi: LabelInput prefills the current
-                                    ;; label; empty submit clears it
-                                    current))
-                                  (tui/tui-request-render (:tui cs)))))
-                cycle-filter! (fn [dir]
-                                (let [i (first (keep-indexed (fn [i m] (when (= m @filter-mode) i))
-                                                             tree-filter-modes))
-                                      n (count tree-filter-modes)
-                                      nxt (nth tree-filter-modes (mod (+ i dir) n))]
-                                  (reset! filter-mode nxt)
-                                  (refresh!)))
-                on-key (fn [_ data]
-                         (cond
-                           (keys/matches-key? data (keys/ctrl "d"))
-                           (do (reset! filter-mode :default) (refresh!) true)
-                           (keys/matches-key? data (keys/ctrl "t"))
-                           (do (reset! filter-mode (if (= :no-tools @filter-mode) :default :no-tools))
-                               (refresh!) true)
-                           (keys/matches-key? data (keys/ctrl "u"))
-                           (do (reset! filter-mode (if (= :user-only @filter-mode) :default :user-only))
-                               (refresh!) true)
-                           (keys/matches-key? data (keys/ctrl "l"))
-                           (do (reset! filter-mode (if (= :labeled-only @filter-mode) :default :labeled-only))
-                               (refresh!) true)
-                           (keys/matches-key? data (keys/ctrl "a"))
-                           (do (reset! filter-mode (if (= :all @filter-mode) :default :all))
-                               (refresh!) true)
-                           (keys/matches-key? data (keys/ctrl "o"))
-                           (do (cycle-filter! 1) true)
-                           (keys/matches-key? data (keys/ctrl-shift "o"))
-                           (do (cycle-filter! -1) true)
-                           ;; shift+l edits the label (legacy terminals send a
-                           ;; bare uppercase letter — pi: app.tree.editLabel)
-                           (or (keys/matches-key? data (keys/shift "l"))
-                               (keys/matches-key? data "L"))
-                           (do (edit-label!) true)
-                           :else false))
-                on-select-fn (fn [_]
-                               (when-let [sel (select-list/select-list-get-selected @sl-ref)]
-                                 (let [entry (:entry sel)]
-                                   (tui/tui-hide-overlay (:tui cs))
-                                   (cond
-                                     (= (:id entry) leaf-id)
-                                     (ui/chat-history-add-message! (:chat-history cs)
-                                                                   {:role :assistant :content "Already at this point."})
-
-                                     @(:running-turn? cs)
-                                     (ui/chat-history-add-message! (:chat-history cs)
-                                                                   {:role :assistant
-                                                                    :content "Wait for the current response to finish before navigating the session tree."})
-
-                                     :else
-                                     (ask-branch-summary cs sess entry)))))
-                items (build-items)
-                sl (select-list/make-select-list items
-                                                 :height (min (count items) 20)
-                                                 :header "Session tree"
-                                                 :on-key on-key
-                                                 :on-select on-select-fn
-                                                 :on-escape (fn []
-                                                              (tui/tui-hide-overlay (:tui cs))
-                                                              (tui/tui-request-render (:tui cs))))]
-            (reset! sl-ref sl)
-            (tui/tui-show-overlay (:tui cs) sl :width 70 :height (min (count items) 20))
-            (tui/tui-request-render (:tui cs))))))))
 
 ;; ─── Fork / clone (pi: /fork, /clone) ─────────────────────────────────────
 
@@ -1857,7 +1380,7 @@
               (do
                 (debug/log "forked session " (:id fork) " from " (:id sess))
                 (restore-session! cs fork false)
-                (editor-text-set! (:editor cs) (session-entry-text entry))
+                (editor-text-set! (:editor cs) (session/session-entry-text entry))
                 (ui/chat-history-add-message! (:chat-history cs)
                                               {:role :assistant
                                                :content (str "Forked to new session " (subs (:id fork) 0 8) ".")})
@@ -1868,48 +1391,6 @@
                                           {:role :info :label "Fork"
                                            :content (str "Fork failed: " (ex-message e))})
             (tui/tui-request-render (:tui cs))))))))
-
-(defn- show-fork-selector
-  "Select a user message to fork from (pi: UserMessageSelectorComponent)."
-  [cs]
-  (let [sess @(:session-atom cs)]
-    (if (nil? sess)
-      (ui/chat-history-add-message! (:chat-history cs)
-                                    {:role :assistant :content "No active session."})
-      (if-not (fs/exists? (:file sess))
-        (ui/chat-history-add-message! (:chat-history cs)
-                                      {:role :assistant
-                                       :content "Wait for the first assistant response before forking."})
-        (let [msgs (->> @(:entries sess)
-                        ;; pi: getUserMessagesForForking iterates ALL entries
-                        ;; (every branch), not just the active path
-                        (filter #(= :user (:role %)))
-                        (keep (fn [e]
-                                (let [t (session-entry-text e)]
-                                  (when (seq t) {:entry e :text t})))))
-              items (mapv (fn [{:keys [entry text]}]
-                            {:label (subs text 0 (min 60 (count text)))
-                             :value (:id entry)})
-                          msgs)]
-          (if (empty? items)
-            (ui/chat-history-add-message! (:chat-history cs)
-                                          {:role :assistant :content "No messages to fork from."})
-            (let [sl-ref (atom nil)
-                  on-select (fn [_]
-                              (when-let [sel (select-list/select-list-get-selected @sl-ref)]
-                                (tui/tui-hide-overlay (:tui cs))
-                                (fork-at! cs (:value sel))))
-                  on-escape (fn []
-                              (tui/tui-hide-overlay (:tui cs))
-                              (tui/tui-request-render (:tui cs)))
-                  sl (select-list/make-select-list items
-                                                   :height (min (count items) 15)
-                                                   :header "Fork from message"
-                                                   :on-select on-select
-                                                   :on-escape on-escape)]
-              (reset! sl-ref sl)
-              (tui/tui-show-overlay (:tui cs) sl :width 70 :height (min (count items) 15))
-              (tui/tui-request-render (:tui cs)))))))))
 
 (defn- clone-current-session!
   "Duplicate the session at its current position (pi: /clone → fork at the
@@ -2450,59 +1931,6 @@
     (tui/tui-request-render (:tui cs))))
 
 ;; ─── External editor (pi: handleOpenExternalEditor) ────────────────────────
-
-(defn- handle-external-editor
-  "Open TARGET-EDITOR's content in $EDITOR (default nano). Suspends the TUI
-   (terminal restored to normal mode, input reader paused), spawns the external
-   editor on a temp file with inherited stdio, reads the result back into the
-   editor, then resumes the TUI. TARGET-EDITOR defaults to the active editor.
-   pi: handleOpenExternalEditor in interactive-mode.ts."
-  [cs & [target-editor]]
-  (let [target-editor (or target-editor @(:current-editor-atom cs))
-        content (editor-text-get-expanded target-editor)
-        tmp-dir (or (System/getenv "TMPDIR")
-                    (System/getProperty "java.io.tmpdir")
-                    "/tmp")
-        _ (fs/create-dirs tmp-dir)
-        tmp-file (str (fs/create-temp-file
-                       {:prefix "kmet-editor-" :suffix ".md" :dir tmp-dir}))]
-    ;; suspend is inside the try so the finally always resumes the TUI
-    (try
-      (tui/tui-suspend! (:tui cs))
-      (spit tmp-file content)
-      ;; pi: external editor command — config > VISUAL > EDITOR > nano
-      (let [editor-cmd (or (System/getenv "VISUAL")
-                           (System/getenv "EDITOR")
-                           "nano")
-            parts (str/split editor-cmd #"\s+")
-            _ (println "Launching external editor: " editor-cmd)
-            _ (println "kmet will resume when the editor exits.")
-            result (try
-                     (let [p (proc/process (concat parts [tmp-file])
-                                           {:out :inherit :err :inherit :in :inherit})
-                           exit-code (:exit @p)]
-                       (if (zero? exit-code) :ok :cancelled))
-                     (catch Exception e
-                       (debug/log "external editor error: " e)
-                       (ui/chat-history-add-message! (:chat-history cs)
-                                                     {:role :assistant
-                                                      :content (str "External editor failed to start: "
-                                                                    (ex-message e))})
-                       :error))]
-        (when (= result :ok)
-          (let [new-content (try (slurp tmp-file) (catch Exception _ nil))]
-            (when (and new-content (not= new-content content))
-              ;; pi: strip a single trailing newline added by editors
-              (let [new-content (if (and (seq new-content)
-                                         (str/ends-with? new-content "\n"))
-                                  (subs new-content 0 (dec (count new-content)))
-                                  new-content)]
-                (editor-text-set! target-editor new-content)
-                (debug/log "external editor content: " (pr-str new-content)))))))
-      (finally
-        (try (fs/delete-if-exists tmp-file) (catch Exception _ nil))
-        (tui/tui-resume! (:tui cs))))
-    nil))
 
 ;; ─── Loaded resources (pi: showLoadedResources) ────────────────────────────
 
@@ -3129,32 +2557,6 @@
     (reset! (:keybindings custom-ed) keybindings))
   nil)
 
-(defn- editor-text-get
-  "Read the editor text through IEditorComponent when available, falling
-   back to the field-based editor fn (duck-typed custom editors)."
-  [ed]
-  (if (satisfies? protocols/IEditorComponent ed)
-    (protocols/editor-get-text ed)
-    (editor/editor-get-text ed)))
-
-(defn- editor-text-set!
-  "Replace the editor text through IEditorComponent when available, falling
-   back to the field-based editor fn (duck-typed custom editors)."
-  [ed text]
-  (if (satisfies? protocols/IEditorComponent ed)
-    (protocols/editor-set-text! ed text)
-    (editor/editor-set-text! ed text))
-  nil)
-
-(defn- editor-text-get-expanded
-  "Read the editor text with paste markers expanded through IEditorComponent
-   when available, falling back to the field-based editor fn (pi:
-   getEditorText = getExpandedText ?? getText)."
-  [ed]
-  (if (satisfies? protocols/IEditorComponent ed)
-    (protocols/editor-get-expanded-text ed)
-    (editor/editor-get-expanded-text ed)))
-
 (defn- normalize-autocomplete-provider
   "Accept either an AutocompleteProvider or a duck-typed map with
    :get-suggestions (fn [state]) and optional :apply-completion,
@@ -3515,7 +2917,16 @@
                       :else (session/create-session (ensure-cwd-session-dir)))
             cs (build-layout config session)]
         (reset! tui-ref (:tui cs))
-        (when (:resume opts) (resume-session cs ensure-session-dir))
+        (when (:resume opts)
+          (show-session-selector cs ensure-session-dir
+                                 (fn [path]
+                                   (let [sess (session/load-session path)
+                                         short-id (subs (:id sess) 0 (min 8 (count (:id sess))))]
+                                     (restore-session! cs sess true)
+                                     (ui/chat-history-add-message! (:chat-history cs)
+                                                                   {:role :assistant
+                                                                    :content (str "Resumed session " short-id ".")})
+                                     (tui/tui-request-render (:tui cs))))))
         ;; start the UI before initializing extensions so session_start
         ;; handlers can use interactive dialogs — kmet loads extensions
         ;; earlier, so the event fires once the layout + UI registry are

@@ -120,6 +120,21 @@ src/kmet/
 │       ├── custom_message.clj
 │       ├── extension_dialogs.clj  — ui.select/input/editor dialogs (DynamicBorder
 │       │                  framing + IME focus propagation)
+│       ├── external_editor.clj — editor-text-* accessors (duck-typed IEditorComponent)
+│       │                  + handle-external-editor ($EDITOR on a temp file; pi external-editor.ts)
+│       ├── fork_selector.clj — fork-from-message picker, on-select callback
+│       │                  (pi UserMessageSelectorComponent; the fork stays in the mode)
+│       ├── model_selector.clj — /model + /scoped-models selectors and model-switch
+│       │                  helpers (pi model-selector.ts + model-search.ts; shared with
+│       │                  Ctrl+P cycling and the footer sync)
+│       ├── session_selector.clj — session browsing overlay with streaming
+│       │                  session-info population (pi SessionSelectorComponent;
+│       │                  the restore stays in the mode)
+│       ├── settings_selector.clj — /settings overlay: thinking level, hide-thinking,
+│       │                  retry block (pi showSettingsSelector, simplified)
+│       ├── tree_selector.clj — /tree overlay: filter modes (ctrl+d/t/u/l/a/o),
+│       │                  label editing, current-leaf marker (pi TreeSelectorComponent;
+│       │                  navigation stays in the mode via on-navigate)
 │       ├── status_indicator.clj
 │       ├── footer.clj
 │       ├── footer_data_provider.clj — footer state (model/thinking/cost/CH%)

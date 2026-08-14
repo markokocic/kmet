@@ -34,3 +34,7 @@ Thumbs.db
 # Logs
 *.log
 /.clj-kondo/.cache/
+
+# Tool caches (clojure-lsp, clj-kondo analysis)
+/.lsp/
+/.clj-kondo/imports/
