@@ -310,7 +310,8 @@ A complete extension showing the common pieces:
 ```clojure
 (ns my.ext
   "Example: command + tool + event handler + status."
-  (:require [kmet.extension :as ext]))
+  (:require [clojure.string :as str]
+            [kmet.extension :as ext]))
 
 (defn init [api]
   (ext/ui-set-status api "my-ext" "loaded")
@@ -318,7 +319,7 @@ A complete extension showing the common pieces:
   (ext/register-command! api
     {:name "uppercase"
      :description "Uppercase a string"
-     :handler (fn [_cs args] (clojure.string/upper-case args))})
+     :handler (fn [_cs args] (str/upper-case args))})
 
   (ext/register-tool! api
     {:name "my-echo"
@@ -331,7 +332,7 @@ A complete extension showing the common pieces:
 
   (ext/on-input api
     (fn [{:keys [text]}]
-      (when (clojure.string/starts-with? text "!magic")
+      (when (str/starts-with? text "!magic")
         {:action :transform :text (str "The magic word is " text)}))))
 
 (defn shutdown [api]
