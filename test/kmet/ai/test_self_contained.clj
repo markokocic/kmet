@@ -9,9 +9,13 @@
             [babashka.fs :as fs]))
 
 (defn- ai-files []
-  (->> (fs/list-dir "src/kmet/ai")
-       (filter #(str/ends-with? (str %) ".clj"))
-       (map str)))
+  (concat
+   (->> (fs/list-dir "src/kmet/ai")
+        (filter #(str/ends-with? (str %) ".clj"))
+        (map str))
+   (->> (fs/list-dir "src/kmet/ai/api")
+        (filter #(str/ends-with? (str %) ".clj"))
+        (map str))))
 
 (defn- kmet-requires [path]
   (let [content (slurp path)

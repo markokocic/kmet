@@ -2104,9 +2104,12 @@
                               (tui/tui-request-render t))
                           :agent-end
                            ;; Pi: maybeShowCacheMissNotice — a significant
-                           ;; prompt-cache miss on the completed turn
+                           ;; prompt-cache miss on the completed turn (only
+                           ;; when the run actually produced an assistant
+                           ;; message — a failed run must not re-show the
+                           ;; previous turn's miss)
                           (do (when-let [cs @cs-ref]
-                                (maybe-show-cache-miss-notice! cs))
+                                (maybe-show-cache-miss-notice! cs (:messages evt)))
                               (tui/tui-request-render t))
                           :queue-update
                            ;; Queued steering/follow-up messages changed (pi:
@@ -2915,12 +2918,14 @@
 
 (defn- maybe-show-cache-miss-notice!
   "pi: maybeShowCacheMissNotice — when :show-cache-miss-notices is on and
-   the last assistant message paid for a significant prompt-cache miss, add
-   a transcript notice. Display floor: >= 20k tokens re-billed (pi's
-   `missedTokens < 20_000 && missedCost < 0.1` is simplified to the token
-   arm — kmet has no per-message price lookup here)."
-  [cs]
-  (when (cfg/get-show-cache-miss-notices (:config cs))
+   the completed turn (RUN-MESSAGES) paid for a significant prompt-cache
+   miss, add a transcript notice. Display floor: >= 20k tokens re-billed
+   (pi's `missedTokens < 20_000 && missedCost < 0.1` is simplified to the
+   token arm — kmet has no per-message price lookup here)."
+  [cs run-messages]
+  (when (and (cfg/get-show-cache-miss-notices (:config cs))
+             ;; the run must have produced an assistant message with usage
+             (some #(and (= :assistant (:role %)) (:usage %)) run-messages))
     (when-let [sess @(:session-atom cs)]
       (when-let [miss (session/detect-cache-miss (session/get-branch sess))]
         (when (>= (:missed-tokens miss) 20000)

@@ -102,7 +102,7 @@ bb run --print "list files in current directory"
 | `/help` | Show help |
 | `/model <provider:model[:thinking]>` | Switch model (Ctrl+L opens a selector; an unmatched term opens the selector pre-filled with it) |
 | `/scoped-models` | Enable/disable/reorder the models Ctrl+P cycles through (Ctrl+S saves to settings) |
-| `/settings` | Settings menu — thinking level, hide-thinking, retry (enabled / max retries / base delay) |
+| `/settings` | Settings menu — thinking level, hide-thinking, retry (enabled / max retries / base delay), theme |
 | `/login [provider]` | Configure provider auth — API key, or OAuth: Copilot device-code, Codex browser/device, Anthropic & OpenRouter browser PKCE |
 | `/logout [provider]` | Remove stored provider credentials |
 | `/new` | Start new session |

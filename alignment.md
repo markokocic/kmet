@@ -122,7 +122,7 @@ Missing (pi `core/extensions/types.ts`):
 |---|---|
 | `registerTool` | extension-defined tools (kmet `app/tools/registry.clj` has `register-tool!` but no extension-facing wrapper) |
 | `registerCommand`, `registerShortcut`, `registerFlag`/`getFlag` | extension commands/shortcuts/CLI flags |
-| `registerMessageRenderer`, `registerMarkdownTransformer`, `registerEntryRenderer` | custom rendering |
+| `registerMessageRenderer`, `registerMarkdownTransformer` | custom message/markdown rendering (`registerEntryRenderer` is done — `extensions/register-entry-renderer!`) |
 | `sendUserMessage` (deliverAs steer/followUp) | queue user messages from extensions |
 | `setModel`, `getThinkingLevel`, `setThinkingLevel` | model/thinking control |
 | `exec` | shell command helper |
