@@ -1,3 +1,4 @@
-{:hooks {:analyze-call {kmet.tui.macros/defcomponent hooks.kmet-macros/defcomponent
+{:exclude-files "test/fixtures/.*"
+ :hooks {:analyze-call {kmet.tui.macros/defcomponent hooks.kmet-macros/defcomponent
                         kmet.tui.macros/defsetter    hooks.kmet-macros/defsetter
                         kmet.tui.macros/defgetter    hooks.kmet-macros/defgetter}}}
