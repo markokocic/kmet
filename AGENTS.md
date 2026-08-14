@@ -77,7 +77,20 @@ src/kmet/
 │   │                     wire (pi: images*.ts; Deferred B)
 │   ├── image_model_data/ — committed image-model catalog (bb generate-image-models)
 │   ├── bash_executor.clj — Bash command execution (raw byte streaming, truncation, temp file)
-│   ├── llm.clj         — LLM API calls (the 9 wire APIs + thinking shaping)
+│   ├── llm.clj         — LLM API dispatcher (pi: send-message — auth/model
+│   │                     resolution, effort clamp, dispatch to kmet.app.api.*)
+│   ├── api/            — Per-wire LLM API builders (pi: packages/ai/src/api/)
+│   │   ├── shared.clj  — URL construction, headers, thinking levels, message
+│   │   │                transformers, cost/event handling (pi transform-messages.ts)
+│   │   ├── openai_completions.clj — OpenAI Completions (pi openai-completions.ts)
+│   │   ├── openai_responses.clj — OpenAI Responses (pi openai-responses.ts)
+│   │   ├── openai_codex_responses.clj — Codex responses (pi openai-codex-responses.ts)
+│   │   ├── azure_openai_responses.clj — Azure responses (pi azure-openai-responses.ts)
+│   │   ├── anthropic_messages.clj — Anthropic Messages (pi anthropic-messages.ts)
+│   │   ├── google_generative_ai.clj — Gemini (pi google-generative-ai.ts)
+│   │   ├── mistral_conversations.clj — Mistral (pi mistral-conversations.ts)
+│   │   ├── google_vertex.clj — Vertex (pi google-vertex.ts)
+│   │   └── bedrock_converse_stream.clj — Bedrock Converse (pi bedrock-converse-stream.ts)
 │   ├── proxy.clj      — Proxy env vars (HTTPS_PROXY/ALL_PROXY/NO_PROXY) + transport;
 │   │                     SOCKS & https-scheme proxies via curl (java.net.http is HTTP-proxy-only)
 │   ├── loop.clj        — Agent conversation loop

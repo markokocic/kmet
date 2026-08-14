@@ -7,6 +7,16 @@
             [kmet.app.aws-sigv4 :as aws-sigv4]
             [kmet.app.config-value :as config-value]
             [kmet.app.llm :as llm]
+            [kmet.app.api.shared :as shared]
+            [kmet.app.api.openai-completions :as completions]
+            [kmet.app.api.openai-responses :as responses]
+            [kmet.app.api.openai-codex-responses :as codex]
+            [kmet.app.api.azure-openai-responses :as azure]
+            [kmet.app.api.anthropic-messages :as anthropic]
+            [kmet.app.api.google-generative-ai :as google]
+            [kmet.app.api.mistral-conversations :as mistral]
+            [kmet.app.api.google-vertex :as vertex]
+            [kmet.app.api.bedrock-converse-stream :as bedrock]
             [kmet.app.models :as m]
             [kmet.app.tools.core :as tools]))
 
@@ -48,39 +58,39 @@
 
 (t/deftest test-endpoint-urls
   (t/is (= "https://api.deepseek.com/chat/completions"
-           (@#'llm/endpoint-url :openai-completions "https://api.deepseek.com" "deepseek-v4-flash")))
+           (@#'shared/endpoint-url :openai-completions "https://api.deepseek.com" "deepseek-v4-flash")))
   (t/is (= "https://opencode.ai/zen/go/v1/chat/completions"
-           (@#'llm/endpoint-url :openai-completions "https://opencode.ai/zen/go/v1" "qwen3.6-plus")))
+           (@#'shared/endpoint-url :openai-completions "https://opencode.ai/zen/go/v1" "qwen3.6-plus")))
   (t/is (= "https://api.individual.githubcopilot.com/v1/messages"
-           (@#'llm/endpoint-url :anthropic-messages "https://api.individual.githubcopilot.com" "claude-sonnet-4.5")))
+           (@#'shared/endpoint-url :anthropic-messages "https://api.individual.githubcopilot.com" "claude-sonnet-4.5")))
   (t/is (= "https://opencode.ai/zen/v1/models/gemini-3.1-pro:streamGenerateContent?alt=sse"
-           (@#'llm/endpoint-url :google-generative-ai "https://opencode.ai/zen/v1" "gemini-3.1-pro")))
+           (@#'shared/endpoint-url :google-generative-ai "https://opencode.ai/zen/v1" "gemini-3.1-pro")))
   (t/is (= "https://api.openai.com/v1/responses"
-           (@#'llm/endpoint-url :openai-responses "https://api.openai.com/v1" "gpt-5.4"))))
+           (@#'shared/endpoint-url :openai-responses "https://api.openai.com/v1" "gpt-5.4"))))
 
 (t/deftest test-interpolate-base-url
   (let [workers "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
         gateway "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/openai"]
     (t/testing "placeholders substitute from the env"
-      (with-redefs [llm/getenv (fn [k]
-                                 (case k
-                                   "CLOUDFLARE_ACCOUNT_ID" "acc-1"
-                                   "CLOUDFLARE_GATEWAY_ID" "gw-1"
-                                   nil))]
+      (with-redefs [shared/getenv (fn [k]
+                                    (case k
+                                      "CLOUDFLARE_ACCOUNT_ID" "acc-1"
+                                      "CLOUDFLARE_GATEWAY_ID" "gw-1"
+                                      nil))]
         (t/is (= "https://gateway.ai.cloudflare.com/v1/acc-1/gw-1/openai"
-                 (@#'llm/interpolate-base-url gateway)))
+                 (@#'shared/interpolate-base-url gateway)))
         (t/is (= "https://api.cloudflare.com/client/v4/accounts/acc-1/ai/v1"
-                 (@#'llm/interpolate-base-url workers)))
+                 (@#'shared/interpolate-base-url workers)))
         (t/is (= "https://api.deepseek.com"
-                 (@#'llm/interpolate-base-url "https://api.deepseek.com"))
+                 (@#'shared/interpolate-base-url "https://api.deepseek.com"))
               "non-cloudflare bases pass through")))
     (t/testing "missing ids are a clear config error (pi resolveCloudflareEnv)"
-      (with-redefs [llm/getenv (fn [_] nil)]
+      (with-redefs [shared/getenv (fn [_] nil)]
         (t/is (thrown-with-msg? Exception #"CLOUDFLARE_ACCOUNT_ID"
-                                (@#'llm/interpolate-base-url workers))))
-      (with-redefs [llm/getenv (fn [k] (when (= k "CLOUDFLARE_ACCOUNT_ID") "acc"))]
+                                (@#'shared/interpolate-base-url workers))))
+      (with-redefs [shared/getenv (fn [k] (when (= k "CLOUDFLARE_ACCOUNT_ID") "acc"))]
         (t/is (thrown-with-msg? Exception #"CLOUDFLARE_GATEWAY_ID"
-                                (@#'llm/interpolate-base-url gateway)))))))
+                                (@#'shared/interpolate-base-url gateway)))))))
 
 ;; ─── OpenAI Codex + Azure responses (shared processor, new URL + auth) ────
 
@@ -108,31 +118,31 @@
 
 (t/deftest test-llm-codex-url
   (t/is (= "https://chatgpt.com/backend-api/codex/responses"
-           (@#'llm/codex-endpoint-url "https://chatgpt.com/backend-api")))
+           (@#'codex/codex-endpoint-url "https://chatgpt.com/backend-api")))
   (t/is (= "https://chatgpt.com/backend-api/codex/responses"
-           (@#'llm/codex-endpoint-url nil))
+           (@#'codex/codex-endpoint-url nil))
         "blank base → the default codex base")
   (t/is (= "https://custom.example/codex/responses"
-           (@#'llm/codex-endpoint-url "https://custom.example/codex"))
+           (@#'codex/codex-endpoint-url "https://custom.example/codex"))
         "base ending in /codex gains /responses")
   (t/is (= "https://custom.example/codex/responses"
-           (@#'llm/codex-endpoint-url "https://custom.example/codex/responses/"))
+           (@#'codex/codex-endpoint-url "https://custom.example/codex/responses/"))
         "the full path passes through (trailing slash trimmed)"))
 
 (t/deftest test-llm-codex-account-id
-  (t/is (= "acc-1" (@#'llm/codex-account-id (test-jwt "acc-1")))
+  (t/is (= "acc-1" (@#'codex/codex-account-id (test-jwt "acc-1")))
         "chatgpt_account_id claim from the JWT payload")
   (t/is (thrown-with-msg? Exception #"Failed to extract accountId"
-                          (@#'llm/codex-account-id "not-a-jwt")))
+                          (@#'codex/codex-account-id "not-a-jwt")))
   (t/is (thrown-with-msg? Exception #"Failed to extract accountId"
-                          (@#'llm/codex-account-id
+                          (@#'codex/codex-account-id
                            (test-jwt ""))) "no claim in the payload"))
 
 (t/deftest test-llm-codex-payload
   (let [msgs [{:role :system :content [{:type :text :text "S"}]}
               {:role :user :content [{:type :text :text "hi"}]}]
-        payload (@#'llm/codex-payload (codex-model) :high msgs [] "gpt-5.4"
-                                      "sess-123")]
+        payload (@#'codex/codex-payload (codex-model) :high msgs [] "gpt-5.4"
+                                        "sess-123")]
     (t/is (= "gpt-5.4" (:model payload)))
     (t/is (= "S" (:instructions payload)) "the system prompt goes to instructions")
     (t/is (false? (:store payload)))
@@ -149,7 +159,7 @@
              (:input payload))
           "converted messages without the system prompt"))
   (t/testing "no prompt-cache key when caching is off"
-    (let [payload (@#'llm/codex-payload (codex-model) nil [] [] "gpt-5.4" nil)]
+    (let [payload (@#'codex/codex-payload (codex-model) nil [] [] "gpt-5.4" nil)]
       (t/is (nil? (:prompt_cache_key payload)))
       (t/is (nil? (:reasoning payload)) "off → no reasoning field (codex thinks by default)")))
   (t/testing "tools + sampling-params merged last"
@@ -157,14 +167,14 @@
                                 :parameters {:type "object"
                                              :properties {:cmd {:type "string"}}}
                                 :execute (fn [_] nil))
-          payload (@#'llm/codex-payload (codex-model {:sampling-params {:temperature 0.2}})
-                                        :high [] [tool] "gpt-5.4" nil)]
+          payload (@#'codex/codex-payload (codex-model {:sampling-params {:temperature 0.2}})
+                                          :high [] [tool] "gpt-5.4" nil)]
       (t/is (= "bash" (get-in payload [:tools 0 :name])))
       (t/is (= 0.2 (:temperature payload)) "sampling-params win over the envelope"))))
 
 (t/deftest test-llm-codex-request-headers
   (let [token (test-jwt "acc-9")
-        headers (@#'llm/codex-request-headers token "sess-123")]
+        headers (@#'codex/codex-request-headers token "sess-123")]
     (t/is (= (str "Bearer " token) (get headers "Authorization")))
     (t/is (= "acc-9" (get headers "chatgpt-account-id")))
     (t/is (= "pi" (get headers "originator")))
@@ -174,59 +184,59 @@
     (t/is (= "sess-123" (get headers "session-id")))
     (t/is (= "sess-123" (get headers "x-client-request-id"))))
   (t/testing "no session headers when caching is off"
-    (let [headers (@#'llm/codex-request-headers (test-jwt "acc-9") nil)]
+    (let [headers (@#'codex/codex-request-headers (test-jwt "acc-9") nil)]
       (t/is (nil? (get headers "session-id")))
       (t/is (nil? (get headers "x-client-request-id"))))))
 
 (t/deftest test-llm-azure-url
   (t/testing "normalizeAzureBaseUrl forces azure hosts to /openai/v1"
     (t/is (= "https://res.openai.azure.com/openai/v1"
-             (@#'llm/normalize-azure-base-url "https://res.openai.azure.com")))
+             (@#'azure/normalize-azure-base-url "https://res.openai.azure.com")))
     (t/is (= "https://res.openai.azure.com/openai/v1"
-             (@#'llm/normalize-azure-base-url "https://res.openai.azure.com/openai/v1/responses")))
+             (@#'azure/normalize-azure-base-url "https://res.openai.azure.com/openai/v1/responses")))
     (t/is (= "https://res.cognitiveservices.azure.com/openai/v1"
-             (@#'llm/normalize-azure-base-url "https://res.cognitiveservices.azure.com/openai/")))
+             (@#'azure/normalize-azure-base-url "https://res.cognitiveservices.azure.com/openai/")))
     (t/is (= "https://res.ai.azure.com/openai/v1"
-             (@#'llm/normalize-azure-base-url "https://res.ai.azure.com")))
+             (@#'azure/normalize-azure-base-url "https://res.ai.azure.com")))
     (t/is (= "https://res.openai.azure.com/custom/path"
-             (@#'llm/normalize-azure-base-url "https://res.openai.azure.com/custom/path"))
+             (@#'azure/normalize-azure-base-url "https://res.openai.azure.com/custom/path"))
           "other paths pass through"))
   (t/testing "azureEndpointUrl appends the deployment + api version"
     (t/is (= "https://res.openai.azure.com/openai/v1/deployments/gpt-5.4/responses?api-version=v1"
-             (@#'llm/azure-endpoint-url "https://res.openai.azure.com/openai/v1"
-                                        "gpt-5.4" "v1"))))
+             (@#'azure/azure-endpoint-url "https://res.openai.azure.com/openai/v1"
+                                          "gpt-5.4" "v1"))))
   (t/testing "deployment name resolution (AZURE_OPENAI_DEPLOYMENT_NAME_MAP)"
-    (with-redefs [llm/getenv (fn [k]
-                               (when (= k "AZURE_OPENAI_DEPLOYMENT_NAME_MAP")
-                                 "gpt-5.4=my-gpt-54, gpt-5.5 = my-gpt-55"))]
-      (t/is (= "my-gpt-54" (@#'llm/azure-deployment-name "gpt-5.4")))
-      (t/is (= "my-gpt-55" (@#'llm/azure-deployment-name "gpt-5.5")))
-      (t/is (= "gpt-4o" (@#'llm/azure-deployment-name "gpt-4o"))
+    (with-redefs [shared/getenv (fn [k]
+                                  (when (= k "AZURE_OPENAI_DEPLOYMENT_NAME_MAP")
+                                    "gpt-5.4=my-gpt-54, gpt-5.5 = my-gpt-55"))]
+      (t/is (= "my-gpt-54" (@#'azure/azure-deployment-name "gpt-5.4")))
+      (t/is (= "my-gpt-55" (@#'azure/azure-deployment-name "gpt-5.5")))
+      (t/is (= "gpt-4o" (@#'azure/azure-deployment-name "gpt-4o"))
             "unmapped models use the model id"))
-    (with-redefs [llm/getenv (fn [_] nil)]
-      (t/is (= "gpt-5.4" (@#'llm/azure-deployment-name "gpt-5.4")))))
+    (with-redefs [shared/getenv (fn [_] nil)]
+      (t/is (= "gpt-5.4" (@#'azure/azure-deployment-name "gpt-5.4")))))
   (t/testing "resolved config: env base wins, resource name derives, api version"
-    (with-redefs [llm/getenv (fn [k]
-                               (case k
-                                 "AZURE_OPENAI_BASE_URL" "https://res.openai.azure.com"
-                                 "AZURE_OPENAI_API_VERSION" "2024-02-01"
-                                 nil))]
+    (with-redefs [shared/getenv (fn [k]
+                                  (case k
+                                    "AZURE_OPENAI_BASE_URL" "https://res.openai.azure.com"
+                                    "AZURE_OPENAI_API_VERSION" "2024-02-01"
+                                    nil))]
       (t/is (= {:base-url "https://res.openai.azure.com/openai/v1" :api-version "2024-02-01"}
-               (@#'llm/azure-resolved-config ""))))
-    (with-redefs [llm/getenv (fn [k]
-                               (when (= k "AZURE_OPENAI_RESOURCE_NAME") "myres"))]
+               (@#'azure/azure-resolved-config ""))))
+    (with-redefs [shared/getenv (fn [k]
+                                  (when (= k "AZURE_OPENAI_RESOURCE_NAME") "myres"))]
       (t/is (= {:base-url "https://myres.openai.azure.com/openai/v1" :api-version "v1"}
-               (@#'llm/azure-resolved-config ""))))
-    (with-redefs [llm/getenv (fn [_] nil)]
+               (@#'azure/azure-resolved-config ""))))
+    (with-redefs [shared/getenv (fn [_] nil)]
       (t/is (= {:base-url "https://model.example/v1" :api-version "v1"}
-               (@#'llm/azure-resolved-config "https://model.example/v1"))
+               (@#'azure/azure-resolved-config "https://model.example/v1"))
             "model base-url fallback")
       (t/is (thrown-with-msg? Exception #"Azure OpenAI base URL is required"
-                              (@#'llm/azure-resolved-config ""))))))
+                              (@#'azure/azure-resolved-config ""))))))
 
 (t/deftest test-llm-azure-payload-uses-deployment
-  (let [payload (@#'llm/responses-payload (codex-model) :high [] [] "my-deployment"
-                                          :short "sess-123")]
+  (let [payload (@#'responses/responses-payload (codex-model) :high [] [] "my-deployment"
+                                                :short "sess-123")]
     (t/is (= "my-deployment" (:model payload))
           "the deployment name is the model field on the wire")
     (t/is (= "sess-123" (:prompt_cache_key payload)))
@@ -247,7 +257,7 @@
   (let [errors (atom [])]
     ;; the config is resolved inside the request future, so the env redef
     ;; must stay active until the future completes
-    (with-redefs [llm/getenv (fn [_] nil)]
+    (with-redefs [shared/getenv (fn [_] nil)]
       @(llm/send-message {:provider :azure-openai-responses
                           :api-key "sk"
                           :model "gpt-5.4"
@@ -279,7 +289,7 @@
               {:role :assistant :content [{:type :text :text "answer"}]
                :tool-calls [{:id "call_abc|fc_123" :name "read" :arguments {:path "x"}}]}
               {:role :tool :content [{:type :tool-result :tool_use_id "call_abc|fc_123" :content "file"}]}]
-        items (@#'llm/responses-messages model msgs)]
+        items (@#'responses/responses-messages model msgs)]
     (t/is (= {:role "developer" :content "You are helpful"} (first items))
           "reasoning models get the system prompt as a developer message")
     (t/is (= {:role "user" :content [{:type "input_text" :text "hi"}]}
@@ -300,7 +310,7 @@
 
 (t/deftest test-llm-responses-messages-non-reasoning-system-role
   (let [model (responses-model {:reasoning false})
-        items (@#'llm/responses-messages
+        items (@#'responses/responses-messages
                model
                [{:role :system :content [{:type :text :text "S"}]}
                 {:role :user :content [{:type :text :text "u"}]}])]
@@ -314,7 +324,7 @@
   ;; different-model path — the id is omitted to avoid fc_/rs_ pairing
   ;; validation)
   (let [model (responses-model)
-        items (@#'llm/responses-messages
+        items (@#'responses/responses-messages
                model
                [{:role :user :content [{:type :text :text "u"}]}
                 {:role :assistant :content []
@@ -329,36 +339,36 @@
 
 (t/deftest test-llm-responses-payload
   (t/testing "thinking on → reasoning {effort, summary} + include"
-    (let [payload (@#'llm/responses-payload (responses-model) :high [] [] "gpt-5.4" nil nil)]
+    (let [payload (@#'responses/responses-payload (responses-model) :high [] [] "gpt-5.4" nil nil)]
       (t/is (= {:effort "high" :summary "auto"} (:reasoning payload)))
       (t/is (= ["reasoning.encrypted_content"] (:include payload)))
       (t/is (= 128000 (:max_output_tokens payload)))
       (t/is (false? (:store payload)))
       (t/is (true? (:stream payload)))))
   (t/testing "thinking off with an explicit off value → reasoning {effort 'none'}"
-    (let [payload (@#'llm/responses-payload (responses-model) nil [] [] "gpt-5.4" nil nil)]
+    (let [payload (@#'responses/responses-payload (responses-model) nil [] [] "gpt-5.4" nil nil)]
       (t/is (= {:effort "none"} (:reasoning payload)))
       (t/is (nil? (:include payload)))))
   (t/testing "off pinned to null (always-thinking) → no reasoning param"
     (let [model (responses-model {:thinking-level-map {:off nil :low "low" :medium "medium"
                                                        :high "high" :xhigh "xhigh" :max "max"}})
-          payload (@#'llm/responses-payload model nil [] [] "gpt-5" nil nil)]
+          payload (@#'responses/responses-payload model nil [] [] "gpt-5" nil nil)]
       (t/is (nil? (:reasoning payload)))
       (t/is (nil? (:include payload)))))
   (t/testing "xai always includes the reasoning content; off:null means
              always-thinking (no reasoning param)"
     (let [model (responses-model {:provider :xai :thinking-level-map {:off nil :minimal nil
                                                                       :low "low" :medium "medium" :high "high"}})
-          payload (@#'llm/responses-payload model nil [] [] "grok-4.5" nil nil)]
+          payload (@#'responses/responses-payload model nil [] [] "grok-4.5" nil nil)]
       (t/is (nil? (:reasoning payload)))
       (t/is (= ["reasoning.encrypted_content"] (:include payload)))))
   (t/testing "max_output_tokens floors at 16 (pi #6265)"
-    (let [payload (@#'llm/responses-payload (responses-model {:max-tokens 10}) :high [] [] "gpt-5.4" nil nil)]
+    (let [payload (@#'responses/responses-payload (responses-model {:max-tokens 10}) :high [] [] "gpt-5.4" nil nil)]
       (t/is (= 16 (:max_output_tokens payload)))))
   (t/testing "tools carry the JSON schema + strict flag when supported"
     (let [tool (tools/map->Tool {:name "read" :label "Read" :description "d"
                                  :parameters {:type "object" :properties {:path {:type "string"}}}})
-          payload (@#'llm/responses-payload (responses-model) :high [] [tool] "gpt-5.4" nil nil)]
+          payload (@#'responses/responses-payload (responses-model) :high [] [tool] "gpt-5.4" nil nil)]
       (t/is (= [{:type "function" :name "read" :description "d"
                  :parameters {:type "object" :properties {:path {:type "string"}}}
                  :strict false}]
@@ -366,7 +376,7 @@
   (t/testing "no strict flag when the provider doesn't support strict mode"
     (let [tool (tools/map->Tool {:name "read" :label "Read" :description "d"
                                  :parameters {:type "object"}})
-          payload (@#'llm/responses-payload
+          payload (@#'responses/responses-payload
                    (responses-model {:compat {}}) :high [] [tool] "grok-4.5" nil nil)]
       (t/is (= [{:type "function" :name "read" :description "d"
                  :parameters {:type "object"}}]
@@ -447,7 +457,7 @@
   (let [msgs [{:role :user
                :content [{:type :text :text "look"}
                          {:type :image :data "AA" :mime-type "image/png"}]}]
-        converted (@#'llm/openai-messages msgs)]
+        converted (@#'shared/openai-messages msgs)]
     (t/is (= [{:type "text" :text "look"}
               {:type "image_url"
                :image_url {:url "data:image/png;base64,AA"}}]
@@ -458,7 +468,7 @@
   (let [msgs [{:role :user
                :content [{:type :text :text "look"}
                          {:type :image :data "AA" :mime-type "image/png"}]}]
-        converted (@#'llm/anthropic-messages msgs)]
+        converted (@#'anthropic/anthropic-messages msgs)]
     (t/is (= [{:type "text" :text "look"}
               {:type "image"
                :source {:type "base64" :media_type "image/png" :data "AA"}}]
@@ -471,10 +481,10 @@
   (let [msgs [{:role :custom
                :custom-type :note
                :content [{:type :text :text "hello from an extension"}]}]
-        openai (@#'llm/openai-messages msgs)
-        openai-reasoning (@#'llm/openai-messages-with-reasoning msgs)
-        anthropic (@#'llm/anthropic-messages msgs)
-        [google _] (@#'llm/google-messages msgs {:id "m" :name "M"})]
+        openai (@#'shared/openai-messages msgs)
+        openai-reasoning (@#'shared/openai-messages-with-reasoning msgs)
+        anthropic (@#'anthropic/anthropic-messages msgs)
+        [google _] (@#'google/google-messages msgs {:id "m" :name "M"})]
     (t/is (= "user" (:role (first openai))))
     (t/is (= "user" (:role (first openai-reasoning))))
     (t/is (= "user" (:role (first anthropic))))
@@ -486,15 +496,15 @@
   ;; string content is normalized by the context projection (context-messages),
   ;; but the converters accept string content via the shared content helpers
   (let [msgs [{:role :custom :custom-type :note :content "plain string"}]
-        openai (@#'llm/openai-messages msgs)]
+        openai (@#'shared/openai-messages msgs)]
     (t/is (= "user" (:role (first openai))))))
 
 (t/deftest test-llm-tool-result-images-conversion
   (let [msgs [{:role :tool
                :content [{:type :tool_result :tool_use_id "t1" :content "saw it"}]
                :images [{:data "AA" :mime-type "image/png"}]}]
-        openai (@#'llm/openai-messages msgs)
-        anthropic (@#'llm/anthropic-messages msgs)]
+        openai (@#'shared/openai-messages msgs)
+        anthropic (@#'anthropic/anthropic-messages msgs)]
     (t/is (= [{:type "text" :text "saw it"}
               {:type "image_url"
                :image_url {:url "data:image/png;base64,AA"}}]
@@ -508,8 +518,8 @@
 
 (t/deftest test-llm-no-images-backward-compat
   (let [msgs [{:role :user :content [{:type :text :text "hi"}]}]
-        openai (@#'llm/openai-messages msgs)
-        anthropic (@#'llm/anthropic-messages msgs)]
+        openai (@#'shared/openai-messages msgs)
+        anthropic (@#'anthropic/anthropic-messages msgs)]
     (t/is (= "hi" (:content (first openai)))
           "text-only messages keep string content for OpenAI")
     (t/is (= "hi" (:content (first anthropic)))
@@ -521,8 +531,8 @@
   (let [msgs [{:role :assistant
                :content [{:type :text :text "answer"}]
                :thinking "let me think\nabout it"}]
-        openai (@#'llm/openai-messages msgs)
-        reasoning (@#'llm/openai-messages-with-reasoning msgs)]
+        openai (@#'shared/openai-messages msgs)
+        reasoning (@#'shared/openai-messages-with-reasoning msgs)]
     (t/is (= "let me think\nabout it" (:reasoning_content (first openai)))
           "plain openai-messages sends the thinking back")
     (t/is (= "let me think\nabout it" (:reasoning_content (first reasoning)))
@@ -530,8 +540,8 @@
   ;; messages without thinking keep the empty-field compat for
   ;; requires-reasoning-content-on-assistant-messages providers
   (let [msgs [{:role :assistant :content [{:type :text :text "answer"}]}]]
-    (t/is (nil? (:reasoning_content (first (@#'llm/openai-messages msgs)))))
-    (t/is (= "" (:reasoning_content (first (@#'llm/openai-messages-with-reasoning msgs)))))))
+    (t/is (nil? (:reasoning_content (first (@#'shared/openai-messages msgs)))))
+    (t/is (= "" (:reasoning_content (first (@#'shared/openai-messages-with-reasoning msgs)))))))
 
 ;; ─── Bash result conversion (pi: convertToLlm bashExecution) ──────────────
 
@@ -540,9 +550,9 @@
                :exclude-from-context? false}
               {:role :bash :command "git st" :output "clean\n" :exit-code 0
                :exclude-from-context? true}]
-        openai (@#'llm/openai-messages msgs)
-        reasoning (@#'llm/openai-messages-with-reasoning msgs)
-        anthropic (@#'llm/anthropic-messages msgs)]
+        openai (@#'shared/openai-messages msgs)
+        reasoning (@#'shared/openai-messages-with-reasoning msgs)
+        anthropic (@#'anthropic/anthropic-messages msgs)]
     (doseq [converted [openai reasoning anthropic]]
       (t/is (= 1 (count converted)) "excluded bash entries are dropped")
       (t/is (= "user" (:role (first converted))) "bash entries become user messages")
@@ -555,7 +565,7 @@
   (let [msgs [{:role :bash :command "false" :output "" :exit-code 1
                :exclude-from-context? false
                :truncated true :full-output-path "/tmp/out"}]
-        openai (@#'llm/openai-messages msgs)
+        openai (@#'shared/openai-messages msgs)
         text (:content (first openai))]
     (t/is (str/includes? text "Ran `false`"))
     (t/is (str/includes? text "(no output)"))
@@ -565,7 +575,7 @@
 (t/deftest test-llm-bash-cancelled-no-exit-code
   (let [msgs [{:role :bash :command "sleep 10" :output "" :exit-code nil
                :cancelled true :exclude-from-context? false}]
-        openai (@#'llm/openai-messages msgs)
+        openai (@#'shared/openai-messages msgs)
         text (:content (first openai))]
     (t/is (str/includes? text "(command cancelled)"))
     (t/is (not (str/includes? text "Command exited with code")))))
@@ -575,7 +585,7 @@
   ;; nil message — transport-error-message must still mark it retryable
   ;; (pi: undici always reports transport failures as "fetch failed"), or
   ;; auto-retry on network errors silently dies.
-  (let [te @#'llm/transport-error-message]
+  (let [te @#'shared/transport-error-message]
     (t/is (= "network error: ConnectException"
              (te (java.net.ConnectException. nil))))
     (t/is (= "network error: request timed out"
@@ -608,37 +618,37 @@
    :thinking-level-map tlm :compat compat :max-tokens max-tokens})
 
 (t/deftest test-supported-thinking-levels
-  (t/is (= [:off] (llm/get-supported-thinking-levels (tmodel :reasoning false)))
+  (t/is (= [:off] (shared/get-supported-thinking-levels (tmodel :reasoning false)))
         "non-reasoning models only support :off")
   (t/is (= [:off :minimal :low :medium :high]
-           (llm/get-supported-thinking-levels (tmodel :tlm nil)))
+           (shared/get-supported-thinking-levels (tmodel :tlm nil)))
         "no map → everything except :xhigh/:max")
   (t/is (= [:off :high :max]
-           (llm/get-supported-thinking-levels
+           (shared/get-supported-thinking-levels
             (tmodel :tlm {:minimal nil :low nil :medium nil :high "high" :max "max"})))
         "null map values mark levels unsupported")
   (t/is (= [:high]
-           (llm/get-supported-thinking-levels
+           (shared/get-supported-thinking-levels
             (tmodel :tlm {:off nil :minimal nil :low nil :medium nil})))
         "a null :off means thinking cannot be disabled"))
 
 (t/deftest test-clamp-thinking-level
   (let [deepseek (tmodel :tlm {:minimal nil :low nil :medium nil :high "high" :max "max"})]
-    (t/is (= :high (@#'llm/clamp-thinking-level deepseek :low))
+    (t/is (= :high (@#'shared/clamp-thinking-level deepseek :low))
           "unsupported levels clamp up to the nearest supported")
-    (t/is (= :max (@#'llm/clamp-thinking-level deepseek :max)))
-    (t/is (= :off (@#'llm/clamp-thinking-level deepseek :off)))
-    (t/is (= :max (@#'llm/clamp-thinking-level deepseek :xhigh))
+    (t/is (= :max (@#'shared/clamp-thinking-level deepseek :max)))
+    (t/is (= :off (@#'shared/clamp-thinking-level deepseek :off)))
+    (t/is (= :max (@#'shared/clamp-thinking-level deepseek :xhigh))
           "xhigh unsupported → clamps up to :max"))
-  (t/is (= :high (@#'llm/clamp-thinking-level (tmodel :tlm nil) :max))
+  (t/is (= :high (@#'shared/clamp-thinking-level (tmodel :tlm nil) :max))
         "no map → :max clamps to :high")
-  (t/is (= :off (@#'llm/clamp-thinking-level (tmodel :reasoning false) :high))
+  (t/is (= :off (@#'shared/clamp-thinking-level (tmodel :reasoning false) :high))
         "non-reasoning model → everything clamps to :off"))
 
 (t/deftest test-effective-effort
-  (t/is (nil? (@#'llm/effective-effort (tmodel) :off)))
-  (t/is (= :low (@#'llm/effective-effort (tmodel) :low)))
-  (t/is (= :high (@#'llm/effective-effort (tmodel) :max))
+  (t/is (nil? (@#'shared/effective-effort (tmodel) :off)))
+  (t/is (= :low (@#'shared/effective-effort (tmodel) :low)))
+  (t/is (= :high (@#'shared/effective-effort (tmodel) :max))
         "no map → :max clamps to :high"))
 
 ;; ─── Thinking request shaping (pi per-api) ─────────────────────────────────
@@ -650,43 +660,43 @@
                                 :tlm {:off nil})
         qwen (tmodel :compat {:thinking-format :qwen})
         no-effort (tmodel :compat {:supports-reasoning-effort false})]
-    (t/is (= {:reasoning_effort "high"} (@#'llm/openai-thinking-params default-model :high))
+    (t/is (= {:reasoning_effort "high"} (@#'shared/openai-thinking-params default-model :high))
           "default format: reasoning_effort = level name")
     (t/is (= {:reasoning_effort "none"}
-             (@#'llm/openai-thinking-params
+             (@#'shared/openai-thinking-params
               (tmodel :tlm {:off "none"}) nil))
           "default format off: map :off value when present")
-    (t/is (= {} (@#'llm/openai-thinking-params default-model nil))
+    (t/is (= {} (@#'shared/openai-thinking-params default-model nil))
           "default format off without map :off → no params")
     (t/is (= {:thinking {:type "enabled"}
               :reasoning_effort "high"}
-             (@#'llm/openai-thinking-params deepseek :high))
+             (@#'shared/openai-thinking-params deepseek :high))
           "deepseek on: thinking enabled + reasoning_effort")
     (t/is (= {:thinking {:type "disabled"}}
-             (@#'llm/openai-thinking-params deepseek nil))
+             (@#'shared/openai-thinking-params deepseek nil))
           "deepseek off: thinking disabled")
-    (t/is (= {} (@#'llm/openai-thinking-params deepseek-no-off nil))
+    (t/is (= {} (@#'shared/openai-thinking-params deepseek-no-off nil))
           "deepseek off with :off null → no disabled param")
     (t/is (= {:enable_thinking true :reasoning_effort "high"}
-             (@#'llm/openai-thinking-params qwen :high))
+             (@#'shared/openai-thinking-params qwen :high))
           "qwen on: enable_thinking + reasoning_effort")
-    (t/is (= {:enable_thinking false} (@#'llm/openai-thinking-params qwen nil))
+    (t/is (= {:enable_thinking false} (@#'shared/openai-thinking-params qwen nil))
           "qwen off: enable_thinking false")
     (t/is (= {:reasoning {:effort "high"}}
-             (@#'llm/openai-thinking-params
+             (@#'shared/openai-thinking-params
               (tmodel :compat {:thinking-format :openrouter}) :high))
           "openrouter on: nested reasoning: {effort}")
     (t/is (= {:reasoning {:effort "none"}}
-             (@#'llm/openai-thinking-params
+             (@#'shared/openai-thinking-params
               (tmodel :compat {:thinking-format :openrouter}) nil))
           "openrouter off: reasoning: {effort: none} (pi)")
     (t/is (= {}
-             (@#'llm/openai-thinking-params
+             (@#'shared/openai-thinking-params
               (tmodel :compat {:thinking-format :openrouter} :tlm {:off nil}) nil))
           "openrouter off pinned to null → no params (always thinking)")
-    (t/is (= {} (@#'llm/openai-thinking-params no-effort :high))
+    (t/is (= {} (@#'shared/openai-thinking-params no-effort :high))
           "supports-reasoning-effort false → no effort params")
-    (t/is (= {} (@#'llm/openai-thinking-params (tmodel :reasoning false) :high))
+    (t/is (= {} (@#'shared/openai-thinking-params (tmodel :reasoning false) :high))
           "non-reasoning model → no thinking params")
     (t/testing "A.3 formats (pi buildParams thinking)"
       (let [zai (tmodel :compat {:thinking-format :zai :supports-reasoning-effort true})
@@ -703,94 +713,94 @@
                                     :tlm {:minimal "low"})]
         (t/is (= {:thinking {:type "enabled" :clear_thinking false}
                   :reasoning_effort "high"}
-                 (@#'llm/openai-thinking-params zai :high))
+                 (@#'shared/openai-thinking-params zai :high))
               "zai on: thinking enabled + reasoning_effort")
         (t/is (= {:thinking {:type "disabled"}}
-                 (@#'llm/openai-thinking-params zai-no-effort nil))
+                 (@#'shared/openai-thinking-params zai-no-effort nil))
               "zai off: thinking disabled")
         (t/is (= {:reasoning {:enabled true} :reasoning_effort "high"}
-                 (@#'llm/openai-thinking-params together :high))
+                 (@#'shared/openai-thinking-params together :high))
               "together on: reasoning enabled + reasoning_effort")
         (t/is (= {:reasoning {:enabled false}}
-                 (@#'llm/openai-thinking-params together-no-effort nil))
+                 (@#'shared/openai-thinking-params together-no-effort nil))
               "together off: reasoning disabled")
         (t/is (= {:chat_template_args {:enable_thinking true}}
-                 (@#'llm/openai-thinking-params baseten :high))
+                 (@#'shared/openai-thinking-params baseten :high))
               "baseten on: chat_template_args enable_thinking true")
         (t/is (= {:chat_template_args {:enable_thinking false}}
-                 (@#'llm/openai-thinking-params baseten nil))
+                 (@#'shared/openai-thinking-params baseten nil))
               "baseten off: chat_template_args enable_thinking false")
-        (t/is (= {} (@#'llm/openai-thinking-params
+        (t/is (= {} (@#'shared/openai-thinking-params
                      (tmodel :compat {:thinking-format :ant-ling}) :high))
               "ant-ling: no params (Ring reasons by default, pi's empty branch)")
         (t/is (= {:thinking "high"}
-                 (@#'llm/openai-thinking-params
+                 (@#'shared/openai-thinking-params
                   (tmodel :compat {:thinking-format :string-thinking}) :high))
               "string-thinking on")
         (t/is (= {:chat_template_kwargs {:enable_thinking true :preserve_thinking true}}
-                 (@#'llm/openai-thinking-params
+                 (@#'shared/openai-thinking-params
                   (tmodel :compat {:thinking-format :qwen-chat-template}) :high))
               "qwen-chat-template on")
         (t/is (= {:chat_template_kwargs {:enable_thinking false}}
-                 (@#'llm/openai-thinking-params chat-template nil))
+                 (@#'shared/openai-thinking-params chat-template nil))
               "chat-template off: enable_thinking false")
         (t/is (= {:thinking {:type "adaptive" :display "summarized"}
                   :output_config {:effort "high"}
                   :max-tokens 32000}
-                 (@#'llm/anthropic-thinking adaptive :high))
+                 (@#'shared/anthropic-thinking adaptive :high))
               "adaptive thinking: output_config effort (pi forceAdaptiveThinking)")
         (t/is (= {:thinking {:type "adaptive" :display "summarized"}
                   :output_config {:effort "low"}
                   :max-tokens 32000}
-                 (@#'llm/anthropic-thinking adaptive-mapped :minimal))
+                 (@#'shared/anthropic-thinking adaptive-mapped :minimal))
               "adaptive effort uses the thinking-level-map mapping when present")
         (t/is (= {:thinking {:type "disabled"} :max-tokens 32000}
-                 (@#'llm/anthropic-thinking adaptive nil))
+                 (@#'shared/anthropic-thinking adaptive nil))
               "adaptive models still disable thinking when off")))))
 
 (t/deftest test-anthropic-thinking
   (let [model (tmodel :max-tokens 32000)]
     (t/is (= {:thinking {:type "enabled" :budget_tokens 2048 :display "summarized"}
               :max-tokens 32000}
-             (@#'llm/anthropic-thinking model :low))
+             (@#'shared/anthropic-thinking model :low))
           "budget-based thinking, max_tokens from the model")
     (t/is (= {:thinking {:type "enabled" :budget_tokens 16384 :display "summarized"}
               :max-tokens 32000}
-             (@#'llm/anthropic-thinking model :high)))
+             (@#'shared/anthropic-thinking model :high)))
     (t/is (= {:thinking {:type "enabled" :budget_tokens 16384 :display "summarized"}
               :max-tokens 32000}
-             (@#'llm/anthropic-thinking model :max))
+             (@#'shared/anthropic-thinking model :max))
           ":max clamps to :high budget")
     (t/is (= {:thinking {:type "disabled"} :max-tokens 32000}
-             (@#'llm/anthropic-thinking model nil))
+             (@#'shared/anthropic-thinking model nil))
           "off → thinking disabled")
-    (t/is (nil? (@#'llm/anthropic-thinking
+    (t/is (nil? (@#'shared/anthropic-thinking
                  (tmodel :tlm {:off nil}) nil))
           "off with :off null → no thinking param")
-    (t/is (nil? (@#'llm/anthropic-thinking (tmodel :reasoning false) :high)))
+    (t/is (nil? (@#'shared/anthropic-thinking (tmodel :reasoning false) :high)))
     (t/is (= {:thinking {:type "enabled" :budget_tokens 2048 :display "summarized"} :max-tokens 4096}
-             (@#'llm/anthropic-thinking (tmodel :max-tokens nil) :low))
+             (@#'shared/anthropic-thinking (tmodel :max-tokens nil) :low))
           "legacy anthropic (no max-tokens) falls back to 4096")))
 
 (t/deftest test-google-thinking-config
   (let [gemini-pro (tmodel :id "gemini-3.1-pro"
                            :tlm {:off nil :minimal nil :low "LOW" :medium nil :high "HIGH"})]
     (t/is (= {:includeThoughts true :thinkingLevel "LOW"}
-             (@#'llm/google-thinking-config gemini-pro :low)))
+             (@#'google/google-thinking-config gemini-pro :low)))
     (t/is (= {:includeThoughts true :thinkingLevel "HIGH"}
-             (@#'llm/google-thinking-config gemini-pro :high)))
+             (@#'google/google-thinking-config gemini-pro :high)))
     (t/is (= {:thinkingLevel "LOW"}
-             (@#'llm/google-thinking-config gemini-pro nil))
+             (@#'google/google-thinking-config gemini-pro nil))
           "gemini-3 pro off → lowest thinking level, no includeThoughts"))
   (t/is (= {:thinkingLevel "MINIMAL"}
-           (@#'llm/google-thinking-config (tmodel :id "gemini-3.5-flash") nil))
+           (@#'google/google-thinking-config (tmodel :id "gemini-3.5-flash") nil))
         "gemini-3 flash off → MINIMAL"))
 
 ;; ─── Google message conversion ─────────────────────────────────────────────
 
 (t/deftest test-google-messages
   (let [model {:id "gemini-2.5-pro" :name "Gemini"}
-        [contents system] (@#'llm/google-messages
+        [contents system] (@#'google/google-messages
                            [{:role :system :content [{:type :text :text "sys"}]}
                             {:role :user :content [{:type :text :text "hi"}]}
                             {:role :assistant :content [{:type :text :text "ok"}]
@@ -807,7 +817,7 @@
           "gemini-2.5 does not require tool-call ids (pi requiresToolCallId)"))
   (t/testing "gemini-3 requires explicit ids on functionCall/functionResponse"
     (let [model {:id "gemini-3-pro-preview" :name "Gemini 3"}
-          [contents _] (@#'llm/google-messages
+          [contents _] (@#'google/google-messages
                         [{:role :assistant :content [{:type :text :text "ok"}]
                           :tool-calls [{:id "t1/x" :name "read" :arguments {:path "a"}}]}
                          {:role :tool :tool-name "read" :is-error false
@@ -854,53 +864,53 @@
         provider {:id :github-copilot
                   :configured-headers {"X-Custom" "literal"}
                   :auth-header false}
-        merged (@#'llm/request-headers {"Content-Type" "application/json"} model provider "k" nil)]
+        merged (@#'shared/request-headers {"Content-Type" "application/json"} model provider "k" nil)]
     (t/is (= "application/json" (get merged "Content-Type")))
     (t/is (= "GitHubCopilotChat/0.35.0" (get merged "User-Agent")))
     (t/is (= "literal" (get merged "X-Custom")))))
 
 (t/deftest test-request-headers-auth-header
   (t/testing "auth-header true adds Authorization: Bearer <key> last"
-    (let [merged (@#'llm/request-headers {"x-api-key" "k"}
-                                         {:provider :p :id "m"}
-                                         {:id :p :auth-header true}
-                                         "secret" nil)]
+    (let [merged (@#'shared/request-headers {"x-api-key" "k"}
+                                            {:provider :p :id "m"}
+                                            {:id :p :auth-header true}
+                                            "secret" nil)]
       (t/is (= "Bearer secret" (get merged "Authorization")))
       (t/is (= "k" (get merged "x-api-key")))))
   (t/testing "no auth-header → no Authorization header"
-    (let [merged (@#'llm/request-headers {"x-api-key" "k"}
-                                         {:provider :p :id "m"}
-                                         {:id :p}
-                                         "secret" nil)]
+    (let [merged (@#'shared/request-headers {"x-api-key" "k"}
+                                            {:provider :p :id "m"}
+                                            {:id :p}
+                                            "secret" nil)]
       (t/is (nil? (get merged "Authorization")))))
   (t/testing "configured header values resolve as config values ($ENV)"
     (with-redefs [config-value/getenv (fn [k] (when (= k "TEST_LLM_HEADER") "hdr"))]
-      (let [merged (@#'llm/request-headers {}
-                                           {:provider :p :id "m"}
-                                           {:id :p :configured-headers {"X-Custom" "$TEST_LLM_HEADER"}}
-                                           "k" nil)]
+      (let [merged (@#'shared/request-headers {}
+                                              {:provider :p :id "m"}
+                                              {:id :p :configured-headers {"X-Custom" "$TEST_LLM_HEADER"}}
+                                              "k" nil)]
         (t/is (= "hdr" (get merged "X-Custom")))))))
 
 (t/deftest test-max-tokens-key
-  (t/is (= :max_tokens (@#'llm/max-tokens-key (tmodel :compat {:max-tokens-field :max-tokens})))
+  (t/is (= :max_tokens (@#'shared/max-tokens-key (tmodel :compat {:max-tokens-field :max-tokens})))
         "max-tokens-field :max-tokens → :max_tokens (opencode/deepseek)")
-  (t/is (= :max_completion_tokens (@#'llm/max-tokens-key (tmodel :compat nil)))
+  (t/is (= :max_completion_tokens (@#'shared/max-tokens-key (tmodel :compat nil)))
         "default → :max_completion_tokens"))
 
 (t/deftest test-openai-payload-sampling-params
   (t/testing "sampling-params merged verbatim into the payload, keys win (pi: Object.assign last)"
     (let [model (assoc (tmodel) :sampling-params {:temperature 1.0 :min_p 0.0})
-          payload (@#'llm/openai-payload model nil [] [] "m1")]
+          payload (@#'completions/openai-payload model nil [] [] "m1")]
       (t/is (= 1.0 (:temperature payload)))
       (t/is (= 0.0 (:min_p payload)))
       (t/is (= "m1" (:model payload)))
       (t/is (= true (:stream payload)))))
   (t/testing "sampling-params override pi-named fields (temperature, max tokens)"
     (let [model (assoc (tmodel) :sampling-params {:max_completion_tokens 5})
-          payload (@#'llm/openai-payload model nil [] [] "m1")]
+          payload (@#'completions/openai-payload model nil [] [] "m1")]
       (t/is (= 5 (:max_completion_tokens payload)) "sampling key beats the model :max-tokens")))
   (t/testing "no sampling-params → payload unchanged"
-    (let [payload (@#'llm/openai-payload (tmodel) nil [] [] "m1")]
+    (let [payload (@#'completions/openai-payload (tmodel) nil [] [] "m1")]
       (t/is (= 32000 (:max_completion_tokens payload)))
       (t/is (nil? (:temperature payload))))))
 
@@ -1009,34 +1019,34 @@
   (let [model (m/get-model :deepseek "deepseek-v4-pro")
         norm {:input 800 :output 500 :cache-read 200 :cache-write 0}]
     (t/testing "provider-native usage gains the pi-shaped :cost breakdown"
-      (let [usage (@#'llm/usage-with-cost model
-                                          {:prompt_tokens 1000 :completion_tokens 500
-                                           :prompt_tokens_details {:cached_tokens 200}})]
+      (let [usage (@#'shared/usage-with-cost model
+                                             {:prompt_tokens 1000 :completion_tokens 500
+                                              :prompt_tokens_details {:cached_tokens 200}})]
         (t/is (= 1000 (:prompt_tokens usage)) "provider-native keys preserved")
         (t/is (= (m/calculate-cost model norm) (:cost usage))
               "cost equals calculate-cost over the normalized tokens")))
     (t/testing "google's already-normalized usage is priced too"
-      (let [usage (@#'llm/usage-with-cost model {:input 10 :output 20
-                                                 :cache-read 0 :cache-write 0})]
+      (let [usage (@#'shared/usage-with-cost model {:input 10 :output 20
+                                                    :cache-read 0 :cache-write 0})]
         (t/is (= 10 (:input usage)))
         (t/is (= (m/calculate-cost model {:input 10 :output 20
                                           :cache-read 0 :cache-write 0})
                  (:cost usage)))))
     (t/testing "unrecognized usage passes through unchanged (no :cost)"
-      (t/is (= {:foo 1} (@#'llm/usage-with-cost model {:foo 1}))))))
+      (t/is (= {:foo 1} (@#'shared/usage-with-cost model {:foo 1}))))))
 
 (t/deftest test-request-headers-attribution
   (t/testing "opencode session headers flow through request-headers"
     (let [model {:provider :opencode :id "qwen3.6-plus"
                  :base-url "https://opencode.ai/zen/v1"}
           provider {:id :opencode}
-          merged (@#'llm/request-headers {"Authorization" "Bearer k"} model provider "k" "sess-42")]
+          merged (@#'shared/request-headers {"Authorization" "Bearer k"} model provider "k" "sess-42")]
       (t/is (= "sess-42" (get merged "x-opencode-session")))
       (t/is (= "pi" (get merged "x-opencode-client")))))
   (t/testing "no session id → no session headers"
     (let [model {:provider :opencode :id "qwen3.6-plus"}
           provider {:id :opencode}
-          merged (@#'llm/request-headers {} model provider "k" nil)]
+          merged (@#'shared/request-headers {} model provider "k" nil)]
       (t/is (nil? (get merged "x-opencode-session"))))))
 
 ;; ─── Phase 9: anthropic auth-token (Authorization: Bearer) ─────────────────
@@ -1045,15 +1055,15 @@
   (t/testing "the :anthropic provider with AUTH_TOKEN → Authorization: Bearer (pi anthropic resolve)"
     (with-redefs [auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))]
       (t/is (= {"Authorization" "Bearer tok"}
-               (@#'llm/anthropic-auth-headers :anthropic "ignored-key")))))
+               (@#'anthropic/anthropic-auth-headers :anthropic "ignored-key")))))
   (t/testing "no AUTH_TOKEN → x-api-key with the resolved key"
     (with-redefs [auth/getenv (fn [_] nil)]
       (t/is (= {"x-api-key" "api-key"}
-               (@#'llm/anthropic-auth-headers :anthropic "api-key")))))
+               (@#'anthropic/anthropic-auth-headers :anthropic "api-key")))))
   (t/testing "other providers never take the anthropic bearer path"
     (with-redefs [auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))]
       (t/is (= {"x-api-key" "k"}
-               (@#'llm/anthropic-auth-headers :github-copilot "k"))))))
+               (@#'anthropic/anthropic-auth-headers :github-copilot "k"))))))
 
 (t/deftest ^:slow test-llm-anthropic-bearer-only
   (m/load-catalogs!)
@@ -1238,29 +1248,29 @@
 
 (t/deftest test-llm-responses-cache-params
   (t/testing "short retention (default) sends the prompt cache key from the session id"
-    (let [payload (@#'llm/responses-payload (responses-model) :high [] [] "gpt-5.4"
-                                            :short "sess-123")]
+    (let [payload (@#'responses/responses-payload (responses-model) :high [] [] "gpt-5.4"
+                                                  :short "sess-123")]
       (t/is (= "sess-123" (:prompt_cache_key payload)))
       (t/is (nil? (:prompt_cache_retention payload)))))
   (t/testing "long retention → prompt_cache_retention 24h (absent compat defaults
              to true, pi getCompat)"
-    (let [payload (@#'llm/responses-payload (responses-model) :high [] [] "gpt-5.4"
-                                            :long "sess-123")]
+    (let [payload (@#'responses/responses-payload (responses-model) :high [] [] "gpt-5.4"
+                                                  :long "sess-123")]
       (t/is (= "24h" (:prompt_cache_retention payload))))
-    (let [payload (@#'llm/responses-payload
+    (let [payload (@#'responses/responses-payload
                    (responses-model {:compat {:supports-long-cache-retention false}})
                    :high [] [] "gpt-5.4" :long "sess-123")]
       (t/is (nil? (:prompt_cache_retention payload)) "unsupported models don't get the retention param")))
   (t/testing "none → no key; explicit prompt-cache mode on cache-enabled models"
-    (let [payload (@#'llm/responses-payload (responses-model) :high [] [] "gpt-5.4" :none nil)]
+    (let [payload (@#'responses/responses-payload (responses-model) :high [] [] "gpt-5.4" :none nil)]
       (t/is (nil? (:prompt_cache_key payload)))
       (t/is (nil? (:prompt_cache_options payload)) "gpt-5.4 has no explicit-prompt-cache compat"))
     (let [model (responses-model {:compat {:supports-explicit-prompt-cache-mode true}})
-          payload (@#'llm/responses-payload model :high [] [] "gpt-5.4" :none nil)]
+          payload (@#'responses/responses-payload model :high [] [] "gpt-5.4" :none nil)]
       (t/is (= {:mode "explicit"} (:prompt_cache_options payload)))))
   (t/testing "session ids over 64 chars are clamped (pi clampOpenAIPromptCacheKey)"
     (let [long-id (apply str (repeat 80 "x"))
-          payload (@#'llm/responses-payload (responses-model) :high [] [] "gpt-5.4" :short long-id)]
+          payload (@#'responses/responses-payload (responses-model) :high [] [] "gpt-5.4" :short long-id)]
       (t/is (= 64 (count (:prompt_cache_key payload))))
       (t/is (str/starts-with? long-id (:prompt_cache_key payload))
             "the clamped key is the first 64 chars of the session id"))))
@@ -1268,48 +1278,48 @@
 (t/deftest test-llm-responses-affinity-headers
   (t/testing "openai format → session_id + x-client-request-id"
     (t/is (= {"session_id" "s1" "x-client-request-id" "s1"}
-             (@#'llm/responses-affinity-headers (responses-model) "s1"))))
+             (@#'responses/responses-affinity-headers (responses-model) "s1"))))
   (t/testing "opencode zen (openai-nosession compat) → x-client-request-id only"
     (t/is (= {"x-client-request-id" "s1"}
-             (@#'llm/responses-affinity-headers
+             (@#'responses/responses-affinity-headers
               (responses-model {:compat {:session-affinity-format :openai-nosession}}) "s1"))))
   (t/testing "openrouter detection (provider or base-url) → x-session-id"
     (t/is (= {"x-session-id" "s1"}
-             (@#'llm/responses-affinity-headers
+             (@#'responses/responses-affinity-headers
               (responses-model {:provider :openrouter}) "s1")))
     (t/is (= {"x-session-id" "s1"}
-             (@#'llm/responses-affinity-headers
+             (@#'responses/responses-affinity-headers
               (responses-model {:base-url "https://openrouter.ai/api/v1"}) "s1"))))
   (t/testing "no session id → no headers"
-    (t/is (nil? (@#'llm/responses-affinity-headers (responses-model) nil)))))
+    (t/is (nil? (@#'responses/responses-affinity-headers (responses-model) nil)))))
 
 (t/deftest test-llm-copilot-dynamic-headers
   (t/testing "X-Initiator from the last message role (pi inferCopilotInitiator)"
     (t/is (= {"X-Initiator" "user" "Openai-Intent" "conversation-edits"}
-             (@#'llm/copilot-dynamic-headers
+             (@#'responses/copilot-dynamic-headers
               [{:role :user :content [{:type :text :text "hi"}]}])))
     (t/is (= {"X-Initiator" "agent" "Openai-Intent" "conversation-edits"}
-             (@#'llm/copilot-dynamic-headers
+             (@#'responses/copilot-dynamic-headers
               [{:role :user :content [{:type :text :text "hi"}]}
                {:role :assistant :content [{:type :text :text "ok"}]}])))
     (t/is (= {"X-Initiator" "agent" "Openai-Intent" "conversation-edits"}
-             (@#'llm/copilot-dynamic-headers
+             (@#'responses/copilot-dynamic-headers
               [{:role :user :content [{:type :text :text "hi"}]}
                {:role :tool :content [{:type :tool-result :tool_use_id "t" :content "out"}]}]))))
   (t/testing "Copilot-Vision-Request when any user/tool-result message has images"
     (t/is (= {"X-Initiator" "user" "Openai-Intent" "conversation-edits"
               "Copilot-Vision-Request" "true"}
-             (@#'llm/copilot-dynamic-headers
+             (@#'responses/copilot-dynamic-headers
               [{:role :user :content [{:type :text :text "look"}
                                       {:type :image :data "AA" :mime-type "image/png"}]}])))
     (t/is (= {"X-Initiator" "agent" "Openai-Intent" "conversation-edits"
               "Copilot-Vision-Request" "true"}
-             (@#'llm/copilot-dynamic-headers
+             (@#'responses/copilot-dynamic-headers
               [{:role :user :content [{:type :text :text "hi"}]}
                {:role :tool :content [{:type :tool-result :tool_use_id "t" :content "out"}]
                 :images [{:type :image :data "AA" :mime-type "image/png"}]}]))))
   (t/testing "no images → no vision header"
-    (t/is (nil? (get (@#'llm/copilot-dynamic-headers
+    (t/is (nil? (get (@#'responses/copilot-dynamic-headers
                       [{:role :user :content [{:type :text :text "hi"}]}])
                      "Copilot-Vision-Request")))))
 
@@ -1317,16 +1327,16 @@
   (let [model (responses-model {:input [:text]})]
     (t/testing "images on a text-only model → pi's (see attached image)"
       (t/is (= "(see attached image)"
-               (@#'llm/responses-tool-result-output
+               (@#'responses/responses-tool-result-output
                 model {:content [{:type :tool-result :tool_use_id "t" :content ""}]
                        :images [{:type :image :data "AA" :mime-type "image/png"}]}))))
     (t/testing "no text and no images → (no tool output)"
       (t/is (= "(no tool output)"
-               (@#'llm/responses-tool-result-output
+               (@#'responses/responses-tool-result-output
                 model {:content [{:type :tool-result :tool_use_id "t" :content ""}]}))))
     (t/testing "plain text passes through"
       (t/is (= "out"
-               (@#'llm/responses-tool-result-output
+               (@#'responses/responses-tool-result-output
                 model {:content [{:type :tool-result :tool_use_id "t" :content "out"}]}))))))
 
 (t/deftest test-llm-responses-request-headers
@@ -1336,22 +1346,22 @@
         provider (m/map->Provider {:id :openai :name "OpenAI" :api-types #{:openai-responses}
                                    :models [model] :env-vars [] :default-model nil})]
     (t/testing "short (default) with a session id → affinity headers"
-      (let [h (#'llm/responses-request-headers model provider "sk" "sess-1" :short [])]
+      (let [h (#'responses/responses-request-headers model provider "sk" "sess-1" :short [])]
         (t/is (= "sess-1" (get h "session_id")))
         (t/is (= "sess-1" (get h "x-client-request-id")))))
     (t/testing ":none → no affinity headers even with a session id"
-      (let [h (#'llm/responses-request-headers model provider "sk" "sess-1" :none [])]
+      (let [h (#'responses/responses-request-headers model provider "sk" "sess-1" :none [])]
         (t/is (nil? (get h "session_id")))
         (t/is (nil? (get h "x-client-request-id")))))
     (t/testing "no session id → no affinity headers"
-      (let [h (#'llm/responses-request-headers model provider "sk" nil :short [])]
+      (let [h (#'responses/responses-request-headers model provider "sk" nil :short [])]
         (t/is (nil? (get h "session_id")))))
     (t/testing "copilot requests carry the dynamic headers (incl. over :none)"
       (let [copilot (responses-model {:provider :github-copilot})
             p2 (m/map->Provider {:id :github-copilot :name "Copilot"
                                  :api-types #{:openai-responses} :models [copilot]
                                  :env-vars [] :default-model nil})
-            h (#'llm/responses-request-headers
+            h (#'responses/responses-request-headers
                copilot p2 "sk" "sess-1" :none
                [{:role :user :content [{:type :text :text "hi"}]}])]
         (t/is (= "user" (get h "X-Initiator")))
@@ -1601,11 +1611,11 @@
         errors (atom [])
         ;; the azure config is resolved inside the request future, so the
         ;; env redef must stay active until the future completes
-        _ (with-redefs [llm/getenv (fn [k]
-                                     (case k
-                                       "AZURE_OPENAI_BASE_URL" (str "http://localhost:" port)
-                                       "AZURE_OPENAI_DEPLOYMENT_NAME_MAP" "gpt-5.4=my-deploy"
-                                       nil))]
+        _ (with-redefs [shared/getenv (fn [k]
+                                        (case k
+                                          "AZURE_OPENAI_BASE_URL" (str "http://localhost:" port)
+                                          "AZURE_OPENAI_DEPLOYMENT_NAME_MAP" "gpt-5.4=my-deploy"
+                                          nil))]
             (let [f (llm/send-message {:provider :azure-openai-responses
                                        :api-key "sk-azure"
                                        :model "gpt-5.4"
@@ -1703,7 +1713,7 @@
   (let [errors (atom [])]
     ;; the interpolation runs inside the request future, so the env redef
     ;; must stay active until the future completes
-    (with-redefs [llm/getenv (fn [_] nil)]
+    (with-redefs [shared/getenv (fn [_] nil)]
       @(llm/send-message {:provider :cloudflare-workers-ai
                           :model "@cf/moonshotai/kimi-k2.6"
                           :api-key "k"
@@ -1723,11 +1733,11 @@
 
 (t/deftest test-mistral-url
   (t/is (= "https://api.mistral.ai/v1/chat/completions"
-           (@#'llm/endpoint-url :mistral-conversations "https://api.mistral.ai" "x"))))
+           (@#'shared/endpoint-url :mistral-conversations "https://api.mistral.ai" "x"))))
 
 (t/deftest test-mistral-tool-call-id-normalizer
   ;; 9-char ids pass through; longer/messy ids get a 9-char shortHash
-  (let [normalize (@#'llm/make-mistral-tool-call-id-normalizer)]
+  (let [normalize (@#'mistral/make-mistral-tool-call-id-normalizer)]
     (t/is (= "abc123xyz" (normalize "abc123xyz")))
     (t/is (= 9 (count (normalize "call_very-long-tool-call-id-12345"))))
     (t/is (re-matches #"[a-zA-Z0-9]{9}" (normalize "call_very-long-tool-call-id-12345")))
@@ -1754,7 +1764,7 @@
               {:role "tool" :tool_call_id "abc123xyz" :name "read"
                :content [{:type "text" :text "done"}]}
               {:role "user" :content "Ran `ls`\n```\na\nb\n```"}]
-             (@#'llm/mistral-messages msgs (mistral-model) normalize)))))
+             (@#'mistral/mistral-messages msgs (mistral-model) normalize)))))
 
 (t/deftest test-mistral-messages-images
   (let [msgs [{:role :user :content [{:type :text :text "see"}
@@ -1769,32 +1779,32 @@
                 {:role "tool" :tool_call_id "t1" :name "read"
                  :content [{:type "text" :text "(see attached image)"}
                            {:type "image_url" :image_url "data:image/png;base64,BBBB"}]}]
-               (@#'llm/mistral-messages msgs (mistral-model :input [:text :image]) normalize))))
+               (@#'mistral/mistral-messages msgs (mistral-model :input [:text :image]) normalize))))
     (t/testing "text-only model drops the image parts (keeps text)"
       (t/is (= [{:role "user" :content [{:type "text" :text "see"}]}
                 {:role "tool" :tool_call_id "t1" :name "read"
                  :content [{:type "text" :text "(image omitted: model does not support images)"}]}]
-               (@#'llm/mistral-messages msgs (mistral-model :input [:text]) normalize))))
+               (@#'mistral/mistral-messages msgs (mistral-model :input [:text]) normalize))))
     (t/testing "image-only user content degrades to pi's placeholder"
       (t/is (= [{:role "user"
                  :content [{:type "text" :text "(image omitted: model does not support images)"}]}]
-               (@#'llm/mistral-messages
+               (@#'mistral/mistral-messages
                 [{:role "user" :content [{:type :image :mime-type "image/png" :data "AAAA"}]}]
                 (mistral-model :input [:text]) normalize))))))
 
 (t/deftest test-mistral-thinking
   (t/is (= {:prompt_mode "reasoning"}
-           (@#'llm/mistral-thinking (mistral-model) :high))
+           (@#'mistral/mistral-thinking (mistral-model) :high))
         "default models use prompt_mode")
   (t/is (= {:reasoning_effort "high"}
-           (@#'llm/mistral-thinking (mistral-model :id "mistral-medium-3.5") :high))
+           (@#'mistral/mistral-thinking (mistral-model :id "mistral-medium-3.5") :high))
         "effort models use reasoning_effort (default high)")
   (t/is (= {:reasoning_effort "medium"}
-           (@#'llm/mistral-thinking (mistral-model :id "mistral-medium-3.5"
-                                                   :tlm {:medium "medium"}) :medium))
+           (@#'mistral/mistral-thinking (mistral-model :id "mistral-medium-3.5"
+                                                       :tlm {:medium "medium"}) :medium))
         "tlm value wins over the default")
-  (t/is (= {} (@#'llm/mistral-thinking (mistral-model) nil)) "off → no thinking params")
-  (t/is (= {} (@#'llm/mistral-thinking (mistral-model :reasoning false) :high))
+  (t/is (= {} (@#'mistral/mistral-thinking (mistral-model) nil)) "off → no thinking params")
+  (t/is (= {} (@#'mistral/mistral-thinking (mistral-model :reasoning false) :high))
         "non-reasoning model → no thinking params"))
 
 (t/deftest test-mistral-payload
@@ -1808,38 +1818,38 @@
               :prompt_mode "reasoning"
               :max_tokens 32000
               :prompt_cache_key "sess-1"}
-             (@#'llm/mistral-payload (mistral-model) :high
-                                     [{:role "user" :content [{:type "text" :text "hi"}]}]
-                                     tools "mistral-large" "sess-1" :short)))
+             (@#'mistral/mistral-payload (mistral-model) :high
+                                         [{:role "user" :content [{:type "text" :text "hi"}]}]
+                                         tools "mistral-large" "sess-1" :short)))
     (t/testing "cache-retention :none drops the cache key"
-      (t/is (nil? (:prompt_cache_key (@#'llm/mistral-payload (mistral-model) nil
-                                                             [{:role "user" :content []}]
-                                                             nil "m" "s" :none)))))))
+      (t/is (nil? (:prompt_cache_key (@#'mistral/mistral-payload (mistral-model) nil
+                                                                 [{:role "user" :content []}]
+                                                                 nil "m" "s" :none)))))))
 
 ;; ─── Google Vertex ─────────────────────────────────────────────────────────
 
 (t/deftest test-vertex-endpoint-url
-  (with-redefs [llm/getenv (fn [k]
-                             (case k
-                               "GOOGLE_CLOUD_PROJECT" "my-project"
-                               "GCLOUD_PROJECT" nil
-                               "GOOGLE_CLOUD_LOCATION" "us-central1"
-                               nil))]
+  (with-redefs [shared/getenv (fn [k]
+                                (case k
+                                  "GOOGLE_CLOUD_PROJECT" "my-project"
+                                  "GCLOUD_PROJECT" nil
+                                  "GOOGLE_CLOUD_LOCATION" "us-central1"
+                                  nil))]
     (t/is (= "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-3-pro:streamGenerateContent?alt=sse"
-             (@#'llm/vertex-endpoint-url "https://{location}-aiplatform.googleapis.com" "gemini-3-pro")))
+             (@#'vertex/vertex-endpoint-url "https://{location}-aiplatform.googleapis.com" "gemini-3-pro")))
     (t/testing "custom base-url used verbatim"
       (t/is (= "https://my-proxy.example/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-3-pro:streamGenerateContent?alt=sse"
-               (@#'llm/vertex-endpoint-url "https://my-proxy.example" "gemini-3-pro")))))
+               (@#'vertex/vertex-endpoint-url "https://my-proxy.example" "gemini-3-pro")))))
   (t/testing "missing project → config error"
-    (with-redefs [llm/getenv (fn [k] (when (= k "GOOGLE_CLOUD_LOCATION") "us-central1"))]
-      (t/is (thrown? Exception (@#'llm/vertex-endpoint-url "" "m")))))
+    (with-redefs [shared/getenv (fn [k] (when (= k "GOOGLE_CLOUD_LOCATION") "us-central1"))]
+      (t/is (thrown? Exception (@#'vertex/vertex-endpoint-url "" "m")))))
   (t/testing "GCLOUD_PROJECT fallback"
-    (with-redefs [llm/getenv (fn [k]
-                               (case k
-                                 "GCLOUD_PROJECT" "alt-project"
-                                 "GOOGLE_CLOUD_LOCATION" "europe-west1"
-                                 nil))]
-      (t/is (str/includes? (@#'llm/vertex-endpoint-url "" "m") "alt-project")))))
+    (with-redefs [shared/getenv (fn [k]
+                                  (case k
+                                    "GCLOUD_PROJECT" "alt-project"
+                                    "GOOGLE_CLOUD_LOCATION" "europe-west1"
+                                    nil))]
+      (t/is (str/includes? (@#'vertex/vertex-endpoint-url "" "m") "alt-project")))))
 
 ;; ─── AWS Bedrock ConverseStream ───────────────────────────────────────────
 
@@ -1852,15 +1862,15 @@
    :reasoning reasoning :max-tokens max-tokens :compat compat})
 
 (t/deftest test-bedrock-model-classification
-  (t/is (true? (@#'llm/bedrock-is-claude? (bedrock-model))))
-  (t/is (true? (@#'llm/bedrock-is-claude? (bedrock-model :id "arn:aws:bedrock:us-east-1:123:inference-profile/xyz"
-                                                         :name "Claude Opus 4.8"))))
-  (t/is (false? (@#'llm/bedrock-is-claude? (bedrock-model :id "amazon.nova-lite-v1:0"
-                                                          :name "Nova Lite"))))
-  (t/is (true? (@#'llm/bedrock-supports-adaptive-thinking? (bedrock-model :id "anthropic.claude-opus-4-6-v1:0"))))
-  (t/is (false? (@#'llm/bedrock-supports-adaptive-thinking? (bedrock-model))))
-  (t/is (true? (@#'llm/bedrock-supports-prompt-caching? (bedrock-model))))
-  (t/is (false? (@#'llm/bedrock-supports-prompt-caching?
+  (t/is (true? (@#'bedrock/bedrock-is-claude? (bedrock-model))))
+  (t/is (true? (@#'bedrock/bedrock-is-claude? (bedrock-model :id "arn:aws:bedrock:us-east-1:123:inference-profile/xyz"
+                                                             :name "Claude Opus 4.8"))))
+  (t/is (false? (@#'bedrock/bedrock-is-claude? (bedrock-model :id "amazon.nova-lite-v1:0"
+                                                              :name "Nova Lite"))))
+  (t/is (true? (@#'bedrock/bedrock-supports-adaptive-thinking? (bedrock-model :id "anthropic.claude-opus-4-6-v1:0"))))
+  (t/is (false? (@#'bedrock/bedrock-supports-adaptive-thinking? (bedrock-model))))
+  (t/is (true? (@#'bedrock/bedrock-supports-prompt-caching? (bedrock-model))))
+  (t/is (false? (@#'bedrock/bedrock-supports-prompt-caching?
                  (bedrock-model :id "amazon.nova-lite-v1:0" :name "Nova Lite")))
         "non-claude models have automatic caching — no explicit cache points"))
 
@@ -1877,7 +1887,7 @@
                 text (kmet stores no reasoning signatures — pi's no-signature
                 fallback; Bedrock rejects a signature-less reasoningContent),
                 cache point on last user"
-      (let [[result system] (@#'llm/bedrock-messages msgs (bedrock-model) :short)]
+      (let [[result system] (@#'bedrock/bedrock-messages msgs (bedrock-model) :short)]
         (t/is (= [{:text "sys"} {:cachePoint {:type "default"}}] system))
         (t/is (= [{:role "user" :content [{:text "hi"}]}
                   {:role "assistant"
@@ -1894,7 +1904,7 @@
                  result))))
     (t/testing "non-claude model: thinking as reasoningContent (no signature),
                 no cache points"
-      (let [[result system] (@#'llm/bedrock-messages
+      (let [[result system] (@#'bedrock/bedrock-messages
                              msgs (bedrock-model :id "amazon.nova-lite-v1:0" :name "Nova") :short)]
         (t/is (= [{:text "sys"}] system) "no cache point on the system block")
         (t/is (= [{:role "user" :content [{:text "hi"}]}
@@ -1909,7 +1919,7 @@
                   {:role "user" :content [{:text "more"}]}]
                  result))))
     (t/testing "no system prompt → nil system blocks"
-      (let [[result system] (@#'llm/bedrock-messages
+      (let [[result system] (@#'bedrock/bedrock-messages
                              (remove #(= :system (:role %)) msgs) (bedrock-model) :short)]
         (t/is (nil? system))
         (t/is (= 4 (count result)))))))
@@ -1924,40 +1934,40 @@
                :content [{:toolResult {:toolUseId "t1"
                                        :content [{:image {:format "jpeg" :source {:bytes "BBBB"}}}]
                                        :status "success"}}]}]
-             (first (@#'llm/bedrock-messages msgs (bedrock-model) :none))))
+             (first (@#'bedrock/bedrock-messages msgs (bedrock-model) :none))))
     (t/testing "unknown image type throws"
       (t/is (thrown? Exception
-                     (@#'llm/bedrock-messages
+                     (@#'bedrock/bedrock-messages
                       [{:role :user :content [{:type :image :mime-type "image/tiff" :data "x"}]}]
                       (bedrock-model) :none))))))
 
 (t/deftest test-bedrock-endpoint-url
-  (with-redefs [llm/getenv (fn [_] nil)]
+  (with-redefs [shared/getenv (fn [_] nil)]
     (t/is (= {:url "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-sonnet-4-5-20250929-v1:0/converse-stream"
               :region "us-east-1"}
-             (@#'llm/bedrock-endpoint-url "https://bedrock-runtime.us-east-1.amazonaws.com" "anthropic.claude-sonnet-4-5-20250929-v1:0")))
+             (@#'bedrock/bedrock-endpoint-url "https://bedrock-runtime.us-east-1.amazonaws.com" "anthropic.claude-sonnet-4-5-20250929-v1:0")))
     (t/is (= {:url "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.claude-opus/converse-stream"
               :region "eu-central-1"}
-             (@#'llm/bedrock-endpoint-url "https://bedrock-runtime.eu-central-1.amazonaws.com" "eu.claude-opus"))))
+             (@#'bedrock/bedrock-endpoint-url "https://bedrock-runtime.eu-central-1.amazonaws.com" "eu.claude-opus"))))
   (t/testing "configured region overrides the endpoint region"
-    (with-redefs [llm/getenv (fn [k] (when (= k "AWS_REGION") "eu-west-1"))]
+    (with-redefs [shared/getenv (fn [k] (when (= k "AWS_REGION") "eu-west-1"))]
       (t/is (= {:url "https://bedrock-runtime.eu-west-1.amazonaws.com/model/m/converse-stream"
                 :region "eu-west-1"}
-               (@#'llm/bedrock-endpoint-url "https://bedrock-runtime.us-east-1.amazonaws.com" "m")))))
+               (@#'bedrock/bedrock-endpoint-url "https://bedrock-runtime.us-east-1.amazonaws.com" "m")))))
   (t/testing "custom endpoints always win"
-    (with-redefs [llm/getenv (fn [_] nil)]
+    (with-redefs [shared/getenv (fn [_] nil)]
       (t/is (= {:url "https://my-vpc.example/model/m/converse-stream" :region "us-east-1"}
-               (@#'llm/bedrock-endpoint-url "https://my-vpc.example" "m"))))))
+               (@#'bedrock/bedrock-endpoint-url "https://my-vpc.example" "m"))))))
 
 (t/deftest test-bedrock-additional-fields
   (t/is (= {:thinking {:type "adaptive" :display "summarized"}
             :output_config {:effort "high"}}
-           (@#'llm/bedrock-additional-fields (bedrock-model :id "anthropic.claude-opus-4-6-v1:0") :high)))
+           (@#'bedrock/bedrock-additional-fields (bedrock-model :id "anthropic.claude-opus-4-6-v1:0") :high)))
   (t/is (= {:thinking {:type "enabled" :budget_tokens 8192 :display "summarized"}
             :anthropic_beta ["interleaved-thinking-2025-05-14"]}
-           (@#'llm/bedrock-additional-fields (bedrock-model) :medium)))
-  (t/is (nil? (@#'llm/bedrock-additional-fields (bedrock-model) nil)) "off → no thinking")
-  (t/is (nil? (@#'llm/bedrock-additional-fields (bedrock-model :id "amazon.nova-lite-v1:0" :name "Nova") :high))
+           (@#'bedrock/bedrock-additional-fields (bedrock-model) :medium)))
+  (t/is (nil? (@#'bedrock/bedrock-additional-fields (bedrock-model) nil)) "off → no thinking")
+  (t/is (nil? (@#'bedrock/bedrock-additional-fields (bedrock-model :id "amazon.nova-lite-v1:0" :name "Nova") :high))
         "non-claude model → no thinking"))
 
 (t/deftest test-bedrock-tool-config
@@ -1967,8 +1977,8 @@
                                   :inputSchema {:json (:parameters (first tools))}
                                   :strict false}}]
               :toolChoice {:auto {}}}
-             (@#'llm/bedrock-tool-config tools)))
-    (t/is (nil? (@#'llm/bedrock-tool-config nil)))))
+             (@#'bedrock/bedrock-tool-config tools)))
+    (t/is (nil? (@#'bedrock/bedrock-tool-config nil)))))
 
 ;; bedrock e2e frame builder (the sse test's private helpers are not
 ;; importable — kept here, mirroring the AWS event-stream framing)
@@ -2247,10 +2257,10 @@
         text (atom "")
         done-reason (atom nil)
         usage (atom nil)
-        fut (with-redefs [llm/getenv (fn [k] (case k "GOOGLE_CLOUD_PROJECT" "proj"
-                                                   "GCLOUD_PROJECT" nil
-                                                   "GOOGLE_CLOUD_LOCATION" "us-central1"
-                                                   nil))]
+        fut (with-redefs [shared/getenv (fn [k] (case k "GOOGLE_CLOUD_PROJECT" "proj"
+                                                      "GCLOUD_PROJECT" nil
+                                                      "GOOGLE_CLOUD_LOCATION" "us-central1"
+                                                      nil))]
               (llm/send-message {:provider :google-vertex
                                  :model "gemini-3.1-pro-preview"
                                  :api-key "vk"

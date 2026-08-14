@@ -5,7 +5,7 @@
    hide-thinking toggle, and the retry block (settings.edn :retry —
    enabled / max-retries / base-delay-ms, applied live to the agent)."
   (:require [kmet.app.loop :as agent]
-            [kmet.app.llm :as llm]
+            [kmet.app.api.shared :as shared]
             [kmet.app.models :as models]
             [kmet.app.ui :as ui]
             [kmet.app.ui.model-selector :as model-selector]
@@ -23,7 +23,7 @@
   [cs]
   (let [ag @(:agent-state cs)
         model (models/get-model @(:provider ag) @(:model ag))
-        levels (if model (llm/get-supported-thinking-levels model) [:off])
+        levels (if model (shared/get-supported-thinking-levels model) [:off])
         current (or (some #{(keyword @(:thinking ag))} levels) (first levels))
         retry-atom (atom (cfg/get-retry-settings-live (:config cs)))
         apply-retry! (fn []
