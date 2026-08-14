@@ -7,8 +7,12 @@ Inspired by [pi](https://pi.dev) — a terminal-based AI coding agent.
 
 ## Overview
 
-kmet provides an interactive terminal UI where you can chat with an LLM (OpenAI or Anthropic),
-with the agent having access to filesystem tools (read, write, edit, bash, grep, find, ls).
+kmet provides an interactive terminal UI where you can chat with any of 39
+cataloged LLM providers (opencode-go, deepseek, anthropic, google, openai,
+openrouter, mistral, bedrock, ...) — the model registry, catalogs, auth and
+wire APIs are a port of pi's provider subsystem (see `models.md`). The agent
+has filesystem tools (read, write, edit, bash, grep, find, ls) plus skills,
+extensions and prompt templates.
 
 ### Features
 
@@ -20,6 +24,10 @@ with the agent having access to filesystem tools (read, write, edit, bash, grep,
 - **Theme System** — customizable ANSI color themes from EDN files
 - **Session Persistence** — EDNL files with branching support
 - **Skills & Extensions** — markdown skills and Clojure extensions
+- **Provider Subsystem** — 39 generated provider catalogs (pi-faithful
+  `models.md` port), `--list-models`, model resolution/cycling, cost display,
+  custom providers via `models.edn`, OAuth logins (Copilot, Codex, Anthropic,
+  OpenRouter), and an image-model registry (`kmet.app.image-models`)
 
 ## Prerequisites
 
@@ -28,14 +36,19 @@ with the agent having access to filesystem tools (read, write, edit, bash, grep,
   `OPENAI_API_KEY` (openai), `XAI_API_KEY` (xai), `AZURE_OPENAI_API_KEY`
   (azure-openai-responses; base URL/deployment from `AZURE_OPENAI_BASE_URL` /
   `AZURE_OPENAI_RESOURCE_NAME` / `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`),
-  `COPILOT_GITHUB_TOKEN`, `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`
+  `COPILOT_GITHUB_TOKEN`,
+  `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_OAUTH_TOKEN`/`ANTHROPIC_API_KEY`
   (anthropic), `GEMINI_API_KEY` (google), `GROQ_API_KEY` (groq),
   `CEREBRAS_API_KEY` (cerebras), `HF_TOKEN` (huggingface),
   `MOONSHOT_API_KEY` (moonshotai), `XIAOMI_API_KEY` + `XIAOMI_TOKEN_PLAN_*_API_KEY`
   (xiaomi token plans), `QWEN_TOKEN_PLAN_API_KEY` (+ `_CN_`), `MINIMAX_API_KEY` /
   `MINIMAX_CN_API_KEY`, `NVIDIA_API_KEY` (nvidia), `OPENROUTER_API_KEY`
   (openrouter), `FIREWORKS_API_KEY` (fireworks), `AI_GATEWAY_API_KEY`
-  (vercel-ai-gateway), `MISTRAL_API_KEY` (mistral),
+  (vercel-ai-gateway), `ZAI_API_KEY`/`ZAI_CODING_CN_API_KEY` (zai),
+  `TOGETHER_API_KEY` (together), `BASETEN_API_KEY` (baseten),
+  `ANT_LING_API_KEY` (ant-ling), `KIMI_API_KEY` (kimi-coding),
+  `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_GATEWAY_ID`
+  (cloudflare workers-ai / ai-gateway), `MISTRAL_API_KEY` (mistral),
   `GOOGLE_CLOUD_API_KEY` (google-vertex; or Application Default
   Credentials — `GOOGLE_APPLICATION_CREDENTIALS` + project + location) —
   or `/login` inside kmet to store `auth.edn` credentials; `/logout`
@@ -87,10 +100,10 @@ bb run --print "list files in current directory"
 |---------|-------------|
 | `/quit` | Exit kmet |
 | `/help` | Show help |
-| `/model <provider:model[:thinking]>` | Switch model (Ctrl+L opens a selector; refresh-on-miss falls through to the selector with the search term) |
+| `/model <provider:model[:thinking]>` | Switch model (Ctrl+L opens a selector; an unmatched term opens the selector pre-filled with it) |
 | `/scoped-models` | Enable/disable/reorder the models Ctrl+P cycles through (Ctrl+S saves to settings) |
 | `/settings` | Settings menu — thinking level, hide-thinking, retry (enabled / max retries / base delay) |
-| `/login [provider]` | Configure provider auth (API key or GitHub Copilot OAuth) |
+| `/login [provider]` | Configure provider auth — API key, or OAuth: Copilot device-code, Codex browser/device, Anthropic & OpenRouter browser PKCE |
 | `/logout [provider]` | Remove stored provider credentials |
 | `/new` | Start new session |
 | `/resume` | Browse past sessions |
@@ -113,28 +126,33 @@ bb run --print "list files in current directory"
 
 ```
 src/kmet/
-├── core.clj              — CLI entry, main layout, commands, session integration
-├── config.clj            — Configuration loading (settings.edn, env vars)
-├── skills.clj            — Skills & extension loading
-├── demo.clj              — Standalone editor demo
-├── tui/
-│   ├── core.clj          — TUI framework (components, overlays, rendering)
-│   ├── terminal.clj      — JLine 4.x terminal wrapper
-│   ├── keys.clj          — Keyboard input handling
-│   ├── utils.clj         — Text width, wrapping, ANSI helpers
-│   ├── protocols.clj     — IComponent, IFocusable protocols
-│   ├── theme.clj         — Theme record, color resolution
-│   └── components/
-│       ├── text.clj, spacer.clj, box.clj, container.clj
-│       ├── input.clj, editor.clj
-│       ├── chat_history.clj, markdown.clj
-│       ├── select_list.clj, settings_list.clj
-└── agent/
-    ├── llm.clj           — LLM API client (OpenAI + Anthropic, SSE streaming)
-    ├── tools.clj         — 7 built-in tools (read/write/edit/bash/grep/find/ls)
-    ├── loop.clj          — Agent turn loop with tool cycling, compaction
-    └── session.clj       — EDNL session storage with branching, tree support
+├── core.clj            — CLI entry, arg parsing, mode dispatch
+├── config.clj          — Configuration loading (settings.edn, env vars)
+├── debug.clj           — Debug/error logging
+├── libs/               — Generic, self-contained helpers (diff, process tree,
+│                         SSE parsing, terminal protocol, yaml frontmatter,
+│                         terminal images, file locks, hashing, highlighting)
+├── modes/              — Entry modes: interactive TUI + print mode
+├── app/                — App business logic (pi: dist/core/)
+│   ├── models.clj      — Provider/model registry + committed EDN catalogs
+│   │                     (model_data/), cost, catalog loading
+│   ├── model_resolver.clj / model_config.clj / provider_composer.clj /
+│   │   config_value.clj — model resolution, models.edn custom providers
+│   ├── auth.clj        — env-var table, auth.edn, credential resolution
+│   ├── oauth.clj       — OAuthAuth record, device-code + PKCE loopback flows
+│   ├── llm.clj         — the 9 wire APIs (openai/anthropic/google/responses/
+│   │                     codex/azure/bedrock/vertex/mistral)
+│   ├── image_models.clj — image-generation registry + :openrouter-images
+│   │                     wire (image_model_data/ catalog)
+│   ├── aws_sigv4.clj / google_adc.clj — bedrock SigV4 + vertex ADC auth
+│   ├── tools/          — read/write/edit/bash tools (grep/find/ls disabled)
+│   └── ui/             — app TUI components (chat history, footer, ...)
+├── tui/                — Generic TUI library (pi: @earendil-works/pi-tui)
+│   └── components/     — text, input, editor, markdown, select/settings
+│                         lists, spinner, image, stack layouts, ...
 ```
+
+The full annotated layout (every file) lives in `AGENTS.md`.
 
 ## Configuration
 
@@ -158,13 +176,14 @@ Example `~/.kmet/agent/settings.edn`:
 ```
 
 `kmet` reads its provider catalog from `src/kmet/app/model_data/*.edn`
-(39 providers incl. anthropic, google, groq, cerebras, openrouter, nvidia,
-moonshotai, qwen-token-plan, minimax, fireworks, vercel-ai-gateway, zai,
-together, baseten, kimi-coding, cloudflare, mistral, google-vertex,
-amazon-bedrock, ...; the openrouter/nvidia/vercel-ai-gateway catalogs are
-fetched live at generation time). Models,
-base URLs and defaults are registry data — see `models.md` for the
-subsystem plan.
+(39 providers: opencode-go, deepseek, anthropic, google, groq, cerebras,
+openrouter, nvidia, moonshotai, qwen-token-plan, minimax, fireworks,
+vercel-ai-gateway, zai, together, baseten, kimi-coding, cloudflare, mistral,
+google-vertex, amazon-bedrock, ...; generated from models.dev + live
+catalogs — `bb generate-models`). The image-model catalog lives in
+`src/kmet/app/image_model_data/image-models.edn` (`bb generate-image-models`).
+Models, base URLs and defaults are registry data; custom providers, API keys
+and model overrides go in `~/.kmet/agent/models.edn` (see `models.md`).
 
 The system prompt (pi-compatible) is built from: the default (or `:system-prompt`)
 base, the active tools with one-line snippets, guidelines, `:append-system-prompt`,
@@ -210,10 +229,15 @@ Create EDN theme files in `~/.kmet/agent/themes/`. See `examples/themes/` for fo
 ## Development
 
 ```sh
-bb demo    # Standalone editor demo
-bb test    # Run fast test suites (excludes ^:slow tests)
-bb test-ext # Run only the slow (^:slow) test suites
-bb help    # Show task help
+bb run             # Interactive TUI
+bb test            # Run fast test suites (excludes ^:slow tests)
+bb test-ext        # Run only the slow (^:slow) test suites
+bb lint            # clj-kondo over src/test
+bb format          # cljfmt (fix) / bb format-check (verify)
+bb generate-models # Regenerate provider catalogs (network)
+bb generate-image-models # Regenerate the image model catalog (network)
+bb check-model-data      # Offline catalog validation
+bb help            # Show task help
 ```
 
 ## Status

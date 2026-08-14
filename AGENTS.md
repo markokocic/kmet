@@ -47,18 +47,42 @@ src/kmet/
 │   │                     negotiation, escape sequences, raw-ANSI write log
 │   │                     (pi terminal.ts; writer-fn based)
 │   ├── yaml_lite.clj   — Minimal YAML subset parser (frontmatter; babashka-compatible)
-│   └── terminal_image.clj — Kitty terminal image protocol + image dimension parsing
-│                           (native PNG/JPEG/GIF via f= codes — no conversion)
+│   ├── terminal_image.clj — Kitty terminal image protocol + image dimension parsing
+│   │                     (native PNG/JPEG/GIF via f= codes — no conversion)
+│   ├── file_lock.clj   — Cross-process file locking (settings.edn/auth.edn writes)
+│   ├── hash.clj        — pi shortHash port (32-bit imul/ushr, byte-exact)
+│   ├── highlight.clj   — Syntax highlighting (pi highlight.ts)
+│   └── markdown.clj    — Markdown rendering for the chat view
 ├── modes/              — Entry modes (pi: dist/modes/)
 │   ├── interactive.clj — Interactive TUI: layout, CoreState, submit/cancel,
 │   │                     bash commands, external editor, session browsing
 │   └── print.clj       — Print mode: send message, print response, exit
 ├── app/                — App-level business logic (pi: dist/core/)
+│   ├── models.clj      — Model/Provider records + registry atom, catalog
+│   │                     loading + manifest, cost (pi: models.ts; Phases 0-5)
+│   ├── model_data/     — committed provider catalogs + manifest (bb generate-models)
+│   ├── model_resolver.clj — model pattern/CLI resolution (pi: model-resolver.ts)
+│   ├── model_config.clj   — models.edn loading + validation (pi: model-config.ts)
+│   ├── provider_composer.clj — builtin+models.edn+extension composition
+│   │                     (pi: provider-composer.ts)
+│   ├── config_value.clj    — $ENV/!command config-value resolution (pi: resolve-config-value.ts)
+│   ├── auth.clj        — env-var table, auth.edn, credential resolution
+│   │                     (pi: env-api-keys.ts + auth-storage.ts)
+│   ├── oauth.clj       — OAuthAuth record, device-code + PKCE loopback
+│   │                     flows + the callback server (pi: auth/oauth/*.ts)
+│   ├── attribution.clj — provider attribution headers (pi: provider-attribution.ts)
+│   ├── aws_sigv4.clj   — AWS SigV4 request signing for bedrock (no AWS SDK in bb)
+│   ├── google_adc.clj  — Google ADC token fetch for google-vertex
+│   ├── image_models.clj — image-generation registry + :openrouter-images
+│   │                     wire (pi: images*.ts; Deferred B)
+│   ├── image_model_data/ — committed image-model catalog (bb generate-image-models)
 │   ├── bash_executor.clj — Bash command execution (raw byte streaming, truncation, temp file)
-│   ├── llm.clj         — LLM API calls
+│   ├── llm.clj         — LLM API calls (the 9 wire APIs + thinking shaping)
 │   ├── proxy.clj      — Proxy env vars (HTTPS_PROXY/ALL_PROXY/NO_PROXY) + transport;
 │   │                     SOCKS & https-scheme proxies via curl (java.net.http is HTTP-proxy-only)
 │   ├── loop.clj        — Agent conversation loop
+│   ├── compaction.clj  — Conversation compaction (pi: compaction.ts)
+│   ├── context.clj     — Context file discovery (AGENTS.md/CLAUDE.md)
 │   ├── session.clj     — Session persistence
 │   ├── session_export.clj — HTML export for /export and /share (standalone
 │   │                     dark page; JSONL deliberately not built)
@@ -72,12 +96,14 @@ src/kmet/
 │   ├── event_bus.clj   — Event vocabulary + extension event bus
 │   ├── commands.clj    — Slash command registry (builtins, skills, extensions)
 │   ├── keybindings.clj — App keybindings
+│   ├── theme_controller.clj — Theme switching / controller
 │   ├── tools/          — Tool implementations (one file per tool)
 │   │   ├── core.clj    — Tool public API (re-exports from tool.clj/registry.clj)
 │   │   ├── tool.clj    — Tool record, param helpers, schema conversion
 │   │   ├── read.clj    — read tool (+ image detection)
 │   │   ├── write.clj   — write tool
 │   │   ├── edit.clj    — edit tool
+│   │   ├── edit_diff.clj — edit diff application (pi edit-diff)
 │   │   ├── bash.clj    — bash tool
 │   │   ├── grep.clj    — grep tool (disabled)
 │   │   ├── find.clj    — find tool (disabled)
@@ -95,7 +121,11 @@ src/kmet/
 │       ├── extension_dialogs.clj  — ui.select/input/editor dialogs (DynamicBorder
 │       │                  framing + IME focus propagation)
 │       ├── status_indicator.clj
-│       └── footer.clj
+│       ├── footer.clj
+│       ├── footer_data_provider.clj — footer state (model/thinking/cost/CH%)
+│       ├── loaded_resources.clj — loaded-context display
+│       ├── pending_messages.clj — queued-message indicator
+│       └── scoped_models_selector.clj — /scoped-models selector (pi ScopedModelsSelectorComponent)
 ├── tui/                — Generic TUI library (Pi's @earendil-works/pi-tui)
 │   ├── core.clj        — TUI class, render loop, overlays
 │   ├── terminal.clj    — JLine 4.x wrapper: ITerminal protocol + the
@@ -120,6 +150,7 @@ src/kmet/
 │       ├── input.clj
 │       ├── editor.clj
 │       ├── editing.clj
+│       ├── expandable_text.clj
 │       ├── select_list.clj
 │       ├── settings_list.clj
 │       ├── spinner.clj
