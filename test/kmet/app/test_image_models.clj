@@ -181,6 +181,12 @@
         (let [r (im/generate-images model {:input []})]
           (t/is (= :error (:stop-reason r)))
           (t/is (= "boom" (:error-message r))))))
+    (testing "non-atom :signal cannot break the never-throw contract"
+      (with-redefs [auth/resolve-provider-auth (fn [_] {:api-key "k"})
+                    im/get-images-api-provider
+                    (fn [_] (fn [_ _ _] (throw (ex-info "boom" {}))))]
+        (let [r (im/generate-images model {:input []} {:signal :not-an-atom})]
+          (t/is (= :error (:stop-reason r))))))
     (testing "signal set on failure → :aborted"
       (with-redefs [auth/resolve-provider-auth (fn [_] {:api-key "k"})
                     im/get-images-api-provider

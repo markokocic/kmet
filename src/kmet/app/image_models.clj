@@ -8,7 +8,7 @@
    kmet.app.models; auth reuses kmet.app.auth (:openrouter already resolves
    env + the Phase 16 OAuth credential); the one wire API is
    :openrouter-images (non-stream chat/completions with modalities). The
-   committed catalog is one static provider (openrouter, 42 models) — no
+   committed catalog is one static provider (openrouter, 45 models) — no
    dynamic providers yet, so pi's refreshModels machinery is not ported."
   (:require [babashka.fs :as fs]
             [clojure.edn :as edn]
@@ -209,7 +209,10 @@
          :provider (:provider model)
          :model (:id model)
          :output []
-         :stop-reason (if (and (:signal options) @(:signal options)) :aborted :error)
+         :stop-reason (if (and (instance? clojure.lang.IDeref (:signal options))
+                               @(:signal options))
+                        :aborted
+                        :error)
          :error-message (ex-message e)
          :timestamp (System/currentTimeMillis)}))))
 
