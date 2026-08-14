@@ -1,6 +1,7 @@
 (ns kmet.app.test-extensions
   (:require [clojure.test :as t]
             [clojure.java.io :as io]
+            [babashka.fs :as fs]
             [kmet.app.extensions :as extensions]
             [kmet.ai.models :as models]
             [kmet.app.session :as session]))
@@ -272,3 +273,29 @@
     (finally
       (models/clear-extension-providers!)
       (models/load-catalogs!))))
+
+;; ─── Custom-entry renderers (pi: registerEntryRenderer) ───────────────────
+
+(t/deftest test-entry-renderer-registry
+  (t/testing "register + lookup roundtrip"
+    (extensions/register-entry-renderer! "my-state" (fn [_] {:role :info}))
+    (t/is (some? (extensions/get-entry-renderer "my-state")))
+    (t/is (nil? (extensions/get-entry-renderer "unregistered")))
+    (extensions/clear-extensions!)
+    (t/is (nil? (extensions/get-entry-renderer "my-state"))
+          "clear-extensions! drops renderers")))
+
+(t/deftest test-entry-sink-invoked-on-append
+  (let [dir (str "target/test-ext-sink-" (System/currentTimeMillis))
+        sess (session/create-session dir)
+        seen (atom nil)]
+    (fs/create-dirs dir)
+    (extensions/set-session! sess)
+    (extensions/set-entry-sink! (fn [entry] (reset! seen entry)))
+    (try
+      (extensions/append-custom-entry! "state" {:n 1})
+      (t/is (= "state" (:custom-type @seen)))
+      (t/is (= {:n 1} (:data @seen)))
+      (finally
+        (extensions/set-session! nil)
+        (extensions/set-entry-sink! nil)))))

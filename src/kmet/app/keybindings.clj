@@ -34,7 +34,15 @@
    "app.message.copy"           {:default-keys ["ctrl+x"]                 :description "Copy message to clipboard"}
    "app.message.followUp"       {:default-keys ["alt+enter"]              :description "Queue follow-up message"}
    "app.message.dequeue"        {:default-keys ["alt+up"]                 :description "Restore queued messages"}
-   "app.editor.external"        {:default-keys ["ctrl+g"]                 :description "Open external editor"}})
+   "app.editor.external"        {:default-keys ["ctrl+g"]                 :description "Open external editor"}
+   "app.tree.filter.default"     {:default-keys ["ctrl+d"]                 :description "Tree: default filter"}
+   "app.tree.filter.noTools"     {:default-keys ["ctrl+t"]                 :description "Tree: hide tool entries"}
+   "app.tree.filter.userOnly"    {:default-keys ["ctrl+u"]                 :description "Tree: user messages only"}
+   "app.tree.filter.labeledOnly" {:default-keys ["ctrl+l"]                 :description "Tree: labeled entries only"}
+   "app.tree.filter.all"         {:default-keys ["ctrl+a"]                 :description "Tree: show all entries"}
+   "app.tree.filter.cycleForward" {:default-keys ["ctrl+o"]                :description "Tree: next filter mode"}
+   "app.tree.filter.cycleBackward" {:default-keys ["ctrl+shift+o"]         :description "Tree: previous filter mode"}
+   "app.tree.editLabel"   {:default-keys ["shift+l"]                 :description "Tree: edit entry label"}})
 
 ;; ─── Combined definitions (TUI + App) ─────────────────────────────────────
 

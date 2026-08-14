@@ -59,7 +59,8 @@
 (declare clone-current-session! fork-at! restore-session!
          build-extension-ui-registry ask-branch-summary
          build-loaded-resource-sections start-agent-run!
-         show-status-indicator! clear-status-indicator!)
+         show-status-indicator! clear-status-indicator!
+         maybe-show-cache-miss-notice!)
 
 ;; ─── Global config ref ────────────────────────────────────────────────────
 
@@ -1085,18 +1086,27 @@
 
 (defn- replay-branch!
   "Replay a session's active branch into the chat history (pi:
-   renderInitialMessages — only message entries; session_info, label,
-   model/thinking change and custom (extension state) entries are metadata
-   and never rendered; compaction and branch_summary entries render their
+   renderInitialMessages — only message entries; session_info, label and
+   model/thinking change entries are metadata and never rendered; custom
+   (extension state) entries render when an extension registered a renderer
+   for their custom-type; compaction and branch_summary entries render their
    summary text; custom_message entries render as labeled info boxes when
    their display flag is set)."
   [cs sess]
   (ui/chat-history-clear! (:chat-history cs))
   (doseq [e (session/get-branch sess)
           :when (not (contains? #{:session_info :label :model-change
-                                  :thinking-level-change :custom} (:role e)))]
+                                  :thinking-level-change} (:role e)))]
     (let [role (:role e)]
-      (if (= role :custom-message)
+      (cond
+        (= role :custom)
+        ;; extension state entries render only with a registered renderer
+        ;; (pi: registerEntryRenderer + CustomEntryComponent)
+        (when-let [renderer (extensions/get-entry-renderer (:custom-type e))]
+          (when-let [msg (renderer e)]
+            (ui/chat-history-add-message! (:chat-history cs) msg)))
+
+        (= role :custom-message)
         ;; extension custom messages render only when display is set (pi:
         ;; the display flag controls TUI rendering); content may be a string
         ;; or a block vector (pi CustomMessageEntry)
@@ -1105,6 +1115,8 @@
                                         {:role :info
                                          :content (custom-message-text e)
                                          :label (:custom-type e)}))
+
+        :else
         (let [content (if (contains? #{:compaction :branch-summary} role)
                         (or (:summary e) "")
                         (str/join
@@ -2088,6 +2100,12 @@
                           (do (when-let [cs @cs-ref]
                                 (update-footer! cs))
                               (tui/tui-request-render t))
+                          :agent-end
+                           ;; Pi: maybeShowCacheMissNotice — a significant
+                           ;; prompt-cache miss on the completed turn
+                          (do (when-let [cs @cs-ref]
+                                (maybe-show-cache-miss-notice! cs))
+                              (tui/tui-request-render t))
                           :queue-update
                            ;; Queued steering/follow-up messages changed (pi:
                            ;; queue_update → updatePendingMessagesDisplay)
@@ -2884,9 +2902,31 @@
     (extensions/set-session! @(:session-atom cs))
     (extensions/set-context-sink!
      (fn [msg] (agent/add-context-message! @(:agent-state cs) msg)))
+    (extensions/set-entry-sink!
+     (fn [entry]
+       (when-let [renderer (extensions/get-entry-renderer (:custom-type entry))]
+         (when-let [msg (renderer entry)]
+           (ui/chat-history-add-message! (:chat-history cs) msg)))))
     registry))
 
 ;; ─── Run ───────────────────────────────────────────────────────────────────
+
+(defn- maybe-show-cache-miss-notice!
+  "pi: maybeShowCacheMissNotice — when :show-cache-miss-notices is on and
+   the last assistant message paid for a significant prompt-cache miss
+   (>= 20k tokens re-billed, pi's display floor), add a transcript notice."
+  [cs]
+  (when (cfg/get-show-cache-miss-notices (:config cs))
+    (when-let [sess @(:session-atom cs)]
+      (when-let [miss (session/detect-cache-miss (session/get-branch sess))]
+        (when (>= (:missed-tokens miss) 20000)
+          (ui/chat-history-add-message!
+           (:chat-history cs)
+           {:role :info
+            :label (if (:model-changed miss)
+                     "Cache miss after model switch"
+                     "Cache miss")
+            :content (str (:missed-tokens miss) " tokens re-billed")}))))))
 
 (defn run
   "Start the interactive TUI with the given config and CLI opts.

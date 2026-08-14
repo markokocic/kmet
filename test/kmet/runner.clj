@@ -49,6 +49,7 @@
     kmet.app.test-theme-controller
     kmet.app.test-commands
     kmet.app.test-keybindings
+    kmet.modes.test-print
     kmet.test-editing
     kmet.tui.test-fuzzy
     kmet.tui.test-autocomplete

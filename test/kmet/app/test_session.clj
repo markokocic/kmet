@@ -1370,3 +1370,31 @@
       (t/is (= [] (s/usage-breakdown (s/create-session test-dir)))
             "no usage -> no buckets")
       (finally (fs/delete-tree dir)))))
+
+;; ─── Cache-miss detection (pi: cache-stats.ts detectMiss) ─────────────────
+
+(t/deftest test-detect-cache-miss
+  (let [with-usage (fn [role usage & [model]] {:role role :usage usage :model model})
+        entries [{:role :model-change :model "m1"}
+                 (with-usage :assistant {:input_tokens 10000 :output_tokens 100
+                                         :input_tokens_details {:cached_tokens 9000}})
+                 (with-usage :assistant {:input_tokens 10000 :output_tokens 100
+                                         :input_tokens_details {:cached_tokens 0}})]]
+    (t/testing "a drop from cached to uncached counts the miss"
+      (let [miss (s/detect-cache-miss entries)]
+        (t/is (some? miss))
+        (t/is (= 10000 (:missed-tokens miss))))))
+  (t/testing "no cache activity on the previous turn → nil"
+    (let [entries [{:role :assistant :usage {:input_tokens 1000 :output_tokens 10}}
+                   {:role :assistant :usage {:input_tokens 1000 :output_tokens 10}}]]
+      (t/is (nil? (s/detect-cache-miss entries)))))
+  (t/testing "fewer than two assistant messages → nil"
+    (t/is (nil? (s/detect-cache-miss [{:role :assistant :usage {:input_tokens 1}}]))))
+  (t/testing "model change between turns is reported"
+    (let [entries [{:role :model-change :model "m1"}
+                   {:role :assistant :usage {:input_tokens 10000 :output_tokens 100
+                                             :input_tokens_details {:cached_tokens 9000}}}
+                   {:role :model-change :model "m2"}
+                   {:role :assistant :usage {:input_tokens 10000 :output_tokens 100
+                                             :input_tokens_details {:cached_tokens 0}}}]]
+      (t/is (true? (:model-changed (s/detect-cache-miss entries)))))))

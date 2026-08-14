@@ -66,9 +66,9 @@ functionally aligned. The remaining gaps cluster in the CLI surface, rendering
 | **LaTeX rendering** (`$…$`, `$$…$$`) | `packages/tui/src/latex.ts`, wired in `tui/src/components/markdown.ts` | Missing |
 | **Alt-screen search** (search overlay over the transcript) | `packages/tui/src/alt-screen-search.ts`, `tui-alt-screen.ts` | Missing |
 | **Images in chat** | `terminal.showImages`, `terminal.imageWidthCells`, `images.autoResize`, `images.blockImages` settings; `show-images-selector.ts` | Partial — tool-execution images only; no settings, no inline/custom-message images |
-| **Cache-miss notices** | `showCacheMissNotices` setting | Missing |
+| **Cache-miss notices** | `showCacheMissNotices` setting | Done — `:show-cache-miss-notices` setting, `session/detect-cache-miss` (pi detectMiss), notice at agent-end (≥ 20k tokens) |
 | **Skill invocation presentation** | `components/skill-invocation-message.ts` | Partial — kmet renders skills as labeled read tool calls (`app/ui/tool_execution.clj`), no dedicated message component |
-| **Custom entry rendering** | `registerEntryRenderer` + `components/custom-entry.ts` | Missing — kmet persists custom entries but never renders them |
+| **Custom entry rendering** | `registerEntryRenderer` + `components/custom-entry.ts` | Done — `extensions/register-entry-renderer!` + live entry sink; rendered at replay and on append (pi registerEntryRenderer + CustomEntryComponent) |
 
 ### 3. Slash commands
 
@@ -134,9 +134,12 @@ Missing (pi `core/extensions/types.ts`):
 ### 6. Smaller gaps
 
 - **Tree filter keybindings** — pi has standalone `app.tree.filter.*` bindings; kmet has
-  the filter modes in `/tree` (`tree-filter-modes`, `cycle-filter!`) but no standalone bindings
+  the filter modes in `/tree` (`tree-filter-modes`, `cycle-filter!`) — **done**: the 7
+  `app.tree.filter.*` ids + `app.tree.editLabel` are now registered keybindings the
+  tree selector resolves through the keybindings manager (rebindable)
 - **`/settings` menu breadth** — kmet `/settings` covers thinking/hide-thinking/retry only;
-  pi's selector also covers theme, mermaid, images, tui-mode, double-escape, tree filter
+  **done (theme)**: a theme row (name switch + persist) was added; mermaid/images/tui-mode
+  settings await those features
 - **Auth selector/dialog components** — pi `login-dialog.ts`, `oauth-selector.ts`,
   `session-selector-search.ts`; kmet's terminal `/login` covers the flows
 - **`packages/agent` (`@earendil-works/pi-agent-core`)** — general-purpose agent library

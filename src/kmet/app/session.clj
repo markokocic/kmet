@@ -574,6 +574,43 @@
     (:user :assistant :tool :bash) [entry]
     []))
 
+;; ─── Cache-miss detection (pi: cache-stats.ts detectMiss) ────────────────
+
+(defn detect-cache-miss
+  "Compare consecutive assistant messages' usage to spot a significant
+   prompt-cache miss (pi: detectMiss): the newer turn's prompt minus its
+   cache-read falls far below the previous turn's prompt (noise floor 1024
+   tokens, pi NOISE_FLOOR_TOKENS). The previous message must have reported
+   cache activity — a provider that never reports caching counts nothing.
+   The model per message is derived from the :model-change entries (kmet
+   stores model changes separately; pi's messages carry their model).
+   Returns {:missed-tokens n :model-changed bool} or nil."
+  [entries]
+  (let [{:keys [result]}
+        (reduce (fn [acc e]
+                  (case (:role e)
+                    :model-change (assoc acc :model (:model e))
+                    :assistant (if (some? (:usage e))
+                                 (update acc :result conj {:usage (:usage e)
+                                                           :model (:model acc)})
+                                 acc)
+                    acc))
+                {:model nil :result []}
+                entries)
+        msgs (take-last 2 result)]
+    (when (= 2 (count msgs))
+      (let [[prev msg] msgs
+            pu (usage/entry-usage (:usage prev))
+            mu (usage/entry-usage (:usage msg))
+            prev-reported (and pu (pos? (+ (:cache-read pu) (:cache-write pu))))]
+        (when (and pu mu prev-reported)
+          (let [prev-tokens (+ (:input pu) (:cache-read pu) (:cache-write pu))
+                msg-tokens (+ (:input mu) (:cache-read mu) (:cache-write mu))
+                missed (- (min prev-tokens msg-tokens) (:cache-read mu))]
+            (when (and (pos? prev-tokens) (pos? msg-tokens) (> missed 1024))
+              {:missed-tokens missed
+               :model-changed (not= (:model prev) (:model msg))})))))))
+
 ;; ─── Session display name (pi: /name command) ─────────────────────────────
 
 (defn sanitize-session-name

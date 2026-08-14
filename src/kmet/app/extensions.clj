@@ -26,6 +26,11 @@
 
 (defonce ^:private input-hooks (atom []))
 (defonce ^:private before-agent-start-hooks (atom []))
+;; Custom-entry renderers (pi: registerEntryRenderer) + the live entry sink
+;; (pi: appendEntry triggers a render). Rendered by replay-branch! and the
+;; interactive entry sink; entries without a renderer stay hidden.
+(defonce ^:private entry-renderers (atom {}))
+(defonce ^:private entry-sink-atom (atom nil))
 
 (defn register-input-hook!
   "Register an input hook (pi: pi.on('input')).
@@ -207,7 +212,9 @@
   []
   (reset! extensions [])
   (clear-input-hooks!)
-  (clear-before-agent-start-hooks!))
+  (clear-before-agent-start-hooks!)
+  (reset! entry-renderers {})
+  (reset! entry-sink-atom nil))
 
 ;; ─── Extension UI registry (pi: ExtensionUIContext) ────────────────────────
 ;; The interactive mode installs the live UI implementations after building
@@ -429,6 +436,28 @@
 (defonce ^:private session-atom (atom nil))
 (defonce ^:private context-sink-atom (atom nil))
 
+(defn register-entry-renderer!
+  "Register a renderer for a custom entry type (pi: registerEntryRenderer).
+   RENDERER — (fn [entry]) returning a chat message map or nil. Custom
+   entries without a registered renderer stay hidden (pi renders only
+   registered custom types)."
+  [custom-type renderer]
+  (swap! entry-renderers assoc custom-type renderer)
+  nil)
+
+(defn get-entry-renderer
+  "The renderer registered for CUSTOM-TYPE, or nil."
+  [custom-type]
+  (get @entry-renderers custom-type))
+
+(defn set-entry-sink!
+  "Install the live custom-entry sink — (fn [entry]) called after a custom
+   entry is appended, so the interactive mode can render it immediately
+   (pi: appendEntry triggers a render). Re-installed on reload."
+  [f]
+  (reset! entry-sink-atom f)
+  nil)
+
 (defn set-session!
   "Register the live session for extension access (pi: ctx.sessionManager).
    Called by interactive mode whenever the live session changes (create,
@@ -455,10 +484,14 @@
 (defn append-custom-entry!
   "Append a custom entry (extension state, never in LLM context) to the
    live session (pi: ctx.session.appendEntry). No-op (nil) when no session
-   is live. Returns the entry id."
+   is live. Returns the entry id. The entry sink (set by interactive mode)
+   renders it live when a renderer is registered for its custom-type."
   [custom-type & [data]]
   (when-let [sess @session-atom]
-    (:id (session/append-custom-entry! sess custom-type data))))
+    (let [entry (session/append-custom-entry! sess custom-type data)]
+      (when-let [sink @entry-sink-atom]
+        (sink entry))
+      (:id entry))))
 
 (defn append-custom-message!
   "Send a custom message that participates in LLM context (pi:

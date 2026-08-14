@@ -151,7 +151,7 @@ src/kmet/
 │       │                  session-info population (pi SessionSelectorComponent;
 │       │                  the restore stays in the mode)
 │       ├── settings_selector.clj — /settings overlay: thinking level, hide-thinking,
-│       │                  retry block (pi showSettingsSelector, simplified)
+│       │                  retry block + theme row (pi showSettingsSelector, simplified)
 │       ├── tree_selector.clj — /tree overlay: filter modes (ctrl+d/t/u/l/a/o),
 │       │                  label editing, current-leaf marker (pi TreeSelectorComponent;
 │       │                  navigation stays in the mode via on-navigate)

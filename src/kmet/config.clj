@@ -24,6 +24,7 @@
    :retry {:enabled true :max-retries 3 :base-delay-ms 2000}
    :models []
    :http-idle-timeout-ms 300000
+   :show-cache-miss-notices false
    :system-prompt nil
    :append-system-prompt nil
    :thinking :off
@@ -103,6 +104,12 @@
   (auth/resolve-api-key provider))
 
 ;; ─── Config loading continued ──────────────────────────────────────────────
+
+(defn get-show-cache-miss-notices
+  "Whether to show transcript notices for significant prompt-cache misses
+   (pi: showCacheMissNotices — default false)."
+  [config]
+  (boolean (:show-cache-miss-notices config)))
 
 (defn load-config
   "Load and merge configuration from user and project directories.

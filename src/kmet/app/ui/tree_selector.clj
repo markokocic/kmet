@@ -11,6 +11,7 @@
             [kmet.tui.core :as tui]
             [kmet.tui.theme :as th]
             [kmet.tui.keys :as keys]
+            [kmet.tui.keybindings :as tui-kb]
             [kmet.tui.components.select-list :as select-list]
             [clojure.string :as str]))
 
@@ -121,31 +122,34 @@
                                   (reset! filter-mode nxt)
                                   (refresh!)))
                 on-key (fn [_ data]
-                         (cond
-                           (keys/matches-key? data (keys/ctrl "d"))
-                           (do (reset! filter-mode :default) (refresh!) true)
-                           (keys/matches-key? data (keys/ctrl "t"))
-                           (do (reset! filter-mode (if (= :no-tools @filter-mode) :default :no-tools))
-                               (refresh!) true)
-                           (keys/matches-key? data (keys/ctrl "u"))
-                           (do (reset! filter-mode (if (= :user-only @filter-mode) :default :user-only))
-                               (refresh!) true)
-                           (keys/matches-key? data (keys/ctrl "l"))
-                           (do (reset! filter-mode (if (= :labeled-only @filter-mode) :default :labeled-only))
-                               (refresh!) true)
-                           (keys/matches-key? data (keys/ctrl "a"))
-                           (do (reset! filter-mode (if (= :all @filter-mode) :default :all))
-                               (refresh!) true)
-                           (keys/matches-key? data (keys/ctrl "o"))
-                           (do (cycle-filter! 1) true)
-                           (keys/matches-key? data (keys/ctrl-shift "o"))
-                           (do (cycle-filter! -1) true)
-                           ;; shift+l edits the label (legacy terminals send a
-                           ;; bare uppercase letter — pi: app.tree.editLabel)
-                           (or (keys/matches-key? data (keys/shift "l"))
-                               (keys/matches-key? data "L"))
-                           (do (edit-label!) true)
-                           :else false))
+                         (let [kmgr (tui-kb/get-global-keybindings)
+                               filter-key? (fn [id]
+                                             (tui-kb/matches-key kmgr data id))]
+                           (cond
+                             (filter-key? "app.tree.filter.default")
+                             (do (reset! filter-mode :default) (refresh!) true)
+                             (filter-key? "app.tree.filter.noTools")
+                             (do (reset! filter-mode (if (= :no-tools @filter-mode) :default :no-tools))
+                                 (refresh!) true)
+                             (filter-key? "app.tree.filter.userOnly")
+                             (do (reset! filter-mode (if (= :user-only @filter-mode) :default :user-only))
+                                 (refresh!) true)
+                             (filter-key? "app.tree.filter.labeledOnly")
+                             (do (reset! filter-mode (if (= :labeled-only @filter-mode) :default :labeled-only))
+                                 (refresh!) true)
+                             (filter-key? "app.tree.filter.all")
+                             (do (reset! filter-mode (if (= :all @filter-mode) :default :all))
+                                 (refresh!) true)
+                             (filter-key? "app.tree.filter.cycleForward")
+                             (do (cycle-filter! 1) true)
+                             (filter-key? "app.tree.filter.cycleBackward")
+                             (do (cycle-filter! -1) true)
+                             ;; shift+l edits the label (legacy terminals send a
+                             ;; bare uppercase letter — pi: app.tree.editLabel)
+                             (or (filter-key? "app.tree.editLabel")
+                                 (keys/matches-key? data "L"))
+                             (do (edit-label!) true)
+                             :else false)))
                 on-select-fn (fn [_]
                                (when-let [sel (select-list/select-list-get-selected @sl-ref)]
                                  (let [entry (:entry sel)]
