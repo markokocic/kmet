@@ -11,6 +11,7 @@
             [kmet.ai.models :as models]
             [kmet.app.model-resolver :as resolver]
             [kmet.debug :as debug]
+            [kmet.tui.fuzzy :as fuzzy]
             [clojure.string :as str]))
 
 ;; ─── CLI argument parsing ──────────────────────────────────────────────────
@@ -143,21 +144,6 @@
 
 ;; ─── Main ──────────────────────────────────────────────────────────────────
 
-(defn- fuzzy-match?
-  "Subsequence fuzzy match (pi: fuzzyFilter — used by --list-models)."
-  [pattern text]
-  (let [pl (count pattern) tl (count text)]
-    (if (zero? pl)
-      true
-      (loop [pi 0 ti 0]
-        (if (>= pi pl)
-          true
-          (if (>= ti tl)
-            false
-            (if (= (nth pattern pi) (nth text ti))
-              (recur (inc pi) (inc ti))
-              (recur pi (inc ti)))))))))
-
 (defn- format-token-count
   "pi formatTokenCount — 200000 → \"200K\", 1000000 → \"1M\", 1500000 →
    \"1.5M\", else the plain number."
@@ -182,11 +168,8 @@
   (let [available (models/get-available)]
     (if (empty? available)
       (println "No models available. Use /login to configure a provider.")
-      (let [filtered (if (seq search-pattern)
-                       (vec (filter #(fuzzy-match? (str/lower-case search-pattern)
-                                                   (str/lower-case (str (name (:provider %)) " " (:id %))))
-                                    available))
-                       (vec available))]
+      (let [filtered (fuzzy/fuzzy-filter available (or search-pattern "")
+                                         #(str (name (:provider %)) " " (:id %)))]
         (if (empty? filtered)
           (println (str "No models matching \"" search-pattern "\""))
           (let [rows (mapv (fn [m]
