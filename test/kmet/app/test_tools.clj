@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.test :as t]
             [kmet.app.tools.core :as tools]
+            [kmet.ai.api.shared :as schema-shared]
             [kmet.app.tools.bash :as bash-tool]
             [kmet.app.bash-executor :as bash-exec]))
 
@@ -263,14 +264,14 @@
 
 (t/deftest test-tool-anthropic-schema
   (let [tool (tools/get-tool "read")
-        schema (tools/tool->anthropic-schema tool)]
+        schema (schema-shared/tool->anthropic-schema tool)]
     (t/is (= "read" (:name schema)))
     (t/is (string? (:description schema)))
     (t/is (map? (:input_schema schema)))))
 
 (t/deftest test-tool-openai-schema
   (let [tool (tools/get-tool "read")
-        schema (tools/tool->openai-schema tool)]
+        schema (schema-shared/tool->openai-schema tool)]
     (t/is (= "function" (:type schema)))
     (t/is (= "read" (get-in schema [:function :name])))))
 

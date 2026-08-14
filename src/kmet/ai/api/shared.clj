@@ -1,0 +1,561 @@
+(ns kmet.ai.api.shared
+  "Shared LLM wire machinery (pi: api/transform-messages.ts, simple-options.ts,
+   openai-prompt-cache.ts + the shared thinking/usage/event helpers): URL construction,
+   request headers, thinking levels, message transformers, cost and stream-event handling."
+  (:require
+   [kmet.ai.attribution :as attribution]
+   [kmet.ai.auth :as auth]
+   [kmet.ai.config-value :as config-value]
+   [cheshire.core :as json]
+   [kmet.ai.models :as models]
+   [kmet.ai.usage :as usage]
+   [clojure.string :as str]))
+
+(def getenv
+  "Process env lookup (System/getenv returns nil for unset vars)."
+  (fn [k] (System/getenv k)))
+
+(defn ambient-auth-available?
+  "True when a provider that resolves its own ambient auth (no api key)
+   is configured — google-vertex ADC or amazon-bedrock AWS credentials
+   (auth/ambient-configured?)."
+  [provider]
+  (auth/ambient-configured? provider))
+
+(defn interpolate-base-url
+  "Substitute the {CLOUDFLARE_ACCOUNT_ID} / {CLOUDFLARE_GATEWAY_ID}
+   placeholders in a cloudflare base URL from the env (pi cloudflare-auth
+   resolve — the account/gateway ids are ambient). A missing id is a
+   configuration error, not a transport failure: pi's resolveCloudflareEnv
+   returns undefined (not configured) unless all of api key + account id
+   (+ gateway id for the gateway) are present."
+  [base]
+  (if (str/includes? base "{CLOUDFLARE_")
+    (let [account (getenv "CLOUDFLARE_ACCOUNT_ID")
+          gateway (getenv "CLOUDFLARE_GATEWAY_ID")
+          missing (cond-> []
+                    (and (str/includes? base "{CLOUDFLARE_ACCOUNT_ID}") (nil? account))
+                    (conj "CLOUDFLARE_ACCOUNT_ID")
+                    (and (str/includes? base "{CLOUDFLARE_GATEWAY_ID}") (nil? gateway))
+                    (conj "CLOUDFLARE_GATEWAY_ID"))]
+      (when (seq missing)
+        (throw (ex-info (str "Cloudflare requires the env vars: "
+                             (str/join ", " missing))
+                        {:type :cloudflare-config-missing})))
+      (-> base
+          (str/replace "{CLOUDFLARE_ACCOUNT_ID}" account)
+          (str/replace "{CLOUDFLARE_GATEWAY_ID}" gateway)))
+    base))
+
+(defn endpoint-url
+  "Full request URL from a wire api + API base + model id (pi: the SDK
+   appends the endpoint path)."
+  [api base model-id]
+  (let [base (interpolate-base-url base)]
+    (case api
+      :openai-completions (str base "/chat/completions")
+      :openai-responses (str base "/responses")
+      :anthropic-messages (str base "/v1/messages")
+      :google-generative-ai (str base "/models/" model-id ":streamGenerateContent?alt=sse")
+      :mistral-conversations (str base "/v1/chat/completions"))))
+
+(defn request-headers
+  "Request headers for one request: the provider-attribution layer (session
+   headers + origin attribution, pi mergeProviderAttributionHeaders), then
+   BASE (api-specific), the model's :headers (static builtin + models.edn
+   model-level config values) and the provider's :configured-headers, all
+   resolved as config values (literals pass through, $ENV interpolates,
+   !command executes — pi resolveConfiguredModelHeaders; unresolvable values
+   throw, reported via the builder's on-error). A provider with :auth-header
+   adds Authorization: Bearer <api-key> last (pi withConfiguredAuth)."
+  [base model provider api-key session-id]
+  (let [attribution-hdrs (attribution/merge-provider-attribution-headers
+                          model session-id)
+        merged (merge attribution-hdrs
+                      base
+                      (config-value/resolve-headers-or-throw
+                       (:headers model)
+                       (str "model \"" (name (:provider model)) "/" (:id model) "\""))
+                      (config-value/resolve-headers-or-throw
+                       (:configured-headers provider)
+                       (str "provider \"" (name (:id provider)) "\"")))]
+    (cond-> merged
+      (:auth-header provider) (assoc "Authorization" (str "Bearer " api-key)))))
+
+(def thinking-levels
+  "All thinking levels in order (pi ThinkingLevel)."
+  [:off :minimal :low :medium :high :xhigh :max])
+
+(defn valid-thinking-level?
+  "True when LEVEL is one of the thinking levels (pi isValidThinkingLevel)."
+  [level]
+  (some #{level} thinking-levels))
+
+(defn get-supported-thinking-levels
+  "Levels a model can express (pi getSupportedThinkingLevels — public for
+   the /settings selector): non-reasoning models only :off; :xhigh/:max
+   require an entry in the model's thinking-level-map; a null map value
+   marks a level unsupported (absent entries are supported)."
+  [model]
+  (if-not (:reasoning model)
+    [:off]
+    (let [tlm (:thinking-level-map model)
+          has-entry? #(and (map? tlm) (contains? tlm %))]
+      (into []
+            (for [level thinking-levels
+                  :when (if (contains? #{:xhigh :max} level)
+                          (and (has-entry? level) (some? (get tlm level)))
+                          (not (and (has-entry? level) (nil? (get tlm level)))))]
+              level)))))
+
+(defn clamp-thinking-level
+  "pi clampThinkingLevel: the requested level when supported, else the
+   nearest supported level (searching up from the request, then down), else
+   the first supported level."
+  [model level]
+  (let [available (get-supported-thinking-levels model)]
+    (if (some #{level} available)
+      level
+      (let [idx (first (keep-indexed (fn [i l] (when (= l level) i)) thinking-levels))]
+        (if (nil? idx)
+          (or (first available) :off)
+          (or (first (filter (set available) (drop idx thinking-levels)))
+              (first (filter (set available) (reverse (take idx thinking-levels))))
+              (first available)
+              :off))))))
+
+(defn effort-value
+  "Wire reasoning_effort string for a level: the model's mapped value, else
+   the level name (pi: model.thinkingLevelMap?.[level] ?? level)."
+  [model level]
+  (let [mapped (get-in model [:thinking-level-map level])]
+    (if (nil? mapped) (name level) mapped)))
+
+(defn off-explicitly-null?
+  "True when the model's thinking-level-map pins :off to null — the provider
+   cannot disable thinking (pi: thinkingLevelMap?.off !== null gates the
+   disabled-thinking params)."
+  [model]
+  (let [tlm (:thinking-level-map model)]
+    (and (map? tlm) (contains? tlm :off) (nil? (:off tlm)))))
+
+(defn effective-effort
+  "Clamped thinking level for the resolved model; nil when off (pi
+   agent.ts: thinkingLevel === 'off' ? undefined : thinkingLevel, clamped by
+   the model's capability)."
+  [model thinking]
+  (let [clamped (clamp-thinking-level model (or thinking :off))]
+    (when-not (= :off clamped) clamped)))
+
+(defn bash-execution-text
+  "Bash result entry → LLM text (pi: bashExecutionToText)."
+  [{:keys [command output exit-code cancelled truncated full-output-path]}]
+  (let [output (or output "")
+        base (str "Ran `" command "`\n"
+                  (if (seq output)
+                    (str "```\n" output "\n```")
+                    "(no output)"))]
+    (str base
+         (when cancelled "\n\n(command cancelled)")
+         (when (and (not cancelled) (some? exit-code) (not (zero? exit-code)))
+           (str "\n\nCommand exited with code " exit-code))
+         (when (and truncated full-output-path)
+           (str "\n\n[Output truncated. Full output: " full-output-path "]")))))
+
+(defn content-text
+  "Extract plain text from a message content block vector.
+   A block has {:type :text :text \"...\"} or {:type \"text\" :text \"...\"}."
+  [content]
+  (str/join (for [b content
+                  :when (or (= (:type b) :text)
+                            (= (:type b) "text"))]
+              (:text b))))
+
+(defn image-block?
+  "True if a content block is an image block (kmet canonical
+   {:type :image :data base64 :mime-type str}, matching pi's read tool
+   {type: \"image\", data, mimeType} format)."
+  [b]
+  (or (= (:type b) :image) (= (:type b) "image")))
+
+(defn openai-content
+  "Convert kmet content blocks to OpenAI content. Returns the plain text
+   string when there are no image blocks (backward compat); with image blocks
+   returns an array of text/image_url blocks (OpenAI vision format)."
+  [content]
+  (if (some image-block? content)
+    (into []
+          (for [b content]
+            (if (image-block? b)
+              {:type "image_url"
+               :image_url {:url (str "data:" (:mime-type b) ";base64," (:data b))}}
+              {:type "text" :text (or (:text b) "")})))
+    (content-text content)))
+
+(defn tool-result-content
+  "OpenAI tool result content: the text from the tool_result block, plus
+   image_url blocks for any :images on the message (pi: the read tool returns
+   image blocks inside the tool result content for vision models)."
+  [m]
+  (let [text (-> m :content first :content)
+        images (:images m)]
+    (if (seq images)
+      (into [{:type "text" :text (or text "")}]
+            (for [i images]
+              {:type "image_url"
+               :image_url {:url (str "data:" (:mime-type i) ";base64," (:data i))}}))
+      text)))
+
+(defn openai-messages
+  "Map agent messages to OpenAI chat-completion messages.
+   Bash entries become user messages (pi: convertToLlm bashExecution);
+   excluded ones are dropped. Assistant messages with :thinking send it back
+   as reasoning_content (pi: the thinking signature field — DeepSeek thinking
+   mode round-trips the CoT). Tested directly by test_llm, hence public."
+  [messages]
+  (into []
+        (keep (fn [m]
+                (let [role (name (:role m))]
+                  (case role
+                    "bash"
+                    (when-not (:exclude-from-context? m)
+                      {:role "user" :content (bash-execution-text m)})
+                    "tool"
+                    {:role "tool"
+                     :tool_call_id (-> m :content first :tool_use_id)
+                     :content (tool-result-content m)}
+                    "assistant"
+                    (let [text (content-text (:content m))
+                          thinking (str/trim (or (:thinking m) ""))
+                          msg (cond-> {:role "assistant" :content text}
+                                (:tool-calls m)
+                                (assoc :tool_calls
+                                       (mapv (fn [tc]
+                                               {:id (:id tc)
+                                                :type "function"
+                                                :function {:name (:name tc)
+                                                           :arguments (cheshire.core/generate-string
+                                                                       (:arguments tc))}})
+                                             (:tool-calls m))))]
+                      (cond-> msg
+                        (seq thinking) (assoc :reasoning_content thinking)))
+                    ;; custom messages (pi: convertToLlm custom→user)
+                    "custom"
+                    {:role "user" :content (openai-content (:content m))}
+                    {:role role
+                     :content (openai-content (:content m))}))))
+        messages))
+
+(defn openai-messages-with-reasoning
+  "Like openai-messages but adds reasoning_content to assistant messages.
+   Some providers (e.g., opencode-go/deepseek-v4-flash) require a
+   reasoning_content field on assistant messages even when empty; a message's
+   own :thinking is sent back verbatim (pi round-trips the thinking
+   signature)."
+  [messages]
+  (into []
+        (keep (fn [m]
+                (let [role (name (:role m))
+                      msg (case role
+                            "bash"
+                            (when-not (:exclude-from-context? m)
+                              {:role "user" :content (bash-execution-text m)})
+                            "tool"
+                            {:role "tool"
+                             :tool_call_id (-> m :content first :tool_use_id)
+                             :content (tool-result-content m)}
+                            "assistant"
+                            (let [text (content-text (:content m))
+                                  has-tc (seq (:tool-calls m))
+                                  msg (cond-> {:role "assistant"}
+                                        (seq text) (assoc :content text)
+                                        has-tc (assoc :tool_calls
+                                                      (mapv (fn [tc]
+                                                              {:id (:id tc)
+                                                               :type "function"
+                                                               :function {:name (:name tc)
+                                                                          :arguments (cheshire.core/generate-string
+                                                                                      (:arguments tc))}})
+                                                            (:tool-calls m))))]
+                              ;; opencode-go requires reasoning_content on assistant messages
+                              (assoc msg :reasoning_content (or (str/trim (or (:thinking m) "")) "")))
+                            ;; custom messages (pi: convertToLlm custom→user)
+                            "custom"
+                            {:role "user"
+                             :content (openai-content (:content m))}
+                            {:role role
+                             :content (openai-content (:content m))})]
+                  msg)))
+        messages))
+
+(defn resolve-template-values
+  "pi buildChatTemplateValues + resolveChatTemplateKwargValue: resolve the
+   compat :chat-template-args/:chat-template-kwargs spec for one request —
+   literals pass through, {$var: \"thinking.enabled\"} → the on/off boolean,
+   other vars → the thinking-level-map value for the effort (or the :off
+   value when off); a value with :omit-when-off is dropped when thinking is
+   off. Returns nil when nothing resolves."
+  [model effort values]
+  (let [resolved (into {}
+                       (keep (fn [[k v]]
+                               (let [v (if (and (map? v) (:omit-when-off v) (nil? effort))
+                                         nil
+                                         (cond
+                                           (and (map? v) (= "thinking.enabled" (:var v)))
+                                           (boolean effort)
+
+                                           (map? v)
+                                           (let [mapped (get-in model [:thinking-level-map
+                                                                       (or effort :off)])]
+                                             (cond
+                                               (nil? mapped) effort
+                                               (string? mapped) mapped
+                                               :else nil))
+
+                                           :else v))]
+                                 (when (some? v) [k v]))))
+                       values)]
+    (when (seq resolved) resolved)))
+
+(defn openai-thinking-params
+  "Thinking params for an openai-completions payload (pi buildParams thinking
+   section; kmet's formats: default/openai, deepseek, qwen, openrouter,
+   zai, together, baseten, ant-ling, string-thinking, chat-template,
+   qwen-chat-template). EFFORT is the clamped level, nil when off."
+  [model effort]
+  (let [reasoning? (:reasoning model)
+        fmt (:thinking-format (:compat model))
+        effort? (not= false (:supports-reasoning-effort (:compat model)))]
+    (cond
+      (and reasoning? (= fmt :openrouter))
+      ;; OpenRouter normalizes reasoning across providers via a nested
+      ;; reasoning object (pi thinkingFormat "openrouter"); off →
+      ;; reasoning: {effort: "none"} unless the model pins :off to null.
+      (cond-> {}
+        effort (assoc :reasoning {:effort (effort-value model effort)})
+        (and (nil? effort) (not (off-explicitly-null? model)))
+        (assoc :reasoning {:effort (or (get-in model [:thinking-level-map :off]) "none")}))
+
+      (and reasoning? (= fmt :deepseek))
+      (cond-> {}
+        effort (assoc :thinking {:type "enabled"})
+        (and (nil? effort) (not (off-explicitly-null? model)))
+        (assoc :thinking {:type "disabled"})
+        (and effort effort?)
+        (assoc :reasoning_effort (effort-value model effort)))
+
+      (and reasoning? (= fmt :qwen))
+      (cond-> {:enable_thinking (boolean effort)}
+        (and effort effort?)
+        (assoc :reasoning_effort (effort-value model effort)))
+
+      (and reasoning? (= fmt :zai))
+      ;; pi thinkingFormat "zai": thinking {type} + reasoning_effort when
+      ;; the provider supports it (zai models always send the thinking
+      ;; object — no off:null gate, matching pi).
+      (cond-> {:thinking (if effort
+                           {:type "enabled" :clear_thinking false}
+                           {:type "disabled"})}
+        (and effort effort?)
+        (assoc :reasoning_effort (effort-value model effort)))
+
+      (and reasoning? (= fmt :together))
+      ;; pi thinkingFormat "together": nested reasoning: {enabled} +
+      ;; reasoning_effort when supported.
+      (cond-> {:reasoning {:enabled (boolean effort)}}
+        (and effort effort?)
+        (assoc :reasoning_effort (effort-value model effort)))
+
+      (and reasoning? (= fmt :qwen-chat-template))
+      {:chat_template_kwargs {:enable_thinking (boolean effort)
+                              :preserve_thinking true}}
+
+      (and reasoning? (= fmt :chat-template))
+      (cond-> {}
+        (seq (:chat-template-kwargs (:compat model)))
+        (assoc :chat_template_kwargs
+               (resolve-template-values model effort
+                                        (:chat-template-kwargs (:compat model)))))
+
+      (and reasoning? (= fmt :baseten))
+      ;; pi thinkingFormat "baseten": chat_template_args from the compat
+      ;; spec ($var thinking.enabled) + reasoning_effort when supported
+      ;; (the off value from the thinking-level-map).
+      (cond-> {}
+        (seq (:chat-template-args (:compat model)))
+        (assoc :chat_template_args
+               (resolve-template-values model effort
+                                        (:chat-template-args (:compat model))))
+        (and effort effort?)
+        (assoc :reasoning_effort (effort-value model effort))
+        (and (nil? effort) (string? (get-in model [:thinking-level-map :off])))
+        (assoc :reasoning_effort (get-in model [:thinking-level-map :off])))
+
+      (and reasoning? (= fmt :ant-ling))
+      ;; pi thinkingFormat "ant-ling": the branch is empty — Ring reasons
+      ;; by default and ignores explicit effort; the trailing default
+      ;; branches must not fire.
+      {}
+
+      (and reasoning? (= fmt :string-thinking))
+      (cond-> {}
+        effort (assoc :thinking (effort-value model effort))
+        (and (nil? effort) (not (off-explicitly-null? model)))
+        (assoc :thinking (or (get-in model [:thinking-level-map :off]) "none")))
+
+      (and reasoning? effort effort?)
+      {:reasoning_effort (effort-value model effort)}
+
+      (and reasoning? (nil? effort) effort?)
+      (let [off (get-in model [:thinking-level-map :off])]
+        (if (string? off) {:reasoning_effort off} {}))
+
+      :else {})))
+
+(def thinking-budgets
+  "pi adjustMaxTokensForThinking defaultBudgets (minimal/low/medium/high)."
+  {:minimal 1024 :low 2048 :medium 8192 :high 16384})
+
+(def min-answer-tokens 1024)
+
+(defn anthropic-adaptive-effort
+  "pi mapThinkingLevelToEffort: the adaptive output_config effort — the
+   model's thinking-level-map value when mapped, else the level collapsed to
+   low/medium/high (xhigh/max → high)."
+  [model effort]
+  (let [mapped (get-in model [:thinking-level-map effort])]
+    (cond
+      (string? mapped) mapped
+      (contains? #{:minimal :low} effort) "low"
+      (= :medium effort) "medium"
+      :else "high")))
+
+(defn anthropic-thinking
+  "pi streamSimple thinking: the thinking config + max_tokens for an
+   anthropic payload. EFFORT is the clamped level; nil when off.
+   forceAdaptiveThinking models (kimi-coding, claude 4.6+ per pi) send
+   thinking {type adaptive} + output_config {effort} instead of a budget.
+   Returns nil when thinking is off and the model allows disabling."
+  [model effort]
+  (cond
+    (not (:reasoning model)) nil
+    effort
+    (if (:force-adaptive-thinking (:compat model))
+      {:thinking {:type "adaptive" :display "summarized"}
+       :output_config {:effort (anthropic-adaptive-effort model effort)}
+       :max-tokens (or (:max-tokens model) 4096)}
+      (let [level (if (contains? #{:xhigh :max} effort) :high effort)
+            budget (get thinking-budgets level 0)
+            max-tokens (or (:max-tokens model) 4096)
+            budget (min budget (max 0 (- max-tokens min-answer-tokens)))]
+        {:thinking {:type "enabled" :budget_tokens budget :display "summarized"}
+         :max-tokens max-tokens}))
+    (off-explicitly-null? model) nil
+    :else {:thinking {:type "disabled"}
+           :max-tokens (or (:max-tokens model) 4096)}))
+
+(defn max-tokens-key
+  "Payload key for the model's max tokens (pi: compat.maxTokensField —
+   :max_tokens when set, :max_completion_tokens by default)."
+  [model]
+  (if (= :max-tokens (:max-tokens-field (:compat model)))
+    :max_tokens
+    :max_completion_tokens))
+
+(defn usage-with-cost
+  "Attach the per-message USD cost (pi: calculateCost runs in the wire API)
+   to a provider-native usage map, computed from the Model record that
+   produced the response. Usage maps without recognizable tokens pass
+   through unchanged."
+  [model-record usage]
+  (if-let [norm (usage/entry-usage usage)]
+    (assoc usage :cost (models/calculate-cost model-record norm))
+    usage))
+
+(defn responses-events-handler
+  "The event dispatch shared by the responses-family request builders
+   (openai-responses / azure / codex): text/thinking/tool-call deltas,
+   done/usage/error."
+  [{:keys [on-text on-thinking on-tool-call on-done on-error on-usage]} model-record]
+  (fn [event]
+    (case (:type event)
+      :text (when on-text (on-text (:content event)))
+      :thinking (when on-thinking (on-thinking (:content event)))
+      :tool-call (when on-tool-call
+                   (on-tool-call {:id (:id event)
+                                  :name (:name event)
+                                  :arguments (:arguments event)
+                                  :index (:index event)}))
+      :tool-call-args (when on-tool-call
+                        (on-tool-call {:arguments (:arguments event)
+                                       :index (:index event)}))
+      :done (when on-done (on-done (:stop-reason event)))
+      :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
+      :error (when on-error (on-error (:message event)))
+      nil)))
+
+(def network-exception-classes
+  "JVM exception classes indicating a transport/network failure (connect,
+   DNS, timeout, reset). java.net.http can throw these with a nil message
+   (e.g. ConnectException on this JDK), so they are classified by class."
+  #{"ConnectException" "UnknownHostException" "NoRouteToHostException"
+    "UnresolvedAddressException" "SocketTimeoutException"
+    "HttpTimeoutException" "SocketException"})
+
+(def http2-stream-reset-regex
+  "Message pattern for HTTP/2 stream resets. java.net.http surfaces a server
+   RST_STREAM frame as a plain java.io.IOException whose message is
+   'Received RST_STREAM: <code>' (e.g. 'Protocol error', 'CANCEL') — the
+   class is too broad to add to network-exception-classes, so these are
+   classified by message."
+  (re-pattern "(?i)received rst_stream"))
+
+(defn transport-error-message
+  "Message for a transport-layer exception. Network failures carry a stable
+   'network error' token so the loop's retry classifier (retryable-error?)
+   recognizes them even when the JVM message is nil — 'Request failed:
+   ConnectException' matches no retryable pattern, which silently kills
+   auto-retry on connect/DNS failures (pi's undici always reports transport
+   failures as 'fetch failed'). Non-network exceptions keep their message."
+  [e]
+  (let [msg (ex-message e)
+        cls (some-> (class e) .getSimpleName)]
+    (cond
+      (contains? network-exception-classes cls)
+      (str "network error: " (if (str/blank? msg) cls msg))
+
+      ;; HTTP/2 RST_STREAM arrives as a plain IOException — same class of
+      ;; transport reset as SocketException "Connection reset", so it gets
+      ;; the same stable retryable token (pi: undici reports these as
+      ;; 'fetch failed').
+      (re-find http2-stream-reset-regex (or msg ""))
+      (str "network error: " (or msg cls))
+
+      (str/blank? msg)
+      (str "Request failed: " cls)
+
+      :else msg)))
+
+;; ─── Tool schema conversion (pi convertTools — moved from app.tools.registry) ──
+
+(defn tool->anthropic-schema
+  "Convert a tool map to Anthropic tool schema format."
+  [tool]
+  {:name (:name tool)
+   :description (:description tool)
+   :input_schema (:parameters tool)})
+
+(defn tool->openai-schema
+  "Convert a tool map to OpenAI tool schema format."
+  [tool]
+  {:type "function"
+   :function {:name (:name tool)
+              :description (:description tool)
+              :parameters (:parameters tool)}})
+
+(defn tool->google-schema
+  "Convert a tool map to a Google functionDeclaration (pi convertTools)."
+  [tool]
+  {:name (:name tool)
+   :description (:description tool)
+   :parameters (:parameters tool)})

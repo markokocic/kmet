@@ -1,0 +1,81 @@
+(ns kmet.ai.api.google-vertex
+  "Google Vertex AI wire API (pi: api/google-vertex.ts)."
+  (:require
+   [kmet.ai.auth :as auth]
+   [kmet.ai.google-adc :as google-adc]
+   [cheshire.core :as json]
+   [kmet.ai.proxy :as proxy]
+   [kmet.libs.sse :as sse]
+   [clojure.string :as str]
+   [kmet.ai.api.google-generative-ai :refer [google-messages google-thinking-config]]
+   [kmet.ai.api.shared :refer [getenv request-headers responses-events-handler tool->google-schema transport-error-message]]))
+
+(def vertex-base-url
+  "The Vertex endpoint template (pi VERTEX_BASE_URL — the SDK substitutes
+   project/location; kmet constructs the URL itself)."
+  "https://{location}-aiplatform.googleapis.com")
+
+(defn vertex-endpoint-url
+  "pi: the Vertex streamGenerateContent URL with project/location from the
+   env (GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT / GOOGLE_CLOUD_LOCATION). A
+   model base-url containing {location} (or empty) resolves the location
+   from the env; any other base-url is used verbatim (custom endpoints)."
+  [model-base-url model-id]
+  (let [project (or (getenv "GOOGLE_CLOUD_PROJECT") (getenv "GCLOUD_PROJECT"))
+        location (getenv "GOOGLE_CLOUD_LOCATION")]
+    (when-not (seq project)
+      (throw (ex-info "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT."
+                      {:type :vertex-config-missing})))
+    (when-not (seq location)
+      (throw (ex-info "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION."
+                      {:type :vertex-config-missing})))
+    (let [base (if (str/includes? (or model-base-url "") "{location}")
+                 (str/replace vertex-base-url "{location}" location)
+                 model-base-url)]
+      (str base "/v1/projects/" project "/locations/" location
+           "/publishers/google/models/" model-id ":streamGenerateContent?alt=sse"))))
+
+(defn vertex-request
+  [{:keys [model-record provider-record effort api-key messages tools signal base-url
+           idle-timeout-ms session-id on-error]
+    :as opts}]
+  (future
+    (let [model-id (or (:model opts) (:id model-record))
+          [contents system] (google-messages messages model-record)
+          thinking-config (google-thinking-config model-record effort)
+          payload (cond-> {:contents contents
+                           :generationConfig (cond-> {}
+                                               (:max-tokens model-record)
+                                               (assoc :maxOutputTokens (:max-tokens model-record))
+                                               thinking-config
+                                               (assoc :thinkingConfig thinking-config))}
+                    system (assoc :systemInstruction {:parts [{:text system}]})
+                    (seq tools) (assoc :tools [{:functionDeclarations
+                                                (mapv tool->google-schema tools)}]))
+          ;; auth: GOOGLE_CLOUD_API_KEY (x-goog-api-key) or ADC
+          ;; (Authorization: Bearer — the token is fetched + cached here)
+          api-key (or api-key (auth/resolve-api-key :google-vertex))
+          auth-header (if api-key "x-goog-api-key" "Authorization")
+          auth-value (or api-key (google-adc/access-token!))]
+      (if-not auth-value
+        (when on-error
+          (on-error (str "No API key for google-vertex. Set GOOGLE_CLOUD_API_KEY "
+                         "or configure Application Default Credentials.")))
+        (try
+          (let [response (proxy/post-stream (or base-url (vertex-endpoint-url (:base-url model-record) model-id))
+                                            {:headers (request-headers
+                                                       {auth-header (str (when-not api-key "Bearer ") auth-value)
+                                                        "Content-Type" "application/json"}
+                                                       model-record provider-record api-key session-id)
+                                             :body (json/generate-string payload)
+                                             :as :stream
+                                             :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
+                                            signal)]
+            (sse/process-google-stream response
+                                       (responses-events-handler opts model-record)
+                                       signal
+                                       idle-timeout-ms
+                                       (fn [] (proxy/abort-stream! response)))
+            (proxy/finish-curl! response signal on-error))
+          (catch Exception e
+            (when on-error (on-error (transport-error-message e)))))))))

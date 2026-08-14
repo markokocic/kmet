@@ -133,18 +133,23 @@ src/kmet/
 │                         SSE parsing, terminal protocol, yaml frontmatter,
 │                         terminal images, file locks, hashing, highlighting)
 ├── modes/              — Entry modes: interactive TUI + print mode
-├── app/                — App business logic (pi: dist/core/)
+├── ai/                 — Provider/auth subsystem (pi: packages/ai — a standalone
+│   │                     library the agent depends on; self-contained, see AGENTS.md)
 │   ├── models.clj      — Provider/model registry + committed EDN catalogs
 │   │                     (model_data/), cost, catalog loading
-│   ├── model_resolver.clj / model_config.clj / provider_composer.clj /
-│   │   config_value.clj — model resolution, models.edn custom providers
+│   ├── model_config.clj / provider_composer.clj / config_value.clj —
+│   │                     models.edn custom providers, config resolution
 │   ├── auth.clj        — env-var table, auth.edn, credential resolution
 │   ├── oauth.clj       — OAuthAuth record, device-code + PKCE loopback flows
-│   ├── llm.clj         — the 9 wire APIs (openai/anthropic/google/responses/
-│   │                     codex/azure/bedrock/vertex/mistral)
+│   ├── llm.clj + api/  — LLM dispatcher + per-wire API builders
+│   │                     (openai/anthropic/google/responses/codex/azure/
+│   │                     bedrock/vertex/mistral)
 │   ├── image_models.clj — image-generation registry + :openrouter-images
 │   │                     wire (image_model_data/ catalog)
 │   ├── aws_sigv4.clj / google_adc.clj — bedrock SigV4 + vertex ADC auth
+│   └── proxy.clj       — proxy env vars + curl transport
+├── app/                — App business logic (pi: dist/core/)
+│   ├── model_resolver.clj — model pattern/CLI resolution
 │   ├── tools/          — read/write/edit/bash tools (grep/find/ls disabled)
 │   └── ui/             — app TUI components (chat history, footer, ...)
 ├── tui/                — Generic TUI library (pi: @earendil-works/pi-tui)
@@ -175,13 +180,13 @@ Example `~/.kmet/agent/settings.edn`:
  :append-system-prompt "Follow the project conventions." ; appended after it}
 ```
 
-`kmet` reads its provider catalog from `src/kmet/app/model_data/*.edn`
+`kmet` reads its provider catalog from `src/kmet/ai/model_data/*.edn`
 (39 providers: opencode-go, deepseek, anthropic, google, groq, cerebras,
 openrouter, nvidia, moonshotai, qwen-token-plan, minimax, fireworks,
 vercel-ai-gateway, zai, together, baseten, kimi-coding, cloudflare, mistral,
 google-vertex, amazon-bedrock, ...; generated from models.dev + live
 catalogs — `bb generate-models`). The image-model catalog lives in
-`src/kmet/app/image_model_data/image-models.edn` (`bb generate-image-models`).
+`src/kmet/ai/image_model_data/image-models.edn` (`bb generate-image-models`).
 Models, base URLs and defaults are registry data; custom providers, API keys
 and model overrides go in `~/.kmet/agent/models.edn` (see `models.md`).
 

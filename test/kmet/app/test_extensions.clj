@@ -2,7 +2,7 @@
   (:require [clojure.test :as t]
             [clojure.java.io :as io]
             [kmet.app.extensions :as extensions]
-            [kmet.app.models :as models]
+            [kmet.ai.models :as models]
             [kmet.app.session :as session]))
 
 ;; ─── Extension loading ────────────────────────────────────────────────────

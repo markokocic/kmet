@@ -13,8 +13,8 @@
             [kmet.app.keybindings :as app-kb]
             [kmet.app.ui :as ui]
             [kmet.app.ui.model-selector :as model-selector]
-            [kmet.app.models :as m]
-            [kmet.app.auth :as auth]
+            [kmet.ai.models :as m]
+            [kmet.ai.auth :as auth]
             [kmet.app.loop :as agent]
             [kmet.config :as cfg]
             [kmet.tui.keybindings :as tui-kb]))

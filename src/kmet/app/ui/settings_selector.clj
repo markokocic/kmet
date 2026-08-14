@@ -5,8 +5,8 @@
    hide-thinking toggle, and the retry block (settings.edn :retry —
    enabled / max-retries / base-delay-ms, applied live to the agent)."
   (:require [kmet.app.loop :as agent]
-            [kmet.app.api.shared :as shared]
-            [kmet.app.models :as models]
+            [kmet.ai.api.shared :as shared]
+            [kmet.ai.models :as models]
             [kmet.app.ui :as ui]
             [kmet.app.ui.model-selector :as model-selector]
             [kmet.config :as cfg]

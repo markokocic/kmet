@@ -14,7 +14,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [babashka.fs :as fs]
-            [kmet.app.models :as models]
+            [kmet.ai.models :as models]
             [kmet.app.session :as session]))
 
 ;; ─── Extension input / before-agent-start hooks ────────────────────────────
@@ -132,8 +132,8 @@
 
 (defn register-provider!
   "Register an extension provider (pi: ctx.registerProvider): a provider-id +
-   config map (kmet.app.models/register-provider-config!) or a complete
-   Provider record (kmet.app.models/register-native-provider!). A broken
+   config map (kmet.ai.models/register-provider-config!) or a complete
+   Provider record (kmet.ai.models/register-native-provider!). A broken
    config throws without touching previously registered state."
   ([provider-id config]
    (models/register-provider-config! provider-id config))

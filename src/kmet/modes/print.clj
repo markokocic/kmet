@@ -4,7 +4,7 @@
   (:require [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.app.loop :as agent]
-            [kmet.app.models :as models]
+            [kmet.ai.models :as models]
             [kmet.app.model-resolver :as resolver]
             [kmet.app.skills :as skills]
             [kmet.app.context :as context]

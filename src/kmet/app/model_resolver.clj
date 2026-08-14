@@ -9,9 +9,9 @@
    openai-responses; the catalog default is the first anthropic claude
    model)."
   (:require [clojure.string :as str]
-            [kmet.app.models :as models]
-            [kmet.app.auth :as auth]
-            [kmet.app.api.shared :as shared]))
+            [kmet.ai.models :as models]
+            [kmet.ai.auth :as auth]
+            [kmet.ai.api.shared :as shared]))
 
 ;; ─── Alias / date matching (pi isAlias) ────────────────────────────────────
 

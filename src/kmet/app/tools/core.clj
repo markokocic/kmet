@@ -15,9 +15,6 @@
 
 (def get-all-tools registry/get-all-tools)
 (def execute-tool registry/execute-tool)
-(def tool->openai-schema registry/tool->openai-schema)
-(def tool->anthropic-schema registry/tool->anthropic-schema)
-(def tool->google-schema registry/tool->google-schema)
 (def register-tool! registry/register-tool!)
 (def unregister-tool! registry/unregister-tool!)
 (def get-tool registry/get-tool)

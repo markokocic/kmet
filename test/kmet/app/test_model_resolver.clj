@@ -3,8 +3,8 @@
    rejection, alias/dated preference, --models scope, CLI resolution."
   (:require [clojure.test :as t]
             [clojure.string :as str]
-            [kmet.app.models :as m]
-            [kmet.app.auth :as auth]
+            [kmet.ai.models :as m]
+            [kmet.ai.auth :as auth]
             [kmet.app.model-resolver :as r]))
 
 (defn- test-model

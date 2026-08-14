@@ -69,28 +69,6 @@
 
 ;; ─── Tool schema helpers ────────────────────────────────────────────────────
 
-(defn tool->anthropic-schema
-  "Convert a tool map to Anthropic tool schema format."
-  [tool]
-  {:name (:name tool)
-   :description (:description tool)
-   :input_schema (:parameters tool)})
-
-(defn tool->openai-schema
-  "Convert a tool map to OpenAI tool schema format."
-  [tool]
-  {:type "function"
-   :function {:name (:name tool)
-              :description (:description tool)
-              :parameters (:parameters tool)}})
-
-(defn tool->google-schema
-  "Convert a tool map to a Google functionDeclaration (pi convertTools)."
-  [tool]
-  {:name (:name tool)
-   :description (:description tool)
-   :parameters (:parameters tool)})
-
 ;; ─── Extended tool registry ────────────────────────────────────────────────
 
 (defonce ^:private custom-tools (atom {}))

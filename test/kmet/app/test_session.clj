@@ -4,7 +4,8 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
-            [kmet.app.session :as s]))
+            [kmet.app.session :as s]
+            [kmet.ai.usage :as usage]))
 
 (def test-dir "target/test-sessions")
 
@@ -844,48 +845,48 @@
 (t/deftest test-entry-usage
   (t/testing "OpenAI usage shape — input excludes cached tokens (pi normalizeUsage)"
     (t/is (= {:input 70 :output 20 :cache-read 30 :cache-write 0 :cost 0.0}
-             (s/entry-usage {:prompt_tokens 100 :completion_tokens 20
-                             :prompt_tokens_details {:cached_tokens 30}}))))
+             (usage/entry-usage {:prompt_tokens 100 :completion_tokens 20
+                                 :prompt_tokens_details {:cached_tokens 30}}))))
   (t/testing "OpenAI cache-write tokens are split out and subtracted (OpenRouter-compatible)"
     (t/is (= {:input 65 :output 20 :cache-read 30 :cache-write 5 :cost 0.0}
-             (s/entry-usage {:prompt_tokens 100 :completion_tokens 20
-                             :prompt_tokens_details {:cached_tokens 30
-                                                     :cache_write_tokens 5}}))))
+             (usage/entry-usage {:prompt_tokens 100 :completion_tokens 20
+                                 :prompt_tokens_details {:cached_tokens 30
+                                                         :cache_write_tokens 5}}))))
   (t/testing "Anthropic usage shape — input_tokens already excludes cache"
     (t/is (= {:input 100 :output 20 :cache-read 30 :cache-write 10 :cost 0.0}
-             (s/entry-usage {:input_tokens 100 :output_tokens 20
-                             :cache_read_input_tokens 30
-                             :cache_creation_input_tokens 10}))))
+             (usage/entry-usage {:input_tokens 100 :output_tokens 20
+                                 :cache_read_input_tokens 30
+                                 :cache_creation_input_tokens 10}))))
   (t/testing "OpenAI Responses shape — input_tokens includes cache tokens,
              subtracted from the details sub-map (pi normalizeUsage)"
     (t/is (= {:input 65 :output 20 :cache-read 30 :cache-write 5 :cost 0.0}
-             (s/entry-usage {:input_tokens 100 :output_tokens 20 :total_tokens 120
-                             :input_tokens_details {:cached_tokens 30
-                                                    :cache_write_tokens 5}
-                             :output_tokens_details {:reasoning_tokens 10}}))))
+             (usage/entry-usage {:input_tokens 100 :output_tokens 20 :total_tokens 120
+                                 :input_tokens_details {:cached_tokens 30
+                                                        :cache_write_tokens 5}
+                                 :output_tokens_details {:reasoning_tokens 10}}))))
   (t/testing "Responses usage without a cache details sub-map passes through"
     (t/is (= {:input 100 :output 20 :cache-read 0 :cache-write 0 :cost 0.0}
-             (s/entry-usage {:input_tokens 100 :output_tokens 20 :total_tokens 120}))))
+             (usage/entry-usage {:input_tokens 100 :output_tokens 20 :total_tokens 120}))))
   (t/testing "Google's already-normalized shape (sse/google-usage)"
     (t/is (= {:input 10 :output 20 :cache-read 5 :cache-write 0 :cost 0.0}
-             (s/entry-usage {:input 10 :output 20 :cache-read 5 :cache-write 0}))))
+             (usage/entry-usage {:input 10 :output 20 :cache-read 5 :cache-write 0}))))
   (t/testing "fully-cached prompt → zero input, cache tokens still reported"
     (t/is (= {:input 0 :output 1 :cache-read 100 :cache-write 0 :cost 0.0}
-             (s/entry-usage {:prompt_tokens 100 :completion_tokens 1
-                             :prompt_tokens_details {:cached_tokens 100}}))))
+             (usage/entry-usage {:prompt_tokens 100 :completion_tokens 1
+                                 :prompt_tokens_details {:cached_tokens 100}}))))
   (t/testing "cost is carried through from the breakdown attached by llm"
-    (t/is (= 0.0042 (:cost (s/entry-usage {:prompt_tokens 100 :completion_tokens 20
-                                           :cost {:input 0.0014 :output 0.0028
-                                                  :cache-read 0.0 :cache-write 0.0
-                                                  :total 0.0042}})))))
+    (t/is (= 0.0042 (:cost (usage/entry-usage {:prompt_tokens 100 :completion_tokens 20
+                                               :cost {:input 0.0014 :output 0.0028
+                                                      :cache-read 0.0 :cache-write 0.0
+                                                      :total 0.0042}})))))
   (t/testing "Bedrock ConverseStream shape — cache_read/write input tokens"
     (t/is (= {:input 7 :output 5 :cache-read 2 :cache-write 1 :cost 0.0}
-             (s/entry-usage {:input_tokens 10 :output_tokens 5 :total_tokens 15
-                             :cache_read_input_tokens 2
-                             :cache_write_input_tokens 1}))))
+             (usage/entry-usage {:input_tokens 10 :output_tokens 5 :total_tokens 15
+                                 :cache_read_input_tokens 2
+                                 :cache_write_input_tokens 1}))))
   (t/testing "unknown shape returns nil"
-    (t/is (nil? (s/entry-usage {:foo 1})))
-    (t/is (nil? (s/entry-usage nil)))))
+    (t/is (nil? (usage/entry-usage {:foo 1})))
+    (t/is (nil? (usage/entry-usage nil)))))
 
 (t/deftest test-usage-totals
   (let [dir (str "target/test-sess-usage-" (System/currentTimeMillis))

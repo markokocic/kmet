@@ -5,7 +5,7 @@
             [clojure.java.io :as io]
             [babashka.fs :as fs]
             [kmet.config :as cfg]
-            [kmet.app.auth :as auth]))
+            [kmet.ai.auth :as auth]))
 
 ;; ─── Defaults ──────────────────────────────────────────────────────────────
 
@@ -135,7 +135,7 @@
 ;; ─── Provider config ───────────────────────────────────────────────────────
 ;; Phase 0: provider-configs / get-provider-config / get-provider-base-url /
 ;; get-provider-api-type are deleted — base-url/api-type come from the models
-;; registry (kmet.app.models), not from config (covered by test_models).
+;; registry (kmet.ai.models), not from config (covered by test_models).
 
 (t/deftest test-resource-dirs
   (let [canon (fn [p] (str (fs/canonicalize (io/file p))))

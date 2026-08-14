@@ -1,4 +1,4 @@
-;; scripts/generate_models.clj — regenerate src/kmet/app/model_data/*.edn from
+;; scripts/generate_models.clj — regenerate src/kmet/ai/model_data/*.edn from
 ;; models.dev + the live catalogs (pi: packages/ai/scripts/generate-models.ts,
 ;; ported to kmet's 39 providers).
 ;;
@@ -236,7 +236,7 @@
 (def data-dir
   "Committed catalog directory, relative to the project root (bb tasks run
    from there, matching kmet.app.models/model-data-dir)."
-  "src/kmet/app/model_data")
+  "src/kmet/ai/model_data")
 
 ;; ─── Small helpers ─────────────────────────────────────────────────────────
 

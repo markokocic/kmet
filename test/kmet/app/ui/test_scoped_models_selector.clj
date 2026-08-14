@@ -6,7 +6,7 @@
             [babashka.fs :as fs]
             [kmet.app.keybindings :as kb]
             [kmet.app.ui.scoped-models-selector :as sms]
-            [kmet.app.models :as models]
+            [kmet.ai.models :as models]
             [kmet.tui.keybindings :as tui-kb]
             [kmet.tui.protocols :as protocols]))
 

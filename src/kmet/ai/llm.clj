@@ -1,0 +1,124 @@
+(ns kmet.ai.llm
+  "LLM API dispatcher (pi: the per-wire api/* files dispatched from the
+   Model record): resolves auth/model, clamps thinking effort, and routes to
+   the per-API request builders in kmet.ai.api.*. The request builders and
+   their shared machinery live in kmet.ai.api.{shared,openai-completions,
+   openai-responses,openai-codex-responses,azure-openai-responses,
+   anthropic-messages,google-generative-ai,mistral-conversations,
+   google-vertex,bedrock-converse-stream}."
+  (:require
+   [kmet.ai.auth :as auth]
+   [kmet.ai.models :as models]
+   [kmet.ai.api.anthropic-messages :refer [anthropic-request]]
+   [kmet.ai.api.azure-openai-responses :refer [azure-request]]
+   [kmet.ai.api.bedrock-converse-stream :refer [bedrock-request]]
+   [kmet.ai.api.google-generative-ai :refer [google-request]]
+   [kmet.ai.api.google-vertex :refer [vertex-request]]
+   [kmet.ai.api.mistral-conversations :refer [mistral-request]]
+   [kmet.ai.api.openai-codex-responses :refer [codex-request]]
+   [kmet.ai.api.openai-completions :refer [openai-request]]
+   [kmet.ai.api.openai-responses :refer [responses-request]]
+   [kmet.ai.api.shared :refer [ambient-auth-available? effective-effort]]))
+
+(defn send-message
+  "Send messages to LLM and receive streaming events via callbacks.
+
+   opts:
+     :provider    — provider keyword (:opencode-go, :opencode, :deepseek,
+                    :github-copilot, :openai, :xai, :openai-codex,
+                    :azure-openai-responses, :mistral, :google-vertex,
+                    :amazon-bedrock, ...)
+     :model       — model id string, resolved against the provider's catalog
+     :api-type    — wire api override (:openai-completions,
+                    :openai-responses, :openai-codex-responses,
+                    :azure-openai-responses, :anthropic-messages,
+                    :google-generative-ai, :mistral-conversations,
+                    :google-vertex, :bedrock-converse-stream); wins over the
+                    resolved model's :api
+     :base-url    — full endpoint URL override (e.g. local test servers);
+                    wins over the model-derived URL
+     :api-key     — API key (required — resolved by caller via cfg/get-api-key)
+     :thinking    — :off :minimal :low :medium :high :xhigh :max; clamped by
+                    the resolved model's capability
+     :messages    — vector of message maps
+     :tools       — vector of Tool records
+     :signal      — atom; set to true to cancel
+     :idle-timeout-ms — per-byte idle timeout on the stream in ms (pi:
+                     httpIdleTimeoutMs — undici bodyTimeout semantics); nil
+                     or non-positive disables it
+     :cache-retention — :short (default) | :long | :none — prompt-cache
+                     params for openai-responses (pi CacheRetention; :none
+                     disables the cache key + affinity headers — compaction
+                     summaries pass it); ignored by the other apis
+     :on-text     — (fn [text-delta])
+     :on-tool-call — (fn [{:keys [id name arguments]}])
+     :on-done     — (fn [stop-reason])
+     :on-error    — (fn [message])
+     :on-usage    — (fn [usage-map]) — provider-native usage from the final
+                     stream chunk.
+
+   Returns: future that completes when the stream ends."
+  [{:keys [provider model api-key] :or {provider :opencode-go} :as opts}]
+  (let [auth (auth/resolve-provider-auth provider)
+        ;; Resolve the key here when the caller didn't provide one (pi:
+        ;; prepareRequest resolves auth per request) — so a direct call with
+        ;; auth.edn / env credentials works, and the builders never see a nil
+        ;; key that would produce an empty Authorization header.
+        api-key (or api-key (:api-key auth))
+        ;; An oauth credential's to-auth carries a per-credential base-url
+        ;; (pi applyAuth: auth.baseUrl overrides the model's — Copilot's
+        ;; proxy-ep endpoint); an explicit agent-level :base-url wins.
+        opts (cond-> opts
+               (and (:base-url auth) (nil? (:base-url opts)))
+               (assoc :base-url (:base-url auth)))]
+    (cond
+      ;; google-vertex (ADC) and amazon-bedrock (ambient AWS credentials)
+      ;; resolve their own auth — the api-key check is per-request below
+      (and (nil? api-key) (nil? (:bearer auth))
+           (not (ambient-auth-available? provider)))
+      (future
+        (when-let [on-error (:on-error opts)]
+          (on-error (str "No API key for " (name provider)
+                         ". Set the key in ~/.kmet/agent/auth.edn."))))
+
+      :else
+      (let [m (models/get-model provider model)]
+        (cond
+          ;; Catalog provider with an unknown model id → error
+          (and (some? (models/get-provider provider)) (nil? m))
+          (future
+            (when-let [on-error (:on-error opts)]
+              (on-error (str "Unknown model: " (name provider) "/" model))))
+
+          ;; Unknown provider (no catalog entry) → error
+          (nil? m)
+          (future
+            (when-let [on-error (:on-error opts)]
+              (on-error (str "Unknown provider: " (name provider)))))
+
+          :else
+          (let [api (or (:api-type opts) (:api m))
+                p (models/get-provider provider)
+                effort (effective-effort m (:thinking opts))]
+            (case api
+              :openai-completions (openai-request (assoc opts :model-record m :provider-record p
+                                                         :effort effort :api-key api-key))
+              :openai-responses (responses-request (assoc opts :model-record m :provider-record p
+                                                          :effort effort :api-key api-key))
+              :openai-codex-responses (codex-request (assoc opts :model-record m :provider-record p
+                                                            :effort effort :api-key api-key))
+              :azure-openai-responses (azure-request (assoc opts :model-record m :provider-record p
+                                                            :effort effort :api-key api-key))
+              :anthropic-messages (anthropic-request (assoc opts :model-record m :provider-record p
+                                                            :effort effort :api-key api-key))
+              :google-generative-ai (google-request (assoc opts :model-record m :provider-record p
+                                                           :effort effort :api-key api-key))
+              :mistral-conversations (mistral-request (assoc opts :model-record m :provider-record p
+                                                             :effort effort :api-key api-key))
+              :google-vertex (vertex-request (assoc opts :model-record m :provider-record p
+                                                    :effort effort :api-key api-key))
+              :bedrock-converse-stream (bedrock-request (assoc opts :model-record m :provider-record p
+                                                               :effort effort :api-key api-key))
+              (future
+                (when-let [on-error (:on-error opts)]
+                  (on-error (str "Unknown api-type: " (name (:api-type opts)))))))))))))

@@ -6,6 +6,7 @@
   (:require [clojure.string :as str]
             [babashka.process :as proc]
             [kmet.app.session :as session]
+            [kmet.ai.usage :as usage]
             [kmet.app.compaction :as compaction]))
 
 (defrecord FooterDataProvider [cwd-atom git-branch-atom git-branch-resolved?-atom
@@ -130,7 +131,7 @@
   [provider]
   (if-let [sess (fdp-get-session provider)]
     (some (fn [e]
-            (when-let [u (session/entry-usage (:usage e))]
+            (when-let [u (usage/entry-usage (:usage e))]
               (let [total (+ (:input u) (:cache-read u) (:cache-write u))]
                 (when (pos? total)
                   (double (/ (* 100.0 (:cache-read u)) total))))))

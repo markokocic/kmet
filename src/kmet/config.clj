@@ -7,7 +7,7 @@
             [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.tui.theme :as theme]
-            [kmet.app.auth :as auth]
+            [kmet.ai.auth :as auth]
             [kmet.libs.file-lock :as file-lock]))
 
 ;; ─── Defaults ───────────────────────────────────────────────────────────────
@@ -94,11 +94,11 @@
             (println "Warning: Failed to load" path ":" (ex-message e)))
           nil)))))
 
-;; ─── Auth (Phase 3: kmet.app.auth owns auth.edn + the env-var table) ──────
+;; ─── Auth (Phase 3: kmet.ai.auth owns auth.edn + the env-var table) ──────
 
 (defn get-api-key
   "API key for a provider (pi: getApiKey) — auth.edn credential first, then
-   the provider's env vars in pi order. Delegates to kmet.app.auth."
+   the provider's env vars in pi order. Delegates to kmet.ai.auth."
   [provider]
   (auth/resolve-api-key provider))
 

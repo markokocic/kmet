@@ -7,8 +7,8 @@
             [kmet.modes.print :as print-mode]
             [kmet.config :as cfg]
             [kmet.app.extensions :as extensions]
-            [kmet.app.image-models :as image-models]
-            [kmet.app.models :as models]
+            [kmet.ai.image-models :as image-models]
+            [kmet.ai.models :as models]
             [kmet.app.model-resolver :as resolver]
             [kmet.debug :as debug]
             [clojure.string :as str]))

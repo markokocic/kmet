@@ -2,11 +2,11 @@
   (:require [clojure.test :as t]
             [clojure.string :as str]
             [babashka.fs :as fs]
-            [kmet.app.llm :as llm]
-            [kmet.app.models :as models]
-            [kmet.app.auth :as auth]
-            [kmet.app.aws-sigv4 :as aws-sigv4]
-            [kmet.app.google-adc :as google-adc]
+            [kmet.ai.llm :as llm]
+            [kmet.ai.models :as models]
+            [kmet.ai.auth :as auth]
+            [kmet.ai.aws-sigv4 :as aws-sigv4]
+            [kmet.ai.google-adc :as google-adc]
             [kmet.app.tools.core :as tools]
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
@@ -1090,7 +1090,7 @@
   (t/is (loop/retryable-error? "ECONNRESET: socket hang up"))
   ;; Network transport failures — the llm layer reports these with a stable
   ;; 'network error' token (java.net.http ConnectExceptions carry a nil
-  ;; message on this JDK; see kmet.app.llm/transport-error-message)
+  ;; message on this JDK; see kmet.ai.llm/transport-error-message)
   (t/is (loop/retryable-error? "network error: ConnectException"))
   (t/is (loop/retryable-error? "network error: Connection reset"))
   (t/is (loop/retryable-error? "network error: request timed out"))

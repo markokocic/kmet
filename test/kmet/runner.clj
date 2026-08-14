@@ -22,20 +22,21 @@
     kmet.app.test-session
     kmet.app.test-compaction
     kmet.app.test-tools
-    kmet.app.test-llm
-    kmet.app.test-attribution
-    kmet.app.test-models
+    kmet.ai.test-llm
+    kmet.ai.test-attribution
+    kmet.ai.test-models
     kmet.app.test-model-resolver
-    kmet.app.test-config-value
-    kmet.app.test-model-config
-    kmet.app.test-provider-composer
-    kmet.app.test-auth
-    kmet.app.test-aws-sigv4
-    kmet.app.test-google-adc
-    kmet.app.test-oauth
-    kmet.app.test-image-models
-    kmet.app.test-model-data
-    kmet.app.test-proxy
+    kmet.ai.test-config-value
+    kmet.ai.test-model-config
+    kmet.ai.test-provider-composer
+    kmet.ai.test-auth
+    kmet.ai.test-aws-sigv4
+    kmet.ai.test-google-adc
+    kmet.ai.test-oauth
+    kmet.ai.test-image-models
+    kmet.ai.test-model-data
+    kmet.ai.test-proxy
+    kmet.ai.test-self-contained
     kmet.app.test-loop
     kmet.test-theme kmet.test-config
     kmet.app.test-skills

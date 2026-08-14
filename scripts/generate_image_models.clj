@@ -1,5 +1,5 @@
 ;; scripts/generate_image_models.clj — regenerate
-;; src/kmet/app/image_model_data/image-models.edn from the OpenRouter API
+;; src/kmet/ai/image_model_data/image-models.edn from the OpenRouter API
 ;; (pi: packages/ai/scripts/generate-image-models.ts).
 ;;
 ;; Keeps models whose output modalities include "image"; input/output
@@ -18,7 +18,7 @@
 
 (def openrouter-base-url "https://openrouter.ai/api/v1")
 (def catalog-path
-  (str (fs/path (fs/cwd) "src" "kmet" "app" "image_model_data" "image-models.edn")))
+  (str (fs/path (fs/cwd) "src" "kmet" "ai" "image_model_data" "image-models.edn")))
 
 (defn- clamp-cost
   "Clamp a negative pricing sentinel to 0 (pi leaves -1e6 in the generated

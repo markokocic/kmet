@@ -4,7 +4,7 @@
    (Ctrl+P cycling) overlay, and the model-switch helpers shared with
    cycling and the footer sync."
   (:require [kmet.app.loop :as agent]
-            [kmet.app.models :as models]
+            [kmet.ai.models :as models]
             [kmet.app.model-resolver :as resolver]
             [kmet.app.ui :as ui]
             [kmet.app.ui.footer-data-provider :as fdp]

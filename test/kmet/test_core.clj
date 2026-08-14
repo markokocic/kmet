@@ -4,7 +4,7 @@
   (:require [clojure.string :as str]
             [clojure.test :as t]
             [kmet.core :as core]
-            [kmet.app.models :as models]))
+            [kmet.ai.models :as models]))
 
 (t/deftest test-format-token-count
   (t/is (= "200K" (@#'core/format-token-count 200000)))

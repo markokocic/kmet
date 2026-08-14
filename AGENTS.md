@@ -57,11 +57,12 @@ src/kmet/
 │   ├── interactive.clj — Interactive TUI: layout, CoreState, submit/cancel,
 │   │                     bash commands, external editor, session browsing
 │   └── print.clj       — Print mode: send message, print response, exit
-├── app/                — App-level business logic (pi: dist/core/)
+├── ai/                 — Provider/auth subsystem (pi: packages/ai — a standalone
+│   │                     library the agent depends on; enforced by the
+│   │                     kmet.ai.test-self-contained guard: only kmet.libs.* deps)
 │   ├── models.clj      — Model/Provider records + registry atom, catalog
 │   │                     loading + manifest, cost (pi: models.ts; Phases 0-5)
 │   ├── model_data/     — committed provider catalogs + manifest (bb generate-models)
-│   ├── model_resolver.clj — model pattern/CLI resolution (pi: model-resolver.ts)
 │   ├── model_config.clj   — models.edn loading + validation (pi: model-config.ts)
 │   ├── provider_composer.clj — builtin+models.edn+extension composition
 │   │                     (pi: provider-composer.ts)
@@ -76,12 +77,14 @@ src/kmet/
 │   ├── image_models.clj — image-generation registry + :openrouter-images
 │   │                     wire (pi: images*.ts; Deferred B)
 │   ├── image_model_data/ — committed image-model catalog (bb generate-image-models)
-│   ├── bash_executor.clj — Bash command execution (raw byte streaming, truncation, temp file)
+│   ├── usage.clj       — usage-map normalization (pi normalizeUsage; shared by
+│   │                     the wire layer, session store and footer cost display)
 │   ├── llm.clj         — LLM API dispatcher (pi: send-message — auth/model
-│   │                     resolution, effort clamp, dispatch to kmet.app.api.*)
+│   │                     resolution, effort clamp, dispatch to kmet.ai.api.*)
 │   ├── api/            — Per-wire LLM API builders (pi: packages/ai/src/api/)
 │   │   ├── shared.clj  — URL construction, headers, thinking levels, message
-│   │   │                transformers, cost/event handling (pi transform-messages.ts)
+│   │   │                transformers, tool schemas, cost/event handling
+│   │   │                (pi transform-messages.ts + openai-prompt-cache.ts)
 │   │   ├── openai_completions.clj — OpenAI Completions (pi openai-completions.ts)
 │   │   ├── openai_responses.clj — OpenAI Responses (pi openai-responses.ts)
 │   │   ├── openai_codex_responses.clj — Codex responses (pi openai-codex-responses.ts)
@@ -91,8 +94,12 @@ src/kmet/
 │   │   ├── mistral_conversations.clj — Mistral (pi mistral-conversations.ts)
 │   │   ├── google_vertex.clj — Vertex (pi google-vertex.ts)
 │   │   └── bedrock_converse_stream.clj — Bedrock Converse (pi bedrock-converse-stream.ts)
-│   ├── proxy.clj      — Proxy env vars (HTTPS_PROXY/ALL_PROXY/NO_PROXY) + transport;
-│   │                     SOCKS & https-scheme proxies via curl (java.net.http is HTTP-proxy-only)
+│   └── proxy.clj      — Proxy env vars (HTTPS_PROXY/ALL_PROXY/NO_PROXY) + transport;
+│                       SOCKS & https-scheme proxies via curl (java.net.http is HTTP-proxy-only)
+├── app/                — App-level business logic (pi: dist/core/)
+│   ├── model_resolver.clj — model pattern/CLI resolution (pi: model-resolver.ts;
+│   │                     resolves against kmet.ai.models)
+│   ├── bash_executor.clj — Bash command execution (raw byte streaming, truncation, temp file)
 │   ├── loop.clj        — Agent conversation loop
 │   ├── compaction.clj  — Conversation compaction (pi: compaction.ts)
 │   ├── context.clj     — Context file discovery (AGENTS.md/CLAUDE.md)
@@ -211,12 +218,15 @@ src/kmet/
   namespace** (no app, tui, modes, or sibling-lib deps). Each lib is a portable
   unit: only stdlib + third-party deps, and any bundled assets (scripts) live in
   the lib directory. Enforced by `kmet.libs.test-self-contained`.
+- **`kmet.ai.*`** — provider/auth subsystem (pi: `packages/ai`). **Must not require
+  any other kmet.* namespace beyond `kmet.libs.*`** — a standalone library the
+  agent depends on. Enforced by `kmet.ai.test-self-contained`.
 - **`kmet.tui.*`** — generic. No dependency on app, LLM, or session concepts.
   May depend on `kmet.libs.*`.
 - **`kmet.modes.*`** — entry modes. Depends on `kmet.app.*`, `kmet.tui.*`, `kmet.config`.
 - **`kmet.app.ui.*`** — app-specific. Builds on `kmet.tui.*`; imports `track!` from `kmet.tui.macros`.
 - **`kmet.app.*`** (non-ui) — business logic. Never imports `kmet.tui.*` or `kmet.app.ui.*`.
-  May depend on `kmet.libs.*`.
+  May depend on `kmet.libs.*` and `kmet.ai.*`.
 - **`kmet.core`** — entry only: args + dispatch. Never contains app logic.
 
 ### ANSI escape codes

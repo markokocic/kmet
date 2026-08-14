@@ -95,7 +95,7 @@ Missing (pi `docs/settings.md`):
 | `autocompleteMaxVisible` | autocomplete dropdown size (kmet constant) |
 | `showHardwareCursor` | hardware cursor for IME support |
 | `tuiMode`, `fullscreenExitOutput`, `fullscreenScrollbar` | fullscreen TUI mode |
-| `httpProxy` | proxy URL applied as HTTP(S)_PROXY (kmet reads proxy env vars only — `app/proxy.clj`) |
+| `httpProxy` | proxy URL applied as HTTP(S)_PROXY (kmet reads proxy env vars only — `ai/proxy.clj`) |
 | `warnings.anthropicExtraUsage` | Anthropic subscription extra-usage warning |
 | `branchSummary.reserveTokens`, `branchSummary.skipPrompt` | branch summarization config |
 | `retry.provider.timeoutMs` / `maxRetries` / `maxRetryDelayMs` | provider/SDK retry tuning |
