@@ -2926,9 +2926,17 @@
                                (agent/get-thinking-level @(:agent-state cs)))
          :send-user-message (fn [text & [{:keys [deliver-as]}]]
                               (let [ag @(:agent-state cs)]
-                                (if (= :steer deliver-as)
-                                  (agent/steer! ag text)
-                                  (agent/follow-up! ag text))))
+                                (if (= :idle (agent/get-status ag))
+                                  ;; pi: sendUserMessage always triggers a
+                                  ;; turn when idle
+                                  (start-agent-run! cs text)
+                                  (if (= :steer deliver-as)
+                                    (agent/steer! ag text)
+                                    (agent/follow-up! ag text)))
+                                (update-pending-messages! cs)
+                                (update-footer! cs)
+                                (tui/tui-request-render (:tui cs))
+                                nil))
          :get-active-tools (fn []
                              (agent/get-active-tools @(:agent-state cs)))
          :set-active-tools (fn [names]

@@ -100,14 +100,20 @@
 
           (str/starts-with? arg "--")
           ;; Unknown --flag: collected for extension registerFlag/getFlag
-          ;; (pi: registerFlag + getFlag). A following non-dash arg is the
-          ;; value; a bare --flag is boolean true.
-          (let [name (subs arg 2)]
-            (if (and (seq rest-args)
-                     (not (str/starts-with? (first rest-args) "-")))
-              (recur (rest rest-args)
-                     (assoc-in opts [:ext-flags name] (first rest-args)))
-              (recur rest-args (assoc-in opts [:ext-flags name] true))))
+          ;; (pi: registerFlag + getFlag). Supports --flag=value, a
+          ;; following non-dash arg as the value, or a bare --flag as
+          ;; boolean true.
+          (let [eq (str/index-of arg "=")
+                [name value] (if eq
+                               [(subs arg 2 eq) (subs arg (inc eq))]
+                               [(subs arg 2) nil])]
+            (if (some? value)
+              (recur rest-args (assoc-in opts [:ext-flags name] value))
+              (if (and (seq rest-args)
+                       (not (str/starts-with? (first rest-args) "-")))
+                (recur (rest rest-args)
+                       (assoc-in opts [:ext-flags name] (first rest-args)))
+                (recur rest-args (assoc-in opts [:ext-flags name] true)))))
 
           :else
           (recur rest-args (update opts :messages conj arg)))))))

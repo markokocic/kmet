@@ -730,7 +730,10 @@
     (when (contains? @flags name)
       (let [raw (get @cli-flags name)]
         (case type
-          :boolean (boolean (if (nil? raw) default raw))
+          :boolean (let [v (if (nil? raw) default raw)]
+                     (if (string? v)
+                       (not (contains? #{"false" "0" ""} v))
+                       (boolean v)))
           :string (or (when (string? raw) raw) default)
           raw)))))
 

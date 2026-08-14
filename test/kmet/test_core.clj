@@ -67,4 +67,5 @@
   (let [opts (core/parse-args ["hello" "--ext-string" "v1" "--ext-bool"])]
     (t/is (= ["hello"] (:messages opts)))
     (t/is (= "v1" (get-in opts [:ext-flags "ext-string"])))
-    (t/is (true? (get-in opts [:ext-flags "ext-bool"])))))
+    (t/is (true? (get-in opts [:ext-flags "ext-bool"])))
+    (t/is (= "eq" (get-in (core/parse-args ["--ext-eq=eq"]) [:ext-flags "ext-eq"])))))
