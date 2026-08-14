@@ -618,7 +618,8 @@
 
 (def ^:private ac-commands
   [{:name "model" :description "Switch model" :argument-hint "<provider:model>"}
-   {:name "theme" :description "Switch theme"}
+   {:name "theme" :description "Switch theme"
+    :get-argument-completions (fn [_] [{:value "dark"} {:value "light"}])}
    {:name "new" :description "Start a new session"}])
 
 (defn- make-ac-editor
@@ -965,3 +966,13 @@
     (t/is (= 2 @(:padding-x e)))
     (core/editor-insert-text-at-cursor! e "y")
     (t/is (= "xy" (core/editor-get-text e)))))
+
+(t/deftest test-autocomplete-enter-slash-args-submits-as-is
+  (let [e (make-ac-editor)
+        submitted (atom nil)]
+    (core/editor-set-on-submit! e #(reset! submitted %))
+    (doseq [c "/theme light"] (core/handle-input e (str c)))
+    (t/is (some? @(:autocomplete-list e)) "arg-completion dropdown open")
+    (core/handle-input e K-ENTER)
+    (t/is (= "/theme light" @submitted) "typed args survive, uncorrupted")
+    (t/is (nil? @(:autocomplete-list e)) "dropdown closed after submit")))

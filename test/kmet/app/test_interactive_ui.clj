@@ -11,6 +11,7 @@
             [kmet.modes.interactive :as inter]
             [kmet.app.commands :as commands]
             [kmet.app.keybindings :as app-kb]
+            [kmet.app.theme-controller :as theme-ctrl]
             [kmet.app.ui :as ui]
             [kmet.app.ui.model-selector :as model-selector]
             [kmet.ai.models :as m]
@@ -475,3 +476,29 @@
           (protocols/handle-input sl "\u001b[C") ;; right — 2000 -> 4000
           (t/is (= 4000 @(:base-delay-ms ag)) "base delay applies live")
           (t/is (= [[:retry :base-delay-ms] 4000] @saved) "base delay persisted"))))))
+
+;; ─── /theme command ───────────────────────────────────────────────────────
+
+(deftest test-theme-command
+  (testing "/theme takes the whole argument string (a string is a seq of
+            chars — (first args) would yield the first character)"
+    (install-app-keybindings!)
+    (commands/clear-commands!)
+    (m/load-catalogs!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [saved (atom nil)
+          msg (atom nil)
+          tc-ctrl (atom nil)]
+      (with-redefs [tui/tui-on-terminal-color-scheme-change (fn [_ _] nil)
+                    tui/tui-invalidate (fn [_] nil)
+                    ui/chat-history-add-message! (fn [_ m] (reset! msg m))
+                    cfg/save-setting! (fn [path value] (reset! saved [path value]))]
+        (reset! tc-ctrl (theme-ctrl/make-theme-controller {:theme "dark"} nil nil (fn [])))
+        (let [cs {:config cfg/default-config
+                  :chat-history nil
+                  :theme-controller @tc-ctrl}]
+          (testing "with a full theme name"
+            ((:handler (commands/find-command "theme")) cs "light")
+            (t/is (= "light" (get-in @saved [1])) "theme persisted as the full name")
+            (t/is (= "light" (theme-ctrl/get-active-theme-name @tc-ctrl))
+                  "theme switched to the full name")))))))

@@ -894,10 +894,13 @@
       (mapv (fn [t] {:value t :label t})
             (sort (keys (th/get-all-themes)))))
     :handler (fn [cs args]
-               (let [tc (:theme-controller cs)]
-                 (if (seq args)
-                   (let [name (first args)
-                         result (theme-ctrl/set-theme-name! tc name)]
+               (let [tc (:theme-controller cs)
+                     ;; args is the trimmed argument string — take it whole
+                     ;; (a string is a seq of chars; (first args) would yield
+                     ;; the first character)
+                     name (str/trim (or args ""))]
+                 (if (seq name)
+                   (let [result (theme-ctrl/set-theme-name! tc name)]
                      (when (:success result)
                        (cfg/save-setting! [:theme] name))
                      (ui/chat-history-add-message! (:chat-history cs)

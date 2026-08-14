@@ -1230,11 +1230,28 @@
               (do (apply-selected-completion! this) nil)
 
               (and (keys/matches-key? data "enter") (not @disable-submit))
-              (do (apply-selected-completion! this)
-                  (when (clojure.string/starts-with? prefix "/")
-                    (when-let [cb @on-submit]
-                      (cb (clojure.string/join "\n" (:lines @(:state-atom this))))))
-                  nil)))
+              (let [line (clojure.string/join "\n" (:lines @(:state-atom this)))
+                    arg-completion? (and (str/starts-with? line "/")
+                                         (not (str/starts-with? prefix "/")))]
+                (cond
+                  ;; slash command, command-name completion: apply, then submit
+                  (str/starts-with? prefix "/")
+                  (apply-selected-completion! this)
+
+                  ;; slash command, argument completion: the typed args win —
+                  ;; applying the completion over them corrupts the command
+                  ;; (e.g. "/theme light" + Enter). Drop the dropdown and
+                  ;; submit as-is (Tab still completes the command name).
+                  arg-completion?
+                  (cancel-autocomplete this)
+
+                  ;; non-slash line (file/@ completion): apply the selection
+                  :else
+                  (apply-selected-completion! this))
+                (when (or (str/starts-with? prefix "/") arg-completion?)
+                  (when-let [cb @on-submit]
+                    (cb (clojure.string/join "\n" (:lines @(:state-atom this))))))
+                nil)))
 
           ;; App actions (pi: CustomEditor.handleInput) — registered action
           ;; handlers take precedence over editor-internal key handling. Paste
