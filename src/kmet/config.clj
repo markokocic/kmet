@@ -377,11 +377,17 @@
    explicit paths load simultaneously): the global default, the project-local
    default (project-rel, resolved against cwd), and the merged config value
    (an explicit override), deduped by canonical path. Order = pi load order
-   (global first), so global wins name collisions."
+   (global first), so global wins name collisions.
+
+   Nil entries are dropped: an unset or explicitly-disabled config value must
+   not fall through to the cwd — expand-path of nil is the empty string,
+   which canonicalizes to the project root and would make a partial config
+   recursively scan the whole project as a resource dir."
   [config resource-key project-rel]
   (->> [(get default-config resource-key)
         project-rel
         (get config resource-key)]
+       (remove nil?)
        (map expand-path)
        (map #(str (fs/canonicalize (io/file %))))
        distinct

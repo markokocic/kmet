@@ -109,7 +109,7 @@
     (t/is (= 1 (count @(:entries session))))
     (t/is (string? @(:leaf-id session)))))
 
-(t/deftest ^:slow test-session-concurrent-appends
+(t/deftest test-session-concurrent-appends
   ;; Concurrent appends (a ! bash result on its future thread + a submitted
   ;; message on the agent thread) must not orphan sibling entries from the
   ;; branch — pi serializes all mutations through storage.enqueue; kmet locks

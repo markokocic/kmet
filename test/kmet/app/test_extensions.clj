@@ -98,11 +98,11 @@
           (t/is (some #(= "ext-1" (:id %)) (extensions/get-all-models))
                 "registered model appears in get-all")
           (t/is (= config (extensions/get-registered-provider-config :ext-prov)))
-          (t/testing "unregister drops the extension provider"
+          (testing "unregister drops the extension provider"
             ((:unregister-provider! (:models api)) :ext-prov)
             (t/is (not (some #(= "ext-1" (:id %)) (extensions/get-all-models))))
             (t/is (nil? (extensions/get-registered-provider-config :ext-prov)))))
-        (t/testing "broken config throws without touching stored state"
+        (testing "broken config throws without touching stored state"
           (t/is (thrown? Exception
                          ((:register-provider! (:models api)) :ext-prov
                                                               {:models [{:id "bad"}]})))
@@ -336,10 +336,12 @@
 ;; ─── Session facades through the api ──────────────────────────────────────
 
 (t/deftest test-session-api-facades
-  (let [sess (session/create-session (str "target/test-ext-sess-" (System/currentTimeMillis)))]
+  (let [dir (str "target/test-ext-sess-" (System/currentTimeMillis))
+        sess (session/create-session dir)]
     (extensions/set-session! sess)
     (try
       (let [id (extensions/append-custom-entry! "st" {:n 1})]
         (t/is (some? id)))
       (finally
-        (extensions/set-session! nil)))))
+        (extensions/set-session! nil)
+        (fs/delete-tree dir)))))

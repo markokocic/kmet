@@ -2,6 +2,7 @@
   (:require [clojure.test :as t]
             [clojure.string :as str]
             [clojure.java.io :as io]
+            [babashka.fs :as fs]
             [kmet.app.prompts :as prompts]))
 
 ;; ─── parse-command-args (pi: parseCommandArgs) ─────────────────────────────
@@ -88,65 +89,71 @@
 (t/deftest test-load-prompt-templates-from-dir
   (let [tmp-dir (str "target/test-prompts-" (System/currentTimeMillis))
         base (fn [rel] (str tmp-dir "/" rel))]
-    (io/make-parents (base "review.md"))
-    (spit (base "review.md")
-          "---\ndescription: Review staged git changes\n---\nReview the staged changes.")
-    (spit (base "comp.md")
-          "---\ndescription: Create a component\nargument-hint: \"<name>\"\n---\nCreate component $1")
-    (spit (base "emptyhint.md")
-          "---\ndescription: Empty hint\nargument-hint: \"\"\n---\nEmpty hint body")
-    (spit (base "notes.txt") "not a template")
-    ;; non-recursive: subdir templates are not discovered
-    (io/make-parents (base "sub/nested.md"))
-    (spit (base "sub/nested.md") "---\ndescription: Nested\n---\nNested body")
-    (let [loaded (prompts/load-prompt-templates-from-dir tmp-dir)]
-      (t/is (= ["comp" "emptyhint" "review"] (mapv :name (sort-by :name loaded))))
-      (let [review (prompts/get-prompt-template "review")
-            comp (prompts/get-prompt-template "comp")]
-        (t/is (= "Review staged git changes" (:description review)))
-        (t/is (= "Review the staged changes." (:content review)))
-        (t/is (= "Create a component" (:description comp)))
-        (t/is (= "<name>" (:argument-hint comp)))
-        (t/is (nil? (prompts/get-prompt-template "nested")))
-        (t/is (nil? (prompts/get-prompt-template "notes")))))
-    (t/testing "empty argument-hint is dropped (pi falsy check)"
-      (t/is (nil? (:argument-hint (prompts/get-prompt-template "emptyhint")))))))
+    (try
+      (io/make-parents (base "review.md"))
+      (spit (base "review.md")
+            "---\ndescription: Review staged git changes\n---\nReview the staged changes.")
+      (spit (base "comp.md")
+            "---\ndescription: Create a component\nargument-hint: \"<name>\"\n---\nCreate component $1")
+      (spit (base "emptyhint.md")
+            "---\ndescription: Empty hint\nargument-hint: \"\"\n---\nEmpty hint body")
+      (spit (base "notes.txt") "not a template")
+      ;; non-recursive: subdir templates are not discovered
+      (io/make-parents (base "sub/nested.md"))
+      (spit (base "sub/nested.md") "---\ndescription: Nested\n---\nNested body")
+      (let [loaded (prompts/load-prompt-templates-from-dir tmp-dir)]
+        (t/is (= ["comp" "emptyhint" "review"] (mapv :name (sort-by :name loaded))))
+        (let [review (prompts/get-prompt-template "review")
+              comp (prompts/get-prompt-template "comp")]
+          (t/is (= "Review staged git changes" (:description review)))
+          (t/is (= "Review the staged changes." (:content review)))
+          (t/is (= "Create a component" (:description comp)))
+          (t/is (= "<name>" (:argument-hint comp)))
+          (t/is (nil? (prompts/get-prompt-template "nested")))
+          (t/is (nil? (prompts/get-prompt-template "notes")))))
+      (t/testing "empty argument-hint is dropped (pi falsy check)"
+        (t/is (nil? (:argument-hint (prompts/get-prompt-template "emptyhint")))))
+      (finally (fs/delete-tree tmp-dir)))))
 
 (t/deftest test-load-prompt-templates-extra-cases
   (let [tmp-dir (str "target/test-prompts-x-" (System/currentTimeMillis))
         base (fn [rel] (str tmp-dir "/" rel))]
-    (io/make-parents (base ".hidden.md"))
-    (spit (base ".hidden.md") "---\ndescription: Hidden file template\n---\nHidden body")
-    (io/make-parents (base "crlf.md"))
-    (spit (base "crlf.md") "---\r\ndescription: CRLF template\r\n---\r\nBody line one.\r\n")
-    (io/make-parents (base "nofm.md"))
-    (spit (base "nofm.md") "First line without frontmatter.\nSecond line.")
-    (io/make-parents (base "dotted.name.md"))
-    (spit (base "dotted.name.md") "---\ndescription: Dotted\n---\nDotted")
-    (let [loaded (prompts/load-prompt-templates-from-dir tmp-dir)]
-      (t/is (= [".hidden" "crlf" "dotted.name" "nofm"] (mapv :name (sort-by :name loaded))))
-      (t/testing "hidden .md files load (pi has no hidden check in prompts)"
-        (t/is (= "Hidden file template" (:description (prompts/get-prompt-template ".hidden")))))
-      (t/testing "CRLF frontmatter and body are normalized"
-        (t/is (= "CRLF template" (:description (prompts/get-prompt-template "crlf"))))
-        (t/is (= "Body line one." (:content (prompts/get-prompt-template "crlf")))))
-      (t/testing "no frontmatter: description falls back to first body line"
-        (t/is (= "First line without frontmatter." (:description (prompts/get-prompt-template "nofm")))))
-      (t/testing "dotted filename becomes the template name"
-        (t/is (= "Dotted" (:description (prompts/get-prompt-template "dotted.name"))))))))
+    (try
+      (io/make-parents (base ".hidden.md"))
+      (spit (base ".hidden.md") "---\ndescription: Hidden file template\n---\nHidden body")
+      (io/make-parents (base "crlf.md"))
+      (spit (base "crlf.md") "---\r\ndescription: CRLF template\r\n---\r\nBody line one.\r\n")
+      (io/make-parents (base "nofm.md"))
+      (spit (base "nofm.md") "First line without frontmatter.\nSecond line.")
+      (io/make-parents (base "dotted.name.md"))
+      (spit (base "dotted.name.md") "---\ndescription: Dotted\n---\nDotted")
+      (let [loaded (prompts/load-prompt-templates-from-dir tmp-dir)]
+        (t/is (= [".hidden" "crlf" "dotted.name" "nofm"] (mapv :name (sort-by :name loaded))))
+        (t/testing "hidden .md files load (pi has no hidden check in prompts)"
+          (t/is (= "Hidden file template" (:description (prompts/get-prompt-template ".hidden")))))
+        (t/testing "CRLF frontmatter and body are normalized"
+          (t/is (= "CRLF template" (:description (prompts/get-prompt-template "crlf"))))
+          (t/is (= "Body line one." (:content (prompts/get-prompt-template "crlf")))))
+        (t/testing "no frontmatter: description falls back to first body line"
+          (t/is (= "First line without frontmatter." (:description (prompts/get-prompt-template "nofm")))))
+        (t/testing "dotted filename becomes the template name"
+          (t/is (= "Dotted" (:description (prompts/get-prompt-template "dotted.name"))))))
+      (finally (fs/delete-tree tmp-dir)))))
 
 (t/deftest test-load-prompt-templates-desc-fallback
   (t/testing "description falls back to the first non-empty body line"
     (let [tmp-dir (str "target/test-prompts-desc-" (System/currentTimeMillis))
           long-line (str/join (repeat 80 "x"))]
-      (io/make-parents (str tmp-dir "/plain.md"))
-      (spit (str tmp-dir "/plain.md") "\n\nFirst meaningful line.\nSecond line.")
-      (io/make-parents (str tmp-dir "/long.md"))
-      (spit (str tmp-dir "/long.md") long-line)
-      (prompts/load-prompt-templates-from-dir tmp-dir)
-      (t/is (= "First meaningful line." (:description (prompts/get-prompt-template "plain"))))
-      (t/is (= (str (subs long-line 0 60) "...")
-               (:description (prompts/get-prompt-template "long")))))))
+      (try
+        (io/make-parents (str tmp-dir "/plain.md"))
+        (spit (str tmp-dir "/plain.md") "\n\nFirst meaningful line.\nSecond line.")
+        (io/make-parents (str tmp-dir "/long.md"))
+        (spit (str tmp-dir "/long.md") long-line)
+        (prompts/load-prompt-templates-from-dir tmp-dir)
+        (t/is (= "First meaningful line." (:description (prompts/get-prompt-template "plain"))))
+        (t/is (= (str (subs long-line 0 60) "...")
+                 (:description (prompts/get-prompt-template "long"))))
+        (finally (fs/delete-tree tmp-dir))))))
 
 (t/deftest test-load-prompt-templates-from-dir-non-existent
   (t/is (= [] (prompts/load-prompt-templates-from-dir "/nonexistent/prompts"))))
@@ -163,9 +170,11 @@
 (t/deftest test-clear-prompt-templates
   (let [tmp-dir (str "target/test-prompts-clear-" (System/currentTimeMillis))
         f (str tmp-dir "/clear-me.md")]
-    (io/make-parents f)
-    (spit f "---\ndescription: Template to clear.\n---\nBody.")
-    (prompts/load-prompt-templates-from-dir tmp-dir)
-    (t/is (some? (prompts/get-prompt-template "clear-me")))
-    (prompts/clear-prompt-templates!)
-    (t/is (nil? (prompts/get-prompt-template "clear-me")))))
+    (try
+      (io/make-parents f)
+      (spit f "---\ndescription: Template to clear.\n---\nBody.")
+      (prompts/load-prompt-templates-from-dir tmp-dir)
+      (t/is (some? (prompts/get-prompt-template "clear-me")))
+      (prompts/clear-prompt-templates!)
+      (t/is (nil? (prompts/get-prompt-template "clear-me")))
+      (finally (fs/delete-tree tmp-dir)))))
