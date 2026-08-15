@@ -1,4 +1,9 @@
 {:exclude-files "test/fixtures/.*"
+ ;; extensions/*.clj declare kmet.extensions.* namespaces that can never match
+ ;; their extensions/... paths (clj-kondo derives the expected ns from the file
+ ;; path), so the namespace-name-mismatch linter is off repo-wide; all other
+ ;; linters still apply to extension code, which is part of `bb lint`.
+ :linters {:namespace-name-mismatch {:level :off}}
  :hooks {:analyze-call {kmet.tui.macros/defcomponent hooks.kmet-macros/defcomponent
                         kmet.tui.macros/defsetter    hooks.kmet-macros/defsetter
                         kmet.tui.macros/defgetter    hooks.kmet-macros/defgetter}}}

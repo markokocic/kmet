@@ -1,6 +1,7 @@
 (ns kmet.test-changed
   "Tests for the changed-file/require-graph helper behind `bb *-changed`."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [kmet.changed :as changed]))
 
 (deftest path->ns-mapping
@@ -9,7 +10,9 @@
     (is (= 'kmet.app.ui.model-selector (changed/path->ns "src/kmet/app/ui/model_selector.clj")))
     (is (= 'kmet.ai.api.openai-completions (changed/path->ns "src/kmet/ai/api/openai_completions.clj"))))
   (testing "test files map to test namespaces"
-    (is (= 'kmet.app.test-loop (changed/path->ns "test/kmet/app/test_loop.clj")))))
+    (is (= 'kmet.app.test-loop (changed/path->ns "test/kmet/app/test_loop.clj"))))
+  (testing "extension files map to path-derived namespaces"
+    (is (= 'extensions.tools (changed/path->ns "extensions/tools.clj")))))
 
 (deftest ns-requires-extraction
   (testing "vector entries"
@@ -39,4 +42,8 @@
       (is (contains? nss 'kmet.tui.components.test-text))))
   (testing "unrelated namespaces stay out"
     (let [nss (set (changed/affected-test-nss-by '[kmet.ai.models]))]
-      (is (not (contains? nss 'kmet.tui.components.test-text))))))
+      (is (not (contains? nss 'kmet.tui.components.test-text)))))
+  (testing "extension namespaces never enter root test selection (their tests run from inside the extension directory)"
+    (let [nss (set (changed/affected-test-nss-by '[kmet.extension extensions.tools]))]
+      (is (empty? (filter #(str/starts-with? (str %) "extensions.") nss)))
+      (is (contains? nss 'kmet.app.test-extensions)))))

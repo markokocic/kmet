@@ -27,6 +27,10 @@
   files next time (over-inclusive, never under); green full `bb test`/`bb test-ext` runs
   (no filters) update the mtime baseline via `kmet.runner` → `kmet.changed/mark-validated!`,
   which is a no-op with git.
+  `extensions/` is covered too: its .clj files (source **and any tests they carry**) are part
+  of `bb lint`/`bb format`/`bb format-check` and the changed-file scan. Extension tests are
+  separate projects — they run from inside their directory (own deps), never from the root
+  runner; `bb test-changed` prints a hint instead of silently skipping them.
 - **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`;
   tooling deps (`cljfmt`) in `bb.edn` `:deps`; JLine **4.3.1** bundled with Babashka (see
   babashka `deps.edn`: `org.jline/jline-terminal`, `org.jline/jline-reader`).
@@ -281,7 +285,8 @@ src/kmet/
 ### Final validation
 `bb lint` and `bb format-check` are slow — don't run them during iterative
 development. Run the full gate once before wrapping up:
-`bb lint` + `bb format-check` + `bb test` + `bb test-ext`.
+`bb lint` + `bb format-check` + `bb test` + `bb test-ext` (plus `bb test` inside any
+extension directory that carries its own tests).
 `bb lint` must pass with 0 errors, warnings, and info findings.
 
 ## Platform

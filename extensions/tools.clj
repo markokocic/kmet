@@ -76,7 +76,7 @@
                       {:id (:name t)
                        :label (:name t)
                        :value (if (contains? (:enabled-tools @state)
-                                              (:name t))
+                                             (:name t))
                                 "enabled" "disabled")
                        :values ["enabled" "disabled"]})
                     (:all-tools @state))
@@ -120,9 +120,9 @@
   [api]
   (let [state (atom {:all-tools [] :enabled-tools #{}})]
     (ext/register-command! api
-      {:name "tools"
-       :description "Enable/disable tools interactively"
-       :handler (fn [ctx _args] (open-selector! api state ctx))})
+                           {:name "tools"
+                            :description "Enable/disable tools interactively"
+                            :handler (fn [ctx _args] (open-selector! api state ctx))})
     ;; handlers receive (event ctx) — pi parity (pi: on('session_start',
     ;; (_event, ctx) => ...)); ctx is unused here but required arity
     (ext/on-event api :session-start

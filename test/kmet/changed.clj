@@ -5,6 +5,13 @@
    ↔ src/kmet/x/y.clj), so a source change must also re-run the tests that
    transitively require it.
 
+   extensions/ is first-class: its .clj files (source and any tests they
+   carry) are part of the lint/format gates and the changed-file scan, and
+   join the require graph so contract changes pull them into the lint
+   closure. Extension tests are separate projects though — they run from
+   inside their own directory against their own deps, never via the root
+   runner — so extension namespaces are excluded from root test selection.
+
    Change detection: git diff vs HEAD + untracked files when the project is a
    git repo; otherwise a mtime comparison against a baseline file written by
    the test gates (`bb test` / `bb test-ext`, when green and unfiltered)
@@ -38,13 +45,20 @@
        distinct
        sort))
 
+(defn- dir-clj-files
+  "Every .clj file under DIR — top level and nested. java.nio's glob
+   `**/*.clj` requires at least one directory level, so top-level files
+   (e.g. extensions/tools.clj) need the `*.clj` pattern too."
+  [dir]
+  (concat (fs/glob dir "*.clj") (fs/glob dir "**/*.clj")))
+
 (defn- mtime-changed-files
-  "src/test .clj files modified after the baseline timestamp (mtime fallback
-   without git; a missing baseline means everything changed)."
+  "src/test/extensions .clj files modified after the baseline timestamp
+   (mtime fallback without git; a missing baseline means everything changed)."
   []
   (let [base (try (Long/parseLong (str/trim (slurp baseline-file)))
                   (catch Exception _ 0))]
-    (->> (concat (fs/glob "src" "**/*.clj") (fs/glob "test" "**/*.clj"))
+    (->> (mapcat dir-clj-files ["src" "test" "extensions"])
          (filter #(> (.toMillis (fs/last-modified-time %)) base))
          (map str)
          sort)))
@@ -58,9 +72,9 @@
     (mtime-changed-files)))
 
 (defn changed-clj-files
-  "Changed .clj files under src/ and test/."
+  "Changed .clj files under src/, test/ and extensions/."
   []
-  (filter #(re-matches #"(?:src|test)/.*\.clj" %) (changed-files)))
+  (filter #(re-matches #"(?:src|test|extensions)/.*\.clj" %) (changed-files)))
 
 (defn mark-validated!
   "Record 'all gates green as of now' for the mtime fallback. No-op with git."
@@ -94,12 +108,14 @@
 
 (defn ns-requires
   "The kmet.* namespace symbols NS-FORM requires. Handles vector entries,
-   prefix-list entries (`(kmet.libs [a :as x] b)`) and bare symbols."
+   prefix-list entries (`(kmet.libs [a :as x] b)`) and bare symbols.
+   Returns #{} for a valid ns form without a :require clause (the namespace
+   still joins the graph), nil for non-ns forms."
   [ns-form]
   (when (and (seq? ns-form) (= 'ns (first ns-form)))
     (let [clause (some #(when (and (seq? %) (= :require (first %))) (rest %))
                        ns-form)]
-      (when clause
+      (if clause
         (letfn [(libs [form prefix]
                   (cond
                     (vector? form) (when (symbol? (first form))
@@ -110,11 +126,14 @@
           (->> (mapcat #(libs % nil) clause)
                (filter #(str/starts-with? (str %) "kmet."))
                distinct
-               set))))))
+               set))
+        #{}))))
 
 (defn- scan-graph
   "The require graph (ns → set of required kmet.* nss) and ns → file path,
-   from every src/test .clj file."
+   from every src/test/extensions .clj file. Extension namespaces join the
+   graph so changes to the extension contract (kmet.extension, kmet.tui.*,
+   kmet.libs.*) pull dependent extension files into the lint closure."
   []
   (reduce (fn [acc f]
             (let [path (str f)
@@ -127,7 +146,7 @@
                     (update :paths assoc ns-sym path))
                 acc)))
           {:graph {} :paths {}}
-          (concat (fs/glob "src" "**/*.clj") (fs/glob "test" "**/*.clj"))))
+          (mapcat dir-clj-files ["src" "test" "extensions"])))
 
 (defn- reverse-graph
   "ns → set of namespaces that require it."
@@ -152,12 +171,21 @@
 
 (defn affected-test-nss-by
   "Test namespaces affected by CHANGED-NSS: the changed ones plus every test
-   namespace that transitively requires them."
+   namespace that transitively requires them. Extension namespaces never
+   enter the selection — their tests are separate projects (own deps and
+   classpath) that run from inside the extension directory, so the root
+   runner must not try to load them."
   [changed-nss]
   (let [{:keys [graph paths]} (scan-graph)
         rev (reverse-graph graph)
-        roots (filter graph changed-nss)
-        tests (set (filter test-ns? (keys paths)))]
+        root? (fn [ns-sym]
+                (and (graph ns-sym)
+                     (not (str/starts-with? (paths ns-sym) "extensions/"))))
+        roots (filter root? changed-nss)
+        tests (set (filter (fn [ns-sym]
+                             (and (test-ns? ns-sym)
+                                  (not (str/starts-with? (paths ns-sym) "extensions/"))))
+                           (keys paths)))]
     (->> (closure roots rev) (filter tests) sort)))
 
 (defn affected-test-nss
@@ -178,8 +206,16 @@
          sort)))
 
 (defn all-clj-files
-  "Every src/test .clj file (full lint when clj-kondo config changed)."
+  "Every src/test/extensions .clj file (full lint when clj-kondo config
+   changed)."
   []
-  (->> (concat (fs/glob "src" "**/*.clj") (fs/glob "test" "**/*.clj"))
+  (->> (mapcat dir-clj-files ["src" "test" "extensions"])
        (map str)
        sort))
+
+(defn extension-changed-files
+  "Changed .clj files under extensions/. Their tests run from inside the
+   extension directory, never from the root runner — the `bb *-changed`
+   test tasks print a hint instead of silently skipping them."
+  []
+  (filter #(str/starts-with? % "extensions/") (changed-clj-files)))

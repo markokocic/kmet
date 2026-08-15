@@ -40,6 +40,13 @@ to pick it up.
   dependencies, and their own tests (run them from inside the directory,
   e.g. `bb test` against the extension's own deps).
 
+All extension files — source **and any tests they carry** — are covered by
+the repo gates: `bb lint` / `bb format` / `bb format-check` lint and format
+`extensions/`, and the `bb *-changed` dev loop tracks extension files
+(extension namespaces join the require graph for linting, but extension
+tests are never selected by the root `bb test` runner — they run from
+inside the extension directory).
+
 ## Shipped extensions
 
 | Extension | Description |
