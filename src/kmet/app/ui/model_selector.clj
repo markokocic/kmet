@@ -29,18 +29,20 @@
   (str (name provider) ":" model))
 
 (defn sync-footer-model!
-  "Push the agent's current model/provider/thinking into the footer data
-   provider and re-render (the fdp atoms are set once at startup; /model,
+  "Push the agent's current model/provider/thinking/reasoning into the footer
+   data provider and re-render (the fdp atoms are set once at startup; /model,
    the selector, and cycling must refresh them). The context window follows
    the resolved Model record, falling back to the settings value."
   [cs]
   (let [ag @(:agent-state cs)
-        fdp (:footer-provider cs)]
+        fdp (:footer-provider cs)
+        m (models/get-model @(:provider ag) @(:model ag))]
     (fdp/fdp-set-model! fdp @(:model ag))
     (fdp/fdp-set-provider! fdp @(:provider ag))
     (fdp/fdp-set-thinking! fdp @(:thinking ag))
+    (fdp/fdp-set-reasoning! fdp (boolean (:reasoning m)))
     (fdp/fdp-set-context-window!
-     fdp (or (:context-window (models/get-model @(:provider ag) @(:model ag)))
+     fdp (or (:context-window m)
              (:context-window (:config cs))))
     (protocols/invalidate (:footer-comp cs))
     (tui/tui-request-render (:tui cs))

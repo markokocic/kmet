@@ -7,6 +7,7 @@
             [kmet.ai.auth :as auth]
             [kmet.ai.aws-sigv4 :as aws-sigv4]
             [kmet.ai.google-adc :as google-adc]
+            [kmet.ai.usage :as usage]
             [kmet.app.tools.core :as tools]
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
@@ -1796,12 +1797,23 @@
                                     "compaction summaries disable prompt caching (pi)")
                               (when-let [on-text (:on-text opts)]
                                 (on-text "summary of the old conversation"))
+                              (when-let [on-usage (:on-usage opts)]
+                                (on-usage {:prompt_tokens 100 :completion_tokens 10
+                                           :prompt_tokens_details {:cached_tokens 20}
+                                           :cost {:total 0.001}}))
                               (when-let [on-done (:on-done opts)]
                                 (on-done :stop))))
                         :done))]
         (binding [*err* (java.io.StringWriter.)]
           @(loop/run-agent-turn agent {:message "hi" :on-error (fn [_])})))
       (t/is (= 2 @main-call-count) "overflow triggers one compaction then a retry")
+      (t/is (some #(and (= :compaction (:role %))
+                        (= {:input 80 :output 10 :cache-read 20 :cache-write 0 :cost 0.001}
+                           (usage/entry-usage (:usage %))))
+                  @(:entries sess))
+            "summarization usage is recorded on the compaction entry (pi: CompactionEntry.usage)")
+      (t/is (= 0.001 (:cost (session/usage-totals sess)))
+            "compaction cost lands in the session totals (footer $)")
       (t/is (some #(= :compaction (:role %)) @(:entries sess))
             "overflow appends a compaction entry (append-only)")
       (t/is (< (count (session/build-context sess)) 12)

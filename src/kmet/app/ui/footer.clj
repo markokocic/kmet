@@ -2,7 +2,11 @@
   "FooterComponent — Pi's two-line footer:
      line 1: accent cursive К mark + cwd (home-substituted) + git branch, dim
      line 2: usage stats (↑in ↓out R W CH%) + context % colored by usage,
-             right-aligned (provider) model • thinking
+             right-aligned provider/model with a pi-aligned thinking suffix:
+             reasoning models show ' • thinking off' when off and ' •
+             <level>' otherwise, non-reasoning models show nothing; the
+             model line wraps to its own right-aligned line when the stats
+             line is too narrow
      line 3 (optional): extension statuses, sorted by key
    Data comes from the FooterDataProvider (pi: FooterComponent + provider).
    No separator line — the two content lines are the footer (pi parity)."
@@ -84,30 +88,38 @@
             stats-parts (cond-> stats-parts
                           (pos? (:cost usage)) (conj (str "$" (format "%.3f" (:cost usage)))))
             ;; ── Context % (pi: contextPercentDisplay, colored by usage) ──
-            percent (when (and window (pos? window)) (* 100.0 (/ tokens window)))
+            percent (when (and window (pos? window) tokens)
+                      (* 100.0 (/ tokens window)))
             auto-indicator (if auto " (auto)" "")
             window-display (when window (format-tokens window))
             ctx-display (if percent
                           (str (format "%.1f" percent) "%/" window-display auto-indicator)
                           (if window
                             (str "?/" window-display auto-indicator)
-                            (str (format-tokens tokens) " tokens")))
+                            (if tokens
+                              (str (format-tokens tokens) " tokens")
+                              "? tokens")))
             ctx-colored (cond
                           (and percent (> percent 90)) (theme/fg thm :error ctx-display)
                           (and percent (> percent 70)) (theme/fg thm :warning ctx-display)
                           :else ctx-display)
             stats-left (str/join " " (conj stats-parts ctx-colored))
-            ;; ── Right side (pi: (provider) model • thinking) ─────────────
+            ;; ── Right side (kmet: always provider/model, pi: (provider)
+            ;;    model only with multiple providers) ──────────────────────
             model-name (or (fdp/fdp-get-model provider) "no-model")
-            thinking-level (or (fdp/fdp-get-thinking provider) :off)
-            right-side (if (= thinking-level :off)
-                         model-name
-                         (str model-name " • thinking " (name thinking-level)))
             provider-name (fdp/fdp-get-provider provider)
-            right-side (if (and (> (fdp/fdp-get-provider-count provider) 1)
-                                provider-name)
-                         (str "(" (name provider-name) ") " right-side)
-                         right-side)
+            model-display (if (some? provider-name)
+                            (str (name provider-name) "/" model-name)
+                            model-name)
+            ;; ── Thinking suffix, pi format: reasoning models show the
+            ;;    level always — " • thinking off" when off, " • <level>"
+            ;;    otherwise; non-reasoning models show none ───────────────
+            thinking-level (or (fdp/fdp-get-thinking provider) :off)
+            right-side (if (fdp/fdp-get-reasoning provider)
+                         (if (= thinking-level :off)
+                           (str model-display " • thinking off")
+                           (str model-display " • " (name thinking-level)))
+                         model-display)
             ;; ── Assemble line 2 (pi: statsLine right-alignment) ──────────
             stats-left-w0 (u/visible-width stats-left)
             [stats-left stats-left-w] (if (> stats-left-w0 width)
@@ -121,14 +133,15 @@
                          (str stats-left
                               (apply str (repeat (- width stats-left-w right-w) \space))
                               right-side)
-                         (let [available (- width stats-left-w min-padding)]
-                           (if (pos? available)
-                             (let [truncated (u/truncate-to-width right-side available "")
-                                   tw (u/visible-width truncated)]
-                               (str stats-left
-                                    (apply str (repeat (max 0 (- width stats-left-w tw)) \space))
-                                    truncated))
-                             stats-left)))
+                         ;; Too narrow for stats + model: the model wraps to
+                         ;; its own line, right-aligned (pi truncates instead)
+                         stats-left)
+            model-line (when (> total-needed width)
+                         (let [r (if (> right-w width)
+                                   (u/truncate-to-width right-side width "...")
+                                   right-side)
+                               rw (u/visible-width r)]
+                           (str (apply str (repeat (- width rw) \space)) r)))
             ;; dim the parts independently — stats-left may contain colors
             ;; whose fg resets would clear an outer dim wrapper
             dim-left (theme/dim stats-left)
@@ -143,7 +156,9 @@
                         (theme/dim (str/join " " ext-statuses))
                         width (theme/dim "...")))]
         (into [pwd-line (str dim-left dim-remainder)]
-              (when ext-line [ext-line]))))))
+              (cond-> []
+                model-line (conj (theme/dim model-line))
+                ext-line (conj ext-line)))))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 

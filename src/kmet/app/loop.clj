@@ -868,10 +868,12 @@ Be precise and concise in your responses."}}]
 
 (defn- summarize!
   "LLM summarization of the pre-cut entries (pi: generateSummaryWithUsage).
-   Returns the summary text, or nil when no API key is available, the call
-   fails/times out/returns empty, or the run's cancel signal fired mid-call
-   (the signal watcher delivers nil so cancellation doesn't wait for the
-   stream to die)."
+   Returns {:summary str :usage usage-map} — usage is the summarization
+   call's cost-attached provider usage, recorded on the compaction entry so
+   the footer totals include it (pi: CompactionEntry.usage) — or nil when no
+   API key is available, the call fails/times out/returns empty, or the run's
+   cancel signal fired mid-call (the signal watcher delivers nil so
+   cancellation doesn't wait for the stream to die)."
   [agent prep & [custom-instructions]]
   (let [provider @(:provider agent)
         ep (resolve-endpoint agent)
@@ -881,6 +883,7 @@ Be precise and concise in your responses."}}]
     (when (or api-key (auth/configured? provider))
       (let [done (promise)
             text-buf (atom "")
+            usage-buf (atom nil)
             signal (:signal agent)
             msgs (compaction/summarization-messages
                   (:messages prep) (:previous-summary prep) custom-instructions)]
@@ -896,6 +899,7 @@ Be precise and concise in your responses."}}]
           :session-id (some-> (:session agent) :id)
           :cache-retention :none
           :on-text (fn [t] (swap! text-buf str t))
+          :on-usage (fn [u] (reset! usage-buf u))
           :on-done (fn [_] (deliver done @text-buf))
           :on-error (fn [_] (when-not (realized? done) (deliver done nil)))})
         ;; Cancel watch: abort the deref the moment the signal fires. The
@@ -906,14 +910,18 @@ Be precise and concise in your responses."}}]
         (when @signal (deliver done nil))
         (let [result (try (deref done 120000 :timeout)
                           (finally (remove-watch signal :kmet/summarize-cancel)))]
-          (when (and (string? result) (seq result)) result))))))
+          (when (and (string? result) (seq result))
+            {:summary result :usage @usage-buf}))))))
 
 (defn generate-branch-summary
   "LLM summary of abandoned branch entries for tree navigation (pi:
-   generateBranchSummary). Returns {:summary str} with the branch preamble
-   applied, {:aborted true} when the signal fired mid-call, or nil when no
-   API key is available or the call fails/times out/returns empty. SIGNAL
-   (optional, defaults to the agent's cancel signal) aborts the call."
+   generateBranchSummary). Returns {:summary str :usage usage-map} with the
+   branch preamble applied (usage = the summarization call's cost-attached
+   provider usage, recorded on the branch-summary entry so the footer totals
+   include it — pi: BranchSummaryEntry.usage), {:aborted true} when the
+   signal fired mid-call, or nil when no API key is available or the call
+   fails/times out/returns empty. SIGNAL (optional, defaults to the agent's
+   cancel signal) aborts the call."
   [agent entries & [custom-instructions signal]]
   (let [provider @(:provider agent)
         ep (resolve-endpoint agent)
@@ -923,6 +931,7 @@ Be precise and concise in your responses."}}]
     (when (or api-key (auth/configured? provider))
       (let [done (promise)
             text-buf (atom "")
+            usage-buf (atom nil)
             signal (or signal (:signal agent))
             msgs (compaction/branch-summary-messages
                   (vec (mapcat session/context-messages entries))
@@ -939,6 +948,7 @@ Be precise and concise in your responses."}}]
           :session-id (some-> (:session agent) :id)
           :cache-retention :none
           :on-text (fn [t] (swap! text-buf str t))
+          :on-usage (fn [u] (reset! usage-buf u))
           :on-done (fn [_] (deliver done @text-buf))
           :on-error (fn [_] (when-not (realized? done) (deliver done nil)))})
         (add-watch signal :kmet/branch-summarize-cancel
@@ -949,7 +959,8 @@ Be precise and concise in your responses."}}]
           (cond
             (and (nil? result) @signal) {:aborted true}
             (string? result) (when (seq result)
-                               {:summary (str compaction/branch-summary-preamble result)})
+                               {:summary (str compaction/branch-summary-preamble result)
+                                :usage @usage-buf})
             :else nil))))))
 
 (defn- sync-context-after-compaction!
@@ -1007,12 +1018,15 @@ Be precise and concise in your responses."}}]
                         prep (compaction/prepare entries (or (:keep-recent-tokens agent) 20000))]
                     (if (or (nil? prep) (empty? (:messages prep)))
                       false
-                      (if-let [summary (summarize! agent prep custom-instructions)]
+                      (if-let [summary-result (summarize! agent prep custom-instructions)]
                         (if @(:signal agent)
                           ;; cancelled during summarization — session unchanged
                           :aborted
-                          (do (session/compact-with-summary! sess summary (:first-kept-id prep)
-                                                             {:tokens-before (:tokens-before prep)})
+                          (do (session/compact-with-summary! sess (:summary summary-result)
+                                                             (:first-kept-id prep)
+                                                             (cond-> {:tokens-before (:tokens-before prep)}
+                                                               (:usage summary-result)
+                                                               (assoc :usage (:usage summary-result))))
                               (sync-context-after-compaction! agent)
                               (debug/log "compacted session with LLM summary")
                               true))

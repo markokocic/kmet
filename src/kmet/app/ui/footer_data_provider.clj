@@ -11,7 +11,7 @@
 
 (defrecord FooterDataProvider [cwd-atom git-branch-atom git-branch-resolved?-atom
                                session-atom provider-count-atom context-window-atom
-                               model-atom provider-atom thinking-atom])
+                               model-atom provider-atom thinking-atom reasoning-atom])
 
 (defn- resolve-git-branch
   "Resolve the current git branch via `git branch --show-current`; nil
@@ -31,8 +31,14 @@
      :cwd            — process cwd (default (System/getProperty \"user.dir\"))
      :session        — kmet.app.session Session record or nil
      :provider-count — number of configured providers (pi: availableProviderCount)
-     :context-window — model context window in tokens, or nil when unknown"
-  [& {:keys [cwd session provider-count context-window model provider thinking]
+     :context-window — model context window in tokens, or nil when unknown
+     :model          — current model id
+     :provider       — current provider keyword
+     :thinking       — current thinking level keyword
+     :reasoning      — whether the current model supports reasoning (pi:
+                       state.model.reasoning — gates the footer's thinking
+                       suffix)"
+  [& {:keys [cwd session provider-count context-window model provider thinking reasoning]
       :or {cwd (System/getProperty "user.dir")
            provider-count 1}}]
   (map->FooterDataProvider
@@ -44,7 +50,8 @@
     :context-window-atom (atom context-window)
     :model-atom (atom model)
     :provider-atom (atom provider)
-    :thinking-atom (atom thinking)}))
+    :thinking-atom (atom thinking)
+    :reasoning-atom (atom (boolean reasoning))}))
 
 ;; ─── Accessors ─────────────────────────────────────────────────────────────
 
@@ -109,6 +116,16 @@
   (reset! (:thinking-atom provider) level)
   nil)
 
+(defn fdp-get-reasoning
+  "Whether the current model supports reasoning (pi: state.model.reasoning —
+   gates the footer's thinking suffix)."
+  [provider]
+  @(:reasoning-atom provider))
+
+(defn fdp-set-reasoning! [provider reasoning?]
+  (reset! (:reasoning-atom provider) (boolean reasoning?))
+  nil)
+
 (defn fdp-set-context-window! [provider window]
   (reset! (:context-window-atom provider) window)
   nil)
@@ -125,25 +142,62 @@
 (defn fdp-latest-cache-hit-rate
   "Cache hit rate of the most recent assistant message with usage (pi:
    latestCacheHitRate — cacheRead / promptTokens of the latest message), or
-   nil when no message reports usage. Walks the context (build-context), not
-   the full branch: compaction is append-only, so the branch keeps
-   pre-compaction messages whose usage reflects the old, larger context."
+   nil when no assistant message reports usage. Only assistant entries count
+   (pi: the rate updates on assistant messages only — compaction entries
+   carry the summarization call's usage, which does not reflect the
+   context). Walks the context (build-context), not the full branch:
+   compaction is append-only, so the branch keeps pre-compaction messages
+   whose usage reflects the old, larger context."
   [provider]
   (if-let [sess (fdp-get-session provider)]
     (some (fn [e]
-            (when-let [u (usage/entry-usage (:usage e))]
-              (let [total (+ (:input u) (:cache-read u) (:cache-write u))]
-                (when (pos? total)
-                  (double (/ (* 100.0 (:cache-read u)) total))))))
+            (when (= :assistant (:role e))
+              (when-let [u (usage/entry-usage (:usage e))]
+                (let [total (+ (:input u) (:cache-read u) (:cache-write u))]
+                  (when (pos? total)
+                    (double (/ (* 100.0 (:cache-read u)) total)))))))
           (reverse (session/build-context sess)))
     nil))
 
+(defn- context-tokens-from-usage
+  "Total context tokens reported by an assistant entry's normalized usage
+   (pi: calculateContextTokens — usage.totalTokens or input+output+cacheRead+
+   cacheWrite). nil when the entry is not an assistant or carries no usable
+   usage. Assistant-only (pi: getAssistantUsage): compaction entries carry
+   the summarization call's usage, which does not reflect the context."
+  [entry]
+  (when (and (= :assistant (:role entry))
+             (some? (:usage entry)))
+    (when-let [u (usage/entry-usage (:usage entry))]
+      (let [n (+ (:input u) (:output u) (:cache-read u) (:cache-write u))]
+        (when (pos? n) n)))))
+
 (defn fdp-context-tokens
   "Estimated tokens of the active session context (pi: getContextUsage →
-   context estimate). build-context, not the full branch: compaction is
-   append-only, so the branch never shrinks and would show a stale context
-   percentage that compaction never relieves."
+   estimateContextTokens): the latest assistant message's measured usage
+   (input+output+cacheRead+cacheWrite — exactly what was sent to the LLM)
+   plus a chars/4 estimate of the entries after it. Returns nil when the
+   count is unknown: after the latest compaction there is no assistant
+   response yet, so any estimate would reflect the pre-compaction context
+   (pi: unknown until the next LLM response — the footer then shows ?/window).
+   Measures build-context, not the full branch: compaction is append-only,
+   so the branch never shrinks and would show a stale context percentage
+   that compaction never relieves."
   [provider]
-  (if-let [sess (fdp-get-session provider)]
-    (reduce + 0 (map compaction/estimate-tokens (session/build-context sess)))
-    0))
+  (when-let [sess (fdp-get-session provider)]
+    (let [ctx (session/build-context sess)
+          comp-idx (last (keep-indexed (fn [i e] (when (= :compaction (:role e)) i))
+                                       ctx))]
+      (when (or (nil? comp-idx)
+                (boolean (some context-tokens-from-usage
+                               (subvec ctx (inc comp-idx)))))
+        (let [n (count ctx)
+              usage-idx (loop [i (dec n)]
+                          (cond
+                            (< i 0) nil
+                            (context-tokens-from-usage (nth ctx i)) i
+                            :else (recur (dec i))))]
+          (if usage-idx
+            (+ (context-tokens-from-usage (nth ctx usage-idx))
+               (reduce + 0 (map compaction/estimate-tokens (subvec ctx (inc usage-idx)))))
+            (reduce + 0 (map compaction/estimate-tokens ctx))))))))

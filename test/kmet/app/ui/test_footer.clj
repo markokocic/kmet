@@ -13,15 +13,16 @@
 (defn- render-plain [c width]
   (mapv strip-ansi (core/render c width)))
 
-(defn- make-footer-with-session [& {:keys [session cwd context-window provider-count model provider thinking auto-compact]}]
+(defn- make-footer-with-session [& {:keys [session cwd context-window provider-count model provider thinking reasoning auto-compact] :as opts}]
   (let [p (fdp/make-footer-data-provider
            :session session
            :cwd (or cwd "/home/user/project")
            :provider-count (or provider-count 1)
            :context-window context-window
            :model (or model "gpt-4o")
-           :provider (or provider :openai)
-           :thinking thinking)]
+           :provider (if (contains? opts :provider) provider :openai)
+           :thinking thinking
+           :reasoning reasoning)]
     (ft/make-footer :provider p :auto-compact auto-compact)))
 
 (deftest test-create
@@ -68,22 +69,34 @@
           plain (render-plain c 60)]
       (is (some #(re-find #"gpt-4o" %) plain)))))
 
-(deftest ^:slow test-provider-prefix-when-multiple
-  (testing "(provider) prefix only when more than one provider is configured"
+(deftest ^:slow test-provider-model-display
+  (testing "model always displays as provider/model, regardless of provider count"
     (let [c (make-footer-with-session :model "gpt-4o" :provider :openai :provider-count 1)
           plain (render-plain c 60)]
-      (is (not-any? #(re-find #"\(openai\)" %) plain)))
+      (is (some #(re-find #"openai/gpt-4o" %) plain)))
     (let [c (make-footer-with-session :model "gpt-4o" :provider :openai :provider-count 3)
           plain (render-plain c 60)]
-      (is (some #(re-find #"\(openai\) gpt-4o" %) plain)))))
+      (is (some #(re-find #"openai/gpt-4o" %) plain)))
+    (testing "no provider configured → bare model"
+      (let [c (make-footer-with-session :model "gpt-4o" :provider nil)
+            plain (render-plain c 60)]
+        (is (some #(re-find #"gpt-4o" %) plain))
+        (is (not-any? #(re-find #"openai/" %) plain))))))
 
 (deftest ^:slow test-thinking-level
-  (testing "thinking level renders after the model when not off"
-    (let [c (make-footer-with-session :model "claude" :thinking :high)
+  (testing "thinking suffix follows pi: reasoning models show the level always"
+    (let [c (make-footer-with-session :model "claude" :thinking :high :reasoning true)
           plain (render-plain c 60)]
-      (is (some #(re-find #"claude • thinking high" %) plain)))
-    (let [c (make-footer-with-session :model "claude" :thinking :off)
+      (is (some #(re-find #"openai/claude • high" %) plain)
+          "non-off level shows bare (pi: `${modelName} • ${thinkingLevel}`)"))
+    (let [c (make-footer-with-session :model "claude" :thinking :off :reasoning true)
           plain (render-plain c 60)]
+      (is (some #(re-find #"openai/claude • thinking off" %) plain)
+          "off shows 'thinking off' (pi)")))
+  (testing "non-reasoning models show no suffix (pi: gated on model.reasoning)"
+    (let [c (make-footer-with-session :model "gpt-4o" :thinking :high :reasoning false)
+          plain (render-plain c 60)]
+      (is (some #(re-find #"openai/gpt-4o" %) plain))
       (is (not-any? #(re-find #"thinking" %) plain)))))
 
 (deftest ^:slow test-context-percent
@@ -115,6 +128,26 @@
     (let [c (make-footer-with-session :model "gpt-4o" :provider :openai :provider-count 3)
           lines (core/render c 120)]
       (is (pos? (count lines))))))
+
+(deftest ^:slow test-model-wraps-to-own-line
+  (testing "when stats + model don't fit, the model wraps to its own right-aligned line"
+    (let [c (make-footer-with-session :model "some-very-long-model-name" :provider :openai)
+          plain (render-plain c 40)]
+      (is (= 3 (count plain)) "pwd + stats + model lines")
+      (let [model-line (last plain)]
+        (is (str/ends-with? model-line "openai/some-very-long-model-name"))
+        (is (= 40 (count model-line)) "model line right-aligned to the full width")))
+    (testing "model wider than the terminal is truncated to fit"
+      (let [c (make-footer-with-session :model (apply str (repeat 50 "x")) :provider :openai)
+            plain (render-plain c 20)]
+        (is (= 3 (count plain)))
+        (is (every? #(<= (count %) 20) plain)))
+      (testing "extension statuses still render after the wrapped model line"
+        (let [c (make-footer-with-session :model "some-very-long-model-name" :provider :openai)]
+          (ft/footer-set-extension-status! c "ext" "● active")
+          (let [plain (render-plain c 40)]
+            (is (= 4 (count plain)) "pwd + stats + model + status")
+            (is (some #(re-find #"● active" %) plain))))))))
 
 (deftest ^:slow test-narrow-footer
   (testing "footer truncates instead of overflowing on narrow terminals"

@@ -1277,11 +1277,17 @@
    (with an optional branch summary), rebuild the agent context and chat
    history from the new branch, restore USER-MSG-TEXT into the editor when
    navigating to a user message (only when the editor is empty), attach
-   LABEL to the summary/target entry when given, and emit :session-tree."
-  [cs sess old-leaf target-leaf summary user-msg-text from-extension? label]
+   LABEL to the summary/target entry when given, and emit :session-tree.
+   SUMMARY-RESULT is nil or {:summary str :usage usage-map} (the usage of
+   the summarization call, recorded on the branch-summary entry — pi:
+   BranchSummaryEntry.usage)."
+  [cs sess old-leaf target-leaf summary-result user-msg-text from-extension? label]
   (try
-    (let [summary-entry (if summary
-                          (session/branch-with-summary! sess target-leaf summary)
+    (let [summary-entry (if summary-result
+                          (session/branch-with-summary!
+                           sess target-leaf (:summary summary-result)
+                           (when (:usage summary-result)
+                             {:usage (:usage summary-result)}))
                           (do (if (nil? target-leaf)
                                 (session/reset-leaf! sess)
                                 (session/branch! sess target-leaf))
@@ -1305,7 +1311,7 @@
          summary-entry (assoc :summary-entry summary-entry)))
       (ui/chat-history-add-message! (:chat-history cs)
                                     {:role :assistant
-                                     :content (if summary
+                                     :content (if summary-result
                                                 "Navigated to the selected point (branch summarized)."
                                                 "Navigated to the selected point.")})
       (tui/tui-request-render (:tui cs)))
@@ -1366,7 +1372,7 @@
 
           :else
           (complete-tree-navigation! cs sess old-leaf target-leaf
-                                     (:summary result) user-msg-text false nil))
+                                     result user-msg-text false nil))
         (tui/tui-request-render (:tui cs))))))
 
 (defn- navigate-tree!
@@ -1407,7 +1413,9 @@
 
       (and wants-summary (:summary ext-result))
       (complete-tree-navigation! cs sess old-leaf target-leaf
-                                 (:summary ext-result) user-msg-text true
+                                 (when-let [s (:summary ext-result)]
+                                   {:summary s :usage (:usage ext-result)})
+                                 user-msg-text true
                                  (:label ext-result))
 
       (not wants-summary)
@@ -2474,7 +2482,8 @@
         ed (tui/make-editor :padding-x 0
                             :terminal-rows (fn [] (term/rows @(:terminal t)))
                             :border-fn (fn [c] (th/dim c)))
-        ;; B.6: footer data provider + two-line footer (pi: FooterComponent)
+        ;; B.6: footer data provider + footer (pi: FooterComponent; the
+        ;; model line wraps to its own line when the stats line is too narrow)
         fdp (ui/make-footer-data-provider
              :session session
              :provider-count (count (distinct (map :provider (scoped-or-available-models ag))))
@@ -2483,7 +2492,9 @@
              ;; contextPercentDisplay)
              :context-window (or (:context-window (models/get-model provider model))
                                  (:context-window config))
-             :model @(:model ag) :provider @(:provider ag) :thinking @(:thinking ag))
+             :model @(:model ag) :provider @(:provider ag) :thinking @(:thinking ag)
+             ;; pi: the thinking suffix renders only for reasoning models
+             :reasoning (boolean (:reasoning (models/get-model provider model))))
         ftr (ui/make-footer :theme (cfg/get-theme config)
                             :provider fdp
                             :auto-compact (boolean (or (:compact-threshold config)
