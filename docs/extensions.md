@@ -290,6 +290,27 @@ Event types: `:agent-start` `:agent-end` `:agent-settled` `:turn-start`
 `:before-provider-request` `:before-provider-headers`
 `:after-provider-response`.
 
+### Contributing resources (`resources_discover`)
+
+After `:session-start` (startup, `/new`, `/resume`, `/reload`), kmet fires
+`:resources-discover` (pi: resources_discover — fired after session_start)
+so extensions can contribute skill, prompt-template and theme paths
+(directories):
+
+```clojure
+(ext/on-event api :resources-discover
+  (fn [ev ctx]  ; {:cwd .. :reason :startup | :reload}
+    {:skill-paths  ["/abs/path/to/skills"]
+     :prompt-paths ["/abs/path/to/prompts"]
+     :theme-paths  ["/abs/path/to/themes"]}))
+```
+
+Unlike the provider events, **every** handler's result is collected (pi
+collects each contribution). The paths load into the skills/prompts/theme
+registries; already-applied paths are skipped on later discoveries (pi:
+mergePaths dedup — discovery fires after every session start, but a
+reload re-applies after the registries clear).
+
 ### Cancellable session before-events
 
 Three events fire **before** session mutations; handlers may return

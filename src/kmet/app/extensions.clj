@@ -34,7 +34,9 @@
             [kmet.ai.hooks :as ai-hooks]
             [kmet.app.commands :as commands]
             [kmet.app.event-bus :as event-bus]
+            [kmet.app.prompts :as prompts]
             [kmet.app.session :as session]
+            [kmet.app.skills :as skills]
             [kmet.app.tools.core :as tools]
             [kmet.tui.theme :as theme]
             [kmet.extension]))
@@ -96,6 +98,7 @@
 (defonce ^:private session-atom (atom nil))
 (defonce ^:private context-sink-atom (atom nil))
 (defonce ^:private entry-sink-atom (atom nil))
+(defonce ^:private applied-resource-paths (atom #{}))
 
 ;; ─── Input / before-agent-start hooks (pi: pi.on('input') / ──────────────
 ;; ─── 'before_agent_start'; applied by modes.interactive + app.loop) ──────
@@ -1150,9 +1153,54 @@
   (some-> (first (filter #(= name (:name %)) @extensions))
           :jars deref))
 
+(defn discover-resources!
+  "pi: extendResourcesFromExtensions — fire the :resources-discover event
+   (payload {:cwd :reason}) after :session-start and apply every handler's
+   contributed resource paths: :skill-paths / :prompt-paths load into the
+   skills/prompts registries, :theme-paths into the theme store (pi:
+   resourceLoader.extendResources → updateSkills/Prompts/ThemesFromPaths;
+   paths are directories). ALL handler results are collected (pi collects
+   each handler's contribution — see emit-event-collect!). Paths already
+   applied since the last extension reload are skipped — discovery fires
+   after every session-start (pi re-scans with mergePaths dedup; kmet's
+   prompt loader would duplicate without the tracking). A throwing handler
+   is skipped (its paths are lost). Returns the collected
+   {:skill-paths [...] :prompt-paths [...] :theme-paths [...]}."
+  [reason]
+  (let [results (event-bus/emit-event-collect!
+                 {:type :resources-discover
+                  :cwd (str (fs/cwd))
+                  :reason reason})
+        paths (reduce (fn [acc r]
+                        (cond-> acc
+                          (seq (:skill-paths r))
+                          (update :skill-paths into (:skill-paths r))
+                          (seq (:prompt-paths r))
+                          (update :prompt-paths into (:prompt-paths r))
+                          (seq (:theme-paths r))
+                          (update :theme-paths into (:theme-paths r))))
+                      {:skill-paths [] :prompt-paths [] :theme-paths []}
+                      results)]
+    (doseq [p (:skill-paths paths)]
+      (when-not (contains? @applied-resource-paths p)
+        (skills/load-skills-from-dir p)
+        (swap! applied-resource-paths conj p)))
+    (doseq [p (:prompt-paths paths)]
+      (when-not (contains? @applied-resource-paths p)
+        (prompts/load-prompt-templates-from-dir p)
+        (swap! applied-resource-paths conj p)))
+    (doseq [p (:theme-paths paths)]
+      (when-not (contains? @applied-resource-paths p)
+        (theme/load-themes-from-dir p)
+        (swap! applied-resource-paths conj p)))
+    paths))
+
 (defn clear-extensions!
   "Unload all extensions (used by /reload and tests)."
   []
+  ;; extension-contributed resources are re-discovered on the next
+  ;; session-start after a reload (the loaders are cleared too)
+  (reset! applied-resource-paths #{})
   (unload-all-extensions!))
 
 (defn load-extensions-from-dir

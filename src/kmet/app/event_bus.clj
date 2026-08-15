@@ -165,7 +165,15 @@
 
    :after-provider-response
    "Fired after the provider response is received, before its body is
-    consumed (pi: after_provider_response). Payload: :status, :headers."})
+    consumed (pi: after_provider_response). Payload: :status, :headers."
+
+   :resources-discover
+   "Fired after :session-start to collect extension-contributed resource
+    paths (pi: resources_discover — fired after session_start). Payload:
+    :cwd, :reason (:startup | :reload). Handlers return
+    {:skill-paths [...] :prompt-paths [...] :theme-paths [...]} (paths are
+    directories); ALL handler results are collected, not reduced
+    (emit-event-collect!)."})
 
 (def app-event-types
   "Event types emitted OUTSIDE the agent loop (the interactive mode and
@@ -180,7 +188,8 @@
     :session-before-fork
     :session-before-compact
     :session-tree
-    :session-info-changed})
+    :session-info-changed
+    :resources-discover})
 
 (def loop-event-types
   "The subset of event-types emitted by the agent loop (kmet.app.loop/emit —
@@ -235,6 +244,24 @@
                   (if (some? result) result acc)))
               nil
               listeners))))
+
+(defn emit-event-collect!
+  "Emit an event and return EVERY non-nil handler result as a vector
+   (pi: emitResourcesDiscover collects each handler's contribution — unlike
+   emit-event!, results are not reduced to the last non-nil). Throwing
+   handlers are skipped and warned, same as emit-event!."
+  [event]
+  (let [type (:type event)
+        listeners (get @event-listeners type)]
+    (when listeners
+      (into []
+            (keep (fn [[_ cb]]
+                    (try (cb event)
+                         (catch Exception e
+                           (binding [*out* *err*]
+                             (println "Warning: extension event handler error:" (ex-message e)))
+                           nil))))
+            listeners))))
 
 (defn get-event-types
   "List all registered event types."

@@ -10,9 +10,12 @@
             [kmet.app.extensions :as extensions]
             [kmet.app.commands :as commands]
             [kmet.app.event-bus :as event-bus]
+            [kmet.app.prompts :as prompts]
             [kmet.app.session :as session]
+            [kmet.app.skills :as skills]
             [kmet.app.tools.core :as tools]
-            [kmet.ai.hooks :as ai-hooks]))
+            [kmet.ai.hooks :as ai-hooks]
+            [kmet.tui.theme :as theme]))
 
 ;; ─── Nullable api (extension tests in isolation) ──────────────────────────
 
@@ -460,3 +463,66 @@
         (t/is (= 200 (:status @seen)))
         (t/is (= {"h" "v"} (:headers @seen)))
         (u1)))))
+
+(t/deftest test-resources-discover
+  (extensions/clear-extensions!)
+  (event-bus/clear-event-listeners!)
+  (let [dir (str "target/test-ext-resources-" (System/currentTimeMillis))
+        skill-dir (str dir "/skill")
+        prompt-dir (str dir "/prompt")
+        theme-dir (str dir "/theme")
+        colors (into {} (map (fn [k] [(name k) "#000000"])
+                             (concat theme/FG-TOKENS theme/BG-TOKENS)))
+        unsubs (atom [])
+        seen-reasons (atom [])]
+    (fs/create-dirs skill-dir)
+    (fs/create-dirs prompt-dir)
+    (fs/create-dirs theme-dir)
+    (spit (str skill-dir "/SKILL.md")
+          "---\nname: ext-skill\ndescription: From an extension\n---\nSkill body")
+    (spit (str prompt-dir "/ext-prompt.md") "Prompt body from an extension")
+    (spit (str theme-dir "/ext-theme.edn")
+          (pr-str {:name "ext-theme" :colors colors}))
+    (try
+      (testing "handler results are all collected and applied (pi: emitResourcesDiscover)"
+        (swap! unsubs conj
+               (event-bus/on-event :resources-discover
+                                   (fn [ev]
+                                     (swap! seen-reasons conj (:reason ev))
+                                     (t/is (string? (:cwd ev)))
+                                     {:skill-paths [skill-dir]
+                                      :prompt-paths [prompt-dir]
+                                      :theme-paths [theme-dir]})))
+        (let [result (extensions/discover-resources! :startup)]
+          (t/is (some? (skills/get-skill "ext-skill"))
+                "contributed skill dir loads into the skills registry")
+          (t/is (some? (prompts/get-prompt-template "ext-prompt"))
+                "contributed prompt dir loads into the prompts registry")
+          (t/is (some? (theme/get-theme "ext-theme"))
+                "contributed theme dir loads into the theme store")
+          (t/is (= {:skill-paths [skill-dir]
+                    :prompt-paths [prompt-dir]
+                    :theme-paths [theme-dir]}
+                   result)
+                "the collected path lists are returned")))
+      (testing "re-discovery after session-start dedups (pi: mergePaths)"
+        (extensions/discover-resources! :startup)
+        (t/is (= 1 (count (filter #(= "ext-prompt" (:name %))
+                                  (prompts/get-prompt-templates))))
+              "the prompt is not loaded twice"))
+      (testing "a throwing handler is skipped, others still contribute"
+        (swap! unsubs conj
+               (event-bus/on-event :resources-discover
+                                   (fn [_] (throw (ex-info "boom" {})))))
+        (extensions/discover-resources! :reload)
+        (t/is (some? (skills/get-skill "ext-skill"))
+              "the good handler's paths were already applied")
+        (t/is (= [:startup :startup :reload] @seen-reasons)
+              "every discovery carried its reason (:startup | :reload)"))
+      (finally
+        (doseq [u @unsubs] (u))
+        (event-bus/clear-event-listeners!)
+        (extensions/clear-extensions!)
+        (skills/clear-skills!)
+        (prompts/clear-prompt-templates!)
+        (fs/delete-tree dir)))))

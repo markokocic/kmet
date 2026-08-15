@@ -12,7 +12,7 @@ Reference: `packages/coding-agent/src/core/extensions/types.ts` in
 ExtensionContext ~340, ExtensionCommandContext ~390, ToolDefinition +
 ToolRenderContext further down).
 
-Status of this document: **P0–P12 complete** (ctx object, provider
+Status of this document: **P0–P13 complete** (ctx object, provider
 registration, ui.editor + getTheme(name), tool_call terminate, tool
 execute signal+ctx, tool renderers, shortcuts, markdown transformers,
 provider events, cancellable session before-events, sendMessage
@@ -96,7 +96,8 @@ value/effort. Effort: S (≤ half day), M (1–2 days), L (3+ days).
 | G13 | ctx fields `model`, `scopedModels`, `isIdle()`, `hasPendingMessages()`, `shutdown()`, `getContextUsage()`, `compact()`, `getSystemPrompt()`, session control (`waitForIdle/newSession/fork/navigateTree/switchSession/reload`) | nothing (folded into G1) | (G1) |
 | G14 | `getCommands` parity, `setModel` boolean return, `getTheme(name)` | close; verify + document | S |
 | — | `refreshTools` | **not needed** — kmet's tool registry is a live atom | — |
-| — | `project_trust` / `resources_discover` | needs features kmet doesn't have (trust; loader contribution) | defer |
+| — | `project_trust` | needs features kmet doesn't have (trust) | defer |
+| — | `resources_discover` | **P13** — fired after session-start; contributed skill/prompt/theme paths applied (see §6) | done |
 | — | `events` EventBus | parity via `on-event`/`emit-event!` (custom events work) | — |
 | — | `exec`, flags, session name/labels, message/entry renderers, ui.select/confirm/input/notify/status/widget/footer/header/title/theme, autocomplete, editor-component | parity | — |
 
@@ -460,8 +461,12 @@ P0 (ctx) ──► P1, P2, P3, P11, P12   (independent, small)
 
 - `project_trust` / `isProjectTrusted` — kmet has no project-trust
   feature; ctx returns `false` constant until one exists.
-- `resources_discover` — requires the skills/prompts/themes loaders to
-  accept contributed paths; revisit after P0–P10.
+- `resources_discover` — DONE (P13): fired after `:session-start`
+  (reason `:startup` | `:reload`); handlers return
+  `{:skill-paths :prompt-paths :theme-paths}` directories, all handler
+  results collected (`emit-event-collect!`), applied into the
+  skills/prompts/theme registries with path dedup across session starts
+  (`extensions/discover-resources!`; pi: extendResourcesFromExtensions).
 - `refreshTools` — kmet's registry is a live atom; `get-all-tools` always
   sees new registrations. Never needed.
 - `constrainedSampling`, `prepareArguments`, `executionMode` for

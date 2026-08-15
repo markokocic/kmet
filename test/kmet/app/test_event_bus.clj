@@ -29,6 +29,12 @@
   (t/is (contains? event-bus/app-event-types :session-shutdown)
         "emitted outside the loop by the interactive mode, like :session-start"))
 
+(t/deftest test-resources-discover-event
+  (t/is (event-bus/known-event-type? :resources-discover)
+        "resources_discover is part of the vocabulary (pi: ResourcesDiscoverEvent)")
+  (t/is (contains? event-bus/app-event-types :resources-discover)
+        "emitted outside the loop (extensions/discover-resources!), not consumed by the UI"))
+
 ;; ─── Event bus ────────────────────────────────────────────────────────────
 
 (t/deftest test-event-register-and-emit

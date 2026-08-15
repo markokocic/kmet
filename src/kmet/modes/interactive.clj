@@ -1062,6 +1062,9 @@
           ;; must never happen on the input thread.
           (future
             (try (event-bus/emit-event! {:type :session-start :reason :reload})
+                 ;; pi: resources_discover fires after session_start (reason
+                 ;; reload) — extensions contribute skill/prompt/theme paths
+                 (extensions/discover-resources! :reload)
                  (catch Exception e (debug/log "session-start: " e))))
           (ui/chat-history-add-message! chat-history
                                         {:role :info :label "Reload"
@@ -1328,6 +1331,9 @@
               (event-bus/emit-event!
                (cond-> {:type :session-start :reason :new}
                  previous-file (assoc :previous-session-file previous-file)))
+              ;; pi: resources_discover fires after session_start (reason
+              ;; startup for non-reload session starts)
+              (extensions/discover-resources! :startup)
               (catch Exception e (debug/log "session-start: " e))))
           (update-footer! cs)
           (tui/tui-request-render (:tui cs))
@@ -3602,7 +3608,10 @@
                {:type :session-start
                 :reason (cond (:resume opts) :resume
                               (:continue opts) :continue
-                              :else :new)}))
+                              :else :new)})
+              ;; pi: resources_discover fires after session_start (reason
+              ;; startup for non-reload session starts)
+              (extensions/discover-resources! :startup))
             (catch Exception e
               (debug/log "session-start: " e))))
         ;; Theme detection + application (pi: startup applyFromSettings) —
