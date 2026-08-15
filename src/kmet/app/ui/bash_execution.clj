@@ -42,7 +42,9 @@
                ended-at-atom     ;; long or nil
                cache-atom        ;; render cache
                exclude-from-context-atom ;; boolean (!! vs !)
-               theme-atom]       ;; Theme record (default dark-theme)
+               theme-atom        ;; Theme record (default dark-theme)
+               request-render-fn-atom ;; nil or (fn) to trigger TUI re-render
+               ticker-atom]      ;; 1s elapsed-tick future while running
   (render [this width]
     (track! this width
       (let [command @command-atom
@@ -172,22 +174,48 @@
             :active true
             :prefix ""
             :spinner-color-fn (fn [s] (theme/fg theme color-key s))
-            :message-color-fn (fn [s] (theme/fg theme :muted s)))]
-    (map->BashExecutionComponent
-     {:command-atom (atom command)
-      :output-lines-atom (atom [])
-      :status-atom (atom :running)
-      :exit-code-atom (atom nil)
-      :expanded-atom (atom false)
-      :content-container content-container
-      :spinner-comp (atom sp)
-      :truncation-atom (atom nil)
-      :full-output-path-atom (atom nil)
-      :started-at-atom (atom (System/currentTimeMillis))
-      :ended-at-atom (atom nil)
-      :cache-atom (atom nil)
-      :exclude-from-context-atom (atom exclude-from-context?)
-      :theme-atom (atom theme)})))
+            :message-color-fn (fn [s] (theme/fg theme :muted s)))
+        comp (map->BashExecutionComponent
+              {:command-atom (atom command)
+               :output-lines-atom (atom [])
+               :status-atom (atom :running)
+               :exit-code-atom (atom nil)
+               :expanded-atom (atom false)
+               :content-container content-container
+               :spinner-comp (atom sp)
+               :truncation-atom (atom nil)
+               :full-output-path-atom (atom nil)
+               :started-at-atom (atom (System/currentTimeMillis))
+               :ended-at-atom (atom nil)
+               :cache-atom (atom nil)
+               :exclude-from-context-atom (atom exclude-from-context?)
+               :theme-atom (atom theme)
+               :request-render-fn-atom (atom nil)
+               :ticker-atom (atom nil)})]
+    ;; Pi: the loader's setInterval drives re-renders while running —
+    ;; kmet's spinner is passive, so a 1s ticker invalidates the
+    ;; component and requests a TUI render while :running, keeping the
+    ;; Elapsed counter (and the spinner frame) updating even when no
+    ;; output chunks arrive. Self-exits on completion; set-complete!
+    ;; cancels it promptly.
+    (reset! (:ticker-atom comp)
+            (future
+              (try
+                (loop []
+                  (Thread/sleep 1000)
+                  (if (= :running @(:status-atom comp))
+                    (do
+                      ;; one bad invalidate/render-request must not kill the
+                      ;; ticker (pi's setInterval survives callback throws)
+                      (try
+                        (protocols/invalidate comp)
+                        (when-let [cb @(:request-render-fn-atom comp)]
+                          (cb))
+                        (catch Exception _))
+                      (recur))
+                    nil))
+                (catch InterruptedException _))))
+    comp))
 
 (defn bash-execution-set-theme!
   "Set the theme on the border/output colors and the spinner."
@@ -244,9 +272,14 @@
     (reset! (:truncation-atom comp) truncation))
   (when full-output-path
     (reset! (:full-output-path-atom comp) full-output-path))
-  ;; Stop the spinner
+  ;; Stop the spinner and the 1s elapsed ticker
   (when-let [sp @(:spinner-comp comp)]
-    (spinner/spinner-stop! sp)))
+    (spinner/spinner-stop! sp))
+  (when-let [t @(:ticker-atom comp)]
+    (future-cancel t)
+    (reset! (:ticker-atom comp) nil)))
+
+(defsetter bash-execution-set-request-render-fn! :request-render-fn-atom comp f)
 
 (defn bash-execution-get-output
   "Get the raw accumulated output string."

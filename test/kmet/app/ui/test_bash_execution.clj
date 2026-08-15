@@ -44,6 +44,16 @@
     (let [lines (protocols/render c 40)]
       (t/is (some #(clojure.string/includes? % "cancelled") lines) "cancelled status shown"))))
 
+(t/deftest test-bash-execution-elapsed-ticker
+  (t/testing "1s ticker drives re-renders while :running; completion cancels it"
+    (let [c (be/make-bash-execution :command "sleep 1")
+          ticker @(:ticker-atom c)]
+      (t/is (some? ticker) "ticker starts with the component")
+      (t/is (future? ticker))
+      (be/bash-execution-set-complete! c 0 false)
+      (t/is (nil? @(:ticker-atom c)) "completion clears the ticker")
+      (t/is (future-cancelled? ticker) "ticker future is cancelled"))))
+
 (t/deftest test-bash-execution-borders-flush
   ;; Every content line — preview output, blank separator, status — must be
   ;; padded to the content width so both border columns stay flush. A broken

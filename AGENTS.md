@@ -376,8 +376,9 @@ Type dispatch uses `IComponentKind` protocol (`component-kind` returning `:user`
   output (Spinner, status indicators, flashes — must render fresh every
   pass), and focused input widgets (input, editor). Time-animated content
   must live at the document bottom (spinner/status) or be cached so it only
-  ticks with real updates (the tool-execution elapsed counter ticks with
-  content chunks, matching pi's cached render).
+  ticks with real updates (the tool-execution elapsed counter ticks via its
+  own 1s invalidate interval while a tool is partial — pi: setInterval →
+  context.invalidate — so a silent long-running tool still updates steadily).
 - A render body that invalidates itself mid-run (a render fn calling
   `:invalidate`, or `set-state!` on tracked state) does not cache its stale
   result: track-render watches the cache atom, so the next render re-runs

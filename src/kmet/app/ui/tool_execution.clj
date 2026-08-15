@@ -20,6 +20,7 @@
             [kmet.tui.components.image :as ic]
             [kmet.libs.terminal-image :as timg]
             [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]
+            [kmet.debug :as debug]
             [cheshire.core :as json]))
 
 ;; ─── Shared render helpers (pi: render-utils.ts) ────────────────────────────
@@ -554,8 +555,11 @@
                               (str (theme/fg theme :tool-title (theme/bold (str "$ " cmd-display)))
                                    timeout-suffix)
                               0 0)))
-            :render-result (fn [content _is-error theme width expanded? started-at ended-at truncation _context]
-                             (let [c (container/make-container)
+            :render-result (fn [content is-error theme width expanded? started-at ended-at truncation context]
+                             (let [state (:state context)
+                                   set-state! (:set-state! context)
+                                   invalidate (:invalidate context)
+                                   c (container/make-container)
                                    BASH-PREVIEW-LINES 5
                                    full-output-path (:full-output-path truncation)
                                    output (let [trimmed (str/trim (or content ""))]
@@ -570,6 +574,33 @@
                                                   (str/trimr (subs trimmed 0 footer-start))
                                                   trimmed))
                                               trimmed))]
+                               ;; Pi: while the execution is partial, tick the
+                               ;; elapsed counter on a 1s interval —
+                               ;; renderResult starts an interval that
+                               ;; invalidates the component (the track! cache
+                               ;; keeps intervening renders cheap); cleared on
+                               ;; completion/error.
+                               (when (and started-at
+                                          (nil? ended-at)
+                                          (nil? (:interval state)))
+                                 (when (and invalidate set-state!)
+                                   (set-state! (assoc state :interval
+                                                      (future
+                                                        (try
+                                                          (loop []
+                                                            (Thread/sleep 1000)
+                                                            ;; pi's setInterval survives a
+                                                            ;; throwing callback — one bad
+                                                            ;; invalidate must not kill the tick
+                                                            (try (invalidate)
+                                                                 (catch Exception _))
+                                                            (recur))
+                                                          (catch InterruptedException _)))))))
+                               (when (or ended-at is-error)
+                                 (when-let [interval (:interval state)]
+                                   (future-cancel interval))
+                                 (when (and set-state! (contains? state :interval))
+                                   (set-state! (dissoc state :interval))))
                                (when (seq output)
                                  (let [styled (->> (str/split-lines output)
                                                    (mapv #(theme/fg theme :tool-output %))
@@ -637,6 +668,17 @@
 
 ;; ─── Render context helper ─────────────────────────────────────────────────
 
+(defn- request-render!
+  "Invoke the component's request-render-fn, containing exceptions: the cb
+   runs on the agent-loop thread (via setters) and inside the TUI render
+   pass (via :invalidate), where an uncaught throw would hang the run or
+   kill the render loop. Logs instead (pi's callbacks are fire-and-forget)."
+  [comp]
+  (when-let [cb @(:request-render-fn-atom comp)]
+    (try (cb)
+         (catch Exception e
+           (debug/log "request-render-fn error: " e)))))
+
 (defn- last-call-component
   "Read the previous render-call component WITHOUT tracking (the render body
    resets this atom on every cache miss; a tracked read would self-invalidate
@@ -657,8 +699,7 @@
    :tool-call-id @(:tool-call-id-atom comp)
    :invalidate (fn []
                  (protocols/invalidate comp)
-                 (when-let [cb @(:request-render-fn-atom comp)]
-                   (cb)))
+                 (request-render! comp))
    :last-component last-comp
    :state @(:renderer-state-atom comp)
    :set-state! (fn [new-state]
@@ -756,11 +797,13 @@
                 (if (seq box-lines)
                   (into [""] box-lines)
                   []))))))))
-  (invalidate [_this]
+  (invalidate [this]
     (protocols/invalidate @box)
-    ;; Pi: invalidate also triggers TUI re-render
-    (when-let [cb @request-render-fn-atom]
-      (cb))))
+    ;; Pi: invalidate also triggers TUI re-render; a throwing callback must
+    ;; not propagate (setters run on the agent-loop thread, renderers inside
+    ;; the TUI render pass — an exception would hang the run or kill the
+    ;; render loop)
+    (request-render! this)))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 ;; Pi: component manages timing internally — no started-at/ended-at passed in.
@@ -815,6 +858,14 @@
   ;; Pi: error marks execution ended
   (when (nil? @(:ended-at-atom comp))
     (reset! (:ended-at-atom comp) (System/currentTimeMillis)))
+  ;; Pi: renderResult clears the elapsed ticker on completion — do it here
+  ;; too, so a component dropped from the chat (e.g. /new while a tool runs)
+  ;; doesn't keep a zombie interval invalidating forever.
+  (let [state @(:renderer-state-atom comp)]
+    (when-let [interval (:interval state)]
+      (future-cancel interval))
+    (when (contains? state :interval)
+      (reset! (:renderer-state-atom comp) (dissoc state :interval))))
   (protocols/invalidate comp))
 
 (defsetter tool-execution-set-expanded! :expanded-atom comp expanded?

@@ -16,19 +16,20 @@
             [kmet.app.ui :as ui]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.editor :as editor]
+            [kmet.tui.protocols :as protocols]
             [babashka.fs :as fs]
             [clojure.string :as str]))
 
 (defn- make-handler
   "The real event handler over a standalone chat history and stub refs: the
    cs-dependent clauses (footer/status indicators) no-op through a nil
-   cs-ref, tool-execution updates no-op through a nil pending component."
+   cs-ref; tool-execution events correlate through an empty pending map."
   []
   ((var inter/make-agent-event-handler)
    {:chat-history (ui/make-chat-history)
     :tui {:render-requested? (atom false)}
     :cs-ref (atom nil)
-    :pending-tool-comp (atom nil)}))
+    :pending-tool-comps (atom {})}))
 
 (defn- minimal-event
   "Minimal but shape-valid payload for TYPE — the clause bodies run against
@@ -126,6 +127,51 @@
 (deftest agent-event-handler-default-is-safe
   (testing "unknown event types fall through the :default clause"
     (is (nil? ((make-handler) {:type :some-future-event})))))
+
+(deftest tool-execution-parallel-correlation
+  (testing "parallel tool calls each own a component; end events correlate by id
+            and clear their own elapsed ticker (pi: pendingTools Map)"
+    (let [pending (atom {})
+          h ((var inter/make-agent-event-handler)
+             {:chat-history (ui/make-chat-history)
+              :tui {:render-requested? (atom false)}
+              :cs-ref (atom nil)
+              :pending-tool-comps pending})]
+      (h {:type :tool-execution-start :tool-call-id "t1" :tool-name "bash"
+          :args {:command "sleep 5"}})
+      (h {:type :tool-execution-start :tool-call-id "t2" :tool-name "bash"
+          :args {:command "sleep 5"}})
+      (let [comp1 (get @pending "t1")
+            comp2 (get @pending "t2")]
+        (is (some? comp1) "first tool component tracked")
+        (is (some? comp2) "second tool component tracked")
+        (is (not (identical? comp1 comp2))
+            "each parallel tool call owns its own component")
+        ;; render comp1 → its bash render-result starts the 100ms ticker
+        (protocols/render comp1 60)
+        (is (some? (:interval @(:renderer-state-atom comp1)))
+            "t1 elapsed ticker running")
+        ;; partial update for t1 reaches only comp1
+        (h {:type :tool-execution-update :tool-call-id "t1" :content "chunk"
+            :is-partial true})
+        (is (= "chunk" @(:content-atom comp1)) "t1 got its chunk")
+        (is (= "" @(:content-atom comp2)) "updates correlate by id")
+        ;; t1 ends (error) — its own ticker is cleared, comp2 untouched
+        (h {:type :tool-execution-end :tool-call-id "t1" :tool-name "bash"
+            :args {} :result {:content "Command aborted" :is-error true}
+            :is-error true})
+        (is (nil? (get @pending "t1")) "ended tool removed from pending")
+        (is (some? (get @pending "t2")) "other tool stays pending")
+        (is (some? @(:ended-at-atom comp1)) "t1 marked ended")
+        (is (nil? (:interval @(:renderer-state-atom comp1)))
+            "t1 elapsed ticker cleared by its own end")
+        (is (nil? @(:ended-at-atom comp2)) "t2 still running")
+        ;; t2 ends normally
+        (h {:type :tool-execution-end :tool-call-id "t2" :tool-name "bash"
+            :args {} :result {:content "ok" :is-error false}
+            :is-error false})
+        (is (empty? @pending)
+            "all tools removed from pending after their end events")))))
 
 (deftest submit-command-line-gate
   (testing "multiline submit text (e.g. pasted blocks) is never a command"

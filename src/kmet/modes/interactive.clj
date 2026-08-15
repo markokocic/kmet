@@ -116,7 +116,7 @@
                       session-atom
                       running-turn?
                       config
-                      pending-tool-comp
+                      pending-tool-comps
                       bash-running?
                       bash-signal
                       pending-bash-components
@@ -1750,6 +1750,9 @@
                        :command command
                        :exclude-from-context? exclude-from-context?
                        :theme (th/get-current-theme))
+            ;; Wire invalidate → TUI re-render (elapsed ticker + spinner)
+            _ (be/bash-execution-set-request-render-fn!
+               bash-comp #(tui/tui-request-render (:tui cs)))
 
             ;; ── Build session env (pi: resolveSpawnContext) ─────────────
             ag @(:agent-state cs)
@@ -2121,10 +2124,14 @@
      :tui                 — TUI record (render requests)
      :cs-ref              — atom holding the CoreState (footer/status updates;
                              nil until the layout is assembled)
-     :pending-tool-comp   — atom holding the in-flight tool component.
+     :pending-tool-comps   — atom map tool-call-id → in-flight tool component
+                            (pi: pendingTools Map — parallel tool calls each
+                            get their own component; end events correlate by
+                            id and remove the entry, so every component's
+                            elapsed ticker is cleared by its own end).
    Extracted from build-layout so the contract that every vocabulary event
    is consumed is testable (kmet.modes.test-interactive)."
-  [{:keys [chat-history tui cs-ref pending-tool-comp]}]
+  [{:keys [chat-history tui cs-ref pending-tool-comps]}]
   (fn [evt]
     (case (:type evt)
       :tool-execution-start
@@ -2145,21 +2152,23 @@
           (ui/tool-execution-set-args-complete! comp)
           ;; Mark execution started so pending bg + timer activate now
           (ui/tool-execution-mark-execution-started! comp)
-          (reset! pending-tool-comp comp))
+          ;; Pi: pendingTools.set(toolCallId, component) — parallel tool
+          ;; calls each own a component; updates/ends correlate by id
+          (swap! pending-tool-comps assoc (:tool-call-id evt) comp))
         (tui/tui-request-render tui))
       :tool-execution-update
-      ;; Pi: live partial content from streaming tools (bash);
-      ;; no periodic pings — the render is cached (track!), so
-      ;; the elapsed timer ticks when content arrives here
-      ;; (a silent long-running tool freezes Elapsed until the
-      ;; next chunk or completion, matching pi's cached render)
-      (do (when-let [comp @pending-tool-comp]
+      ;; Pi: live partial content from streaming tools (bash). The
+      ;; elapsed counter itself ticks via the bash render-result's own
+      ;; 1s interval (pi: setInterval → context.invalidate), so a
+      ;; silent long-running tool still updates Elapsed steadily — this
+      ;; event only pushes the new output chunks.
+      (do (when-let [comp (get @pending-tool-comps (:tool-call-id evt))]
             (when-let [content (:content evt)]
               (ui/tool-execution-set-content! comp content)))
           (tui/tui-request-render tui))
       :tool-execution-end
-      ;; Pi: update the existing component in place
-      (when-let [comp @pending-tool-comp]
+      ;; Pi: update the component by id and remove it from pendingTools
+      (when-let [comp (get @pending-tool-comps (:tool-call-id evt))]
         (let [result (:result evt)]
           (ui/tool-execution-set-content! comp (:content result))
           (ui/tool-execution-set-error! comp (:is-error result false))
@@ -2169,7 +2178,7 @@
             (ui/tool-execution-set-details! comp details))
           (when-let [images (:images result)]
             (ui/tool-execution-set-images! comp images))
-          (reset! pending-tool-comp nil)
+          (swap! pending-tool-comps dissoc (:tool-call-id evt))
           (tui/tui-request-render tui)))
       :status
       ;; Pi: agent status changes keep the footer/status
@@ -2377,7 +2386,7 @@
         sp1 (spacer/make-spacer 1)
         ch (ui/make-chat-history :theme (cfg/get-theme config)
                                  :thinking-hidden (cfg/get-hide-thinking-block config))
-        pending-tool-comp (atom nil)  ;; Pi: component ref for in-place updates
+        pending-tool-comps (atom {})  ;; Pi: pendingTools Map (tool-call-id → comp)
         cs-ref (atom nil)             ;; CoreState, filled after layout (for :status events)
 
         ;; Agent state
@@ -2437,7 +2446,7 @@
                                        (extensions/get-tool-result-hooks)))
             :on-event (make-agent-event-handler
                        {:chat-history ch :tui t :cs-ref cs-ref
-                        :pending-tool-comp pending-tool-comp}))
+                        :pending-tool-comps pending-tool-comps}))
             ;; Session scoped model list for cycle-model! / the scoped-models
             ;; selector (pi: resolveModelScope → session.scopedModels at
             ;; startup — full "provider/id" refs so cycling can switch
@@ -2497,7 +2506,7 @@
                             :session-atom (atom session)
                             :running-turn? (atom false)
                             :config config
-                            :pending-tool-comp pending-tool-comp
+                            :pending-tool-comps pending-tool-comps
                             :bash-running? (atom false)
                             :bash-signal (atom false)
                             :pending-bash-components (atom [])
