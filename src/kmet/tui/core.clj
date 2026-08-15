@@ -1122,6 +1122,50 @@
             (reset! buf rest)
             (dispatch-input! tui first-char)))))))
 
+;; ─── Unbracketed paste detection (paste-like bursts) ────────────────────────
+;; Bracketed paste (mode 2004) delivers paste content verbatim, but input
+;; paths that bypass bracketing — Android IME text injection, terminals
+;; without bracketed-paste support, tmux send-keys — deliver the raw bytes as
+;; ordinary key events. A paste line ending then arrives as a lone CR and the
+;; editor submits, executing pasted "/cmd" or "!cmd" text without the user
+;; pressing Enter. Human typing cannot reach paste speed, so a CR that ends a
+;; paste-like burst (several chars within a few ms) is rewritten to \n; only
+;; an isolated CR (a real Enter press) keeps submitting. The rewritten CR's
+;; LF half (CRLF line endings) is then swallowed so a \r\n pair still
+;; produces a single newline (matching normalize-paste-text).
+
+(def ^:private paste-burst-ms 100)
+(def ^:private paste-burst-chars 4)
+(def ^:private paste-lf-swallow-ms 50)
+
+(defn- cr-in-paste-burst?
+  "True when the CR arriving at NOW ends an unbracketed paste: at least
+   PASTE-BURST-CHARS chars (the CR included) arrived within the last
+   PASTE-BURST-MS and at least one of them is not itself a CR — an Enter key
+   repeat stream of CRs must keep submitting. RECENT is a vector of
+   [timestamp char] pairs including the current char."
+  [recent now]
+  (let [in-window (filter (fn [[ts _]] (>= ts (- now paste-burst-ms))) recent)]
+    (boolean (and (>= (count in-window) paste-burst-chars)
+                  (some #(not= \return (second %)) in-window)))))
+
+(defn- paste-input-decision
+  "Decide how to process the input char C arriving at NOW. RECENT holds
+   [timestamp char] pairs of previously read chars, SWALLOW-LF the timestamp
+   of a recently rewritten paste CR (nil when none). Returns a map with
+   :append (the char to buffer), :drop (true when the char is swallowed — the
+   LF half of a rewritten CRLF), and :new-swallow-lf (the flag value to keep)."
+  [c now recent swallow-lf]
+  (cond
+    (and (= c \return) (cr-in-paste-burst? recent now))
+    {:append "\n" :new-swallow-lf now}
+
+    (and (= c \newline) swallow-lf (<= (- now swallow-lf) paste-lf-swallow-ms))
+    {:drop true :new-swallow-lf nil}
+
+    :else
+    {:append (str c) :new-swallow-lf nil}))
+
 (defn- start-input-reader [tui]
   (let [jline (.terminal @(:terminal tui))
         reader (.reader jline)
@@ -1130,7 +1174,13 @@
     ;; session) exits as soon as a fresh reader is installed by resume.
     (reset! (:current-reader tui) reader)
     (let [f (future
-              (let [buf (atom "")]
+              (let [buf (atom "")
+                    ;; [timestamp char] pairs of recently read chars, pruned
+                    ;; to the paste-burst window on every read so the vector
+                    ;; stays bounded; swallow-lf remembers a rewritten paste
+                    ;; CR whose LF half may still arrive.
+                    recent-chars (atom [])
+                    swallow-lf (atom nil)]
                 (while (and @(:running? tui) (not @(:stopped? tui))
                             (identical? reader @(:current-reader tui)))
                   (try
@@ -1142,9 +1192,21 @@
                     ;; in-flight read; the FFM pump thread never wakes it).
                     (let [ch (.read reader 100)]
                       (when (>= ch 0)
-                        (swap! buf str (char ch))
-                        (swap! (:input-generation tui) inc)
-                        (process-input-buffer! tui read-fn buf)))
+                        (let [c (char ch)
+                              now (System/currentTimeMillis)]
+                          (swap! recent-chars
+                                 (fn [ts]
+                                   (-> (conj ts [now c])
+                                       (->> (filter (fn [[t _]]
+                                                      (>= t (- now paste-burst-ms)))))
+                                       vec)))
+                          (let [{:keys [append drop new-swallow-lf]}
+                                (paste-input-decision c now @recent-chars @swallow-lf)]
+                            (reset! swallow-lf new-swallow-lf)
+                            (swap! (:input-generation tui) inc)
+                            (when-not drop
+                              (swap! buf str append)
+                              (process-input-buffer! tui read-fn buf))))))
                     (catch Exception e
                       (when (and @(:running? tui)
                                  (identical? reader @(:current-reader tui)))

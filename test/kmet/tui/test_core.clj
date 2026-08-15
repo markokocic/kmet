@@ -1,7 +1,8 @@
 (ns kmet.tui.test-core
   (:require [clojure.test :as t :refer [testing]]
             [kmet.tui.core :as core]
-            [kmet.tui.keys :as keys]))
+            [kmet.tui.keys :as keys]
+            [kmet.tui.components.editor :as editor]))
 
 (defn- leaf
   "A focusable leaf component with a focused?-atom (like the editor)."
@@ -169,3 +170,138 @@
       (dispatch! tui "y")
       (t/is (= [[:l2 "y!"]] @got)
             "consume drops the event for later listeners and focus"))))
+
+;; ─── Unbracketed paste detection (paste-like bursts) ──────────────────────
+;; Terminals/IMEs without bracketed-paste support deliver paste content as
+;; ordinary key events, so a paste line ending arrives as a lone CR and the
+;; editor would submit it (executing pasted /cmd or !cmd without Enter). The
+;; reader rewrites a CR that ends a paste-like burst to \n; only an isolated
+;; CR (a real Enter press) submits.
+
+(defn- cr-in-paste-burst?
+  "Test helper for the private predicate."
+  [recent now]
+  ((var kmet.tui.core/cr-in-paste-burst?) recent now))
+
+(defn- paste-input-decision
+  "Test helper for the private decision fn."
+  [c now recent swallow-lf]
+  ((var kmet.tui.core/paste-input-decision) c now recent swallow-lf))
+
+(defn- burst-chars
+  "N chars arriving BURST-APART ms apart, ending with LAST, all within the
+   paste-burst window ending at NOW. Entries are [timestamp char] pairs like
+   the reader's recent-chars tracking."
+  [n burst-apart last now]
+  (conj (mapv (fn [i]
+                [(- now (* (- n i) burst-apart))
+                 (char (+ (int \a) i))])
+              (range n))
+        [now last]))
+
+(t/deftest test-cr-in-paste-burst
+  (testing "a CR ends a paste-like burst"
+    (t/is (true? (cr-in-paste-burst? (burst-chars 3 5 \return 1000) 1000))
+          "4 chars (incl CR) within 100ms")
+    (t/is (true? (cr-in-paste-burst? (burst-chars 8 5 \return 1000) 1000))
+          "any paste-sized burst"))
+  (testing "slow input is typing, not a paste"
+    (t/is (false? (cr-in-paste-burst? (burst-chars 2 5 \return 1000) 1000))
+          "fewer than 4 chars")
+    (t/is (false? (cr-in-paste-burst? (burst-chars 3 200 \return 1000) 1000))
+          "chars arrive slower than the burst window"))
+  (testing "an Enter key repeat stream (all CRs) keeps submitting"
+    (t/is (false? (cr-in-paste-burst? (mapv (fn [i] [(- 1000 (* i 30)) \return])
+                                            (range 4))
+                                      1000)))))
+
+(t/deftest test-paste-input-decision
+  (let [recent (burst-chars 3 5 \return 1000)
+        now 1000]
+    (testing "CR ending a burst becomes a newline and arms the LF swallow"
+      (t/is (= {:append "\n" :new-swallow-lf 1000}
+               (paste-input-decision \return now recent nil))))
+    (testing "the LF half of a rewritten CRLF is dropped"
+      (t/is (= {:drop true :new-swallow-lf nil}
+               (paste-input-decision \newline 1005 recent 1000)))
+      (t/is (= {:append "\n" :new-swallow-lf nil}
+               (paste-input-decision \newline 1100 recent 1000))
+            "a late LF is a real newline"))
+    (testing "ordinary chars pass through"
+      (t/is (= {:append "x" :new-swallow-lf nil}
+               (paste-input-decision \x now recent 1000)))
+      (t/is (= {:append "\r" :new-swallow-lf nil}
+               (paste-input-decision \return now [] nil))
+            "an isolated CR (real Enter) is untouched"))))
+
+(defn- reader-feed!
+  "Simulate the app reader loop (start-input-reader) for CHARS: each entry is
+   [char ts] with TS a monotonic timestamp; applies the paste-burst decision
+   and drives process-input-buffer! exactly like the real loop."
+  [tui chars]
+  (let [read-fn (fn [_timeout-ms] -2)
+        buf (atom "")
+        recent-chars (atom [])
+        swallow-lf (atom nil)]
+    (doseq [[c ts] chars]
+      (let [now ts]
+        (swap! recent-chars
+               (fn [rc]
+                 (-> (conj rc [now c])
+                     (->> (filter (fn [[t _]] (>= t (- now 100)))))
+                     vec)))
+        (let [{:keys [append drop new-swallow-lf]}
+              (paste-input-decision c now @recent-chars @swallow-lf)]
+          (reset! swallow-lf new-swallow-lf)
+          (swap! (:input-generation tui) inc)
+          (when-not drop
+            (swap! buf str append)
+            ((var kmet.tui.core/process-input-buffer!) tui read-fn buf)))))
+    {:buf @buf}))
+
+(defn- pasted-editor
+  "TUI with a focused editor; feeds CHARS through the simulated reader loop
+   and returns {:editor ed :submitted submitted}."
+  [chars]
+  (let [tui (core/create-tui nil)
+        ed (editor/make-editor)
+        submitted (atom [])]
+    (editor/editor-set-on-submit! ed (fn [t] (swap! submitted conj t)))
+    (core/tui-add-child tui ed)
+    (core/tui-set-focus tui ed)
+    (reader-feed! tui chars)
+    {:editor ed :submitted submitted}))
+
+(defn- paste-chars
+  "CHARS arriving BURST-APART ms apart starting at TS."
+  [chars burst-apart ts]
+  (mapv (fn [i c] [c (+ ts (* i burst-apart))]) (range) chars))
+
+(t/deftest test-unbracketed-paste-does-not-submit
+  (testing "an unbracketed paste with CR line endings inserts text, no submit"
+    (let [{:keys [editor submitted]} (pasted-editor (paste-chars "abc\rdef\r" 5 1000))]
+      (t/is (= [] @submitted) "paste CRs never submit")
+      (t/is (= "abc\ndef\n" (editor/editor-get-text editor)) "CRs became newlines")))
+  (testing "CRLF line endings collapse to a single newline each"
+    (let [{:keys [editor submitted]} (pasted-editor (paste-chars "abc\r\ndef\r" 5 1000))]
+      (t/is (= [] @submitted))
+      (t/is (= "abc\ndef\n" (editor/editor-get-text editor)))))
+  (testing "a pasted slash command is text, not a command"
+    (let [{:keys [editor submitted]} (pasted-editor (paste-chars "/model DGG hhh\r" 5 1000))]
+      (t/is (= [] @submitted))
+      (t/is (= "/model DGG hhh\n" (editor/editor-get-text editor))))))
+
+(t/deftest test-isolated-enter-still-submits
+  (testing "a lone CR (real Enter press) submits"
+    (let [{:keys [submitted]} (pasted-editor (paste-chars "abc\r" 150 1000))]
+      (t/is (= ["abc"] @submitted) "slow typing then Enter submits")))
+  (testing "an Enter key repeat stream (all CRs) keeps submitting"
+    (let [{:keys [submitted]} (pasted-editor (paste-chars "\r\r\r\r" 30 1000))]
+      (t/is (= 4 (count @submitted)) "repeated Enters are not rewritten"))))
+
+(t/deftest test-bracketed-paste-unaffected
+  (testing "bracketed paste still buffers and normalizes via handle-paste"
+    (let [{:keys [editor submitted]}
+          (pasted-editor (paste-chars "\u001b[200~ab\r\ncd\r\u001b[201~" 5 1000))]
+      (t/is (= [] @submitted))
+      (t/is (= "ab\ncd" (editor/editor-get-text editor))))))
