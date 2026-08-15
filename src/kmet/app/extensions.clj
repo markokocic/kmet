@@ -1,8 +1,10 @@
 (ns kmet.app.extensions
   "Extension runtime: discovers, loads, reloads and unloads Clojure
    extensions. The extension contract lives in kmet.extension — extensions
-   depend only on that namespace; this runtime wires the api capabilities to
-   the registries and the interactive/loop surfaces.
+   depend on that namespace plus the generic TUI layer kmet.tui.* (shared
+   by reference; the port of pi's @earendil-works/pi-tui); this runtime
+   wires the api capabilities to the registries and the interactive/loop
+   surfaces.
 
    An extension is a .clj file defining (defn init [api]) in its namespace,
    or a directory containing an extension.edn manifest:
@@ -211,6 +213,57 @@
   (when-let [f (get @ui-registry capability)]
     (apply f args)))
 
+(def ^:private default-extension-context
+  "Static context for headless/print mode (pi: ExtensionContext): the
+   interactive :build-context capability overrides these per call. Every
+   key is a value or zero-arg fn so handlers always receive a callable
+   map."
+  {:mode :print
+   :has-ui false
+   :cwd (System/getProperty "user.dir")
+   :model nil
+   :scoped-models []
+   :thinking-level nil
+   :is-idle (fn [] true)
+   :has-pending-messages (fn [] false)
+   :signal (fn [] nil)
+   :abort (fn [] nil)
+   :shutdown (fn [] (System/exit 0))
+   :get-context-usage (fn [] nil)
+   :compact (fn [& _] nil)
+   :get-system-prompt (fn [] nil)
+   :get-system-prompt-options (fn [] nil)
+   :wait-for-idle (fn [] nil)
+   :reload (fn [] nil)
+   :new-session (fn [& _] {:cancelled true})
+   :fork (fn [& _] {:cancelled true})
+   :navigate-tree (fn [& _] {:cancelled true})
+   :switch-session (fn [& _] {:cancelled true})
+   :is-project-trusted (fn [] false)})
+
+(defn build-extension-context
+  "Build the extension context (pi: ExtensionContext) for the current
+   runtime: the interactive mode's live :build-context capability merged
+   over the headless default. Returns a fresh map per call — the fns
+   capture live state at call time. Used for command handlers (replacing
+   the internal CoreState leak) and event handler ctx args.
+
+   Session control fns (new-session/fork/navigate-tree/switch-session/
+   reload) run the interactive flows synchronously — call them from
+   user-initiated command handlers, never from agent-loop event handlers
+   (pi restricts these to the command ctx; they can re-enter the run loop)."
+  []
+  (merge default-extension-context (ui-call :build-context)))
+
+(defn wrap-event-handler
+  "Adapt an extension event handler to the bus: handlers always receive
+   (event ctx) — pi parity, ctx built fresh per event. Fixed arity-2
+   contract (no legacy shim): a handler that takes fewer args fails fast
+   with an ArityException, which the bus logs as a handler error."
+  [handler]
+  (fn [event]
+    (handler event (build-extension-context))))
+
 (defn ui-select [title options & [_opts]] (ui-call :select title options))
 (defn ui-confirm [title message & [_opts]] (ui-call :confirm title message))
 (defn ui-input [title placeholder & [_opts]] (ui-call :input title placeholder))
@@ -385,10 +438,17 @@
      :extension-path (:path ext)
      :extension-dir (str (fs/parent (:path ext)))
      :register-command! (fn [cmd]
-                          (commands/register-command! cmd)
-                          (track (fn [] (commands/unregister-command! (:name cmd)))))
+                          ;; the handler is stored under :extension-handler so
+                          ;; the runner can pass it the extension context
+                          ;; (pi: handler(args, ctx)) while builtin commands
+                          ;; keep receiving CoreState
+                          (let [cmd (assoc cmd :extension-handler (:handler cmd))]
+                            (commands/register-command! cmd)
+                            (track (fn [] (commands/unregister-command! (:name cmd))))))
      :unregister-command! commands/unregister-command!
-     :get-commands #(commands/get-commands)
+     ;; sanitized — other extensions must not see :handler/:extension-handler
+     :get-commands #(mapv (fn [c] (select-keys c [:name :description]))
+                          (commands/get-commands))
      :register-tool! (fn [tool]
                        (tools/register-tool! tool)
                        (track (fn [] (tools/unregister-tool! (:name tool)))))
@@ -397,7 +457,8 @@
      :get-active-tools get-active-tools
      :set-active-tools set-active-tools
      :on-event (fn [event-type handler]
-                 (let [dereg (event-bus/on-event event-type handler)]
+                 (let [dereg (event-bus/on-event event-type
+                                                 (wrap-event-handler handler))]
                    (track dereg)
                    dereg))
      :emit-event! event-bus/emit-event!
@@ -441,12 +502,14 @@
 ;; registry plus a per-extension loader that serves (1) the extension's own
 ;; files, (2) the jars its deps.edn declares (the complete transitive
 ;; closure, resolved in-process via borkdude.deps), and (3) anything else on
-;; the classpath. Global namespaces the extension may touch (kmet.extension,
-;; clojure.*, babashka.*) are injected as shared references — never
-;; re-evaluated, so kmet's registries are not duplicated. kmet.* namespaces
-;; other than the contract are not served at all: re-evaluating kmet
-;; internals in a context would create context-local copies of their
-;; registries.
+;; the classpath. Global namespaces the extension may touch — kmet.extension
+;; (the contract), clojure.*, babashka.*, and the kmet.tui.* TUI library
+;; (pi: @earendil-works/pi-tui) — are injected as shared references, never
+;; re-evaluated, so kmet's registries and protocols are not duplicated.
+;; kmet.* namespaces outside that set (app internals, libs) are not served
+;; at all: re-evaluating them in a context would create context-local
+;; copies of their registries, and sharing them would break the layer
+;; boundary.
 
 (declare unload-extension!)
 
@@ -528,7 +591,28 @@
                 (remove #(str/starts-with? (.getName ^Class %) "[")
                         (babashka.classes/all-classes)))))
 
-(defonce ^:private context-namespaces
+(def ^:private tui-library-namespaces
+  "The generic TUI layer shared with extension contexts (pi:
+   @earendil-works/pi-tui). kmet.tui.core pulls in the components; the rest
+   are the tui namespaces it does not require. Required once here so they
+   exist when a per-extension context is built — injection is by reference,
+   never re-evaluated, so protocol identity is shared."
+  '[kmet.tui.core
+    kmet.tui.theme
+    kmet.tui.keybindings
+    kmet.tui.macros
+    kmet.tui.fuzzy
+    kmet.tui.autocomplete
+    kmet.tui.components.editing
+    kmet.tui.components.expandable-text
+    kmet.tui.components.image])
+
+(defn- build-context-namespaces
+  "The shared namespace map for extension contexts: kmet.extension (the
+   contract), the clojure.*/babashka.* builtins, and the kmet.tui.* TUI
+   library. Rebuilt per context so namespaces required since the last build
+   (the tui library) are included."
+  []
   (into {'kmet.extension (ns-interns 'kmet.extension)}
         (keep (fn [ns-obj]
                 (let [n (str (ns-name ns-obj))]
@@ -544,7 +628,8 @@
                              (not (or (str/starts-with? n "clojure.tools.")
                                       (str/starts-with? n "clojure.data.")))
                              (or (str/starts-with? n "clojure.")
-                                 (str/starts-with? n "babashka.")))
+                                 (str/starts-with? n "babashka.")
+                                 (str/starts-with? n "kmet.tui.")))
                     [(ns-name ns-obj) (ns-interns ns-obj)])))
               (all-ns))))
 
@@ -603,6 +688,58 @@
   (let [f (io/file (str dir) "deps.edn")]
     (when (.exists f)
       (:deps (edn/read-string (slurp f))))))
+
+(defn- ns-clause
+  "The (:require ...) / (:use ...) / (:require-macros ...) reference form of
+   an ns form, or nil (ns forms: (ns name docstring? attr-map? & refs))."
+  [ns-form clause-key]
+  (some #(when (and (seq? %) (= clause-key (first %))) %)
+        (filter #(not (or (string? %) (map? %))) (nnext ns-form))))
+
+(defn- require-libspec-libs
+  "The library symbols of an ns :require / :require-macros / :use clause
+   (each libspec is a bare symbol or a [lib ...] vector)."
+  [clause]
+  (keep (fn [spec]
+          (cond
+            (symbol? spec) spec
+            (and (vector? spec) (seq spec) (symbol? (first spec))) (first spec)
+            :else nil))
+        clause))
+
+(defn- validate-entry-requires!
+  "Fail fast with an actionable error when the entry ns form requires a
+   kmet.* namespace outside the shared set (kmet.extension + kmet.tui.*).
+   Without this the error would be silent: sci's require machinery NPEs on
+   a load-fn failure and swallows the original exception."
+  [ext-name ns-form tui-namespaces]
+  (doseq [clause-key [:require :require-macros :use]
+          lib (require-libspec-libs (ns-clause ns-form clause-key))]
+    (let [s (str lib)]
+      (cond
+        (str/starts-with? s "kmet.tui.")
+        (when-not (contains? tui-namespaces lib)
+          (throw (ex-info
+                  (str "Extension " ext-name " requires " lib
+                       " — not part of the kmet.tui.* library shared with extensions")
+                  {:extension ext-name :ns lib})))
+
+        (and (str/starts-with? s "kmet.")
+             (not= lib 'kmet.extension))
+        (throw (ex-info
+                (str "Extension " ext-name " requires " lib
+                     " — extensions may depend only on kmet.extension and kmet.tui.*")
+                {:extension ext-name :ns lib}))))))
+
+(defn- shared-tui-namespaces
+  "The set of kmet.tui.* namespace symbols currently loaded (what the
+   context injection shares with extensions)."
+  []
+  (set (keep (fn [ns-obj]
+               (let [n (str (ns-name ns-obj))]
+                 (when (str/starts-with? n "kmet.tui.")
+                   (ns-name ns-obj))))
+             (all-ns))))
 
 (def ^:private bundled-artifacts
   "Artifacts babashka ships (clojure + spec are always bundled) — excluded
@@ -707,24 +844,34 @@
         (when-not (str/starts-with? (str namespace) "kmet.")
           (resource-source namespace))
         (throw (ex-info
-                (if (str/starts-with? (str namespace) "kmet.")
+                (cond
+                  (str/starts-with? (str namespace) "kmet.tui.")
                   (str "Extension " ext-name " requires " namespace
-                       " — extensions may only depend on kmet.extension")
+                       " — the kmet.tui.* library is shared by reference and was"
+                       " not loaded when this context was built")
+
+                  (str/starts-with? (str namespace) "kmet.")
+                  (str "Extension " ext-name " requires " namespace
+                       " — extensions may depend only on kmet.extension and kmet.tui.*")
+
+                  :else
                   (str "Extension " ext-name " requires " namespace
                        " — not declared in deps.edn and not a babashka-bundled library"))
                 {:extension ext-name :ns namespace})))))
 
 (defn- create-context
   "Build the isolated sci context for one extension: full bb classes and
-   imports, shared global namespaces, and the per-extension load-fn that
-   checks deps — own files, declared deps (resolved lazily on first library
-   require), bb-bundled namespaces, with actionable errors for everything
-   else."
+   imports, shared global namespaces (contract + builtins + the kmet.tui.*
+   TUI library, required first so they exist for the injection), and the
+   per-extension load-fn that checks deps — own files, declared deps
+   (resolved lazily on first library require), bb-bundled namespaces, with
+   actionable errors for everything else."
   [ext-name ns-files deps-resolver]
+  (apply require tui-library-namespaces)
   (sci/init {:classes context-classes
              :imports bb-imports
              :features #{:bb :clj}
-             :namespaces context-namespaces
+             :namespaces (build-context-namespaces)
              :load-fn (make-load-fn ext-name ns-files deps-resolver)}))
 
 (defn- eval-forms!
@@ -769,7 +916,11 @@
     (try
       (let [deps (when (fs/directory? f) (deps-of-dir dir))
             ns-files (when (fs/directory? f) (scan-ns-files (str f)))
-            ctx (create-context name (or ns-files {}) (make-deps-resolver deps (:jars ext)))]
+            ctx (create-context name (or ns-files {}) (make-deps-resolver deps (:jars ext)))
+            ;; fail fast on forbidden/misspelled kmet.* requires — sci's
+            ;; require machinery swallows the load-fn error into an NPE
+            _ (validate-entry-requires! name (read-ns-form entry)
+                                        (shared-tui-namespaces))]
         (doseq [lib (keys deps)]
           (when (contains? bb-bundled-libs (str lib))
             (binding [*out* *err*]
@@ -797,7 +948,9 @@
       {:extension (:name ext) :error nil}
       (catch Exception e
         (unload-extension! ext)
-        {:extension nil :error (ex-message e)}))))
+        {:extension nil
+         :error (or (ex-message e)
+                    (str "load failed: " (.getName (class e))))}))))
 
 (defn unload-extension!
   "Unload an extension: shutdown (if initialized), deregister everything it

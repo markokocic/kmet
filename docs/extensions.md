@@ -31,10 +31,59 @@ unregistered** afterwards.
 `shutdown` is optional. Every `ext/...` wrapper takes `api` as its first
 argument and dispatches to the runtime; extensions never require kmet internals.
 
+## The shared TUI library
+
+Extensions that contribute interactive components (`ui/custom`) build them with
+`kmet.tui.*` — the same pi-tui-derived component library the kmet UI itself is
+built on. The namespaces are shared **by reference**: extension components are
+the same `IComponent` records the host renders, so keys, focus, theming and
+caching behave identically, and there is nothing to reimplement.
+
+```clojure
+(ns my.dialog
+  (:require [kmet.tui.protocols :as protocols]
+            [kmet.tui.components.container :as container]
+            [kmet.tui.components.text :as text]
+            [kmet.tui.theme :as theme]
+            [kmet.tui.macros :refer [defcomponent track!]]))
+
+(defcomponent MyDialog [this width]
+  (protocols/render [_ w]
+    (track! this w)
+    (container/->Container
+     {:child (text/->Text "Hello from an extension")})))
+```
+
+What is available: the core protocol records (`container`, `box`, `text`,
+`spacer`, `markdown`, `input`, `editor`, `editing`, `select-list`,
+`settings-list`, `stack`, `v-stack`, `h-stack`, `expandable-text`, `image`,
+`spinner`, ...), `kmet.tui.theme` (styling — including
+`theme/get-settings-list-theme` for the selector look), `kmet.tui.macros`
+(`track!`/`track-deps` reactive caching), `kmet.tui.keybindings`, `kmet.tui.keys`,
+`kmet.tui.fuzzy` and `kmet.tui.autocomplete`. Extension components must follow
+the duck-typed `{:render :handle-input :invalidate}` contract accepted by
+`ui/custom` (returning a real record is also fine). A `kmet.tui.*` require that
+is not part of the shared set (or a `kmet.app.*`/`kmet.modes.*`/`kmet.libs.*`
+require) fails the load with an explicit error.
+
 ## Where extensions live
 
 Extensions load from the `:extensions-dir` (default `~/.kmet/agent/extensions`,
 plus `.kmet/extensions` project-local) at startup and on `/reload`.
+
+### Built-in extensions (`extensions/`)
+
+The repo ships a set of opt-in extensions in `extensions/` — nothing there is
+loaded by default. Enable one by symlinking (or copying) it into the global
+or project extensions dir:
+
+```bash
+ln -s "$PWD/extensions/tools.clj" ~/.kmet/agent/extensions/tools.clj
+```
+
+Single-file extensions ship without tests (they must stay small and
+self-contained); directory-based extensions are separate projects with
+their own tests. See `extensions/README.md`.
 
 ### Single-file extensions
 
@@ -119,8 +168,9 @@ evaluation context**. Every extension runs in its own isolated context:
   and the deps re-resolve.
 - kmet core and `clojure.*` / `babashka.*` namespaces are shared references
   (never re-evaluated), so extension registrations always reach the real
-  kmet registries. Extensions must still depend only on `kmet.extension`;
-  other kmet internals are not resolvable from an extension context.
+  kmet registries. Extensions may depend only on `kmet.extension` plus the
+  shared `kmet.tui.*` library; other kmet internals are not resolvable from
+  an extension context (the load fails with an explicit error).
 
 Dep resolution happens **in-process** (via `borkdude.deps`, the tools.deps
 port kmet depends on) — no subprocess, and nothing is written outside the

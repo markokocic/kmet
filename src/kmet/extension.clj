@@ -49,7 +49,12 @@
 
 ;; ─── Wrappers (extensions call these; api is the map from init) ───────────
 
-(defn register-command! [api cmd] ((:register-command! api) cmd))
+(defn register-command!
+  "Register a slash command. The handler receives (ctx args): ctx is the
+   extension context (pi: ExtensionContext) — mode/has-ui, cwd, current
+   model, is-idle/abort/compact/reload/session control, … Build it at call
+   time when you need a fresh view; the values are captured per call."
+  [api cmd] ((:register-command! api) cmd))
 (defn unregister-command! [api name] ((:unregister-command! api) name))
 (defn get-commands [api] ((:get-commands api)))
 
@@ -61,7 +66,8 @@
 
 (defn on-event
   "Register a handler for an event type (e.g. :session-start, :agent-end,
-   :message-end). Returns a deregister fn."
+   :message-end). Handlers always receive (event ctx) — the ctx is the
+   extension context, built fresh per event. Returns a deregister fn."
   [api event-type handler]
   ((:on-event api) event-type handler))
 (defn emit-event! [api event] ((:emit-event! api) event))

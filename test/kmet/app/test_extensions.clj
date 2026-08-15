@@ -8,6 +8,7 @@
             [kmet.extension :as ext]
             [kmet.app.extensions :as extensions]
             [kmet.app.commands :as commands]
+            [kmet.app.event-bus :as event-bus]
             [kmet.app.session :as session]
             [kmet.app.tools.core :as tools]))
 
@@ -130,6 +131,116 @@
         (t/is (some? (:error result)))
         (t/is (empty? (extensions/get-loaded-extensions))))
       (fs/delete-tree dir))))
+
+(t/deftest test-extension-context
+  (testing "headless default context is complete and callable"
+    (let [ctx (extensions/build-extension-context)]
+      (t/is (= :print (:mode ctx)))
+      (t/is (false? (:has-ui ctx)))
+      (t/is (string? (:cwd ctx)))
+      (t/is (nil? (:model ctx)))
+      (t/is (= [] (:scoped-models ctx)))
+      (t/is (true? ((:is-idle ctx))))
+      (t/is (false? ((:has-pending-messages ctx))))
+      (t/is (nil? ((:signal ctx))))
+      (t/is (nil? ((:get-context-usage ctx))))
+      (t/is (nil? ((:get-system-prompt ctx))))
+      (t/is (nil? ((:wait-for-idle ctx))))
+      (t/is (= {:cancelled true} ((:new-session ctx))))
+      (t/is (= {:cancelled true} ((:fork ctx) "e1")))
+      (t/is (= {:cancelled true} ((:navigate-tree ctx) "e1")))
+      (t/is (= {:cancelled true} ((:switch-session ctx) "/x")))
+      (t/is (false? ((:is-project-trusted ctx))))))
+  (testing "event handlers receive (event ctx) — fixed arity-2 contract"
+    (let [calls (atom [])
+          w (extensions/wrap-event-handler
+             (fn [ev ctx] (swap! calls conj [(:type ev) (:mode ctx)])))]
+      (w {:type :agent-start})
+      (t/is (= [[:agent-start :print]] @calls))
+      (t/is (thrown? clojure.lang.ArityException
+                     ((extensions/wrap-event-handler (fn [_] :legacy))
+                      {:type :agent-end}))
+            "arity-1 handlers fail fast — no legacy shim")))
+  (testing "sci handlers receive the ctx through the real bus path"
+    (extensions/clear-extensions!)
+    (let [dir "target/test-ext-ctx-events"
+          probes (atom [])
+          unsub-a (event-bus/on-event :probe-a
+                                      (fn [ev] (swap! probes conj [:a ev])))
+          unsub-b (event-bus/on-event :probe-b
+                                      (fn [ev] (swap! probes conj [:b (:mode ev)])))
+          content (str "(ns ctx-events (:require [kmet.extension :as ext]))\n"
+                       "(defn init [api]\n"
+                       "  (ext/register-command! api {:name \"probe-cmd\"\n"
+                       "                                :description \"pc\"\n"
+                       "                                :handler (fn [c a] nil)})\n"
+                       "  (ext/on-event api :session-start\n"
+                       "    (fn [ev ctx] (ext/emit-event! api {:type :probe-a\n"
+                       "                                        :from (:type ev)\n"
+                       "                                        :cmds (ext/get-commands api)})))\n"
+                       "  (ext/on-event api :session-tree\n"
+                       "    (fn [ev ctx] (ext/emit-event! api {:type :probe-b :mode (:mode ctx)}))))\n")]
+      (fs/create-dirs dir)
+      (spit (str dir "/ext.clj") content)
+      (let [result (extensions/load-extension! (str dir "/ext.clj"))]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+        (event-bus/emit-event! {:type :session-start})
+        (event-bus/emit-event! {:type :session-tree :new-leaf-id "x"})
+        (let [[[_ probe-a] [_ mode-b]] @probes]
+          (t/is (= :session-start (:from probe-a))
+                "arity-2 handler received the event")
+          (t/is (= :print mode-b) "arity-2 handler got the ctx")
+          (testing "get-commands is sanitized — handlers stay private"
+            (t/is (seq (:cmds probe-a)))
+            (t/is (some #(= "probe-cmd" (:name %)) (:cmds probe-a))
+                  "the extension's own command is visible")
+            (t/is (every? #(and (string? (:name %)) (string? (:description %)))
+                          (:cmds probe-a)))
+            (t/is (every? #(not (contains? % :handler)) (:cmds probe-a)))
+            (t/is (every? #(not (contains? % :extension-handler)) (:cmds probe-a))))))
+      (unsub-a)
+      (unsub-b)
+      (fs/delete-tree dir))))
+(testing "extension commands carry :extension-handler for ctx dispatch"
+  (extensions/clear-extensions!)
+  (let [dir "target/test-ext-ctx-cmd"]
+    (fs/create-dirs dir)
+    (spit (str dir "/ext.clj")
+          (str "(ns ctx-cmd (:require [kmet.extension :as ext]))\n"
+               "(defn init [api]\n"
+               "  (ext/register-command! api\n"
+               "    {:name \"ctx-test\" :description \"d\"\n"
+               "     :handler (fn [ctx args] {:mode (:mode ctx) :args args})}))\n"))
+    (let [result (extensions/load-extension! (str dir "/ext.clj"))]
+      (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+      (let [c (commands/find-command "ctx-test")]
+        (t/is (fn? (:extension-handler c)))
+        (t/is (= {:mode :print :args "hi"}
+                 ((:extension-handler c) (extensions/build-extension-context) "hi"))))
+      (fs/delete-tree dir))))
+
+(t/deftest test-extension-namespace-isolation
+  (extensions/clear-extensions!)
+  (let [load (fn [name content]
+               (let [dir (str "target/test-ext-iso-" name)]
+                 (fs/create-dirs dir)
+                 (spit (str dir "/ext.clj") content)
+                 (let [result (extensions/load-extension! (str dir "/ext.clj"))]
+                   (fs/delete-tree dir)
+                   result)))]
+    (testing "kmet.app.* requires are rejected with an actionable error"
+      (let [result (load "app" "(ns bad-app (:require [kmet.app.commands :as c]))\n(defn init [api] nil)\n")]
+        (t/is (some? (:error result)))
+        (t/is (str/includes? (:error result)
+                             "may depend only on kmet.extension and kmet.tui.*"))))
+    (testing "a kmet.tui.* typo is rejected (sci would NPE silently)"
+      (let [result (load "typo" "(ns bad-typo (:require [kmet.tui.theem :as t]))\n(defn init [api] nil)\n")]
+        (t/is (some? (:error result)))
+        (t/is (str/includes? (:error result)
+                             "not part of the kmet.tui.* library shared with extensions"))))
+    (testing "valid kmet.tui.* requires load and share the real library"
+      (let [result (load "tui" "(ns good-tui\n  (:require [kmet.tui.components.text :as text]\n            [kmet.tui.protocols :as protocols]))\n(defn init [api]\n  (let [c (text/make-text \"hi\")]\n    (when-not (vector? (protocols/render c 20))\n      (throw (ex-info \"render failed\" {})))))\n")]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))))))
 
 (t/deftest ^:slow test-extension-bad-deps-fails-load
   (extensions/clear-extensions!)

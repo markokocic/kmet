@@ -588,29 +588,40 @@
          :width 60 :height (min (count options) 10))
         (tui/tui-request-render (:tui cs))))))
 
+(defn- register-builtin-command!
+  "Register a builtin slash command unless an extension already took the
+   name. Extensions load before the layout is built, so a command an
+   extension registered under a builtin name (e.g. the shipped /tools
+   extension replacing the builtin tools listing — pi has no builtin
+   /tools; the example extension owns the name there) must not be
+   clobbered."
+  [cmd]
+  (when-not (commands/find-command (:name cmd))
+    (commands/register-command! cmd)))
+
 (defn- register-builtin-commands!
   "Register kmet's builtin slash commands. Handlers receive [cs args];
    argument completions feed the editor autocomplete dropdown."
   [_config]
-  (commands/register-command!
+  (register-builtin-command!
    {:name "quit"
     :description "Exit kmet"
     :handler (fn [cs _]
                (debug/log "/quit command")
                (tui/tui-stop (:tui cs)))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "help"
     :description "Show available commands and shortcuts"
     :handler (fn [cs _]
                (ui/chat-history-add-message! (:chat-history cs)
                                              {:role :assistant :content (help-text)}))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "tools"
     :description "List available tools with parameters"
     :handler (fn [cs _]
                (ui/chat-history-add-message! (:chat-history cs)
                                              {:role :assistant :content (tools-text)}))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "model"
     :description "Switch model"
     :argument-hint "<provider:model[:thinking]>"
@@ -629,19 +640,19 @@
             ;; catalogs are static — no catalog refresh on a miss)
             (show-model-selector cs args)))
         (show-model-selector cs)))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "scoped-models"
     :description "Enable/disable models for Ctrl+P cycling"
     :handler (fn [cs _] (show-scoped-models-selector cs))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "settings"
     :description "Open settings menu"
     :handler (fn [cs _] (show-settings cs))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "new"
     :description "Start a new session"
     :handler (fn [cs _] (handle-new-session cs))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "resume"
     :description "Browse past sessions"
     :handler (fn [cs _]
@@ -655,7 +666,7 @@
                                                                         {:role :assistant
                                                                          :content (str "Resumed session " short-id ".")})
                                           (tui/tui-request-render (:tui cs))))))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "continue"
     :description "Continue where the agent left off (e.g. after a network error)"
     :handler (fn [cs _]
@@ -686,24 +697,24 @@
                    :else
                    (do (debug/log "/continue command")
                        (start-agent-run! cs)))))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "tree"
     :description "Navigate session tree (switch branches)"
     :handler (fn [cs _]
                (show-session-tree cs
                                   (fn [entry]
                                     (ask-branch-summary cs @(:session-atom cs) entry))))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "fork"
     :description "Create a new fork from a previous user message"
     :handler (fn [cs _]
                (show-fork-selector cs (fn [entry-id] (fork-at! cs entry-id))))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "clone"
     :description "Duplicate the current session at the current position"
     :handler (fn [cs _]
                (clone-current-session! cs))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "name"
     :description "Set session display name"
     :argument-hint "<name>"
@@ -737,7 +748,7 @@
                                                       :content (str "Session name: " current)})
                        (ui/show-warning! (:chat-history cs)
                                          "Usage: /name <name>"))))))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "session"
     :description "Show session info and stats"
     :handler (fn [cs _]
@@ -750,7 +761,7 @@
                    (ui/chat-history-add-message! chat
                                                  {:role :assistant
                                                   :content (session-info-text sess)}))))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "export"
     :description "Export session to HTML (JSONL is not supported by design)"
     :argument-hint "<path>"
@@ -786,7 +797,7 @@
                                                      {:role :info :label "Export"
                                                       :content (str "Failed to export session: "
                                                                     (or (ex-message e) (str e)))}))))))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "share"
     :description "Share session as a secret GitHub gist"
     :handler (fn [cs _]
@@ -813,7 +824,7 @@
                                                    {:role :info :label "Share"
                                                     :content "No active session."})
                      (share-session! cs)))))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "copy"
     :description "Copy last agent message to clipboard"
     :handler (fn [cs _]
@@ -838,11 +849,11 @@
                                            "No clipboard tool available on this system.")))
                      (ui/show-warning! chat
                                        "No agent messages to copy yet.")))))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "reload"
     :description "Reload keybindings, extensions, skills, prompts, themes, and context files"
     :handler handle-reload})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "compact"
     :description "Manually compact the session context"
     :argument-hint "<instructions>"
@@ -875,7 +886,7 @@
                            :content (if result
                                       "Session compacted."
                                       "Nothing to compact (session too small).")})))))))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "theme"
     :description "Switch theme"
     :argument-hint "<name>"
@@ -906,7 +917,7 @@
                                                                 "\nAvailable themes: "
                                                                 (str/join ", " (sort (keys (th/get-all-themes))))
                                                                 "\nUsage: /theme <name>")}))))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "login"
     :description "Configure provider authentication"
     :argument-hint "<provider>"
@@ -936,7 +947,7 @@
                 (oauth-login! cs p)
                 (api-key-login! cs p))
               (show-login-method-selector! cs p methods))))))})
-  (commands/register-command!
+  (register-builtin-command!
    {:name "logout"
     :description "Remove provider authentication"
     :argument-hint "<provider>"
@@ -1063,12 +1074,13 @@
   "Register pi's builtin slash commands that kmet does not implement yet,
    all bound to the command-not-implemented handler. Keeps the command list
    in sync with pi (packages/coding-agent/src/core/slash-commands.ts) so
-   /help and autocomplete show the full surface."
+   /help and autocomplete show the full surface. Like the real builtins,
+   they never clobber extension-registered commands."
   []
   (doseq [{:keys [name description argument-hint]}
           [{:name "import" :description "Import and resume a session from a JSONL file"}
            {:name "hotkeys" :description "Show all keyboard shortcuts"}]]
-    (commands/register-command!
+    (register-builtin-command!
      {:name name
       :description description
       :argument-hint argument-hint
@@ -1922,7 +1934,11 @@
               cmd (if (nil? space) (subs trimmed 1) (subs trimmed 1 space))
               args (if (nil? space) "" (str/trim (subs trimmed (inc space))))]
           (if-let [c (commands/find-command cmd)]
-            (do ((:handler c) cs args)
+            (do (if-let [eh (:extension-handler c)]
+                  ;; extension commands receive the extension context
+                  ;; (pi: handler(args, ctx)); builtins keep CoreState
+                  (eh (extensions/build-extension-context) args)
+                  ((:handler c) cs args))
                 (update-footer! cs))
             ;; pi: input hooks → skill command → prompt template → fall
             ;; through to the agent (unknown /cmd is sent as a message)
@@ -3076,6 +3092,96 @@
                              (agent/set-active-tools! @(:agent-state cs) names)
                              (tui/tui-request-render t)
                              nil)
+         ;; Extension context (pi: ExtensionContext) — captures the live
+         ;; layout/agent state per call; the headless default in
+         ;; extensions.clj covers everything else (mode/has-ui/…)
+         :build-context (fn []
+                          ;; capture the agent-state ATOM: session swaps
+                          ;; assoc a NEW record onto the atom, so the old
+                          ;; record's :session field goes stale (compact);
+                          ;; the atom fields are shared and always current
+                          (let [ag-atom (:agent-state cs)
+                                ag @ag-atom]
+                            {:mode :interactive
+                             :has-ui true
+                             :cwd (fdp/fdp-get-cwd fdp)
+                             :model @(:model ag)
+                             :scoped-models @(:scoped-models ag)
+                             :thinking-level (agent/get-thinking-level ag)
+                             :is-idle (fn [] (= :idle (agent/get-status @ag-atom)))
+                             :has-pending-messages (fn []
+                                                     (boolean
+                                                      (agent/has-queued-messages?
+                                                       @ag-atom)))
+                             :signal (fn [] @(:signal @ag-atom))
+                             :abort (fn []
+                                      (when-not (= :idle (agent/get-status @ag-atom))
+                                        (agent/cancel-turn @ag-atom)))
+                             :shutdown (fn [] (tui/tui-stop t))
+                             :get-context-usage (fn []
+                                                  ;; pi: null without an
+                                                  ;; active session
+                                                  (when-let [_ (fdp/fdp-get-session fdp)]
+                                                    (let [tokens (fdp/fdp-context-tokens fdp)
+                                                          window (fdp/fdp-get-context-window fdp)]
+                                                      {:tokens tokens
+                                                       :context-window window
+                                                       :percent (when (and tokens window
+                                                                           (pos? window))
+                                                                  (int (* 100.0 (/ tokens window))))})))
+                             :compact (fn [& [{:keys [custom-instructions
+                                                      on-complete on-error]}]]
+                                        (future
+                                          (try
+                                            (let [r (agent/compact-context!
+                                                     @ag-atom custom-instructions)]
+                                              (when on-complete (on-complete {:result r})))
+                                            (catch Exception e
+                                              (when on-error (on-error e))))))
+                             :get-system-prompt (fn [] @(:system @ag-atom))
+                             :get-system-prompt-options (fn []
+                                                          (let [config (:config cs)]
+                                                            {:custom-prompt (cfg/get-custom-prompt config)
+                                                             :append-prompt (cfg/get-append-system-prompt config)
+                                                             :context-files (context/load-project-context-files
+                                                                             (cfg/get-agent-dir)
+                                                                             (str (fs/cwd)))}))
+                             :wait-for-idle (fn []
+                                              (if (= :idle (agent/get-status @ag-atom))
+                                                nil
+                                                (let [p (promise)]
+                                                  (future
+                                                    (loop []
+                                                      (if (= :idle (agent/get-status @ag-atom))
+                                                        (deliver p true)
+                                                        (do (Thread/sleep 100) (recur)))))
+                                                  p)))
+                             :reload (fn [] (handle-reload cs nil))
+                             :new-session (fn [& _]
+                                            (handle-new-session cs)
+                                            {:cancelled false})
+                             :fork (fn [entry-id & _]
+                                     (if entry-id
+                                       (do (fork-at! cs entry-id) {:cancelled false})
+                                       {:cancelled true}))
+                             :navigate-tree (fn [target-id & [{:keys [summarize
+                                                                      custom-instructions]}]]
+                                              (if-let [sess @(:session-atom cs)]
+                                                (if-let [entry (session/get-entry sess
+                                                                                  target-id)]
+                                                  (do (navigate-tree! cs sess entry
+                                                                      (boolean summarize)
+                                                                      custom-instructions)
+                                                      {:cancelled false})
+                                                  {:cancelled true})
+                                                {:cancelled true}))
+                             :switch-session (fn [session-path & _]
+                                               (try
+                                                 (let [sess (session/load-session session-path)]
+                                                   (restore-session! cs sess true)
+                                                   {:cancelled false})
+                                                 (catch Exception _ {:cancelled true})))
+                             :is-project-trusted (fn [] false)}))
          :reset (fn []
                   ;; pi: resetExtensionUI — dispose widgets, restore
                   ;; footer/header/editor, clear statuses + working

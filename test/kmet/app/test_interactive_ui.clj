@@ -10,6 +10,7 @@
             [kmet.tui.core :as tui]
             [kmet.modes.interactive :as inter]
             [kmet.app.commands :as commands]
+            [kmet.app.extensions :as extensions]
             [kmet.app.keybindings :as app-kb]
             [kmet.app.theme-controller :as theme-ctrl]
             [kmet.app.ui :as ui]
@@ -18,6 +19,9 @@
             [kmet.ai.models :as m]
             [kmet.ai.auth :as auth]
             [kmet.app.loop :as agent]
+            [kmet.app.session :as session]
+            [kmet.app.ui.footer-data-provider :as fdp]
+            [babashka.fs :as fs]
             [kmet.config :as cfg]
             [kmet.tui.keybindings :as tui-kb]))
 
@@ -99,6 +103,18 @@
       (t/is (some? logout) "logout registered")
       (t/is (= "Remove provider authentication" (:description logout)))
       (t/is (some? (:handler logout)) "logout has a handler"))))
+
+(deftest test-builtins-do-not-clobber-extension-commands
+  (testing "builtin registration skips names an extension already took
+            (extensions load before the layout is built; the shipped /tools
+            extension replaces the builtin tools listing)"
+    (commands/clear-commands!)
+    (commands/register-command!
+     {:name "tools" :description "extension version" :handler (fn [_ _] nil)})
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (t/is (= "extension version" (:description (commands/find-command "tools")))
+          "extension command survives builtin registration")
+    (t/is (some? (commands/find-command "model")) "unclaimed builtins still register")))
 
 (deftest test-login-logout-unknown-provider
   (testing "login/logout validate the provider against the registry"
@@ -503,3 +519,53 @@
             (t/is (= "light" (get-in @saved [1])) "theme persisted as the full name")
             (t/is (= "light" (theme-ctrl/get-active-theme-name @tc-ctrl))
                   "theme switched to the full name")))))))
+
+(deftest test-build-context-capability
+  (testing "the interactive ui registry's :build-context captures live state"
+    (let [ag (agent/make-agent-state :provider :opencode-go :model "deepseek-v4-flash")
+          cs {:agent-state (atom ag)
+              :config cfg/default-config
+              :session-atom (atom nil)}
+          registry ((var inter/build-extension-ui-registry)
+                    {:tui nil :cs cs}
+                    {:fdp (ui/make-footer-data-provider)}
+                    nil)
+          ctx ((:build-context registry))]
+      (t/is (= :interactive (:mode ctx)))
+      (t/is (true? (:has-ui ctx)))
+      (t/is (string? (:cwd ctx)))
+      (t/is (= "deepseek-v4-flash" (:model ctx)))
+      (t/is (= [] (:scoped-models ctx)))
+      (t/is (true? ((:is-idle ctx))))
+      (t/is (false? ((:has-pending-messages ctx))))
+      (t/is (false? ((:signal ctx))))
+      (t/is (string? ((:get-system-prompt ctx))))
+      (t/is (nil? ((:wait-for-idle ctx))) "already idle → nil, not a promise")
+      (t/is (nil? ((:get-context-usage ctx))) "no active session → nil (pi parity)")
+      (t/is (= {:cancelled true} ((:fork ctx) nil)))
+      (t/is (= {:cancelled true} ((:navigate-tree ctx) "missing-leaf")))
+      (t/is (= {:cancelled true} ((:switch-session ctx) "/nonexistent-file.edn")))
+      (t/is (false? ((:is-project-trusted ctx))))
+      (t/is (not (contains? ctx :cs)) "CoreState never leaks into the ctx")
+      (testing "fns stay live across an agent swap (session swaps assoc a
+                new record; only the :session field goes stale)"
+        (let [sess (session/create-session (str (fs/cwd) "/target"))]
+          (reset! (:agent-state cs) (assoc ag :session sess))
+          (t/is (true? ((:is-idle ctx))))
+          (t/is (nil? ((:wait-for-idle ctx))))))
+      (testing "get-context-usage reports the active session (pi parity)"
+        (let [fdp-provider (ui/make-footer-data-provider)
+              _ (fdp/fdp-set-session! fdp-provider
+                                      (session/create-session
+                                       (str (fs/cwd) "/target")))
+              registry ((var inter/build-extension-ui-registry)
+                        {:tui nil :cs cs}
+                        {:fdp fdp-provider}
+                        nil)
+              usage ((:get-context-usage ((:build-context registry))))]
+          (t/is (contains? usage :tokens))
+          (t/is (contains? usage :context-window))
+          (t/is (contains? usage :percent)))))
+      ;; the registry install is a side effect — don't leak the fake cs
+      ;; registry into later tests (build-extension-context would merge it)
+    (extensions/clear-ui-registry!)))
