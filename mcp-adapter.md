@@ -120,7 +120,10 @@ files it sits inside the `bb lint` / `bb test` gates and must satisfy
 Dependencies allowed: `kmet.extension`, `kmet.tui.*`, `kmet.libs.*`,
 `clojure.*`, `babashka.*`, bundled `cheshire.core` + `clojure.core.async` +
 `babashka.http-client`. **No `deps.edn` needed** (all libs are bb-bundled and
-resolved from the bb classpath).
+resolved from the bb classpath). Reused existing libs:
+`kmet.libs.process` (stdio spawn + tree-kill), `kmet.libs.sse` (SSE parsing,
+both transports), `kmet.libs.file-lock` conventions (atomic cache/token
+writes).
 
 ## 6. Config — `config.clj`
 
@@ -237,8 +240,11 @@ Notifications received mid-request are consumed/dropped; stale responses
 ### 7.2 stdio transport
 
 - Spawn `(apply proc/process (into argv args) {:in :stream :out :stream
-  :err :stream :dir cwd :env (merge (System/getenv) env)})`.
-- pid via `(.pid (:proc p))`; `alive?` via `proc/alive?`.
+  :err :stream :dir cwd :env (merge (System/getenv) env)})`; pid via
+  `(.pid (:proc p))`; `alive?` via `proc/alive?`.
+- Reuse `kmet.libs.process` for process management: `track-pid!` on spawn,
+  `collect-descendant-pids` + `kill-process-tree!` on disconnect/shutdown
+  (npx-style servers spawn children — a bare `proc/stop` orphans them).
 - Reader thread: buffered stdout lines → `cheshire` parse → push to a
   core.async channel (capacity 128); `::eof` marker + close on EOF.
 - Stderr drained into a bounded tail (last 20 lines) for diagnostics.
@@ -256,7 +262,8 @@ Notifications received mid-request are consumed/dropped; stale responses
   if present); remember for subsequent requests.
 - Response handling by content type:
   - `application/json`: parse body → it is the response.
-  - `text/event-stream`: read lines, collect `data:` payloads, parse each as
+  - `text/event-stream`: read lines, collect `data:` payloads via
+    `kmet.libs.sse/parse-sse-line` (same parser as §7.4), parse each as
     JSON, keep the one matching our `:id` (notifications/other events
     dropped); the server closes the stream after the result.
 - Blocking read happens inside a `future`; deref with deadline. On timeout:
