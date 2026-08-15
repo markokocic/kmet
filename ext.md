@@ -464,11 +464,11 @@ P0 (ctx) ──► P1, P2, P3, P11, P12   (independent, small)
   accept contributed paths; revisit after P0–P10.
 - `refreshTools` — kmet's registry is a live atom; `get-all-tools` always
   sees new registrations. Never needed.
-- `constrainedSampling`, `prepareArguments`, `executionMode`,
-  `renderShell` for extension tools — fields exist on the record but the
-  loop/UI has no consumers; wire them only if a shipped extension needs
-  them (note: `renderShell :self` IS honored for builtin tools via
-  `builtin-renderers` — extension parity would ride on P5).
+- `constrainedSampling`, `prepareArguments`, `executionMode` for
+  extension tools — fields exist on the record but the loop/UI has no
+  consumers; wire them only if a shipped extension needs them.
+  (`renderShell` IS wired — P5 passes the record's `:render-shell` to the
+  transcript component for extension tools too.)
 - `oauth` provider registration (pi `registerProvider` oauth block) —
   kmet's OAuth flows are internal; extension providers get
   `$ENV`/`!command` api-key resolution only.
