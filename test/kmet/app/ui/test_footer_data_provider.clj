@@ -172,8 +172,8 @@
             (let [p (fdp/make-footer-data-provider :session sess)]
               (is (= 50.0 (fdp/fdp-latest-cache-hit-rate p))
                   "assistant rate (50/100), not the compaction's (100/500) — pi: assistant messages only")
-              (is (= 102 (fdp/fdp-context-tokens p))
-                  "assistant context tokens (50+1+50) + estimate of trailing q2 (1), not the compaction usage"))))))))
+              (is (nil? (fdp/fdp-context-tokens p))
+                  "kept-tail assistant predates the compaction in the branch — its usage reflects the old context; unknown until the next response (pi)"))))))))
 
 (deftest test-latest-cache-hit-rate
   (testing "cache hit rate comes from the most recent usage entry (input excludes cache, pi)"

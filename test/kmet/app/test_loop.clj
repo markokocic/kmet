@@ -1479,6 +1479,8 @@
     (t/is (= [] @(:scoped-models agent)))
     (t/is (false? @(:overflow-recovered agent)))
     (t/is (nil? (:compact-token-threshold agent)))
+    (t/is (nil? (:context-window agent)))
+    (t/is (= 16384 (:compact-reserve-tokens agent)) "pi default reserveTokens")
     (t/is (= 3 @(:max-retries agent)) "pi default maxRetries")))
 
 (defn- make-test-provider
@@ -1775,9 +1777,6 @@
         agent (loop/make-agent-state
                :on-event (fn [e] (swap! events conj e))
                :session sess
-                ;; high entry threshold so the proactive check never fires;
-                ;; only the overflow path compacts
-               :compact-threshold 100
                :keep-recent-tokens 5)]
     (try
       (dotimes [i 12]
@@ -1876,13 +1875,36 @@
                   :base-url "https://custom.example/v1/messages"}
                  @sent))))))
 
+(defn- with-summarization-stub
+  "Run f with the LLM stubbed to complete one compaction summarization call
+   (only the compaction path calls the LLM with an empty tool list). Delivers
+   usage like a real provider so the compaction entry records it (pi:
+   CompactionEntry.usage)."
+  [f]
+  (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                llm/send-message
+                (fn [opts]
+                  (future
+                    (t/is (empty? (:tools opts)) "summarization call carries no tools")
+                    (t/is (= :none (:cache-retention opts))
+                          "compaction summaries disable prompt caching (pi)")
+                    (when-let [on-text (:on-text opts)]
+                      (on-text "summary of the old conversation"))
+                    (when-let [on-usage (:on-usage opts)]
+                      (on-usage {:prompt_tokens 100 :completion_tokens 10
+                                 :prompt_tokens_details {:cached_tokens 20}
+                                 :cost {:total 0.001}}))
+                    (when-let [on-done (:on-done opts)]
+                      (on-done :stop))
+                    :done))]
+    (f)))
+
 (t/deftest test-loop-token-threshold-compaction
   (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
         sess (session/create-session (str dir))
         agent (loop/make-agent-state
                :session sess
                :compact-token-threshold 10
-               :compact-threshold 1000
                :keep-recent-tokens 40)]
     (try
       (doseq [i (range 10)]
@@ -1894,8 +1916,12 @@
           (swap! (:messages agent) conj m)
           (session/append-entry sess m)))
       (t/is (true? (binding [*err* (java.io.StringWriter.)]
-                     (loop/maybe-compact! agent)))
+                     (with-summarization-stub #(loop/maybe-compact! agent))))
             "token estimate above threshold triggers compaction")
+      (t/is (some #(and (= :compaction (:role %))
+                        (= "summary of the old conversation" (:summary %)))
+                  @(:entries sess))
+            "LLM summary lands on the compaction entry")
       (t/is (= 11 (count @(:entries sess)))
             "append-only: all 10 entries stay, compaction entry added")
       (t/is (< (count @(:messages agent)) 10) "in-memory context aligned with session")
@@ -1904,32 +1930,93 @@
       (finally
         (fs/delete-tree dir)))))
 
+(t/deftest test-loop-window-based-compaction
+  ;; pi: the default trigger is token-based against the model's context
+  ;; window — contextTokens > contextWindow - reserveTokens, where
+  ;; contextTokens is the measured usage of the latest assistant response.
+  ;; Regression: the old entry-count default (400) compacted sessions at
+  ;; ~13% context usage — the count trigger is removed entirely.
+  (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})]
+    (try
+      (t/testing "small measured usage vs window → no compaction, no count trigger"
+        (let [sess (session/create-session (str dir))
+              agent (loop/make-agent-state
+                     :session sess
+                     :context-window 10000
+                     :compact-reserve-tokens 1000
+                     :keep-recent-tokens 40)]
+          (dotimes [i 50]
+            (session/append-entry sess {:role :user :content [{:type :text :text (str "msg " i)}]}))
+          (session/append-entry sess {:role :assistant :content [{:type :text :text "ok"}]
+                                      :usage {:prompt_tokens 2000 :completion_tokens 50
+                                              :prompt_tokens_details {:cached_tokens 500}}})
+          (t/is (false? (loop/maybe-compact! agent))
+                "measured 2050 tokens (1500 input + 50 output + 500 cached) vs window-reserve 9000 — no compaction")))
+      (t/testing "measured usage within reserve of the window → compaction"
+        (let [sess (session/create-session (str dir))
+              agent (loop/make-agent-state
+                     :session sess
+                     :context-window 10000
+                     :compact-reserve-tokens 1000
+                     :keep-recent-tokens 40)]
+          (dotimes [i 50]
+            (session/append-entry sess {:role :user :content [{:type :text :text (str "msg " i)}]}))
+          (session/append-entry sess {:role :assistant :content [{:type :text :text "ok"}]
+                                      :usage {:prompt_tokens 20000 :completion_tokens 50
+                                              :prompt_tokens_details {:cached_tokens 500}}})
+          (t/is (true? (binding [*err* (java.io.StringWriter.)]
+                         (with-summarization-stub #(loop/maybe-compact! agent))))
+                "measured 20050 tokens >= window-reserve 9000 → compaction")))
+      (t/testing "no window and no explicit thresholds → never compacts"
+        (let [sess (session/create-session (str dir))
+              agent (loop/make-agent-state
+                     :session sess
+                     :keep-recent-tokens 40)]
+          (dotimes [i 50]
+            (session/append-entry sess {:role :user :content [{:type :text :text (str "msg " i)}]}))
+          (t/is (false? (loop/maybe-compact! agent))
+                "no count trigger by default (pi: no entry-count compaction)")))
+      (t/testing "degenerate windows never trigger the window check"
+        (let [sess (session/create-session (str dir))
+              agent (loop/make-agent-state
+                     :session sess
+                     :context-window 0
+                     :keep-recent-tokens 40)]
+          (dotimes [i 50]
+            (session/append-entry sess {:role :user :content [{:type :text :text (str "msg " i)}]}))
+          (session/append-entry sess {:role :assistant :content [{:type :text :text "ok"}]
+                                      :usage {:prompt_tokens 20000 :completion_tokens 50}})
+          (t/is (false? (loop/maybe-compact! agent))
+                "window 0 → no window check (pi: contextWindow <= 0 → undefined)")))
+      (t/testing "stale kept-tail usage does not re-trigger right after a compaction"
+        (let [sess (session/create-session (str dir))
+              agent (loop/make-agent-state
+                     :session sess
+                     :context-window 10000
+                     :compact-reserve-tokens 1000
+                     :keep-recent-tokens 40)]
+          (dotimes [i 50]
+            (session/append-entry sess {:role :user :content [{:type :text :text (str "msg " i)}]}))
+          (session/append-entry sess {:role :assistant :content [{:type :text :text "ok"}]
+                                      :usage {:prompt_tokens 20000 :completion_tokens 50
+                                              :prompt_tokens_details {:cached_tokens 500}}})
+          (t/is (true? (binding [*err* (java.io.StringWriter.)]
+                         (with-summarization-stub #(loop/maybe-compact! agent))))
+                "measured usage near the window compacts once")
+          (t/is (false? (loop/maybe-compact! agent))
+                "kept-tail assistant usage predates the compaction in the branch — no re-trigger until the next response (pi)")))
+      (finally (fs/delete-tree dir)))))
+
 (t/deftest test-loop-compaction-not-retriggered
   ;; Regression: compaction is append-only, so the full branch never shrinks —
   ;; maybe-compact! must measure the context (compaction + kept tail), not the
-  ;; file. Otherwise the count/token threshold fires every turn after the
-  ;; first compaction.
+  ;; file. Otherwise the token threshold fires every turn after the first
+  ;; compaction.
   (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})]
     (try
       (let [sess (session/create-session (str dir))
             agent (loop/make-agent-state
                    :session sess
-                   :compact-threshold 6
-                   :compact-token-threshold 1000
-                   :keep-recent-tokens 5)]
-        (dotimes [i 10]
-          (let [m {:role :user :content [{:type :text :text (str "msg " i)}]}]
-            (swap! (:messages agent) conj m)
-            (session/append-entry sess m)))
-        (t/is (true? (binding [*err* (java.io.StringWriter.)]
-                       (loop/maybe-compact! agent)))
-              "count threshold triggers the first compaction")
-        (t/is (false? (loop/maybe-compact! agent))
-              "context shrank below the count threshold — no re-compaction"))
-      (let [sess (session/create-session (str dir))
-            agent (loop/make-agent-state
-                   :session sess
-                   :compact-threshold 1000
                    :compact-token-threshold 100
                    :keep-recent-tokens 40)]
         (dotimes [i 10]
@@ -1940,7 +2027,7 @@
             (swap! (:messages agent) conj m)
             (session/append-entry sess m)))
         (t/is (true? (binding [*err* (java.io.StringWriter.)]
-                       (loop/maybe-compact! agent)))
+                       (with-summarization-stub #(loop/maybe-compact! agent))))
               "token threshold triggers the first compaction")
         (t/is (false? (loop/maybe-compact! agent))
               "context tokens dropped below the token threshold — no re-compaction"))
@@ -1949,7 +2036,7 @@
 (t/deftest test-loop-compact-no-op-reports-false
   (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
         sess (session/create-session (str dir))
-        agent (loop/make-agent-state :session sess :compact-threshold 1000)]
+        agent (loop/make-agent-state :session sess)]
     (try
       (doseq [i (range 3)]
         (let [m {:role :user :content [{:type :text :text (str "msg " i)}]}]
@@ -1973,7 +2060,6 @@
           llm-called? (atom false)
           agent (loop/make-agent-state
                  :session sess
-                 :compact-threshold 1000
                  :keep-recent-tokens 40
                  :on-event (fn [e] (swap! events conj e)))
           dereg (event-bus/on-event
@@ -2082,7 +2168,6 @@
         events (atom [])
         agent (loop/make-agent-state
                :session sess
-               :compact-threshold 1000
                :keep-recent-tokens 40
                :on-event (fn [e] (swap! events conj e)))]
     (try
@@ -2113,7 +2198,7 @@
 (t/deftest ^:slow test-loop-compaction-refuses-when-active
   (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
         sess (session/create-session (str dir))
-        agent (loop/make-agent-state :session sess :compact-threshold 1000
+        agent (loop/make-agent-state :session sess
                                      :keep-recent-tokens 40)]
     (try
       (doseq [i (range 6)]

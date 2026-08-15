@@ -15,8 +15,7 @@
     (t/is (= :opencode-go (:provider c)))
     (t/is (= "dark" (:theme c)))
     (t/is (contains? c :session-dir))
-    (t/is (= "deepseek-v4-flash" (:model c)))
-    (t/is (= 500 (:max-session-entries c)))))
+    (t/is (= "deepseek-v4-flash" (:model c)))))
 
 (t/deftest test-default-config-has-no-provider-map
   ;; Phase 0: the :providers map is replaced by the models registry — the

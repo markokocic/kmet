@@ -36,11 +36,10 @@
    LLM call. set-system-prompt-override! sets a per-run system prompt override.
 
    Compaction (pi: auto-compaction): the session is compacted proactively
-   (entry-count / token-estimate thresholds) and reactively after a
+   (measured usage vs. the model's context window) and reactively after a
    context-overflow error (compact once, then retry). Compaction summarizes
    the pre-cut conversation via the LLM (kmet.app.compaction, pi:
-   core/compaction) and replaces it with a summary entry; falls back to
-   count-based truncation when summarization is unavailable.
+   core/compaction) and replaces it with a summary entry.
 
    Model management (pi: setModel / cycleModel): set-scoped-models! sets the
    session scoped model list; cycle-model! moves through it emitting
@@ -87,7 +86,6 @@
                        provider      ;; provider keyword (registry id, e.g. :opencode-go)
                        system        ;; system prompt string
                        signal        ;; atom for cancellation
-                       compact-threshold ;; int: auto-compact when entries exceed this
                        thinking      ;; :off :low :medium :high :max
                        on-event      ;; callback for state updates
                        base-url      ;; full endpoint URL override (default: derived from the Model record)
@@ -117,15 +115,17 @@
 
 (defn make-agent-state
   "Create a new agent state.
-   opts: :model, :provider, :system, :session, :on-event, :compact-threshold,
+   opts: :model, :provider, :system, :session, :on-event,
          :thinking, :base-url, :api-type, :steering-mode, :follow-up-mode,
          :max-retries (default 3), :base-delay-ms (default 2000),
          :before-tool-call, :after-tool-call, :system-prompt-override,
          :transform-context, :prepare-next-turn, :should-stop-after-turn,
          :get-api-key, :scoped-models (default []), :compact-token-threshold,
-         :keep-recent-tokens (default 20000, pi: keepRecentTokens),
-         :http-idle-timeout-ms (default 300000, pi: httpIdleTimeoutMs; 0 disables)"
-  [& {:keys [model provider system session on-event compact-threshold thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key scoped-models compact-token-threshold keep-recent-tokens http-idle-timeout-ms]
+         :context-window, :compact-reserve-tokens (default 16384, pi:
+         reserveTokens), :keep-recent-tokens (default 20000, pi:
+         keepRecentTokens), :http-idle-timeout-ms (default 300000, pi:
+         httpIdleTimeoutMs; 0 disables)"
+  [& {:keys [model provider system session on-event thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key scoped-models compact-token-threshold context-window compact-reserve-tokens keep-recent-tokens http-idle-timeout-ms]
       :or {provider :opencode-go
            thinking :off
            steering-mode :all
@@ -133,6 +133,7 @@
            max-retries 3
            base-delay-ms 2000
            scoped-models []
+           compact-reserve-tokens 16384
            keep-recent-tokens 20000
            http-idle-timeout-ms 300000
            system "You are kmet, a minimal coding agent. Help the user with their tasks.
@@ -145,7 +146,6 @@ Be precise and concise in your responses."}}]
                     :provider (atom provider)
                     :system (atom system)
                     :signal (atom false)
-                    :compact-threshold compact-threshold
                     :thinking (atom thinking)
                     :enabled-tools (atom nil)
                     :on-event on-event
@@ -169,6 +169,8 @@ Be precise and concise in your responses."}}]
                     :scoped-models (atom scoped-models)
                     :overflow-recovered (atom false)
                     :compact-token-threshold compact-token-threshold
+                    :context-window context-window
+                    :compact-reserve-tokens compact-reserve-tokens
                     :keep-recent-tokens keep-recent-tokens
                     :compacting? (atom false)
                     :pending-bash (atom [])
@@ -976,26 +978,11 @@ Be precise and concise in your responses."}}]
     (reset! (:messages agent)
             (vec (mapcat session/context-messages (session/build-context sess))))))
 
-(defn- count-based-compact!
-  "Fallback: count-based compaction (previous behavior). Appends a placeholder
-   compaction entry and rebuilds the in-memory context from the session.
-   Returns true when compaction happened."
-  [agent]
-  (if-let [sess (:session agent)]
-    (let [n (count @(:entries sess))
-          compacted (session/compact! sess (quot n 2))]
-      (when compacted
-        (sync-context-after-compaction! agent)
-        (debug/log "compacted session: appended count-based compaction entry"))
-      (boolean compacted))
-    false))
-
 (defn compact-context!
   "LLM-based compaction (pi: prepareCompaction → compact): summarize the
    pre-cut entries, append a compaction entry (append-only — summarized
    entries stay in the file, build-context excludes them), and rebuild the
-   in-memory context to mirror it. Falls back to count-based truncation
-   when summarization is unavailable or fails. Also the manual /compact path
+   in-memory context to mirror it. Also the manual /compact path
    (pi: session.compact) — custom-instructions are appended to the
    summarization prompt.
 
@@ -1049,8 +1036,8 @@ Be precise and concise in your responses."}}]
                                 true))
                           (if @(:signal agent)
                             :aborted
-                            (do (debug/log "Warning: summarization failed; falling back to count-based compaction")
-                                (count-based-compact! agent))))))))
+                            (do (debug/log "Warning: summarization failed; compaction skipped")
+                                false)))))))
                 false)]
           (emit agent {:type :compaction-end
                        :reason reason
@@ -1066,21 +1053,34 @@ Be precise and concise in your responses."}}]
 
 (defn maybe-compact!
   "Proactively compact before a run (pi: _checkCompaction — threshold case).
-   Triggers on entry count (:compact-threshold) or estimated tokens
-   (:compact-token-threshold). Returns true when compaction happened."
+   Triggers when the measured context usage comes within reserve tokens of
+   the model's context window (pi: contextTokens > contextWindow -
+   reserveTokens) — the default trigger — or when an explicit
+   :compact-token-threshold (estimated tokens) is configured. Returns true
+   when compaction happened."
   [agent]
   (if-let [sess (:session agent)]
     (let [context (session/build-context sess)
-          n (count context)
-          threshold (:compact-threshold agent)
+          branch (session/get-branch sess)
           token-threshold (:compact-token-threshold agent)
+          window (:context-window agent)
+          reserve (:compact-reserve-tokens agent)
+          window-reserve (when window (- window reserve))
           ;; Measure the context that would be sent, not the whole file:
           ;; compaction is append-only, so the full branch never shrinks —
           ;; counting it would re-trigger compaction every turn after the
           ;; first one (pi: the threshold is evaluated against the context).
-          tokens (reduce + 0 (map compaction/estimate-tokens context))]
-      (if (or (and threshold (>= n threshold))
-              (and token-threshold (>= tokens token-threshold)))
+          measured (compaction/context-tokens branch)
+          has-usage? (boolean (some compaction/assistant-usage-tokens branch))
+          tokens (or measured (reduce + 0 (map compaction/estimate-tokens context)))]
+      (if (or (and token-threshold (>= tokens token-threshold))
+              ;; the window check requires a positive window-reserve and fresh
+              ;; measured usage: right after a compaction the last measured
+              ;; usage reflects the old context (context-tokens is nil), and
+              ;; without any usage data the estimate is too unreliable (pi:
+              ;; estimate with lastUsageIndex null → no compaction)
+              (and window-reserve (pos? window-reserve)
+                   has-usage? measured (>= measured window-reserve)))
         (let [result (compact-context! agent nil :threshold)]
           (and (not= :aborted result) result))
         false))
@@ -1311,8 +1311,7 @@ Be precise and concise in your responses."}}]
                                                   ;; (pi: overflow is compaction territory, not auto-retry)
                                                   (and (not @(:overflow-recovered agent))
                                                        (context-overflow? err)
-                                                       (:session agent)
-                                                       (:compact-threshold agent))
+                                                       (:session agent))
                                                   (do (reset! (:overflow-recovered agent) true)
                                                       (compact-for-overflow! agent)
                                                       (recur t prev-tool-calls must-run))
@@ -1540,6 +1539,13 @@ Be precise and concise in your responses."}}]
                    :model model
                    :previous-model previous
                    :source :set}))))
+
+(defn set-context-window!
+  "Set the model context window used by the proactive compaction check (pi:
+   state.model.contextWindow — follows model switches)."
+  [agent window]
+  (reset! (:context-window agent) window)
+  nil)
 
 (defn set-scoped-models!
   "Set the session scoped model list used by cycle-model! (pi:

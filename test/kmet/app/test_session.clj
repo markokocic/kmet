@@ -449,24 +449,6 @@
       (t/is (= :assistant (:role (first (:children (first tree)))))
             "First child is assistant"))))
 
-(t/deftest test-session-compact
-  (let [session (s/create-session test-dir)]
-    (dotimes [i 10]
-      (s/append-entry session {:role :user :content [{:type :text :text (str "q" i)}]})
-      (s/append-entry session {:role :assistant :content [{:type :text :text (str "a" i)}]}))
-    (let [result (s/compact! session 6)
-          branch (s/get-branch session)]
-      (t/is (some? result))
-      (t/is (= :compaction (:role result)))
-      (t/is (= 21 (count @(:entries session)))
-            "append-only: all entries stay, compaction entry added")
-      (t/is (= (:id result) (:id (last branch)))
-            "compaction is the new leaf")))
-  (let [session (s/create-session test-dir)]
-    (s/append-entry session {:role :user :content "hi"})
-    (t/is (nil? (s/compact! session 6))
-          "nothing to compact below the threshold")))
-
 (t/deftest test-session-delete
   (let [session (s/create-session test-dir)
         f (:file session)]

@@ -17,9 +17,10 @@
    :model "deepseek-v4-flash"
    :theme "dark"
    :session-dir "~/.kmet/sessions"
-   :max-session-entries 500
-   :compact-threshold 400
+   ;; pi: auto-compaction is token-based against the context window
    :compact-token-threshold nil
+   ;; pi: reserveTokens — tokens reserved for prompt + response
+   :compact-reserve-tokens 16384
    :keep-recent-tokens 20000
    :retry {:enabled true :max-retries 3 :base-delay-ms 2000}
    :models []

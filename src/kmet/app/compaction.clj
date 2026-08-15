@@ -11,7 +11,8 @@
    dedicated turn-prefix prompt and merges two summaries)."
   (:require [clojure.string :as str]
             [clojure.edn :as edn]
-            [kmet.app.session :as session]))
+            [kmet.app.session :as session]
+            [kmet.ai.usage :as usage]))
 
 (def ^:private image-chars 4800)
 (def ^:private tool-result-max-chars 2000)
@@ -64,6 +65,53 @@
                              (+ (count (or (:name tc) ""))
                                 (count (str (or (:arguments tc) ""))))))))]
     (quot (+ chars 3) 4))) ;; ceil(chars / 4)
+
+;; ─── Context token measurement (pi: calculateContextTokens / estimateContextTokens) ──
+
+(defn assistant-usage-tokens
+  "Total context tokens reported by an assistant entry's normalized usage
+   (pi: calculateContextTokens — input+output+cacheRead+cacheWrite), or nil
+   when the entry is not an assistant or carries no usable usage.
+   Assistant-only: compaction entries carry the summarization call's usage,
+   which does not reflect the context."
+  [entry]
+  (when (and (= :assistant (:role entry))
+             (some? (:usage entry)))
+    (when-let [u (usage/entry-usage (:usage entry))]
+      (let [n (+ (:input u) (:output u) (:cache-read u) (:cache-write u))]
+        (when (pos? n) n)))))
+
+(defn context-tokens
+  "Measured token count of the active context (pi: getContextUsage →
+   estimateContextTokens): the latest usage-carrying assistant entry's
+   measured usage plus a chars/4 estimate of the entries after it; a pure
+   estimate when no assistant entry reports usage. Entries are a session
+   BRANCH. Returns nil only when the count is unknown: after the latest
+   compaction only assistant responses that came after it in the branch are
+   trusted — kept-tail entries carry pre-compaction usage reflecting the
+   old, larger context (pi: unknown until the next LLM response — the
+   footer then shows ?/window, and the compaction check must not re-trigger
+   on the stale size)."
+  [branch]
+  (let [comp-idx (last (keep-indexed (fn [i e] (when (= :compaction (:role e)) i))
+                                     branch))
+        post (if comp-idx (subvec branch (inc comp-idx)) branch)
+        known? (boolean (some assistant-usage-tokens post))
+        ctx (session/context-entries branch)
+        n (count ctx)
+        usage-idx (when known?
+                    (loop [i (dec n)]
+                      (cond
+                        (< i 0) nil
+                        (assistant-usage-tokens (nth ctx i)) i
+                        :else (recur (dec i)))))]
+    (cond
+      known? (if usage-idx
+               (+ (assistant-usage-tokens (nth ctx usage-idx))
+                  (reduce + 0 (map estimate-tokens (subvec ctx (inc usage-idx)))))
+               (reduce + 0 (map estimate-tokens ctx)))
+      (nil? comp-idx) (reduce + 0 (map estimate-tokens ctx))
+      :else nil)))
 
 ;; ─── Cut-point selection (pi: findCutPoint) ────────────────────────────────
 

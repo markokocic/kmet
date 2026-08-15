@@ -168,3 +168,38 @@
     (let [msgs (compaction/summarization-messages [{:role :user :content "x"}] nil "focus on tests")]
       (t/is (str/includes? (-> msgs second :content first :text)
                            "Additional focus: focus on tests")))))
+
+;; ─── Context token measurement (pi: estimateContextTokens) ────────────────
+
+(t/deftest test-context-tokens
+  (t/testing "measured usage of the latest assistant + estimate of trailing entries"
+    (let [entries [{:role :assistant :content [{:type :text :text "a"}]
+                    :usage {:prompt_tokens 1000 :completion_tokens 200
+                            :prompt_tokens_details {:cached_tokens 300}}}
+                   {:role :user :content [{:type :text :text "hello world"}]}]]
+      ;; 700 input + 200 output + 300 cacheRead, plus ceil(11/4)=3 trailing
+      (t/is (= 1203 (compaction/context-tokens entries)))))
+  (t/testing "compaction entries carry summarization usage — never counted"
+    (let [entries [{:role :compaction :summary "s"
+                    :usage {:prompt_tokens 999 :completion_tokens 999}}
+                   {:role :assistant :content [{:type :text :text "a"}]
+                    :usage {:prompt_tokens 100 :completion_tokens 20
+                            :prompt_tokens_details {:cached_tokens 30}}}]]
+      ;; assistant only: 70+20+30 = 120
+      (t/is (= 120 (compaction/context-tokens entries)))))
+  (t/testing "pure estimate when no assistant reports usage"
+    (let [entries [{:role :user :content [{:type :text :text "hello world"}]}]]
+      (t/is (= 3 (compaction/context-tokens entries)))))
+  (t/testing "unknown (nil) when no assistant responded after the latest compaction"
+    (let [entries [{:role :assistant :content [{:type :text :text "old"}]
+                    :usage {:prompt_tokens 1000 :completion_tokens 1}}
+                   {:role :compaction :summary "s"}]]
+      (t/is (nil? (compaction/context-tokens entries))
+            "kept-tail usage predates the compaction and reflects the old context — pi: unknown until the next response")))
+  (t/testing "kept-tail assistant usage is stale — only branch-post-compaction responses count"
+    (let [entries [{:role :assistant :content [{:type :text :text "kept-tail"}]
+                    :usage {:prompt_tokens 8000 :completion_tokens 100}}
+                   {:role :compaction :summary "s" :first-kept-id "kept"}
+                   {:role :user :content [{:type :text :text "kept"}]}]]
+      (t/is (nil? (compaction/context-tokens entries))
+            "the kept-tail assistant predates the compaction in the branch — its usage reflects the old, larger context"))))

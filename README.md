@@ -213,13 +213,15 @@ stream deadline: a stream that receives no bytes for this long errors retryably
 context files, and rebuilds the system prompt (pi: `session.reload`). It refuses
 while a response is streaming.
 
-Compaction (pi-compatible): `:compact-threshold` (entry count, default 400) and
-`:compact-token-threshold` (estimated tokens, default off) trigger proactive
-compaction before a run; context-overflow errors compact once then retry. The
-pre-cut conversation is summarized via the LLM (structured Goal/Progress/Next-
-Steps checkpoint, updated on subsequent compactions) and replaced with a summary
-entry; `:keep-recent-tokens` (default 20000) sets how many recent tokens to keep.
-`/compact [instructions]` triggers it manually.
+Compaction (pi-compatible): proactive compaction triggers before a run when
+the measured context usage (latest response's reported usage + a chars/4
+estimate of newer entries) comes within `:compact-reserve-tokens` (default
+16384) of the model's context window. An explicit `:compact-token-threshold`
+(estimated tokens) can override it. Context-overflow errors compact once then
+retry. The pre-cut conversation is summarized via the LLM (structured
+Goal/Progress/Next-Steps checkpoint, updated on subsequent compactions) and
+replaced with a summary entry; `:keep-recent-tokens` (default 20000) sets how
+many recent tokens to keep. `/compact [instructions]` triggers it manually.
 
 ## Themes
 

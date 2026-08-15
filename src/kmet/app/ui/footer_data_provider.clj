@@ -159,45 +159,18 @@
           (reverse (session/build-context sess)))
     nil))
 
-(defn- context-tokens-from-usage
-  "Total context tokens reported by an assistant entry's normalized usage
-   (pi: calculateContextTokens — usage.totalTokens or input+output+cacheRead+
-   cacheWrite). nil when the entry is not an assistant or carries no usable
-   usage. Assistant-only (pi: getAssistantUsage): compaction entries carry
-   the summarization call's usage, which does not reflect the context."
-  [entry]
-  (when (and (= :assistant (:role entry))
-             (some? (:usage entry)))
-    (when-let [u (usage/entry-usage (:usage entry))]
-      (let [n (+ (:input u) (:output u) (:cache-read u) (:cache-write u))]
-        (when (pos? n) n)))))
-
 (defn fdp-context-tokens
   "Estimated tokens of the active session context (pi: getContextUsage →
    estimateContextTokens): the latest assistant message's measured usage
    (input+output+cacheRead+cacheWrite — exactly what was sent to the LLM)
    plus a chars/4 estimate of the entries after it. Returns nil when the
-   count is unknown: after the latest compaction there is no assistant
-   response yet, so any estimate would reflect the pre-compaction context
-   (pi: unknown until the next LLM response — the footer then shows ?/window).
+   count is unknown: after the latest compaction only assistant responses
+   that came after it in the branch are trusted — kept-tail entries carry
+   pre-compaction usage reflecting the old context (pi: unknown until the
+   next LLM response — the footer then shows ?/window).
    Measures build-context, not the full branch: compaction is append-only,
    so the branch never shrinks and would show a stale context percentage
    that compaction never relieves."
   [provider]
   (when-let [sess (fdp-get-session provider)]
-    (let [ctx (session/build-context sess)
-          comp-idx (last (keep-indexed (fn [i e] (when (= :compaction (:role e)) i))
-                                       ctx))]
-      (when (or (nil? comp-idx)
-                (boolean (some context-tokens-from-usage
-                               (subvec ctx (inc comp-idx)))))
-        (let [n (count ctx)
-              usage-idx (loop [i (dec n)]
-                          (cond
-                            (< i 0) nil
-                            (context-tokens-from-usage (nth ctx i)) i
-                            :else (recur (dec i))))]
-          (if usage-idx
-            (+ (context-tokens-from-usage (nth ctx usage-idx))
-               (reduce + 0 (map compaction/estimate-tokens (subvec ctx (inc usage-idx)))))
-            (reduce + 0 (map compaction/estimate-tokens ctx))))))))
+    (compaction/context-tokens (session/get-branch sess))))

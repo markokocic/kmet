@@ -2532,13 +2532,19 @@
         pending-tool-comps (atom {})  ;; Pi: pendingTools Map (tool-call-id → comp)
         cs-ref (atom nil)             ;; CoreState, filled after layout (for :status events)
 
+        ;; Context window of the active model — drives the footer % and the
+        ;; proactive auto-compaction check (pi: state.model.contextWindow)
+        ctx-window (or (:context-window (models/get-model provider model))
+                       (:context-window config))
+
         ;; Agent state
         ag (agent/make-agent-state
             :model model
             :provider provider
             :system system-prompt
             :session session
-            :compact-threshold (:compact-threshold config)
+            :context-window ctx-window
+            :compact-reserve-tokens (or (:compact-reserve-tokens config) 16384)
             :compact-token-threshold (:compact-token-threshold config)
             :keep-recent-tokens (or (:keep-recent-tokens config) 20000)
             :http-idle-timeout-ms (:http-idle-timeout-ms config)
@@ -2625,14 +2631,13 @@
              ;; Phase 2: context window from the resolved Model record, falling
              ;; back to the settings value when the model is unknown (pi footer
              ;; contextPercentDisplay)
-             :context-window (or (:context-window (models/get-model provider model))
-                                 (:context-window config))
+             :context-window ctx-window
              :model @(:model ag) :provider @(:provider ag) :thinking @(:thinking ag)
              ;; pi: the thinking suffix renders only for reasoning models
              :reasoning (boolean (:reasoning (models/get-model provider model))))
         ftr (ui/make-footer :theme (cfg/get-theme config)
                             :provider fdp
-                            :auto-compact (boolean (or (:compact-threshold config)
+                            :auto-compact (boolean (or ctx-window
                                                        (:compact-token-threshold config))))
 
         ;; Core state (status-indicator/status-container filled in after layout)

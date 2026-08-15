@@ -679,24 +679,6 @@
                :children (mapv build-node (children (:id entry)))})]
       (mapv build-node root-children))))
 
-(defn compact!
-  "Count-based fallback compaction: append a placeholder compaction entry
-   covering the oldest entries beyond the threshold (used when LLM
-   summarization is unavailable — see compact-with-summary!). Append-only:
-   the summarized entries stay in the file; build-context excludes them from
-   the LLM context while keeping them reachable via get-branch/get-tree/fork.
-   Returns the compaction entry, or nil when there is nothing to compact."
-  [session max-entries]
-  (with-session-lock session
-    (let [entries @(:entries session)
-          n (count entries)
-          keep-count (quot max-entries 2)]
-      (when (and (> n max-entries) (pos? keep-count))
-        (append-entry session
-                      {:role :compaction
-                       :summary (str "[Compacted " (- n keep-count) " messages]")
-                       :first-kept-id (:id (nth entries (- n keep-count)))})))))
-
 (defn compact-with-summary!
   "Append a compaction entry summarizing everything before first-kept-id (pi:
    appendCompaction). Append-only: the summarized entries stay in the file;
