@@ -394,7 +394,10 @@
 (deftest test-bash-tool-result-blank-separators
   (testing "bash tool result keeps blank lines before output and before Took"
     (let [c (te/make-tool-execution :name "bash" :args {:command "echo hi"})]
-      ;; set-content! marks execution started; set-error! marks it ended
+      ;; timing is lifecycle-driven: mark-execution-started! then set-error!
+      ;; (pi: markExecutionStarted; set-content! must not mark started —
+      ;; replayed tools render without a duration)
+      (te/tool-execution-mark-execution-started! c)
       (te/tool-execution-set-content! c "hi\n")
       (te/tool-execution-set-error! c false)
       (let [plain (mapv strip-ansi (core/render c 60))

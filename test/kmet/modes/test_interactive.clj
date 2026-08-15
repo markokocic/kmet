@@ -173,6 +173,63 @@
         (is (empty? @pending)
             "all tools removed from pending after their end events")))))
 
+(deftest replay-branch-restores-tool-rendering
+  (testing "replaying a session branch restores tool executions with their
+            real name + args: the components are created from the assistant
+            message's :tool-calls and results are matched by tool-call id
+            (pi: renderSessionItems + renderedPendingTools). Regression: the
+            replay read :name from tool entries that are saved with the
+            pi-faithful :tool-name key, so every tool rendered as \"tool\"
+            through the default renderer — no bash call line, full output
+            with no collapsing"
+    (let [sess-dir (str "target/test-interactive-replay-tools-" (System/currentTimeMillis))
+          sess (session/create-session sess-dir)]
+      (try
+        (session/append-entry sess {:role :user :content "run the tests"})
+        (session/append-entry sess
+                              {:role :assistant
+                               :content [{:type :text :text "Running..."}]
+                               :tool-calls [{:id "call_1" :name "bash"
+                                             :arguments {:command "ls -la"}}
+                                            {:id "call_2" :name "bash"
+                                             :arguments {:command "echo hi"}}]})
+        ;; results arrive out of order (parallel tools)
+        (session/append-entry sess
+                              {:role :tool
+                               :content [{:type :tool_result :tool_use_id "call_2"
+                                          :content "hi"}]
+                               :tool-name "bash" :is-error false})
+        (session/append-entry sess
+                              {:role :tool
+                               :content [{:type :tool_result :tool_use_id "call_1"
+                                          :content (str/join "\n" (range 20))}]
+                               :tool-name "bash" :is-error false})
+        (session/append-entry sess {:role :assistant
+                                    :content [{:type :text :text "Done."}]})
+        (let [loaded (session/load-session (:file sess))
+              ch (ui/make-chat-history)
+              cs (inter/map->CoreState {:chat-history ch})]
+          ((var inter/replay-branch!) cs loaded)
+          (let [msgs @(:messages-atom ch)
+                tools (filterv #(= :tool (:role %)) msgs)
+                [t1 t2] tools]
+            (is (= 2 (count tools)) "one component per tool call")
+            (is (= "bash" (:name t1)) "tool name restored from the call")
+            (is (= "bash" (:name t2)) "second call too")
+            ;; collapsed bash: call line + 5-line preview + expand hint
+            (let [lines (protocols/render (:component t1) 100)]
+              (is (some #(str/includes? % "$ ls -la") lines)
+                  "call line shows the restored command")
+              (is (some #(str/includes? % "to expand") lines)
+                  "collapsed preview shows the expand hint")
+              (is (< (count lines) 30)
+                  "collapsed output is truncated, not the full 20 lines")
+              (is (not-any? #(str/includes? % "Took") lines)
+                  "replayed tools show no fabricated duration (pi: startedAt stays undefined)"))
+            (is (str/includes? (str/join "\n" (protocols/render (:component t2) 100)) "hi")
+                "result content matched to the right call by id")))
+        (finally (fs/delete-tree sess-dir))))))
+
 (deftest submit-command-line-gate
   (testing "multiline submit text (e.g. pasted blocks) is never a command"
     (let [command-line? @#'inter/command-line?]

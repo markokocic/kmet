@@ -1107,55 +1107,111 @@
    (extension state) entries render when an extension registered a renderer
    for their custom-type; compaction and branch_summary entries render their
    summary text; custom_message entries render as labeled info boxes when
-   their display flag is set)."
+   their display flag is set). Tool results replay as ToolExecutionComponents
+   created from the assistant entry's :tool-calls (name + args) and filled
+   by the matching :tool result entry by tool-call id (pi:
+   renderedPendingTools); a result without a matching call renders
+   standalone from its own :tool-name."
   [cs sess]
   (ui/chat-history-clear! (:chat-history cs))
-  (doseq [e (session/get-branch sess)
-          :when (not (contains? #{:session_info :label :model-change
-                                  :thinking-level-change} (:role e)))]
-    (let [role (:role e)]
-      (cond
-        (= role :custom)
-        ;; extension state entries render only with a registered renderer
-        ;; (pi: registerEntryRenderer + CustomEntryComponent)
-        (when-let [renderer (extensions/get-entry-renderer (:custom-type e))]
-          (when-let [msg (renderer e)]
-            (ui/chat-history-add-message! (:chat-history cs) msg)))
+  (let [content-of
+        (fn [e]
+          (if (contains? #{:compaction :branch-summary} (:role e))
+            (or (:summary e) "")
+            (str/join
+             (keep (fn [b]
+                     (case (:type b)
+                       :text (:text b)
+                       :tool_result (:content b)
+                       nil))
+                   (:content e)))))
+        ;; Pi: renderedPendingTools — tool-call id → ToolExecutionComponent
+        ;; created from the assistant message's tool calls, filled by the
+        ;; matching tool-result entry (results can arrive out of order with
+        ;; parallel tools).
+        pending-tools (atom {})]
+    (doseq [e (session/get-branch sess)
+            :when (not (contains? #{:session_info :label :model-change
+                                    :thinking-level-change} (:role e)))]
+      (let [role (:role e)]
+        (cond
+          (= role :custom)
+          ;; extension state entries render only with a registered renderer
+          ;; (pi: registerEntryRenderer + CustomEntryComponent)
+          (when-let [renderer (extensions/get-entry-renderer (:custom-type e))]
+            (when-let [msg (renderer e)]
+              (ui/chat-history-add-message! (:chat-history cs) msg)))
 
-        (= role :custom-message)
-        ;; extension custom messages render only when display is set (pi:
-        ;; the display flag controls TUI rendering); content may be a string
-        ;; or a block vector (pi CustomMessageEntry). A registered message
-        ;; renderer overrides the default labeled info box.
-        (when (:display e)
-          (ui/chat-history-add-message!
-           (:chat-history cs)
-           (if-let [renderer (extensions/get-message-renderer (:custom-type e))]
-             (let [msg (renderer e)]
-               (if (map? msg) msg {:component msg}))
-             {:role :info
-              :content (custom-message-text e)
-              :label (:custom-type e)})))
+          (= role :custom-message)
+          ;; extension custom messages render only when display is set (pi:
+          ;; the display flag controls TUI rendering); content may be a string
+          ;; or a block vector (pi CustomMessageEntry). A registered message
+          ;; renderer overrides the default labeled info box.
+          (when (:display e)
+            (ui/chat-history-add-message!
+             (:chat-history cs)
+             (if-let [renderer (extensions/get-message-renderer (:custom-type e))]
+               (let [msg (renderer e)]
+                 (if (map? msg) msg {:component msg}))
+               {:role :info
+                :content (custom-message-text e)
+                :label (:custom-type e)})))
 
-        :else
-        (let [content (if (contains? #{:compaction :branch-summary} role)
-                        (or (:summary e) "")
-                        (str/join
-                         (keep (fn [b]
-                                 (case (:type b)
-                                   :text (:text b)
-                                   :tool_result (:content b)
-                                   nil))
-                               (:content e))))]
+          (= role :assistant)
+          (do
+            (ui/chat-history-add-message! (:chat-history cs)
+                                          (cond-> {:role role :content (content-of e)}
+                                            (= role :assistant) (assoc :thinking (:thinking e))))
+            ;; Pi: create a ToolExecutionComponent per tool call declared in
+            ;; the assistant message (name + args from the call — the same
+            ;; fields the live :tool-execution-start event carries), then
+            ;; match the following tool-result entries by tool-call id. The
+            ;; tool entries themselves only store the pi-faithful
+            ;; :tool-name/:content — the call line (args) lives here.
+            (doseq [tc (:tool-calls e)]
+              (when-let [comp (ui/chat-history-add-message!
+                               (:chat-history cs)
+                               {:role :tool
+                                :name (:name tc)
+                                :args (:arguments tc)
+                                :content ""
+                                :is-error false})]
+                (ui/tool-execution-set-tool-call-id! comp (:id tc))
+                (ui/tool-execution-set-args-complete! comp)
+                (swap! pending-tools assoc (:id tc) comp))))
+
+          (= role :tool)
+          (let [tc-id (some (fn [b] (when (= :tool_result (:type b))
+                                      (:tool_use_id b)))
+                            (:content e))]
+            (if-let [comp (get @pending-tools tc-id)]
+              ;; matched result — fill the pending call component (pi:
+              ;; updateResult by toolCallId)
+              (do (ui/tool-execution-set-content! comp (content-of e))
+                  (ui/tool-execution-set-error! comp (:is-error e false))
+                  (when-let [truncation (:truncation e)]
+                    (ui/tool-execution-set-truncation! comp truncation))
+                  (when-let [details (:details e)]
+                    (ui/tool-execution-set-details! comp details))
+                  (when-let [images (:images e)]
+                    (ui/tool-execution-set-images! comp images))
+                  (swap! pending-tools dissoc tc-id))
+              ;; unpaired result (no matching tool call in the branch —
+              ;; legacy sessions, extension tools) — standalone component
+              ;; from the entry's own fields
+              (ui/chat-history-add-message!
+               (:chat-history cs)
+               {:role :tool
+                :content (content-of e)
+                :name (or (:tool-name e) (:name e) "tool")
+                :is-error (:is-error e false)
+                :truncation (:truncation e)
+                :details (:details e)})))
+
+          :else
           (ui/chat-history-add-message! (:chat-history cs)
-                                        (cond-> {:role role :content content}
-                                          (= role :assistant) (assoc :thinking (:thinking e))
-                                          (= role :info) (assoc :label (:label e))
-                                          (= role :tool)
-                                          (assoc :name (or (:name e) "tool")
-                                                 :is-error (:is-error e false)
-                                                 :truncation (:truncation e)
-                                                 :details (:details e)))))))))
+                                        (cond-> {:role role :content (content-of e)}
+                                          (= role :info) (assoc :label (:label e)))))))))
 
 (defn- restore-session!
   "Restore a session into the UI and the agent: swap the active session,

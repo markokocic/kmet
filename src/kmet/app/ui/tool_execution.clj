@@ -849,9 +849,11 @@
   (protocols/invalidate comp))
 
 (defsetter tool-execution-set-content! :content-atom comp content
-  ;; Pi: first content delivery marks execution started
-  (when (nil? @(:started-at-atom comp))
-    (reset! (:started-at-atom comp) (System/currentTimeMillis)))
+  ;; Pi: timing is driven exclusively by markExecutionStarted (the
+  ;; :tool-execution-start lifecycle event) — set-content! must NOT mark
+  ;; execution started, or replayed results (restore / -c) would show a
+  ;; fabricated "Took 0.0s". Pi renders replayed tools without a duration
+  ;; (startedAt stays undefined: updateResult never touches it).
   (protocols/invalidate comp))
 
 (defsetter tool-execution-set-error! :is-error-atom comp is-error
