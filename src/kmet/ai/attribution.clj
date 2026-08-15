@@ -50,15 +50,15 @@
   [model]
   (cond
     (is-openrouter-model? model)
-    {"HTTP-Referer" "https://pi.dev"
-     "X-OpenRouter-Title" "pi"
+    {"HTTP-Referer" "https://github.com/markokocic/kmet"
+     "X-OpenRouter-Title" "kmet"
      "X-OpenRouter-Categories" "cli-agent"}
 
     (is-nvidia-nim-model? model)
-    {"X-BILLING-INVOKE-ORIGIN" "Pi"}
+    {"X-BILLING-INVOKE-ORIGIN" "Kmet"}
 
     (is-cloudflare-model? model)
-    {"User-Agent" "pi-coding-agent"}
+    {"User-Agent" "kmet-coding-agent"}
 
     :else nil))
 
@@ -71,7 +71,7 @@
     (when (or (contains? #{:opencode :opencode-go} (:provider model))
               (= opencode-host (host-of (:base-url model))))
       {"x-opencode-session" session-id
-       "x-opencode-client" "pi"})))
+       "x-opencode-client" "kmet"})))
 
 (defn merge-provider-attribution-headers
   "pi mergeProviderAttributionHeaders (minus the telemetry gate, which kmet

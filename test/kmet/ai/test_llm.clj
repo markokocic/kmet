@@ -177,8 +177,8 @@
         headers (@#'codex/codex-request-headers token "sess-123")]
     (t/is (= (str "Bearer " token) (get headers "Authorization")))
     (t/is (= "acc-9" (get headers "chatgpt-account-id")))
-    (t/is (= "pi" (get headers "originator")))
-    (t/is (str/starts-with? (get headers "User-Agent") "pi (") "pi User-Agent (pi buildBaseCodexHeaders)")
+    (t/is (= "kmet" (get headers "originator")))
+    (t/is (str/starts-with? (get headers "User-Agent") "kmet (") "kmet User-Agent (pi buildBaseCodexHeaders)")
     (t/is (= "responses=experimental" (get headers "OpenAI-Beta")))
     (t/is (= "text/event-stream" (get headers "Accept")))
     (t/is (= "sess-123" (get headers "session-id")))
@@ -1042,7 +1042,7 @@
           provider {:id :opencode}
           merged (@#'shared/request-headers {"Authorization" "Bearer k"} model provider "k" "sess-42")]
       (t/is (= "sess-42" (get merged "x-opencode-session")))
-      (t/is (= "pi" (get merged "x-opencode-client")))))
+      (t/is (= "kmet" (get merged "x-opencode-client")))))
   (t/testing "no session id → no session headers"
     (let [model {:provider :opencode :id "qwen3.6-plus"}
           provider {:id :opencode}
@@ -1539,7 +1539,7 @@
       (t/testing "codex headers on the wire"
         (t/is (= (str "Bearer " token) (get @request-headers "Authorization")))
         (t/is (= "acc-1" (get @request-headers "chatgpt-account-id")))
-        (t/is (= "pi" (get @request-headers "originator")))
+        (t/is (= "kmet" (get @request-headers "originator")))
         (t/is (= "responses=experimental" (get @request-headers "OpenAI-Beta")))
         (t/is (= "sess-codex" (get @request-headers "session-id")))
         (t/is (= "sess-codex" (get @request-headers "x-client-request-id"))))

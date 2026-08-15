@@ -52,14 +52,14 @@
 (defn codex-request-headers
   "pi buildSSEHeaders + buildBaseCodexHeaders: the token as Authorization:
    Bearer, the chatgpt-account-id decoded from the token, originator + the
-   pi User-Agent, OpenAI-Beta responses=experimental, plus session-id +
+   kmet User-Agent, OpenAI-Beta responses=experimental, plus session-id +
    x-client-request-id when prompt caching is on. SESSION-ID is the
    already-clamped cache key."
   [api-key session-id]
   (cond-> {"Authorization" (str "Bearer " api-key)
            "chatgpt-account-id" (codex-account-id api-key)
-           "originator" "pi"
-           "User-Agent" (str "pi (" (System/getProperty "os.name")
+           "originator" "kmet"
+           "User-Agent" (str "kmet (" (System/getProperty "os.name")
                              "; " (System/getProperty "os.arch") ")")
            "OpenAI-Beta" "responses=experimental"
            "Content-Type" "application/json"
