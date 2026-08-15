@@ -268,6 +268,27 @@ and receive the same `ToolRenderContext` map the builtin renderers get
 expanded, is-error). `:streams? true` keeps the 2-arg `(fn [args
 on-update])` contract (no signal/ctx).
 
+Other pi tool fields:
+
+```clojure
+(ext/register-tool! api
+  {:name "my-tool" :description "..."
+   :prepare-arguments (fn [args] (assoc args "normalized" true))
+   ;; pi prepareArguments — rewrite the raw tool args before schema
+   ;; validation/execution; a throwing shim surfaces as a tool error.
+   :execution-mode :parallel
+   ;; pi executionMode — :sequential (default) or :parallel; the agent
+   ;; loop runs parallel-capable tools concurrently with a sequential
+   ;; fallback when a tool doesn't declare it.
+   :constrained-sampling {:type :json-schema :strict :prefer}
+   ;; pi constrainedSampling — :json-schema strict ({:strict :prefer}
+   ;; degrades silently when the provider/model can't do strict;
+   ;; {:strict :require} throws :constrained-sampling-required instead)
+   ;; or :grammar (helpers implemented, never activated — pi parity:
+   ;; no model sets supportsOpenAIGrammarTools).
+   :execute (fn [args] {:content "..."})})
+```
+
 ### Events
 
 ```clojure
@@ -520,6 +541,36 @@ inert before the interactive layout exists and in headless/print mode.
                             :api-key "sk-..." :models [{:id "my-model"}]})
 (models/unregister-provider! api :my-provider)
 ```
+
+Providers can register an **OAuth login block** instead of (or alongside)
+`:api-key` (pi: `registerProvider` oauth block — the `/login` command then
+offers the OAuth flow):
+
+```clojure
+(models/register-provider! api :my-provider
+                           {:base-url "https://..." :api :openai-completions
+                            :models [{:id "my-model"}]
+                            :oauth {:name "My SSO"
+                                    :is-subscription? true
+                                    :login (fn [interaction]
+                                             ;; interaction: {:signal :prompt
+                                             ;;               :abort-prompt!
+                                             ;;               :notify}
+                                             {:type :oauth :access "..."
+                                              :refresh "..." :expires 0})
+                                    :refresh-token (fn [credential _signal]
+                                                     credential)
+                                    :to-auth (fn [credential]
+                                               {:api-key (str "Bearer "
+                                                              (:access credential))})}})
+```
+
+`:login` returns the credential to persist in auth.edn (pi
+`OAuthCredentials`), `:refresh-token` refreshes expired credentials
+(default: pass through), and `:to-auth` converts a credential into the API
+key used for provider requests (pi `getApiKey`). A config missing
+`:login`/`:to-auth` throws at register time. On unregister the provider's
+oauth block goes away with it.
 
 ### Session
 

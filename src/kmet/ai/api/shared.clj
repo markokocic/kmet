@@ -10,6 +10,7 @@
    [cheshire.core :as json]
    [kmet.ai.models :as models]
    [kmet.ai.usage :as usage]
+   [kmet.ai.constrained-sampling :as cs]
    [clojure.string :as str]))
 
 ;; ─── Provider-event hooks (pi: context / before_provider_request) ────────
@@ -554,23 +555,41 @@
 ;; ─── Tool schema conversion (pi convertTools — moved from app.tools.registry) ──
 
 (defn tool->anthropic-schema
-  "Convert a tool map to Anthropic tool schema format."
-  [tool]
-  {:name (:name tool)
-   :description (:description tool)
-   :input_schema (:parameters tool)})
+  "Convert a tool map to Anthropic tool schema format. With SUPPORTS-STRICT?
+   (pi: supportsStrictTools compat), a tool whose :constrained-sampling
+   resolves strict gets a strictified input_schema and :strict true."
+  [tool & [supports-strict?]]
+  (let [strict (cs/resolve-json-schema-strict-sampling tool supports-strict?)]
+    (cond-> {:name (:name tool)
+             :description (:description tool)
+             :input_schema (cs/get-json-schema-tool-parameters tool strict)}
+      (true? strict) (assoc :strict true))))
 
 (defn tool->openai-schema
-  "Convert a tool map to OpenAI tool schema format."
-  [tool]
-  {:type "function"
-   :function {:name (:name tool)
-              :description (:description tool)
-              :parameters (:parameters tool)}})
+  "Convert a tool map to OpenAI tool schema format. With SUPPORTS-STRICT?,
+   a strict-resolving tool gets strictified parameters and :strict true on
+   the function; other tools get :strict false (pi: strict ?? false)."
+  [tool & [supports-strict?]]
+  (let [strict (cs/resolve-json-schema-strict-sampling tool supports-strict?)]
+    {:type "function"
+     :function (cond-> {:name (:name tool)
+                        :description (:description tool)
+                        :parameters (cs/get-json-schema-tool-parameters tool strict)}
+                 supports-strict? (assoc :strict (true? strict)))}))
 
 (defn tool->google-schema
-  "Convert a tool map to a Google functionDeclaration (pi convertTools)."
-  [tool]
-  {:name (:name tool)
-   :description (:description tool)
-   :parameters (:parameters tool)})
+  "Convert a tool map to a Google functionDeclaration (pi convertTools).
+   With SUPPORTS-STRICT?, a strict-resolving tool gets the strictified
+   schema (pi: parametersJsonSchema)."
+  [tool & [supports-strict?]]
+  (let [strict (cs/resolve-json-schema-strict-sampling tool supports-strict?)]
+    {:name (:name tool)
+     :description (:description tool)
+     :parameters (cs/get-json-schema-tool-parameters tool strict)}))
+
+(defn google-supports-strict-tool-sampling?
+  "pi supportsGoogleStrictToolSampling: Gemini 3+ enforces required function
+   parameters in validated tool-calling modes."
+  [model-id]
+  (let [major (second (re-find #"(?i)^gemini(?:-live)?-(\d+)" (or model-id "")))]
+    (boolean (and major (>= (Long/parseLong major) 3)))))

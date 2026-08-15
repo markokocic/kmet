@@ -6,6 +6,7 @@
    [kmet.ai.proxy :as proxy]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
+   [kmet.ai.constrained-sampling :as cs]
    [kmet.ai.api.shared :refer [bash-execution-text content-text endpoint-url image-block? apply-before-provider-request-hook request-headers responses-events-handler transport-error-message]]))
 
 (def mistral-tool-call-id-length 9)
@@ -149,14 +150,16 @@
     :else {:prompt_mode "reasoning"}))
 
 (defn mistral-tool
-  "pi toFunctionTools: Mistral function tool with the JSON schema and
-   strict: false (kmet has no constrained sampling)."
+  "pi toFunctionTools: Mistral function tool. Strict-resolving tools get
+   strictified parameters and :strict true (pi resolves with true — Mistral
+   always supports strict); other tools get :strict false."
   [tool]
-  {:type "function"
-   :function {:name (:name tool)
-              :description (:description tool)
-              :parameters (:parameters tool)
-              :strict false}})
+  (let [strict (cs/resolve-json-schema-strict-sampling tool true)]
+    {:type "function"
+     :function {:name (:name tool)
+                :description (:description tool)
+                :parameters (cs/get-json-schema-tool-parameters tool strict)
+                :strict (true? strict)}}))
 
 (defn mistral-payload
   "Mistral chat payload (pi buildChatPayload + toMistralWirePayload — the

@@ -122,7 +122,12 @@
   (let [{:keys [on-update signal ctx]} (or opts {})]
     (if-let [tool (get-tool tool-name)]
       (try
-        (let [args (normalize-args args)]
+        ;; pi prepareToolCallArguments: a tool's :prepare-arguments shim
+        ;; rewrites the raw args before schema validation/execution
+        (let [args (normalize-args args)
+              args (if-let [prepare (:prepare-arguments tool)]
+                     (prepare args)
+                     args)]
           (cond
             (:contextual? tool)
             ((:execute tool) args on-update signal ctx)

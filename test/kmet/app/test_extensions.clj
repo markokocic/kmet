@@ -111,6 +111,32 @@
                          ((:register-provider! (:models api)) :ext-prov
                                                               {:models [{:id "bad"}]})))
           (t/is (nil? (extensions/get-registered-provider-config :ext-prov))))
+        (testing "oauth block registers an OAuthAuth on the composed provider"
+          (let [login (fn [_] {:type :oauth :access "a" :refresh "r" :expires 1})
+                to-auth (fn [c] {:api-key (str "Bearer " (:access c))})
+                config {:base-url "https://ext.example/v1" :api :openai-completions
+                        :oauth {:name "Ext SSO" :is-subscription? true
+                                :login login :refresh-token (fn [c _] c) :to-auth to-auth}
+                        :models [{:id "ext-1"}]}
+                _ ((:register-provider! (:models api)) :ext-oauth config)
+                p (models/get-provider :ext-oauth)]
+            (t/is (instance? kmet.ai.oauth.OAuthAuth (:oauth p)))
+            (t/is (= "Ext SSO" (:name (:oauth p))))
+            (t/is (true? (:is-subscription? (:oauth p))))
+            (t/is (= login (:login (:oauth p))))
+            (t/is (= "Bearer a" (get-in ((:to-auth (:oauth p)) {:type :oauth :access "a"})
+                                        [:api-key])))
+            (t/is (= "a" (get-in ((:refresh (:oauth p)) {:type :oauth :access "a"} nil)
+                                 [:access])))
+            ((:unregister-provider! (:models api)) :ext-oauth)
+            (t/is (nil? (:oauth (models/get-provider :ext-oauth))))))
+        (testing "a broken oauth block throws at register time (pi validateExtensionProvider)"
+          (t/is (thrown-with-msg? Exception #"requires :login and :to-auth"
+                                  ((:register-provider! (:models api)) :ext-oauth
+                                                                       {:base-url "https://ext.example/v1"
+                                                                        :api :openai-completions
+                                                                        :models [{:id "ext-1"}]
+                                                                        :oauth {:name "broken"}}))))
         (finally
           (models/clear-extension-providers!))))))
 

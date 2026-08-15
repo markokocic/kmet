@@ -101,7 +101,9 @@
                             :max_tokens (:max-tokens thinking (or (:max-tokens model-record) 4096))
                             :messages (anthropic-messages messages)
                             :stream true}
-                     (seq tools) (assoc :tools (mapv tool->anthropic-schema tools))
+                     (seq tools) (assoc :tools (mapv #(tool->anthropic-schema %
+                                                                              (:supports-strict-tools (:compat model-record)))
+                                                     tools))
                      (:thinking thinking) (assoc :thinking (:thinking thinking))
                     ;; adaptive thinking (pi forceAdaptiveThinking): the
                     ;; output_config effort rides alongside the thinking block

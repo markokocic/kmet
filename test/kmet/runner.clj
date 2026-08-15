@@ -37,6 +37,8 @@
     kmet.ai.test-model-data
     kmet.ai.test-proxy
     kmet.ai.test-self-contained
+    kmet.ai.test-constrained-sampling
+    kmet.ai.test-api-tools
     kmet.app.test-loop
     kmet.test-theme kmet.test-config
     kmet.app.test-skills

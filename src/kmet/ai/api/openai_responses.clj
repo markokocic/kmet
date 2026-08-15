@@ -5,6 +5,7 @@
    [kmet.ai.proxy :as proxy]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
+   [kmet.ai.constrained-sampling :as cs]
    [kmet.ai.api.shared :refer [bash-execution-text content-text effort-value endpoint-url image-block? off-explicitly-null? apply-before-provider-request-hook request-headers responses-events-handler transport-error-message]]))
 
 (defn normalize-id-part
@@ -119,16 +120,19 @@
               acc)))))
 
 (defn responses-tools
-  "pi convertResponsesTools: flat function tools with the JSON schema; the
-   strict flag is emitted when the provider accepts strict schemas (no
-   grammar/custom tools — kmet has no constrained sampling)."
+  "pi convertResponsesTools: flat function tools with the JSON schema. A
+   tool whose :constrained-sampling resolves strict gets strictified
+   parameters and :strict true; other tools get :strict false (pi: strict
+   ?? defaultStrict — emitted whenever the provider accepts strict
+   schemas)."
   [tools strict?]
   (mapv (fn [tool]
-          (cond-> {:type "function"
-                   :name (:name tool)
-                   :description (:description tool)
-                   :parameters (:parameters tool)}
-            strict? (assoc :strict false)))
+          (let [strict (cs/resolve-json-schema-strict-sampling tool strict?)]
+            (cond-> {:type "function"
+                     :name (:name tool)
+                     :description (:description tool)
+                     :parameters (cs/get-json-schema-tool-parameters tool strict)}
+              strict? (assoc :strict (true? strict)))))
         tools))
 
 (defn copilot-vision-input?

@@ -6,6 +6,7 @@
    [kmet.ai.proxy :as proxy]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
+   [kmet.ai.constrained-sampling :as cs]
    [kmet.ai.api.shared :refer [anthropic-adaptive-effort bash-execution-text content-text getenv image-block? min-answer-tokens apply-before-provider-request-hook request-headers responses-events-handler thinking-budgets transport-error-message]]))
 
 (defn bedrock-is-claude?
@@ -181,14 +182,16 @@
 
 (defn bedrock-tool-config
   "ConverseStream toolConfig (pi convertToolConfig): toolSpec blocks with
-   the JSON input schema; toolChoice auto when tools are present."
-  [tools]
+   the JSON input schema; strict-resolving tools get the strictified schema
+   and :strict true; toolChoice auto when tools are present."
+  [tools supports-strict?]
   (when (seq tools)
     {:tools (mapv (fn [tool]
-                    {:toolSpec {:name (:name tool)
-                                :description (:description tool)
-                                :inputSchema {:json (:parameters tool)}
-                                :strict false}})
+                    (let [strict (cs/resolve-json-schema-strict-sampling tool supports-strict?)]
+                      (cond-> {:toolSpec {:name (:name tool)
+                                          :description (:description tool)
+                                          :inputSchema {:json (cs/get-json-schema-tool-parameters tool strict)}}}
+                        (true? strict) (assoc-in [:toolSpec :strict] true))))
                   tools)
      :toolChoice {:auto {}}}))
 
@@ -261,7 +264,8 @@
                                                            (:max-tokens model-record))
                                                       (assoc :maxTokens (:max-tokens model-record)))}
                             (seq system-blocks) (assoc :system system-blocks)
-                            (seq tools) (assoc :toolConfig (bedrock-tool-config tools))
+                            (seq tools) (assoc :toolConfig (bedrock-tool-config tools
+                                                                                (:supports-strict-mode (:compat model-record))))
                             (seq additional) (assoc :additionalModelRequestFields additional))))
                 sha (aws-sigv4/sha256-hex payload)
                 ;; the request's own headers (attribution + configured) first,

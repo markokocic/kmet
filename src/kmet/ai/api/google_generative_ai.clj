@@ -5,7 +5,8 @@
    [kmet.ai.proxy :as proxy]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
-   [kmet.ai.api.shared :refer [bash-execution-text content-text endpoint-url image-block? apply-before-provider-request-hook request-headers tool->google-schema transport-error-message usage-with-cost]]))
+   [kmet.ai.constrained-sampling :as cs]
+   [kmet.ai.api.shared :refer [bash-execution-text content-text endpoint-url google-supports-strict-tool-sampling? image-block? apply-before-provider-request-hook request-headers tool->google-schema transport-error-message usage-with-cost]]))
 
 (defn google-requires-tool-call-id?
   [model-id]
@@ -136,7 +137,15 @@
                                                 (assoc :thinkingConfig thinking-config))}
                      system (assoc :systemInstruction {:parts [{:text system}]})
                      (seq tools) (assoc :tools [{:functionDeclarations
-                                                 (mapv tool->google-schema tools)}])))]
+                                                 (mapv #(tool->google-schema %
+                                                                             (google-supports-strict-tool-sampling? model-id))
+                                                       tools)}])
+                     ;; pi resolveGoogleFunctionCallingMode: a strict tool
+                     ;; forces the validated function-calling mode
+                     (some #(cs/resolve-json-schema-strict-sampling %
+                                                                    (google-supports-strict-tool-sampling? model-id))
+                           tools)
+                     (assoc :toolConfig {:functionCallingConfig {:mode "VALIDATED"}})))]
       (try
         (let [response (proxy/post-stream (or base-url (endpoint-url :google-generative-ai (:base-url model-record) model-id))
                                           {:headers (request-headers

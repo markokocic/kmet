@@ -291,6 +291,38 @@
     (tools/unregister-tool! "custom")
     (t/is (not (contains? (tools/get-all-tools) "custom")))))
 
+(t/deftest test-tools-prepare-arguments
+  (t/testing "pi prepareToolCallArguments: the shim rewrites args before execution"
+    (let [custom (tools/make-tool
+                  :name "prepare-args"
+                  :label "Prepare"
+                  :description "Applies the shim"
+                  :parameters {:type "object" :properties {} :required []}
+                  :prepare-arguments (fn [args] (assoc args "normalized" true))
+                  :execute (fn [args] {:content (str "got " (count args) " keys")}))]
+      (tools/register-tool! custom)
+      (try
+        (let [result (tools/execute-tool "prepare-args" {"raw" 1})]
+          (t/is (= "got 2 keys" (:content result))
+                "execute receives the prepared args (raw + normalized)"))
+        (finally
+          (tools/unregister-tool! "prepare-args")))))
+  (t/testing "a throwing shim surfaces as a tool error (pi: validation failure)"
+    (let [custom (tools/make-tool
+                  :name "prepare-throws"
+                  :label "Prepare"
+                  :description "Throws in the shim"
+                  :parameters {:type "object" :properties {} :required []}
+                  :prepare-arguments (fn [_] (throw (ex-info "bad args" {})))
+                  :execute (fn [_] {:content "unreachable"}))]
+      (tools/register-tool! custom)
+      (try
+        (let [result (tools/execute-tool "prepare-throws" {})]
+          (t/is (:is-error result))
+          (t/is (.contains (:content result) "bad args")))
+        (finally
+          (tools/unregister-tool! "prepare-throws"))))))
+
 ;; ─── Edge cases ──────────────────────────────────────────────────────────
 
 (t/deftest test-tool-read-binary

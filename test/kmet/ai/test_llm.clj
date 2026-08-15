@@ -1972,13 +1972,19 @@
 
 (t/deftest test-bedrock-tool-config
   (let [tools [(tools/make-tool :name "read" :label "Read" :description "Read a file"
-                                :params {:path {:type :string :description "path"}})]]
+                                :params {:path {:type :string :description "path"}})]
+        config (@#'bedrock/bedrock-tool-config tools false)]
     (t/is (= {:tools [{:toolSpec {:name "read" :description "Read a file"
-                                  :inputSchema {:json (:parameters (first tools))}
-                                  :strict false}}]
+                                  :inputSchema {:json (:parameters (first tools))}}}]
               :toolChoice {:auto {}}}
-             (@#'bedrock/bedrock-tool-config tools)))
-    (t/is (nil? (@#'bedrock/bedrock-tool-config nil)))))
+             config))
+    (t/is (nil? (@#'bedrock/bedrock-tool-config nil false)))
+    (t/testing "strict-resolving tools get the strictified schema and :strict true"
+      (let [strict-tool (assoc (first tools)
+                               :constrained-sampling {:type :json-schema :strict :prefer})
+            config (@#'bedrock/bedrock-tool-config [strict-tool] true)]
+        (t/is (= true (get-in config [:tools 0 :toolSpec :strict])))
+        (t/is (= ["path"] (get-in config [:tools 0 :toolSpec :inputSchema :json "required"])))))))
 
 ;; bedrock e2e frame builder (the sse test's private helpers are not
 ;; importable — kept here, mirroring the AWS event-stream framing)

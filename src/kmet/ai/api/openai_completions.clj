@@ -26,7 +26,9 @@
              :messages (messages-fn messages)
              :stream true
              :stream_options {:include_usage true}}
-      (seq tools) (assoc :tools (mapv tool->openai-schema tools))
+      (seq tools) (assoc :tools (mapv #(tool->openai-schema %
+                                                            (not= false (:supports-strict-mode (:compat model-record))))
+                                      tools))
       (seq thinking-params) (merge thinking-params)
       (:max-tokens model-record) (assoc max-tokens-field (:max-tokens model-record))
       (seq (:sampling-params model-record)) (merge (:sampling-params model-record)))))

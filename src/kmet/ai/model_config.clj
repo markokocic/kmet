@@ -70,7 +70,8 @@
                              :supports-usage-in-streaming :supports-finish-reason
                              :requires-tool-result-name
                              :requires-assistant-after-tool-result
-                             :requires-thinking-as-text :supports-strict-mode} k)
+                             :requires-thinking-as-text :supports-strict-mode
+                             :supports-strict-tools} k)
                 (check errors (boolean? v) p "expected boolean")
 
                 (contains? #{:thinking-format :max-tokens-field} k)

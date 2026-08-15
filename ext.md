@@ -12,11 +12,12 @@ Reference: `packages/coding-agent/src/core/extensions/types.ts` in
 ExtensionContext ~340, ExtensionCommandContext ~390, ToolDefinition +
 ToolRenderContext further down).
 
-Status of this document: **P0–P13 complete** (ctx object, provider
-registration, ui.editor + getTheme(name), tool_call terminate, tool
+Status of this document: **P0–P13 + constrained sampling + tool fields + oauth complete** (ctx object, provider
+registration incl. oauth blocks, ui.editor + getTheme(name), tool_call terminate, tool
 execute signal+ctx, tool renderers, shortcuts, markdown transformers,
 provider events, cancellable session before-events, sendMessage
-custom messages, ui.custom async factories + dispose, parity docs).
+custom messages, ui.custom async factories + dispose, constrainedSampling/
+prepareArguments/executionMode tool fields, parity docs).
 
 ---
 
@@ -98,6 +99,8 @@ value/effort. Effort: S (≤ half day), M (1–2 days), L (3+ days).
 | — | `refreshTools` | **not needed** — kmet's tool registry is a live atom | — |
 | — | `project_trust` | needs features kmet doesn't have (trust) | defer |
 | — | `resources_discover` | **P13** — fired after session-start; contributed skill/prompt/theme paths applied (see §6) | done |
+| — | `constrainedSampling`/`prepareArguments`/`executionMode` | DONE — see §6 (strict json-schema per tool in every wire; prepareArguments in execute-tool; executionMode in the loop) | done |
+| — | `oauth` provider registration | DONE — see §6 (`:oauth` block on registerProvider → OAuthAuth, `/login` flow) | done |
 | — | `events` EventBus | parity via `on-event`/`emit-event!` (custom events work) | — |
 | — | `exec`, flags, session name/labels, message/entry renderers, ui.select/confirm/input/notify/status/widget/footer/header/title/theme, autocomplete, editor-component | parity | — |
 
@@ -470,13 +473,22 @@ P0 (ctx) ──► P1, P2, P3, P11, P12   (independent, small)
 - `refreshTools` — kmet's registry is a live atom; `get-all-tools` always
   sees new registrations. Never needed.
 - `constrainedSampling`, `prepareArguments`, `executionMode` for
-  extension tools — fields exist on the record but the loop/UI has no
-  consumers; wire them only if a shipped extension needs them.
-  (`renderShell` IS wired — P5 passes the record's `:render-shell` to the
-  transcript component for extension tools too.)
-- `oauth` provider registration (pi `registerProvider` oauth block) —
-  kmet's OAuth flows are internal; extension providers get
-  `$ENV`/`!command` api-key resolution only.
+  extension tools — DONE: `prepareArguments` runs in `execute-tool` before
+  schema validation/execution (a throwing shim surfaces as a tool error);
+  `constrainedSampling` strict json-schema is resolved per tool in every
+  wire builder (`:prefer` degrades silently, `:require` throws
+  `:constrained-sampling-required`; grammar helpers tested, never
+  activated — pi parity); `executionMode` was already wired in the agent
+  loop (parallel with sequential fallback). `renderShell` IS wired — P5
+  passes the record's `:render-shell` to the transcript component for
+  extension tools too.
+- `oauth` provider registration (pi `registerProvider` oauth block) — DONE:
+  the extension `:oauth` config is adapted into an `OAuthAuth` record at
+  register time (missing `:login`/`:to-auth` throws eagerly, pi
+  `validateExtensionProvider`), composed onto the provider (`composeOAuthAuth`),
+  and served to the `/login` flow via the auth hook — extension providers
+  get the same device-code/SSO login, refresh, and credential→API-key
+  conversion as builtins.
 
 ## 7. Definition of done
 
