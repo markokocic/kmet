@@ -180,15 +180,44 @@
       (let [lines2 (plain-lines ch 40)]
         (is (some #(re-find #"new" %) lines2))))))
 
-(deftest test-remove-last
-  (testing "remove last message"
+(deftest test-remove-streaming-placeholder
+  (testing "placeholder is the last entry — removed, streaming state cleared"
     (let [ch (ch/make-chat-history)]
-      (ch/chat-history-add-message! ch {:role :user :content "first"})
-      (ch/chat-history-add-message! ch {:role :user :content "second"})
-      (is (= 2 (count (ch/chat-history-get-messages ch))))
-      (ch/chat-history-remove-last! ch)
-      (is (= 1 (count (ch/chat-history-get-messages ch))))
-      (is (= "first" (:content (first (ch/chat-history-get-messages ch))))))))
+      (ch/chat-history-add-message! ch {:role :user :content "initial"})
+      (ch/chat-history-start-streaming! ch)
+      (is (true? (ch/chat-history-remove-streaming-placeholder! ch)))
+      (is (nil? @(:streaming-atom ch)))
+      (is (= ["initial"] (map :content (ch/chat-history-get-messages ch))))))
+
+  (testing "consumed steering message sits after the placeholder — it survives"
+    ;; on-agent-error / handle-cancel remove the empty placeholder when a
+    ;; run dies before the next assistant message-start. A drained
+    ;; steering/follow-up user message (or a tool execution) is appended
+    ;; AFTER the placeholder, so position-based removal would delete the
+    ;; user's message instead (pi: agent_end removes the streamingComponent
+    ;; by reference).
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-add-message! ch {:role :user :content "initial"})
+      (ch/chat-history-start-streaming! ch)
+      (ch/chat-history-add-message! ch {:role :user :content "STEERED"})
+      (ch/chat-history-add-message! ch {:role :user :content "TOOL"})
+      (is (true? (ch/chat-history-remove-streaming-placeholder! ch)))
+      (is (nil? @(:streaming-atom ch)))
+      (is (= ["initial" "STEERED" "TOOL"]
+             (map :content (ch/chat-history-get-messages ch))))))
+
+  (testing "trailing status lines are dropped with the placeholder"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-start-streaming! ch)
+      (ch/chat-history-show-status! ch "some status")
+      (is (true? (ch/chat-history-remove-streaming-placeholder! ch)))
+      (is (empty? (ch/chat-history-get-messages ch)))))
+
+  (testing "no streaming in progress — no-op"
+    (let [ch (ch/make-chat-history)]
+      (ch/chat-history-add-message! ch {:role :user :content "initial"})
+      (is (nil? (ch/chat-history-remove-streaming-placeholder! ch)))
+      (is (= 1 (count (ch/chat-history-get-messages ch)))))))
 
 (deftest test-rebuild
   (testing "rebuild replaces all messages and preserves the info banner"
@@ -361,14 +390,14 @@
         (is (every? #(true? @(:hide-thinking-atom %)) assistants)
             "all assistant messages — old and new — have thinking hidden")))))
 
-(deftest test-remove-last-skips-status
-  (testing "remove-last drops trailing status lines with the last message"
+(deftest test-remove-streaming-placeholder-skips-status
+  (testing "placeholder removal drops trailing status lines with it"
     (let [ch (ch/make-chat-history)]
-      (ch/chat-history-add-message! ch {:role :user :content "msg"})
+      (ch/chat-history-start-streaming! ch)
       (ch/chat-history-show-status! ch "Tool output: expanded")
-      (ch/chat-history-remove-last! ch)
+      (is (true? (ch/chat-history-remove-streaming-placeholder! ch)))
       (is (= [] (ch/chat-history-get-messages ch))
-          "the status line and the message are both removed"))))
+          "the status line and the placeholder are both removed"))))
 
 (deftest test-show-status-appends-then-scrolls-away
   (testing "a status is a trailing entry — the next message renders below it,
@@ -387,7 +416,7 @@
            pinned to the bottom of the chat"))))
 
 (deftest test-info-banner-in-children
-  (testing "the info banner is a chat message: themed, persisted as :info, survives remove-last"
+  (testing "the info banner is a chat message: themed, persisted as :info, survives placeholder removal"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-set-info-msg! ch {:label "kmet" :content "banner"})
       (is (some? @(:info-comp-atom ch)) "banner component exists")
@@ -396,9 +425,10 @@
       (ch/chat-history-set-output-pad! ch 2)
       (ch/chat-history-add-message! ch {:role :user :content "hi"})
       (is (= [:info :user] (mapv :role (ch/chat-history-get-messages ch))))
-      (ch/chat-history-remove-last! ch)
-      (is (= [:info] (mapv :role (ch/chat-history-get-messages ch)))
-          "remove-last removes the message, not the banner"))))
+      (ch/chat-history-start-streaming! ch)
+      (is (true? (ch/chat-history-remove-streaming-placeholder! ch)))
+      (is (= [:info :user] (mapv :role (ch/chat-history-get-messages ch)))
+          "placeholder removal removes the placeholder, not the banner or the message"))))
 
 (deftest test-show-error-warning
   (testing "show-error! / show-warning! render plain spacer + colored text (pi: showError/showWarning)"

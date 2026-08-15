@@ -1231,6 +1231,11 @@
       (debug/log "new session created: " (:id new-session))
       (ui/chat-history-clear! (:chat-history cs))
       (container/container-clear (:pending-messages-container cs))
+      ;; Re-attach the PendingMessages component — container-clear removes
+      ;; every child (queued steering/follow-up display included), and the
+      ;; display must keep rendering for messages queued after /new
+      (when-let [pm (:pending-messages-comp cs)]
+        (container/container-add-child (:pending-messages-container cs) pm))
       (reset! (:pending-bash-components cs) [])
       (editor-text-set! @(:current-editor-atom cs) "")
       (reset! (:session-atom cs) new-session)
@@ -1715,13 +1720,16 @@
     (clear-status-indicator! cs)
     ;; If streaming placeholder is still empty, remove it
     ;; so we don't get a blank assistant entry before the error message.
+    ;; Removed by identity — a consumed steering/follow-up message or a
+    ;; tool execution can sit after the placeholder, and popping the last
+    ;; entry would delete that message instead (pi: agent_end removes the
+    ;; streamingComponent by reference).
     (let [ch (:chat-history cs)
           streaming @(:streaming-atom ch)]
       (if (and streaming
                (empty? @(:text-atom (:component streaming)))
                (empty? @(:thinking-text-atom (:component streaming))))
-        (do (ui/chat-history-remove-last! ch)
-            (reset! (:streaming-atom ch) nil))
+        (ui/chat-history-remove-streaming-placeholder! ch)
         (do (ui/chat-history-finalize-streaming! ch)
             (ui/chat-history-finalize-thinking! ch))))
     (ui/chat-history-add-message! (:chat-history cs)
@@ -2057,12 +2065,14 @@
     ;; loop consumes them, so cancel would otherwise lose them entirely).
     (let [restored (restore-queued-messages! cs)]
       (agent/cancel-turn @(:agent-state cs))
-      ;; Remove empty streaming placeholder if present
+      ;; Remove empty streaming placeholder if present — by identity, so
+      ;; an entry appended after it (steered/follow-up message, tool
+      ;; execution) is never popped in its place
       (let [ch (:chat-history cs)]
         (when-let [s @(:streaming-atom ch)]
           (if (and (empty? @(:text-atom (:component s)))
                    (empty? @(:thinking-text-atom (:component s))))
-            (do (ui/chat-history-remove-last! ch) (reset! (:streaming-atom ch) nil))
+            (ui/chat-history-remove-streaming-placeholder! ch)
             (do (ui/chat-history-finalize-streaming! ch) (ui/chat-history-finalize-thinking! ch)))))
       (ui/chat-history-add-message! (:chat-history cs)
                                     {:role :assistant :content (th/dim "(cancelled)")})
@@ -3136,6 +3146,15 @@
                              :signal (fn [] @(:signal @ag-atom))
                              :abort (fn []
                                       (when-not (= :idle (agent/get-status @ag-atom))
+                                        ;; pi: ctx.abort() restores queued
+                                        ;; steering/follow-up messages to the
+                                        ;; editor before aborting — a message
+                                        ;; only reaches the chat once the loop
+                                        ;; consumes it, so clearing the queues
+                                        ;; without restoring would drop it
+                                        ;; entirely (restoreQueuedMessagesToEditor
+                                        ;; {abort:true})
+                                        (restore-queued-messages! cs)
                                         (agent/cancel-turn @ag-atom)))
                              :shutdown (fn [] (tui/tui-stop t))
                              :get-context-usage (fn []

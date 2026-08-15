@@ -108,7 +108,7 @@
 (def make-chat-history chat-history/make-chat-history)
 (def chat-history-add-message! chat-history/chat-history-add-message!)
 (def chat-history-add-messages! chat-history/chat-history-add-messages!)
-(def chat-history-remove-last! chat-history/chat-history-remove-last!)
+(def chat-history-remove-streaming-placeholder! chat-history/chat-history-remove-streaming-placeholder!)
 (def chat-history-insert-before-streaming! chat-history/chat-history-insert-before-streaming!)
 (def chat-history-start-streaming! chat-history/chat-history-start-streaming!)
 (def chat-history-append-streaming-text! chat-history/chat-history-append-streaming-text!)

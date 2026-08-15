@@ -276,15 +276,32 @@
       (recur (pop msgs))
       msgs)))
 
-(defn chat-history-remove-last!
-  "Remove the last message from history.
-   Trailing status lines are dropped with it (they are UI-only, not
-   messages)."
+(defn chat-history-remove-streaming-placeholder!
+  "Remove the current streaming placeholder from the chat if still present.
+   The placeholder is matched by IDENTITY, never by position: a tool
+   execution or a consumed steering/follow-up user message can be appended
+   after it, and popping the last entry would delete that message instead
+   (pi: agent_end removes the streamingComponent by reference). Returns
+   true when the placeholder was removed (and the streaming state cleared)."
   [ch]
-  (swap! (:messages-atom ch)
-         (fn [msgs]
-           (let [msgs (drop-trailing-statuses msgs)]
-             (if (seq msgs) (pop msgs) msgs)))))
+  (let [streaming @(:streaming-atom ch)]
+    (when streaming
+      (let [removed? (volatile! false)]
+        (swap! (:messages-atom ch)
+               (fn [msgs]
+                 (let [msgs' (drop-trailing-statuses msgs)]
+                   (cond
+                     (identical? (peek msgs') streaming)
+                     (do (vreset! removed? true) (pop msgs'))
+
+                     (some #(identical? % streaming) msgs')
+                     (do (vreset! removed? true)
+                         (vec (remove #(identical? % streaming) msgs')))
+
+                     :else msgs))))
+        (when @removed?
+          (reset! (:streaming-atom ch) nil)
+          true)))))
 
 ;; ─── Streaming ────────────────────────────────────────────────────────────
 
