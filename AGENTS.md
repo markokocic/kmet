@@ -127,8 +127,10 @@ src/kmet/
 │   ├── skills.clj      — Skills loading + system prompt
 │   ├── prompts.clj     — Prompt template loading + /name expansion (pi: core/prompt-templates.js)
 │   ├── frontmatter.clj — YAML frontmatter parsing shared by skills/prompts (pi: utils/frontmatter.js)
-│   ├── extension.clj   — THE extension contract (root): the only namespace
-│   │                     extensions depend on — init/shutdown contract, api
+│   ├── extension.clj   — THE extension contract (root): the namespaces
+│   │                     extensions depend on — kmet.extension plus the
+│   │                     shared kmet.tui.* / kmet.libs.* library layers;
+│   │                     init/shutdown contract, api
 │   │                     wrappers, create-nullable-api test fixture
 │   ├── extensions.clj  — Extension runtime: discover/load/reload/unload
 │   │                     (single .clj or extension.edn manifest dirs),

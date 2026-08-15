@@ -1,10 +1,11 @@
 (ns kmet.app.extensions
   "Extension runtime: discovers, loads, reloads and unloads Clojure
    extensions. The extension contract lives in kmet.extension — extensions
-   depend on that namespace plus the generic TUI layer kmet.tui.* (shared
-   by reference; the port of pi's @earendil-works/pi-tui); this runtime
-   wires the api capabilities to the registries and the interactive/loop
-   surfaces.
+   depend on that namespace plus the shared library layers kmet.tui.*
+   (the generic TUI layer; the port of pi's @earendil-works/pi-tui) and
+   kmet.libs.* (generic, self-contained utilities) — all shared by
+   reference; this runtime wires the api capabilities to the registries
+   and the interactive/loop surfaces.
 
    An extension is a .clj file defining (defn init [api]) in its namespace,
    or a directory containing an extension.edn manifest:
@@ -666,11 +667,12 @@
 ;; files, (2) the jars its deps.edn declares (the complete transitive
 ;; closure, resolved in-process via borkdude.deps), and (3) anything else on
 ;; the classpath. Global namespaces the extension may touch — kmet.extension
-;; (the contract), clojure.*, babashka.*, and the kmet.tui.* TUI library
-;; (pi: @earendil-works/pi-tui) — are injected as shared references, never
+;; (the contract), clojure.*, babashka.*, and the shared library layers
+;; kmet.tui.* (pi: @earendil-works/pi-tui) and kmet.libs.* (generic
+;; self-contained utilities) — are injected as shared references, never
 ;; re-evaluated, so kmet's registries and protocols are not duplicated.
-;; kmet.* namespaces outside that set (app internals, libs) are not served
-;; at all: re-evaluating them in a context would create context-local
+;; kmet.* namespaces outside that set (app internals) are not served at
+;; all: re-evaluating them in a context would create context-local
 ;; copies of their registries, and sharing them would break the layer
 ;; boundary.
 
@@ -770,11 +772,29 @@
     kmet.tui.components.expandable-text
     kmet.tui.components.image])
 
+(def ^:private libs-library-namespaces
+  "The generic kmet.libs.* layer shared with extension contexts. Every lib
+   is self-contained (enforced by kmet.libs.test-self-contained), so the
+   whole prefix is whitelisted. Required once here so they exist when a
+   per-extension context is built — injection is by reference, never
+   re-evaluated, so any protocols they define keep their identity. Keep in
+   sync with src/kmet/libs/ when a lib is added or removed."
+  '[kmet.libs.diff
+    kmet.libs.file-lock
+    kmet.libs.hash
+    kmet.libs.highlight
+    kmet.libs.markdown
+    kmet.libs.process
+    kmet.libs.sse
+    kmet.libs.terminal
+    kmet.libs.terminal-image
+    kmet.libs.yaml-lite])
+
 (defn- build-context-namespaces
   "The shared namespace map for extension contexts: kmet.extension (the
-   contract), the clojure.*/babashka.* builtins, and the kmet.tui.* TUI
-   library. Rebuilt per context so namespaces required since the last build
-   (the tui library) are included."
+   contract), the clojure.*/babashka.* builtins, and the shared library
+   layers kmet.tui.* and kmet.libs.*. Rebuilt per context so namespaces
+   required since the last build (the shared library layers) are included."
   []
   (into {'kmet.extension (ns-interns 'kmet.extension)}
         (keep (fn [ns-obj]
@@ -792,7 +812,8 @@
                                       (str/starts-with? n "clojure.data.")))
                              (or (str/starts-with? n "clojure.")
                                  (str/starts-with? n "babashka.")
-                                 (str/starts-with? n "kmet.tui.")))
+                                 (str/starts-with? n "kmet.tui.")
+                                 (str/starts-with? n "kmet.libs.")))
                     [(ns-name ns-obj) (ns-interns ns-obj)])))
               (all-ns))))
 
@@ -872,10 +893,10 @@
 
 (defn- validate-entry-requires!
   "Fail fast with an actionable error when the entry ns form requires a
-   kmet.* namespace outside the shared set (kmet.extension + kmet.tui.*).
-   Without this the error would be silent: sci's require machinery NPEs on
-   a load-fn failure and swallows the original exception."
-  [ext-name ns-form tui-namespaces]
+   kmet.* namespace outside the shared set (kmet.extension + kmet.tui.* +
+   kmet.libs.*). Without this the error would be silent: sci's require
+   machinery NPEs on a load-fn failure and swallows the original exception."
+  [ext-name ns-form tui-namespaces libs-namespaces]
   (doseq [clause-key [:require :require-macros :use]
           lib (require-libspec-libs (ns-clause ns-form clause-key))]
     (let [s (str lib)]
@@ -887,11 +908,18 @@
                        " — not part of the kmet.tui.* library shared with extensions")
                   {:extension ext-name :ns lib})))
 
+        (str/starts-with? s "kmet.libs.")
+        (when-not (contains? libs-namespaces lib)
+          (throw (ex-info
+                  (str "Extension " ext-name " requires " lib
+                       " — not part of the kmet.libs.* library shared with extensions")
+                  {:extension ext-name :ns lib})))
+
         (and (str/starts-with? s "kmet.")
              (not= lib 'kmet.extension))
         (throw (ex-info
                 (str "Extension " ext-name " requires " lib
-                     " — extensions may depend only on kmet.extension and kmet.tui.*")
+                     " — extensions may depend only on kmet.extension, kmet.tui.* and kmet.libs.*")
                 {:extension ext-name :ns lib}))))))
 
 (defn- shared-tui-namespaces
@@ -901,6 +929,16 @@
   (set (keep (fn [ns-obj]
                (let [n (str (ns-name ns-obj))]
                  (when (str/starts-with? n "kmet.tui.")
+                   (ns-name ns-obj))))
+             (all-ns))))
+
+(defn- shared-libs-namespaces
+  "The set of kmet.libs.* namespace symbols currently loaded (what the
+   context injection shares with extensions)."
+  []
+  (set (keep (fn [ns-obj]
+               (let [n (str (ns-name ns-obj))]
+                 (when (str/starts-with? n "kmet.libs.")
                    (ns-name ns-obj))))
              (all-ns))))
 
@@ -1013,9 +1051,14 @@
                        " — the kmet.tui.* library is shared by reference and was"
                        " not loaded when this context was built")
 
+                  (str/starts-with? (str namespace) "kmet.libs.")
+                  (str "Extension " ext-name " requires " namespace
+                       " — the kmet.libs.* library is shared by reference and was"
+                       " not loaded when this context was built")
+
                   (str/starts-with? (str namespace) "kmet.")
                   (str "Extension " ext-name " requires " namespace
-                       " — extensions may depend only on kmet.extension and kmet.tui.*")
+                       " — extensions may depend only on kmet.extension, kmet.tui.* and kmet.libs.*")
 
                   :else
                   (str "Extension " ext-name " requires " namespace
@@ -1025,12 +1068,12 @@
 (defn- create-context
   "Build the isolated sci context for one extension: full bb classes and
    imports, shared global namespaces (contract + builtins + the kmet.tui.*
-   TUI library, required first so they exist for the injection), and the
-   per-extension load-fn that checks deps — own files, declared deps
-   (resolved lazily on first library require), bb-bundled namespaces, with
-   actionable errors for everything else."
+   TUI library + the kmet.libs.* library layer, required first so they
+   exist for the injection), and the per-extension load-fn that checks deps
+   — own files, declared deps (resolved lazily on first library require),
+   bb-bundled namespaces, with actionable errors for everything else."
   [ext-name ns-files deps-resolver]
-  (apply require tui-library-namespaces)
+  (apply require (concat tui-library-namespaces libs-library-namespaces))
   (sci/init {:classes context-classes
              :imports bb-imports
              :features #{:bb :clj}
@@ -1083,7 +1126,8 @@
             ;; fail fast on forbidden/misspelled kmet.* requires — sci's
             ;; require machinery swallows the load-fn error into an NPE
             _ (validate-entry-requires! name (read-ns-form entry)
-                                        (shared-tui-namespaces))]
+                                        (shared-tui-namespaces)
+                                        (shared-libs-namespaces))]
         (doseq [lib (keys deps)]
           (when (contains? bb-bundled-libs (str lib))
             (binding [*out* *err*]

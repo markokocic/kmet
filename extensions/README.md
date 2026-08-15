@@ -29,7 +29,8 @@ to pick it up.
 - **Single-file extensions** (`*.clj` at the top level of the directory) —
   one namespace defining `(defn init [api])`. They cannot carry a
   `deps.edn`, so they may only use `kmet.extension` plus the shared
-  `kmet.tui.*` library and `clojure.*` / `babashka.*` builtins. They have
+  `kmet.tui.*` / `kmet.libs.*` library layers and `clojure.*` /
+  `babashka.*` builtins. They have
   **no tests** — the code is expected to
   stay small and self-contained; validate changes by loading the file
   against `kmet.extension/create-nullable-api` or the real runtime.

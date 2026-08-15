@@ -319,14 +319,22 @@
       (let [result (load "app" "(ns bad-app (:require [kmet.app.commands :as c]))\n(defn init [api] nil)\n")]
         (t/is (some? (:error result)))
         (t/is (str/includes? (:error result)
-                             "may depend only on kmet.extension and kmet.tui.*"))))
+                             "may depend only on kmet.extension, kmet.tui.* and kmet.libs.*"))))
     (testing "a kmet.tui.* typo is rejected (sci would NPE silently)"
       (let [result (load "typo" "(ns bad-typo (:require [kmet.tui.theem :as t]))\n(defn init [api] nil)\n")]
         (t/is (some? (:error result)))
         (t/is (str/includes? (:error result)
                              "not part of the kmet.tui.* library shared with extensions"))))
+    (testing "a kmet.libs.* typo is rejected (sci would NPE silently)"
+      (let [result (load "lib-typo" "(ns bad-lib-typo (:require [kmet.libs.hashh :as h]))\n(defn init [api] nil)\n")]
+        (t/is (some? (:error result)))
+        (t/is (str/includes? (:error result)
+                             "not part of the kmet.libs.* library shared with extensions"))))
     (testing "valid kmet.tui.* requires load and share the real library"
       (let [result (load "tui" "(ns good-tui\n  (:require [kmet.tui.components.text :as text]\n            [kmet.tui.protocols :as protocols]))\n(defn init [api]\n  (let [c (text/make-text \"hi\")]\n    (when-not (vector? (protocols/render c 20))\n      (throw (ex-info \"render failed\" {})))))\n")]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))))
+    (testing "valid kmet.libs.* requires load and share the real library"
+      (let [result (load "lib" "(ns good-lib\n  (:require [kmet.libs.hash :as hash]\n            [kmet.libs.yaml-lite :as yaml]))\n(defn init [api]\n  (let [s (hash/short-hash \"hi\")]\n    (when-not (string? s)\n      (throw (ex-info \"hash failed\" {})))))\n")]
         (t/is (nil? (:error result)) (str "loaded: " (:error result)))))))
 
 (t/deftest ^:slow test-extension-bad-deps-fails-load

@@ -1,7 +1,10 @@
 (ns kmet.extension
-  "The kmet extension contract — the ONLY namespace an extension may depend
+  "The kmet extension contract — the root namespace an extension may depend
    on (psi: the extension-api contract; pi: the `pi` object passed to the
-   extension factory).
+   extension factory). Extensions may also use the shared library layers
+   kmet.tui.* (generic TUI components; pi: @earendil-works/pi-tui) and
+   kmet.libs.* (generic, self-contained utilities) — injected by reference,
+   never re-evaluated. Everything else in kmet.* is off-limits.
 
    An extension is a Clojure namespace defining:
      (defn init [api] ...)     — required; register everything here
