@@ -63,11 +63,15 @@
           plain (render-plain c 50)]
       (is (= 2 (count plain))))))
 
-(deftest ^:slow test-model-right-aligned
-  (testing "model renders on the right side of the stats line"
+(deftest ^:slow test-model-left-aligned
+  (testing "model renders left-aligned right after the stats, not padded to the right edge"
     (let [c (make-footer-with-session :model "gpt-4o" :provider-count 1)
-          plain (render-plain c 60)]
-      (is (some #(re-find #"gpt-4o" %) plain)))))
+          plain (render-plain c 60)
+          line (some #(when (str/includes? % "openai/gpt-4o") %) plain)]
+      (is line "model renders on the stats line")
+      (is (str/starts-with? line "? tokens  openai/gpt-4o")
+          "stats, gap, then the model — no right-alignment padding")
+      (is (< (count line) 60) "line does not extend to the right edge"))))
 
 (deftest ^:slow test-provider-model-display
   (testing "model always displays as provider/model, regardless of provider count"
@@ -130,13 +134,14 @@
       (is (pos? (count lines))))))
 
 (deftest ^:slow test-model-wraps-to-own-line
-  (testing "when stats + model don't fit, the model wraps to its own right-aligned line"
+  (testing "when stats + model don't fit, the model wraps to its own left-aligned line"
     (let [c (make-footer-with-session :model "some-very-long-model-name" :provider :openai)
           plain (render-plain c 40)]
       (is (= 3 (count plain)) "pwd + stats + model lines")
       (let [model-line (last plain)]
-        (is (str/ends-with? model-line "openai/some-very-long-model-name"))
-        (is (= 40 (count model-line)) "model line right-aligned to the full width")))
+        (is (str/starts-with? model-line "openai/some-very-long-model-name"))
+        (is (= 32 (count model-line))
+            "model line left-aligned, not padded to the full width")))
     (testing "model wider than the terminal is truncated to fit"
       (let [c (make-footer-with-session :model (apply str (repeat 50 "x")) :provider :openai)
             plain (render-plain c 20)]

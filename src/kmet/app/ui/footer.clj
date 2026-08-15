@@ -2,10 +2,11 @@
   "FooterComponent — Pi's two-line footer:
      line 1: accent cursive К mark + cwd (home-substituted) + git branch, dim
      line 2: usage stats (↑in ↓out R W CH%) + context % colored by usage,
-             right-aligned provider/model with a pi-aligned thinking suffix:
+             followed by the provider/model (left-aligned, kmet deviation
+             from pi's right alignment) with a pi-aligned thinking suffix:
              reasoning models show ' • thinking off' when off and ' •
              <level>' otherwise, non-reasoning models show nothing; the
-             model line wraps to its own right-aligned line when the stats
+             model line wraps to its own left-aligned line when the stats
              line is too narrow
      line 3 (optional): extension statuses, sorted by key
    Data comes from the FooterDataProvider (pi: FooterComponent + provider).
@@ -104,8 +105,8 @@
                           (and percent (> percent 70)) (theme/fg thm :warning ctx-display)
                           :else ctx-display)
             stats-left (str/join " " (conj stats-parts ctx-colored))
-            ;; ── Right side (kmet: always provider/model, pi: (provider)
-            ;;    model only with multiple providers) ──────────────────────
+            ;; ── Model (kmet: always provider/model, pi: (provider) model
+            ;;    only with multiple providers) ────────────────────────────
             model-name (or (fdp/fdp-get-model provider) "no-model")
             provider-name (fdp/fdp-get-provider provider)
             model-display (if (some? provider-name)
@@ -115,33 +116,32 @@
             ;;    level always — " • thinking off" when off, " • <level>"
             ;;    otherwise; non-reasoning models show none ───────────────
             thinking-level (or (fdp/fdp-get-thinking provider) :off)
-            right-side (if (fdp/fdp-get-reasoning provider)
+            model-side (if (fdp/fdp-get-reasoning provider)
                          (if (= thinking-level :off)
                            (str model-display " • thinking off")
                            (str model-display " • " (name thinking-level)))
                          model-display)
-            ;; ── Assemble line 2 (pi: statsLine right-alignment) ──────────
+            ;; ── Assemble line 2 (kmet: stats + provider/model both
+            ;;    left-aligned with a gap; pi right-aligns the model) ──────
             stats-left-w0 (u/visible-width stats-left)
             [stats-left stats-left-w] (if (> stats-left-w0 width)
                                         (let [t (u/truncate-to-width stats-left width "...")]
                                           [t (u/visible-width t)])
                                         [stats-left stats-left-w0])
             min-padding 2
-            right-w (u/visible-width right-side)
-            total-needed (+ stats-left-w min-padding right-w)
+            model-w (u/visible-width model-side)
+            total-needed (+ stats-left-w min-padding model-w)
             stats-line (if (<= total-needed width)
                          (str stats-left
-                              (apply str (repeat (- width stats-left-w right-w) \space))
-                              right-side)
+                              (apply str (repeat min-padding \space))
+                              model-side)
                          ;; Too narrow for stats + model: the model wraps to
-                         ;; its own line, right-aligned (pi truncates instead)
+                         ;; its own line, left-aligned
                          stats-left)
             model-line (when (> total-needed width)
-                         (let [r (if (> right-w width)
-                                   (u/truncate-to-width right-side width "...")
-                                   right-side)
-                               rw (u/visible-width r)]
-                           (str (apply str (repeat (- width rw) \space)) r)))
+                         (if (> model-w width)
+                           (u/truncate-to-width model-side width "...")
+                           model-side))
             ;; dim the parts independently — stats-left may contain colors
             ;; whose fg resets would clear an outer dim wrapper
             dim-left (theme/dim stats-left)
