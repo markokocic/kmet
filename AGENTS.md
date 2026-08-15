@@ -8,6 +8,7 @@
   To stop: evaluate `(System/exit 0)` via nREPL (or `fuser -k 1667/tcp` from another terminal).
 - **Lint**: `bb lint` — clj-kondo over `src`/`test`. Custom macros (`defcomponent`/`defsetter`/`defgetter`)
   are handled via analysis hooks in `.clj-kondo/hooks/`; keep them in sync when the macro shapes change.
+  The gate requires `bb lint` to pass with 0 errors, warnings, and info findings.
 - **Format**: `bb format` (fix) / `bb format-check` (verify) — cljfmt over `src`/`test`.
   `cljfmt.edn` carries `:extra-indents` for the custom macros; default arg alignment is
   align-to-first-argument (modern cljfmt). Run `bb format` after structural edits (e.g. let merges).
@@ -277,6 +278,7 @@ src/kmet/
 `bb lint` and `bb format-check` are slow — don't run them during iterative
 development. Run the full gate once before wrapping up:
 `bb lint` + `bb format-check` + `bb test` + `bb test-ext`.
+`bb lint` must pass with 0 errors, warnings, and info findings.
 
 ## Platform
 - **Fully supported**: Linux, WSL, Windows, Termux (Android)
