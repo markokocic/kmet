@@ -169,7 +169,7 @@ Be precise and concise in your responses."}}]
                     :scoped-models (atom scoped-models)
                     :overflow-recovered (atom false)
                     :compact-token-threshold compact-token-threshold
-                    :context-window context-window
+                    :context-window (atom context-window)
                     :compact-reserve-tokens compact-reserve-tokens
                     :keep-recent-tokens keep-recent-tokens
                     :compacting? (atom false)
@@ -1063,7 +1063,7 @@ Be precise and concise in your responses."}}]
     (let [context (session/build-context sess)
           branch (session/get-branch sess)
           token-threshold (:compact-token-threshold agent)
-          window (:context-window agent)
+          window @(:context-window agent)
           reserve (:compact-reserve-tokens agent)
           window-reserve (when window (- window reserve))
           ;; Measure the context that would be sent, not the whole file:

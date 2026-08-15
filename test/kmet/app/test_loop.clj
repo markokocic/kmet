@@ -1479,7 +1479,7 @@
     (t/is (= [] @(:scoped-models agent)))
     (t/is (false? @(:overflow-recovered agent)))
     (t/is (nil? (:compact-token-threshold agent)))
-    (t/is (nil? (:context-window agent)))
+    (t/is (nil? @(:context-window agent)))
     (t/is (= 16384 (:compact-reserve-tokens agent)) "pi default reserveTokens")
     (t/is (= 3 @(:max-retries agent)) "pi default maxRetries")))
 
