@@ -80,12 +80,12 @@
     (t/is (not= before (vec (core/render s 30))))))
 
 (t/deftest test-settings-list-focus-shows-cursor
-  ;; regression: focusing never re-rendered (focused? omitted from cache key)
-  (let [s (settings/make-settings-list [{:id :a :label "Alpha" :value "x"}])]
-    (core/render s 30)
-    (core/set-focused! s true)
-    (let [line (second (core/render s 30))]
-      (t/is (.contains line "→")))))
+  ;; the selected item always shows the → cursor (pi: prefix = cursor when
+  ;; selected, regardless of focus — extension dialogs wrap the list in a
+  ;; duck-typed component that never receives focus)
+  (let [s (settings/make-settings-list [{:id :a :label "Alpha" :value "x"}
+                                        {:id :b :label "Beta" :value "y"}])]
+    (t/is (.contains (first (core/render s 30)) "→"))))
 
 (t/deftest test-cache-verifies-values-even-without-watch
   ;; Simulates the watch-registration race: a value changed after the watch

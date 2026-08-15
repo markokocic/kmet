@@ -83,6 +83,7 @@
         settings (settings-list/make-settings-list
                   items
                   :theme (theme/get-settings-list-theme th)
+                  :max-visible (min (+ (count items) 2) 15)
                   :on-change (fn [id new-value]
                                (swap! state update :enabled-tools
                                       (if (= new-value "enabled") conj disj) id)
@@ -93,7 +94,7 @@
         c (container/make-container)
         _ (container/container-add-child
            c (text/make-text
-              (theme/fg th :accent (theme/bold "Tool Configuration")) 1 0))
+              (theme/fg th :accent (theme/bold "Tool Configuration")) 0 0))
         _ (container/container-add-child c (spacer/make-spacer 1))
         _ (container/container-add-child c settings)]
     ;; duck-typed component: input goes to the settings list, render and
@@ -122,7 +123,9 @@
       {:name "tools"
        :description "Enable/disable tools interactively"
        :handler (fn [ctx _args] (open-selector! api state ctx))})
+    ;; handlers receive (event ctx) — pi parity (pi: on('session_start',
+    ;; (_event, ctx) => ...)); ctx is unused here but required arity
     (ext/on-event api :session-start
-                  (fn [_ev] (restore-from-branch! api state)))
+                  (fn [_ev _ctx] (restore-from-branch! api state)))
     (ext/on-event api :session-tree
-                  (fn [_ev] (restore-from-branch! api state)))))
+                  (fn [_ev _ctx] (restore-from-branch! api state)))))

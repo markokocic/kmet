@@ -10,6 +10,7 @@
 (def ^:const K-RIGHT "\u001b[C")
 (def ^:const K-BS "\u007f")
 (def ^:const K-ESC "\u001b")
+(def ^:const K-ENTER "\r")
 
 (def sample-items
   [{:id :theme :label "Theme" :value "dark" :values ["dark" "light" "auto"]}
@@ -50,9 +51,10 @@
     (t/is (= 1 @(:selected-idx-atom s)))))
 
 (t/deftest test-settings-list-navigate-past-end
+  ;; pi: navigation wraps around
   (let [s (sl/make-settings-list sample-items)]
     (dotimes [_ 10] (core/handle-input s K-DOWN))
-    (t/is (= 2 @(:selected-idx-atom s)))))
+    (t/is (= 1 @(:selected-idx-atom s)))))
 
 ;; ─── Cycling values ───────────────────────────────────────────────────────
 
@@ -81,18 +83,33 @@
     (core/handle-input s K-RIGHT)
     (t/is (= [[:theme "light"]] @changes))))
 
-;; ─── Filtering ─────────────────────────────────────────────────────────────
+(t/deftest test-settings-list-cycle-enter
+  ;; pi: Enter cycles to the next value (activateItem)
+  (let [changes (atom [])
+        s (sl/make-settings-list sample-items
+                                 :on-change (fn [id val] (swap! changes conj [id val])))]
+    (core/handle-input s K-ENTER)
+    (t/is (= [[:theme "light"]] @changes))
+    (t/is (= "light" (:value (first @(:items-atom s)))))))
+
+;; ─── Filtering (pi: enableSearch opt-in) ───────────────────────────────────
 
 (t/deftest test-settings-list-filter
-  (let [s (sl/make-settings-list sample-items)]
+  (let [s (sl/make-settings-list sample-items :enable-search true)]
     (core/handle-input s "font")
     (t/is (= "font" @(:filter-atom s)))))
 
 (t/deftest test-settings-list-filter-backspace
-  (let [s (sl/make-settings-list sample-items)]
+  (let [s (sl/make-settings-list sample-items :enable-search true)]
     (core/handle-input s "f")
     (core/handle-input s K-BS)
     (t/is (= "" @(:filter-atom s)))))
+
+(t/deftest test-settings-list-filter-renders-search-line
+  ;; pi: search-enabled settings lists render a "> " input line up top
+  (let [s (sl/make-settings-list sample-items :enable-search true)
+        lines (vec (core/render s 50))]
+    (t/is (some #(.contains % "> ") lines))))
 
 ;; ─── Escape ────────────────────────────────────────────────────────────────
 

@@ -445,8 +445,8 @@
         ((:handler (commands/find-command "settings")) cs "")
         (let [sl @sl-ref]
           (t/is (some? sl) "settings list shown")
-          ;; right arrow (raw terminal sequence) cycles the selected row
-          (protocols/handle-input sl "\u001b[C")
+          ;; Enter (pi: activateItem) cycles the selected row
+          (protocols/handle-input sl "\r")
           (t/is (not= :off @(:thinking ag)) "thinking row cycles the session level")
           (t/is (= [[:thinking] @(:thinking ag)] @saved)
                 "thinking change persisted to settings (path + level)"))))))
@@ -480,17 +480,17 @@
           ;; base-delay(4)
           (protocols/handle-input sl "\u001b[B") ;; down → hide-thinking
           (protocols/handle-input sl "\u001b[B") ;; down → auto-retry
-          (protocols/handle-input sl "\u001b[C") ;; right — auto-retry true -> false
+          (protocols/handle-input sl "\r") ;; enter — auto-retry true -> false
           (t/is (= 0 @(:max-retries ag)) "disabled retry gates max-retries to 0")
           (t/is (= [[:retry :enabled] false] @saved) "auto-retry persisted")
-          (protocols/handle-input sl "\u001b[C") ;; right — auto-retry back on
+          (protocols/handle-input sl "\r") ;; enter — auto-retry back on
           (t/is (= 3 @(:max-retries ag)) "re-enabled retry restores max-retries")
           (protocols/handle-input sl "\u001b[B") ;; down → max-retries
-          (protocols/handle-input sl "\u001b[C") ;; right — 3 -> 5
+          (protocols/handle-input sl "\r") ;; enter — 3 -> 5
           (t/is (= 5 @(:max-retries ag)) "max-retries applies live")
           (t/is (= [[:retry :max-retries] 5] @saved) "max-retries persisted")
           (protocols/handle-input sl "\u001b[B") ;; down → base-delay
-          (protocols/handle-input sl "\u001b[C") ;; right — 2000 -> 4000
+          (protocols/handle-input sl "\r") ;; enter — 2000 -> 4000
           (t/is (= 4000 @(:base-delay-ms ag)) "base delay applies live")
           (t/is (= [[:retry :base-delay-ms] 4000] @saved) "base delay persisted"))))))
 

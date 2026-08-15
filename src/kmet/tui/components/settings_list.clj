@@ -1,11 +1,19 @@
 (ns kmet.tui.components.settings-list
   "Toggle/cycle through setting values.
-   Port of @earendil-works/pi-tui SettingsList."
+   Port of @earendil-works/pi-tui SettingsList — same rendering as pi:
+   no header line, aligned two-column layout (`→ ` cursor on the selected
+   item, values right-aligned to the widest label), scroll window with
+   (N/M) indicator, selected-item description, and the Enter/Space-to-change
+   hint at the bottom. Enter or Space cycles the selected item's value
+   (pi: activateItem); left/right are kmet extras cycling backward/forward.
+   Search (pi: enableSearch) renders a `> ` input line and filters as you
+   type."
   (:require [clojure.string :as str]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as u]
-            [kmet.tui.macros :refer [track! defcomponent]]))
+            [kmet.tui.macros :refer [track! track-deps defcomponent]]
+            [kmet.tui.components.input :as input]))
 
 ;; ─── Theme ──────────────────────────────────────────────────────────────────
 
@@ -21,11 +29,71 @@
     :cursor "\u001b[36m→ \u001b[39m"
     :hint (fn [s] (str "\u001b[2m" s "\u001b[22m"))}))
 
+;; ─── Helpers (pi: renderMainList / activateItem) ───────────────────────────
+
+(def ^:private max-label-width 30)
+
+(defn- display-items
+  "The items to render/navigate: all items, or the query-filtered subset
+   when search is enabled and a query is present (pi: filteredItems)."
+  [items filter-text search?]
+  (if (and search? (seq filter-text))
+    (filterv (fn [item] (str/includes? (str/lower-case (str (:label item)))
+                                       (str/lower-case filter-text)))
+             items)
+    items))
+
+(defn- visible-window
+  "The [start end) item index window to render (pi: renderMainList scroll
+   window): the selection centered within MAX-VISIBLE, clamped to the item
+   count."
+  [selected max-visible n]
+  (let [start (max 0 (min (- selected (quot max-visible 2))
+                          (- n max-visible)))
+        end (min (+ start max-visible) n)]
+    [start end]))
+
+(defn- add-hint!
+  "Push the blank line + usage hint (pi: addHintLine)."
+  [lines theme width search?]
+  (vswap! lines conj "")
+  (vswap! lines conj
+          (u/truncate-to-width
+           ((:hint theme) (if search?
+                            "  Type to search · Enter/Space to change · Esc to cancel"
+                            "  Enter/Space to change · Esc to cancel"))
+           width)))
+
+(defn- cycle-value!
+  "Advance the selected item's value by DELTA steps within :values, firing
+   :on-change (pi: activateItem cycles to the next value on Enter/Space).
+   A value not in :values starts at the first (delta 1) or last (delta -1)
+   value."
+  [this display selected delta]
+  (let [item (nth display selected)
+        possible (:values item)]
+    (when (and possible (seq possible))
+      (let [current (or (:value item) "")
+            cur-idx (.indexOf possible current)
+            base (if (neg? cur-idx) (if (neg? delta) 0 -1) cur-idx)
+            next-idx (mod (+ base delta) (count possible))
+            new-val (nth possible next-idx)]
+        (when-let [cb @(:on-change-atom this)]
+          (cb (:id item) new-val))
+        (swap! (:items-atom this)
+               (fn [items]
+                 (mapv (fn [it]
+                         (if (= (:id it) (:id item))
+                           (assoc it :value new-val)
+                           it))
+                       items)))))))
+
 ;; ─── SettingsList component ─────────────────────────────────────────────────
 
 (defcomponent SettingsList nil [items-atom selected-idx-atom filter-atom
                                 focused? theme-atom cache-atom
-                                on-change-atom on-escape-atom]
+                                on-change-atom on-escape-atom
+                                search-enabled? max-visible search-input-atom]
 
   (render [this width]
     (track! this width
@@ -33,60 +101,75 @@
             flt @filter-atom
             selected @selected-idx-atom
             theme @theme-atom
-            filtered (if (empty? flt)
-                       items
-                       (->> items
-                            (filter #(let [label (:label %)]
-                                       (clojure.string/includes?
-                                        (clojure.string/lower-case label)
-                                        (clojure.string/lower-case flt))))))
-            n (count filtered)
+            search? @search-enabled?
+            search-input @search-input-atom
+            max-visible @max-visible
+            display (display-items items flt search?)
+            n (count display)
             selected (min selected (max 0 (dec n)))
             _ (reset! selected-idx-atom selected)
             lines (volatile! [])]
-        ;; Header
-        (vswap! lines conj
-                (str " \u001b[1mSettings"
-                     (if (empty? flt) "" (str " (filter: " flt ")"))
-                     "\u001b[0m"))
-        ;; Items
-        (doseq [[idx item] (map-indexed vector filtered)]
-          (let [is-selected (= idx selected)
-                label ((:label theme) (:label item) is-selected)
-                current (or (:value item) "")
-                possible (:values item)
-                is-cycling (and is-selected possible (> (count possible) 1))
-                value-str (cond
-                            is-cycling
-                            (str " < "
-                                 (clojure.string/join " | " (map #(if (= % current)
-                                                                    ((:value theme) (pr-str %) true)
-                                                                    ((:value theme) (pr-str %) false))
-                                                                 possible))
-                                 " > ")
-                            :else (str "  " ((:value theme) (pr-str current) is-selected)))
-                cursor (if (and is-selected @focused?) (:cursor theme) "  ")
-                line-str (str cursor label value-str)
-                truncated (u/truncate-to-width line-str (- width 1))
-                padded (str truncated
-                            (apply str (repeat (max 0 (- width (u/visible-width truncated))) \space)))]
-            (vswap! lines conj padded)))
-        (when (zero? n)
-          (vswap! lines conj
-                  (str "  \u001b[2mNo matching settings\u001b[0m"
-                       (apply str (repeat (max 0 (- width 35)) \space)))))
+        ;; pi: the search input renders at the top, followed by a blank line.
+        ;; Its focused?/value atoms affect the baked lines — declare them so
+        ;; focus changes and typing invalidate this cache (track-deps).
+        (when (and search? search-input)
+          (track-deps @(:focused? search-input) @(:value-atom search-input))
+          (vswap! lines into (protocols/render search-input width))
+          (vswap! lines conj ""))
+        (cond
+          (empty? items)
+          (do (vswap! lines conj ((:hint theme) "  No settings available"))
+              (when search?
+                (add-hint! lines theme width search?)))
+
+          (zero? n)
+          (do (vswap! lines conj ((:hint theme)
+                                  (u/truncate-to-width "  No matching settings" width)))
+              (add-hint! lines theme width search?))
+
+          :else
+          (let [[start end] (visible-window selected max-visible n)
+                max-label (min max-label-width
+                               (reduce (fn [w item]
+                                         (max w (u/visible-width (str (:label item)))))
+                                       0
+                                       items))
+                cursor (:cursor theme)]
+            (doseq [i (range start end)]
+              (let [item (nth display i)
+                    is-selected (= i selected)
+                    prefix (if is-selected cursor "  ")
+                    label-padded (str (:label item)
+                                      (apply str (repeat (max 0 (- max-label
+                                                                   (u/visible-width (str (:label item)))))
+                                                         \space)))
+                    label-text ((:label theme) label-padded is-selected)
+                    value-max (- width (u/visible-width prefix) max-label 2 2)
+                    value-text ((:value theme)
+                                (u/truncate-to-width (str (:value item)) value-max "")
+                                is-selected)]
+                (vswap! lines conj
+                        (u/truncate-to-width (str prefix label-text "  " value-text)
+                                             width))))
+            (when (or (pos? start) (< end n))
+              (vswap! lines conj
+                      ((:hint theme)
+                       (u/truncate-to-width (str "  (" (inc selected) "/" n ")")
+                                            (max 1 (- width 2))))))
+            (when-let [desc (:description (nth display selected))]
+              (vswap! lines conj "")
+              (doseq [line (u/wrap-text-with-ansi (str desc) (max 1 (- width 4)))]
+                (vswap! lines conj ((:description theme) (str "  " line)))))
+            (add-hint! lines theme width search?)))
         @lines)))
 
-  (handle-input [_this data]
+  (handle-input [this data]
     (let [items @items-atom
           flt @filter-atom
-          filtered (if (empty? flt)
-                     items
-                     (->> items
-                          (filter #(clojure.string/includes?
-                                    (clojure.string/lower-case (:label %))
-                                    (clojure.string/lower-case flt)))))
-          n (count filtered)
+          search? @search-enabled?
+          search-input @search-input-atom
+          display (display-items items flt search?)
+          n (count display)
           selected @selected-idx-atom]
       (cond
         ;; Escape — close
@@ -94,78 +177,59 @@
         (do (when-let [cb @on-escape-atom] (cb))
             nil)
 
-        ;; Down / Ctrl+n
+        ;; Down / Ctrl+n — wrap around (pi)
         (or (keys/matches-key? data "down")
             (keys/matches-key? data (keys/ctrl "n")))
-        (do (when (pos? n) (swap! selected-idx-atom #(min (inc %) (dec n))))
+        (do (when (pos? n) (swap! selected-idx-atom #(mod (inc %) n)))
             nil)
 
-        ;; Up / Ctrl+p
+        ;; Up / Ctrl+p — wrap around (pi)
         (or (keys/matches-key? data "up")
             (keys/matches-key? data (keys/ctrl "p")))
-        (do (swap! selected-idx-atom #(max 0 (dec %))) nil)
-
-        ;; Next value (right / space)
-        (or (keys/matches-key? data "right")
-            (keys/matches-key? data "space"))
-        (do (when (and (pos? n) (< selected n))
-              (let [item (nth filtered selected)
-                    possible (:values item)]
-                (when (and possible (seq possible))
-                  (let [current (or (:value item) "")
-                        cur-idx (.indexOf possible current)
-                        next-idx (mod (inc (if (neg? cur-idx) -1 cur-idx))
-                                      (count possible))
-                        new-val (nth possible next-idx)]
-                    (when-let [cb @on-change-atom]
-                      (cb (:id item) new-val))
-                    (swap! items-atom update-in
-                           [(.indexOf items item) :value] (constantly new-val))))))
+        (do (when (pos? n) (swap! selected-idx-atom #(mod (dec %) n)))
             nil)
 
-        ;; Previous value (left)
+        ;; Enter, or Space when not searching (or the query is empty) —
+        ;; cycle the selected item's value (pi: activateItem)
+        (or (keys/matches-key? data "enter")
+            (and (keys/matches-key? data "space")
+                 (or (not search?) (empty? flt))))
+        (do (when (pos? n) (cycle-value! this display selected 1))
+            nil)
+
+        ;; Search enabled — everything else goes to the search input (pi)
+        (and search? search-input)
+        (do (protocols/handle-input search-input data)
+            (let [q (input/input-get-value search-input)]
+              (reset! filter-atom q)
+              (reset! selected-idx-atom 0))
+            nil)
+
+        ;; kmet extras (pi ignores these keys): right/left cycle values
+        (keys/matches-key? data "right")
+        (do (when (pos? n) (cycle-value! this display selected 1))
+            nil)
+
         (keys/matches-key? data "left")
-        (do (when (and (pos? n) (< selected n))
-              (let [item (nth filtered selected)
-                    possible (:values item)]
-                (when (and possible (seq possible))
-                  (let [current (or (:value item) "")
-                        cur-idx (.indexOf possible current)
-                        prev-idx (mod (dec (if (neg? cur-idx) 0 cur-idx))
-                                      (count possible))
-                        new-val (nth possible prev-idx)]
-                    (when-let [cb @on-change-atom]
-                      (cb (:id item) new-val))
-                    (swap! items-atom update-in
-                           [(.indexOf items item) :value] (constantly new-val))))))
+        (do (when (pos? n) (cycle-value! this display selected -1))
             nil)
 
-        ;; Backspace — remove filter char
-        (or (keys/matches-key? data "backspace")
-            (keys/matches-key? data (keys/ctrl "h")))
-        (do (swap! filter-atom #(subs % 0 (max 0 (dec (count %)))))
-            (reset! selected-idx-atom 0)
-            nil)
-
-        ;; Regular character — add to filter
-        :else
-        (let [has-ctrl? (some #(let [c (int %)]
-                                 (or (< c 32) (== c 127)
-                                     (and (>= c 128) (<= c 159))))
-                              data)]
-          (when-not has-ctrl?
-            (swap! filter-atom str data)
-            (reset! selected-idx-atom 0)
-            nil))))))
+        :else nil))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-settings-list
-  "Create a new SettingsList component.
-   Each item: {:id :key :label \"Name\" :value current :values [possible ...]}
-   Options: :theme (default-theme), :on-change callback"
-  [items & {:keys [theme on-change]
-            :or {theme default-theme}}]
+  "Create a new SettingsList component (pi: new SettingsList(items,
+   maxVisible, theme, onChange, onCancel)).
+   Each item: {:id :label :value current :values [possible ...]
+   :description opt}. Options: :theme (default-theme), :on-change callback,
+   :enable-search (default false — pi's tools dialog has no search), and
+   :max-visible — the scroll window height (default 10; pi's tools dialog
+   passes (min (+ (count items) 2) 15))."
+  [items & {:keys [theme on-change enable-search max-visible]
+            :or {theme default-theme
+                 enable-search false
+                 max-visible 10}}]
   (map->SettingsList {:items-atom (atom items)
                       :selected-idx-atom (atom 0)
                       :filter-atom (atom "")
@@ -173,7 +237,11 @@
                       :theme-atom (atom theme)
                       :cache-atom (atom nil)
                       :on-change-atom (atom on-change)
-                      :on-escape-atom (atom nil)}))
+                      :on-escape-atom (atom nil)
+                      :search-enabled? (atom enable-search)
+                      :max-visible (atom max-visible)
+                      :search-input-atom (atom (when enable-search
+                                                 (input/make-input)))}))
 
 (defn settings-list-set-on-escape! [sl f]
   (reset! (:on-escape-atom sl) f))
@@ -197,4 +265,9 @@
 (extend-type SettingsList
   protocols/IFocusable
   (focused [this] @(:focused? this))
-  (set-focused! [this val] (reset! (:focused? this) val)))
+  (set-focused! [this val]
+    (reset! (:focused? this) val)
+    ;; the search input's cursor follows the list's focus (pi renders the
+    ;; search Input with its cursor regardless; kmet's Input needs focus)
+    (when-let [si @(:search-input-atom this)]
+      (protocols/set-focused! si val))))

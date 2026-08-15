@@ -13,7 +13,10 @@
             [kmet.app.ui.model-selector :as model-selector]
             [kmet.config :as cfg]
             [kmet.tui.core :as tui]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as th]
+            [kmet.tui.components.container :as container]
+            [kmet.tui.components.dynamic-border :as db]
             [kmet.tui.components.settings-list :as settings-list]))
 
 (defn show-settings
@@ -69,6 +72,7 @@
                 base-items)
         sl (settings-list/make-settings-list
             items
+            :enable-search true
             :on-change (fn [id value]
                          (case id
                            :theme
@@ -104,5 +108,23 @@
      sl (fn []
           (tui/tui-hide-overlay (:tui cs))
           (tui/tui-request-render (:tui cs))))
-    (tui/tui-show-overlay (:tui cs) sl :width 55 :height 9)
-    (tui/tui-request-render (:tui cs))))
+    ;; Frame the list like pi's SettingsSelectorComponent (DynamicBorder +
+    ;; SettingsList + DynamicBorder) so the overlay reads as a panel instead
+    ;; of floating transparent text; width 60 fits the full hint line and
+    ;; height 12 fits border + 10 content lines without clipping.
+    (let [th (th/get-current-theme)
+          frame (container/make-container)
+          _ (container/container-add-child
+             frame (db/make-dynamic-border #(th/fg th :accent %)))
+          _ (container/container-add-child frame sl)
+          _ (container/container-add-child
+             frame (db/make-dynamic-border #(th/fg th :accent %)))
+          comp (reify tui/IComponent
+                 (render [_ width] (protocols/render frame width))
+                 (handle-input [_ data] (protocols/handle-input sl data))
+                 (invalidate [_] (protocols/invalidate frame))
+                 tui/IFocusable
+                 (focused [_] (protocols/focused sl))
+                 (set-focused! [_ val] (protocols/set-focused! sl val)))]
+      (tui/tui-show-overlay (:tui cs) comp :width 60 :height 12)
+      (tui/tui-request-render (:tui cs)))))
