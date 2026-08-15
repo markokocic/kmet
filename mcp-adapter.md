@@ -1,7 +1,9 @@
 # kmet mcp-adapter extension — implementation plan (Phase 1)
 
-Status: approved plan — not yet implemented. This document is the design
-contract; deviations during implementation must be reflected back here.
+Status: approved plan — not yet implemented. Rev 2: OAuth (RFC 8414/7591,
+PKCE loopback + RFC 8628 device flow) added to Phase 1 scope on request.
+This document is the design contract; deviations during implementation must
+be reflected back here.
 
 ## 1. Goal
 
@@ -34,7 +36,8 @@ never by convenience.
 | Config sources | exactly two: global `~/.kmet/agent/mcp.edn`, project `.kmet/mcp.edn` |
 | Porting | none — no pi `mcp.json` reading, no host-config discovery |
 | Template | create global `mcp.edn` at init when missing; project file on first enable/disable write |
-| HTTP | in Phase 1: streamable HTTP + legacy SSE, static bearer/headers auth only (no OAuth) |
+| HTTP | in Phase 1: streamable HTTP + legacy SSE; auth: static bearer/headers + OAuth (RFC 8414 discovery, RFC 7591 DCR, PKCE loopback + device flow) |
+| OAuth machinery | new generic lib `kmet.libs.oauth`, extracted from `kmet.ai.oauth` (device-code poll, PKCE, callback server) + RFC 8414/7591 additions; extension `auth.clj` is a thin adapter; `kmet.ai.oauth` refactored onto the lib — one implementation, no duplication |
 | `/mcp serve` | out of scope |
 | Entry ns | `extensions.mcp-adapter` (a `kmet.*` prefix is rejected by the loader) |
 
@@ -44,18 +47,22 @@ never by convenience.
 
 - EDN config loading/merging/template/write-back (§6)
 - MCP client: stdio JSON-RPC, streamable HTTP, legacy SSE (§7)
+- OAuth client auth for HTTP servers: RFC 8414 metadata discovery, RFC 7591
+  dynamic client registration, PKCE loopback + RFC 8628 device flows, token
+  refresh, plaintext token store with 0600 perms (§7.8; machinery in the
+  new generic lib `kmet.libs.oauth`)
 - Proxy tool `mcp` with status/search/describe/call/connect/disconnect (§9)
 - Direct tools, pi-parity (§10.5)
 - Metadata cache for offline search/describe + startup direct-tool registration (§8)
 - Server lifecycle: lazy/eager/keep-alive, reconnect-on-use, cleanup on
   session shutdown / extension unload
 - `/mcp` command: status, search, list, connect, disconnect, enable, disable,
-  refresh (+ argument completions)
+  refresh, auth, logout (+ argument completions)
 - Usage skill contributed via `:resources-discover`, README
 
 ### Out of scope (Phase 2+)
 
-- OAuth (device/PKCE), dynamic client registration
+- OAuth client-credentials / JWT-bearer grants, OS-keyring token storage
 - Prompts → slash commands, resources → read tool
 - `mcpScript` batching tool (node)
 - `/mcp serve` (expose kmet as an MCP server, dirge-style)
@@ -69,16 +76,17 @@ never by convenience.
 |---|---|---|
 | `index.ts` (installMcpAdapter) | `mcp_adapter.clj` | init/shutdown, state, tool registration, events, lifecycle generations simplified to per-server locks |
 | `config.ts` (loadMcpConfig, writeProjectServerDisabledOverride) | `config.clj` | precedence merge, disabled override — EDN sources instead of mcp.json, no imports/host discovery (Phase 1) |
-| `server-manager.ts` | `client.clj` | server lifecycle, lazy connect, reconnect, stdio+streamable-http+sse transports (no OAuth, no sampling/elicitation handlers) |
+| `server-manager.ts` | `client.clj` | server lifecycle, lazy connect, reconnect, stdio+streamable-http+sse transports (no sampling/elicitation handlers) |
+| `mcp-auth.ts`, `mcp-oauth-provider.ts`, `oauth-handler.ts`, `mcp-auth-flow.ts`, `mcp-callback-server.ts` | `kmet.libs.oauth` + `auth.clj` | generic machinery → `kmet.libs.oauth` (extracted from `kmet.ai.oauth`, extended with RFC 8414 discovery + RFC 7591 DCR + token exchange/refresh); `auth.clj` is a thin adapter (config → lib calls, token-store file, browser open, status). Extensions cannot require `kmet.ai.*` — the lib is the shared seam; plaintext store instead of OS keyring |
 | `proxy-modes.ts` (executeSearch/Describe/Call/Connect/Status) | `proxy.clj` | proxy tool dispatch, search ranking, describe, status text |
 | `direct-tools.ts` (resolveDirectTools, createDirectToolExecutor) | `mcp_adapter.clj` (§10.5) | per-server direct-tools opt-in, MCP_DIRECT_TOOLS env, tool-prefix naming, cache-backed registration |
 | `metadata-cache.ts` (loadMetadataCache, isServerCacheValid) | `metadata.clj` | persistent cache, config fingerprint, 7-day freshness |
-| `commands.ts` (`/mcp` subcommands) | `mcp_adapter.clj` (§10.6) | status/search/list/connect/disconnect/enable/disable (+ refresh); no setup/auth panels (Phase 1) |
+| `commands.ts` (`/mcp` subcommands) | `mcp_adapter.clj` (§10.6) | status/search/list/connect/disconnect/enable/disable/auth/logout (+ refresh); no setup panels (Phase 1) |
 | `init.ts` (updateStatusBar, lazyConnect) | `mcp_adapter.clj` | status text, lazy/eager/keep-alive connect, description rebuild |
 | `types.ts` (ServerEntry, McpSettings, ToolPrefix) | `config.clj` (§6.2) | same field semantics, kebab-case EDN + tolerant camel reading |
 | `skills/` (mcp-scripting) | `skills/mcp/SKILL.md` | usage skill, contributed via `:resources-discover` |
 
-Deliberately not ported in Phase 1 (see §3): `mcp-auth*.ts`, `mcp-callback-server.ts`, `mcp-panel.ts`, `mcp-setup-panel.ts`, `mcp-code.ts` (mcpScript), `tool-approval.ts`, `mcp-output-guard.ts`, `ui-*.ts`, `mcp-script-worker.mjs`, `prompts.ts`, `resource-tools.ts`, `search-ranking.ts` ranking depth (phase 1 keeps name-over-description ranking), `tool-result-renderer.ts` (default rendering; custom render hooks are optional polish, §10.4).
+Deliberately not ported in Phase 1 (see §3): `mcp-panel.ts`, `mcp-setup-panel.ts`, `mcp-code.ts` (mcpScript), `tool-approval.ts`, `mcp-output-guard.ts`, `ui-*.ts`, `mcp-script-worker.mjs`, `prompts.ts`, `resource-tools.ts`, `search-ranking.ts` ranking depth (phase 1 keeps name-over-description ranking), `tool-result-renderer.ts` (default rendering; custom render hooks are optional polish, §10.4).
 
 ## 5. File layout
 
@@ -90,13 +98,24 @@ extensions/mcp-adapter/
 ├── skills/mcp/SKILL.md           usage skill (contributed via :resources-discover)
 ├── scripts/
 │   ├── fake-mcp-server.bb        fake stdio MCP server (validation)
-│   └── fake-http-mcp-server.bb   fake streamable-HTTP MCP server (validation)
+│   ├── fake-http-mcp-server.bb   fake streamable-HTTP MCP server (validation)
+│   └── fake-oauth-server.bb      fake OAuth AS: discovery/DCR/token/authorize/device (validation)
 └── src/extensions/mcp_adapter.clj          entry: init/shutdown, state, registration, /mcp
     src/extensions/mcp_adapter/config.clj   EDN config
     src/extensions/mcp_adapter/client.clj   transports + JSON-RPC
+    src/extensions/mcp_adapter/auth.clj     OAuth: discovery, DCR, PKCE/device flows, token store
     src/extensions/mcp_adapter/metadata.clj cache
     src/extensions/mcp_adapter/proxy.clj    proxy tool executor
 ```
+
+Plus one new core file (outside the extension dir):
+`src/kmet/libs/oauth.clj` — generic OAuth machinery extracted from
+`kmet.ai.oauth` (device-code poll, PKCE, loopback callback server), extended
+with RFC 8414 discovery + RFC 7591 DCR + token exchange/refresh;
+transport-agnostic (plain `babashka.http-client`, no `kmet.ai.proxy`); the
+caller supplies the token store and interaction fns. Unlike the extension
+files it sits inside the `bb lint` / `bb test` gates and must satisfy
+`kmet.libs.test-self-contained`.
 
 Dependencies allowed: `kmet.extension`, `kmet.tui.*`, `kmet.libs.*`,
 `clojure.*`, `babashka.*`, bundled `cheshire.core` + `clojure.core.async` +
@@ -134,7 +153,11 @@ resolved from the bb classpath).
             :auth :bearer
             :bearer-token "sk-..."                    ;; or :bearer-token-env "ENV_VAR"
             :http-transport :streamable-http          ;; :streamable-http | :sse
-            :lifecycle :lazy}}}
+            :lifecycle :lazy}
+  "notion" {:url "https://mcp.notion.com/mcp"
+            :auth :oauth                              ;; triggers the §7.8 OAuth flow
+            :oauth {:flow :auto                       ;; :auto | :pkce | :device
+                    :scopes ["read"]}}}}              ;; :client-id optional → DCR
 ```
 
 Server key meaning:
@@ -147,8 +170,9 @@ Server key meaning:
 | `:cwd` | string | spawn dir, default cwd |
 | `:url` | string | HTTP server (streamable-http or sse) |
 | `:headers` | map | static HTTP headers |
-| `:auth` | `:bearer` or `false` | bearer only in Phase 1 |
+| `:auth` | `:bearer` \| `:oauth` \| `false` (default) | auth mode; `:oauth` runs the §7.8 flow |
 | `:bearer-token` / `:bearer-token-env` | string | token or env var name; sets `Authorization: Bearer …` when `:auth :bearer` and no explicit header |
+| `:oauth` | map \| `false` | `:client-id`/`:client-secret` (omit → RFC 7591 DCR), `:scopes` (string or vector), `:flow` (`:auto` default \| `:pkce` \| `:device`), `:redirect-uri`, `:authorization-server-url`, `:skip-issuer-metadata-validation`; explicit `false` disables |
 | `:http-transport` | `:streamable-http` (default) \| `:sse` | forced transport |
 | `:lifecycle` | `:lazy` (default) \| `:eager` \| `:keep-alive` | see §10.3 |
 | `:direct-tools` | bool \| `[name ...]` | opt-in surface; list = only those tools |
@@ -166,7 +190,10 @@ JSON config works with light edits: `:mcpServers`/`:mcp-servers`,
 `:directTools`/`:direct-tools`, `:toolPrefix`/`:tool-prefix`,
 `:requestTimeoutMs`/`:request-timeout-ms`, `:bearerToken`/`:bearer-token`,
 `:bearerTokenEnv`/`:bearer-token-env`, `:httpTransport`/`:http-transport`,
-`:disableProxyTool`/`:disable-proxy-tool`, plus `:settings`. `:lifecycle` /
+`:disableProxyTool`/`:disable-proxy-tool`, plus `:settings`; nested under
+`:oauth`: `:clientId`/`:client-id`, `:clientSecret`/`:client-secret`,
+`:redirectUri`/`:redirect-uri`, `:authorizationServerUrl`/`:authorization-server-url`,
+`:skipIssuerMetadataValidation`/`:skip-issuer-metadata-validation`. `:lifecycle` /
 `:tool-prefix` values accept string or keyword. Unknown keys pass through
 unmodified.
 
@@ -274,7 +301,59 @@ Flatten content blocks: `text`/`error` blocks joined with newlines; `image`
 Every transport failure includes the stderr tail / HTTP status in the
 `ex-info` data. Message pattern:
 `MCP connect failed: <cause> (stderr: …)` / `MCP error <code>: <message>` /
-`MCP request timed out after Nms: <method>`.
+`MCP request timed out after Nms: <method>`. / `MCP auth failed: <cause>`
+(§7.8).
+
+### 7.8 OAuth (HTTP servers) — `auth.clj` over `kmet.libs.oauth`
+
+Trigger: server config `:auth :oauth` (or an `:oauth` map). Faithful port of
+pi's `mcp-auth.ts` / `mcp-oauth-provider.ts` / `oauth-handler.ts` /
+`mcp-auth-flow.ts` / `mcp-callback-server.ts`. The extension cannot require
+`kmet.ai.*`, so the generic machinery lives in a new shared lib,
+`kmet.libs.oauth` — extracted from `kmet.ai.oauth` (device-code poll, PKCE,
+loopback callback server, existing raw `java.net.ServerSocket` design) and
+extended with RFC 8414 discovery, RFC 7591 DCR and token
+exchange/refresh; transport-agnostic, plain `babashka.http-client`.
+`kmet.ai.oauth` is refactored onto the same lib (single implementation).
+The extension's `auth.clj` is a thin adapter: server config → lib calls,
+token-store file wiring, browser open, status text.
+
+1. **Token lookup** (pi `oauth-handler.ts`): per-server entry in
+   `~/.kmet/agent/mcp-oauth.edn` — `{:tokens {:access … :refresh … :expires
+   ms :scope …} :client-info {:client-id … :redirect-uris […]}}`. Expired →
+   refresh (§5); missing/refresh-failed → full flow. Plaintext file, 0600
+   perms (bb has no OS keyring — documented tradeoff; pi uses the keyring);
+   fixed path, no `MCP_OAUTH_DIR` override in Phase 1.
+2. **Discovery** (RFC 8414): GET
+   `{url}/.well-known/oauth-authorization-server` →
+   `authorization_endpoint` / `token_endpoint` / `registration_endpoint` /
+   `device_authorization_endpoint`; fallback to
+   `/.well-known/oauth-protected-resource`. Config
+   `:authorization-server-url` (or explicit endpoints) skips discovery.
+3. **Client registration** (RFC 7591): `:oauth {:client-id …}` in config →
+   use it, no DCR (pi `configPreRegistered` path). Otherwise POST
+   `registration_endpoint` `{:redirect_uris [loopback-uri]
+   :token_endpoint_auth_method "none" :grant_types ["authorization_code"
+   "refresh_token"] :response_types ["code"] :client_name "kmet"}` →
+   `client_id`; persist with the entry, register once.
+4. **Authorization**: default `:flow :auto` — PKCE (S256) with a loopback
+   redirect (`http://127.0.0.1:<os-assigned-port>/callback`, port 0 → OS
+   assigns; pi `ensureCallbackServer` strictPort=false) when the metadata
+   supports it; RFC 8628 device flow (port of `kmet.ai.oauth` device-code
+   polling incl. `slow_down`/`interval` handling) when the metadata exposes
+   `device_authorization_endpoint` but loopback is unusable (remote/headless
+   hosts), or when forced via `:oauth {:flow :device}`. Browser opened via
+   the platform helper (`xdg-open` / `open` / `termux-open-url`); device
+   flow falls back to printing the URL + polling in place. Manual
+   paste-the-redirect-URL path is Phase 2 (pi `auth-complete`).
+5. **Tokens**: `grant_type=authorization_code` + `code_verifier` (or device
+   grant) → store access/refresh/expires/scope. Requests attach
+   `Authorization: Bearer <access>` (§7.3/§7.4); on 401 with a stored
+   refresh token, refresh once and retry the request once; on expiry,
+   refresh silently before sending. Refresh failure → re-run the flow.
+6. **Surfaces**: `/mcp auth <server>` forces a fresh flow; `/mcp logout
+   <server>` clears the stored entry (§10.6). Status shows
+   logged-in/expired/none (§9.5).
 
 ## 8. Metadata cache — `metadata.clj`
 
@@ -342,7 +421,8 @@ required/optional, description, enum/default when present. Ambiguous
 ### 9.5 Status text
 
 Per server: name, lifecycle, state (`idle`/`connecting`/`connected`/
-`failed`/`disabled`/`misconfigured`/`unsupported-transport`), tool count
+`failed`/`disabled`/`misconfigured`/`unsupported-transport`), auth state
+(`bearer` | `oauth` logged-in/expired/none) when configured, tool count
 (from cache or live), error tail when failed, cache age. Plus global
 settings line (direct-tools default, tool-prefix) and cache file age.
 
@@ -450,11 +530,13 @@ Subcommands (empty = status):
 | `disconnect <server>` | close + kill |
 | `enable\|disable <server>` | §6.5 write, notify "run /reload to apply" |
 | `refresh` | reload EDN config, add/remove servers (disconnecting dropped ones), resync tools, rebuild description |
+| `auth <server>` | run the OAuth flow now — fresh login, replaces stored tokens (§7.8) |
+| `logout <server>` | clear stored OAuth tokens + client info |
 
 Output: `ui-notify` when `(:has-ui ctx)`, `println` headless. Multi-line
 notify behavior verified during implementation; fallback is a
 `ui-custom` dialog. Completions: subcommands, then server names for
-connect/disconnect/enable/disable.
+connect/disconnect/enable/disable/auth/logout.
 
 ### 10.7 Events
 
@@ -471,8 +553,10 @@ connect/disconnect/enable/disable.
   note, config reference pointer.
 - `README.md`: enabling (symlink `extensions/mcp-adapter` into
   `~/.kmet/agent/extensions/`), first-run template note, EDN config
-  reference, `/mcp` reference, direct-tools + env var, HTTP/bearer notes,
-  security warning ("MCP config is trusted code execution"), Phase-2
+  reference, `/mcp` reference, direct-tools + env var, HTTP/bearer/OAuth
+  notes (PKCE/device flows; plaintext token store at
+  `~/.kmet/agent/mcp-oauth.edn`), security warning ("MCP config is trusted
+  code execution"), Phase-2
   roadmap.
 
 ## 12. Validation plan
@@ -490,23 +574,36 @@ connect/disconnect/enable/disable.
 4. **Config tests**: precedence merge (global → project), camel/kebab
    normalization, template creation, enable/disable write round-trip
    (including the lower-source-disabled case).
-5. **Extension load**: load the entry against
+5. **OAuth tests**: `fake-oauth-server.bb` (or extend `fake-http-mcp-server.bb`)
+   with `/.well-known/oauth-authorization-server`, registration, token,
+   authorize (loopback) and device endpoints — DCR → PKCE loopback → token →
+   authenticated request → 401-refresh → device flow → logout. The lib's
+   unit tests are registered in `kmet.runner/all-namespaces` (inside the
+   normal gates, unlike extension files); the existing `kmet.ai` OAuth tests
+   must stay green unchanged, proving the extraction is behavior-neutral.
+6. **Extension load**: load the entry against
    `kmet.extension/create-nullable-api` — assert proxy tool, direct tools,
    `/mcp` command, event registrations; then a live smoke in `bb run` with a
    real `mcp.edn` pointing at the fake servers (TUI: status/search/describe/
-   call/connect/disconnect/enable/disable/refresh).
-6. **Quality**: clj-kondo over the extension files (manual — `bb lint` only
+   call/connect/disconnect/enable/disable/refresh/auth/logout).
+7. **Quality**: clj-kondo over the extension files (manual — `bb lint` only
    covers src/test), cljfmt check, plan/README consistency.
 
 ## 13. Implementation order
 
-1. `config.clj` (+ template + tests)
-2. `client.clj` stdio transport (+ fake stdio server validation)
-3. `client.clj` http transports (+ fake http server validation)
-4. `metadata.clj`
-5. `proxy.clj`
-6. entry `mcp_adapter.clj` (state, tools, direct tools, `/mcp`, events)
-7. skill + README, full validation pass (§12)
+1. `kmet.libs.oauth` — extract generic machinery from `kmet.ai.oauth`
+   (device-code poll, PKCE, callback server), add RFC 8414 discovery + RFC
+   7591 DCR + token exchange/refresh; refactor `kmet.ai.oauth` onto it.
+   Validated by the existing `kmet.ai` OAuth tests staying green — the
+   shared foundation lands first, de-risked before any extension work.
+2. `config.clj` (+ template + tests)
+3. `client.clj` stdio transport (+ fake stdio server validation)
+4. `client.clj` http transports (+ fake http server validation)
+5. `auth.clj` adapter (+ fake OAuth server validation)
+6. `metadata.clj`
+7. `proxy.clj`
+8. entry `mcp_adapter.clj` (state, tools, direct tools, `/mcp`, events)
+9. skill + README, full validation pass (§12)
 
 ## 14. Risks & notes
 
@@ -514,6 +611,19 @@ connect/disconnect/enable/disable.
 - `:pid` is absent on bb process records — use `(.pid (:proc p))`.
 - HTTP abort is not possible in bb — timeout abandons the read; the server
   may complete the call (documented; tool output lost).
+- OAuth tokens are stored plaintext (no OS keyring in bb) — `mcp-oauth.edn`
+  written with 0600 perms; `logout` clears. Loopback callback binds an
+  OS-assigned local port and is unusable on remote/headless hosts —
+  `:flow :device` fallback (auto-selected when the metadata exposes a
+  device endpoint but loopback is unavailable). Some servers pre-register
+  clients / block DCR — `:oauth {:client-id …}` skips registration. 401s
+  without `WWW-Authenticate` are handled by pre-emptive token refresh when
+  `:auth :oauth` is configured.
+- `kmet.libs.oauth` sits inside the `bb lint` / `bb test` gates and must
+  pass `kmet.libs.test-self-contained` (no kmet.* requires) — unlike the
+  extension files. The extraction must be behavior-neutral for
+  `kmet.ai.oauth`'s provider flows (they keep `kmet.ai.proxy` transport;
+  the lib is transport-agnostic).
 - Some servers negotiate an older protocol version — accept the server's
   response version; never send `notifications/initialized` before
   `initialize` succeeds.
