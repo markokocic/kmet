@@ -162,7 +162,7 @@ pi events (`core/extensions/types.ts`) → kmet status (`app/event_bus.clj` `eve
 | `session_before_switch` / `session_before_fork` | ❌ | kmet has `:session-before-tree` but no switch/fork counterparts |
 | `session_before_compact` / `session_compact` | ~ | kmet emits `:compaction-start`/`:compaction-end` (reason manual/threshold/overflow/auto) |
 | `session_before_tree` / `session_tree` | ✅ `:session-before-tree` / `:session-tree` | incl. cancel/summary/extension-summary results |
-| `session_shutdown` | ~ | kmet clears extension state on `/reload` but emits no event |
+| `session_shutdown` | ✅ `:session-shutdown` | emitted by `/reload` (reason reload) and `/new` (reason new, target-session-file) before the extension runtime is torn down (pi: teardownCurrent / session.reload) |
 | `context` | ~ | kmet has `:context-replaced` (different shape) |
 | `before_agent_start` | ✅ | hook, not event |
 | `agent_start` / `agent_end` / `agent_settled` | ✅ `:agent-start` / `:agent-end` / `:agent-settled` | |

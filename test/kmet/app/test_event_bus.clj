@@ -23,6 +23,12 @@
   (t/is (not (event-bus/known-event-type? nil)))
   (t/is (not (event-bus/known-event-type? "agent-start"))))
 
+(t/deftest test-session-shutdown-event
+  (t/is (event-bus/known-event-type? :session-shutdown)
+        "session_shutdown is part of the vocabulary (pi: SessionShutdownEvent)")
+  (t/is (contains? event-bus/app-event-types :session-shutdown)
+        "emitted outside the loop by the interactive mode, like :session-start"))
+
 ;; ─── Event bus ────────────────────────────────────────────────────────────
 
 (t/deftest test-event-register-and-emit

@@ -11,7 +11,13 @@
   (:require [clojure.test :as t :refer [deftest is testing]]
             [kmet.modes.interactive :as inter]
             [kmet.app.event-bus :as event-bus]
-            [kmet.app.ui :as ui]))
+            [kmet.app.loop :as agent]
+            [kmet.app.session :as session]
+            [kmet.app.ui :as ui]
+            [kmet.tui.components.container :as container]
+            [kmet.tui.components.editor :as editor]
+            [babashka.fs :as fs]
+            [clojure.string :as str]))
 
 (defn- make-handler
   "The real event handler over a standalone chat history and stub refs: the
@@ -48,6 +54,62 @@
     :auto-retry-end {:type :auto-retry-end :success true :attempt 1}
     ;; the remaining vocabulary events carry only :type
     {:type type}))
+
+(deftest handle-new-session-clears-context
+  (testing "/new (pi: handleClearCommand → runtimeHost.newSession) swaps in a
+            fresh session and rebuilds the agent's in-memory context from it
+            — the old conversation must never reach the next LLM call"
+    (let [sess-dir (str "target/test-interactive-new-session-" (System/currentTimeMillis))
+          old-sess (session/create-session sess-dir)
+          ag (agent/make-agent-state :session old-sess)
+          _ (swap! (:messages ag) conj {:role :user :content "old message"})
+          _ (swap! (:messages ag) conj {:role :assistant :content "old reply"})
+          tui-stub {:render-requested? (atom false)}
+          ch (ui/make-chat-history)
+          fdp (ui/make-footer-data-provider :session old-sess)
+          ftr (ui/make-footer :provider fdp)
+          ed (editor/make-editor)
+          _ (editor/editor-set-text! ed "draft")
+          cs (inter/map->CoreState
+              {:tui tui-stub
+               :agent-state (atom ag)
+               :chat-history ch
+               :editor ed
+               :current-editor-atom (atom ed)
+               :anim-timer (atom nil)
+               :running-turn? (atom false)
+               :bash-running? (atom false)
+               :bash-signal (atom false)
+               :session-atom (atom old-sess)
+               :pending-messages-container (container/make-container)
+               :pending-bash-components (atom [])
+               :status-container (container/make-container)
+               :status-indicator (ui/make-status-indicator)
+               :active-status-kind (atom nil)
+               :footer-comp ftr
+               :footer-provider fdp})
+          shutdown-events (atom [])
+          _ (event-bus/clear-event-listeners!)
+          _ (event-bus/on-event :session-shutdown
+                                (fn [ev] (swap! shutdown-events conj ev)))]
+      (try
+        ((var inter/handle-new-session) cs)
+        (let [ag' @(:agent-state cs)
+              new-sess @(:session-atom cs)]
+          (is (not= (:id old-sess) (:id new-sess)) "a fresh session is created")
+          (is (= new-sess (:session ag')) "agent points at the new session")
+          (is (empty? @(:messages ag'))
+              "the old conversation is not carried into the new session")
+          (is (= :idle @(:status ag')) "agent status back to :idle")
+          (is (str/blank? (editor/editor-get-text ed))
+              "editor cleared (pi: editor.setText(\"\"))")
+          (is (= [{:type :session-shutdown :reason :new
+                   :target-session-file (:file old-sess)}]
+                 @shutdown-events)
+              "extensions are told the runtime is torn down before the swap (pi: teardownCurrent)"))
+        (finally
+          (event-bus/clear-event-listeners!)
+          (fs/delete-tree sess-dir))))))
 
 (deftest agent-event-handler-consumes-vocabulary
   (testing "every loop event type is consumed by the UI handler without throwing"

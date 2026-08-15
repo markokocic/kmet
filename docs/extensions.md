@@ -201,7 +201,8 @@ the wrappers below or directly.
 Event types: `:agent-start` `:agent-end` `:agent-settled` `:turn-start`
 `:turn-end` `:message-start` `:message-update` `:message-end`
 `:tool-execution-start` `:tool-execution-update` `:tool-execution-end`
-`:status` `:error` `:session-start` `:session-info-changed` `:user-bash`
+`:status` `:error` `:session-start` `:session-shutdown`
+`:session-info-changed` `:user-bash`
 `:session-before-tree` `:session-tree` `:queue-update` `:model-select`
 `:thinking-level-select` `:context-replaced` `:auto-retry-start`
 `:auto-retry-end` `:compaction-start` `:compaction-end`.

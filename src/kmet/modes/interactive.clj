@@ -56,10 +56,10 @@
             [kmet.libs.process :as process]
             [kmet.libs.terminal :as lib-term]))
 
-(declare clone-current-session! fork-at! restore-session!
+(declare clone-current-session! fork-at! restore-session! handle-new-session
          build-extension-ui-registry ask-branch-summary
          build-loaded-resource-sections start-agent-run!
-         show-status-indicator! clear-status-indicator!
+         show-status-indicator! clear-status-indicator! stop-anim-timer!
          maybe-show-cache-miss-notice!)
 
 ;; ─── Global config ref ────────────────────────────────────────────────────
@@ -640,17 +640,7 @@
   (commands/register-command!
    {:name "new"
     :description "Start a new session"
-    :handler (fn [cs _]
-               (let [new-session (session/create-session (ensure-cwd-session-dir))]
-                 (debug/log "new session created: " (:id new-session))
-                 (ui/chat-history-clear! (:chat-history cs))
-                 (reset! (:session-atom cs) new-session)
-                 (extensions/set-session! new-session)
-                 (let [old-ag @(:agent-state cs)
-                       new-ag (assoc old-ag :session new-session)]
-                   (reset! (:agent-state cs) new-ag))
-                 (ui/chat-history-add-message! (:chat-history cs)
-                                               {:role :assistant :content "Started a new session."})))})
+    :handler (fn [cs _] (handle-new-session cs))})
   (commands/register-command!
    {:name "resume"
     :description "Browse past sessions"
@@ -1017,7 +1007,10 @@
         (let [config (cfg/init!)
               ;; pi: keybindings.reload() — re-read keybindings.edn
               _ (app-kb/reload-agent-keybindings!)
-        ;; pi: session.reload → extension shutdown/start
+        ;; pi: session.reload → emitSessionShutdownEvent(reason reload)
+        ;; BEFORE the runner is torn down, so extensions can persist
+        ;; state; then extension shutdown/start
+              _ (event-bus/emit-event! {:type :session-shutdown :reason :reload})
               _ (extensions/ui-reset!)
               _ (extensions/clear-extensions!)
               _ (doseq [d (cfg/resource-dirs config :extensions-dir ".kmet/extensions")]
@@ -1174,6 +1167,87 @@
     (sync-footer-model! cs))
   (replay-branch! cs sess)
   (update-footer! cs))
+
+(defn- handle-new-session
+  "Pi: handleClearCommand → runtimeHost.newSession. Fully reset the
+   conversation: settle the in-flight run and compaction first so the
+   aborted turn (incl. pending bash results) persists to the OUTGOING
+   session (pi: teardownCurrent awaits session.abort), then swap in a fresh
+   session, rebuild the agent's in-memory context from it — empty (pi:
+   createRuntime; the session is the source of truth) — reset per-run
+   state, and clear the chat, pending container, and editor (pi:
+   editor.setText(\"\")). Emits :session-shutdown (reason :new,
+   target-session-file) before the swap and :session-start (reason :new,
+   previous-session-file) after it for extensions (pi: teardownCurrent →
+   session_start on every switch)."
+  [cs]
+  (let [ag @(:agent-state cs)
+        was-running @(:running-turn? cs)
+        previous-file (:file @(:session-atom cs))]
+    ;; Settle in-flight work so it lands in the outgoing session and cannot
+    ;; race the swap. Queued steering/follow-up are dropped — a new session
+    ;; discards them (unlike cancel, which restores them to the editor).
+    (when was-running
+      (agent/cancel-turn ag))
+    (when @(:compacting? ag)
+      (reset! (:signal ag) true))
+    (when @(:bash-running? cs)
+      (reset! (:bash-signal cs) true)
+      (reset! (:bash-running? cs) false))
+    ;; Wait (bounded) for the cancelled run's finally to drain pending bash
+    ;; results and for an in-flight compaction to settle — its context sync
+    ;; must not run after the swap.
+    (let [deadline (+ (System/currentTimeMillis) 3000)]
+      (loop []
+        (when (and (or (seq @(:pending-bash ag)) @(:compacting? ag))
+                   (< (System/currentTimeMillis) deadline))
+          (Thread/sleep 10)
+          (recur))))
+    (when (and (not @(:compacting? ag))
+               (empty? @(:pending-bash ag)))
+      (reset! (:signal ag) false))
+    (when was-running
+      (reset! (:running-turn? cs) false)
+      (stop-anim-timer! cs)
+      (clear-status-indicator! cs))
+    ;; pi: teardownCurrent — after the run is settled, tell extensions the
+    ;; runtime is being torn down (reason :new, destination session file)
+    ;; so they can persist state before the swap.
+    (event-bus/emit-event! {:type :session-shutdown :reason :new
+                            :target-session-file previous-file})
+    (let [new-session (session/create-session (ensure-cwd-session-dir))]
+      (debug/log "new session created: " (:id new-session))
+      (ui/chat-history-clear! (:chat-history cs))
+      (container/container-clear (:pending-messages-container cs))
+      (reset! (:pending-bash-components cs) [])
+      (editor-text-set! @(:current-editor-atom cs) "")
+      (reset! (:session-atom cs) new-session)
+      (extensions/set-session! new-session)
+      (let [new-ag (assoc ag :session new-session)]
+        (reset! (:agent-state cs) new-ag)
+        ;; Rebuild the in-memory context from the new session — empty — and
+        ;; reset per-run state (pi: createRuntime builds a fresh agent
+        ;; state; the hook/config atoms are kept — not session state).
+        (agent/restore-session-context! new-ag)
+        (reset! (:status ag) :idle)
+        (reset! (:steering ag) [])
+        (reset! (:follow-up ag) [])
+        (reset! (:pending-bash ag) [])
+        (reset! (:overflow-recovered ag) false)
+        (reset! (:retry-count ag) 0))
+      ;; pi: newSession emits session_start (reason "new",
+      ;; previousSessionFile) — on a future, handlers may block on dialog
+      ;; promises (same as /reload).
+      (future
+        (try
+          (event-bus/emit-event!
+           (cond-> {:type :session-start :reason :new}
+             previous-file (assoc :previous-session-file previous-file)))
+          (catch Exception e (debug/log "session-start: " e))))
+      (update-footer! cs)
+      (tui/tui-request-render (:tui cs))
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    {:role :assistant :content "Started a new session."}))))
 
 ;; ─── Session tree navigation (pi: TreeSelectorComponent) ──────────────────
 

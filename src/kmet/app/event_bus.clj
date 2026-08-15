@@ -65,9 +65,18 @@
    :session-start
    "Fired once after the interactive TUI is built and the extension UI
     registry is live, before the render loop starts (pi: session_start).
-    Payload: :reason (:new | :resume | :continue), :previous-session-file
-    (optional). Extensions use this to set up widgets, statuses, footers,
-    and custom editors."
+    Payload: :reason (:startup | :reload | :new | :resume | :fork),
+    :previous-session-file (optional). Extensions use this to set up
+    widgets, statuses, footers, and custom editors."
+
+   :session-shutdown
+   "Fired before the extension runtime is torn down — quit, reload, or
+    session replacement (pi: session_shutdown, emitted by teardownCurrent /
+    session.reload BEFORE the extensions are unloaded, so handlers can
+    persist state while still alive). Payload: :reason (:reload | :new |
+    :resume | :fork | :quit), :target-session-file (optional; the
+    destination session on replacement). Extensions restore their state on
+    the following :session-start."
 
    :user-bash
    "Fired when the user runs a bash command (!/!!).
@@ -140,6 +149,7 @@
    through the loop's :on-event UI callback. The UI handler only needs to
    consume loop-event-types."
   #{:session-start
+    :session-shutdown
     :user-bash
     :session-before-tree
     :session-tree
