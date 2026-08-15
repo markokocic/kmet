@@ -11,7 +11,8 @@
             [kmet.app.commands :as commands]
             [kmet.app.event-bus :as event-bus]
             [kmet.app.session :as session]
-            [kmet.app.tools.core :as tools]))
+            [kmet.app.tools.core :as tools]
+            [kmet.ai.hooks :as ai-hooks]))
 
 ;; ─── Nullable api (extension tests in isolation) ──────────────────────────
 
@@ -205,7 +206,9 @@
       (t/is (= {:cancelled true} ((:fork ctx) "e1")))
       (t/is (= {:cancelled true} ((:navigate-tree ctx) "e1")))
       (t/is (= {:cancelled true} ((:switch-session ctx) "/x")))
-      (t/is (false? ((:is-project-trusted ctx))))))
+      (t/is (false? ((:is-project-trusted ctx))))
+      (t/is (nil? ((:get-name (:session ctx))))
+            "ctx carries the read-only session facade (pi: ctx.sessionManager)")))
   (testing "event handlers receive (event ctx) — fixed arity-2 contract"
     (let [calls (atom [])
           w (extensions/wrap-event-handler
@@ -345,3 +348,115 @@
       (finally
         (extensions/set-session! nil)
         (fs/delete-tree dir)))))
+
+(t/deftest test-markdown-transformers
+  (testing "applied in registration order, last wins per position"
+    (extensions/clear-extensions!)
+    (let [d1 (extensions/register-markdown-transformer!
+              (fn [md _ctx] (str "a[" md "]")))
+          d2 (extensions/register-markdown-transformer!
+              (fn [md _ctx] (str "b[" md "]")))]
+      (t/is (= "b[a[hi]]"
+               (extensions/apply-markdown-transformers
+                "hi" {:message-type :user :is-streaming false :available-width 80}))
+            "transformers chain in registration order (pi: applyMarkdownTransformers)")
+      (d1)
+      (t/is (= "b[hi]" (extensions/apply-markdown-transformers "hi" {}))
+            "dereg removes exactly its own transformer")
+      (d2)
+      (t/is (= "hi" (extensions/apply-markdown-transformers "hi" {})))))
+  (testing "a throwing transformer is skipped, the chain continues"
+    (extensions/clear-extensions!)
+    (let [d1 (extensions/register-markdown-transformer!
+              (fn [_md _ctx] (throw (ex-info "boom" {}))))
+          d2 (extensions/register-markdown-transformer!
+              (fn [md _ctx] (str "ok[" md "]")))]
+      (t/is (= "ok[hi]" (extensions/apply-markdown-transformers "hi" {}))
+            "pi: keep the current markdown and continue")
+      (d1) (d2)))
+  (testing "non-string results are ignored"
+    (extensions/clear-extensions!)
+    (let [d1 (extensions/register-markdown-transformer!
+              (fn [_md _ctx] {:not :a-string}))
+          d2 (extensions/register-markdown-transformer!
+              (fn [md _ctx] (str md "!")))]
+      (t/is (= "hi!" (extensions/apply-markdown-transformers "hi" {})))
+      (d1) (d2))))
+
+(t/deftest test-register-shortcut-headless
+  (testing "headless register-shortcut! returns a no-op dereg fn"
+    (let [dereg (extensions/register-shortcut! "ctrl+alt+x"
+                                               {:description "d"
+                                                :handler (fn [_] nil)})]
+      (t/is (fn? dereg))
+      (dereg) ;; must not throw headless
+      (dereg))))
+
+(t/deftest test-send-message-headless
+  (testing "headless send-message! persists a custom message to the live session"
+    (let [dir (str "target/test-ext-send-" (System/currentTimeMillis))
+          sess (session/create-session dir)]
+      (extensions/set-session! sess)
+      (try
+        (extensions/send-message! {:custom-type :note :content "hello"
+                                   :display true :details {:x 1}})
+        (let [entries (session/get-branch sess)
+              e (last entries)]
+          (t/is (= :custom-message (:role e)))
+          (t/is (= :note (:custom-type e)))
+          (t/is (= "hello" (:content e)))
+          (t/is (= {:x 1} (:details e)))
+          (t/is (= [{:role :custom
+                     :custom-type :note
+                     :content [{:type :text :text "hello"}]
+                     :display true
+                     :details {:x 1}}]
+                   (session/context-messages e))
+                "the entry projects into LLM context as a custom (user) message"))
+        (finally
+          (extensions/set-session! nil)
+          (fs/delete-tree dir))))))
+
+(t/deftest test-provider-event-bridges
+  (testing "bus events drive the ai-layer hooks; last non-nil handler result wins"
+    (let [u1 (event-bus/on-event :context
+                                 (fn [_ev] {:messages ["first"]}))
+          u2 (event-bus/on-event :context
+                                 (fn [_ev] nil)) ;; nil result — first wins
+          u3 (event-bus/on-event :context
+                                 (fn [_ev] {:messages ["second"]}))]
+      (t/is (= ["second"] (ai-hooks/apply-context-hook ["orig"]))
+            "last non-nil handler result wins (pi chains)")
+      (u1) (u2) (u3))
+    (testing "a throwing handler is skipped"
+      (let [u1 (event-bus/on-event :context
+                                   (fn [_ev] (throw (ex-info "boom" {}))))
+            u2 (event-bus/on-event :context
+                                   (fn [_ev] {:messages ["kept"]}))]
+        (t/is (= ["kept"] (ai-hooks/apply-context-hook ["orig"])))
+        (u1) (u2))
+      (t/is (= ["orig"] (ai-hooks/apply-context-hook ["orig"]))
+            "no handlers — passthrough"))
+    (testing "before-provider-headers: the returned map replaces the headers"
+      (let [u1 (event-bus/on-event :before-provider-headers
+                                   (fn [_ev] {"x-api-key" "k"}))]
+        (t/is (= {"x-api-key" "k"}
+                 (ai-hooks/apply-before-provider-headers-hook {"a" "b"})))
+        (u1))
+      (t/is (= {"a" "b"} (ai-hooks/apply-before-provider-headers-hook {"a" "b"}))))
+    (testing "before-provider-request: the last non-nil result replaces the payload"
+      (let [u1 (event-bus/on-event :before-provider-request
+                                   (fn [_ev] {:payload :replaced}))]
+        (t/is (= {:payload :replaced}
+                 (ai-hooks/apply-before-provider-request-hook {:payload :orig}))
+              "the bridge returns the handler's replacement payload")
+        (u1))
+      (t/is (= {:payload :orig} (ai-hooks/apply-before-provider-request-hook {:payload :orig}))))
+    (testing "after-provider-response fires with status/headers"
+      (let [seen (atom nil)
+            u1 (event-bus/on-event :after-provider-response
+                                   (fn [ev] (reset! seen ev)))]
+        (ai-hooks/apply-after-provider-response-hook 200 {"h" "v"})
+        (t/is (= 200 (:status @seen)))
+        (t/is (= {"h" "v"} (:headers @seen)))
+        (u1)))))

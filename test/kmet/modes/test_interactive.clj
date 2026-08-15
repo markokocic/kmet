@@ -112,6 +112,59 @@
           (event-bus/clear-event-listeners!)
           (fs/delete-tree sess-dir))))))
 
+(deftest handle-new-session-extension-cancel
+  (testing "a {:cancel true} :session-before-switch handler aborts /new —
+            the session, agent context and editor stay untouched and no
+            :session-shutdown fires (pi: emitBeforeSwitch → cancel)"
+    (let [sess-dir (str "target/test-interactive-new-session-cancel-"
+                        (System/currentTimeMillis))
+          old-sess (session/create-session sess-dir)
+          ag (agent/make-agent-state :session old-sess)
+          _ (swap! (:messages ag) conj {:role :user :content "old message"})
+          _ (swap! (:messages ag) conj {:role :assistant :content "old reply"})
+          tui-stub {:render-requested? (atom false)}
+          ch (ui/make-chat-history)
+          ed (editor/make-editor)
+          _ (editor/editor-set-text! ed "draft")
+          cs (inter/map->CoreState
+              {:tui tui-stub
+               :agent-state (atom ag)
+               :chat-history ch
+               :editor ed
+               :current-editor-atom (atom ed)
+               :anim-timer (atom nil)
+               :running-turn? (atom false)
+               :bash-running? (atom false)
+               :bash-signal (atom false)
+               :session-atom (atom old-sess)
+               :pending-messages-container (container/make-container)
+               :pending-bash-components (atom [])
+               :status-container (container/make-container)
+               :status-indicator (ui/make-status-indicator)
+               :active-status-kind (atom nil)
+               :footer-comp nil
+               :footer-provider nil})
+          shutdown-events (atom [])
+          seen-before-switch (atom nil)
+          _ (event-bus/clear-event-listeners!)
+          _ (event-bus/on-event :session-before-switch
+                                (fn [ev]
+                                  (reset! seen-before-switch ev)
+                                  {:cancel true}))
+          _ (event-bus/on-event :session-shutdown
+                                (fn [ev] (swap! shutdown-events conj ev)))]
+      (try
+        ((var inter/handle-new-session) cs)
+        (is (= old-sess @(:session-atom cs)) "session NOT swapped")
+        (is (= old-sess (:session @(:agent-state cs))) "agent still points at the old session")
+        (is (= 2 (count @(:messages @(:agent-state cs)))) "conversation untouched")
+        (is (= "draft" (editor/editor-get-text ed)) "editor untouched")
+        (is (= :new (:reason @seen-before-switch)) "before-switch carries the reason")
+        (is (empty? @shutdown-events) "no :session-shutdown on a cancelled switch")
+        (finally
+          (event-bus/clear-event-listeners!)
+          (fs/delete-tree sess-dir))))))
+
 (deftest agent-event-handler-consumes-vocabulary
   (testing "every loop event type is consumed by the UI handler without throwing"
     (let [h (make-handler)

@@ -329,15 +329,20 @@
 ;; ─── Markdown component ───────────────────────────────────────────────────
 
 (defcomponent Markdown nil [text-atom theme-atom padding-x-atom
-                            default-style-atom
+                            default-style-atom transform-atom
                             cache-atom]
   (render [this width]
     (track! this width
-      (let [text @text-atom
-            theme @theme-atom
-            padding-x @padding-x-atom
-            default-style @default-style-atom
+      (let [padding-x @padding-x-atom
             content-width (max 1 (- width (* 2 padding-x)))
+            ;; Extension markdown transformers (pi: Markdown's transform fn —
+            ;; applied per render with the available width; a throwing
+            ;; transformer is skipped). Nil when no transformers.
+            text (if-let [tf @transform-atom]
+                   (tf @text-atom {:available-width content-width})
+                   @text-atom)
+            theme @theme-atom
+            default-style @default-style-atom
             left-pad (apply str (repeat padding-x \space))
             result (volatile! [])]
         ;; Trim partial closing-fence fragments from the LAST block (streaming)
@@ -356,13 +361,17 @@
    Options: :theme (default-theme), :padding-x (default 1),
    :default-style — per-line base style fn applied to text content
    (paragraphs, list items, table cells) but NOT block-level styled elements
-   (code blocks, headings, quotes, hr), mirroring pi's defaultTextStyle."
-  [text & {:keys [theme padding-x default-style] :or {padding-x 1}}]
+   (code blocks, headings, quotes, hr), mirroring pi's defaultTextStyle,
+   :transform — extension markdown transformer fn (fn [text {:keys
+   [available-width]}]) applied per render before parsing (pi: Markdown's
+   transform)."
+  [text & {:keys [theme padding-x default-style transform] :or {padding-x 1}}]
   (let [t (or theme default-theme)]
     (map->Markdown {:text-atom (atom text)
                     :theme-atom (atom t)
                     :padding-x-atom (atom padding-x)
                     :default-style-atom (atom default-style)
+                    :transform-atom (atom transform)
                     :cache-atom (atom nil)})))
 
 (defn markdown-set-text! [md text]
@@ -376,6 +385,9 @@
 
 (defn markdown-set-default-style! [md f]
   (reset! (:default-style-atom md) f))
+
+(defn markdown-set-transform! [md f]
+  (reset! (:transform-atom md) f))
 
 (defn markdown-set-padding-x! [md n]
   (reset! (:padding-x-atom md) n))

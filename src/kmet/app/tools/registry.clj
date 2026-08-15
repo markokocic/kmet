@@ -111,17 +111,28 @@
 
 (defn execute-tool
   "Execute a tool by name with given arguments.
-   on-update — optional (fn [partial]) streaming callback; passed to the
-   tool's execute when it declares :streams? (e.g. bash live output).
-   Returns {:content str :is-error bool}."
-  [tool-name args & [on-update]]
-  (if-let [tool (get-tool tool-name)]
-    (try
-      (let [args (normalize-args args)]
-        (if (and on-update (:streams? tool))
-          ((:execute tool) args on-update)
-          ((:execute tool) args)))
-      (catch Exception e
-        {:content (str "Error executing " tool-name ": " (ex-message e))
-         :is-error true}))
-    {:content (str "Unknown tool: " tool-name) :is-error true}))
+   opts — {:on-update (fn [partial]) streaming callback (passed to the
+   tool's execute when it declares :streams?); :signal — cancel atom; :ctx
+   — extension context map for :contextual? tools (pi: execute(toolCallId,
+   params, signal, onUpdate, ctx)). A :contextual? tool's execute always
+   receives 4 args (fn [args on-update signal ctx]) — pi passes the signal
+   and ctx unconditionally; other tools keep (fn [args]) / (fn [args
+   on-update]). Returns {:content str :is-error bool}."
+  [tool-name args & [opts]]
+  (let [{:keys [on-update signal ctx]} (or opts {})]
+    (if-let [tool (get-tool tool-name)]
+      (try
+        (let [args (normalize-args args)]
+          (cond
+            (:contextual? tool)
+            ((:execute tool) args on-update signal ctx)
+
+            (and on-update (:streams? tool))
+            ((:execute tool) args on-update)
+
+            :else
+            ((:execute tool) args)))
+        (catch Exception e
+          {:content (str "Error executing " tool-name ": " (ex-message e))
+           :is-error true}))
+      {:content (str "Unknown tool: " tool-name) :is-error true})))

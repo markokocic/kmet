@@ -6,7 +6,7 @@
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
    [kmet.ai.api.openai-responses :refer [clamp-prompt-cache-key responses-messages responses-tools]]
-   [kmet.ai.api.shared :refer [content-text effort-value request-headers responses-events-handler transport-error-message]]))
+   [kmet.ai.api.shared :refer [content-text effort-value apply-before-provider-request-hook request-headers responses-events-handler transport-error-message]]))
 
 (def codex-default-base-url
   "pi DEFAULT_CODEX_BASE_URL: the ChatGPT backend the codex endpoint
@@ -106,8 +106,9 @@
             retention (or cache-retention :short)
             codex-session-id (when (and (not= :none retention) session-id)
                                (clamp-prompt-cache-key session-id))
-            payload (codex-payload model-record effort messages tools model-id
-                                   codex-session-id)
+            payload (apply-before-provider-request-hook
+                     (codex-payload model-record effort messages tools model-id
+                                    codex-session-id))
             headers (request-headers
                      (codex-request-headers api-key codex-session-id)
                      model-record provider-record api-key session-id)

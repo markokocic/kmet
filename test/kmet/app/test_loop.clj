@@ -585,9 +585,12 @@
                       :done))
                   tools/execute-tool
                   ;; Streaming tool: emits one partial update via on-update
-                  ;; (live output), then completes after 250ms
-                  (fn [_ _ on-update]
-                    (when on-update (on-update {:content "partial output"}))
+                  ;; (live output), then completes after 250ms. P4 contract:
+                  ;; opts map {:on-update .. :signal .. :ctx ..} (pi:
+                  ;; executeTool passes signal/onUpdate/ctx unconditionally)
+                  (fn [_ _ opts]
+                    (when-let [on-update (:on-update opts)]
+                      (on-update {:content "partial output"}))
                     (Thread/sleep 250)
                     {:content "ok" :is-error false})]
       ;; deref inside with-redefs keeps the rebinding until the turn completes
@@ -1958,6 +1961,55 @@
       (t/is (= 3 (count @(:messages agent))) "context untouched when no compaction")
       (finally
         (fs/delete-tree dir)))))
+
+(t/deftest test-loop-compact-extension-cancel
+  (t/testing "a {:cancel true} :session-before-compact handler skips the
+              summarization; compaction_start/compaction_end still fire and
+              the end carries :aborted true (pi parity); session + context
+              untouched, no LLM call"
+    (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
+          sess (session/create-session (str dir))
+          events (atom [])
+          llm-called? (atom false)
+          agent (loop/make-agent-state
+                 :session sess
+                 :compact-threshold 1000
+                 :keep-recent-tokens 40
+                 :on-event (fn [e] (swap! events conj e)))
+          dereg (event-bus/on-event
+                 :session-before-compact
+                 (fn [ev]
+                   (t/is (= :threshold (:reason ev)) "reason rides the event")
+                   (t/is (some? (:signal ev)) "the run signal rides the event")
+                   {:cancel true}))]
+      (try
+        (doseq [i (range 6)]
+          (let [m {:role :user :content [{:type :text :text
+                                          (str "This is message body number " i
+                                               " with plenty of words so the estimated token count "
+                                               "easily exceeds the small test threshold.")}]}]
+            (swap! (:messages agent) conj m)
+            (session/append-entry sess m)))
+        (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                      llm/send-message (fn [_] (reset! llm-called? true) (promise))]
+          (t/is (false? (loop/compact-context! agent nil :threshold))
+                "cancel → compaction skipped, reports false"))
+        (t/is (false? @llm-called?) "no LLM summarization call on cancel")
+        (let [types (mapv :type @events)
+              end (first (filter #(= :compaction-end (:type %)) @events))]
+          (t/is (< (.indexOf types :compaction-start)
+                   (.indexOf types :session-before-compact))
+                "compaction-start fires before session-before-compact (pi)")
+          (t/is (< (.indexOf types :session-before-compact)
+                   (.indexOf types :compaction-end))
+                "session-before-compact fires before compaction-end (pi)")
+          (t/is (:aborted end) "compaction-end carries :aborted true on extension cancel")
+          (t/is (false? (:result end)) "compaction-end carries result false"))
+        (t/is (= 6 (count @(:entries sess))) "session untouched")
+        (t/is (= 6 (count @(:messages agent))) "in-memory context untouched")
+        (finally
+          (dereg)
+          (fs/delete-tree dir))))))
 
 (t/deftest test-loop-get-api-key-resolved-per-call
   (let [keys-seen (atom [])

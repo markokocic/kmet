@@ -166,8 +166,8 @@
   (t/testing "bash tool streams partial output via on-update (pi onUpdate)"
     (let [updates (atom [])
           result (tools/execute-tool "bash" {:command "echo first; sleep 0.3; echo second"}
-                                     (fn [partial]
-                                       (swap! updates conj (:content partial))))]
+                                     {:on-update (fn [partial]
+                                                   (swap! updates conj (:content partial)))})]
       (t/is (not (:is-error result)))
       (t/is (seq @updates))
       (t/is (some #(clojure.string/includes? % "first") @updates))

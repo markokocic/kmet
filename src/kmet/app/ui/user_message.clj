@@ -3,12 +3,15 @@
    Wraps a Markdown child in a Box with user-message-bg background; text is
    tinted user-message-text via the markdown component's :default-style (pi:
    Markdown with defaultTextStyle {color: userMessageText}). Box handles
-   padding/background/caching, Markdown handles parsing and word-wrap."
+   padding/background/caching, Markdown handles parsing and word-wrap.
+   Extension markdown transformers apply to the text per render (pi:
+   createMarkdownTransform(\"user\", false))."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.box :as box]
             [kmet.tui.components.markdown :as md]
-            [kmet.tui.macros :refer [track! track-deps defsetter defcomponent]]))
+            [kmet.tui.macros :refer [track! track-deps defsetter defcomponent]]
+            [kmet.app.extensions :as extensions]))
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
@@ -50,6 +53,19 @@
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
+(defn- make-user-transform
+  "Extension markdown transform for user messages (pi:
+   createMarkdownTransform(\"user\", false)): transformers apply in
+   registration order at render time (each text/width change re-runs them),
+   throwing transformers are skipped; the transformer list is read at apply
+   time so late registrations take effect on the next render."
+  []
+  (fn [text {:keys [available-width]}]
+    (extensions/apply-markdown-transformers
+     text {:message-type :user
+           :is-streaming false
+           :available-width available-width})))
+
 (defn make-user-message
   [& {:keys [text theme output-pad]
       :or {text "" theme theme/dark-theme output-pad 1}}]
@@ -57,6 +73,7 @@
                             :theme (theme/get-markdown-theme theme)
                             :default-style (fn [s]
                                              (theme/fg theme :user-message-text s))
+                            :transform (make-user-transform)
                             :padding-x 0)
         b (box/make-box output-pad 1 nil)
         comp (map->UserMessageComponent {:box (atom b)

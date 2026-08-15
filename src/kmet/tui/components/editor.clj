@@ -1043,7 +1043,26 @@
 ;; ─── App actions (pi: CustomEditor.handleInput) ───────────────────────────
 ;; Registered action handlers (via editor-set-on-action!) are matched against
 ;; the keybindings manager (the app-level KeybindingsManager in kmet.core) and
-;; take precedence over editor-internal key handling.
+;; take precedence over editor-internal key handling. Priority handlers
+;; (editor-set-priority-action!, used for extension shortcuts — pi:
+;; onExtensionShortcut) are checked BEFORE every app action, so extensions
+;; can bind keys the app owns.
+
+(defn- dispatch-priority-action!
+  "Try to dispatch data to a priority action handler (extension shortcuts).
+   Returns true if a handler matched and ran. Handlers are checked in
+   registration order; the first matching key wins (pi: extension shortcuts
+   run before builtin keybindings; between extensions, last registration
+   wins per key, first registration wins per keypress)."
+  [editor data]
+  (let [kmgr (or @(:keybindings editor) (kb/get-global-keybindings))
+        handlers @(:priority-action-handlers editor)]
+    (loop [ids (keys handlers)]
+      (if-let [action-id (first ids)]
+        (if (kb/matches-key kmgr data action-id)
+          (do ((get handlers action-id)) true)
+          (recur (next ids)))
+        false))))
 
 (defn- dispatch-app-action!
   "Try to dispatch data to a registered app action handler. Returns true if a
@@ -1058,6 +1077,11 @@
         handlers @(:action-handlers editor)
         text (clojure.string/join "\n" (:lines @(:state-atom editor)))]
     (cond
+      ;; Extension shortcuts first (pi: onExtensionShortcut runs before
+      ;; every builtin binding, escape included)
+      (dispatch-priority-action! editor data)
+      true
+
       (and (get handlers "app.interrupt")
            (kb/matches-key kmgr data "app.interrupt")
            (not @(:autocomplete-state editor)))
@@ -1090,7 +1114,8 @@
                           autocomplete-provider autocomplete-state
                           autocomplete-list autocomplete-prefix
                           autocomplete-max-visible autocomplete-theme
-                          action-handlers keybindings]
+                          action-handlers keybindings
+                          priority-action-handlers]
 
   (render [this width]
     (let [state @state-atom
@@ -1468,6 +1493,7 @@
                 :autocomplete-max-visible (atom 5)
                 :autocomplete-theme (atom select-list/default-theme)
                 :action-handlers (atom {})
+                :priority-action-handlers (atom {})
                 :keybindings (atom keybindings)}))
 
 (defn editor-set-text! [editor text]
@@ -1550,6 +1576,16 @@
   (if handler
     (swap! (:action-handlers editor) assoc action-id handler)
     (swap! (:action-handlers editor) dissoc action-id))
+  nil)
+
+(defn editor-set-priority-action!
+  "Register or clear a priority action handler (extension shortcuts — pi:
+   onExtensionShortcut): checked before every builtin app action, including
+   app.interrupt/app.exit. HANDLER — nil removes the registration."
+  [editor action-id handler]
+  (if handler
+    (swap! (:priority-action-handlers editor) assoc action-id handler)
+    (swap! (:priority-action-handlers editor) dissoc action-id))
   nil)
 
 (defn editor-get-expanded-text

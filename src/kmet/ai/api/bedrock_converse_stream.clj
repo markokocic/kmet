@@ -6,7 +6,7 @@
    [kmet.ai.proxy :as proxy]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
-   [kmet.ai.api.shared :refer [anthropic-adaptive-effort bash-execution-text content-text getenv image-block? min-answer-tokens request-headers responses-events-handler thinking-budgets transport-error-message]]))
+   [kmet.ai.api.shared :refer [anthropic-adaptive-effort bash-execution-text content-text getenv image-block? min-answer-tokens apply-before-provider-request-hook request-headers responses-events-handler thinking-budgets transport-error-message]]))
 
 (defn bedrock-is-claude?
   "pi isAnthropicClaudeModel: id/name mention Anthropic Claude (also matches
@@ -253,15 +253,16 @@
           (let [additional (bedrock-additional-fields model-record effort)
                 [msgs system-blocks] (bedrock-messages messages model-record retention)
                 payload (json/generate-string
-                         (cond-> {:modelId model-id
-                                  :messages msgs
-                                  :inferenceConfig (cond-> {}
-                                                     (and (bedrock-is-claude? model-record)
-                                                          (:max-tokens model-record))
-                                                     (assoc :maxTokens (:max-tokens model-record)))}
-                           (seq system-blocks) (assoc :system system-blocks)
-                           (seq tools) (assoc :toolConfig (bedrock-tool-config tools))
-                           (seq additional) (assoc :additionalModelRequestFields additional)))
+                         (apply-before-provider-request-hook
+                          (cond-> {:modelId model-id
+                                   :messages msgs
+                                   :inferenceConfig (cond-> {}
+                                                      (and (bedrock-is-claude? model-record)
+                                                           (:max-tokens model-record))
+                                                      (assoc :maxTokens (:max-tokens model-record)))}
+                            (seq system-blocks) (assoc :system system-blocks)
+                            (seq tools) (assoc :toolConfig (bedrock-tool-config tools))
+                            (seq additional) (assoc :additionalModelRequestFields additional))))
                 sha (aws-sigv4/sha256-hex payload)
                 ;; the request's own headers (attribution + configured) first,
                 ;; then the SigV4/bearer headers — AWS requires content-type

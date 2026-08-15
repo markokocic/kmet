@@ -38,6 +38,7 @@
 ;;   :on-input :on-before-agent-start                   — hooks
 ;;   :on-tool-call :on-tool-result                      — tool transforms
 ;;   :register-flag! :get-flag
+;;   :register-shortcut! :register-markdown-transformer! :send-message!
 ;;   :register-entry-renderer! :register-message-renderer!
 ;;   :set-model :get-thinking-level :set-thinking-level :send-user-message
 ;;   :exec
@@ -79,6 +80,11 @@
 
 (defn register-flag! [api name & [opts]] ((:register-flag! api) name opts))
 (defn get-flag [api name] ((:get-flag api) name))
+
+(defn register-shortcut! [api key-id & [opts]] ((:register-shortcut! api) key-id opts))
+(defn register-markdown-transformer! [api transformer]
+  ((:register-markdown-transformer! api) transformer))
+(defn send-message! [api message & [opts]] ((:send-message! api) message opts))
 
 (defn register-entry-renderer! [api custom-type renderer]
   ((:register-entry-renderer! api) custom-type renderer))
@@ -224,6 +230,15 @@
                                (swap! state assoc-in [:flags name] opts)
                                (fn [] (swap! state update :flags dissoc name)))
              :get-flag (fn [name] (get-in @state [:flags name]))
+             :register-shortcut! (fn [key-id opts]
+                                   (swap! state assoc-in [:shortcuts key-id] opts)
+                                   (fn [] (swap! state update :shortcuts dissoc key-id)))
+             :register-markdown-transformer! (fn [transformer]
+                                               (swap! state update :markdown-transformers conj transformer)
+                                               (fn [] (swap! state update :markdown-transformers
+                                                             (fn [ts] (remove #(identical? % transformer) ts)))))
+             :send-message! (fn [message opts]
+                              (swap! state update :ui-calls conj [:send-message! message opts]))
              :register-entry-renderer! (fn [custom-type renderer]
                                          (swap! state assoc-in [:entry-renderers custom-type] renderer)
                                          (fn [] (swap! state update :entry-renderers dissoc custom-type)))

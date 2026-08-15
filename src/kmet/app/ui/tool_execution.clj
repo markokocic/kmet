@@ -726,6 +726,7 @@
                truncation-atom tool-call-id-atom
                details-atom        ;; result :details map (pi: result.details), e.g. edit diff
                args-complete-atom
+               render-shell-atom   ;; pi: ToolDefinition.renderShell — :self renders without the outer Box
                image-data-atom       ;; vector of {:data str :mime-type str}
                last-call-component-atom   ;; component from previous render-call
                last-result-component-atom ;; component from previous render-result
@@ -754,7 +755,7 @@
             render-result-fn (or @custom-render-result-atom
                                  (:render-result builtin)
                                  default-render-result)
-            render-shell (or (:render-shell builtin) :default)
+            render-shell (or @render-shell-atom (:render-shell builtin) :default)
             container @inner-container
             content-width (max 1 (- width (* 2 output-pad)))
             call-context (tool-execution-context this (last-call-component this))
@@ -809,7 +810,7 @@
 ;; Pi: component manages timing internally — no started-at/ended-at passed in.
 
 (defn make-tool-execution
-  [& {:keys [name args content is-error theme output-pad expanded? render-call-fn render-result-fn truncation details cwd]
+  [& {:keys [name args content is-error theme output-pad expanded? render-call-fn render-result-fn truncation details cwd render-shell]
       :or {name "" args {} content "" is-error false theme theme/dark-theme
            output-pad 1 expanded? false truncation nil details nil
            cwd (or (System/getProperty "user.dir") ".")}}]
@@ -830,6 +831,7 @@
                                   :tool-call-id-atom (atom nil)
                                   :details-atom (atom details)
                                   :args-complete-atom (atom false)
+                                  :render-shell-atom (atom render-shell)
                                   :custom-render-call-atom (atom render-call-fn)
                                   :custom-render-result-atom (atom render-result-fn)
                                   :image-data-atom (atom [])

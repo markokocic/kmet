@@ -659,13 +659,19 @@
                (debug/log "/resume command")
                (show-session-selector cs ensure-session-dir
                                       (fn [path]
-                                        (let [sess (session/load-session path)
-                                              short-id (subs (:id sess) 0 (min 8 (count (:id sess))))]
-                                          (restore-session! cs sess true)
-                                          (ui/chat-history-add-message! (:chat-history cs)
-                                                                        {:role :assistant
-                                                                         :content (str "Resumed session " short-id ".")})
-                                          (tui/tui-request-render (:tui cs))))))})
+                                        ;; pi: emitBeforeSwitch (reason :resume)
+                                        ;; — extensions may cancel the switch
+                                        (when-not (:cancel (event-bus/emit-event!
+                                                            {:type :session-before-switch
+                                                             :reason :resume
+                                                             :target-session-file path}))
+                                          (let [sess (session/load-session path)
+                                                short-id (subs (:id sess) 0 (min 8 (count (:id sess))))]
+                                            (restore-session! cs sess true)
+                                            (ui/chat-history-add-message! (:chat-history cs)
+                                                                          {:role :assistant
+                                                                           :content (str "Resumed session " short-id ".")})
+                                            (tui/tui-request-render (:tui cs)))))))})
   (register-builtin-command!
    {:name "continue"
     :description "Continue where the agent left off (e.g. after a network error)"
@@ -1244,83 +1250,89 @@
    session, rebuild the agent's in-memory context from it — empty (pi:
    createRuntime; the session is the source of truth) — reset per-run
    state, and clear the chat, pending container, and editor (pi:
-   editor.setText(\"\")). Emits :session-shutdown (reason :new,
-   target-session-file) before the swap and :session-start (reason :new,
-   previous-session-file) after it for extensions (pi: teardownCurrent →
-   session_start on every switch)."
+   editor.setText(\"\")). Emits :session-before-switch (extensions may
+   cancel), :session-shutdown (reason :new, target-session-file) before the
+   swap and :session-start (reason :new, previous-session-file) after it
+   for extensions (pi: teardownCurrent → session_start on every switch)."
   [cs]
-  (let [ag @(:agent-state cs)
-        was-running @(:running-turn? cs)
-        previous-file (:file @(:session-atom cs))]
-    ;; Settle in-flight work so it lands in the outgoing session and cannot
-    ;; race the swap. Queued steering/follow-up are dropped — a new session
-    ;; discards them (unlike cancel, which restores them to the editor).
-    (when was-running
-      (agent/cancel-turn ag))
-    (when @(:compacting? ag)
-      (reset! (:signal ag) true))
-    (when @(:bash-running? cs)
-      (reset! (:bash-signal cs) true)
-      (reset! (:bash-running? cs) false))
-    ;; Wait (bounded) for the cancelled run's finally to drain pending bash
-    ;; results and for an in-flight compaction to settle — its context sync
-    ;; must not run after the swap.
-    (let [deadline (+ (System/currentTimeMillis) 3000)]
-      (loop []
-        (when (and (or (seq @(:pending-bash ag)) @(:compacting? ag))
-                   (< (System/currentTimeMillis) deadline))
-          (Thread/sleep 10)
-          (recur))))
-    (when (and (not @(:compacting? ag))
-               (empty? @(:pending-bash ag)))
-      (reset! (:signal ag) false))
-    (when was-running
-      (reset! (:running-turn? cs) false)
-      (stop-anim-timer! cs)
-      (clear-status-indicator! cs))
-    ;; pi: teardownCurrent — after the run is settled, tell extensions the
-    ;; runtime is being torn down (reason :new, destination session file)
-    ;; so they can persist state before the swap.
-    (event-bus/emit-event! {:type :session-shutdown :reason :new
-                            :target-session-file previous-file})
-    (let [new-session (session/create-session (ensure-cwd-session-dir))]
-      (debug/log "new session created: " (:id new-session))
-      (ui/chat-history-clear! (:chat-history cs))
-      (container/container-clear (:pending-messages-container cs))
-      ;; Re-attach the PendingMessages component — container-clear removes
-      ;; every child (queued steering/follow-up display included), and the
-      ;; display must keep rendering for messages queued after /new
-      (when-let [pm (:pending-messages-comp cs)]
-        (container/container-add-child (:pending-messages-container cs) pm))
-      (reset! (:pending-bash-components cs) [])
-      (editor-text-set! @(:current-editor-atom cs) "")
-      (reset! (:session-atom cs) new-session)
-      (extensions/set-session! new-session)
-      (let [new-ag (assoc ag :session new-session)]
-        (reset! (:agent-state cs) new-ag)
-        ;; Rebuild the in-memory context from the new session — empty — and
-        ;; reset per-run state (pi: createRuntime builds a fresh agent
-        ;; state; the hook/config atoms are kept — not session state).
-        (agent/restore-session-context! new-ag)
-        (reset! (:status ag) :idle)
-        (reset! (:steering ag) [])
-        (reset! (:follow-up ag) [])
-        (reset! (:pending-bash ag) [])
-        (reset! (:overflow-recovered ag) false)
-        (reset! (:retry-count ag) 0))
+  (let [previous-file (:file @(:session-atom cs))
+        ;; pi: emitBeforeSwitch — extensions may cancel the switch; the
+        ;; conversation stays completely untouched
+        switch-result (event-bus/emit-event! {:type :session-before-switch
+                                              :reason :new
+                                              :target-session-file previous-file})]
+    (when-not (:cancel switch-result)
+      (let [ag @(:agent-state cs)
+            was-running @(:running-turn? cs)]
+        ;; Settle in-flight work so it lands in the outgoing session and cannot
+        ;; race the swap. Queued steering/follow-up are dropped — a new session
+        ;; discards them (unlike cancel, which restores them to the editor).
+        (when was-running
+          (agent/cancel-turn ag))
+        (when @(:compacting? ag)
+          (reset! (:signal ag) true))
+        (when @(:bash-running? cs)
+          (reset! (:bash-signal cs) true)
+          (reset! (:bash-running? cs) false))
+        ;; Wait (bounded) for the cancelled run's finally to drain pending bash
+        ;; results and for an in-flight compaction to settle — its context sync
+        ;; must not run after the swap.
+        (let [deadline (+ (System/currentTimeMillis) 3000)]
+          (loop []
+            (when (and (or (seq @(:pending-bash ag)) @(:compacting? ag))
+                       (< (System/currentTimeMillis) deadline))
+              (Thread/sleep 10)
+              (recur))))
+        (when (and (not @(:compacting? ag))
+                   (empty? @(:pending-bash ag)))
+          (reset! (:signal ag) false))
+        (when was-running
+          (reset! (:running-turn? cs) false)
+          (stop-anim-timer! cs)
+          (clear-status-indicator! cs))
+        ;; pi: teardownCurrent — after the run is settled, tell extensions the
+        ;; runtime is being torn down (reason :new, destination session file)
+        ;; so they can persist state before the swap.
+        (event-bus/emit-event! {:type :session-shutdown :reason :new
+                                :target-session-file previous-file})
+        (let [new-session (session/create-session (ensure-cwd-session-dir))]
+          (debug/log "new session created: " (:id new-session))
+          (ui/chat-history-clear! (:chat-history cs))
+          (container/container-clear (:pending-messages-container cs))
+          ;; Re-attach the PendingMessages component — container-clear removes
+          ;; every child (queued steering/follow-up display included), and the
+          ;; display must keep rendering for messages queued after /new
+          (when-let [pm (:pending-messages-comp cs)]
+            (container/container-add-child (:pending-messages-container cs) pm))
+          (reset! (:pending-bash-components cs) [])
+          (editor-text-set! @(:current-editor-atom cs) "")
+          (reset! (:session-atom cs) new-session)
+          (extensions/set-session! new-session)
+          (let [new-ag (assoc ag :session new-session)]
+            (reset! (:agent-state cs) new-ag)
+            ;; Rebuild the in-memory context from the new session — empty — and
+            ;; reset per-run state (pi: createRuntime builds a fresh agent
+            ;; state; the hook/config atoms are kept — not session state).
+            (agent/restore-session-context! new-ag)
+            (reset! (:status ag) :idle)
+            (reset! (:steering ag) [])
+            (reset! (:follow-up ag) [])
+            (reset! (:pending-bash ag) [])
+            (reset! (:overflow-recovered ag) false)
+            (reset! (:retry-count ag) 0))
       ;; pi: newSession emits session_start (reason "new",
       ;; previousSessionFile) — on a future, handlers may block on dialog
       ;; promises (same as /reload).
-      (future
-        (try
-          (event-bus/emit-event!
-           (cond-> {:type :session-start :reason :new}
-             previous-file (assoc :previous-session-file previous-file)))
-          (catch Exception e (debug/log "session-start: " e))))
-      (update-footer! cs)
-      (tui/tui-request-render (:tui cs))
-      (ui/chat-history-add-message! (:chat-history cs)
-                                    {:role :assistant :content "Started a new session."}))))
+          (future
+            (try
+              (event-bus/emit-event!
+               (cond-> {:type :session-start :reason :new}
+                 previous-file (assoc :previous-session-file previous-file)))
+              (catch Exception e (debug/log "session-start: " e))))
+          (update-footer! cs)
+          (tui/tui-request-render (:tui cs))
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        {:role :assistant :content "Started a new session."}))))))
 
 ;; ─── Session tree navigation (pi: TreeSelectorComponent) ──────────────────
 
@@ -1553,21 +1565,29 @@
         (ui/chat-history-add-message! (:chat-history cs)
                                       {:role :assistant :content "Invalid entry for forking."})
         (try
-          (let [fork (if (:parent-id entry)
-                       (session/fork-session sess (:parent-id entry))
-                       (session/create-session (ensure-cwd-session-dir)
-                                               {:parent-session (:file sess)}))]
-            (if (nil? fork)
-              (ui/chat-history-add-message! (:chat-history cs)
-                                            {:role :assistant :content "Failed to create forked session."})
-              (do
-                (debug/log "forked session " (:id fork) " from " (:id sess))
-                (restore-session! cs fork false)
-                (editor-text-set! (:editor cs) (session/session-entry-text entry))
+          ;; pi: emitBeforeFork — extensions may cancel the fork; the
+          ;; conversation stays untouched
+          (if (:cancel (event-bus/emit-event! {:type :session-before-fork
+                                               :entry-id entry-id
+                                               :position :at}))
+            (ui/chat-history-add-message! (:chat-history cs)
+                                          {:role :assistant
+                                           :content "Fork cancelled by an extension."})
+            (let [fork (if (:parent-id entry)
+                         (session/fork-session sess (:parent-id entry))
+                         (session/create-session (ensure-cwd-session-dir)
+                                                 {:parent-session (:file sess)}))]
+              (if (nil? fork)
                 (ui/chat-history-add-message! (:chat-history cs)
-                                              {:role :assistant
-                                               :content (str "Forked to new session " (subs (:id fork) 0 8) ".")})
-                (tui/tui-request-render (:tui cs)))))
+                                              {:role :assistant :content "Failed to create forked session."})
+                (do
+                  (debug/log "forked session " (:id fork) " from " (:id sess))
+                  (restore-session! cs fork false)
+                  (editor-text-set! (:editor cs) (session/session-entry-text entry))
+                  (ui/chat-history-add-message! (:chat-history cs)
+                                                {:role :assistant
+                                                 :content (str "Forked to new session " (subs (:id fork) 0 8) ".")})
+                  (tui/tui-request-render (:tui cs))))))
           (catch Exception e
             (debug/log "fork failed: " e)
             (ui/chat-history-add-message! (:chat-history cs)
@@ -1601,17 +1621,25 @@
 
       :else
       (try
-        (let [fork (session/clone-session sess)]
-          (if (nil? fork)
-            (ui/chat-history-add-message! (:chat-history cs)
-                                          {:role :assistant :content "Failed to clone session."})
-            (do
-              (debug/log "cloned session " (:id fork) " from " (:id sess))
-              (restore-session! cs fork false)
+        ;; pi: /clone is a fork at the current leaf — session_before_fork
+        ;; applies; extensions may cancel
+        (if (:cancel (event-bus/emit-event! {:type :session-before-fork
+                                             :entry-id @(:leaf-id sess)
+                                             :position :at}))
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        {:role :assistant
+                                         :content "Clone cancelled by an extension."})
+          (let [fork (session/clone-session sess)]
+            (if (nil? fork)
               (ui/chat-history-add-message! (:chat-history cs)
-                                            {:role :assistant
-                                             :content (str "Cloned to new session " (subs (:id fork) 0 8) ".")})
-              (tui/tui-request-render (:tui cs)))))
+                                            {:role :assistant :content "Failed to clone session."})
+              (do
+                (debug/log "cloned session " (:id fork) " from " (:id sess))
+                (restore-session! cs fork false)
+                (ui/chat-history-add-message! (:chat-history cs)
+                                              {:role :assistant
+                                               :content (str "Cloned to new session " (subs (:id fork) 0 8) ".")})
+                (tui/tui-request-render (:tui cs))))))
         (catch Exception e
           (debug/log "clone failed: " e)
           (ui/chat-history-add-message! (:chat-history cs)
@@ -1957,6 +1985,34 @@
     (do
       (debug/log "user submitted: " text)
       (start-agent-run! cs text))))
+
+(declare command-line?)
+
+(defn- expand-user-message-text
+  "pi: prompt() expansion chain (sendUserMessage with
+   :expand-prompt-templates?): extension commands execute immediately and
+   consume the message; then skill commands and prompt templates expand.
+   Builtin commands are NOT dispatched (pi: _tryExecuteExtensionCommand
+   only). Returns the expanded text, or nil when an extension command
+   consumed the message."
+  [cs text]
+  (let [trimmed (str/trim text)]
+    (if (and (str/starts-with? trimmed "/")
+             (command-line? trimmed))
+      (let [space (str/index-of trimmed " ")
+            cmd (if (nil? space) (subs trimmed 1) (subs trimmed 1 space))
+            args (if (nil? space) "" (str/trim (subs trimmed (inc space))))]
+        (if-let [c (commands/find-command cmd)]
+          (if-let [eh (:extension-handler c)]
+            (do (eh (extensions/build-extension-context) args)
+                (update-footer! cs)
+                nil ;; consumed — nothing to send
+                )
+            text) ;; builtin command — not dispatched here (pi parity)
+          (-> text
+              (skills/expand-skill-command)
+              (prompts/expand-prompt-template (prompts/get-prompt-templates)))))
+      text)))
 
 (defn- apply-hooks
   "Run extension input hooks on text; returns the (possibly transformed)
@@ -2390,13 +2446,20 @@
                                                           (assoc m :content text))
                 (tui/tui-request-render tui))
                             ;; extension custom messages (pi: custom messages
-                            ;; render as labeled info boxes when display=true)
+                            ;; render when display=true — a registered message
+                            ;; renderer overrides the labeled info box; same
+                            ;; rule as the session-restore path)
         :custom (do (when (:display (:message evt))
                       (let [m (:message evt)]
                         (ui/chat-history-insert-before-streaming!
-                         chat-history (assoc m :role :info
-                                             :content (custom-message-text m)
-                                             :label (:custom-type m)))))
+                         chat-history
+                         (if-let [renderer (extensions/get-message-renderer
+                                            (:custom-type m))]
+                           (let [msg (renderer m)]
+                             (if (map? msg) msg {:component msg}))
+                           (assoc m :role :info
+                                  :content (custom-message-text m)
+                                  :label (:custom-type m))))))
                     (tui/tui-request-render tui))
         nil)
       ;; Remaining vocabulary events need no UI action in
@@ -2914,6 +2977,7 @@
         widgets-below (atom {})
         custom-footer-atom (atom nil)
         custom-header-atom (atom nil)
+        custom-dialog-comp (atom nil)
         ;; the ACTIVE editor — the default or a swapped-in custom editor
         ;; (pi: this.editor is rebound by setCustomEditorComponent); the atom
         ;; lives on CoreState so action handlers outside this closure (e.g.
@@ -3008,6 +3072,14 @@
                          close (fn [result]
                                  (when-not @closed
                                    (reset! closed true)
+                                   ;; pi: dispose?() runs when the dialog
+                                   ;; closes, before the component is
+                                   ;; removed — a map/record :dispose fn
+                                   (when-let [component @custom-dialog-comp]
+                                     (when-let [dispose (:dispose component)]
+                                       (try (dispose)
+                                            (catch Exception _))))
+                                   (reset! custom-dialog-comp nil)
                                    (if overlay
                                      (tui/tui-hide-overlay t)
                                      (do (hide-dialog)
@@ -3015,11 +3087,19 @@
                                           @current-editor-atom saved-text)))
                                    (deliver p result)))]
                      (try
-                       (let [component (normalize-custom-component
-                                        (factory t (th/get-current-theme) (tui-kb/get-global-keybindings) close))]
-                         (when (and (nil? component) (not @closed))
-                           (throw (ex-info "ui-custom factory returned no component" {})))
+                       ;; pi: custom() accepts a Promise<Component> — deref
+                       ;; with a timeout; a timeout or nil factory result
+                       ;; hits the same error path as a throwing factory
+                       (let [raw (factory t (th/get-current-theme) (tui-kb/get-global-keybindings) close)
+                             raw (if (instance? clojure.lang.IDeref raw)
+                                   (deref raw 5000 ::timeout)
+                                   raw)
+                             component (normalize-custom-component raw)]
+                         (when (or (nil? component) (= ::timeout raw))
+                           (when-not @closed
+                             (throw (ex-info "ui-custom factory returned no component (or timed out)" {}))))
                          (when-not @closed
+                           (reset! custom-dialog-comp component)
                            (if overlay
                              (let [opts (if (fn? overlay-options)
                                           (overlay-options)
@@ -3042,7 +3122,12 @@
                        (tui/tui-request-render t))
          :set-widget (fn [key content options]
                        (let [placement (or (:placement options) :above-editor)
-                             m (if (= :below-editor placement) widgets-below widgets-above)]
+                             m (if (= :below-editor placement) widgets-below widgets-above)
+                             existing (get @m key)]
+                         ;; pi: replacing a widget disposes the old one
+                         (when (and existing (not= content :remove))
+                           (when-let [dispose (:dispose existing)]
+                             (try (dispose) (catch Exception _))))
                          (swap! m dissoc key)
                          (when content
                            (swap! m assoc key
@@ -3052,6 +3137,8 @@
                                                     widgets-above widgets-below)))
          :set-footer (fn [factory]
                        (when-let [cf @custom-footer-atom]
+                         (when-let [dispose (:dispose cf)]
+                           (try (dispose) (catch Exception _)))
                          (tui/tui-remove-child t cf))
                        (tui/tui-remove-child t ftr)
                        (if factory
@@ -3062,6 +3149,10 @@
                              (tui/tui-add-child t ftr)))
                        (tui/tui-request-render t))
          :set-header (fn [factory]
+                       (when @custom-header-atom
+                         (when-let [dispose (:dispose @custom-header-atom)]
+                           (try (dispose) (catch Exception _)))
+                         (reset! custom-header-atom nil))
                        (let [child (if factory (factory t (th/get-current-theme)) hdr)]
                          (container/container-clear header-container)
                          (container/container-add-child header-container sp1)
@@ -3140,6 +3231,29 @@
                                  (when (not= current? expanded?)
                                    (ui/chat-history-toggle-tool-expanded! ch)))
                                (tui/tui-request-render t))
+         ;; pi: registerShortcut — a raw key-id bound as a priority editor
+         ;; action, checked before every builtin app binding (escape
+         ;; included). The keybinding definition is registered on the global
+         ;; manager so key-hints and user overrides resolve. Last
+         ;; registration of a key wins; deregistration removes only its own.
+         :register-shortcut! (fn [key-id {:keys [description handler]}]
+                               (let [kmgr (tui-kb/get-global-keybindings)
+                                     key-id (str/lower-case (str key-id))]
+                                 (tui-kb/register-definition!
+                                  kmgr key-id
+                                  {:default-keys [key-id]
+                                   :description (or description "Extension shortcut")})
+                                 (editor/editor-set-priority-action!
+                                  ed key-id
+                                  (fn []
+                                    (try
+                                      (handler (extensions/build-extension-context))
+                                      (catch Exception e
+                                        (tui/tui-flash!
+                                         t (str "Extension shortcut error: " (ex-message e)))))))
+                                 (fn []
+                                   (tui-kb/unregister-definition! kmgr key-id)
+                                   (editor/editor-set-priority-action! ed key-id nil))))
          ;; Agent control (pi: ctx.setModel / getThinkingLevel /
          ;; setThinkingLevel / sendUserMessage / getActiveTools /
          ;; setActiveTools)
@@ -3159,19 +3273,62 @@
                                nil)
          :get-thinking-level (fn []
                                (agent/get-thinking-level @(:agent-state cs)))
-         :send-user-message (fn [text & [{:keys [deliver-as]}]]
-                              (let [ag @(:agent-state cs)]
-                                (if (= :idle (agent/get-status ag))
-                                  ;; pi: sendUserMessage always triggers a
-                                  ;; turn when idle
-                                  (start-agent-run! cs text)
-                                  (if (= :steer deliver-as)
-                                    (agent/steer! ag text)
-                                    (agent/follow-up! ag text)))
+         :send-user-message (fn [text & [{:keys [deliver-as expand-prompt-templates?]}]]
+                              (let [ag @(:agent-state cs)
+                                    ;; pi: prompt() with expandPromptTemplates —
+                                    ;; extension commands execute immediately
+                                    ;; (consuming the message), then skill
+                                    ;; commands + prompt templates expand.
+                                    ;; kmet defaults to NO expansion (the
+                                    ;; existing behavior); opt in explicitly.
+                                    text (if expand-prompt-templates?
+                                           (expand-user-message-text cs text)
+                                           text)]
+                                (when text
+                                  (if (= :idle (agent/get-status ag))
+                                    ;; pi: sendUserMessage always triggers a
+                                    ;; turn when idle
+                                    (start-agent-run! cs text)
+                                    (if (= :steer deliver-as)
+                                      (agent/steer! ag text)
+                                      (agent/follow-up! ag text))))
                                 (update-pending-messages! cs)
                                 (update-footer! cs)
                                 (tui/tui-request-render (:tui cs))
                                 nil))
+         ;; pi: sendMessage — a custom message: persisted as a custom_message
+         ;; session entry, injected into the agent context (sent to the LLM
+         ;; as a user message; rendered when :display) and optionally
+         ;; triggering a turn. Idle + trigger-turn starts the run (the
+         ;; message is already in context); busy queues via deliver-as
+         ;; (:steer injects immediately — the next LLM call sees it;
+         ;; anything else defers to the next turn).
+         :send-message! (fn [message & [opts]]
+                          (let [ag @(:agent-state cs)
+                                custom-type (or (:custom-type message) :custom)
+                                display (if (nil? (:display message)) true (:display message))
+                                msg {:role :custom
+                                     :custom-type custom-type
+                                     :content (:content message)
+                                     :display display
+                                     :details (:details message)}]
+                            (when (:session ag)
+                              (session/append-custom-message-entry!
+                               (:session ag) custom-type (:content message)
+                               display (:details message)))
+                            (agent/add-context-message! ag msg)
+                            (when (:trigger-turn opts)
+                              (if (= :idle (agent/get-status ag))
+                                (start-agent-run! cs)
+                                (if (= :steer (:deliver-as opts))
+                                  ;; already in context — the next LLM call
+                                  ;; sees it (pi: steer into the current run)
+                                  nil
+                                  (agent/follow-up! ag msg))))
+                            (update-pending-messages! cs)
+                            (update-footer! cs)
+                            (tui/tui-request-render (:tui cs))
+                            true))
          :get-active-tools (fn []
                              (agent/get-active-tools @(:agent-state cs)))
          :set-active-tools (fn [names]
@@ -3272,31 +3429,51 @@
                                                 {:cancelled true}))
                              :switch-session (fn [session-path & _]
                                                (try
-                                                 (let [sess (session/load-session session-path)]
-                                                   (restore-session! cs sess true)
-                                                   {:cancelled false})
+                                                 (let [sess (session/load-session session-path)
+                                                       ;; pi: emitBeforeSwitch (reason :resume) —
+                                                       ;; extensions may cancel the switch
+                                                       result (event-bus/emit-event!
+                                                               {:type :session-before-switch
+                                                                :reason :resume
+                                                                :target-session-file session-path})]
+                                                   (if (:cancel result)
+                                                     {:cancelled true}
+                                                     (do (restore-session! cs sess true)
+                                                         {:cancelled false})))
                                                  (catch Exception _ {:cancelled true})))
                              :is-project-trusted (fn [] false)}))
          :reset (fn []
                   ;; pi: resetExtensionUI — dispose widgets, restore
                   ;; footer/header/editor, clear statuses + working
                   ;; customization, drop terminal input listeners
+                  (doseq [m [widgets-above widgets-below]]
+                    (doseq [w (vals @m)]
+                      (when-let [dispose (:dispose w)]
+                        (try (dispose) (catch Exception _)))))
                   (reset! widgets-above {})
                   (reset! widgets-below {})
                   (render-extension-widgets! t widget-container-above
                                              widget-container-below
                                              widgets-above widgets-below)
                   (when @custom-footer-atom
+                    (when-let [dispose (:dispose @custom-footer-atom)]
+                      (try (dispose) (catch Exception _)))
                     (tui/tui-remove-child t @custom-footer-atom)
                     (reset! custom-footer-atom nil)
                     (tui/tui-add-child t ftr))
                   (when @custom-header-atom
+                    (when-let [dispose (:dispose @custom-header-atom)]
+                      (try (dispose) (catch Exception _)))
                     (reset! custom-header-atom nil)
                     (container/container-clear header-container)
                     (container/container-add-child header-container sp1)
                     (container/container-add-child header-container hdr)
                     (container/container-add-child header-container sp1)
                     (expandable-text/expandable-text-rebuild! hdr))
+                  (when-let [component @custom-dialog-comp]
+                    (when-let [dispose (:dispose component)]
+                      (try (dispose) (catch Exception _)))
+                    (reset! custom-dialog-comp nil))
                   (doseq [unsub @terminal-input-unsubscribers]
                     (try (unsub) (catch Exception _)))
                   (reset! terminal-input-unsubscribers [])
@@ -3395,13 +3572,19 @@
         (when (:resume opts)
           (show-session-selector cs ensure-session-dir
                                  (fn [path]
-                                   (let [sess (session/load-session path)
-                                         short-id (subs (:id sess) 0 (min 8 (count (:id sess))))]
-                                     (restore-session! cs sess true)
-                                     (ui/chat-history-add-message! (:chat-history cs)
-                                                                   {:role :assistant
-                                                                    :content (str "Resumed session " short-id ".")})
-                                     (tui/tui-request-render (:tui cs))))))
+                                   ;; pi: emitBeforeSwitch (reason :resume) —
+                                   ;; extensions may cancel the switch
+                                   (when-not (:cancel (event-bus/emit-event!
+                                                       {:type :session-before-switch
+                                                        :reason :resume
+                                                        :target-session-file path}))
+                                     (let [sess (session/load-session path)
+                                           short-id (subs (:id sess) 0 (min 8 (count (:id sess))))]
+                                       (restore-session! cs sess true)
+                                       (ui/chat-history-add-message! (:chat-history cs)
+                                                                     {:role :assistant
+                                                                      :content (str "Resumed session " short-id ".")})
+                                       (tui/tui-request-render (:tui cs)))))))
         ;; start the UI before initializing extensions so session_start
         ;; handlers can use interactive dialogs — kmet loads extensions
         ;; earlier, so the event fires once the layout + UI registry are

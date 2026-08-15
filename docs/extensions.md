@@ -21,7 +21,7 @@ unregistered** afterwards.
   (ext/register-command! api
     {:name        "hello"
      :description "Say hello"
-     :handler     (fn [_cs args] (str "Hello, " args "!"))}))
+     :handler     (fn [ctx args] (str "Hello, " args "!"))}))
 
 (defn shutdown [api]
   ;; optional teardown — deregistration is automatic
@@ -226,7 +226,7 @@ the wrappers below or directly.
 (ext/register-command! api
   {:name "cmd" :description "..." :argument-hint "<arg>"
    :get-argument-completions (fn [prefix] [{:value "a" :label "A"}])
-   :handler (fn [cs args] ...)})          ; args is the trimmed argument string
+   :handler (fn [ctx args] ...)})        ; ctx = extension context, args = trimmed argument string
 (ext/unregister-command! api "cmd")
 (ext/get-commands api)
 
@@ -240,11 +240,41 @@ the wrappers below or directly.
 (ext/set-active-tools api ["read" "write"])
 ```
 
+### Tool execute contract
+
+By default `:execute` receives `(fn [args])`. A tool that declares
+`:contextual? true` receives pi's full contract:
+
+```clojure
+(ext/register-tool! api
+  {:name "my-tool" :description "..."
+   :contextual? true
+   :execute (fn [args on-update signal ctx]
+              ;; args        — the validated tool args
+              ;; on-update   — streaming updates (fn [partial-content])
+              ;; signal      — the run's abort atom (true = user cancelled;
+              ;;               poll it to abort long work, e.g. kill a child
+              ;;               process — pi: AbortSignal)
+              ;; ctx         — the extension context (pi: ToolExecuteContext)
+              {:content "..."})})
+```
+
+`on-update`/`signal`/`ctx` are always passed to contextual tools (pi passes
+signal+ctx unconditionally). Extension tools may also declare
+`:render-call` / `:render-result` fns (pi: `renderCall`/`renderResult`) —
+they replace the builtin transcript rendering for that tool's calls/results
+and receive the same `ToolRenderContext` map the builtin renderers get
+(args, tool-call-id, invalidate, state/set-state!, cwd, is-partial,
+expanded, is-error). `:streams? true` keeps the 2-arg `(fn [args
+on-update])` contract (no signal/ctx).
+
 ### Events
 
 ```clojure
 ;; returns a deregister fn — call it to stop listening
-(ext/on-event api :session-start (fn [ev] ...))
+(ext/on-event api :session-start (fn [ev ctx] ...))
+;; handlers always receive (event ctx) — the extension context, built fresh
+;; per event (pi: handler(event, ctx))
 (ext/emit-event! api {:type :my-event :data 1})
 ```
 
@@ -253,9 +283,48 @@ Event types: `:agent-start` `:agent-end` `:agent-settled` `:turn-start`
 `:tool-execution-start` `:tool-execution-update` `:tool-execution-end`
 `:status` `:error` `:session-start` `:session-shutdown`
 `:session-info-changed` `:user-bash`
-`:session-before-tree` `:session-tree` `:queue-update` `:model-select`
+`:session-before-tree` `:session-before-switch` `:session-before-fork`
+`:session-before-compact` `:session-tree` `:queue-update` `:model-select`
 `:thinking-level-select` `:context-replaced` `:auto-retry-start`
-`:auto-retry-end` `:compaction-start` `:compaction-end`.
+`:auto-retry-end` `:compaction-start` `:compaction-end` `:context`
+`:before-provider-request` `:before-provider-headers`
+`:after-provider-response`.
+
+### Cancellable session before-events
+
+Three events fire **before** session mutations; handlers may return
+`{:cancel true}` to abort the operation (the session stays untouched):
+
+```clojure
+;; before /new and /resume switch the session
+(ext/on-event api :session-before-switch
+  (fn [ev ctx] (when (and (= :resume (:reason ev)) (not (trusted?))) {:cancel true})))
+
+;; before forking (or cloning) at a message
+(ext/on-event api :session-before-fork
+  (fn [ev ctx] ...))   ; {:entry-id .. :position :at}
+
+;; before context compaction (manual, threshold, or overflow) — the run's
+;; abort signal rides in the event
+(ext/on-event api :session-before-compact
+  (fn [ev ctx] ...))   ; {:preparation .. :branch-entries .. :reason .. :signal ..}
+```
+
+Provider events fire around each LLM call (pi: context /
+before_provider_request / before_provider_headers / after_provider_response);
+for each, the **last non-nil handler result wins**:
+
+```clojure
+;; replace the outgoing messages
+(ext/on-event api :context (fn [ev ctx] {:messages [...]}))
+;; replace the assembled request payload
+(ext/on-event api :before-provider-request (fn [ev ctx] new-payload))
+;; replace the request headers (return the map; a nil header value deletes
+;; that header — pi mutates in place, Clojure maps are immutable)
+(ext/on-event api :before-provider-headers (fn [ev ctx] new-headers-map))
+;; observe the response (no result used)
+(ext/on-event api :after-provider-response (fn [ev ctx] ...))
+```
 
 ### Hooks
 
@@ -284,6 +353,42 @@ Event types: `:agent-start` `:agent-end` `:agent-settled` `:turn-start`
   (fn [{:keys [tool-name result is-error]}]
     ;; nil, or {:content ...} / {:is-error ...} overrides
     nil))
+```
+
+### Shortcuts and markdown transformers
+
+```clojure
+;; register a keyboard shortcut (pi: registerShortcut). KEY is a raw key
+;; string ("ctrl+alt+x", "f5", ...). The handler receives the extension
+;; context. Extension shortcuts are checked BEFORE every builtin app
+;; binding (escape/app.interrupt included — pi: onExtensionShortcut runs
+;; first); the last registration of the same key wins.
+(ext/register-shortcut! api "ctrl+alt+x"
+  {:description "Do the thing"
+   :handler (fn [ctx] ...)})
+
+;; transform user/assistant message markdown before rendering (pi:
+;; registerMarkdownTransformer). The transformer receives the markdown and
+;; {:message-type :user|:assistant :is-streaming bool :available-width int}
+;; and returns the transformed string. Transformers run in registration
+;; order and MUST be idempotent — they re-run per render, so streaming
+;; chunks re-transform the accumulated text; a throwing transformer is
+;; skipped.
+(ext/register-markdown-transformer! api
+  (fn [md ctx] (str/replace md "TODO" "**TODO**")))
+```
+
+### Custom messages and agent control
+
+```clojure
+;; send a custom message (pi: sendMessage): persisted as a custom_message
+;; session entry, injected into the LLM context (sent as a user message),
+;; rendered in the chat when :display. :trigger-turn starts a run when the
+;; agent is idle; while streaming, :deliver-as queues it (:steer injects
+;; into the current run, :follow-up/:next-turn defer to the next turn).
+(ext/send-message! api
+  {:custom-type :note :content "remember this" :display true :details {:x 1}}
+  {:trigger-turn true :deliver-as :next-turn})
 ```
 
 ### CLI flags
@@ -317,14 +422,22 @@ boolean true).
 
 ```clojure
 (ext/set-model api model)                 ; a Model record from (:models api)
+                                        ; → true on success, false when the
+                                        ; model has no configured auth (pi:
+                                        ; Promise<boolean>)
 (ext/get-thinking-level api)
 (ext/set-thinking-level api :high)
 (ext/send-user-message api "text" {:deliver-as :steer})  ; :steer | :follow-up
+(ext/send-user-message api "/skill:name args" {:expand-prompt-templates? true})
 ```
 
 `send-user-message` always triggers a turn when the agent is idle; while
 streaming, `:deliver-as` controls whether the message is injected mid-run
 (`:steer`) or queued until the run settles (`:follow-up`, the default).
+With `:expand-prompt-templates?`, the message runs through the submit
+chain first — extension commands execute immediately (consuming the
+message), then skill commands and prompt templates expand (pi:
+expandPromptTemplates; kmet defaults to no expansion).
 
 ### UI
 
@@ -361,6 +474,12 @@ inert before the interactive layout exists and in headless/print mode.
 (ext/ui-get-tools-expanded api)
 (ext/ui-editor api "Title" "prefill")   ; modal editor dialog → promise of text, nil when dismissed (nil headless)
 (ext/ui-get-theme-by-name api "dark")     ; real Theme record, nil for unknown names (pi: getTheme)
+
+;; ui-custom's factory may return the component OR a promise of one (deref'd
+;; with a 5s timeout); when the component carries a :dispose fn, it is
+;; called when the dialog closes (pi: dispose?()) — same for widgets,
+;; custom footer/header and the :reset path (extension reload)
+(ext/ui-custom api (fn [tui theme kb close] (comp-with-dispose)) {:overlay false})
 ```
 
 ### Models
@@ -393,6 +512,12 @@ inert before the interactive layout exists and in headless/print mode.
 (sess/set-name! "my session")
 (sess/get-name)
 ```
+
+The same facades are available on the extension **context** as `(:session
+ctx)` (pi: `ctx.sessionManager`) — command and event handlers that only
+receive `ctx` can read session state. The ctx map itself is a fresh merge of
+a headless default and the interactive mode's live `:build-context`
+capability per call (pi: `createContext()`).
 
 ### Shell
 
@@ -447,7 +572,7 @@ A complete extension showing the common pieces:
   (ext/register-command! api
     {:name "uppercase"
      :description "Uppercase a string"
-     :handler (fn [_cs args] (str/upper-case args))})
+     :handler (fn [ctx args] (str/upper-case args))})
 
   (ext/register-tool! api
     {:name "my-echo"
@@ -456,7 +581,7 @@ A complete extension showing the common pieces:
      :execute (fn [args] {:content (str "echo: " (:text args))})})
 
   (ext/on-event api :agent-end
-    (fn [ev] (ext/ui-notify api "Turn finished" :info)))
+    (fn [ev ctx] (ext/ui-notify api "Turn finished" :info)))
 
   (ext/on-input api
     (fn [{:keys [text]}]

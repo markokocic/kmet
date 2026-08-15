@@ -6,6 +6,7 @@
             [kmet.tui.autocomplete :as ac]
             [kmet.tui.components.select-list :as select-list]
             [kmet.tui.utils :as u]
+            [kmet.tui.keybindings :as kb]
             [kmet.app.keybindings :as app-kb]
             [babashka.fs :as fs]))
 
@@ -172,6 +173,30 @@
     (editor/editor-set-on-submit! e (fn [v] (reset! cancelled (nil? v))))
     (core/handle-input e K-ESC)
     (t/is @cancelled)))
+
+(t/deftest test-editor-priority-action-before-builtin
+  (t/testing "extension shortcuts (priority handlers) run BEFORE every builtin
+              app action — app.interrupt (escape) included (pi:
+              onExtensionShortcut); deregistering restores the builtin"
+    (let [kmgr (kb/make-tui-keybindings-manager)
+          _ (kb/register-definition! kmgr "ext.shortcut"
+                                     {:default-keys ["escape"] :description "ext"})
+          _ (kb/register-definition! kmgr "app.interrupt"
+                                     {:default-keys ["escape"] :description "interrupt"})
+          e (editor/make-editor :keybindings kmgr)
+          builtin-ran (atom false)
+          prio-ran (atom false)
+          _ (editor/editor-set-on-action! e "app.interrupt"
+                                          (fn [] (reset! builtin-ran true)))
+          _ (editor/editor-set-priority-action!
+             e "ext.shortcut" (fn [] (reset! prio-ran true)))]
+      (core/handle-input e K-ESC)
+      (t/is @prio-ran "priority handler ran on escape")
+      (t/is (not @builtin-ran)
+            "builtin app.interrupt did not run — the shortcut consumed the key")
+      (editor/editor-set-priority-action! e "ext.shortcut" nil)
+      (core/handle-input e K-ESC)
+      (t/is @builtin-ran "after deregistration the builtin binding handles escape"))))
 
 ;; ─── set-text / get-text ──────────────────────────────────────────────────
 

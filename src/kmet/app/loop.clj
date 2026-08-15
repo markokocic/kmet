@@ -556,7 +556,9 @@ Be precise and concise in your responses."}}]
                                 [(:id tc)
                                  (future (let [tc-id (:id tc)
                                                result (tools/execute-tool (:name tc) (:arguments tc)
-                                                                          (tool-on-update agent tc-id))]
+                                                                          {:on-update (tool-on-update agent tc-id)
+                                                                           :signal (:signal agent)
+                                                                           :ctx (extensions/build-extension-context)})]
                                            (swap! completion-order conj [tc-id result])
                                            result))])
                               pending))
@@ -619,7 +621,9 @@ Be precise and concise in your responses."}}]
                          (:terminate before) (assoc :terminate true))
                        (run-tool-call!
                         (future (tools/execute-tool tc-name tc-args
-                                                    (tool-on-update agent tc-id)))))
+                                                    {:on-update (tool-on-update agent tc-id)
+                                                     :signal (:signal agent)
+                                                     :ctx (extensions/build-extension-context)}))))
               result (after-tool-hook-result agent tc-id tc-name tc-args result assistant-msg)
               result-msg (tool-result-message tc-id tc-name result)]
           (swap! (:messages agent) conj result-msg)
@@ -997,12 +1001,14 @@ Be precise and concise in your responses."}}]
 
    Emits :compaction-start/:compaction-end around the work (pi:
    compaction_start/compaction_end); the end event carries :aborted true
-   when the run's cancel signal fired mid-compaction (escape), in which
-   case the session is left untouched.
+   when the run's cancel signal fired mid-compaction (escape) or an
+   extension's :session-before-compact handler returned {:cancel true}
+   (pi: aborted compaction_end), in which cases the session is left
+   untouched.
 
    Returns true when a compaction happened, false when there was nothing to
-   compact (or compaction is already in progress), and :aborted when the
-   user cancelled mid-compaction."
+   compact (or compaction is already in progress, or an extension
+   cancelled it), and :aborted when the user cancelled mid-compaction."
   [agent & [custom-instructions reason]]
   (if @(:compacting? agent)
     false
@@ -1018,29 +1024,43 @@ Be precise and concise in your responses."}}]
                         prep (compaction/prepare entries (or (:keep-recent-tokens agent) 20000))]
                     (if (or (nil? prep) (empty? (:messages prep)))
                       false
-                      (if-let [summary-result (summarize! agent prep custom-instructions)]
-                        (if @(:signal agent)
+                      ;; pi: session_before_compact — extensions may cancel
+                      ;; the compaction (a {:cancel true} result skips the
+                      ;; summarization; compaction_start/compaction_end still
+                      ;; fire, the end carrying :aborted true — pi parity)
+                      (if (:cancel (emit agent {:type :session-before-compact
+                                                :preparation prep
+                                                :branch-entries entries
+                                                :reason reason
+                                                :will-retry false
+                                                :signal (:signal agent)}))
+                        ::cancelled
+                        (if-let [summary-result (summarize! agent prep custom-instructions)]
+                          (if @(:signal agent)
                           ;; cancelled during summarization — session unchanged
-                          :aborted
-                          (do (session/compact-with-summary! sess (:summary summary-result)
-                                                             (:first-kept-id prep)
-                                                             (cond-> {:tokens-before (:tokens-before prep)}
-                                                               (:usage summary-result)
-                                                               (assoc :usage (:usage summary-result))))
-                              (sync-context-after-compaction! agent)
-                              (debug/log "compacted session with LLM summary")
-                              true))
-                        (if @(:signal agent)
-                          :aborted
-                          (do (debug/log "Warning: summarization failed; falling back to count-based compaction")
-                              (count-based-compact! agent)))))))
+                            :aborted
+                            (do (session/compact-with-summary! sess (:summary summary-result)
+                                                               (:first-kept-id prep)
+                                                               (cond-> {:tokens-before (:tokens-before prep)}
+                                                                 (:usage summary-result)
+                                                                 (assoc :usage (:usage summary-result))))
+                                (sync-context-after-compaction! agent)
+                                (debug/log "compacted session with LLM summary")
+                                true))
+                          (if @(:signal agent)
+                            :aborted
+                            (do (debug/log "Warning: summarization failed; falling back to count-based compaction")
+                                (count-based-compact! agent))))))))
                 false)]
           (emit agent {:type :compaction-end
                        :reason reason
-                       :aborted (= result :aborted)
-                       :result (and (not= result :aborted) result)
+                       :aborted (or (= result :aborted)
+                                    (= result ::cancelled))
+                       :result (and (not= result :aborted)
+                                    (not= result ::cancelled)
+                                    result)
                        :will-retry false})
-          result)
+          (if (= result ::cancelled) false result))
         (finally
           (reset! (:compacting? agent) false))))))
 
@@ -1391,7 +1411,13 @@ Be precise and concise in your responses."}}]
                                                      (:follow-up-mode agent))]
                         (if (seq follow-ups)
                           (do (doseq [m follow-ups]
-                                (add-user-message! agent m))
+                                ;; strings are user messages; maps are
+                                ;; pre-injected custom messages (pi: the
+                                ;; follow-up queue carries full messages,
+                                ;; sendMessage queues custom messages there)
+                                (if (map? m)
+                                  (add-context-message! agent m)
+                                  (add-user-message! agent m)))
                               (emit agent {:type :queue-update
                                            :steering @(:steering agent)
                                            :follow-up @(:follow-up agent)})

@@ -12,8 +12,11 @@ Reference: `packages/coding-agent/src/core/extensions/types.ts` in
 ExtensionContext ~340, ExtensionCommandContext ~390, ToolDefinition +
 ToolRenderContext further down).
 
-Status of this document: **P0–P3 complete (ctx object, provider registration,
-ui.editor + getTheme(name), tool_call terminate); P4+ planned**.
+Status of this document: **P0–P12 complete** (ctx object, provider
+registration, ui.editor + getTheme(name), tool_call terminate, tool
+execute signal+ctx, tool renderers, shortcuts, markdown transformers,
+provider events, cancellable session before-events, sendMessage
+custom messages, ui.custom async factories + dispose, parity docs).
 
 ---
 

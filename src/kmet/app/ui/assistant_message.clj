@@ -12,18 +12,35 @@
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.markdown :as md]
-            [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]))
+            [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]
+            [kmet.app.extensions :as extensions]))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
+
+(defn- make-assistant-transform
+  "Extension markdown transform for assistant messages (pi:
+   createMarkdownTransform(\"assistant\", this.isStreaming)): transformers
+   apply in registration order at reflow time (every streaming chunk
+   re-runs them), throwing transformers are skipped; the transformer list is
+   read at apply time so late registrations take effect on the next reflow.
+   STREAMING-ATOM — the component's streaming flag (true while the response
+   streams, false once finalized)."
+  [streaming-atom]
+  (fn [text {:keys [available-width]}]
+    (extensions/apply-markdown-transformers
+     text {:message-type :assistant
+           :is-streaming (boolean @streaming-atom)
+           :available-width available-width})))
 
 (defn- render-text-to-width
   "Render assistant text as markdown (pi: Markdown + getMarkdownTheme, which
    includes syntax-highlighting the code fences). Plain text is left unstyled
    — terminal default, exactly like pi's assistant messages."
-  [text cw left-pad theme]
+  [text cw left-pad theme transform]
   (when (seq text)
     (let [mc (md/make-markdown text
                                :theme (theme/get-markdown-theme theme)
+                               :transform transform
                                :padding-x 0)
           md-lines (protocols/render mc cw)]
       (mapv #(str left-pad %) md-lines))))
@@ -33,7 +50,7 @@
    Markdown with defaultTextStyle {color: thinkingText, italic: true}). Code
    fences inside thinking highlight, like pi. When hidden, renders the
    hidden-thinking label instead (pi: hiddenThinkingLabel)."
-  [text cw left-pad theme hide? hidden-label]
+  [text cw left-pad theme hide? hidden-label transform]
   (if (not (seq text))
     []
     (if hide?
@@ -43,6 +60,7 @@
                                  :default-style (fn [s]
                                                   (theme/fg theme :thinking-text
                                                             (theme/italic s)))
+                                 :transform transform
                                  :padding-x 0)
             md-lines (protocols/render mc cw)]
         (mapv #(str left-pad %) md-lines)))))
@@ -54,10 +72,12 @@
 (defcomponent AssistantMessageComponent :assistant
               [text-atom thinking-text-atom theme-atom
                output-pad-atom hide-thinking-atom hidden-label-atom
+               streaming-atom
                rendered-text-lines-atom
                rendered-thinking-lines-atom
                rendered-text-atom        ;; text source of the cached lines (stale check)
                rendered-thinking-atom    ;; thinking source of the cached lines (stale check)
+               rendered-streaming-atom   ;; streaming flag of the cached lines (stale check)
                last-render-width-atom
                cache-atom]
   (render [this width]
@@ -67,14 +87,18 @@
             ;; blocks render nothing (and get no Spacer(1)).
             text (let [t (str/trim (or @text-atom ""))] (when (seq t) t))
             thinking (let [t (str/trim (or @thinking-text-atom ""))] (when (seq t) t))
+            streaming? (boolean @streaming-atom)
             text-empty? (nil? text)
             thinking-empty? (nil? thinking)
             ;; Reflow lazily on the render thread: appends only swap the text
             ;; atom (never blocking the LLM stream); a render re-wraps when the
-            ;; width changed or new text arrived since the cached lines.
+            ;; width changed, new text arrived, or the streaming flag flipped
+            ;; (finalize must re-run transformers with is-streaming false)
+            ;; since the cached lines.
             stale? (or (and prev-width (not= prev-width width))
                        (not= text @rendered-text-atom)
-                       (not= thinking @rendered-thinking-atom))
+                       (not= thinking @rendered-thinking-atom)
+                       (not= streaming? @rendered-streaming-atom))
             _ (when stale? (reflow-all! this width))
             text-lines @rendered-text-lines-atom
             thinking-lines @rendered-thinking-lines-atom]
@@ -109,13 +133,16 @@
         cw (max 1 (- width (* 2 pad-x)))
         left-pad (apply str (repeat pad-x \space))
         text (str/trim (or @(:text-atom comp) ""))
-        thinking (str/trim (or @(:thinking-text-atom comp) ""))]
+        thinking (str/trim (or @(:thinking-text-atom comp) ""))
+        streaming? (boolean @(:streaming-atom comp))
+        transform (make-assistant-transform (:streaming-atom comp))]
     (reset! (:rendered-text-lines-atom comp)
-            (render-text-to-width text cw left-pad theme))
+            (render-text-to-width text cw left-pad theme transform))
     (reset! (:rendered-thinking-lines-atom comp)
-            (render-thinking-to-width thinking cw left-pad theme hide? hidden-label))
+            (render-thinking-to-width thinking cw left-pad theme hide? hidden-label transform))
     (reset! (:rendered-text-atom comp) text)
     (reset! (:rendered-thinking-atom comp) thinking)
+    (reset! (:rendered-streaming-atom comp) streaming?)
     (reset! (:last-render-width-atom comp) width)))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
@@ -132,10 +159,12 @@
                                               :output-pad-atom (atom output-pad)
                                               :hide-thinking-atom (atom hide-thinking?)
                                               :hidden-label-atom (atom hidden-label)
+                                              :streaming-atom (atom false)
                                               :rendered-text-lines-atom (atom [])
                                               :rendered-thinking-lines-atom (atom [])
                                               :rendered-text-atom (atom nil)
                                               :rendered-thinking-atom (atom nil)
+                                              :rendered-streaming-atom (atom nil)
                                               :last-render-width-atom (atom nil)
                                               :cache-atom (atom nil)})]
     ;; Do initial render so lines are ready immediately
@@ -156,6 +185,13 @@
 
 (defn assistant-message-append-thinking! [comp text]
   (swap! (:thinking-text-atom comp) str text))
+
+(defn assistant-message-set-streaming!
+  "Set the streaming flag (pi: this.isStreaming) — true while the response
+   streams, false once finalized. Flips the markdown transformers'
+   :is-streaming context and forces a reflow on the next render."
+  [comp streaming?]
+  (reset! (:streaming-atom comp) (boolean streaming?)))
 
 (defsetter assistant-message-set-hide-thinking! :hide-thinking-atom comp hide?
   (when-let [w @(:last-render-width-atom comp)]

@@ -6,7 +6,7 @@
    [kmet.ai.proxy :as proxy]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
-   [kmet.ai.api.shared :refer [anthropic-thinking bash-execution-text endpoint-url image-block? request-headers tool->anthropic-schema transport-error-message usage-with-cost]]))
+   [kmet.ai.api.shared :refer [anthropic-thinking bash-execution-text endpoint-url image-block? apply-before-provider-request-hook request-headers tool->anthropic-schema transport-error-message usage-with-cost]]))
 
 (def default-anthropic-version "2023-06-01")
 
@@ -96,15 +96,16 @@
   (future
     (let [model-id (or (:model opts) (:id model-record))
           thinking (anthropic-thinking model-record effort)
-          payload (cond-> {:model model-id
-                           :max_tokens (:max-tokens thinking (or (:max-tokens model-record) 4096))
-                           :messages (anthropic-messages messages)
-                           :stream true}
-                    (seq tools) (assoc :tools (mapv tool->anthropic-schema tools))
-                    (:thinking thinking) (assoc :thinking (:thinking thinking))
+          payload (apply-before-provider-request-hook
+                   (cond-> {:model model-id
+                            :max_tokens (:max-tokens thinking (or (:max-tokens model-record) 4096))
+                            :messages (anthropic-messages messages)
+                            :stream true}
+                     (seq tools) (assoc :tools (mapv tool->anthropic-schema tools))
+                     (:thinking thinking) (assoc :thinking (:thinking thinking))
                     ;; adaptive thinking (pi forceAdaptiveThinking): the
                     ;; output_config effort rides alongside the thinking block
-                    (:output_config thinking) (assoc :output_config (:output_config thinking)))]
+                     (:output_config thinking) (assoc :output_config (:output_config thinking))))]
       (try
         (let [response (proxy/post-stream (or base-url (endpoint-url :anthropic-messages (:base-url model-record) model-id))
                                           {:headers (request-headers

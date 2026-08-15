@@ -109,7 +109,7 @@
    (ctx.mode !== 'tui' in pi) — notify instead of showing a dialog."
   [api state ctx]
   (swap! state assoc :all-tools (ext/get-all-tools api))
-  (when (or (not (:has-ui ctx))
+  (when (or (not= :interactive (:mode ctx))
             (not (ext/ui-custom api (fn [tui th kb close]
                                       (tools-dialog api state tui th kb close)))))
     (ext/ui-notify api "/tools requires TUI mode" :error)))

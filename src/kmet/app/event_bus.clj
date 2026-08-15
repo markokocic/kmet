@@ -141,7 +141,31 @@
    "Fired when the agent run is fully settled — immediately after :agent-end
     on every run exit (success, error, timeout, or cancel). The agent is idle
     and no further events for this run will be emitted (pi: agent_settled,
-    emitted from a finally block after the run)."})
+    emitted from a finally block after the run)."
+
+   ;; ─── Provider events (pi: context / before_provider_request /
+   ;; ─── before_provider_headers / after_provider_response) ────────────
+   :context
+   "Fired before each LLM call with the outgoing messages (pi: context —
+    emitContext). Payload: :messages. Handlers may return {:messages [...]}
+    to replace them; the last non-nil result wins (pi chains handler
+    results)."
+
+   :before-provider-request
+   "Fired with the assembled request payload before the provider HTTP call
+    (pi: before_provider_request). Payload: :payload. The last non-nil
+    handler result replaces the payload."
+
+   :before-provider-headers
+   "Fired with the final request headers before the provider HTTP call (pi:
+    before_provider_headers — handlers mutate the map in place there; kmet's
+    maps are immutable, so handlers RETURN the replacement map and a nil
+    header value deletes that header). Payload: :headers. The last non-nil
+    map result replaces the headers."
+
+   :after-provider-response
+   "Fired after the provider response is received, before its body is
+    consumed (pi: after_provider_response). Payload: :status, :headers."})
 
 (def app-event-types
   "Event types emitted OUTSIDE the agent loop (the interactive mode and
@@ -152,6 +176,9 @@
     :session-shutdown
     :user-bash
     :session-before-tree
+    :session-before-switch
+    :session-before-fork
+    :session-before-compact
     :session-tree
     :session-info-changed})
 

@@ -18,7 +18,7 @@
    [kmet.ai.api.openai-codex-responses :refer [codex-request]]
    [kmet.ai.api.openai-completions :refer [openai-request]]
    [kmet.ai.api.openai-responses :refer [responses-request]]
-   [kmet.ai.api.shared :refer [ambient-auth-available? effective-effort]]))
+   [kmet.ai.api.shared :refer [ambient-auth-available? apply-context-hook effective-effort]]))
 
 (defn send-message
   "Send messages to LLM and receive streaming events via callbacks.
@@ -70,7 +70,11 @@
         ;; proxy-ep endpoint); an explicit agent-level :base-url wins.
         opts (cond-> opts
                (and (:base-url auth) (nil? (:base-url opts)))
-               (assoc :base-url (:base-url auth)))]
+               (assoc :base-url (:base-url auth)))
+        ;; pi: emitContext — the context event fires before each LLM call;
+        ;; the hook (installed by the extension bridge) may replace the
+        ;; outgoing messages (first non-nil handler result wins)
+        opts (update opts :messages apply-context-hook)]
     (cond
       ;; google-vertex (ADC) and amazon-bedrock (ambient AWS credentials)
       ;; resolve their own auth — the api-key check is per-request below

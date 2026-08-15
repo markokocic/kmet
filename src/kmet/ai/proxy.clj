@@ -10,6 +10,7 @@
             [babashka.process :as proc]
             [cheshire.core :as json]
             [clojure.string :as str]
+            [kmet.ai.hooks :as hooks]
             [kmet.libs.process :as process]))
 
 ;; ─── Proxy parsing ────────────────────────────────────────────────────────
@@ -249,13 +250,25 @@
    from env vars (proxy-for-url). Returns a map with :body as an input stream,
    plus :proc/:pid for curl-backed (SOCKS) responses — call finish-curl! after
    the stream is read. signal — cancel atom: for curl-backed requests it kills
-   the process tree when set mid-stream."
+   the process tree when set mid-stream.
+
+   Provider-event hooks (pi: before_provider_headers /
+   after_provider_response): the final :headers map runs through the
+   before-provider-headers hook right before the HTTP call; after the
+   response arrives, the after-provider-response hook fires with
+   {:status n :headers {...}} (only when the transport exposes them — the
+   curl-backed path reports no status/headers)."
   [url opts signal]
-  (if-let [p (proxy-for-url url)]
-    (if (curl-proxy? p)
-      (curl-post url opts p signal)
-      (http/post url (assoc opts :client (java-client p))))
-    (http/post url opts)))
+  (let [opts (update opts :headers hooks/apply-before-provider-headers-hook)
+        response (if-let [p (proxy-for-url url)]
+                   (if (curl-proxy? p)
+                     (curl-post url opts p signal)
+                     (http/post url (assoc opts :client (java-client p))))
+                   (http/post url opts))]
+    (when (and (map? response) (contains? response :status))
+      (hooks/apply-after-provider-response-hook (:status response)
+                                                (:headers response)))
+    response))
 
 (defn request-json
   "HTTP request expecting a JSON response (pi fetchJson — the OAuth flows).

@@ -3,6 +3,7 @@
    openai-prompt-cache.ts + the shared thinking/usage/event helpers): URL construction,
    request headers, thinking levels, message transformers, cost and stream-event handling."
   (:require
+   [kmet.ai.hooks :as hooks]
    [kmet.ai.attribution :as attribution]
    [kmet.ai.auth :as auth]
    [kmet.ai.config-value :as config-value]
@@ -10,6 +11,20 @@
    [kmet.ai.models :as models]
    [kmet.ai.usage :as usage]
    [clojure.string :as str]))
+
+;; ─── Provider-event hooks (pi: context / before_provider_request) ────────
+;; Re-exported from kmet.ai.hooks (the slots live there so kmet.ai.proxy can
+;; reach them without a require cycle); the context hook fires here (applied
+;; by kmet.ai.llm per call) and the request hook in each api builder.
+
+(def set-context-hook! hooks/set-context-hook!)
+(def apply-context-hook hooks/apply-context-hook)
+(def set-before-provider-request-hook! hooks/set-before-provider-request-hook!)
+(def apply-before-provider-request-hook hooks/apply-before-provider-request-hook)
+(def set-before-provider-headers-hook! hooks/set-before-provider-headers-hook!)
+(def apply-before-provider-headers-hook hooks/apply-before-provider-headers-hook)
+(def set-after-provider-response-hook! hooks/set-after-provider-response-hook!)
+(def apply-after-provider-response-hook hooks/apply-after-provider-response-hook)
 
 (def getenv
   "Process env lookup (System/getenv returns nil for unset vars)."

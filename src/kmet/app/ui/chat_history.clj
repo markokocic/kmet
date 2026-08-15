@@ -18,6 +18,7 @@
             [kmet.app.ui.tool-execution :as te]
             [kmet.app.ui.custom-message :as cm]
             [kmet.app.ui.bash-execution :as be]
+            [kmet.app.tools.core :as tools]
             [kmet.tui.macros :refer [track! track-deps defcomponent]]))
 
 ;; ─── Info component at top ─────────────────────────────────────────────────
@@ -199,7 +200,8 @@
                   :output-pad output-pad
                   :hide-thinking? thinking-hidden?
                   :hidden-label hidden-label)
-      :tool (let [comp (te/make-tool-execution
+      :tool (let [tool (tools/get-tool (:name msg ""))
+                  comp (te/make-tool-execution
                         :name (:name msg "")
                         :args (:args msg {})
                         :content (content->display-text (:content msg ""))
@@ -208,7 +210,14 @@
                         :details (:details msg)
                         :theme theme
                         :output-pad output-pad
-                        :expanded? tools-expanded?)]
+                        :expanded? tools-expanded?
+                        ;; pi: ToolDefinition.renderCall/renderResult — the
+                        ;; record's fns (extension tools) win over the
+                        ;; builtin renderers; both get the ToolRenderContext
+                        ;; map (tool-execution-context)
+                        :render-call-fn (:render-call tool)
+                        :render-result-fn (:render-result tool)
+                        :render-shell (:render-shell tool))]
             ;; Pi: replayed/persisted tool results are final — mark ended so
             ;; they render with success/error bg, footer strip, and Took.
             ;; Live pending messages (content "" + is-error false) are skipped.
@@ -318,6 +327,7 @@
               :hide-thinking? @(:thinking-hidden-atom ch)
               :hidden-label @(:hidden-label-atom ch))
         msg {:role :assistant :content "" :component comp :streaming? true}]
+    (am/assistant-message-set-streaming! comp true)
     (swap! (:messages-atom ch) conj msg)
     (reset! (:streaming-atom ch) msg)
     msg))
@@ -347,6 +357,8 @@
     (let [comp (:component msg)
           text (am/assistant-message-get-text comp)
           thinking (am/assistant-message-get-thinking comp)]
+      ;; mark non-streaming so transformers re-run with is-streaming false
+      (am/assistant-message-set-streaming! comp false)
       (swap! (:messages-atom ch)
              (fn [msgs]
                (mapv (fn [m]

@@ -31,12 +31,52 @@
             [borkdude.deps :as bdeps]
             [sci.core :as sci]
             [kmet.ai.models :as models]
+            [kmet.ai.hooks :as ai-hooks]
             [kmet.app.commands :as commands]
             [kmet.app.event-bus :as event-bus]
             [kmet.app.session :as session]
             [kmet.app.tools.core :as tools]
             [kmet.tui.theme :as theme]
             [kmet.extension]))
+
+;; ─── Provider-event bridges (pi: context / before_provider_request /
+;; ─── before_provider_headers / after_provider_response) ────────────────
+;; The ai layer exposes injectable hooks (kmet.ai.api.shared) — it cannot
+;; depend on kmet.app (the event bus). These bridges translate bus events
+;; into hook results. The bus returns the LAST non-nil handler result;
+;; pi chains handler results (each handler sees the previous one's
+;; replacement) — kmet's approximation: handlers see the original event
+;; and the last non-nil result wins. before-provider-headers handlers
+;; return the replacement header map (Clojure maps are immutable — the
+;; return value IS the mutation; pi mutates in place).
+
+(defn- install-provider-event-bridges!
+  "Wire the bus to the ai-layer hooks once (idempotent)."
+  []
+  (ai-hooks/set-context-hook!
+   (fn [messages]
+     (let [result (event-bus/emit-event! {:type :context :messages messages})]
+       (if (and result (contains? result :messages))
+         (:messages result)
+         messages))))
+  (ai-hooks/set-before-provider-request-hook!
+   (fn [payload]
+     (let [result (event-bus/emit-event! {:type :before-provider-request
+                                          :payload payload})]
+       (if (some? result) result payload))))
+  (ai-hooks/set-before-provider-headers-hook!
+   (fn [headers]
+     (let [result (event-bus/emit-event! {:type :before-provider-headers
+                                          :headers headers})]
+       (if (map? result) result headers))))
+  (ai-hooks/set-after-provider-response-hook!
+   (fn [{:keys [status headers]}]
+     (event-bus/emit-event! {:type :after-provider-response
+                             :status status
+                             :headers headers})))
+  nil)
+
+(install-provider-event-bridges!)
 
 ;; ─── Extension records ────────────────────────────────────────────────────
 (defrecord Extension [name path entry-ns ctx jars api deregister-fns initialized?])
@@ -49,6 +89,7 @@
 (defonce ^:private message-renderers (atom {}))
 (defonce ^:private tool-call-hooks (atom []))
 (defonce ^:private tool-result-hooks (atom []))
+(defonce ^:private markdown-transformers (atom []))
 (defonce ^:private flags (atom {}))
 (defonce ^:private cli-flags (atom {}))
 (defonce ^:private ui-registry (atom {}))
@@ -170,6 +211,57 @@
 (defn get-tool-call-hooks [] @tool-call-hooks)
 (defn get-tool-result-hooks [] @tool-result-hooks)
 
+;; ─── Shortcuts + markdown transformers (extension api) ────────────────────
+
+(declare ui-call)
+
+(defn register-shortcut!
+  "Register a keyboard shortcut (extension api: register-shortcut! — pi:
+   registerShortcut). KEY-ID is a raw key string (\"ctrl+alt+x\", \"f5\", …);
+   opts: {:description str :handler (fn [ctx])}. The interactive mode
+   installs it as a priority editor action — checked before every builtin
+   app binding (pi: onExtensionShortcut runs first) — and registers the
+   keybinding definition on the global manager (key-hints resolve, user
+   overrides apply). The last registration of the same key wins (pi: last
+   extension wins). Returns a deregister fn; no-op headless."
+  [key-id & [{:keys [description handler]}]]
+  (or (ui-call :register-shortcut! key-id {:description description :handler handler})
+      ;; headless: no-op dereg (unload must never NPE on it)
+      (fn [] nil)))
+
+(defn register-markdown-transformer!
+  "Register a markdown transformer (extension api:
+   register-markdown-transformer! — pi: registerMarkdownTransformer):
+   (fn [markdown {:keys [message-type is-streaming available-width]}])
+   → string, applied to user/assistant message markdown before rendering,
+   in registration order. Transformers must be idempotent (they re-run per
+   render — streaming chunks re-transform the accumulated text). A
+   transformer that throws is skipped (pi: keep the current markdown and
+   continue). Returns a deregister fn."
+  [transformer]
+  (swap! markdown-transformers conj transformer)
+  (fn [] (swap! markdown-transformers
+                (fn [ts] (remove #(identical? % transformer) ts)))))
+
+(defn get-markdown-transformers
+  "Registered markdown transformers in registration order."
+  []
+  @markdown-transformers)
+
+(defn apply-markdown-transformers
+  "Apply the registered markdown transformers to MARKDOWN in registration
+   order (pi: applyMarkdownTransformers); a transformer that throws is
+   skipped and the chain continues with the current markdown. CTX:
+   {:message-type :user|:assistant :is-streaming bool :available-width int}."
+  [markdown ctx]
+  (reduce (fn [acc t]
+            (try
+              (let [r (t acc ctx)]
+                (if (string? r) r acc))
+              (catch Exception _ acc)))
+          markdown
+          @markdown-transformers))
+
 ;; ─── CLI flags (extension api: register-flag! / get-flag) ─────────────────
 
 (defn register-flag!
@@ -214,11 +306,15 @@
   (when-let [f (get @ui-registry capability)]
     (apply f args)))
 
-(def ^:private default-extension-context
+(declare api-session)
+
+(defn- default-extension-context
   "Static context for headless/print mode (pi: ExtensionContext): the
    interactive :build-context capability overrides these per call. Every
    key is a value or zero-arg fn so handlers always receive a callable
-   map."
+   map. Built per call so it can reference the session facades (defined
+   below) — the fns read the live session atom at call time."
+  []
   {:mode :print
    :has-ui false
    :cwd (System/getProperty "user.dir")
@@ -240,7 +336,10 @@
    :fork (fn [& _] {:cancelled true})
    :navigate-tree (fn [& _] {:cancelled true})
    :switch-session (fn [& _] {:cancelled true})
-   :is-project-trusted (fn [] false)})
+   :is-project-trusted (fn [] false)
+   ;; pi: ctx.sessionManager — read facades over the live session (set by
+   ;; the interactive mode / headless tests via set-session!)
+   :session (api-session)})
 
 (defn build-extension-context
   "Build the extension context (pi: ExtensionContext) for the current
@@ -254,7 +353,7 @@
    user-initiated command handlers, never from agent-loop event handlers
    (pi restricts these to the command ctx; they can re-enter the run loop)."
   []
-  (merge default-extension-context (ui-call :build-context)))
+  (merge (default-extension-context) (ui-call :build-context)))
 
 (defn wrap-event-handler
   "Adapt an extension event handler to the bus: handlers always receive
@@ -310,7 +409,40 @@
 (defn set-model [model] (ui-call :set-model model))
 (defn get-thinking-level [] (ui-call :get-thinking-level))
 (defn set-thinking-level [level] (ui-call :set-thinking-level level) nil)
-(defn send-user-message [text & [{:keys [deliver-as]}]] (ui-call :send-user-message text {:deliver-as deliver-as}) nil)
+(defn send-user-message
+  "Extension api: send-user-message (pi: sendUserMessage) — send text to
+   the agent. OPTIONS: {:deliver-as :steer | :follow-up (queue while
+   streaming), :expand-prompt-templates? bool (pi:
+   expandPromptTemplates — extension commands execute immediately and
+   consume the message, then skill commands and prompt templates expand;
+   kmet defaults to no expansion)."
+  [text & [{:keys [deliver-as expand-prompt-templates?]}]]
+  (ui-call :send-user-message text {:deliver-as deliver-as
+                                    :expand-prompt-templates? expand-prompt-templates?})
+  nil)
+
+(declare append-custom-message!)
+
+(defn send-message!
+  "Extension api: send-message! (pi: sendMessage). MESSAGE:
+   {:custom-type :content :display :details} — appended to the session as a
+   custom_message entry (persisted), injected into the agent context (sent
+   to the LLM as a user message; rendered in the chat when :display), and
+   optionally triggering a turn. OPTIONS: {:trigger-turn bool :deliver-as
+   :steer | :follow-up | :next-turn}. Idle + trigger-turn starts the run
+   (the custom message is already in context); busy queues per deliver-as
+   (:steer injects into the current run immediately, :follow-up/:next-turn
+   defer to the next turn). Headless (no UI registry): persists + injects
+   via the sinks. Returns nil."
+  [message & [opts]]
+  (if (nil? (ui-call :send-message! message opts))
+    ;; headless fallback: persist + inject through the sinks
+    (append-custom-message! (or (:custom-type message) :custom)
+                            (:content message)
+                            (if (nil? (:display message)) true (:display message))
+                            (:details message))
+    nil)
+  nil)
 (defn get-active-tools [] (ui-call :get-active-tools))
 (defn set-active-tools [names] (ui-call :set-active-tools names) nil)
 
@@ -501,6 +633,14 @@
                        (register-flag! flag-name opts)
                        (track (fn [] (swap! flags dissoc flag-name))))
      :get-flag get-flag
+     :register-shortcut! (fn [key-id & [opts]]
+                           (let [dereg (register-shortcut! key-id opts)]
+                             (track dereg)
+                             dereg))
+     :register-markdown-transformer! (fn [transformer]
+                                       (let [dereg (register-markdown-transformer! transformer)]
+                                         (track dereg)
+                                         dereg))
      :register-entry-renderer! (fn [custom-type renderer]
                                  (register-entry-renderer! custom-type renderer)
                                  (track (fn [] (swap! entry-renderers dissoc custom-type))))
@@ -511,6 +651,7 @@
      :get-thinking-level get-thinking-level
      :set-thinking-level set-thinking-level
      :send-user-message send-user-message
+     :send-message! send-message!
      :exec exec
      :ui (api-ui)
      :models (api-models)
@@ -1045,7 +1186,10 @@
 
 (defn reload-extensions!
   "Unload all loaded extensions, then load from DIRS. Returns the list of
-   per-extension {:extension name :error} results."
+   per-extension {:extension name :error} results. Extension UI (widgets,
+   custom footer/header/editor, dialogs) is reset first (pi: reload calls
+   resetExtensionUI before reloading)."
   [dirs]
+  (ui-call :reset)
   (unload-all-extensions!)
   (mapcat load-extensions-from-dir dirs))

@@ -4,7 +4,7 @@
    [cheshire.core :as json]
    [kmet.ai.proxy :as proxy]
    [kmet.libs.sse :as sse]
-   [kmet.ai.api.shared :refer [endpoint-url max-tokens-key openai-messages openai-messages-with-reasoning openai-thinking-params request-headers tool->openai-schema transport-error-message usage-with-cost]]))
+   [kmet.ai.api.shared :refer [endpoint-url max-tokens-key openai-messages openai-messages-with-reasoning openai-thinking-params apply-before-provider-request-hook request-headers tool->openai-schema transport-error-message usage-with-cost]]))
 
 (defn openai-payload
   "Request body for an openai-completions request (pi buildParams):
@@ -40,7 +40,8 @@
     (try
       (let [model-id (or (:model opts) (:id model-record))
             url (or base-url (endpoint-url :openai-completions (:base-url model-record) model-id))
-            payload (openai-payload model-record effort messages tools model-id)
+            payload (apply-before-provider-request-hook
+                     (openai-payload model-record effort messages tools model-id))
             response (proxy/post-stream url
                                         {:headers (request-headers
                                                    {"Authorization" (str "Bearer " api-key)

@@ -5,7 +5,7 @@
    [kmet.ai.proxy :as proxy]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
-   [kmet.ai.api.shared :refer [bash-execution-text content-text effort-value endpoint-url image-block? off-explicitly-null? request-headers responses-events-handler transport-error-message]]))
+   [kmet.ai.api.shared :refer [bash-execution-text content-text effort-value endpoint-url image-block? off-explicitly-null? apply-before-provider-request-hook request-headers responses-events-handler transport-error-message]]))
 
 (defn normalize-id-part
   "pi normalizeIdPart: sanitize a tool-call id to [a-zA-Z0-9_-], cap at 64
@@ -254,8 +254,9 @@
       (let [model-id (or (:model opts) (:id model-record))
             url (or base-url (endpoint-url :openai-responses (:base-url model-record) model-id))
             retention (or cache-retention :short)
-            payload (responses-payload model-record effort messages tools model-id
-                                       retention session-id)
+            payload (apply-before-provider-request-hook
+                     (responses-payload model-record effort messages tools model-id
+                                        retention session-id))
             headers (responses-request-headers model-record provider-record api-key
                                                session-id retention messages)
             response (proxy/post-stream url

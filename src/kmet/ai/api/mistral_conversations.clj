@@ -6,7 +6,7 @@
    [kmet.ai.proxy :as proxy]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
-   [kmet.ai.api.shared :refer [bash-execution-text content-text endpoint-url image-block? request-headers responses-events-handler transport-error-message]]))
+   [kmet.ai.api.shared :refer [bash-execution-text content-text endpoint-url image-block? apply-before-provider-request-hook request-headers responses-events-handler transport-error-message]]))
 
 (def mistral-tool-call-id-length 9)
 
@@ -182,10 +182,11 @@
     (try
       (let [model-id (or (:model opts) (:id model-record))
             url (or base-url (endpoint-url :mistral-conversations (:base-url model-record) model-id))
-            payload (mistral-payload model-record effort
-                                     (mistral-messages messages model-record
-                                                       (make-mistral-tool-call-id-normalizer))
-                                     tools model-id session-id cache-retention)
+            payload (apply-before-provider-request-hook
+                     (mistral-payload model-record effort
+                                      (mistral-messages messages model-record
+                                                        (make-mistral-tool-call-id-normalizer))
+                                      tools model-id session-id cache-retention))
             base-headers (request-headers
                           {"Authorization" (str "Bearer " api-key)
                            "Content-Type" "application/json"

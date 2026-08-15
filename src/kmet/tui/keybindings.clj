@@ -38,7 +38,7 @@
 
 ;; ─── KeybindingsManager record ─────────────────────────────────────────────
 
-(defrecord KeybindingsManager [definitions     ;; {id -> {:default-keys [...] :description str}}
+(defrecord KeybindingsManager [definitions-atom  ;; atom of {id -> {:default-keys [...] :description str}}
                                user-bindings-atom  ;; atom of {id -> key-str-or-vec}
                                keys-by-id-atom  ;; atom of {id -> [key-str ...]}
                                conflicts-atom]  ;; atom of [{:key key-str :keybindings [id ...]}]
@@ -84,7 +84,7 @@
   ([definitions user-bindings]
    (let [user-bindings (or user-bindings {})]
      (map->KeybindingsManager
-      {:definitions definitions
+      {:definitions-atom (atom definitions)
        :user-bindings-atom (atom user-bindings)
        :keys-by-id-atom (atom (resolve-all-keys definitions user-bindings))
        :conflicts-atom (atom (find-conflicts definitions user-bindings))}))))
@@ -115,7 +115,7 @@
 (defn get-definition
   "Get the definition map for a keybinding ID, or nil."
   [kmgr keybinding-id]
-  (get (:definitions kmgr) keybinding-id))
+  (get @(:definitions-atom kmgr) keybinding-id))
 
 (defn get-conflicts
   "Get vector of conflict maps: {:key key-str :keybindings [id ...]}."
@@ -126,8 +126,27 @@
   "Replace all user overrides and rebuild the resolution."
   [kmgr user-bindings]
   (reset! (:user-bindings-atom kmgr) user-bindings)
-  (reset! (:keys-by-id-atom kmgr) (resolve-all-keys (:definitions kmgr) user-bindings))
-  (reset! (:conflicts-atom kmgr) (find-conflicts (:definitions kmgr) user-bindings))
+  (let [definitions @(:definitions-atom kmgr)]
+    (reset! (:keys-by-id-atom kmgr) (resolve-all-keys definitions user-bindings))
+    (reset! (:conflicts-atom kmgr) (find-conflicts definitions user-bindings)))
+  nil)
+
+(defn register-definition!
+  "Register a runtime keybinding definition (pi: extension shortcuts add
+   bindings at runtime — kmet registers them with the app manager so
+   key-hints resolve and user overrides apply). DEF — {:default-keys [...]
+   :description str}. A later registration of the same id replaces the
+   earlier definition and re-resolves keys/conflicts."
+  [kmgr keybinding-id def]
+  (swap! (:definitions-atom kmgr) assoc keybinding-id def)
+  (set-user-bindings! kmgr @(:user-bindings-atom kmgr))
+  nil)
+
+(defn unregister-definition!
+  "Remove a runtime keybinding definition (extension unload)."
+  [kmgr keybinding-id]
+  (swap! (:definitions-atom kmgr) dissoc keybinding-id)
+  (set-user-bindings! kmgr @(:user-bindings-atom kmgr))
   nil)
 
 (defn get-user-bindings
