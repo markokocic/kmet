@@ -63,6 +63,10 @@ src/kmet/
 │   │                     negotiation, escape sequences, raw-ANSI write log
 │   │                     (pi terminal.ts; writer-fn based)
 │   ├── yaml_lite.clj   — Minimal YAML subset parser (frontmatter; babashka-compatible)
+│   ├── frontmatter.clj — YAML frontmatter extraction (--- delimited block +
+│   │                     yaml-lite parse; pi utils/frontmatter.js)
+│   ├── clipboard.clj   — Clipboard copy via platform tools (Termux/Wayland/
+│   │                     X11/macOS/Windows; OSC52 fallback lives in libs.terminal)
 │   ├── terminal_image.clj — Kitty terminal image protocol + image dimension parsing
 │   │                     (native PNG/JPEG/GIF via f= codes — no conversion)
 │   ├── file_lock.clj   — Cross-process file locking (settings.edn/auth.edn writes)
@@ -122,11 +126,8 @@ src/kmet/
 │   ├── session.clj     — Session persistence
 │   ├── session_export.clj — HTML export for /export and /share (standalone
 │   │                     dark page; JSONL deliberately not built)
-│   ├── clipboard.clj   — Clipboard copy via platform tools (Termux/Wayland/
-│   │                     X11/macOS/Windows; OSC52 fallback lives in libs.terminal)
 │   ├── skills.clj      — Skills loading + system prompt
 │   ├── prompts.clj     — Prompt template loading + /name expansion (pi: core/prompt-templates.js)
-│   ├── frontmatter.clj — YAML frontmatter parsing shared by skills/prompts (pi: utils/frontmatter.js)
 │   ├── extension.clj   — THE extension contract (root): the namespaces
 │   │                     extensions depend on — kmet.extension plus the
 │   │                     shared kmet.tui.* / kmet.libs.* library layers;
@@ -237,8 +238,9 @@ src/kmet/
 ```
 
 ### Layer boundaries
-- **`kmet.libs.*`** — generic, self-contained. **Must not require any other kmet.*
-  namespace** (no app, tui, modes, or sibling-lib deps). Each lib is a portable
+- **`kmet.libs.*`** — generic, self-contained. **Must not require any kmet.*
+  namespace outside `kmet.libs.*`** (no app, tui, modes, ai, or sibling-lib
+  deps beyond the libs tree itself). Each lib is a portable
   unit: only stdlib + third-party deps, and any bundled assets (scripts) live in
   the lib directory. Enforced by `kmet.libs.test-self-contained`.
 - **`kmet.ai.*`** — provider/auth subsystem (pi: `packages/ai`). **Must not require

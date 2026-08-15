@@ -8,7 +8,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [babashka.fs :as fs]
-            [kmet.app.frontmatter :as fm]))
+            [kmet.libs.frontmatter :as fm]))
 
 ;; ─── Template state ────────────────────────────────────────────────────────
 

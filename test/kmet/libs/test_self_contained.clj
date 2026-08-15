@@ -1,7 +1,8 @@
 (ns kmet.libs.test-self-contained
   "Guard: every kmet.libs.* namespace must be self-contained — no requires
-   on any other kmet.* namespace (app, tui, modes, or sibling libs). A lib
-   should be extractable as a third-party library on its own."
+   outside kmet.libs.* (app, tui, modes, ai are forbidden; sibling libs
+   like kmet.libs.yaml-lite are allowed). The libs tree should be
+   extractable as a third-party library package on its own."
   (:require [clojure.test :as t :refer [deftest is]]
             [clojure.string :as str]
             [babashka.fs :as fs]))
@@ -19,7 +20,8 @@
       (->> (re-seq #"\[([\w.-]+)(?:\s+:as\s+\w+)?\]" ns-block)
            (map second)
            (filter #(str/starts-with? % "kmet."))
-           (remove #(= % "kmet.libs"))))))
+           ;; sibling-lib requires are allowed; everything else is not
+           (remove #(str/starts-with? % "kmet.libs."))))))
 
 (deftest libs-are-self-contained
   (doseq [f (lib-files)]

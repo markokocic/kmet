@@ -1,7 +1,7 @@
-(ns kmet.app.frontmatter
-  "YAML frontmatter parsing shared by skills and prompt templates
-   (pi: utils/frontmatter.js). Extracts the --- delimited block and delegates
-   to kmet.libs.yaml-lite (a minimal YAML subset parser)."
+(ns kmet.libs.frontmatter
+  "YAML frontmatter parsing (pi: utils/frontmatter.js). Extracts the ---
+   delimited block and delegates to kmet.libs.yaml-lite (a minimal YAML
+   subset parser)."
   (:require [clojure.string :as str]
             [kmet.libs.yaml-lite :as yaml]))
 

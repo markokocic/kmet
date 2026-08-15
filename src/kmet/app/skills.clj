@@ -15,7 +15,7 @@
             [babashka.fs :as fs]
             [kmet.debug :as debug]
             [kmet.app.tools.registry :as tools-registry]
-            [kmet.app.frontmatter :as fm]))
+            [kmet.libs.frontmatter :as fm]))
 
 ;; ─── Constants (pi: MAX_NAME_LENGTH / MAX_DESCRIPTION_LENGTH) ─────────────
 

@@ -32,7 +32,7 @@
             [kmet.ai.auth :as auth]
             [kmet.app.session :as session]
             [kmet.app.session-export :as session-export]
-            [kmet.app.clipboard :as clipboard]
+            [kmet.libs.clipboard :as clipboard]
             [kmet.app.tools.core :as tools]
             [kmet.app.keybindings :as app-kb]
             [kmet.tui.keybindings :as tui-kb]
