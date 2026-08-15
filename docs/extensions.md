@@ -276,6 +276,9 @@ Event types: `:agent-start` `:agent-end` `:agent-settled` `:turn-start`
 (ext/on-tool-call api
   (fn [{:keys [tool-name args]}]
     ;; nil (pass), {:block true :reason "..."}, or {:args transformed}
+    ;; a blocked call may add :terminate true — when EVERY call in the
+    ;; batch is blocked with :terminate the run stops after the batch
+    ;; (no follow-up LLM call; the follow-up queue still drains)
     nil))
 (ext/on-tool-result api
   (fn [{:keys [tool-name result is-error]}]
@@ -356,6 +359,8 @@ inert before the interactive layout exists and in headless/print mode.
 (ext/ui-on-terminal-input api (fn [data] nil-or-{:consume true :data d}))
 (ext/ui-set-tools-expanded api true)
 (ext/ui-get-tools-expanded api)
+(ext/ui-editor api "Title" "prefill")   ; modal editor dialog → promise of text, nil when dismissed (nil headless)
+(ext/ui-get-theme-by-name api "dark")     ; real Theme record, nil for unknown names (pi: getTheme)
 ```
 
 ### Models
@@ -368,6 +373,12 @@ inert before the interactive layout exists and in headless/print mode.
 (models/has-configured-auth api model)
 (models/get-provider-auth-status api provider-id)
 (models/get-api-key-and-headers api model)
+(models/get-registered-provider-config api provider-id)
+(models/get-registered-provider-ids api)
+(models/register-provider! api :my-provider
+                           {:base-url "https://..." :api :openai-completions
+                            :api-key "sk-..." :models [{:id "my-model"}]})
+(models/unregister-provider! api :my-provider)
 ```
 
 ### Session

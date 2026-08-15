@@ -6,6 +6,7 @@
             [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.extension :as ext]
+            [kmet.ai.models :as models]
             [kmet.app.extensions :as extensions]
             [kmet.app.commands :as commands]
             [kmet.app.event-bus :as event-bus]
@@ -40,6 +41,29 @@
     (t/is (not (contains? (:commands @state) "dc")))
     (t/is (empty? (get-in @state [:handlers :agent-end])))))
 
+(t/deftest test-nullable-api-p2-capabilities
+  (let [{:keys [api state]} (ext/create-nullable-api)]
+    (testing "ui.editor and getTheme(name) are captured (pi: ctx.ui.editor, ctx.getTheme)"
+      (ext/ui-editor api "Title" "prefill")
+      (ext/ui-get-theme-by-name api "dark")
+      (t/is (some #(= [:editor "Title" "prefill"] %) (:ui-calls @state)))
+      (t/is (some #(= [:get-theme-by-name "dark"] %) (:ui-calls @state))))
+    (testing "models register/unregister are captured (pi: ctx.registerProvider)"
+      (ext/models-register-provider! api :ext-prov {:models [{:id "m"}]})
+      (ext/models-unregister-provider! api :ext-prov)
+      (t/is (some #(= [:register-provider! :ext-prov {:models [{:id "m"}]}] %)
+                  (:model-calls @state)))
+      (t/is (some #(= [:unregister-provider! :ext-prov] %) (:model-calls @state))))))
+
+(t/deftest test-ui-editor-and-theme-by-name-headless
+  (testing "ui-editor is a no-op headless (no ui registry)"
+    (t/is (nil? (extensions/ui-editor "t" "p"))))
+  (testing "getTheme(name) is a pure lookup that works without a ui registry"
+    (t/is (= "dark" (:name (extensions/ui-get-theme-by-name "dark"))))
+    (t/is (= "light" (:name (extensions/ui-get-theme-by-name "light"))))
+    (t/is (nil? (extensions/ui-get-theme-by-name "does-not-exist"))
+          "unknown names return nil (pi: undefined — no dark fallback)")))
+
 (t/deftest test-nullable-api-extension-init
   (testing "a sample extension's init registers what it declares"
     (let [{:keys [api state]} (ext/create-nullable-api)]
@@ -54,6 +78,37 @@
         (t/is (some #(= [:set-status "hello-ext" "loaded"] %) (:ui-calls @state))
               "ui calls captured"))
       (remove-ns 'hello-ext))))
+
+;; ─── Provider registration through the api (:models facades) ─────────────
+
+(t/deftest test-extension-provider-registration
+  (testing "api :models register-provider! / unregister-provider! (pi ctx.registerProvider)"
+    (let [api ((var extensions/create-extension-api)
+               {:name "prov-test" :path "target/test-ext-prov.clj"})]
+      (models/load-catalogs!)
+      (models/clear-extension-providers!)
+      (try
+        (t/is (not (some #(= "ext-1" (:id %)) (extensions/get-all-models))))
+        (let [config {:base-url "https://ext.example/v1" :api :openai-completions
+                      :api-key "sk-ext" :auth-header true
+                      :models [{:id "ext-1" :reasoning true}]}
+              _ ((:register-provider! (:models api)) :ext-prov config)]
+          (t/is (= "ext-prov" (:name (models/get-provider :ext-prov)))
+                "name defaults to provider id")
+          (t/is (some #(= "ext-1" (:id %)) (extensions/get-all-models))
+                "registered model appears in get-all")
+          (t/is (= config (extensions/get-registered-provider-config :ext-prov)))
+          (t/testing "unregister drops the extension provider"
+            ((:unregister-provider! (:models api)) :ext-prov)
+            (t/is (not (some #(= "ext-1" (:id %)) (extensions/get-all-models))))
+            (t/is (nil? (extensions/get-registered-provider-config :ext-prov)))))
+        (t/testing "broken config throws without touching stored state"
+          (t/is (thrown? Exception
+                         ((:register-provider! (:models api)) :ext-prov
+                                                              {:models [{:id "bad"}]})))
+          (t/is (nil? (extensions/get-registered-provider-config :ext-prov))))
+        (finally
+          (models/clear-extension-providers!))))))
 
 ;; ─── Load / unload / reload lifecycle (real runtime) ─────────────────────
 

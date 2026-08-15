@@ -520,6 +520,12 @@
       (get @themes "dark")
       dark-theme))
 
+(defn get-theme-by-name
+  "Get a theme by name, or nil when no such theme is registered
+   (pi: getThemeByName — undefined for unknown names)."
+  [name]
+  (get @themes (str name)))
+
 (defn get-all-themes
   "All registered themes as a name → theme map (pi: getAvailableThemesWithPaths
    without the file paths — those come from the loaders)."

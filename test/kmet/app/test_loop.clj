@@ -1163,6 +1163,70 @@
       (t/is (true? (:is-error end)) "blocked tool result is an error")
       (t/is (= "Permission denied" (:content (:result end)))))))
 
+(t/deftest test-loop-before-tool-call-terminate
+  (let [events (atom [])
+        executed (atom false)
+        llm-calls (atom 0)
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
+    (loop/set-before-tool-call! agent
+                                (fn [_] {:block true :reason "Policy" :terminate true}))
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message (fn [opts]
+                                     (future
+                                       (swap! llm-calls inc)
+                                       (when-let [on-tc (:on-tool-call opts)]
+                                         (on-tc {:id "tc1" :name "bash" :arguments "{}" :index 0}))
+                                       (when-let [on-done (:on-done opts)]
+                                         (on-done :tool-calls))
+                                       :done))
+                  tools/execute-tool (fn [_ _ _] (reset! executed true)
+                                       {:content "should not run" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (t/is (false? @executed) "blocked tool must not execute")
+    (t/is (= 1 @llm-calls) "terminate stops the run — no follow-up LLM call")
+    (t/is (= :idle (loop/get-status agent)))
+    (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
+      (t/is (= "tc1" (:tool-call-id end)))
+      (t/is (= "Policy" (:content (:result end))) "blocked result still in transcript")
+      (t/is (true? (:is-error end))))))
+
+(t/deftest test-loop-before-tool-call-terminate-mixed-batch
+  (let [events (atom [])
+        executed (atom 0)
+        llm-calls (atom 0)
+        agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
+    ;; pi: terminate only when EVERY finalized call in the batch carries
+    ;; the hint — a single non-terminated call keeps the run going
+    (loop/set-before-tool-call! agent
+                                (fn [ctx]
+                                  (when (= "tc1" (:tool-call-id ctx))
+                                    {:block true :reason "Policy" :terminate true})))
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message (fn [opts]
+                                     (future
+                                       (if (= 1 (swap! llm-calls inc))
+                                         (do (when-let [on-tc (:on-tool-call opts)]
+                                               (on-tc {:id "tc1" :name "bash" :arguments "{}" :index 0})
+                                               (on-tc {:id "tc2" :name "bash" :arguments "{}" :index 1}))
+                                             (when-let [on-done (:on-done opts)]
+                                               (on-done :tool-calls)))
+                                         (do (when-let [on-text (:on-text opts)]
+                                               (on-text "ok"))
+                                             (when-let [on-done (:on-done opts)]
+                                               (on-done :stop))))
+                                       :done))
+                  tools/execute-tool (fn [_ _ _] (swap! executed inc)
+                                       {:content "ran" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (t/is (= 1 @executed) "non-blocked call in the batch executed")
+    (t/is (= 2 @llm-calls) "mixed batch does not terminate — follow-up LLM call happened")
+    (t/is (= :idle (loop/get-status agent)))
+    (t/is (some #(and (= :tool-execution-end (:type %))
+                      (= "tc1" (:tool-call-id %))
+                      (true? (:is-error %)))
+                @events)
+          "blocked call still reports its error result")))
+
 (t/deftest test-loop-before-tool-call-hook-throws
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]

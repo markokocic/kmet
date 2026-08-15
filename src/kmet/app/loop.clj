@@ -466,7 +466,9 @@ Be precise and concise in your responses."}}]
   "Run the before-tool-call hook if registered (pi: beforeToolCall).
    Returns nil to allow, {:block true :reason ...} to block, or
    {:args transformed-args} to rewrite the call's arguments. A throwing
-   hook blocks with the error message as reason."
+   hook blocks with the error message as reason. A blocked result may
+   carry :terminate true — the run stops after this batch when EVERY
+   finalized call in it carries the hint (pi: ToolCallEventResult.terminate)."
   [agent tc-id tc-name tc-args assistant-msg]
   (when-let [hook @(:before-tool-call agent)]
     (try
@@ -531,8 +533,9 @@ Be precise and concise in your responses."}}]
                              (cond
                                (:block before)
                                (assoc tc :kmet/blocked
-                                      {:content (or (:reason before) "Tool execution was blocked")
-                                       :is-error true})
+                                      (cond-> {:content (or (:reason before) "Tool execution was blocked")
+                                               :is-error true}
+                                        (:terminate before) (assoc :terminate true)))
 
                                (contains? before :args)
                                (assoc tc :arguments (:args before))
@@ -590,7 +593,11 @@ Be precise and concise in your responses."}}]
         (swap! (:messages agent) conj result-msg)
         (when (:session agent)
           (session/append-entry (:session agent) result-msg))))
-    (mapv #(get finalized (:id %)) tool-calls)))
+    ;; pi: terminate stops the run after this batch — only when EVERY
+    ;; finalized call (blocked ones carry the hint, executed ones don't)
+    {:results (mapv #(get finalized (:id %)) tool-calls)
+     :terminate (and (seq finalized)
+                     (every? #(true? (:terminate %)) (vals finalized)))}))
 
 (defn- execute-tool-calls-sequential!
   "Execute tool calls one at a time (pi: executeToolCallsSequential).
@@ -607,8 +614,9 @@ Be precise and concise in your responses."}}]
                      :args tc-args})
         (let [before (before-tool-hook-result agent tc-id tc-name tc-args assistant-msg)
               result (if (:block before)
-                       {:content (or (:reason before) "Tool execution was blocked")
-                        :is-error true}
+                       (cond-> {:content (or (:reason before) "Tool execution was blocked")
+                                :is-error true}
+                         (:terminate before) (assoc :terminate true))
                        (run-tool-call!
                         (future (tools/execute-tool tc-name tc-args
                                                     (tool-on-update agent tc-id)))))
@@ -624,7 +632,11 @@ Be precise and concise in your responses."}}]
                        :args tc-args
                        :result result
                        :is-error (:is-error result false)}))))
-    @tool-results))
+    ;; pi: terminate rides on blocked results — the batch stops the run
+    ;; only when every call in it was blocked with :terminate
+    {:results @tool-results
+     :terminate (and (seq @tool-results)
+                     (every? #(true? (:terminate %)) @tool-results))}))
 
 (defn- execute-tool-calls!
   "Execute tool calls. If any target tool is :sequential the whole batch runs
@@ -1332,17 +1344,22 @@ Be precise and concise in your responses."}}]
                                                       (reset! (:status agent) :executing)
                                                       (emit agent {:type :status :status :executing
                                                                    :tool-calls tool-calls})
-                                                      (let [tool-results (execute-tool-calls! agent tool-calls assistant-msg)]
+                                                      (let [{:keys [results terminate]} (execute-tool-calls! agent tool-calls assistant-msg)]
                                                         (reset! (:status agent) :thinking)
                                                         (emit agent {:type :status :status :thinking})
                                                         (emit agent {:type :turn-end
                                                                      :message assistant-msg
-                                                                     :tool-results tool-results})
+                                                                     :tool-results results})
                                                         ;; Proactive mid-run compaction (pi: after tool results, before next call)
                                                         (maybe-compact! agent)
-                                                        (if (after-turn! agent t assistant-msg tool-results)
-                                                          {:settled (inc t)}
-                                                          (recur (inc t) tool-calls false))))
+                                                        ;; pi: after-turn hooks (prepareNextTurn/shouldStopAfterTurn) run
+                                                        ;; unconditionally; terminate only stops the tool-call
+                                                        ;; continuation (no follow-up LLM call — the outer follow-up
+                                                        ;; queue still drains below)
+                                                        (let [stop? (after-turn! agent t assistant-msg results)]
+                                                          (if (or terminate stop?)
+                                                            {:settled (inc t)}
+                                                            (recur (inc t) tool-calls false)))))
                                                     ;; Final response
                                                     (let [assistant-msg (add-assistant-message! agent text thinking nil (:usage result))
                                                           tool-results []]

@@ -12,7 +12,8 @@ Reference: `packages/coding-agent/src/core/extensions/types.ts` in
 ExtensionContext ~340, ExtensionCommandContext ~390, ToolDefinition +
 ToolRenderContext further down).
 
-Status of this document: **P0 complete (context object), rest planned**.
+Status of this document: **P0–P3 complete (ctx object, provider registration,
+ui.editor + getTheme(name), tool_call terminate); P4+ planned**.
 
 ---
 
@@ -78,9 +79,9 @@ value/effort. Effort: S (≤ half day), M (1–2 days), L (3+ days).
 | # | pi capability | kmet today | effort |
 |---|---------------|------------|--------|
 | G1 | Handler **context object** (ExtensionContext/CommandContext) | none; `cs` leak + `(fn [event])` | L |
-| G2 | `registerProvider`/`unregisterProvider` | machinery ported but **unwired** (`kmet.ai.models/register-provider-config!`) | S |
-| G3 | `ui.editor` dialog + `ui.getTheme(name)` load-without-switch | `:editor` implemented in registry, not exposed; get-theme only returns current | S |
-| G4 | tool_call result `terminate: true` | block/args only | S |
+| G2 | `registerProvider`/`unregisterProvider` | machinery ported but **unwired** (`kmet.ai.models/register-provider-config!`) | S | ✅ P1 |
+| G3 | `ui.editor` dialog + `ui.getTheme(name)` load-without-switch | `:editor` implemented in registry, not exposed; get-theme only returns current | S | ✅ P2 |
+| G4 | tool_call result `terminate: true` | block/args only | S | ✅ P3 |
 | G5 | tool `execute(toolCallId, params, signal, onUpdate, ctx)` | `(fn [args])` / `(fn [args on-update])`, no signal, no ctx | M |
 | G6 | tool `renderCall`/`renderResult` for extension tools | record fields exist; not wired into transcript | M |
 | G7 | `registerShortcut` | nothing | M |
@@ -219,32 +220,54 @@ state at call time:
 
 ## 4. Work packages
 
-### P1 — Provider registration (G2, S)
+### P1 — Provider registration (G2, S) — ✅ done
 
-- `api-models` (`extensions.clj`): add
-  `:register-provider!` / `:unregister-provider!` backed by
-  `kmet.ai.models/register-provider-config!` / `unregister-provider-config!`
-  (already ported from pi's `ModelRuntime.registerProvider`, validated
-  eagerly by `provider-composer/validate-extension-provider`, recomposes
-  builtin + models.edn + extension layers automatically).
-- New wrappers in `kmet.extension`: `models-register-provider!`,
-  `models-unregister-provider!`.
-- Note: registration is queued/applied at init like other calls — no
-  special load-phase handling needed (api calls are live).
-- Tests: register provider config → model appears in `get-all`; unregister
-  → builtin restored; invalid config (bad api) → `ex-info` from
-  validation, stored state untouched.
+- `api-models` (`extensions.clj`): `:register-provider!` / `:unregister-provider!`
+  backed by `kmet.ai.models/register-provider-config!` /
+  `unregister-provider-config!` (validated eagerly by
+  `provider-composer/validate-extension-provider`, recomposes
+  builtin + models.edn + extension layers automatically;
+  `unregister-provider-config!` is a safe no-op for never-registered ids).
+- Wrappers in `kmet.extension`: `models-register-provider!`,
+  `models-unregister-provider!`; nullable-api `:models` captures both.
+- Tests: `test-extension-provider-registration` (real api via
+  `create-extension-api`): model appears in `get-all`; unregister → gone;
+  broken config (bad api) → throws, stored state untouched.
 
-### P2 — Expose `ui.editor` + `getTheme(name)` (G3, S)
+### P2 — Expose `ui.editor` + `getTheme(name)` (G3, S) — ✅ done
 
-- `api-ui`: add `:editor` (registry impl exists) and `:get-theme-by-name`
-  (lookup via `theme/resolve-theme-setting` + the theme store; the
-  controller's `preview` applies without touching auto-sync — the pure
-  lookup is a thin wrapper over the resolver).
-- Wrappers: `ui-editor`, `ui-get-theme-by-name`.
-- `api-ui` gains `:get-mode`/`:get-has-ui`? No — those live on the ctx (P0).
-- Tests: api map keys exist; headless → nil; nullable-api fixture captures
-  them.
+- `api-ui`: `:editor` (registry impl exists — modal dialog, promise for
+  the submitted text, nil headless) and `:get-theme-by-name` (pure lookup
+  over the theme store — builtins + custom themes dir).
+- Wrappers: `ui-editor`, `ui-get-theme-by-name` (+ nullable-api capture).
+- Theme alignment: pi's `getTheme(name)` returns the real registered
+  Theme (created on demand from builtin JSON / source-path files),
+  **`undefined` for unknown names**. kmet's store holds the same real
+  Theme records, so the lookup returns them directly — no fallback:
+  new `kmet.tui.theme/get-theme-by-name` (nil for unknown); the
+  fallbacking `get-theme` stays for internal callers (config/startup).
+- Tests: `test-ui-editor-and-theme-by-name-headless` (nil headless;
+  dark/light resolve; unknown → nil).
+
+### P3 — `terminate` in tool_call hooks (G4, S) — ✅ done
+
+- pi's exact semantics (verified in `packages/agent/src/agent-loop.ts`
+  `shouldTerminateToolBatch` / `prepareToolCall`): `terminate` is **only
+  honored on blocked calls** (a `{:block true :terminate true}` result;
+  bare `:terminate` is ignored), rides on the blocked error result, and
+  the batch stops the run **only when EVERY finalized call in it carries
+  the hint** (any executed call kills it). It does NOT abort the run:
+  `prepareNextTurn`/`shouldStopAfterTurn` still run and the outer
+  steering/follow-up queue still drains — only the tool-call continuation
+  (follow-up LLM call) is skipped.
+- `loop.clj`: blocked results carry `:terminate true`;
+  `execute-tool-calls-{parallel,sequential}!` return
+  `{:results [...] :terminate bool}`; the turn loop runs `after-turn!`
+  unconditionally then settles on `(or terminate stop?)`.
+- Tests: `test-loop-before-tool-call-terminate` (all blocked+terminate →
+  exactly one LLM call, blocked results in transcript, status idle) and
+  `test-loop-before-tool-call-terminate-mixed-batch` (one blocked+terminate
+  + one executed → follow-up LLM call still happens).
 
 ### P3 — `terminate` in tool_call hooks (G4, S)
 

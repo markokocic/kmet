@@ -35,6 +35,7 @@
             [kmet.app.event-bus :as event-bus]
             [kmet.app.session :as session]
             [kmet.app.tools.core :as tools]
+            [kmet.tui.theme :as theme]
             [kmet.extension]))
 
 ;; ─── Extension records ────────────────────────────────────────────────────
@@ -290,6 +291,18 @@
 (defn ui-set-theme [theme-or-name] (ui-call :set-theme theme-or-name))
 (defn ui-get-tools-expanded [] (ui-call :get-tools-expanded))
 (defn ui-set-tools-expanded [expanded?] (ui-call :set-tools-expanded expanded?))
+(defn ui-editor
+  "Open the modal editor dialog (pi: ui.editor). Returns a promise
+   resolving to the submitted text or nil when dismissed. No-op (nil)
+   headless."
+  [title prefill]
+  (ui-call :editor title prefill))
+(defn ui-get-theme-by-name
+  "Look up a theme by name (pi: getTheme(name)): a real Theme record from
+   the store (builtins + custom themes dir), nil for unknown names.
+   Works in every mode."
+  [name]
+  (theme/get-theme-by-name name))
 (defn ui-reset! [] (ui-call :reset))
 
 ;; ─── Agent control (dispatches through the ui registry; extension api) ───
@@ -311,6 +324,8 @@
 (defn get-api-key-and-headers [model] (models/get-api-key-and-headers model))
 (defn get-registered-provider-config [provider-id] (models/get-registered-provider-config provider-id))
 (defn get-registered-provider-ids [] (models/get-registered-provider-ids))
+(defn register-provider! [provider-id config] (models/register-provider-config! provider-id config))
+(defn unregister-provider! [provider-id] (models/unregister-provider-config! provider-id))
 
 (defn- exec
   "Execute a shell command and return {:exit n :out str :err str}
@@ -400,6 +415,8 @@
    :get-theme ui-get-theme
    :get-all-themes ui-get-all-themes
    :set-theme ui-set-theme
+   :editor ui-editor
+   :get-theme-by-name ui-get-theme-by-name
    :get-tools-expanded ui-get-tools-expanded
    :set-tools-expanded ui-set-tools-expanded})
 
@@ -413,7 +430,9 @@
    :get-provider-auth-status get-provider-auth-status
    :get-api-key-and-headers get-api-key-and-headers
    :get-registered-provider-config get-registered-provider-config
-   :get-registered-provider-ids get-registered-provider-ids})
+   :get-registered-provider-ids get-registered-provider-ids
+   :register-provider! register-provider!
+   :unregister-provider! unregister-provider!})
 
 (defn- api-session
   "The :session capability map — live session facades."

@@ -126,12 +126,38 @@
 (defn ui-get-tools-expanded [api] ((:get-tools-expanded (ui api))))
 (defn ui-set-tools-expanded [api expanded?] ((:set-tools-expanded (ui api)) expanded?))
 (defn ui-on-terminal-input [api handler] ((:on-terminal-input (ui api)) handler))
+(defn ui-editor
+  "Open the modal editor dialog (pi: ui.editor): returns a promise for the
+   submitted text, nil when dismissed (nil headless)."
+  [api title prefill]
+  ((:editor (ui api)) title prefill))
+(defn ui-get-theme-by-name
+  "Look up a theme by name (pi: getTheme(name)); unknown names fall back
+   to dark. Works in every mode."
+  [api name]
+  ((:get-theme-by-name (ui api)) name))
 
 (defn models
   "Provider/model facades: :get-all :get-available :find :has-configured-auth
-   :get-provider-auth-status :get-api-key-and-headers."
+   :get-provider-auth-status :get-api-key-and-headers
+   :get-registered-provider-config :get-registered-provider-ids
+   :register-provider! :unregister-provider!."
   [api]
   (:models api))
+
+(defn models-register-provider!
+  "Register/replace an extension provider (pi: ctx.registerProvider):
+   validated eagerly — a broken config throws without touching stored
+   state — then recomposes builtin + models.edn + extension layers."
+  [api provider-id config]
+  ((:register-provider! (models api)) provider-id config))
+
+(defn models-unregister-provider!
+  "Remove an extension provider registration (pi: ctx.unregisterProvider):
+   the provider falls back to its builtin (or disappears when it had
+   none), keeping the models.edn layer."
+  [api provider-id]
+  ((:unregister-provider! (models api)) provider-id))
 
 (defn session
   "The live session facades: :append-entry! :append-message! :get-entries
@@ -216,10 +242,11 @@
              :ui (into {} (for [[k _] {:select 1 :confirm 1 :input 1 :notify 1 :custom 1
                                        :set-status 1 :set-widget 1 :set-footer 1 :set-header 1
                                        :set-editor-text 1 :get-editor-text 1 :paste-to-editor 1
-                                       :set-theme 1 :get-theme 1 :get-all-themes 1
-                                       :set-working-indicator 1 :set-working-message 1
-                                       :set-working-visible 1 :on-terminal-input 1
-                                       :set-tools-expanded 1 :get-tools-expanded 1}]
+                                       :set-theme 1 :get-theme 1 :get-all-themes 1 :editor 1
+                                       :get-theme-by-name 1 :set-working-indicator 1
+                                       :set-working-message 1 :set-working-visible 1
+                                       :on-terminal-input 1 :set-tools-expanded 1
+                                       :get-tools-expanded 1}]
                             [k (fn [& args] (swap! state update :ui-calls conj (into [k] args)))]))
              :models {:get-all (fn [] (swap! state update :model-calls conj [:get-all]) [])
                       :get-available (fn [] [])
@@ -229,7 +256,17 @@
                       :has-configured-auth (fn [model] (boolean model))
                       :get-model-auth (fn [_model] {:configured false :source nil})
                       :get-provider-auth-status (fn [_provider] {:configured false :source nil})
-                      :get-api-key-and-headers (fn [_model] {:ok false :error "nullable"})}
+                      :get-api-key-and-headers (fn [_model] {:ok false :error "nullable"})
+                      :get-registered-provider-config (fn [_provider-id] nil)
+                      :get-registered-provider-ids (fn [] [])
+                      :register-provider! (fn [provider-id config]
+                                            (swap! state update :model-calls
+                                                   conj [:register-provider! provider-id config])
+                                            {:name (str provider-id)})
+                      :unregister-provider! (fn [provider-id]
+                                              (swap! state update :model-calls
+                                                     conj [:unregister-provider! provider-id])
+                                              nil)}
              :session {:append-entry! (fn [custom-type data]
                                         (swap! state update :ui-calls conj [:append-entry custom-type data]))
                        :append-message! (fn [custom-type _content display _details]
