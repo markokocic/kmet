@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T22:50:59Z"
+ :generated-at "2026-08-16T17:43:20Z"
  :provider {:id :opencode
             :name "OpenCode (Zen)"
             :env-vars ["OPENCODE_API_KEY"]
@@ -1033,4 +1033,23 @@
     :context-window 256000
     :max-tokens 256000
     :compat {:supports-reasoning-effort false
-             :session-affinity-format :openai-nosession}}}}}
+             :session-affinity-format :openai-nosession}}
+   "muse-spark-1.2"
+   {:id "muse-spark-1.2"
+    :name "Muse Spark 1.2"
+    :provider :opencode
+    :api :openai-responses
+    :base-url "https://opencode.ai/zen/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 1.25 :output 4.25 :cache-read 0.15 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 131072
+    :compat {:session-affinity-format :openai-nosession}}}}}

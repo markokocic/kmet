@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T22:50:59Z"
+ :generated-at "2026-08-16T17:43:20Z"
  :provider {:id :huggingface
             :name "Hugging Face"
             :env-vars ["HF_TOKEN"]
@@ -66,6 +66,18 @@
     :context-window 524288
     :max-tokens 128000
     :compat {:supports-developer-role false}}
+   "Qwen/Qwen2.5-Coder-32B-Instruct"
+   {:id "Qwen/Qwen2.5-Coder-32B-Instruct"
+    :name "Qwen2.5-Coder-32B-Instruct"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.06 :output 0.2 :cache-read 0 :cache-write 0}
+    :context-window 131072
+    :max-tokens 8192
+    :compat {:supports-developer-role false}}
    "Qwen/Qwen3-235B-A22B"
    {:id "Qwen/Qwen3-235B-A22B"
     :name "Qwen3 235B-A22B"
@@ -101,6 +113,18 @@
     :cost {:input 0.3 :output 3 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 131072
+    :compat {:supports-developer-role false}}
+   "Qwen/Qwen3-30B-A3B"
+   {:id "Qwen/Qwen3-30B-A3B"
+    :name "Qwen3 30B A3B"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0.12 :output 0.5 :cache-read 0 :cache-write 0}
+    :context-window 40960
+    :max-tokens 16384
     :compat {:supports-developer-role false}}
    "Qwen/Qwen3-32B"
    {:id "Qwen/Qwen3-32B"
@@ -351,6 +375,18 @@
     :context-window 64000
     :max-tokens 8192
     :compat {:supports-developer-role false}}
+   "deepseek-ai/DeepSeek-V3-0324"
+   {:id "deepseek-ai/DeepSeek-V3-0324"
+    :name "DeepSeek V3 0324"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.27 :output 1.12 :cache-read 0 :cache-write 0}
+    :context-window 163840
+    :max-tokens 163840
+    :compat {:supports-developer-role false}}
    "deepseek-ai/DeepSeek-V3.1"
    {:id "deepseek-ai/DeepSeek-V3.1"
     :name "DeepSeek-V3.1"
@@ -425,6 +461,25 @@
     :context-window 1048576
     :max-tokens 393216
     :compat {:supports-developer-role false}}
+   "deepseek-ai/DeepSeek-V4-Pro-0813"
+   {:id "deepseek-ai/DeepSeek-V4-Pro-0813"
+    :name "DeepSeek V4 Pro 0813"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text]
+    :cost {:input 1.32 :output 3.96 :cache-read 0 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 384000
+    :compat {:supports-developer-role false}}
    "google/gemma-4-26B-A4B-it"
    {:id "google/gemma-4-26B-A4B-it"
     :name "Gemma 4 26B A4B IT"
@@ -458,6 +513,18 @@
     :cost {:input 0.14 :output 0.4 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 32768
+    :compat {:supports-developer-role false}}
+   "meta-llama/Llama-3.1-8B-Instruct"
+   {:id "meta-llama/Llama-3.1-8B-Instruct"
+    :name "Llama-3.1-8B-Instruct"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.06 :output 0.06 :cache-read 0 :cache-write 0}
+    :context-window 131072
+    :max-tokens 4096
     :compat {:supports-developer-role false}}
    "meta-llama/Llama-3.3-70B-Instruct"
    {:id "meta-llama/Llama-3.3-70B-Instruct"

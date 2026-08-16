@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T22:50:59Z"
+ :generated-at "2026-08-16T17:43:20Z"
  :provider {:id :baseten
             :name "Baseten"
             :env-vars ["BASETEN_API_KEY"]
@@ -40,6 +40,31 @@
     :input [:text]
     :cost {:input 1.74 :output 3.48 :cache-read 0.145 :cache-write 0}
     :context-window 262144
+    :max-tokens 262144
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort true
+             :thinking-format :openai
+             :max-tokens-field :max-tokens
+             :supports-long-cache-retention false
+             :supports-strict-mode true}}
+   "deepseek-ai/DeepSeek-V4-Pro-0813"
+   {:id "deepseek-ai/DeepSeek-V4-Pro-0813"
+    :name "Deepseek V4 Pro 0813"
+    :provider :baseten
+    :api :openai-completions
+    :base-url "https://inference.baseten.co/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off "none"
+                         :xhigh "xhigh"}
+    :input [:text]
+    :cost {:input 1.32 :output 3.96 :cache-read 0 :cache-write 0}
+    :context-window 1048576
     :max-tokens 262144
     :compat {:supports-store false
              :supports-developer-role false

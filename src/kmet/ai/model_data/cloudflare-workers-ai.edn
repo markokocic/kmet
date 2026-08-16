@@ -1,12 +1,60 @@
 {:schema-version 1
- :generated-at "2026-08-13T22:50:59Z"
+ :generated-at "2026-08-16T17:43:20Z"
  :provider {:id :cloudflare-workers-ai
             :name "Cloudflare Workers AI"
             :env-vars ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"]
             :default-model "@cf/moonshotai/kimi-k2.6"}
  :models
  {:openai-completions
-  {"@cf/google/gemma-4-26b-a4b-it"
+  {"@cf/deepseek-ai/deepseek-v4-flash-0731"
+   {:id "@cf/deepseek-ai/deepseek-v4-flash-0731"
+    :name "DeepSeek V4 Flash 0731"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text]
+    :cost {:input 0.44 :output 1.32 :cache-read 0.014 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 1048576
+    :compat {:supports-store false
+             :supports-developer-role false
+             :requires-reasoning-content-on-assistant-messages true
+             :thinking-format :deepseek
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/deepseek-ai/deepseek-v4-pro-0813"
+   {:id "@cf/deepseek-ai/deepseek-v4-pro-0813"
+    :name "DeepSeek V4 Pro 0813"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text]
+    :cost {:input 1.32 :output 3.96 :cache-read 0.044 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 1048576
+    :compat {:supports-store false
+             :supports-developer-role false
+             :requires-reasoning-content-on-assistant-messages true
+             :thinking-format :deepseek
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/google/gemma-4-26b-a4b-it"
    {:id "@cf/google/gemma-4-26b-a4b-it"
     :name "Gemma 4 26B A4B IT"
     :provider :cloudflare-workers-ai

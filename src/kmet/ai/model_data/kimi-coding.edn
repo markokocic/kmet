@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-13T22:50:59Z"
+ :generated-at "2026-08-16T17:43:20Z"
  :provider {:id :kimi-coding
             :name "Kimi For Coding"
             :env-vars ["KIMI_API_KEY"]
