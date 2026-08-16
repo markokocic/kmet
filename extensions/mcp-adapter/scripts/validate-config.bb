@@ -10,6 +10,7 @@
 ;; ~/.kmet/agent/mcp.edn is never touched.
 (require '[clojure.string :as str]
          '[clojure.java.io :as io]
+         '[cheshire.core :as json]
          '[kmet.extension :as ext]
          '[extensions.mcp-adapter.config :as config]
          '[extensions.mcp-adapter.metadata :as metadata]
@@ -117,17 +118,90 @@
   (let [definition {:command "npx" :args ["-y" "x"]}
         settings {}
         _ (metadata/update-entry! nil "srv" definition settings
-                                  [{:name "tool-a" :description "d" :inputSchema {}}])]
+                                  [{:name "tool-a" :description "d" :inputSchema {}}]
+                                  [{:name "brief" :description "b"
+                                    :arguments [{:name "topic" :required true}]}]
+                                  [{:name "README" :uri "file:///r"}])]
     (check "cache round-trip"
            (some? (metadata/server-entry (metadata/load-cache) "srv" definition settings)))
     (check "cache stale on config change"
            (nil? (metadata/server-entry (metadata/load-cache) "srv"
                                         {:command "other"} settings)))
+    (check "cache stale on include-tools change"
+           (nil? (metadata/server-entry (metadata/load-cache) "srv"
+                                        (assoc definition :include-tools ["a*"])
+                                        settings)))
+    (check "prompts cached"
+           (= "brief" (get-in (metadata/load-cache) [:servers "srv" :prompts 0 :name])))
+    (check "resources cached"
+           (= "README" (get-in (metadata/load-cache) [:servers "srv" :resources 0 :name])))
     (check "all-tools"
            (= [{:server "srv" :tool {:name "tool-a"}}]
               (mapv #(update % :tool select-keys [:name])
                     (metadata/all-tools (metadata/load-cache)
                                         {:mcp-servers {"srv" definition}} settings))))))
+
+;; ─── Phase 2 config: include/exclude, keywords, host adoption ─────────────
+
+(defn test-phase2-config [global project]
+  (println "\n── phase-2 config ──")
+  (spit global (pr-str {:mcp-servers
+                        {"srv" {:command "npx"
+                                :includeTools ["srv_*"]
+                                :excludeTools ["srv_secret"]
+                                :searchKeywords {"srv_*" ["capture" "snapshot"]}
+                                :idleTimeout 5
+                                :exposeResources false}}}
+                       ))
+  (let [cfg (config/load-config)
+        defn (get-in cfg [:mcp-servers "srv"])]
+    (check "camel include/exclude normalized"
+           (and (= ["srv_*"] (:include-tools defn))
+                (= ["srv_secret"] (:exclude-tools defn))))
+    (check "searchKeywords normalized"
+           (= ["capture" "snapshot"] (get-in defn [:search-keywords "srv_*"])))
+    (check "idleTimeout normalized" (= 5 (:idle-timeout defn)))
+    (check "exposeResources normalized" (false? (:expose-resources defn))))
+  ;; host config discovery + adoption (fake vscode file — relative to cwd,
+  ;; unlike cursor/claude which live under the home dir)
+  (let [host-path (str (System/getProperty "user.dir") "/.vscode/mcp.json")]
+    (try
+      (fs/create-dirs (fs/parent host-path))
+      (spit host-path (json/generate-string
+                       {:mcpServers {"host-git" {:command "npx -y server-git"}
+                                     "host-web" {:url "https://h/mcp"}
+                                     "host-bad" {:type "http"}}}))
+      (let [discoveries (config/host-config-discoveries)]
+        (check "host discovery"
+               (and (= 1 (count discoveries))
+                    (= :vscode (:kind (first discoveries)))
+                    (= 2 (:server-count (first discoveries))))))
+      (let [{:keys [added skipped]} (config/adopt-host-configs!)]
+        (check "adopt adds new servers"
+               (= #{"host-git" "host-web"} (set added)))
+        (check "adopt skips none first time" (empty? skipped))
+        (let [{:keys [added skipped]} (config/adopt-host-configs!)]
+          (check "adopt idempotent"
+                 (and (empty? added) (= #{"host-git" "host-web"} (set skipped)))))
+        (check "adopt wrote project file"
+               (let [cfg (config/load-config)
+                     git (get-in cfg [:mcp-servers "host-git"])]
+                 (and (= "npx" (:command git))
+                      (= ["-y" "server-git"] (:args git))
+                      (= "https://h/mcp" (get-in cfg [:mcp-servers "host-web" :url]))))))
+      ;; write-server-entry! (setup panel save path)
+      (let [{:keys [changed]} (config/write-server-entry! "custom" {:command "x"})]
+        (check "write-server-entry!"
+               (and changed
+                    (= {:command "x"} (get-in (config/load-config)
+                                               [:mcp-servers "custom"])))))
+      (finally
+        (io/delete-file host-path true)
+        (fs/delete-tree (fs/parent host-path)))))
+  ;; presets
+  (check "known presets"
+         (= #{"deepwiki" "context7" "notion" "github" "chrome-devtools"}
+            (set (map :id config/known-server-presets)))))
 
 ;; ─── extension load against the nullable api ──────────────────────────────
 
@@ -163,7 +237,8 @@
   (fn [global project]
     (test-config global project)
     (test-template-and-writes global project)
-    (test-metadata global project)))
+    (test-metadata global project)
+    (test-phase2-config global project)))
 (test-extension-load)
 (println "\n" (if (zero? @failures) "ALL PASS" (str @failures " FAILURES")))
 (System/exit (if (zero? @failures) 0 1))

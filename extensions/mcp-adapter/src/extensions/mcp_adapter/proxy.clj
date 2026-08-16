@@ -3,6 +3,13 @@
    proxy-modes.ts, Phase-1 subset: status/search/describe/call/connect/
    disconnect/list; no instructions/ui-messages/auth actions).
 
+   Phase 2 additions: ranked search (pi search-ranking.ts — weighted
+   name/description/server/keyword scoring with searchKeywords boost),
+   the output guard (output_guard.clj) on call/resource results,
+   streaming tool-call progress (:on-update receives notifications/
+   progress events as partial content), and resource reads
+   (read-mcp-resource — the read_<resource> direct-tool executor).
+
    Dispatch precedence (§9.2): search → describe → tool → connect →
    disconnect → list → server (list that server's tools) → status.
    Search/describe read the metadata cache only (no spawn); call/connect
@@ -12,7 +19,8 @@
             [clojure.string :as str]
             [extensions.mcp-adapter.auth :as auth]
             [extensions.mcp-adapter.client :as client]
-            [extensions.mcp-adapter.metadata :as metadata]))
+            [extensions.mcp-adapter.metadata :as metadata]
+            [extensions.mcp-adapter.output-guard :as guard]))
 
 (def ^:private desc-truncate-length 50)
 (def ^:private max-regex-query-length 256)
@@ -52,7 +60,7 @@
   [definition]
   (and (not (:command definition)) (not (:url definition))))
 
-(defn- truncate-at-word
+(defn truncate-at-word
   "Truncate S to LENGTH chars at a word boundary (pi truncateAtWord)."
   [s length]
   (let [s (or s "")]
@@ -71,16 +79,236 @@
                                           (settings state))]
     (:tools entry)))
 
-;; ─── Tool naming (§10.5 pi getServerPrefix/formatToolName) ────────────────
-;; The cache stores RAW MCP tool names; the user-facing surface (search/
-;; describe/list output and the mcp({ tool }) parameter) uses the prefixed
-;; names registered for direct tools, so both spellings resolve.
+;; ─── Tool name candidates + glob selectors (§10.5 include/exclude, pi
+;; types.ts getToolNameCandidates / matchesToolSelector — simplified: the
+;; candidate set covers every current prefix form plus the legacy
+;; dash→underscore forms; pi's collision-aware legacy path is dropped)
 
 (defn- sanitize-tool-name
   "Lowercase; [^a-z0-9_] → _ (§10.5)."
   [s]
   (-> (str/lower-case (str s))
       (str/replace #"[^a-z0-9_]" "_")))
+
+(defn sanitize-server-name
+  "The sanitized server name used as a tool/command prefix (§10.5)."
+  [server-name]
+  (sanitize-tool-name server-name))
+
+(defn tool-name-candidates
+  "Every name a tool can be addressed by: the raw name + the prefixed form
+   under each prefix mode + legacy dash→underscore spellings."
+  [server-name tool-name]
+  (let [modes [:server :short :mcp]
+        raw (str tool-name)
+        legacy (str/replace raw #"-" "_")
+        prefixed (fn [mode]
+                   (let [prefix (case mode
+                                  :short (let [short (sanitize-tool-name
+                                                      (str/replace server-name #"-?mcp$" ""))]
+                                           (if (seq short) short "mcp"))
+                                  :mcp "mcp"
+                                  (sanitize-tool-name server-name))
+                         sanitized (sanitize-tool-name raw)]
+                     (if (seq prefix) (str prefix "_" sanitized) sanitized)))]
+    ;; hash-set, not a literal: sci builds set literals as maps and throws
+    ;; "Duplicate key" when raw == legacy (same value twice)
+    (-> (hash-set raw legacy)
+        (into (map prefixed modes))
+        (into (map (comp sanitize-tool-name #(str % "_" (sanitize-tool-name raw)))
+                   [server-name (str/replace server-name #"-?mcp$" "") "mcp"])))))
+
+(defn- glob->regex
+  "A glob pattern (* = any run, ? = one char) as an anchored regex."
+  [pattern]
+  (re-pattern (str "^" (-> pattern
+                           (str/replace #"[.+^${}()|\[\\\]\\]" "\\$&")
+                           (str/replace #"\*" ".*")
+                           (str/replace #"\?" "."))
+                   "$")))
+
+(defn- matches-tool-pattern
+  "True when any PATTERN matches any of the CANDIDATES (exact or glob)."
+  [candidates patterns]
+  (boolean
+   (some (fn [pattern]
+           (when (string? pattern)
+             (if (or (str/includes? pattern "*")
+                     (str/includes? pattern "?"))
+               (some (fn [c] (boolean (re-find (glob->regex pattern) c)))
+                     candidates)
+               (contains? candidates pattern))))
+         (or patterns []))))
+
+(defn tool-allowed?
+  "include/exclude gate (pi isToolAllowed): empty :include-tools allows
+   everything; :exclude-tools always wins. Applied to direct-tool
+   registration (tools and read_<resource> tools)."
+  [server-name tool-name include-tools exclude-tools]
+  (let [candidates (tool-name-candidates server-name tool-name)]
+    (and (or (empty? include-tools)
+             (matches-tool-pattern candidates include-tools))
+         (not (matches-tool-pattern candidates exclude-tools)))))
+
+;; ─── Search ranking (pi search-ranking.ts) ────────────────────────────────
+
+(def ^:private field-weights
+  {:name 12 :original-name 10 :server 8 :description 5 :keywords 5})
+
+(def ^:private min-stem-length 4)
+
+(defn- normalize-search-text
+  "camelCase → spaced, separators → spaces, lowercase (pi
+   normalizeSearchText)."
+  [s]
+  (-> (str s)
+      (str/replace #"([a-z0-9])([A-Z])" "$1 $2")
+      (str/replace #"[_./:-]+" " ")
+      str/lower-case))
+
+(defn- tokenize
+  [s]
+  (->> (str/split (normalize-search-text s) #"[^a-z0-9]+")
+       (remove str/blank?)
+       vec))
+
+(defn- resolve-search-keywords
+  "The configured :search-keywords values whose pattern matches the tool
+   (by raw or prefixed name, pi resolveSearchKeywords)."
+  [definition tool-name server-name]
+  (let [map (:search-keywords definition)]
+    (when (map? map)
+      (let [candidates (tool-name-candidates server-name tool-name)
+            out (atom [])
+            seen (atom #{})]
+        (doseq [[pattern values] map
+                :when (and (vector? values)
+                           (matches-tool-pattern candidates [pattern]))]
+          (doseq [value values
+                  :let [value (str/trim (str value))]
+                  :when (and (seq value) (not (contains? @seen value)))]
+            (swap! seen conj value)
+            (swap! out conj value)))
+        @out))))
+
+(defn- score-tool-match
+  "Weighted match score for a tool against a query; nil when the tool does
+   not match (pi scoreToolMatch: phrase matches dominate, token coverage
+   gate for short queries, first-query-token-in-name and whole-field-exact
+   bonuses)."
+  [tool server query keywords]
+  (let [normalized-query (str/trim (normalize-search-text query))
+        query-tokens (tokenize query)]
+    (when (seq query-tokens)
+      (let [fields {:name (normalize-search-text (:name tool))
+                    :original-name (normalize-search-text (:original-name tool))
+                    :server (normalize-search-text server)
+                    :description (normalize-search-text (or (:description tool) ""))}
+            matched-tokens (atom #{})
+            phrase-matched? (atom false)
+            whole-field-exact? (atom false)
+            score (atom 0)]
+        (doseq [[field value] fields]
+          (let [weight (field-weights field)
+                field-tokens (tokenize value)]
+            (cond
+              (= value normalized-query)
+              (do (swap! score + (* weight 14))
+                  (reset! phrase-matched? true)
+                  (reset! whole-field-exact? true))
+              (str/starts-with? value normalized-query)
+              (do (swap! score + (* weight 9))
+                  (reset! phrase-matched? true))
+              (str/includes? value normalized-query)
+              (do (swap! score + (* weight 6))
+                  (reset! phrase-matched? true)))
+            (doseq [token query-tokens]
+              (cond
+                (some #{token} field-tokens)
+                (do (swap! score + (* weight 4))
+                    (swap! matched-tokens conj token))
+                (some (fn [field-token]
+                        (or (str/starts-with? field-token token)
+                            (and (>= (count field-token) min-stem-length)
+                                 (str/starts-with? token field-token))))
+                      field-tokens)
+                (do (swap! score + (* weight 2))
+                    (swap! matched-tokens conj token))
+                (str/includes? value token)
+                (do (swap! score + weight)
+                    (swap! matched-tokens conj token))))))
+        ;; configured keywords are discrete phrases (pi: per-phrase bonus)
+        (when (seq keywords)
+          (let [weight (field-weights :keywords)
+                phrases (->> keywords
+                             (map #(str/trim (normalize-search-text %)))
+                             (remove str/blank?))]
+            (doseq [phrase phrases]
+              (cond
+                (= phrase normalized-query)
+                (do (swap! score + (* weight 14))
+                    (reset! phrase-matched? true)
+                    (reset! whole-field-exact? true))
+                (str/starts-with? phrase normalized-query)
+                (do (swap! score + (* weight 9))
+                    (reset! phrase-matched? true))
+                (str/includes? phrase normalized-query)
+                (do (swap! score + (* weight 6))
+                    (reset! phrase-matched? true))))
+            (let [keyword-tokens (vec (mapcat tokenize phrases))]
+              (doseq [token query-tokens]
+                (cond
+                  (some #{token} keyword-tokens)
+                  (do (swap! score + (* weight 4))
+                      (swap! matched-tokens conj token))
+                  (some (fn [keyword-token]
+                          (or (str/starts-with? keyword-token token)
+                              (and (>= (count keyword-token) min-stem-length)
+                                   (str/starts-with? token keyword-token))))
+                        keyword-tokens)
+                  (do (swap! score + (* weight 2))
+                      (swap! matched-tokens conj token))
+                  (some #(str/includes? % token) phrases)
+                  (do (swap! score + weight)
+                      (swap! matched-tokens conj token)))))))
+        (let [coverage (/ (count @matched-tokens) (count query-tokens))
+              coverage-ok? (if (<= (count query-tokens) 2)
+                             (= coverage 1)
+                             (>= coverage 0.6))]
+          (when (or @phrase-matched? coverage-ok?)
+            (swap! score + (if (= coverage 1) 25 (Math/round (* coverage 10))))
+            (when (some #{(first query-tokens)} (tokenize (:name fields)))
+              (swap! score + 8))
+            (when @whole-field-exact? (swap! score + 20))
+            @score))))))
+
+(defn- rank-tool-matches
+  "All matching cached tools across enabled servers, sorted by score desc
+   then tool name (pi rankToolMatches). KEYWORDS resolved per tool."
+  [state query server]
+  (let [matches (atom [])]
+    (doseq [[server-name definition] (:mcp-servers (:config state))
+            :when (and (not (disabled? state server-name))
+                       (or (nil? server) (= server server-name)))]
+      (doseq [tool (or (cached-tools state server-name) [])]
+        (let [tool {:name (:name tool)
+                    :original-name (:name tool)
+                    :description (:description tool)}
+              keywords (resolve-search-keywords definition (:name tool) server-name)
+              score (score-tool-match tool server-name query keywords)]
+          (when score
+            (swap! matches conj {:server server-name :tool tool :score score})))))
+    (vec (sort-by (juxt (comp - :score) (comp :name :tool)) @matches))))
+
+(defn- paginate
+  [items offset limit]
+  (let [safe-offset (max 0 (or offset 0))
+        safe-limit (max 1 (or limit 1))
+        total (count items)
+        page (vec (take safe-limit (drop safe-offset items)))]
+    {:items page :total total :has-more (< (+ safe-offset (count page)) total)
+     :next-offset (when (< (+ safe-offset (count page)) total)
+                    (+ safe-offset (count page)))}))
 
 (defn- tool-prefix-mode
   "The effective prefix mode for a server (per-server over settings)."
@@ -251,32 +479,41 @@
     :else {}))
 
 (defn- search-tools
-  "Search cached tools (§9.3): substring (case-insensitive) or regex
-   (COMPILED, or nil); name matches rank above description matches; both
-   sorted by name; server-then-name for ties. Returns {:total :items}
-   honoring :limit/:offset."
+  "Search cached tools (§9.3): ranked by the search-ranking port when the
+   query is non-empty (name/description/server/keyword weighted scoring);
+   regex mode tests name/description/keywords; an empty query with a
+   SERVER lists that server's tools sorted by name. include/exclude do not
+   filter the proxy search (pi parity — they gate direct-tool
+   registration). Returns {:total :items} honoring :limit/:offset."
   [state query compiled server limit offset]
-  (let [matches (atom [])]
-    (doseq [[name _definition] (:mcp-servers (:config state))]
-      (when (and (not (disabled? state name))
-                 (or (nil? server) (= server name)))
-        (doseq [tool (or (cached-tools state name) [])]
-          (let [name-match? (if compiled
-                              (boolean (re-find compiled (:name tool)))
-                              (str/includes? (str/lower-case (or (:name tool) ""))
-                                             (str/lower-case query)))
-                desc-match? (if compiled
-                              (boolean (re-find compiled (or (:description tool) "")))
-                              (str/includes? (str/lower-case (or (:description tool) ""))
-                                             (str/lower-case query)))]
-            (when (or name-match? desc-match?)
-              (swap! matches conj {:server name
-                                   :tool tool
-                                   :score (if name-match? 1 0)}))))))
-    (let [all (sort-by (juxt (comp - :score) :server (comp :name :tool)) @matches)
-          total (count all)
-          page (vec (take limit (drop offset all)))]
-      {:total total :items page})))
+  (let [all (if (or compiled (str/blank? query))
+              (let [items (atom [])]
+                (doseq [[name _definition] (:mcp-servers (:config state))
+                        :when (and (not (disabled? state name))
+                                   (or (nil? server) (= server name)))]
+                  (doseq [tool (or (cached-tools state name) [])]
+                    (let [keywords (resolve-search-keywords
+                                    (server-definition state name) (:name tool) name)
+                          name-match? (if compiled
+                                        (boolean (re-find compiled (:name tool)))
+                                        true)
+                          desc-match? (if compiled
+                                        (boolean (re-find compiled (or (:description tool) "")))
+                                        true)
+                          kw-match? (if compiled
+                                      (boolean (some #(re-find compiled %) keywords))
+                                      true)]
+                      (when (and name-match? desc-match? kw-match?)
+                        (swap! items conj {:server name
+                                           :tool tool
+                                           :score 0})))))
+                (if compiled
+                  (vec (sort-by (juxt :server (comp :name :tool)) @items))
+                  (vec (sort-by (comp :name :tool) @items))))
+              (rank-tool-matches state query server))
+        total (count all)
+        page (vec (take limit (drop offset all)))]
+    {:total total :items page}))
 
 (defn search-text
   "§9.3 output: one block per hit — name line, one-line description,
@@ -379,6 +616,56 @@
           (swap! out conj "\nNo parameters defined."))
         {:content (str/join "\n" @out) :is-error false}))))
 
+(defn search-items
+  "Structured search for the mcpScript runtime (pi rankToolMatches →
+   paginate in mcp-code.ts): ranked matches as
+   {:items [{:path prefixed-name :name raw :server :description :score}]
+   :total :has-more :next-offset}."
+  [state query server limit offset]
+  (let [matches (if (str/blank? (or query ""))
+                  []
+                  (rank-tool-matches state query server))
+        {:keys [items total has-more next-offset]} (paginate matches offset limit)]
+    {:items (mapv (fn [{:keys [server tool score]}]
+                    (cond-> {:path (format-tool-name state server (:name tool))
+                             :name (:name tool)
+                             :server server
+                             :score score}
+                      (:description tool) (assoc :description (:description tool))))
+                  items)
+     :total total :has-more has-more :next-offset next-offset}))
+
+(defn describe-item
+  "Structured describe for the mcpScript runtime (pi describeTool): the
+   tool descriptor {:path :name :server :description} or
+   {:path :error {:code :message}} when not found."
+  [state path]
+  (let [match (find-tool state path)]
+    (cond
+      (= :ambiguous match)
+      {:path path :error {:code "ambiguous"
+                          :message (str "Tool \"" path "\" matches multiple servers. "
+                                        "Pass a prefixed name.")}}
+
+      (nil? match)
+      {:path path :error {:code "tool_not_found"
+                          :message (str "Tool not found: " path)}}
+
+      :else
+      (let [{:keys [server tool]} match]
+        (cond-> {:path (format-tool-name state server (:name tool))
+                 :name (:name tool)
+                 :server server}
+          (:description tool) (assoc :description (:description tool)))))))
+
+(defn find-tool-for-path
+  "Resolve a (prefixed or raw) tool path to {:server :name} for the
+   mcpScript runtime, or nil when not found / ambiguous."
+  [state path]
+  (let [match (find-tool state path)]
+    (when (and match (not= :ambiguous match))
+      {:server (:server match) :name (:name (:tool match))})))
+
 ;; ─── List / connect / disconnect ──────────────────────────────────────────
 
 (defn list-text
@@ -428,11 +715,49 @@
 
 ;; ─── Call (§9.2 tool mode) ────────────────────────────────────────────────
 
+(defn ensure-lazy-connected
+  "Connect a server honoring the 60s failure backoff window (pi
+   lazyConnect): inside the window returns nil (the caller reports 'not
+   available') instead of retrying; explicit connects bypass the window.
+   Returns the live conn or nil."
+  [state server]
+  (when-not (failure-age-seconds state server)
+    (try
+      ((:ensure-connected-fn state) server)
+      (catch Exception _ nil))))
+
+(defn- format-progress
+  "One progress notification as a partial-content line (client-side
+   streaming tool-call progress)."
+  [notification]
+  (let [params (or (:params notification) {})
+        progress (:progress params)
+        total (:total params)
+        message (str/trim (or (:message params) ""))
+        amount (cond
+                 (and progress total) (str progress "/" total)
+                 progress (str progress)
+                 :else nil)]
+    (str "[progress" (when amount (str " " amount))
+         (when (seq message) (str " — " (truncate-at-word message 100)))
+         "]")))
+
+(defn- on-update-progress!
+  "Wrap ON-UPDATE so progress notifications stream as partial content
+   while the call runs (the final result replaces the partials)."
+  [on-update]
+  (when on-update
+    (fn [notification]
+      (on-update {:content (format-progress notification)
+                  :is-partial true}))))
+
 (defn call-mcp-tool
   "Call one MCP tool on a server (direct-tool executor + proxy tool mode).
-   Ensures the connection first (reconnect-on-use). Returns the kmet tool
-   result shape."
-  [state server tool-name args]
+   Ensures the connection first (reconnect-on-use). OPTS:
+   {:on-update (fn [partial]) — progress streaming}. Returns the kmet
+   tool result shape; the output guard (§settings :output-guard) bounds
+   oversized text and rides details (:output-guard / :mcp-result)."
+  [state server tool-name args & [opts]]
   (let [definition (server-definition state server)]
     (cond
       (nil? definition)
@@ -454,22 +779,80 @@
               (let [timeout-ms (or (:request-timeout-ms definition) 120000)
                     result (client/request! conn "tools/call"
                                             {:name tool-name :arguments (normalize-args args)}
-                                            {:timeout-ms timeout-ms})
-                    formatted (client/format-result result)]
+                                            {:timeout-ms timeout-ms
+                                             :on-notification (on-update-progress! (:on-update opts))})
+                    formatted (client/format-result result)
+                    guard-options (guard/resolve-options (settings state))
+                    guarded (guard/guard-text (:text formatted) guard-options)
+                    details (guard/guarded-details (:guard guarded)
+                                                   (guard/bound-mcp-result result
+                                                                           (:details-max-bytes guard-options)))]
                 (if (:is-error formatted)
-                  (return-error (:text formatted))
-                  {:content (:text formatted) :is-error false}))
+                  (return-error (:text guarded))
+                  (cond-> {:content (:text guarded) :is-error false}
+                    (seq details) (assoc :details details))))
               (return-error (str "Server \"" server "\" not connected"))))
           (catch Exception e
             (return-error (str "MCP call failed: " (ex-message e)))))))))
+
+(defn read-mcp-resource
+  "Read a resource by URI on a server (the read_<resource> direct-tool
+   executor, pi executeCall resourceUri path). Ensures the connection;
+   text/string contents are joined, blobs summarized. Returns the kmet
+   tool result shape with output-guard details."
+  [state server uri]
+  (let [definition (server-definition state server)]
+    (cond
+      (nil? definition)
+      (return-error (str "Server \"" server "\" not found. Use mcp({}) to see available servers."))
+
+      (disabled? state server)
+      (return-error (str "Server \"" server "\" is disabled. Run /mcp enable " server
+                         " and /reload to enable it."))
+
+      :else
+      (if-let [failed-ago (failure-age-seconds state server)]
+        (return-error (str "Server \"" server "\" not available (last failed "
+                           failed-ago "s ago)"))
+        (try
+          (let [conn ((:ensure-connected-fn state) server)]
+            (if conn
+              (let [result (client/read-resource conn uri)
+                    contents (or (:contents result) [])
+                    texts (keep (fn [c]
+                                  (case (:type c)
+                                    "text" (:text c)
+                                    "string" (:text c)
+                                    "blob" (str "[resource " uri ": "
+                                                (or (:mimeType c) "?")
+                                                ", " (count (or (:data c) ""))
+                                                " bytes — not rendered]")
+                                    nil))
+                                contents)
+                    text (cond
+                           (seq texts) (str/join "\n" texts)
+                           (seq contents) (pr-str contents)
+                           :else "(empty resource)")
+                    guard-options (guard/resolve-options (settings state))
+                    guarded (guard/guard-text text guard-options)
+                    details (guard/guarded-details (:guard guarded)
+                                                   (guard/bound-mcp-result result
+                                                                           (:details-max-bytes guard-options)))]
+                (cond-> {:content (:text guarded) :is-error false}
+                  (seq details) (assoc :details details)))
+              (return-error (str "Server \"" server "\" not connected"))))
+          (catch Exception e
+            (return-error (str "MCP resource read failed: " (ex-message e)))))))))
 
 ;; ─── Dispatch (§9.2) ──────────────────────────────────────────────────────
 
 (defn execute
   "Proxy tool dispatch over STATE-ATOM (the §10.1 state atom) and PARAMS
    (§9.1). The atom is deref'd per dispatch so connect (which refreshes the
-   cache and tools) is followed by a fresh view."
-  [state-atom params]
+   cache and tools) is followed by a fresh view. ON-UPDATE (streaming
+   tools) receives progress notifications as partial content while a call
+   runs."
+  [state-atom params & [on-update]]
   (let [params (or params {})
         state @state-atom]
     (or (validate-params params)
@@ -500,7 +883,8 @@
                                (if (and match (not= :ambiguous match))
                                  (:name (:tool match))
                                  (:tool params))
-                               (:args params))))
+                               (:args params)
+                               {:on-update on-update})))
 
             (some? (:connect params))
             (try

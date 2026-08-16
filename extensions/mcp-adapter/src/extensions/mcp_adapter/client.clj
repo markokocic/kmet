@@ -20,8 +20,11 @@
    Public protocol: request! / notify! / close! / alive? (§7.1).
    request! throws ex-info on JSON-RPC error, timeout, or transport death
    (§7.7 message patterns). Notifications received mid-request are
-   consumed/dropped; stale responses (non-matching :id) are dropped and
-   the wait loop continues."
+   consumed/dropped — except notifications/progress, which are forwarded
+   to the :on-notification callback when one is given (streaming
+   tool-call progress); stale responses (non-matching :id) are dropped and
+   the wait loop continues. Every request!/notify! touches :last-used so
+   the idle reaper can disconnect unused servers."
   (:require [babashka.http-client :as http]
             [babashka.process :as proc]
             [cheshire.core :as json]
@@ -120,7 +123,8 @@
      :pid pid
      :ch ch
      :stderr-tail tail
-     :id-counter (atom 0)}))
+     :id-counter (atom 0)
+     :last-used (atom (System/currentTimeMillis))}))
 
 ;; ─── streamable-http transport (§7.3) ────────────────────────────────────
 
@@ -142,6 +146,7 @@
    :session-id (atom nil)
    :id-counter (atom 0)
    :closed (atom false)
+   :last-used (atom (System/currentTimeMillis))
    :auth-headers (:auth-headers opts)
    :on-401 (:on-401 opts)})
 
@@ -161,9 +166,11 @@
 
 (defn- read-sse-response
   "Read an SSE response body: collect data: payloads (event: lines set the
-   event name), keep the one whose parsed JSON matches our id; the server
-   closes the stream after the result."
-  [body id]
+   event name), keep the one whose parsed JSON matches our id; progress
+   notifications (no :id, method notifications/progress) are forwarded to
+   ON-NOTIFICATION when given; the server closes the stream after the
+   result."
+  [body id on-notification]
   (with-open [rdr (io/reader body)]
     (loop [event-name nil buf ""]
       (let [line (.readLine rdr)]
@@ -177,9 +184,12 @@
               (and (str/blank? line) (seq buf))
               (let [parsed (try (json/parse-string buf true)
                                 (catch Exception _ nil))]
-                (if (and (map? parsed) (= id (:id parsed)))
-                  parsed
-                  (recur nil "")))
+                (cond
+                  (and (map? parsed) (= id (:id parsed))) parsed
+                  (and on-notification (map? parsed) (nil? (:id parsed))
+                       (= "notifications/progress" (:method parsed)))
+                  (do (on-notification parsed) (recur nil ""))
+                  :else (recur nil "")))
               :else (recur event-name buf))))))))
 
 (defn- http-post!
@@ -203,14 +213,14 @@
   "Parse an HTTP response by content type into the JSON-RPC response map
    (or nil when the body is empty — a 202-accepted without a direct
    response). SSE bodies are read until the message with :id = ID arrives."
-  [response id]
+  [response id on-notification]
   (let [status (:status response)
         content-type (or (header-value (:headers response) "Content-Type") "")]
     (cond
       (<= 200 status 299)
       (cond
         (str/includes? content-type "text/event-stream")
-        (read-sse-response (:body response) id)
+        (read-sse-response (:body response) id on-notification)
 
         (str/includes? content-type "application/json")
         (let [text (read-stream (:body response))]
@@ -309,6 +319,7 @@
    :session-id (atom nil)
    :id-counter (atom 0)
    :closed (atom false)
+   :last-used (atom (System/currentTimeMillis))
    :auth-headers (:auth-headers opts)
    :on-401 (:on-401 opts)})
 
@@ -341,7 +352,7 @@
    (with :result or :error), or ::eof when the channel closed (transport
    death) before the response arrived. The timeout is an overall deadline —
    notifications do not extend it."
-  [ch id method timeout-ms]
+  [ch id method timeout-ms on-notification]
   (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
     (loop []
       (let [remaining (- deadline (System/currentTimeMillis))
@@ -358,7 +369,12 @@
           (let [msg value]
             (cond
               (not (map? msg)) (recur)
-              (nil? (:id msg)) (recur)            ;; notification
+              (nil? (:id msg))
+              (do
+                (when (and on-notification
+                           (= "notifications/progress" (:method msg)))
+                  (on-notification msg))
+                (recur))
               (not= id (:id msg)) (recur)         ;; stale response
               (contains? msg :error)
               (throw (mcp-error (str "MCP error " (:code (:error msg)) ": "
@@ -376,17 +392,17 @@
          (when (seq tail) (str " (stderr: " tail ")")))))
 
 (defn- request-stdio!
-  [conn method params id timeout-ms]
+  [conn method params id timeout-ms on-notification]
   (when-not (proc/alive? (:proc conn))
     (throw (mcp-error (stdio-dead-message conn nil) {:transport :stdio})))
   (write-stdio-msg! conn {:jsonrpc "2.0" :id id :method method :params params})
-  (let [response (wait-for-response (:ch conn) id method timeout-ms)]
+  (let [response (wait-for-response (:ch conn) id method timeout-ms on-notification)]
     (if (= eof-marker response)
       (throw (mcp-error (stdio-dead-message conn method) {:transport :stdio}))
       (:result response))))
 
 (defn- request-http!
-  [conn method params id timeout-ms]
+  [conn method params id timeout-ms on-notification]
   (let [result-p (promise)
         _ (spawn
            (fn []
@@ -399,7 +415,7 @@
                              (when-let [session-id (header-value (:headers response)
                                                                  "Mcp-Session-Id")]
                                (reset! (:session-id conn) session-id))
-                             (parse-http-response response id))
+                             (parse-http-response response id on-notification))
                            (catch Exception e
                              (if (timeout-exception? e)
                                (mcp-error (str "MCP request timed out after " timeout-ms "ms: " method)
@@ -439,7 +455,7 @@
                         {:transport :sse}))))
 
 (defn- request-sse!
-  [conn method params id timeout-ms]
+  [conn method params id timeout-ms on-notification]
   (loop [attempts 0]
     (let [ch @(:ch conn)]
       (when (nil? ch)
@@ -449,7 +465,7 @@
             body (json/generate-string {:jsonrpc "2.0" :id id :method method :params params})
             response (http-post! conn endpoint (http-request-headers conn)
                                  body timeout-ms)
-            parsed (parse-http-response response id)]
+            parsed (parse-http-response response id on-notification)]
         (if (and (map? parsed) (contains? parsed :id) (:error parsed))
           (throw (mcp-error (str "MCP error " (:code (:error parsed)) ": "
                                  (:message (:error parsed)))
@@ -457,7 +473,7 @@
                              :message (:message (:error parsed))}))
           (let [wait-result (if (and (map? parsed) (contains? parsed :id))
                               parsed
-                              (wait-for-response ch id method timeout-ms))]
+                              (wait-for-response ch id method timeout-ms on-notification))]
             (if (= eof-marker wait-result)
               ;; Stream dropped — reopen + re-initialize (bounded retry).
               (if (< attempts 1)
@@ -476,22 +492,26 @@
                 (:result wait-result)))))))))
 
 (defn request!
-  "Send a JSON-RPC request and return its :result. OPTS: {:timeout-ms n}
-   (default 120000). Throws ex-info on JSON-RPC error, timeout, or
-   transport death (§7.7)."
-  [conn method params & [{:keys [timeout-ms]}]]
+  "Send a JSON-RPC request and return its :result. OPTS:
+   {:timeout-ms n (default 120000) :on-notification (fn [notification])
+   — receives notifications/progress events arriving mid-request
+   (streaming tool-call progress)}. Throws ex-info on JSON-RPC error,
+   timeout, or transport death (§7.7)."
+  [conn method params & [{:keys [timeout-ms on-notification]}]]
   (let [id (swap! (:id-counter conn) inc)
         timeout (or timeout-ms default-request-timeout-ms)]
+    (when-let [lu (:last-used conn)] (reset! lu (System/currentTimeMillis)))
     (case (:transport conn)
-      :stdio (request-stdio! conn method params id timeout)
-      :streamable-http (request-http! conn method params id timeout)
-      :sse (request-sse! conn method params id timeout))))
+      :stdio (request-stdio! conn method params id timeout on-notification)
+      :streamable-http (request-http! conn method params id timeout on-notification)
+      :sse (request-sse! conn method params id timeout on-notification))))
 
 (defn notify!
   "Send a JSON-RPC notification (no response expected)."
   [conn method params]
   (let [msg {:jsonrpc "2.0" :method method :params params}
         body (json/generate-string msg)]
+    (when-let [lu (:last-used conn)] (reset! lu (System/currentTimeMillis)))
     (case (:transport conn)
       :stdio (write-stdio-msg! conn msg)
       (:streamable-http :sse)
@@ -536,11 +556,19 @@
     :streamable-http (not @(:closed conn))
     :sse (boolean (and @(:stream-open conn) (not @(:closed conn))))))
 
+(defn last-used
+  "The last activity timestamp (ms) for a connection — the idle reaper
+   disconnects servers whose conn has been idle past the configured
+   :idle-timeout."
+  [conn]
+  (or (when-let [lu (:last-used conn)] @lu) 0))
+
 ;; ─── Handshake + discovery (§7.5) ─────────────────────────────────────────
 
 (defn initialize!
   "Run the MCP handshake: initialize (60s timeout) → notifications/
-   initialized. Returns {:protocol-version str :server-info map}."
+   initialized. Returns {:protocol-version str :server-info map
+   :capabilities map}."
   [conn]
   (let [result (request! conn "initialize"
                          {:protocolVersion protocol-version
@@ -549,7 +577,8 @@
                          {:timeout-ms initialize-timeout-ms})]
     (notify! conn "notifications/initialized" {})
     {:protocol-version (or (:protocolVersion result) protocol-version)
-     :server-info (:serverInfo result)}))
+     :server-info (:serverInfo result)
+     :capabilities (or (:capabilities result) {})}))
 
 (defn list-all-tools
   "tools/list with cursor pagination (nextCursor loop, 30s per page)."
@@ -562,6 +591,45 @@
       (if-let [next-cursor (:nextCursor result)]
         (recur next-cursor tools)
         tools))))
+
+(defn list-all-prompts
+  "prompts/list with cursor pagination (30s per page)."
+  [conn]
+  (loop [cursor nil prompts []]
+    (let [result (request! conn "prompts/list"
+                           (if cursor {:cursor cursor} {})
+                           {:timeout-ms list-page-timeout-ms})
+          prompts (into prompts (:prompts result))]
+      (if-let [next-cursor (:nextCursor result)]
+        (recur next-cursor prompts)
+        prompts))))
+
+(defn get-prompt
+  "prompts/get — result contains :messages; :arguments is a string map
+   (omitted when empty)."
+  [conn name arguments & [{:keys [timeout-ms]}]]
+  (request! conn "prompts/get"
+            (cond-> {:name name}
+              (seq arguments) (assoc :arguments arguments))
+            {:timeout-ms (or timeout-ms default-request-timeout-ms)}))
+
+(defn list-all-resources
+  "resources/list with cursor pagination (30s per page)."
+  [conn]
+  (loop [cursor nil resources []]
+    (let [result (request! conn "resources/list"
+                           (if cursor {:cursor cursor} {})
+                           {:timeout-ms list-page-timeout-ms})
+          resources (into resources (:resources result))]
+      (if-let [next-cursor (:nextCursor result)]
+        (recur next-cursor resources)
+        resources))))
+
+(defn read-resource
+  "resources/read — result contains :contents (text or blob blocks)."
+  [conn uri & [{:keys [timeout-ms]}]]
+  (request! conn "resources/read" {:uri uri}
+            {:timeout-ms (or timeout-ms default-request-timeout-ms)}))
 
 (defn connect!
   "Full connect for a DEFINITION: build the transport, handshake,
@@ -578,9 +646,14 @@
     (try
       (when (and url (= :sse (:transport conn)))
         (open-sse-stream! conn))
-      (let [{:keys [protocol-version server-info]} (initialize! conn)]
+      (let [{:keys [protocol-version server-info capabilities]} (initialize! conn)
+            capabilities (or capabilities {})]
         {:conn conn
-         :tools (list-all-tools conn)
+         ;; prompts/resources are only queried when the server advertises
+         ;; the capability (an unadvertised method errors with -32601)
+         :tools (if (:tools capabilities) (list-all-tools conn) [])
+         :prompts (if (:prompts capabilities) (list-all-prompts conn) [])
+         :resources (if (:resources capabilities) (list-all-resources conn) [])
          :protocol-version protocol-version
          :server-info server-info})
       (catch Exception e

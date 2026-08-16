@@ -18,9 +18,17 @@
    Keys are read in camel or kebab form (see normalize-key) so a file
    copied from a pi-style JSON config works with light edits; unknown keys
    pass through unmodified. :lifecycle / :tool-prefix values accept string
-   or keyword."
+   or keyword.
+
+   Phase 2 additions: :include-tools/:exclude-tools/:search-keywords globs,
+   :idle-timeout reaping, :output-guard tuning, :script-mode, :token-storage,
+   :expose-resources, and host-config adoption (pi config.ts IMPORT_PATHS
+   discovery + extractServers) — JSON host files only (codex config.toml has
+   no TOML reader in bb; its config.json path is covered)."
   (:require [babashka.fs :as fs]
-            [clojure.edn :as edn]))
+            [cheshire.core :as json]
+            [clojure.edn :as edn]
+            [clojure.string :as str]))
 
 (defn- read-text
   "The text of PATH, or nil when the file does not exist."
@@ -65,7 +73,20 @@
    :privateKeyFile :private-key-file
    :privateKeyJwk :private-key-jwk
    :tokenEndpoint :token-endpoint
-   :tokenEndpointAuthMethod :token-endpoint-auth-method})
+   :tokenEndpointAuthMethod :token-endpoint-auth-method
+   :includeTools :include-tools
+   :excludeTools :exclude-tools
+   :searchKeywords :search-keywords
+   :idleTimeout :idle-timeout
+   :exposeResources :expose-resources
+   :outputGuard :output-guard
+   :scriptMode :script-mode
+   :tokenStorage :token-storage
+   :hostConfigDiscovery :host-config-discovery
+   :maxBytes :max-bytes
+   :maxLines :max-lines
+   :detailsMaxBytes :details-max-bytes
+   :maxOutputBytes :max-output-bytes})
 
 (defn- normalize-key
   "CamelCase known keys → kebab; everything else passes through (a kebab
@@ -86,7 +107,20 @@
 
 (def ^:private keyword-valued-keys
   #{:lifecycle :tool-prefix :http-transport :auth :flow :grant :algorithm
-    :token-endpoint-auth-method})
+    :token-endpoint-auth-method :token-storage :host-config-discovery})
+
+(defn- normalize-map-value
+  "Normalize a nested option map (:oauth, :output-guard): known camel keys
+   → kebab, keyword-valued options → keywords, nil values dropped."
+  [m]
+  (into {}
+        (keep (fn [[k v]]
+                (let [k (normalize-key k)]
+                  (when (some? v)
+                    [k (if (keyword-valued-keys k)
+                         (normalize-value v)
+                         v)]))))
+        m))
 
 (defn- normalize-oauth
   "Normalize an :oauth map (nil → nil, false → false)."
@@ -94,16 +128,17 @@
   (cond
     (nil? oauth) nil
     (false? oauth) false
-    (map? oauth)
-    (into {}
-          (keep (fn [[k v]]
-                  (let [k (normalize-key k)]
-                    (when (some? v)
-                      [k (if (keyword-valued-keys k)
-                           (normalize-value v)
-                           v)]))))
-          oauth)
+    (map? oauth) (normalize-map-value oauth)
     :else oauth))
+
+(defn- normalize-output-guard
+  "Normalize an :output-guard value: false passes through (disables), a map
+   gets key normalization (pi McpOutputGuardSettings)."
+  [v]
+  (cond
+    (false? v) false
+    (map? v) (normalize-map-value v)
+    :else v))
 
 (defn- normalize-server
   "Normalize one server entry: known camel keys → kebab, keyword-valued
@@ -114,11 +149,11 @@
           (keep (fn [[k v]]
                   (let [k (normalize-key k)]
                     (when (some? v)
-                      (if (= k :oauth)
-                        [k (normalize-oauth v)]
-                        (if (keyword-valued-keys k)
-                          [k (normalize-value v)]
-                          [k v]))))))
+                      (cond
+                        (= k :oauth) [k (normalize-oauth v)]
+                        (= k :output-guard) [k (normalize-output-guard v)]
+                        (keyword-valued-keys k) [k (normalize-value v)]
+                        :else [k v])))))
           entry)
     entry))
 
@@ -203,16 +238,6 @@
     (or (:settings base) (:settings next))
     (assoc :settings (merge-settings (:settings base) (:settings next)))))
 
-(defn load-config
-  "Load + merge the global and project EDN configs (§6.1). Returns
-   {:mcp-servers {name entry} :settings {...}} — empty maps when neither
-   file exists. A parse error in either file throws (with the path)."
-  []
-  (let [global (read-config-file @global-config-path)
-        project (read-config-file (project-config-path))
-        base (or global {:mcp-servers {}})]
-    (merge-configs base project)))
-
 ;; ─── Template (§6.4) ──────────────────────────────────────────────────────
 
 (def ^:private template-edn
@@ -221,6 +246,11 @@
   (str "{:settings {:direct-tools false           ;; global default for direct tools\n"
        "            :tool-prefix :server          ;; :server | :none | :short | :mcp\n"
        "            :disable-proxy-tool false}\n"
+       "            ;; :script-mode true            ;; gates the mcpScript tool\n"
+       "            ;; :idle-timeout 10             ;; minutes; 0 disables reaping\n"
+       "            ;; :output-guard {}             ;; false disables; {\":max-bytes\" ..}\n"
+       "            ;; :token-storage :auto         ;; :auto | :keyring | :file\n"
+       "            ;; :host-config-discovery :off  ;; :off | :on — merge host mcp.json\n"
        " :mcp-servers\n"
        " {\"filesystem\" {:command \"npx\"\n"
        "                 :args [\"-y\" \"@modelcontextprotocol/server-filesystem\" \"/tmp\"]\n"
@@ -355,3 +385,202 @@
       (fs/create-dirs (fs/parent path))
       (write-text path (str (pr-str next) "\n")))
     {:path path :changed (boolean (seq changes))}))
+
+;; ─── Host-config discovery + adoption (pi config.ts IMPORT_PATHS) ─────────
+;; Known host MCP config files (JSON only — codex config.toml has no TOML
+;; reader in bb; its config.json path is covered). Each entry lists the
+;; candidate paths in precedence order; relative paths resolve against the
+;; project cwd.
+
+(def ^:private host-config-paths
+  {:cursor [(str (fs/home) "/.cursor/mcp.json")]
+   :claude-code [(str (fs/home) "/.claude/mcp.json")
+                 (str (fs/home) "/.claude.json")
+                 (str (fs/home) "/.claude/claude_desktop_config.json")]
+   :claude-desktop [(str (fs/home) "/Library/Application Support/Claude/claude_desktop_config.json")]
+   :codex [(str (fs/home) "/.codex/config.json")]
+   :opencode [(str (fs/home) "/.config/opencode/opencode.json")
+              "./opencode.json"]
+   :windsurf [(str (fs/home) "/.windsurf/mcp.json")]
+   :vscode [".vscode/mcp.json"]})
+
+(defn- host-servers-map
+  "The raw mcpServers map from a host JSON file, or nil. pi extractServers:
+   claude.json-family files carry :mcpServers at the top level; a string
+   value (e.g. \"npx -y pkg\") is split on whitespace into command+args."
+  [path]
+  (try
+    (let [raw (json/parse-string (slurp path) true)]
+      (when (map? raw)
+        (let [servers (or (:mcpServers raw)
+                          (get raw "mcpServers")
+                          (:mcp-servers raw)
+                          (get raw "mcp-servers"))]
+          (when (map? servers) servers))))
+    (catch Exception _ nil)))
+
+(defn- host-entry->edn
+  "Convert one host server entry to a kmet EDN entry. String commands are
+   split on whitespace (command + args); entries without :command/:url are
+   dropped (misconfigured). :env passes through as-is."
+  [entry]
+  (when (map? entry)
+    (let [entry (normalize-server entry)
+          command (:command entry)
+          url (:url entry)]
+      (cond
+        (and (string? command) (seq (str/trim command)))
+        (let [parts (str/split (str/trim command) #"\s+")]
+          (if (seq (rest parts))
+            (assoc (dissoc entry :command)
+                   :command (first parts)
+                   :args (vec (rest parts)))
+            (assoc (dissoc entry :command) :command (first parts))))
+
+        (and (vector? command) (seq command)) entry
+        (and (string? url) (seq (str/trim url))) entry
+        :else nil))))
+
+(defn extract-host-servers
+  "Every usable server from a host config file: {name edn-entry} (pi
+   extractServers). Entries that do not normalize to a command or url are
+   skipped. Returns {} for missing/unparsable files."
+  [path]
+  (into {}
+        (keep (fn [[name entry]]
+                (when-let [edn-entry (host-entry->edn entry)]
+                  [name edn-entry])))
+        (or (host-servers-map path) {})))
+
+(defn host-config-discoveries
+  "The host config files that exist and carry at least one server:
+   [{:kind :cursor :path str :server-count n}] sorted by kind (pi
+   IMPORT_PATHS order is deterministic)."
+  [& [cwd]]
+  (let [cwd (or cwd (System/getProperty "user.dir"))]
+    (->> host-config-paths
+         (sort-by key)
+         (keep (fn [[kind paths]]
+                 (some (fn [path]
+                         (let [path (if (str/starts-with? path "./")
+                                      (str cwd "/" (subs path 2))
+                                      path)]
+                           (when (fs/exists? path)
+                             (let [servers (extract-host-servers path)]
+                               (when (seq servers)
+                                 {:kind kind :path path :server-count (count servers)})))))
+                       paths)))
+         vec)))
+
+(defn host-configs-config
+  "The merged config from ALL discovered host files (lowest precedence,
+   first kind wins per server — pi loadDiscoveredHostConfigs)."
+  [& [cwd]]
+  (reduce (fn [acc discovery]
+            (merge-configs acc {:mcp-servers (extract-host-servers (:path discovery))}))
+          {:mcp-servers {}}
+          (host-config-discoveries cwd)))
+
+(defn adopt-host-configs!
+  "Adopt the servers from the given host config DISCOVERIES (or all
+   discovered when nil) into the project .kmet/mcp.edn: existing project
+   entries win (the project file is the highest precedence source — pi
+   skips conflicts), new servers are added. Returns {:path str :added
+   [names] :skipped [names]}."
+  [& [discoveries]]
+  (let [discoveries (or discoveries (host-config-discoveries))
+        adopted (reduce (fn [acc discovery]
+                          ;; string keys — the project file convention
+                          ;; (EDN written by enable/disable uses strings)
+                          (into acc (map (fn [[k v]] [(if (keyword? k) (name k) (str k)) v]))
+                                (extract-host-servers (:path discovery))))
+                        {}
+                        discoveries)
+        path (project-config-path)
+        raw (read-project-raw)
+        servers-key (if (contains? raw :mcp-servers)
+                      :mcp-servers
+                      (if (contains? raw :mcpServers) :mcpServers :mcp-servers))
+        existing (get raw servers-key {})
+        existing-names (set (map (fn [k] (if (keyword? k) (name k) (str k)))
+                                 (keys existing)))
+        name-of (fn [k] (if (keyword? k) (name k) (str k)))
+        added (remove #(contains? existing-names (name-of %)) (keys adopted))
+        skipped (filter #(contains? existing-names (name-of %)) (keys adopted))]
+    (when (seq added)
+      (fs/create-dirs (fs/parent path))
+      (write-text path (str (pr-str (assoc raw servers-key
+                                           (merge existing
+                                                  (select-keys adopted added))))
+                            "\n")))
+    {:path path :added (vec added) :skipped (vec skipped)}))
+
+;; ─── Known server presets (pi config.ts KNOWN_SERVER_PRESETS) ─────────────
+
+(def known-server-presets
+  "One-click server entries for the setup panel."
+  [{:id "deepwiki" :name "DeepWiki"
+    :summary "Ask questions about public GitHub repositories."
+    :entry {:url "https://mcp.deepwiki.com/mcp"}}
+   {:id "context7" :name "Context7"
+    :summary "Look up current library documentation and examples."
+    :entry {:url "https://mcp.context7.com/mcp"}}
+   {:id "notion" :name "Notion"
+    :summary "Search and work with your Notion workspace."
+    :entry {:url "https://mcp.notion.com/mcp" :auth :oauth}}
+   {:id "github" :name "GitHub"
+    :summary "Work with GitHub through your Copilot account."
+    :entry {:url "https://api.githubcopilot.com/mcp" :auth :oauth}}
+   {:id "chrome-devtools" :name "Chrome DevTools"
+    :summary "Inspect and automate a local Chrome browser."
+    :entry {:command "npx" :args ["-y" "chrome-devtools-mcp@1.6.0"]}}])
+
+(defn- write-project-servers!
+  "Persist SERVERS (a name → entry map) into the project config: existing
+   entries are REPLACED wholesale (the setup form specifies the full
+   entry; the merge happens at config load against the global file).
+   Returns {:path str :changed bool}."
+  [servers]
+  (let [path (project-config-path)
+        raw (read-project-raw)
+        servers-key (if (contains? raw :mcp-servers)
+                      :mcp-servers
+                      (if (contains? raw :mcpServers) :mcpServers :mcp-servers))
+        existing (get raw servers-key {})
+        changed? (boolean (some (fn [[name entry]]
+                                  (not= entry (get existing name)))
+                                servers))]
+    (when (and changed? (seq servers))
+      (fs/create-dirs (fs/parent path))
+      (write-text path (str (pr-str (assoc raw servers-key
+                                           (merge existing servers)))
+                            "\n")))
+    {:path path :changed changed?}))
+
+(defn write-server-entry!
+  "Add or replace one server entry in the project config (the setup
+   panel's save path — like enable/disable, the project file is the only
+   file the extension writes). Returns {:path str :changed bool}."
+  [server-name entry]
+  (write-project-servers! {server-name entry}))
+
+;; ─── load-config — defined LAST (sci resolves symbols at analysis time;
+;; it references host-configs-config above) ─────────────────────────────────
+
+(defn load-config
+  "Load + merge the global and project EDN configs (§6.1). Returns
+   {:mcp-servers {name entry} :settings {...}} — empty maps when neither
+   file exists. A parse error in either file throws (with the path).
+
+   With :host-config-discovery :on in the merged settings, discovered host
+   config files (Cursor/Claude/Codex/opencode/windsurf/vscode mcp.json) are
+   merged at the LOWEST precedence — below the global file, exactly like pi
+   (loadDiscoveredHostConfigs): an explicit EDN definition always wins over
+   a discovered one, and the URL-bound credential stripping applies."
+  []
+  (let [global (read-config-file @global-config-path)
+        project (read-config-file (project-config-path))
+        merged (merge-configs (or global {:mcp-servers {}}) project)]
+    (if (= :on (:host-config-discovery (:settings merged)))
+      (merge-configs (host-configs-config) merged)
+      merged)))

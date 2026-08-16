@@ -82,8 +82,21 @@ argv), `:url` (HTTP), `:env`, `:cwd`, `:headers`, `:auth` (`:bearer` |
 `:oauth` | `false`), `:bearer-token`/`:bearer-token-env`,
 `:oauth` (map — see below), `:http-transport`, `:lifecycle`,
 `:direct-tools`, `:tool-prefix`, `:request-timeout-ms`, `:disabled` (only
-literal `true` disables). A server with neither `:command` nor `:url` is
-skipped and shows as `misconfigured` in status.
+literal `true` disables), `:include-tools`/`:exclude-tools` (globs over
+the prefixed names, gate direct-tool registration), `:search-keywords`
+(`{"server_*" ["capture"]}` — boosts proxy search ranking),
+`:expose-resources` (default true — `read_<resource>` direct tools),
+`:idle-timeout` (minutes, overrides the settings default). A server with
+neither `:command` nor `:url` is skipped and shows as `misconfigured` in
+status.
+
+Settings keys: `:direct-tools`, `:tool-prefix`, `:disable-proxy-tool`,
+`:script-mode` (default true — gates the mcpScript tool),
+`:idle-timeout` (minutes, default 10, 0 disables reaping),
+`:output-guard` (false disables, or `{:max-bytes :max-lines
+:details-max-bytes}` tuning), `:token-storage` (`:auto` default |
+`:keyring` | `:file`), `:host-config-discovery` (`:off` default |
+`:on` — merges host mcp.json files at the lowest precedence).
 
 OAuth config (`:oauth` map): `:client-id` (pre-registered client; omit →
 RFC 7591 dynamic client registration), `:client-secret`, `:scopes`
@@ -131,14 +144,51 @@ cached metadata so no server spawns at startup. Names are lowercased with
 | Command | Description |
 |---|---|
 | `/mcp` | interactive McpPanel (pi mcp-panel.ts port): servers, lifecycle, tool counts, direct/proxy toggles, search, reconnect/auth — `ctrl+s` saves, `esc` clears/closes |
-| `/mcp search <q> [regex]` | search tools (substring or regex) — text dialog |
+| `/mcp search <q> [regex]` | ranked search (name/description/keyword scoring) — text dialog |
 | `/mcp list [server]` | servers, or one server's tools — text dialog |
+| `/mcp prompts` | list the prompt slash-commands from cached metadata |
 | `/mcp connect <server>` | connect now (+ metadata refresh + tool resync) |
 | `/mcp disconnect <server>` | stop the server process |
 | `/mcp enable\|disable <server>` | write `:disabled` into `.kmet/mcp.edn`; `/reload` to apply |
-| `/mcp refresh` | reload `mcp.edn`, resync tools |
+| `/mcp refresh` | reload `mcp.edn`, resync tools + prompt commands |
 | `/mcp auth <server>` | run the OAuth flow now (PKCE loopback, device, or a machine-grant token fetch) |
 | `/mcp logout <server>` | clear stored OAuth tokens + client info |
+| `/mcp setup` | interactive setup panel: known-server presets, custom-server form (with connection test), host-config import, scaffold `.kmet/mcp.edn` |
+| `/mcp import` | headless host-config adoption (see below) |
+
+## Prompts, resources, mcpScript
+
+- **Prompts** → slash commands: every prompt a server advertises becomes
+  `/mcp__<server>__<prompt>`, registered from the metadata cache. Args map
+  positionally or `key=value` (bash-style quoting); the formatted result
+  is sent into the conversation.
+- **Resources** → read tools: servers expose `read_<resource>` direct
+  tools by default (`:expose-resources false` disables) that call
+  `resources/read`.
+- **mcpScript** (`mcpScript` tool, settings `:script-mode false`
+  disables): trusted Clojure in a sandboxed `bb` subprocess (no host
+  access) with a `tools` bridge — `(tools/search {...})`,
+  `(tools/describe {:path ...})`, `(tools/call path args)` returning
+  `{:ok true :data ...}` / `{:ok false :error {:code :message}}`, plus
+  `emit` and `console.log`. See `skills/mcp/SKILL.md`.
+- **include/exclude globs**: server `:include-tools`/`:exclude-tools`
+  (`["server_*"]`) filter which tools register as direct tools;
+  `:search-keywords {"server_*" ["capture"]}` boost proxy search.
+- **Idle reaping**: settings `:idle-timeout` minutes (default 10, 0
+  disables; server `:idle-timeout` overrides; `:keep-alive` servers never
+  reap) — a background daemon disconnects idle servers.
+- **Output guard**: results over 50 KiB / 2000 lines are truncated with a
+  head-preview and the full text spilled to a temp file; tune via
+  settings `:output-guard {:max-bytes .. :max-lines ..
+  :details-max-bytes ..}` or disable with `:output-guard false`
+  (`MCP_OUTPUT_GUARD=0`).
+- **Streaming progress**: `notifications/progress` events during a call
+  stream as partial content into the tool output (all transports).
+- **Host-config adoption**: `:host-config-discovery :on` in settings
+  merges Cursor/Claude/Codex/opencode/windsurf/vscode `mcp.json` files at
+  the lowest precedence; `/mcp import` (or the setup panel) adopts their
+  servers into `.kmet/mcp.edn` (JSON only — codex `config.toml` is not
+  read).
 
 ## HTTP auth
 
@@ -150,8 +200,12 @@ cached metadata so no server spawns at startup. Names are lowercased with
   callback on an OS-assigned port) or the RFC 8628 device flow (`:flow
   :device`, or auto-selected when headless). Tokens refresh silently on
   expiry; a 401 with a stored refresh token refreshes once and retries.
-  Tokens are stored **plaintext** at `~/.kmet/agent/mcp-oauth.edn`
-  (0600 perms — Babashka has no OS keyring; `logout` clears them).
+  Tokens are stored in the **OS keyring when available** — macOS
+  `security`, Linux `secret-tool`, Windows Credential Manager (PowerShell
+  P/Invoke) — and fall back to **plaintext** `~/.kmet/agent/mcp-oauth.edn`
+  (0600 perms) on hosts without a keyring tool (e.g. Termux). Settings
+  `:token-storage :keyring | :file | :auto` (default `:auto`); env
+  `MCP_TOKEN_STORAGE` overrides; `logout` clears the entry.
 - **Machine grants**: `:oauth {:grant :client-credentials ...}` (RFC 6749
   §4.4) or `:grant :jwt-bearer` (RFC 7523) skip the browser: a token is
   fetched from the token endpoint on demand and cached in memory,
@@ -168,21 +222,26 @@ configure. Only add servers you trust.
 
 ## Development
 
-The `scripts/` directory carries fake MCP/OAuth servers and four
+The `scripts/` directory carries fake MCP/OAuth servers and six
 validation scripts (client transports, config/extension load, OAuth flow,
-McpPanel/TextDialog/prompt components) plus an end-to-end smoke of the
-proxy-tool surface (`e2e.bb`, headless — see plan §15.22):
+McpPanel/TextDialog/prompt components, mcpScript end-to-end) plus an
+end-to-end smoke of the proxy-tool surface (`e2e.bb`, headless — see plan
+§15.22):
 
 ```bash
 bb -cp ../../src:src scripts/validate-client.bb scripts/fake-mcp-server.bb scripts/fake-http-mcp-server.bb
 bb -cp ../../src:src scripts/validate-config.bb
 bb -cp ../../src:src scripts/validate-panel.bb
 bb -cp ../../src:src scripts/validate-oauth.bb scripts/fake-oauth-server.bb
+bb -cp ../../src:src scripts/validate-script.bb scripts/fake-mcp-server.bb
 bb -cp ../../src:src scripts/e2e.bb scripts/fake-mcp-server.bb
 ```
 
-## Phase-2 roadmap
+## Phase-3 roadmap
 
-OS-keyring token storage, prompts → slash commands, resources → read
-tool, mcpScript batching, `/mcp serve` (expose kmet as an MCP server),
-setup wizard, include/exclude globs, output guards, streaming progress.
+Only `/mcp serve` (expose kmet as an MCP server) remains out of scope —
+dropped from the plan by request. Everything else on the original Phase-2
+list (keyring storage, prompts, resources, mcpScript, setup wizard +
+host-config adoption, include/exclude globs, idle-timeout reaping, output
+guards, streaming progress) is implemented — see the plan's §15.23-34 for
+the recorded deviations.

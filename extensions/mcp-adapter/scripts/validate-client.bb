@@ -60,6 +60,29 @@
     (let [result (client/request! conn "tools/call"
                                   {:name "add" :arguments {:a 2 :b 3}})]
       (check "tools/call add" (= "5" (:text (client/format-result result)))))
+    ;; Phase 2: prompts/resources capability + progress streaming
+    (let [result (client/connect! definition {})]
+      (check "prompts/list" (= #{"brief" "review"}
+                                (set (map :name (:prompts result)))))
+      (check "resources/list" (= #{"README" "schema"}
+                                  (set (map :name (:resources result))))))
+    (let [result (client/get-prompt conn "brief" {"topic" "clojure"})]
+      (check "prompts/get args"
+             (str/includes? (get-in result [:messages 0 :content :text])
+                            "Briefly summarize: clojure")))
+    (let [result (client/read-resource conn "file:///README.md")]
+      (check "resources/read"
+             (str/includes? (get-in result [:contents 0 :text]) "# Fake README")))
+    (let [progress (atom [])
+          result (client/request! conn "tools/call"
+                                  {:name "slow" :arguments {:ms 400}}
+                                  {:timeout-ms 5000
+                                   :on-notification
+                                   (fn [n] (swap! progress conj
+                                                  (get-in n [:params :progress])))})
+          formatted (client/format-result result)]
+      (check "progress notifications streamed" (= [25 50 75] @progress))
+      (check "slow call after progress" (= "slept" (:text formatted))))
     ;; notification mid-request must be dropped, response still arrives
     (let [result (client/request! conn "tools/call" {:name "ping-mid" :arguments {}})]
       (check "notification mid-request dropped"
@@ -116,6 +139,26 @@
         (let [result (client/request! conn "tools/call"
                                       {:name "http-add" :arguments {:a 40 :b 2}})]
           (check "http add" (= "42" (:text (client/format-result result)))))
+        (let [result (client/connect! definition {})]
+          (check "http prompts/list"
+                 (= #{"http-brief"} (set (map :name (:prompts result)))))
+          (check "http resources/list"
+                 (= #{"HTTP doc"} (set (map :name (:resources result))))))
+        (let [result (client/get-prompt conn "http-brief" {"topic" "x"})]
+          (check "http prompts/get"
+                 (str/includes? (get-in result [:messages 0 :content :text])
+                                "http brief: x")))
+        ;; SSE responses stream progress notifications before the result
+        (let [progress (atom [])
+              result (client/request! conn "tools/call"
+                                      {:name "http-slow" :arguments {}}
+                                      {:timeout-ms 5000
+                                       :on-notification
+                                       (fn [n] (swap! progress conj
+                                                      (get-in n [:params :progress])))})
+              formatted (client/format-result result)]
+          (check "http progress via sse body" (= [10 50] @progress))
+          (check "http slow result" (= "finally" (:text formatted))))
         (check "http timeout"
                (try (client/request! conn "tools/call" {:name "http-slow" :arguments {}}
                                      {:timeout-ms 300})

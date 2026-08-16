@@ -90,7 +90,9 @@
       (do (reset! state (assoc @state :session-id (or session-id "sess-1")))
           {:jsonrpc "2.0" :id id
            :result {:protocolVersion (get-in msg [:params :protocolVersion])
-                    :capabilities {:tools {}}
+                    :capabilities {:tools {}
+                                   :prompts {:listChanged false}
+                                   :resources {:listChanged false}}
                     :serverInfo {:name "fake-http-mcp-server" :version "1.0.0"}}})
       "notifications/initialized" nil
       "tools/list"
@@ -111,6 +113,25 @@
           {:jsonrpc "2.0" :id id
            :result {:content [{:type "text" :text "unknown"}]
                     :isError true}}))
+      "prompts/list"
+      {:jsonrpc "2.0" :id id
+       :result {:prompts [{:name "http-brief"
+                           :description "Summarize a topic briefly"
+                           :arguments [{:name "topic" :required true}]}]}}
+      "prompts/get"
+      {:jsonrpc "2.0" :id id
+       :result {:messages [{:role "user"
+                           :content {:type "text"
+                                     :text (str "http brief: "
+                                                (get-in msg [:params :arguments :topic]))}}]}}
+      "resources/list"
+      {:jsonrpc "2.0" :id id
+       :result {:resources [{:name "HTTP doc" :uri "http://fake/doc"
+                             :description "A fake http resource"}]}}
+      "resources/read"
+      {:jsonrpc "2.0" :id id
+       :result {:contents [{:type "text" :uri (get-in msg [:params :uri])
+                            :text "http resource content"}]}}
       {:jsonrpc "2.0" :id id
        :error {:code -32601 :message (str "Method not found: " method)}})))
 
@@ -119,8 +140,10 @@
   [req]
   (let [session-id (get-in req [:headers "mcp-session-id"])
         slow? (str/includes? (or (:query req) "") "slow")
-        is-initialize? (= "initialize" (get-in (json/parse-string (:body req) true)
-                                               [:method]))
+        body-msg (json/parse-string (:body req) true)
+        is-initialize? (= "initialize" (:method body-msg))
+        is-slow-call? (and (= "tools/call" (:method body-msg))
+                           (= "http-slow" (get-in body-msg [:params :name])))
         response (handle-json-rpc (:body req) session-id)]
     ;; notifications get an empty 200 (never close without a response —
     ;; java.net.http reports that as an error)
@@ -131,9 +154,24 @@
         (let [session-header (when is-initialize?
                                {"Mcp-Session-Id" (or session-id "sess-1")})]
           (if (str/includes? (str (get-in req [:headers "accept"])) "text/event-stream")
-            (http-response 200
-                           (str "event: message\ndata: " (json/generate-string response) "\n\n")
-                           (merge {"Content-Type" "text/event-stream"} session-header))
+            (let [sse-parts (if is-slow-call?
+                              ;; progress notifications before the result
+                              (apply str
+                                     (map (fn [p]
+                                            (str "event: message\ndata: "
+                                                 (json/generate-string
+                                                  {:jsonrpc "2.0"
+                                                   :method "notifications/progress"
+                                                   :params {:progress p :total 100
+                                                            :message (str "p" p)}})
+                                                 "\n\n"))
+                                          [10 50]))
+                              "")
+                  body (str sse-parts
+                            "event: message\ndata: "
+                            (json/generate-string response) "\n\n")]
+              (http-response 200 body
+                             (merge {"Content-Type" "text/event-stream"} session-header)))
             (http-response 200 (json/generate-string response)
                            (merge {"Content-Type" "application/json"} session-header))))))))
 

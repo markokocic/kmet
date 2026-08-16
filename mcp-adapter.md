@@ -1,10 +1,16 @@
 # kmet mcp-adapter extension — implementation plan (Phase 1)
 
-Status: **implemented (Phase 1)** — see §15 for implementation notes and
-recorded deviations. Rev 2: OAuth (RFC 8414/7591, PKCE loopback + RFC 8628
-device flow) added to Phase 1 scope on request. Rev 3: the Phase-2 OAuth
-machine grants (client-credentials RFC 6749 §4.4 + jwt-bearer RFC 7523,
-§15.17-20) implemented; OS-keyring storage remains out of scope.
+Status: **implemented (Phase 1 + Phase 2)** — see §15 for implementation
+notes and recorded deviations. Rev 2: OAuth (RFC 8414/7591, PKCE loopback
++ RFC 8628 device flow) added to Phase 1 scope on request. Rev 3: the
+Phase-2 OAuth machine grants (client-credentials RFC 6749 §4.4 +
+jwt-bearer RFC 7523, §15.17-20) implemented. Rev 4 (this revision): the
+rest of the original Phase-2 list implemented — OS-keyring token storage,
+prompts → slash commands, resources → read tool, mcpScript batching
+(Clojure port), setup wizard + host-config adoption, include/exclude/
+searchKeywords globs, idle-timeout reaping, output guards, streaming
+tool-call progress (§15.23-34). `/mcp serve` was **dropped from the plan
+by request** (the user asked to drop it and implement the rest).
 This document is the design contract; deviations during implementation must
 be reflected back here.
 
@@ -63,16 +69,15 @@ never by convenience.
   refresh, auth, logout (+ argument completions)
 - Usage skill contributed via `:resources-discover`, README
 
-### Out of scope (Phase 2+)
+### Out of scope
 
-- OS-keyring token storage (plaintext 0600 store stays — no keyring on
-  Termux/Windows; documented tradeoff)
-- Prompts → slash commands, resources → read tool
-- `mcpScript` batching tool (node)
-- `/mcp serve` (expose kmet as an MCP server, dirge-style)
-- Setup wizard / host-config adoption
-- `includeTools` / `excludeTools` / `searchKeywords` globs, idle-timeout
-  reaping, output guards, streaming tool-call progress (client-side)
+- `/mcp serve` (expose kmet as an MCP server) — **dropped from the plan by
+  request** (Rev 4).
+
+All other Phase-2 items (keyring storage, prompts, resources, mcpScript,
+setup wizard / host-config adoption, include/exclude/searchKeywords globs,
+idle-timeout reaping, output guards, streaming tool-call progress) are
+implemented — §15.23-34 record the build notes and deviations.
 
 ## 4. Port mapping (pi-mcp-adapter → kmet)
 
@@ -88,9 +93,27 @@ never by convenience.
 | `commands.ts` (`/mcp` subcommands) | `mcp_adapter.clj` (§10.6) | status/search/list/connect/disconnect/enable/disable/auth/logout (+ refresh); no setup panels (Phase 1) |
 | `init.ts` (updateStatusBar, lazyConnect) | `mcp_adapter.clj` | status text, lazy/eager/keep-alive connect, description rebuild |
 | `types.ts` (ServerEntry, McpSettings, ToolPrefix) | `config.clj` (§6.2) | same field semantics, kebab-case EDN + tolerant camel reading |
-| `skills/` (mcp-scripting) | `skills/mcp/SKILL.md` | usage skill, contributed via `:resources-discover` |
+| `mcp-output-guard.ts` | `output_guard.clj` | result bounding: max-bytes/max-lines truncation + temp-file spill + details bound (string-content adaptation) |
+| `prompts.ts` | `prompts.clj` | prompt slash-commands: bash-style arg parsing, positional/named resolution, role-marked formatting, cache-driven registration |
+| `mcp-code.ts` / `mcp-script-worker.mjs` | `script.clj` | mcpScript for bb: sandboxed `bb` subprocess (no host access), tools/search/describe/call bridge over a JSON-lines stdin/stdout protocol, emit + captured console, timeout + call trace |
+| `mcp-setup-panel.ts` | `setup.clj` + `mcp_adapter.clj` | setup panel: known-server presets, custom-server form with connection test, host-config import, project scaffolding |
+| `config.ts` IMPORT_PATHS / extractServers | `config.clj` | host-config discovery + adoption (JSON host files only — no TOML reader in bb; codex config.json covered, config.toml not) |
+| `search-ranking.ts` | `proxy.clj` | full weighted ranking port (name/original/server/description/keywords + coverage gates) replacing the Phase-1 name-over-description ranking |
+| `types.ts` includeTools/excludeTools/searchKeywords, idleTimeout | `config.clj` + `proxy.clj` + `mcp_adapter.clj` | glob-filtered direct-tool registration, keyword-boosted search, idle reaper daemon |
+| `mcp-auth.ts` keyring storage | `auth.clj` | OS-keyring backends (macOS security / Linux secret-tool / Windows Credential Manager P/Invoke) with plaintext fallback; settings :token-storage / env MCP_TOKEN_STORAGE |
+| skills/ (mcp-scripting) | `skills/mcp/SKILL.md` | usage skill, contributed via `:resources-discover` |
 
-Deliberately not ported in Phase 1 (see §3): `mcp-panel.ts`, `mcp-setup-panel.ts`, `mcp-code.ts` (mcpScript), `tool-approval.ts`, `mcp-output-guard.ts`, `ui-*.ts`, `mcp-script-worker.mjs`, `prompts.ts`, `resource-tools.ts`, `search-ranking.ts` ranking depth (phase 1 keeps name-over-description ranking), `tool-result-renderer.ts` (default rendering; custom render hooks are optional polish, §10.4).
+Deliberately not ported (Rev 4): `mcp-panel.ts` (ported as panel.clj),
+`mcp-setup-panel.ts` full desktop layout (setup.clj implements the same
+actions on kmet's component model), `mcp-code.ts` JS worker (Clojure
+port — the flat `tools.<name>` shorthand cannot exist in Clojure, §15.31),
+`tool-approval.ts` (kmet has no approval UI; `:approve-tools` is not
+implemented), `mcp-output-guard.ts` image pass-through (kmet tool results
+are string content), `ui-*.ts`, `mcp-script-worker.mjs` vm isolation
+(replaced by the subprocess sandbox), `prompts.ts` live-metadata
+subsystems (the cache is the live source after connects), `resource-tools.ts`
+(ported inline in the entry), `tool-result-renderer.ts` (kmet renders tool
+results natively).
 
 ## 5. File layout
 
@@ -102,13 +125,23 @@ extensions/mcp-adapter/
 ├── scripts/
 │   ├── fake-mcp-server.bb        fake stdio MCP server (validation)
 │   ├── fake-http-mcp-server.bb   fake streamable-HTTP MCP server (validation)
-│   └── fake-oauth-server.bb      fake OAuth AS: discovery/DCR/token/authorize/device (validation)
+│   ├── fake-oauth-server.bb      fake OAuth AS: discovery/DCR/token/authorize/device (validation)
+│   ├── validate-client.bb        transports + prompts/resources/progress checks
+│   ├── validate-config.bb        config + metadata + host-adoption + extension load
+│   ├── validate-oauth.bb         OAuth flows (PKCE/device/redirect-uri/machine grants)
+│   ├── validate-panel.bb         McpPanel/TextDialog/prompt component checks
+│   ├── validate-script.bb        mcpScript end-to-end against the fake server
+│   └── e2e.bb                    headless proxy-tool smoke
 └── src/extensions/mcp_adapter.clj          entry: init/shutdown, state, registration, /mcp
-    src/extensions/mcp_adapter/config.clj   EDN config
-    src/extensions/mcp_adapter/client.clj   transports + JSON-RPC
-    src/extensions/mcp_adapter/auth.clj     OAuth: discovery, DCR, PKCE/device flows, token store
-    src/extensions/mcp_adapter/metadata.clj cache
-    src/extensions/mcp_adapter/proxy.clj    proxy tool executor
+    src/extensions/mcp_adapter/config.clj   EDN config + host-config discovery/adoption
+    src/extensions/mcp_adapter/client.clj   transports + JSON-RPC + prompts/resources calls
+    src/extensions/mcp_adapter/auth.clj     OAuth: discovery, DCR, PKCE/device flows, token store + keyring
+    src/extensions/mcp_adapter/metadata.clj cache (tools + prompts + resources)
+    src/extensions/mcp_adapter/proxy.clj    proxy tool executor + search ranking
+    src/extensions/mcp_adapter/output_guard.clj  result bounding (pi mcp-output-guard.ts)
+    src/extensions/mcp_adapter/prompts.clj  prompt slash-commands (pi prompts.ts)
+    src/extensions/mcp_adapter/script.clj   mcpScript bb port (pi mcp-code.ts + worker)
+    src/extensions/mcp_adapter/setup.clj    setup panel (pi mcp-setup-panel.ts)
 ```
 
 This plan lives at the repo root (`mcp-adapter.md`), not inside the
@@ -925,3 +958,130 @@ landed and every deliberate deviation from the text above.
     (`bb -cp ../../src:src scripts/e2e.bb scripts/fake-mcp-server.bb`) —
     without it the server path is `.../nil` and the connect-dependent
     checks fail.
+
+23. **Phase 2 implemented (Rev 4)** — the remaining out-of-scope list was
+    implemented on request; `/mcp serve` was dropped from the plan (see
+    §3). Everything below records where the Phase-2 build landed.
+24. **Keyring token storage** (§7.8.1): `auth.clj` gained `:token-storage`
+    settings (default `:auto`; env `MCP_TOKEN_STORAGE` overrides) with
+    platform backends — macOS `security` (add/find/delete-generic-password),
+    Linux `secret-tool` (libsecret), Windows Credential Manager via a
+    PowerShell P/Invoke script (CredWrite/CredRead/CredDelete; embedded in
+    the extension, untested on real Windows — recorded limitation). Secrets
+    are per-server, service `kmet-mcp` / account `oauth:<server>`, payload
+    = pr-str of the entry (compact — gnome-keyring GKeyFile corrupts
+    multiline secrets, pi parity). `:auto` probes the tool and falls back
+    to the plaintext 0600 file when absent (Termux has none — the Phase-1
+    tradeoff holds exactly there). The `run-tool` helper derefs the
+    process (bb has no `process-done`), and the PowerShell body is
+    inlined via a top-level `(reset! ...)` (sci evaluates in order).
+25. **Prompts → slash commands** (`prompts.clj`, pi prompts.ts): every
+    advertised prompt becomes `/mcp__<server>__<prompt>` from the metadata
+    cache (registered at init, diff-resynced after connects/refreshes).
+    The handler ports parsePromptArgs (bash-style quoting — the tokenizer
+    only splits on whitespace OUTSIDE quotes; quotes stay in the token and
+    stripQuotes removes them), resolvePromptArgs (named wins per slot,
+    undeclared named args pass through, missing required → usage message),
+    and formatPromptResult (lone user message bare, mixed roles keep
+    `[role]` markers). Delivery is `send-user-message` (pi
+    sendUserMessage). `/mcp prompts` lists them. A discovered quirk: sci
+    evaluates SET LITERALS as maps — `#{a b}` throws "Duplicate key" when
+    `a` and `b` evaluate equal — `(hash-set a b)` is the safe form (also
+    fixed in proxy.clj's tool-name-candidates).
+26. **Resources → read tools** (pi init.ts/direct-tools.ts resource
+    tools): servers advertise `read_<resource>` direct tools by default
+    (`:expose-resources false` disables), named via the resourceNameToToolName
+    port (sanitize + digit/empty guard), registered from the cache like
+    tools and executed via `proxy/read-mcp-resource` (resources/read;
+    text/string contents joined, blobs summarized). The metadata cache now
+    stores `:prompts`/`:resources` per server and the fingerprint covers
+    `:include-tools`/`:exclude-tools`/`:expose-resources`.
+27. **mcpScript for bb** (`script.clj`, pi mcp-code.ts +
+    mcp-script-worker.mjs): the `mcpScript` tool (settings `:script-mode
+    false` disables, pi parity) runs trusted **Clojure** in a sandboxed
+    `bb` subprocess — no host access, only the tools bridge. The runtime
+    is an embedded string; the tools/console bridges are loaded as real
+    namespaces (`mcp-script.tools`, `mcp-script.console`) and aliased, so
+    `(tools/call path args)`, `(tools/search {...})`, `(tools/describe
+    {...})`, `(console/log ...)` resolve as vars. Protocol: JSON lines
+    over stdin/stdout; user *out*/*err* are bound (set! is forbidden on
+    root bindings in bb) and flushed as `[stdout]`/`[stderr]` emits;
+    `emit` streams via on-update; timeout (default 30s, `timeoutMs` param)
+    kills the process tree and in-flight calls appear in details as
+    `error "incomplete"`. Search/describe/call resolve from the metadata
+    cache (pi parity — connect a server once before scripting it).
+28. **Setup wizard + host-config adoption** (`setup.clj` + `/mcp setup`,
+    `/mcp import`, pi mcp-setup-panel.ts + config.ts IMPORT_PATHS):
+    known-server presets (deepwiki/context7/notion/github/chrome-devtools,
+    pi KNOWN_SERVER_PRESETS), a custom-server form (name, command-or-url,
+    args, auth; Enter advances, Esc backs out; add-server tests the
+    connection), host-config import with space-toggled kinds, and project
+    scaffolding. Host discovery covers cursor/claude-code/claude-desktop/
+    codex/opencode/windsurf/vscode paths — JSON files only (codex
+    config.toml has no TOML reader in bb; its config.json is covered);
+    string commands are split into command+args; entries without
+    command/url are dropped. Adoption writes string-keyed servers into
+    the project file (the file's convention — keyword/string collisions
+    are detected by name) and skips existing names; `:host-config-discovery
+    :on` in settings merges host configs at the LOWEST precedence in
+    load-config (the merged settings decide, like pi).
+29. **include/exclude/searchKeywords globs** (pi types.ts
+    matchesToolSelector + search-ranking.ts): `:include-tools`/
+    `:exclude-tools` (glob or exact, matched against every prefix-form
+    candidate + legacy dash→underscore spellings) gate DIRECT-tool
+    registration only (pi parity — the proxy search is not filtered);
+    the collision-aware legacy-candidate index was simplified away.
+    `:search-keywords` values boost proxy search via the full
+    scoreToolMatch port (FIELD_WEIGHTS name 12/original 10/server 8/
+    description 5/keywords 5, phrase/exact/prefix/token scoring, coverage
+    gate, first-token + whole-field-exact bonuses) — the Phase-1
+    name-over-description ranking was replaced.
+30. **Idle-timeout reaping** (pi init.ts): settings `:idle-timeout`
+    minutes (default 10, 0 disables), server `:idle-timeout` overrides,
+    `:keep-alive` servers default to no reaping (pi
+    persistsAfterFirstSpawn → 0). Every request!/notify! touches
+    `:last-used` on the conn; a daemon thread (spawn, checked every 30s,
+    stopped at shutdown) disconnects idle servers. The reaper-stop flag
+    lives in the state map — the entry's shutdown must deref the state
+    atom first (`(:reaper-stop @state)` — state-atom holds the ATOM,
+    not the map).
+31. **Output guards** (`output_guard.clj`, pi mcp-output-guard.ts,
+    adapted to kmet's string-content results): settings `:output-guard`
+    (false disables; map tunes `:max-bytes` 50 KiB / `:max-lines` 2000 /
+    `:details-max-bytes` 16 KiB), env kill switch `MCP_OUTPUT_GUARD`.
+    Oversized text is truncated to a head-preview with a notice pointing
+    at the temp-file spill (0600); the raw MCP result in details is kept
+    when its JSON fits, else replaced by a compact summary + spill.
+    Applied to proxy calls, resource reads, and mcpScript results.
+    Deviation: `fs/create-temp-dir` is broken in this bb version
+    (NoSuchFileException) and Termux's `/tmp` is read-only — temp dirs
+    are built from `TMPDIR` (fallback java.io.tmpdir) + nanoTime.
+32. **Streaming tool-call progress**: `request!` gained
+    `:on-notification`; `notifications/progress` events are forwarded
+    (stdio/SSE via the wait loop, streamable-http via the SSE body
+    reader) instead of being dropped. The mcp proxy tool, direct tools,
+    and mcpScript declare `:streams?` and stream progress as partial
+    content (`[progress 42/100 — message]`) while a call runs — the host
+    shows it live and the final result replaces it. `connect!` only
+    queries prompts/resources when the server advertises the capability
+    (an unadvertised method errors with -32601).
+33. **Validation** (Rev 4): the fake servers gained prompts/resources/
+    progress (stdio: cursor pagination for tools, brief/review prompts,
+    README/schema resources, slow tool emitting 25/50/75 progress; HTTP:
+    prompts/resources + progress events in the SSE response body);
+    validate-client.bb grew prompts/resources/progress checks for both
+    transports (30 checks), validate-config.bb grew include/exclude/
+    keywords/idle-timeout normalization, cache prompts/resources,
+    host-discovery + adoption + write-server-entry + presets (30 checks),
+    and the new validate-script.bb drives the registered mcpScript tool
+    end-to-end through create-nullable-api (16 checks). All suites plus
+    e2e.bb pass. A headless REAL-loader smoke (kmet.app.extensions/
+    load-extension!, sci context) passes: extension load, proxy connect/
+    call, mcpScript call/search through the real tool registry.
+34. **Discovered pre-existing host bug**: `kmet.app.extensions/
+    unload-extension!` throws an NPE (a future deref inside the sci
+    context) even for a minimal extension with a trivial shutdown that
+    never runs — reproduced with the committed Phase-1 code and a
+    10-line stub extension; out of scope for this plan (a kmet host fix
+    with gates coverage), recorded here so the TUI reload/exit paths are
+    not blamed on the extension.

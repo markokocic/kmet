@@ -6,7 +6,9 @@
    Shape: {:version 1
            :servers {name {:config-fingerprint str
                            :fetched-at ms
-                           :tools [{:name :description :inputSchema}]}}}
+                           :tools [{:name :description :inputSchema}]
+                           :prompts [{:name :description :arguments}]
+                           :resources [{:name :uri :description :mimeType}]}}}
 
    Freshness: 7 days. server-entry returns nil when stale or the config
    fingerprint mismatches — callers fall back to a live connect. A config
@@ -67,14 +69,17 @@
     nil))
 
 (defn config-fingerprint
-  "Fingerprint of the config bits that affect which tools a server exposes
-   (§8): the server name, :command/:args/:url/:disabled/:direct-tools/
-   :tool-prefix, and the relevant settings. A config change invalidates
-   cached metadata."
+  "Fingerprint of the config bits that affect which tools/prompts/
+   resources a server exposes (§8): the server name, :command/:args/:url/
+   :disabled/:direct-tools/:tool-prefix/:include-tools/:exclude-tools/
+   :expose-resources, and the relevant settings. A config change
+   invalidates cached metadata."
   [name definition settings]
   (pr-str [name
            (select-keys definition [:command :args :url :disabled
-                                    :direct-tools :tool-prefix])
+                                    :direct-tools :tool-prefix
+                                    :include-tools :exclude-tools
+                                    :expose-resources])
            (select-keys settings [:direct-tools :tool-prefix
                                   :disable-proxy-tool])]))
 
@@ -94,13 +99,21 @@
         entry))))
 
 (defn update-entry!
-  "Persist a fresh tools entry for a server (also returned)."
-  [cache name definition settings tools]
+  "Persist a fresh entry for a server (also returned). TOOLS/PROMPTS/
+   RESOURCES are the wire lists; prompts keep :name/:description/
+   :arguments, resources :name/:uri/:description/:mimeType."
+  [cache name definition settings tools & [prompts resources]]
   (let [entry {:config-fingerprint (config-fingerprint name definition settings)
                :fetched-at (System/currentTimeMillis)
                :tools (vec (mapv (fn [t]
                                    (select-keys t [:name :description :inputSchema]))
-                                 tools))}]
+                                 tools))
+               :prompts (vec (mapv (fn [p]
+                                     (select-keys p [:name :description :arguments]))
+                                   (or prompts [])))
+               :resources (vec (mapv (fn [r]
+                                       (select-keys r [:name :uri :description :mimeType]))
+                                     (or resources [])))}]
     (save-cache! {:servers {name entry}})
     (assoc-in (or cache {:version cache-version :servers {}})
               [:servers name] entry)))
@@ -115,3 +128,15 @@
           :when (and entry (not (true? (:disabled definition))))
           tool (:tools entry)]
       {:server name :tool tool})))
+
+(defn all-prompts
+  "Every cached prompt across servers with fresh, non-disabled entries:
+   [{:server str :prompt {:name ... :description ... :arguments ...}}] —
+   used by /mcp prompts and the panel's prompt count."
+  [cache config settings]
+  (when cache
+    (for [[name definition] (:mcp-servers config)
+          :let [entry (server-entry cache name definition settings)]
+          :when (and entry (not (true? (:disabled definition))))
+          prompt (:prompts entry)]
+      {:server name :prompt prompt})))

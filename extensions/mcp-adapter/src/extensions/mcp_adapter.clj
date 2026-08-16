@@ -14,7 +14,10 @@
             [extensions.mcp-adapter.config :as config]
             [extensions.mcp-adapter.metadata :as metadata]
             [extensions.mcp-adapter.panel :as panel]
+            [extensions.mcp-adapter.prompts :as prompts]
             [extensions.mcp-adapter.proxy :as proxy]
+            [extensions.mcp-adapter.script :as script]
+            [extensions.mcp-adapter.setup :as setup]
             [kmet.extension :as ext]))
 
 (def ^:private state-atom (atom nil))
@@ -28,7 +31,9 @@
     (.start t)
     t))
 
-(declare ensure-connected! disconnect-server! sync-direct-tools! register-proxy-tool!)
+(declare ensure-connected! disconnect-server! sync-direct-tools!
+         sync-prompt-commands! register-proxy-tool!
+         handle-import open-setup-panel!)
 
 (def ^:private builtin-tool-names
   #{"read" "bash" "edit" "write" "grep" "find" "ls" "mcp"})
@@ -70,7 +75,9 @@
                    :config config
                    :cache (metadata/load-cache)
                    :servers (build-servers config)
-                   :registered-direct (atom {})})
+                   :registered-direct (atom {})
+                   :registered-prompts (atom {})
+                   :reaper-stop (atom false)})
     (swap! state assoc
            :ensure-connected-fn (fn [name] (ensure-connected! state name))
            :disconnect-fn (fn [name] (disconnect-server! state name)))
@@ -98,15 +105,16 @@
 
 (defn- refresh-after-connect!
   "On successful connect: refresh the metadata cache + save, resync direct
-   tools, rebuild the proxy description (§10.3)."
-  [state name tools]
+   tools, resync prompt commands, rebuild the proxy description (§10.3)."
+  [state name tools prompts resources]
   (when-let [definition (get-in @state [:config :mcp-servers name])]
     (swap! state (fn [st]
                    (assoc st :cache
                           (metadata/update-entry! (:cache st) name definition
                                                   (:settings (:config st))
-                                                  tools))))
+                                                  tools prompts resources))))
     (sync-direct-tools! state)
+    (prompts/sync-prompt-commands! state)
     (register-proxy-tool! state)))
 
 (defn- connect-with-auth
@@ -140,10 +148,12 @@
               ;; different name so the outer conn atom is not shadowed
               (let [result (connect-with-auth state name)
                     new-conn (:conn result)
-                    tools (:tools result)]
+                    tools (:tools result)
+                    prompts (:prompts result)
+                    resources (:resources result)]
                 (reset! conn new-conn)
                 (clear-failure! state name)
-                (refresh-after-connect! state name tools)
+                (refresh-after-connect! state name tools prompts resources)
                 new-conn)
               (catch Exception e
                 (record-failure! state name (ex-message e))
@@ -196,13 +206,30 @@
       (str (sanitize-tool-name server-name) "_" sanitized)
       name)))
 
+(defn- resource-tool-name
+  "Pi resourceNameToToolName: [^a-zA-Z0-9] → _, collapse runs, trim
+   leading/trailing _, lowercase; empty or digit-start → prefixed with
+   'resource'."
+  [name]
+  (let [result (-> (str name)
+                   (str/replace #"[^a-zA-Z0-9]" "_")
+                   (str/replace #"_+" "_")
+                   (str/replace #"^_+|_+$" "")
+                   str/lower-case)]
+    (if (or (str/blank? result) (re-matches #"^[0-9].*" result))
+      (str "resource" (when (seq result) (str "_" result)))
+      result)))
+
 (defn- direct-tools-specs
   "Resolve direct-tool specs from the metadata cache only (never spawns;
    §10.5.1): MCP_DIRECT_TOOLS env → only listed servers (config ignored),
    __none__ → none; else server :direct-tools (bool | name list), else
    settings :direct-tools, else false. Skips disabled and misconfigured
-   servers. Naming per §10.5 with collision fallback. STATE is the §10.1
-   atom."
+   servers. Naming per §10.5 with collision fallback. Phase 2: server
+   :include-tools/:exclude-tools globs filter the registration (pi
+   isToolAllowed), and :expose-resources (default true) registers
+   read_<resource> tools alongside the tool list (pi resource tools).
+   STATE is the §10.1 atom."
   [state]
   (let [config (:config @state)
         settings (:settings config)
@@ -221,20 +248,37 @@
                        env-servers (contains? env-servers name)
                        :else (if (contains? definition :direct-tools)
                                (:direct-tools definition)
-                               (if (:direct-tools settings) true false)))]
+                               (if (:direct-tools settings) true false)))
+              mode (or (:tool-prefix definition) prefix-mode)
+              include (:include-tools definition)
+              exclude (:exclude-tools definition)]
           (when filter
             (let [entry (metadata/server-entry (:cache @state) name definition settings)
-                  mode (or (:tool-prefix definition) prefix-mode)]
+                  add-spec! (fn [tool-name description schema & [resource-uri]]
+                              (when (proxy/tool-allowed? name tool-name include exclude)
+                                (let [prefixed (prefixed-tool-name name tool-name mode @seen)]
+                                  (swap! seen conj prefixed)
+                                  (swap! specs conj
+                                         (cond-> {:server name
+                                                  :original tool-name
+                                                  :prefixed prefixed
+                                                  :description description
+                                                  :input-schema schema}
+                                           resource-uri (assoc :resource-uri resource-uri))))))]
               (doseq [tool (:tools entry)]
                 (when (or (true? filter) (some #{(:name tool)} filter))
-                  (let [prefixed (prefixed-tool-name name (:name tool) mode @seen)]
-                    (swap! seen conj prefixed)
-                    (swap! specs conj
-                           {:server name
-                            :original (:name tool)
-                            :prefixed prefixed
-                            :description (or (:description tool) "")
-                            :input-schema (:inputSchema tool)})))))))))
+                  (add-spec! (:name tool)
+                             (or (:description tool) "")
+                             (:inputSchema tool))))
+              (when (not= false (:expose-resources definition))
+                (doseq [resource (:resources entry)]
+                  (let [base-name (str "read_" (resource-tool-name (:name resource)))]
+                    (when (or (true? filter) (some #{base-name} filter))
+                      (add-spec! base-name
+                                 (or (:description resource)
+                                     (str "Read resource: " (:uri resource)))
+                                 nil
+                                 (:uri resource)))))))))))
     @specs))
 
 (defn- truncate
@@ -307,7 +351,10 @@
 
 (defn- sync-direct-tools!
   "Diff-based resync (§10.5): register new/updated (by fingerprint),
-   unregister removed. Runs at init and after every connect/refresh."
+   unregister removed. Runs at init and after every connect/refresh.
+   Resource read_* tools execute via proxy/read-mcp-resource; tools via
+   proxy/call-mcp-tool. All declare :streams? — progress notifications
+   stream as partial content while a call runs."
   [state]
   (let [specs (direct-tools-specs state)
         next-names (set (map :prefixed specs))
@@ -315,7 +362,16 @@
         fingerprint (fn [spec]
                       (pr-str (select-keys spec
                                            [:server :original :prefixed
-                                            :description :input-schema])))]
+                                            :description :input-schema
+                                            :resource-uri])))
+        make-execute (fn [spec]
+                       (fn [args & [on-update]]
+                         (if (:resource-uri spec)
+                           (proxy/read-mcp-resource @state (:server spec)
+                                                    (:resource-uri spec))
+                           (proxy/call-mcp-tool @state (:server spec)
+                                                (:original spec) args
+                                                {:on-update on-update}))))]
     (doseq [spec specs]
       (let [fp (fingerprint spec)]
         (when (not= fp (get registered (:prefixed spec)))
@@ -325,11 +381,8 @@
                                :description (or (:description spec) "(no description)")
                                :prompt-snippet (truncate (:description spec) 100)
                                :parameters (normalize-direct-schema (:input-schema spec))
-                               :execute (fn [args]
-                                          (proxy/call-mcp-tool @state
-                                                               (:server spec)
-                                                               (:original spec)
-                                                               args))})
+                               :streams? true
+                               :execute (make-execute spec)})
           (swap! (:registered-direct @state) assoc (:prefixed spec) fp))))
     (doseq [name (remove next-names (keys registered))]
       (ext/unregister-tool! (:api @state) name)
@@ -360,7 +413,9 @@
 
 (defn- register-proxy-tool!
   "Register the mcp proxy tool (replaces by name — re-registered after
-   every connect/refresh so the system prompt sees current availability)."
+   every connect/refresh so the system prompt sees current availability).
+   :streams? — progress notifications stream as partial content while a
+   call runs."
   [state]
   (ext/register-tool! (:api @state)
                       {:name "mcp"
@@ -394,7 +449,9 @@
                                      "offset" {:type "number"
                                                :description "Search offset (default 0)"}}
                                     :required []}
-                       :execute (fn [params] (proxy/execute state params))}))
+                       :streams? true
+                       :execute (fn [params & [on-update]]
+                                  (proxy/execute state params on-update))}))
 
 ;; ─── /mcp command (§10.6) ─────────────────────────────────────────────────
 
@@ -450,14 +507,16 @@
 
 (defn- handle-refresh
   "Reload the EDN config: add/remove servers (disconnecting dropped ones),
-   resync tools, rebuild the description (§10.6)."
+   resync tools + prompts, rebuild the description (§10.6)."
   [state ctx]
   (let [config (config/load-config)
         current-names (set (keys (:mcp-servers (:config @state))))]
     (doseq [name (remove (set (keys (:mcp-servers config))) current-names)]
       ((:disconnect-fn @state) name))
     (swap! state assoc :config config :servers (rebuild-servers state config))
+    (auth/configure-storage! (:settings config))
     (sync-direct-tools! state)
+    (prompts/sync-prompt-commands! state)
     (bootstrap-direct-tools! state)
     (register-proxy-tool! state)
     (notify-or-print state ctx "MCP config reloaded.")))
@@ -703,11 +762,23 @@
             (notify-or-print state ctx (str "OAuth credentials cleared for \"" rest-args "\".")))
         (notify-or-print state ctx "Usage: /mcp logout <server>"))
 
+      "prompts"
+      (notify-or-print state ctx (prompts/prompts-text state) "MCP prompts")
+
+      "setup"
+      (if (:has-ui ctx)
+        (open-setup-panel! state ctx)
+        (notify-or-print state ctx "The setup panel requires the interactive TUI (headless: edit mcp.edn directly)."))
+
+      "import"
+      (handle-import state ctx)
+
       (notify-or-print state ctx (str "Unknown /mcp subcommand: " sub)))))
 
 (def ^:private mcp-subcommands
   ["status" "search" "list" "connect" "disconnect"
-   "enable" "disable" "refresh" "auth" "logout"])
+   "enable" "disable" "refresh" "auth" "logout"
+   "prompts" "setup" "import"])
 
 (defn- mcp-completions
   "Argument completions: subcommands, then server names for the
@@ -724,6 +795,145 @@
           (let [servers (filter #(str/starts-with? % server-prefix)
                                 (keys (:mcp-servers (:config @state))))]
             (mapv (fn [s] {:value (str sub " " s) :label s}) servers)))))))
+
+;; ─── Setup panel + host-config import (§10.6 setup/import) ───────────────
+
+(defn- reload-config!
+  "Reload the EDN config into the live state (used after setup-panel
+   writes) — servers added/removed, tools + prompts resynced."
+  [state]
+  (let [config (config/load-config)
+        current-names (set (keys (:mcp-servers (:config @state))))]
+    (doseq [name (remove (set (keys (:mcp-servers config))) current-names)]
+      ((:disconnect-fn @state) name))
+    (swap! state assoc :config config :servers (rebuild-servers state config))
+    (auth/configure-storage! (:settings config))
+    (sync-direct-tools! state)
+    (prompts/sync-prompt-commands! state)
+    (register-proxy-tool! state)))
+
+(defn- setup-callbacks
+  "The setup panel's callbacks over the extension state (pi
+   buildSetupCallbacks): every write goes to the project config file, then
+   the config is reloaded live; add-known/add-server test the connection."
+  [state _ctx]
+  {:presets (mapv (fn [p] (select-keys p [:id :name :summary]))
+                  config/known-server-presets)
+   :discover-imports (fn [] (config/host-config-discoveries))
+   :add-known
+   (fn [preset]
+     (try
+       (let [{:keys [path changed]} (config/write-server-entry!
+                                     (:id preset) (:entry preset))]
+         (reload-config! state)
+         (spawn (fn []
+                  (try ((:ensure-connected-fn @state) (:id preset))
+                       (catch Exception _ nil))))
+         {:ok true
+          :message (str "Added " (:name preset) " to " path
+                        (when changed " — connecting…"))})
+       (catch Exception e
+         {:ok false :message (str "Failed to add server: " (ex-message e))})))
+   :add-server
+   (fn [name entry]
+     (try
+       (let [{:keys [path]} (config/write-server-entry! name entry)]
+         (reload-config! state)
+         (let [conn (try ((:ensure-connected-fn @state) name)
+                         (catch Exception _ nil))]
+           {:ok true
+            :message (str "Saved " name " to " path
+                          (if conn " — connection OK." " — saved (connect failed, see /mcp status)."))}))
+       (catch Exception e
+         {:ok false :message (str "Failed to add server: " (ex-message e))})))
+   :adopt-imports
+   (fn [kinds]
+     (try
+       (let [discoveries (filter (fn [d] (contains? (set kinds) (:kind d)))
+                                 (config/host-config-discoveries))
+             {:keys [path added skipped]} (config/adopt-host-configs! discoveries)]
+         (reload-config! state)
+         {:ok true
+          :message (str "Adopted " (count added) " server" (when (not= 1 (count added)) "s")
+                        " into " path
+                        (when (seq skipped) (str "; skipped " (count skipped) " already defined")))})
+       (catch Exception e
+         {:ok false :message (str "Failed to adopt host configs: " (ex-message e))})))
+   :scaffold
+   (fn []
+     (let [path (config/project-config-path)]
+       (if (fs/exists? path)
+         {:ok false :message (str "Project config already exists at " path)}
+         (do (fs/create-dirs (fs/parent path))
+             (spit path "{:mcp-servers {}}\n")
+             {:ok true :message (str "Created " path)}))))})
+
+(defn- open-setup-panel!
+  "Show the setup panel (setup.clj — built on kmet.tui, mounted via
+   ui-custom like the McpPanel)."
+  [state ctx]
+  (ext/ui-custom
+   (:api @state)
+   (fn [_tui _th kb close]
+     (setup/make-setup-panel (setup-callbacks state ctx)
+                             (fn [_result] (close nil))
+                             kb))
+   {:overlay true
+    :overlay-options {:anchor :center :width 82}}))
+
+(defn- handle-import
+  "/mcp import — adopt ALL discovered host configs into the project file
+   (headless path; the setup panel does the interactive variant)."
+  [state ctx]
+  (let [discoveries (config/host-config-discoveries)]
+    (if (seq discoveries)
+      (let [{:keys [path added skipped]} (config/adopt-host-configs! discoveries)]
+        (reload-config! state)
+        (notify-or-print state ctx
+                         (str "Adopted " (count added) " server" (when (not= 1 (count added)) "s")
+                              " from host configs into " path
+                              (when (seq skipped)
+                                (str "; skipped " (count skipped) " already defined"))
+                              ".")))
+      (notify-or-print state ctx "No host MCP configs found (Cursor/Claude/Codex/opencode/windsurf/vscode)."))))
+
+;; ─── Idle reaper (pi init.ts idle-timeout) ────────────────────────────────
+;; settings :idle-timeout (minutes, default 10, 0 disables) disconnects
+;; servers whose connections have been idle past the window; server
+;; :idle-timeout overrides. :keep-alive servers default to no reaping
+;; (pi: persistsAfterFirstSpawn → 0). A daemon thread checks every 30s.
+
+(defn- idle-timeout-minutes
+  "The effective idle timeout for a server (minutes; 0 = never reap)."
+  [state name]
+  (let [definition (get-in @state [:config :mcp-servers name])
+        settings (:settings (:config @state))
+        global (if (number? (:idle-timeout settings)) (:idle-timeout settings) 10)]
+    (if (contains? definition :idle-timeout)
+      (or (:idle-timeout definition) 0)
+      (if (= :keep-alive (:lifecycle definition)) 0 global))))
+
+(defn- reap-idle-servers!
+  "Disconnect every connected server idle past its timeout."
+  [state]
+  (doseq [[name {:keys [conn]}] (:servers @state)]
+    (when-let [c @conn]
+      (let [timeout-min (idle-timeout-minutes state name)
+            idle-ms (- (System/currentTimeMillis) (client/last-used c))]
+        (when (and (pos? timeout-min)
+                   (> idle-ms (* timeout-min 60000)))
+          (disconnect-server! state name))))))
+
+(defn- start-idle-reaper!
+  "Background daemon: check every 30s until :reaper-stop is set (shutdown)."
+  [state]
+  (spawn
+   (fn []
+     (loop []
+       (Thread/sleep 30000)
+       (when-not @(:reaper-stop @state)
+         (try (reap-idle-servers! state) (catch Exception _ nil))
+         (recur))))))
 
 ;; ─── Events (§10.7) ───────────────────────────────────────────────────────
 
@@ -746,6 +956,44 @@
 
 ;; ─── Init / shutdown (§10.2) ──────────────────────────────────────────────
 
+(defn- register-script-tool!
+  "Register the mcpScript tool (pi index.ts — gated by settings
+   :script-mode, default on)."
+  [state]
+  (ext/register-tool! (:api @state)
+                      {:name "mcpScript"
+                       :label "MCP Script"
+                       :description (str "Run trusted Clojure that makes multiple MCP tool calls in one "
+                                         "request — loop, filter, chain, or fan out between calls. "
+                                         "For a single MCP call, search, describe, status check, or auth "
+                                         "action, use the mcp tool instead. "
+                                         "Discover with (tools/search {:query \"...\"}) — resolves to "
+                                         "{:items [{:path :name :server :description :score}] :total "
+                                         ":has-more :next-offset}, not an {:ok :data} envelope. "
+                                         "Inspect with (tools/describe {:path \"...\"}) — the tool "
+                                         "descriptor, or {:path :error {:code :message}}. "
+                                         "Then call (tools/call path args) — resolves to {:ok true :data} "
+                                         "or {:ok false :error {:code :message}} — or use direct flat "
+                                         "calls when the name is already known; use (emit value) for "
+                                         "user-visible output.")
+                       :prompt-snippet "Batch multiple MCP tool calls in one Clojure request (loop, filter, chain)"
+                       :parameters {:type "object"
+                                    :properties
+                                    {"code" {:type "string"
+                                             :description "Trusted Clojure MCP script. Use (tools/call \"server_tool\" args) and (emit value)."}
+                                     "timeoutMs" {:type "number"
+                                                  :description "Execution timeout in milliseconds (default: 30000)"}}
+                                    :required ["code"]}
+                       :streams? true
+                       :execute (fn [params & [on-update]]
+                                  (let [params (or params {})
+                                        code (or (:code params) "")
+                                        timeout-ms (when (number? (:timeoutMs params))
+                                                     (:timeoutMs params))]
+                                    (script/run-script state code
+                                                       {:timeout-ms timeout-ms
+                                                        :on-update on-update})))}))
+
 (defn init
   "Extension init (required by the loader)."
   [api]
@@ -753,18 +1001,24 @@
         _ (config/ensure-global-template!)
         state (init-state api config)]
     (reset! state-atom state)
+    (auth/configure-storage! (:settings config))
     ;; 2. proxy tool (§10.4)
     (register-proxy-tool! state)
+    ;; 2b. mcpScript tool (pi: settings.scriptMode !== false)
+    (when (not= false (:script-mode (:settings config)))
+      (register-script-tool! state))
     ;; 3. direct tools from cache (§10.5)
     (sync-direct-tools! state)
-    ;; 3b. direct-tools bootstrap (pi init.ts): background-connect servers
+    ;; 3b. prompt commands from cache (pi resolveCachedPrompts)
+    (prompts/sync-prompt-commands! state)
+    ;; 3c. direct-tools bootstrap (pi init.ts): background-connect servers
     ;; whose direct tools aren't in the metadata cache yet, so they
     ;; register without a manual first connect
     (bootstrap-direct-tools! state)
     ;; 4. /mcp command + completions (§10.6)
     (ext/register-command! api
                            {:name "mcp"
-                            :description "MCP server status, search, connect, auth"
+                            :description "MCP server status, search, connect, auth, setup"
                             :get-argument-completions (fn [arg-prefix]
                                                         (mcp-completions state arg-prefix))
                             ;; handlers receive (ctx args) — the extension
@@ -773,6 +1027,8 @@
                             ;; (ctx args), see test-extensions "ctx dispatch")
                             :handler (fn [ctx args]
                                        (handle-mcp-command state args ctx))})
+    ;; 4b. idle reaper (settings :idle-timeout)
+    (start-idle-reaper! state)
     ;; 5. events (§10.7)
     (ext/on-event api :session-start (fn [event ctx]
                                        (on-session-start state event ctx)))
@@ -784,9 +1040,11 @@
 
 (defn shutdown
   "Extension shutdown (optional): close all connections, kill process
-   trees, close the OAuth callback server. Idempotent."
+   trees, stop the idle reaper, close the OAuth callback server.
+   Idempotent."
   [_api]
   (when-let [state @state-atom]
+    (reset! (:reaper-stop @state) true)
     (disconnect-all! state)
     (auth/shutdown!)
     (reset! state-atom nil)))
