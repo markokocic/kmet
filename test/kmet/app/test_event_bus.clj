@@ -109,5 +109,7 @@
   (event-bus/clear-event-listeners!)
   (event-bus/on-event :bad (fn [_] (throw (ex-info "boom" {}))))
   (event-bus/on-event :bad (fn [_] {:ok true}))
-  (t/is (= {:ok true} (event-bus/emit-event! {:type :bad}))
-        "an errored handler doesn't prevent later handlers or throw"))
+  ;; The throwing listener prints a warning to stderr — suppress it.
+  (binding [*err* (java.io.StringWriter.)]
+    (t/is (= {:ok true} (event-bus/emit-event! {:type :bad}))
+          "an errored handler doesn't prevent later handlers or throw")))

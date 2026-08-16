@@ -21,9 +21,11 @@
 
 (deftest test-run-error-returns-nil
   (testing "run returns nil when the agent reports an error"
-    (with-redefs [agent/run-agent-turn (fn [_ ag-opts]
-                                         ((:on-error ag-opts) (ex-info "boom" {})))]
-      (is (nil? (print-mode/run (opts)))))))
+    ;; print-mode surfaces the error to stderr — capture it in the test.
+    (binding [*err* (java.io.StringWriter.)]
+      (with-redefs [agent/run-agent-turn (fn [_ ag-opts]
+                                           ((:on-error ag-opts) (ex-info "boom" {})))]
+        (is (nil? (print-mode/run (opts))))))))
 
 (deftest test-run-passes-message
   (testing "the joined user message reaches the agent"

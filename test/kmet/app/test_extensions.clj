@@ -574,7 +574,9 @@
                                    (fn [_ev] (throw (ex-info "boom" {}))))
             u2 (event-bus/on-event :context
                                    (fn [_ev] {:messages ["kept"]}))]
-        (t/is (= ["kept"] (ai-hooks/apply-context-hook ["orig"])))
+        ;; The throwing listener prints a warning to stderr — suppress it.
+        (binding [*err* (java.io.StringWriter.)]
+          (t/is (= ["kept"] (ai-hooks/apply-context-hook ["orig"]))))
         (u1) (u2))
       (t/is (= ["orig"] (ai-hooks/apply-context-hook ["orig"]))
             "no handlers — passthrough"))
@@ -652,7 +654,9 @@
         (swap! unsubs conj
                (event-bus/on-event :resources-discover
                                    (fn [_] (throw (ex-info "boom" {})))))
-        (extensions/discover-resources! :reload)
+        ;; The throwing listener prints a warning to stderr — suppress it.
+        (binding [*err* (java.io.StringWriter.)]
+          (extensions/discover-resources! :reload))
         (t/is (some? (skills/get-skill "ext-skill"))
               "the good handler's paths were already applied")
         (t/is (= [:startup :startup :reload] @seen-reasons)
