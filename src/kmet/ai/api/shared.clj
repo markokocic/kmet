@@ -526,17 +526,56 @@
    classified by message."
   (re-pattern "(?i)received rst_stream"))
 
+(def ^:private max-error-body-chars 2000)
+
+(defn- http-error-message
+  "Best-effort extraction of a provider's error message from a
+   babashka.http-client exceptional-status exception (pi: undici surfaces the
+   parsed error body to the caller — 'Exceptional status code: 400' alone
+   matches no overflow/retry pattern, which silently kills auto-compaction
+   and auto-retry on 400/413/429-style provider errors).
+
+   OpenAI-compatible providers send {\"error\": {\"message\": ...}} (Anthropic
+   and Gemini use the same shape); the :msg alias covers the rest. A plain
+   text body passes through trimmed (capped); nil keeps the caller's fallback
+   when the body is unreadable or unparseable."
+  [e]
+  (let [d (ex-data e)
+        status (:status d)
+        body (:body d)]
+    (when (and (integer? status) (>= status 400))
+      (let [text (cond
+                   (string? body) body
+                   ;; babashka.http-client :as :stream responses carry the
+                   ;; unconsumed HttpResponseInputStream here
+                   (instance? java.io.InputStream body)
+                   (try (slurp body) (catch Exception _ nil))
+                   :else nil)
+            parsed (try (json/parse-string text true) (catch Exception _ nil))
+            trimmed (some-> text str str/trim)
+            pick (fn [s] (let [t (some-> s str str/trim)] (when (seq t) t)))]
+        (or (pick (some-> parsed :error :message))
+            (pick (some-> parsed :error :msg))
+            (when (seq trimmed)
+              (subs trimmed 0 (min max-error-body-chars (count trimmed)))))))))
+
 (defn transport-error-message
   "Message for a transport-layer exception. Network failures carry a stable
    'network error' token so the loop's retry classifier (retryable-error?)
    recognizes them even when the JVM message is nil — 'Request failed:
    ConnectException' matches no retryable pattern, which silently kills
    auto-retry on connect/DNS failures (pi's undici always reports transport
-   failures as 'fetch failed'). Non-network exceptions keep their message."
+   failures as 'fetch failed'). HTTP error responses (babashka's
+   'Exceptional status code: N') surface the provider's message from the
+   response body so overflow/throttle classifiers see the real error.
+   Non-network exceptions keep their message."
   [e]
   (let [msg (ex-message e)
-        cls (some-> (class e) .getSimpleName)]
+        cls (some-> (class e) .getSimpleName)
+        http-msg (http-error-message e)]
     (cond
+      http-msg http-msg
+
       (contains? network-exception-classes cls)
       (str "network error: " (if (str/blank? msg) cls msg))
 

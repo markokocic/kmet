@@ -17,6 +17,7 @@
             [kmet.ai.api.mistral-conversations :as mistral]
             [kmet.ai.api.google-vertex :as vertex]
             [kmet.ai.api.bedrock-converse-stream :as bedrock]
+            [kmet.app.loop :as loop]
             [kmet.ai.models :as m]
             [kmet.app.tools.core :as tools]))
 
@@ -606,7 +607,28 @@
     (t/is (= "Broken pipe" (te (java.io.IOException. "Broken pipe"))))
     ;; Non-network exceptions keep their message / legacy fallback
     (t/is (= "Invalid API key" (te (ex-info "Invalid API key" {}))))
-    (t/is (= "Request failed: ExceptionInfo" (te (ex-info nil {}))))))
+    (t/is (= "Request failed: ExceptionInfo" (te (ex-info nil {}))))
+    ;; babashka.http-client throw-on-error: 'Exceptional status code: N' with
+    ;; the full response in ex-data — the provider's error message must
+    ;; surface so overflow/throttle classifiers see the real error
+    (let [overflow "{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"This model's maximum context length is 1048576 tokens. However, you requested 1048586 tokens. Please reduce the length of the messages or completion.\"}}"
+          pairing "{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'.\"}}"
+          http-err (fn [body] (ex-info "Exceptional status code: 400" {:status 400 :body body}))]
+      (t/is (= "This model's maximum context length is 1048576 tokens. However, you requested 1048586 tokens. Please reduce the length of the messages or completion."
+               (te (http-err overflow)))
+            "HTTP error bodies surface the provider's :error :message")
+      (t/is (= "An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'."
+               (te (http-err pairing)))
+            "non-overflow provider messages pass through")
+      (t/is (= "rate limit exceeded" (te (http-err "rate limit exceeded")))
+            "plain-text bodies pass through trimmed")
+      (t/is (= "Exceptional status code: 400" (te (http-err nil)))
+            "missing body keeps the original message")
+      ;; the surfaced overflow message must classify as a context overflow
+      (t/is (loop/context-overflow? (te (http-err overflow)))
+            "the surfaced body feeds the overflow classifier")
+      (t/is (not (loop/context-overflow? (te (http-err pairing))))
+            "other provider errors are not misclassified as overflow"))))
 
 ;; ─── Thinking level machinery (pi: clampThinkingLevel) ─────────────────────
 
