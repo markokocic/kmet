@@ -16,6 +16,7 @@
             [kmet.ai.aws-sigv4 :as aws-sigv4]
             [kmet.libs.dynamic-value :as dynamic-value]
             [kmet.ai.google-adc :as google-adc]
+            [kmet.libs.edn-settings :as eds]
             [kmet.libs.file-lock :as file-lock]))
 
 ;; ─── Env var table (pi env-api-keys.ts) ────────────────────────────────────
@@ -135,11 +136,7 @@
                (into {} (filter (fn [[_ v]] (valid-credential? v))) parsed)))
            (catch Exception _ nil)))))
 
-(defn- pretty-auth
-  "Canonical pretty EDN for auth.edn: one entry per line, closing brace on
-   its own line (same format as config's settings files)."
-  [m]
-  (str "{" (str/join "\n " (for [[k v] m] (str (pr-str k) " " (pr-str v)))) "\n}\n"))
+
 
 (defn load-auth!
   "Load auth.edn into the auth atom; returns the auth map. Called at startup
@@ -164,7 +161,7 @@
     (file-lock/with-file-lock (str path ".lock")
       (fn []
         (let [updated (f (or (read-auth-file) {}))]
-          (spit path (pretty-auth updated))
+          (spit path (eds/pretty-edn updated))
           updated)))))
 
 (defn set-credential!

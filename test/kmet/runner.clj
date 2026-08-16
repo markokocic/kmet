@@ -91,6 +91,7 @@
     kmet.libs.test-markdown
     kmet.libs.test-highlight
     kmet.libs.test-oauth
+    kmet.libs.test-edn-settings
     kmet.app.ui.test-chat-history
     kmet.app.ui.test-user-message
     kmet.app.ui.test-assistant-message

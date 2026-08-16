@@ -5,7 +5,8 @@
             [clojure.java.io :as io]
             [babashka.fs :as fs]
             [kmet.config :as cfg]
-            [kmet.ai.auth :as auth]))
+            [kmet.ai.auth :as auth]
+            [kmet.libs.edn-settings :as eds]))
 
 ;; ─── Defaults ──────────────────────────────────────────────────────────────
 
@@ -22,19 +23,7 @@
   ;; provider defaults live in the catalog EDN, not in default-config.
   (t/is (not (contains? cfg/default-config :providers))))
 
-;; ─── Path expansion ────────────────────────────────────────────────────────
 
-(t/deftest test-expand-path-no-tilde
-  (t/is (= "/tmp/foo" (cfg/expand-path "/tmp/foo"))))
-
-(t/deftest test-expand-path-with-tilde
-  (let [home (System/getProperty "user.home")
-        expanded (cfg/expand-path "~/.kmet/agent/settings.edn")]
-    (t/is (str/starts-with? expanded home))
-    (t/is (str/ends-with? expanded "/.kmet/agent/settings.edn"))))
-
-(t/deftest test-expand-path-relative
-  (t/is (= ".kmet/settings.edn" (cfg/expand-path ".kmet/settings.edn"))))
 
 ;; ─── Load config ──────────────────────────────────────────────────────────
 
@@ -82,32 +71,7 @@
   (let [c (dissoc cfg/default-config :theme)]
     (t/is (= "dark" (cfg/get-theme-name c)))))
 
-;; ─── Configuration merging ────────────────────────────────────────────────
 
-(t/deftest test-deep-merge
-  (t/testing "nested maps merge key-by-key (pi: project overrides global, objects merge)"
-    (let [base {:theme "dark"
-                :providers {:openai {:model "gpt-4o" :base-url "u"}
-                            :anthropic {:model "claude"}}}
-          user {:providers {:openai {:model "gpt-4o-mini"}}}
-          merged (cfg/deep-merge base user)]
-      (t/is (= "dark" (:theme merged)))
-      (t/is (= "gpt-4o-mini" (get-in merged [:providers :openai :model])))
-      (t/is (= "u" (get-in merged [:providers :openai :base-url])))
-      (t/is (= "claude" (get-in merged [:providers :anthropic :model])))))
-  (t/testing "non-map values: later wins; vectors replaced, not merged"
-    (let [merged (cfg/deep-merge {:a 1 :v [1 2]} {:a 2 :v [3]})]
-      (t/is (= 2 (:a merged)))
-      (t/is (= [3] (:v merged)))))
-  (t/testing "scalar vs map conflict: later value wins without crashing"
-    (t/is (= {:a {:x 2}} (cfg/deep-merge {:a 1} {:a {:x 2}})))
-    (t/is (= {:a 1} (cfg/deep-merge {:a {:x 2}} {:a 1}))))
-  (t/testing "pi settings.md example: compaction partial override"
-    (let [global {:compaction {:enabled true :reserveTokens 16384}}
-          project {:compaction {:reserveTokens 8192}}
-          merged (cfg/deep-merge global project)]
-      (t/is (= true (get-in merged [:compaction :enabled])))
-      (t/is (= 8192 (get-in merged [:compaction :reserveTokens]))))))
 
 ;; ─── Scope-relative path resolution ────────────────────────────────────────
 
@@ -348,58 +312,6 @@
           (cfg/set-hide-thinking-block! true)
           (t/is (= {:hide-thinking-block true} (edn/read-string (slurp settings-file))))))
       (finally (fs/delete-tree tmp)))))
-
-(t/deftest test-save-setting-pretty-format
-  (t/testing "one entry per line, closing brace on its own line (pi: JSON.stringify(,2))"
-    (let [tmp (str (fs/absolutize (fs/file "target" (str "test-settings-pretty-" (System/currentTimeMillis)))))
-          settings-file (str tmp "/settings.edn")]
-      (fs/create-dirs tmp)
-      (try
-        (with-redefs [cfg/global-settings-path (fn [] settings-file)]
-          (cfg/save-setting! [:provider] :opencode-go)
-          (t/is (= "{:provider :opencode-go\n}\n" (slurp settings-file))))
-        (finally (fs/delete-tree tmp))))))
-
-(t/deftest test-save-setting-preserves-comments
-  (t/testing "in-place update keeps unrelated lines"
-    (let [tmp (str (fs/absolutize (fs/file "target" (str "test-settings-comments-" (System/currentTimeMillis)))))
-          settings-file (str tmp "/settings.edn")]
-      (fs/create-dirs tmp)
-      (try
-        (with-redefs [cfg/global-settings-path (fn [] settings-file)]
-          (spit settings-file "{:provider :opencode-go\n ;; keep me\n :hide-thinking-block true\n}\n")
-          (cfg/set-hide-thinking-block! false)
-          (t/is (= "{:provider :opencode-go\n ;; keep me\n :hide-thinking-block false\n}\n"
-                   (slurp settings-file))))
-        (finally (fs/delete-tree tmp)))))
-  (t/testing "inserting a new key preserves comments, and later updates stay in-place"
-    (let [tmp (str (fs/absolutize (fs/file "target" (str "test-settings-comments2-" (System/currentTimeMillis)))))
-          settings-file (str tmp "/settings.edn")]
-      (fs/create-dirs tmp)
-      (try
-        (with-redefs [cfg/global-settings-path (fn [] settings-file)]
-          (spit settings-file "{:provider :opencode-go\n ;; keep me\n}\n")
-          (cfg/set-hide-thinking-block! true)
-          (t/is (= "{:provider :opencode-go\n ;; keep me\n :hide-thinking-block true\n}\n"
-                   (slurp settings-file)))
-          (t/testing "second toggle updates in place, comment still there"
-            (cfg/set-hide-thinking-block! false)
-            (t/is (= "{:provider :opencode-go\n ;; keep me\n :hide-thinking-block false\n}\n"
-                     (slurp settings-file)))))
-        (finally (fs/delete-tree tmp))))))
-
-(t/deftest test-save-setting-nested-merge
-  (t/testing "nested fields merge leaf-wise, other nested keys survive (pi: persistScopedSettings)"
-    (let [tmp (str (fs/absolutize (fs/file "target" (str "test-settings-nested-" (System/currentTimeMillis)))))
-          settings-file (str tmp "/settings.edn")]
-      (fs/create-dirs tmp)
-      (try
-        (with-redefs [cfg/global-settings-path (fn [] settings-file)]
-          (cfg/save-setting! [:terminal :show-images] false)
-          (cfg/save-setting! [:terminal :image-width-cells] 80)
-          (t/is (= {:terminal {:show-images false :image-width-cells 80}}
-                   (edn/read-string (slurp settings-file)))))
-        (finally (fs/delete-tree tmp))))))
 
 (t/deftest test-concurrent-setting-saves
   (t/testing "lock serializes writes — no lost update (pi: proper-lockfile)"

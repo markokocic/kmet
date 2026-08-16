@@ -1,7 +1,11 @@
 # Moving app/ai modules into kmet.libs — analysis
 
-> Status: Tier 1 step 1 done — `kmet.ai.config-value` moved to
-> `kmet.libs.dynamic-value` (2026-08-16). Nothing else moved yet.
+> Status: Tier 1 steps 1-2 done.
+> - Step 1: `kmet.ai.config-value` → `kmet.libs.dynamic-value` (2026-08-16)
+> - Step 2: `kmet.libs.edn-settings` extracted from `kmet.config` + `kmet.ai.auth`
+>   (pretty-edn, deep-merge, expand-path, update-setting-text, save-edn-setting!).
+>   `pretty-auth` duplicate eliminated.
+>
 > Layer rule enforced by `test/kmet/libs/test-self-contained.clj` (libs must not
 > require anything outside `kmet.libs.*`) and `test/kmet/ai/test-self-contained.clj`.
 
@@ -25,7 +29,8 @@ It *does* share `kmet.libs.oauth` — the seam that already works.
 
 | Module | Size | deps | Notes |
 |---|---|---|---|
-| `kmet.ai.config-value` | 260 | stdlib only | `$VAR` / `!command` config-value resolution. **Highest value**: the mcp-adapter's `:bearer-token-env` is exactly this pattern; extensions resolving secrets from env/commands is a core need. |
+| `kmet.ai.config-value` | 260 | stdlib only | `$VAR` / `!command` config-value resolution. **Done** → `kmet.libs.dynamic-value`. |
+| `kmet.libs.edn-settings` | ~150 | libs only | `pretty-edn`, `deep-merge`, `expand-path`, `update-setting-text`, `save-edn-setting!`. **Done** — extracted from `config` + `auth`, eliminates `pretty-auth` duplicate. |
 | `kmet.ai.aws-sigv4` | ~206 | stdlib + JVM crypto | Textbook generic library (SigV4 signing is a published spec; tests pin AWS's official test suite). Only consumers: `auth`, `bedrock_converse_stream`. |
 | `kmet.app.context` | 44 | `babashka.fs` only | AGENTS.md/CLAUDE.md discovery walking up from cwd. Generic file discovery; extensions (e.g. skills that read project context) would use it. |
 | `kmet.ai.hooks` | 80 | none | The single-fn slot registry pattern is generic — and already duplicated in `kmet.ai.auth` (`config-key-source`, `oauth-source` atoms). Extract `kmet.libs.hooks` (install/apply), have both use it. |
