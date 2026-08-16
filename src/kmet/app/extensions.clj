@@ -812,6 +812,7 @@
                                       (str/starts-with? n "clojure.data.")))
                              (or (str/starts-with? n "clojure.")
                                  (str/starts-with? n "babashka.")
+                                 (str/starts-with? n "cheshire.")
                                  (str/starts-with? n "kmet.tui.")
                                  (str/starts-with? n "kmet.libs.")))
                     [(ns-name ns-obj) (ns-interns ns-obj)])))

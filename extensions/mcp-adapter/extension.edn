@@ -1,0 +1,2 @@
+{:name "mcp-adapter"
+ :entry "src/extensions/mcp_adapter.clj"}

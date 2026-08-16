@@ -83,6 +83,15 @@
           @(proc/process ["kill" "-9" (str p)] {:out :discard :err :discard})
           (catch Exception _e nil))))))
 
+(defn process-pid
+  "The pid of a babashka process map, or nil. The process record has no
+   :pid key, and .pid is not callable from extension sci contexts — this
+   host-side accessor is the shared seam."
+  [p]
+  (try
+    (-> p :proc .pid)
+    (catch Exception _ nil)))
+
 ;; ─── Pid registry ──────────────────────────────────────────────────────────
 ;; Processes spawned by the app, killed in bulk on shutdown.
 

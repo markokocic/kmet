@@ -10,9 +10,6 @@ burning your context window, you get one `mcp` proxy tool (~200 tokens).
 The agent discovers what it needs on demand with `search`/`describe`, and
 servers connect lazily — only when a tool is actually called.
 
-**Status: planned (Phase 1) — implementation pending.** The behavior below
-is the approved design; see `../../mcp-adapter.md` for the full plan.
-
 ## Enabling
 
 Extensions load from `~/.kmet/agent/extensions/` (global) and
@@ -38,31 +35,50 @@ Exactly two files:
 | `.kmet/mcp.edn` (project) | per-project | higher — the only file the extension writes |
 
 Per-field server merge, project wins. Keys are read in kebab or camel form,
-so copying content from a pi-style JSON config is a light edit.
+so copying content from a pi-style JSON config is a light edit. A
+higher-precedence source that repoints a server at a different `:url` does
+**not** inherit the lower entry's credentials (`:headers`,
+`:bearer-token`, `:bearer-token-env`, `:oauth`) — they are bound to the
+url that supplied them.
 
 ```clojure
 {:settings {:direct-tools false           ;; global default for direct tools
             :tool-prefix :server          ;; :server | :none | :short | :mcp
             :disable-proxy-tool false}
  :mcp-servers
- {"chrome-devtools" {:command "npx"
-                     :args ["-y" "chrome-devtools-mcp@1.6.0"]
-                     :lifecycle :lazy     ;; :lazy | :eager | :keep-alive
-                     :direct-tools false  ;; bool | [tool-name ...]
-                     :disabled false
-                     :env {"KEY" "value"}
-                     :cwd "/path"}
+ {"filesystem" {:command "npx"
+                :args ["-y" "@modelcontextprotocol/server-filesystem" "/tmp"]
+                :lifecycle :lazy          ;; :lazy | :eager | :keep-alive
+                :direct-tools false       ;; bool | [tool-name ...]
+                :tool-prefix :server
+                :request-timeout-ms 120000
+                :disabled false
+                :env {"KEY" "value"}
+                :cwd "/path"}
   "remote" {:url "https://mcp.example.com/mcp"
-            :auth :bearer                  ;; bearer only (Phase 1)
-            :bearer-token-env "MY_TOKEN"   ;; or :bearer-token, or :headers
+            :auth :bearer                  ;; :bearer | :oauth | false
+            :bearer-token-env "MY_TOKEN"   ;; or :bearer-token / :headers
             :http-transport :streamable-http ;; :streamable-http | :sse
-            :lifecycle :lazy}}}
+            :lifecycle :lazy}
+  "notion" {:url "https://mcp.notion.com/mcp"
+            :auth :oauth
+            :oauth {:flow :auto            ;; :auto | :pkce | :device
+                    :scopes ["read"]}}}}   ;; :client-id optional → DCR
 ```
 
-Server keys: `:command`/`:args` (stdio), `:url` (HTTP), `:env`, `:cwd`,
-`:headers`, `:auth` (`:bearer`), `:bearer-token`/`:bearer-token-env`,
-`:http-transport`, `:lifecycle`, `:direct-tools`, `:tool-prefix`,
-`:request-timeout-ms`, `:disabled` (only literal `true` disables).
+Server keys: `:command`/`:args` (stdio; `:command` may be a vector = full
+argv), `:url` (HTTP), `:env`, `:cwd`, `:headers`, `:auth` (`:bearer` |
+`:oauth` | `false`), `:bearer-token`/`:bearer-token-env`,
+`:oauth` (map — see below), `:http-transport`, `:lifecycle`,
+`:direct-tools`, `:tool-prefix`, `:request-timeout-ms`, `:disabled` (only
+literal `true` disables). A server with neither `:command` nor `:url` is
+skipped and shows as `misconfigured` in status.
+
+OAuth config (`:oauth` map): `:client-id` (pre-registered client; omit →
+RFC 7591 dynamic client registration), `:client-secret`, `:scopes`
+(string or vector), `:flow` (`:auto` default | `:pkce` | `:device`),
+`:redirect-uri`, `:authorization-server-url` (fetch metadata directly,
+skips well-known discovery), `:skip-issuer-metadata-validation`.
 
 ## The `mcp` tool
 
@@ -77,7 +93,8 @@ mcp({})                              → status
 ```
 
 Two calls instead of N tools cluttering the context. Servers are lazy by
-default — they don't connect until you call one of their tools.
+default — they don't connect until you call one of their tools. Search and
+describe read the local metadata cache only (no server spawn).
 
 ## Direct tools (opt-in)
 
@@ -85,21 +102,37 @@ Enable per server (`:direct-tools true` in `mcp.edn`), per server with a
 name list (`:direct-tools ["tool-a" "tool-b"]`), globally via
 `settings.direct-tools`, or via the `MCP_DIRECT_TOOLS` env var
 (`MCP_DIRECT_TOOLS=server1,server2`, `__none__` disables all). Each tool is
-then registered as `server_toolname` (or bare name with
-`:tool-prefix :none`/`:short`/`:mcp`), registered from cached metadata so
-no server spawns at startup.
+registered as `server_toolname` (or bare name with
+`:tool-prefix :none`/`:short`, `mcp_` prefix with `:mcp`), registered from
+cached metadata so no server spawns at startup. Names are lowercased with
+`[^a-z0-9_]` → `_`; collisions fall back to the server prefix.
 
 ## Commands
 
 | Command | Description |
 |---|---|
 | `/mcp` | status: servers, lifecycle, state, tool counts |
-| `/mcp search <q>` | search tools (substring; `regex` param for the tool form) |
+| `/mcp search <q> [regex]` | search tools (substring or regex) |
 | `/mcp list [server]` | servers, or one server's tools |
-| `/mcp connect <server>` | connect now (+ metadata refresh) |
+| `/mcp connect <server>` | connect now (+ metadata refresh + tool resync) |
 | `/mcp disconnect <server>` | stop the server process |
 | `/mcp enable\|disable <server>` | write `:disabled` into `.kmet/mcp.edn`; `/reload` to apply |
 | `/mcp refresh` | reload `mcp.edn`, resync tools |
+| `/mcp auth <server>` | run the OAuth flow now (PKCE loopback or device) |
+| `/mcp logout <server>` | clear stored OAuth tokens + client info |
+
+## HTTP auth
+
+- **Bearer**: `:auth :bearer` with `:bearer-token` or `:bearer-token-env`
+  (or an explicit `:headers {"Authorization" ...}`).
+- **OAuth**: `:auth :oauth` (+ optional `:oauth` map). The flow follows
+  RFC 8414 metadata discovery, RFC 7591 dynamic client registration (or a
+  config `:client-id`), and the PKCE loopback flow (browser → local
+  callback on an OS-assigned port) or the RFC 8628 device flow (`:flow
+  :device`, or auto-selected when headless). Tokens refresh silently on
+  expiry; a 401 with a stored refresh token refreshes once and retries.
+  Tokens are stored **plaintext** at `~/.kmet/agent/mcp-oauth.edn`
+  (0600 perms — Babashka has no OS keyring; `logout` clears them).
 
 ## Security
 
@@ -107,8 +140,20 @@ MCP config is **trusted code execution**: stdio servers run whatever
 `command` you configure, and HTTP bearer tokens are sent to the `:url` you
 configure. Only add servers you trust.
 
+## Development
+
+The `scripts/` directory carries fake MCP/OAuth servers and three
+validation scripts (client transports, config/extension load, OAuth flow):
+
+```bash
+bb -cp ../../../src:../src scripts/validate-client.bb scripts/fake-mcp-server.bb scripts/fake-http-mcp-server.bb
+bb -cp ../../../src:../src scripts/validate-config.bb
+bb -cp ../../../src:../src scripts/validate-oauth.bb scripts/fake-oauth-server.bb
+```
+
 ## Phase-2 roadmap
 
-OAuth, prompts → slash commands, resources → read tool, mcpScript batching,
-`/mcp serve` (expose kmet as an MCP server), setup wizard, include/exclude
-globs, output guards, streaming progress.
+OAuth client-credentials/JWT grants, OS-keyring token storage, prompts →
+slash commands, resources → read tool, mcpScript batching, `/mcp serve`
+(expose kmet as an MCP server), setup wizard, include/exclude globs,
+output guards, streaming progress.

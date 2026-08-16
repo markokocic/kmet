@@ -1,7 +1,8 @@
 # kmet mcp-adapter extension — implementation plan (Phase 1)
 
-Status: approved plan — not yet implemented. Rev 2: OAuth (RFC 8414/7591,
-PKCE loopback + RFC 8628 device flow) added to Phase 1 scope on request.
+Status: **implemented (Phase 1)** — see §15 for implementation notes and
+recorded deviations. Rev 2: OAuth (RFC 8414/7591, PKCE loopback + RFC 8628
+device flow) added to Phase 1 scope on request.
 This document is the design contract; deviations during implementation must
 be reflected back here.
 
@@ -639,3 +640,99 @@ connect/disconnect/enable/disable/auth/logout.
   id-matched and safe to pipeline.
 - Extension dir layout: `extensions/` is outside the `bb lint` gate — lint
   the files manually; keep them clj-kondo-clean anyway.
+
+## 15. Implementation notes & recorded deviations
+
+Implemented per this contract; the following notes record where the build
+landed and every deliberate deviation from the text above.
+
+1. **`kmet.libs.oauth`** (`src/kmet/libs/oauth.clj`) — the generic machinery
+   (device-code poll, PKCE, loopback callback server, parse/wait helpers,
+   RFC 8414 discovery, RFC 7591 DCR, token exchange/refresh, RFC 8628
+   device start) plus a transport-agnostic `fetch-json` (plain
+   `babashka.http-client`). `kmet.ai.oauth` was refactored onto it: the
+   provider flows keep their own `kmet.ai.proxy` transport; the poll fn
+   gained a `:sleep` option so `kmet.ai.oauth`'s `abortable-sleep` var
+   (with-redef'd by tests) stays effective through its wrapper — the
+   existing `kmet.ai.test-oauth` suite passes unchanged.
+2. **Callback port**: the extension owns a process-wide loopback callback
+   server bound once on an OS-assigned port (auth.clj
+   `ensure-callback-server!`); every flow and the DCR reuse the same
+   redirect URI, so "port 0 → OS assigns" and "register once" both hold.
+   `:redirect-uri` config (loopback with explicit port) overrides the
+   default `/callback` path.
+3. **Issuer validation** is deliberately lenient: the metadata `:issuer`
+   must share the server URL's origin (or equal the full URL), not match
+   byte-for-byte — real servers vary issuer paths. `:skip-issuer-
+   metadata-validation` disables it entirely.
+4. **`:mcp` tool-prefix** produces `mcp_<tool>` (plan §10.5); the
+   collision fallback to the server prefix applies in every mode, not only
+   `:none`/`:short`. The proxy surface (search/describe/list output and
+   the `tool:` parameter) uses the PREFIXED display names (per the §10.4
+   example `tool: "server_tool"`); the cache stores raw wire names and
+   `mcp({tool: ...})` resolves either spelling to the raw name for the
+   call. An empty search query without a server is an error; with a
+   server it lists that server's tools (pi executeSearch).
+5. **`notify!`** swallows transport errors (fire-and-forget, pi parity).
+   Related discovery: `java.net.http` reports a connection closed without
+   a response as "HTTP/1.1 header parser received no bytes" — the fake
+   servers answer notifications with an empty 200, and the client treats
+   an empty 2xx response to a request as an error.
+6. **`:registered-direct`** in the §10.1 state is a map `name →
+   fingerprint` (diff-based resync) rather than a plain set.
+7. **State/atom convention**: the §10.1 state map lives in an atom;
+   `:ensure-connected-fn`/`:disconnect-fn` close over it. `init` stores it
+   in a private `state-atom` so `shutdown` can disconnect-all + close the
+   OAuth callback server (idempotent).
+8. **Status text** uses `(name state)` labels: idle/connecting/connected/
+   failed/disabled/misconfigured (no `unsupported-transport` in Phase 1 —
+   an invalid `:http-transport` falls back to streamable-http).
+9. **Validation** lives in `scripts/` (bb, no test framework):
+   `fake-mcp-server.bb` (stdio; cursor-paginated tools/list, error paths,
+   mid-request notification, slow call), `fake-http-mcp-server.bb`
+   (streamable HTTP JSON + SSE responses, session-id, slow endpoint,
+   legacy SSE with endpoint/message events), `fake-oauth-server.bb`
+   (well-known discovery incl. RFC 8414 path insertion, DCR, authorize,
+   token incl. device pending/slow_down, device start), and
+   `validate-client.bb` / `validate-config.bb` / `validate-oauth.bb`
+   (27 + 24 + 18 checks, all green). The lib's unit tests are registered
+   in `kmet.runner/all-namespaces` (`kmet.libs.test-oauth`, HTTP mocked
+   via with-redefs — no network).
+10. **Extension load** was verified against `kmet.extension/create-
+    nullable-api` (proxy tool, `/mcp` command + completions, events,
+    skill path); the gates (`bb test`, `bb test-ext`, `bb lint`, `bb
+    format-check`) pass.
+11. **README** updated: OAuth moved out of the Phase-2 roadmap into the
+    Phase-1 reference; the `:oauth` config table, security note and
+    development/validation section were added.
+12. **Extension sci-context constraints** (discovered while wiring the
+    real loader, §12.6): the extension context cannot resolve `future`,
+    `slurp`/`spit`, direct stream methods (`.write`/`.flush`), or Process
+    methods (`.pid`/`.isAlive`/`.toHandle`). The extension therefore uses
+    a `spawn` daemon-thread helper (replacing `future`),
+    `read-text`/`write-text` helpers over `babashka.fs`
+    (`read-all-lines`/`write-bytes`, replacing `slurp`/`spit`),
+    `clojure.java.io/copy` (replacing `.write`), and a new host-side
+    `process-pid` accessor in `kmet.libs.process` (the process record has
+    no `:pid` key and `.pid` is not callable from sci — the lib is the
+    shared seam, injected by reference). `proc/alive?` works as-is.
+13. **Review-round fixes** (post-implementation review): the request
+    timeout is an overall deadline — notifications/stale responses no
+    longer reset it (wait-for-response uses a deadline, not a fresh
+    timeout per iteration); a configured `:oauth {:redirect-uri}` now
+    binds the callback server's port AND path (first flow wins — the
+    server binds once process-wide, later flows derive the URI from the
+    bound server, so a DCR'd client's registered URI stays valid);
+    `/mcp enable|disable` creates the project `.kmet/` directory before
+    writing; RFC 7591 DCR preserves an existing token-store entry.
+14. **`cheshire.core` is injected into extension contexts** — the loader's
+    context-injection filter gained the `cheshire.` prefix
+    (`src/kmet/app/extensions.clj`; the filter's own comment already
+    documented that cheshire "stays injected", the whitelist just lacked
+    it). The plan's "bundled cheshire.core" dependency note therefore
+    holds; cheshire's Maven copy fails to evaluate in sci (Jackson
+    classnames), so the injected bundled copy is the only working path.
+    This was validated by loading the extension through the real
+    `kmet.app.extensions/load-extension!` in a headless runner and driving
+    the `mcp` tool against the fake stdio server from inside the sci
+    context (status → connect → call → search → describe → disconnect).

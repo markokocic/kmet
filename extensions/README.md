@@ -52,3 +52,4 @@ inside the extension directory).
 | Extension | Description |
 |-----------|-------------|
 | `tools.clj` | Interactive `/tools` command to enable/disable tools, with selection persisted across session reloads and branch navigation (port of pi's example tools extension) |
+| `mcp-adapter/` | MCP server access via one lazy `mcp` proxy tool: stdio + streamable-HTTP/SSE transports, EDN config (`~/.kmet/agent/mcp.edn` + `.kmet/mcp.edn`), OAuth (PKCE loopback + device flow), direct tools, `/mcp` command (port of pi-mcp-adapter — see `mcp-adapter/README.md`) |
