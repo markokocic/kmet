@@ -231,7 +231,12 @@
   [args]
   (let [parsed (cond
                  (string? (:edits args)) (try (let [p (json/parse-string (:edits args) true)]
-                                                (when (sequential? p) p))
+                                                ;; cheshire parses arrays lazily — realize
+                                                ;; inside the guard so a malformed JSON
+                                                ;; string degrades to nil instead of
+                                                ;; crashing the render preview in the
+                                                ;; mapv below (render loop death)
+                                                (when (sequential? p) (vec p)))
                                               (catch Exception _ nil))
                  (sequential? (:edits args)) (:edits args)
                  :else nil)

@@ -18,7 +18,11 @@
   [{:keys [edits old-text new-text oldText newText] :as args}]
   (let [parsed (cond
                  (string? edits) (try (let [p (json/parse-string edits true)]
-                                        (when (sequential? p) p))
+                                        ;; cheshire parses arrays lazily — realize
+                                        ;; inside the guard so a malformed JSON
+                                        ;; string degrades to nil instead of
+                                        ;; throwing later in the mapv below
+                                        (when (sequential? p) (vec p)))
                                       (catch Exception _ nil))
                  (sequential? edits) edits
                  :else nil)
