@@ -1,4 +1,4 @@
-(ns kmet.app.context
+(ns kmet.libs.context
   "Project context files (AGENTS.md/CLAUDE.md) loaded into the system prompt.
    pi: core/resource-loader.js loadProjectContextFiles + loadContextFileFromDir."
   (:require [babashka.fs :as fs]))

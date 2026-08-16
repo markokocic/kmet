@@ -1,5 +1,5 @@
-(ns kmet.ai.test-aws-sigv4
-  "SigV4 signing (kmet.ai.aws-sigv4). The signing-key chain is validated
+(ns kmet.libs.test-aws-sigv4
+  "SigV4 signing (kmet.libs.aws-sigv4). The signing-key chain is validated
    against the AWS-documented derivation (Signature Version 4 signing
    process — kSigning = HMAC(HMAC(HMAC(HMAC('AWS4'+secret, date), region),
    service), 'aws4_request')); the full signature is exercised on the
@@ -8,7 +8,7 @@
   (:require [clojure.test :as t]
             [babashka.fs :as fs]
             [clojure.string :as str]
-            [kmet.ai.aws-sigv4 :as aws]))
+            [kmet.libs.aws-sigv4 :as aws]))
 
 (defn- hmac-sha256
   "HMAC-SHA256 hex of a UTF-8 string with a byte-array key (independent

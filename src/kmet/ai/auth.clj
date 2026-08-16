@@ -12,8 +12,9 @@
    order."
   (:require [clojure.edn :as edn]
             [babashka.fs :as fs]
-            [kmet.ai.aws-sigv4 :as aws-sigv4]
+            [kmet.libs.aws-sigv4 :as aws-sigv4]
             [kmet.libs.dynamic-value :as dynamic-value]
+            [kmet.libs.hooks :as hooks]
             [kmet.ai.google-adc :as google-adc]
             [kmet.libs.edn-settings :as eds]
             [kmet.libs.file-lock :as file-lock]))
@@ -204,7 +205,7 @@
 
 ;; ─── Resolution (pi: credential-store resolveApiKey) ──────────────────────
 
-(defonce ^:private config-key-source (atom nil))
+(defonce ^:private config-key-source (hooks/make-slot))
 
 (defn set-config-key-source!
   "Register the provider → raw models.edn/extension :api-key config value
@@ -212,7 +213,7 @@
    key). Kept behind a hook so auth stays dependency-free of the registry
    (no require cycle)."
   [f]
-  (reset! config-key-source f))
+  (hooks/set-slot! config-key-source f))
 
 (defn config-key-source-installed?
   "True when a config-key source is registered (models/load-catalogs! or
@@ -224,28 +225,26 @@
   "Raw models.edn/extension :api-key config value for a provider (nil when
    none configured)."
   [provider]
-  (when-let [f @config-key-source]
-    (f provider)))
+  (hooks/apply-slot config-key-source provider))
 
 ;; ─── OAuth (Phase 10) ─────────────────────────────────────────────────────
 ;; The OAuthAuth record for a provider lives on the Provider record; auth
 ;; reads it through a hook (like config-key-source) to stay dependency-free
 ;; of the registry.
 
-(defonce ^:private oauth-source (atom nil))
+(defonce ^:private oauth-source (hooks/make-slot))
 
 (defn set-oauth-source!
   "Register the provider → OAuthAuth record source (set by
    models/load-catalogs!; nil returns no oauth). Kept behind a hook so auth
    stays dependency-free of the registry."
   [f]
-  (reset! oauth-source f))
+  (hooks/set-slot! oauth-source f))
 
 (defn- provider-oauth
   "The OAuthAuth record for a provider, or nil."
   [provider]
-  (when-let [f @oauth-source]
-    (f provider)))
+  (hooks/apply-slot oauth-source provider))
 
 (def ^:private oauth-min-validity-ms
   "Refresh when the token has less than this much validity left (pi

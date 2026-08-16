@@ -1,9 +1,9 @@
-(ns kmet.app.test-context
+(ns kmet.libs.test-context
   (:require [clojure.test :as t]
             [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
-            [kmet.app.context :as context]))
+            [kmet.libs.context :as context]))
 
 (defn- tmp-dir
   "Writable temp dir under target/ (ancestors may contain uncontrolled

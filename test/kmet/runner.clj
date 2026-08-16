@@ -30,7 +30,6 @@
     kmet.ai.test-model-config
     kmet.ai.test-provider-composer
     kmet.ai.test-auth
-    kmet.ai.test-aws-sigv4
     kmet.ai.test-google-adc
     kmet.ai.test-oauth
     kmet.ai.test-image-models
@@ -42,7 +41,7 @@
     kmet.app.test-loop
     kmet.test-theme kmet.test-config
     kmet.app.test-skills
-    kmet.app.test-context
+
     kmet.app.test-prompts
     kmet.app.test-extensions
     kmet.app.test-extensions-ui
@@ -93,6 +92,8 @@
     kmet.libs.test-oauth
     kmet.libs.test-edn-settings
     kmet.libs.test-proxy
+    kmet.libs.test-aws-sigv4
+    kmet.libs.test-context
     kmet.app.ui.test-chat-history
     kmet.app.ui.test-user-message
     kmet.app.ui.test-assistant-message

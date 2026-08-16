@@ -38,7 +38,7 @@
             [kmet.tui.keybindings :as tui-kb]
             [kmet.config :as cfg]
             [kmet.app.skills :as skills]
-            [kmet.app.context :as context]
+            [kmet.libs.context :as context]
             [kmet.app.prompts :as prompts]
             [kmet.app.commands :as commands]
             [kmet.app.extensions :as extensions]

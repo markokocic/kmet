@@ -7,7 +7,7 @@
             [kmet.ai.models :as models]
             [kmet.app.model-resolver :as resolver]
             [kmet.app.skills :as skills]
-            [kmet.app.context :as context]
+            [kmet.libs.context :as context]
             [kmet.app.prompts :as prompts]
             [kmet.config :as cfg]))
 

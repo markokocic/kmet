@@ -4,7 +4,7 @@
             [clojure.string :as str]
             [kmet.libs.sse :as sse]
             [kmet.ai.auth :as auth]
-            [kmet.ai.aws-sigv4 :as aws-sigv4]
+            [kmet.libs.aws-sigv4 :as aws-sigv4]
             [kmet.libs.dynamic-value :as dynamic-value]
             [kmet.ai.llm :as llm]
             [kmet.ai.api.shared :as shared]

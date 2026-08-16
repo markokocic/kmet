@@ -5,7 +5,7 @@
             [kmet.ai.llm :as llm]
             [kmet.ai.models :as models]
             [kmet.ai.auth :as auth]
-            [kmet.ai.aws-sigv4 :as aws-sigv4]
+            [kmet.libs.aws-sigv4 :as aws-sigv4]
             [kmet.ai.google-adc :as google-adc]
             [kmet.ai.usage :as usage]
             [kmet.app.tools.core :as tools]

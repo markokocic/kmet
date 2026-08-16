@@ -1,6 +1,6 @@
 # Moving app/ai modules into kmet.libs — analysis
 
-> Status: Tier 1 steps 1-2 done.
+> Status: Tier 1 steps 1-6 done.
 > - Step 1: `kmet.ai.config-value` → `kmet.libs.dynamic-value` (2026-08-16)
 > - Step 2: `kmet.libs.edn-settings` extracted from `kmet.config` + `kmet.ai.auth`
 >   (pretty-edn, deep-merge, expand-path, update-setting-text, save-edn-setting!).
@@ -8,6 +8,10 @@
 > - Step 3: `kmet.libs.proxy` split from `kmet.ai.proxy` — proxy selection,
 >   curl transport, java-client, request-json all in libs. `ai.proxy` keeps
 >   only `post-stream` (hooks layer). Extensions get env-proxy HTTP routing.
+> - Step 4: `kmet.ai.aws-sigv4` → `kmet.libs.aws-sigv4` (move as-is)
+> - Step 5: `kmet.app.context` → `kmet.libs.context` (move as-is)
+> - Step 6: `kmet.libs.hooks` extracted — generic single-fn slot registry;
+>   `ai.hooks` and `ai.auth` (config-key-source, oauth-source) use it.
 >
 > Layer rule enforced by `test/kmet/libs/test-self-contained.clj` (libs must not
 > require anything outside `kmet.libs.*`) and `test/kmet/ai/test-self-contained.clj`.
@@ -35,8 +39,9 @@ It *does* share `kmet.libs.oauth` — the seam that already works.
 | `kmet.ai.config-value` | 260 | stdlib only | `$VAR` / `!command` config-value resolution. **Done** → `kmet.libs.dynamic-value`. |
 | `kmet.libs.edn-settings` | ~150 | libs only | `pretty-edn`, `deep-merge`, `expand-path`, `update-setting-text`, `save-edn-setting!`. **Done** — extracted from `config` + `auth`, eliminates `pretty-auth` duplicate. |
 | `kmet.libs.proxy` | ~310 | libs only | Proxy selection, curl transport, java-client, request-json. **Done** — split from `ai.proxy` which keeps only `post-stream` (hooks). |
-| `kmet.app.context` | 44 | `babashka.fs` only | AGENTS.md/CLAUDE.md discovery walking up from cwd. Generic file discovery; extensions (e.g. skills that read project context) would use it. |
-| `kmet.ai.hooks` | 80 | none | The single-fn slot registry pattern is generic — and already duplicated in `kmet.ai.auth` (`config-key-source`, `oauth-source` atoms). Extract `kmet.libs.hooks` (install/apply), have both use it. |
+| `kmet.libs.aws-sigv4` | ~206 | stdlib + JVM crypto | SigV4 signing + ambient credential resolution. **Done** — moved as-is. |
+| `kmet.libs.context` | 44 | `babashka.fs` only | AGENTS.md/CLAUDE.md discovery. **Done** — moved as-is. |
+| `kmet.libs.hooks` | ~40 | none | Generic single-fn slot registry. **Done** — extracted; `ai.hooks` and `ai.auth` use it. |
 | `kmet.ai.usage` | 58 | none | Borderline. Token accounting is generic; the key shapes are provider-flavored. Moves cleanly but the only consumers are `api.shared` + `session` + footer. Low urgency. |
 
 ## Tier 2 — detach a small dep, then move
@@ -117,7 +122,7 @@ gain a shared writer.
 3. **`kmet.libs.proxy`** split (from `ai.proxy`) — detaches the last `hooks`
    dep, then the whole ai transport stack depends on libs only. **Done**.
 4. **`kmet.libs.aws-sigv4`, `kmet.libs.context`, `kmet.libs.hooks`** —
-   trivially clean, smaller wins.
+   trivially clean, smaller wins. **Done**.
 5. **`kmet.libs.credential-store`** (from `ai.auth`) — medium value; do it
    after #2 since it builds on the same EDN-store primitives.
 

@@ -1,7 +1,7 @@
 (ns kmet.ai.api.bedrock-converse-stream
   "AWS Bedrock Converse stream wire API (pi: api/bedrock-converse-stream.ts)."
   (:require
-   [kmet.ai.aws-sigv4 :as aws-sigv4]
+   [kmet.libs.aws-sigv4 :as aws-sigv4]
    [cheshire.core :as json]
    [kmet.ai.proxy :as proxy]
    [kmet.libs.sse :as sse]
