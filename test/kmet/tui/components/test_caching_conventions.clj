@@ -32,9 +32,8 @@
    "VStack"                     :transparent-parent
    "ChatHistoryComponent"       :transparent-parent
    "ScrollView"                 :transparent-parent
-   "ExtensionSelectorDialog"    :transparent-parent
-   "ExtensionInputDialog"       :transparent-parent
-   "ExtensionEditorDialog"      :transparent-parent
+   "SelectorDialog"    :transparent-parent
+   "InputDialog"       :transparent-parent
    "ModelSelector"              :transparent-parent
    "ScopedModelsSelector"       :transparent-parent
    "Spinner"                    :time-animated
@@ -129,7 +128,7 @@
    when components are added or removed; a mismatch means the scan below
    silently lost forms (a scanner regression), so the convention checks
    would otherwise pass vacuously."
-  39)
+  38)
 
 (deftest caching-conventions
   (let [checked (atom [])]

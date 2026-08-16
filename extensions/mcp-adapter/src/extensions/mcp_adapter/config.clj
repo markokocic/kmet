@@ -328,3 +328,30 @@
         (do (write-text path (str (pr-str (assoc-in raw [servers-key server-name] next)) "\n"))
             {:path path :changed true})
         {:path path :changed false}))))
+
+;; ─── direct-tools write (§6.6 — pi writeDirectToolsConfig) ────────────────
+
+(defn write-direct-tools!
+  "Persist the McpPanel's direct-tools CHANGES into the project config
+   (the only file the extension writes, like §6.5): true → :direct-tools
+   true, false → explicit :direct-tools false, name list → :direct-tools
+   [names]. Servers not in CHANGES keep their existing project entry.
+   Returns {:path str :changed bool}. The in-memory config is updated by
+   the caller (apply-direct-tools-changes!) — this only persists."
+  [changes]
+  (let [path (project-config-path)
+        raw (read-project-raw)
+        servers-key (if (contains? raw :mcp-servers)
+                      :mcp-servers
+                      (if (contains? raw :mcpServers) :mcpServers :mcp-servers))
+        next (reduce-kv (fn [acc name v]
+                          (assoc-in acc [servers-key name :direct-tools]
+                                    (cond
+                                      (true? v) true
+                                      (false? v) false
+                                      :else (vec v))))
+                        raw changes)]
+    (when (seq changes)
+      (fs/create-dirs (fs/parent path))
+      (write-text path (str (pr-str next) "\n")))
+    {:path path :changed (boolean (seq changes))}))

@@ -13,6 +13,7 @@
             [extensions.mcp-adapter.client :as client]
             [extensions.mcp-adapter.config :as config]
             [extensions.mcp-adapter.metadata :as metadata]
+            [extensions.mcp-adapter.panel :as panel]
             [extensions.mcp-adapter.proxy :as proxy]
             [kmet.extension :as ext]))
 
@@ -397,12 +398,29 @@
 
 ;; ─── /mcp command (§10.6) ─────────────────────────────────────────────────
 
+(defn- show-text-dialog!
+  "Show the extension's scrollable TextDialog (panel.clj — built on
+   kmet.tui, mounted via ui-custom) for multi-line command output."
+  [state title text]
+  (ext/ui-custom (:api @state)
+                 (fn [_tui _th _kb close]
+                   (panel/make-text-dialog title text close))
+                 {:overlay true
+                  :overlay-options {:anchor :center :width 82}}))
+
 (defn- notify-or-print
-  "ui-notify in the TUI, println headless."
-  [state ctx message]
-  (if (:has-ui ctx)
-    (ext/ui-notify (:api @state) message "info")
-    (println message)))
+  "Output a command result: the transient flash (ui-notify) for
+   single-line messages, the extension's scrollable text dialog for
+   multi-line ones — a flash is a single line and cannot display
+   status/search/list output (pi shows the interactive panel instead).
+   println headless."
+  [state ctx message & [title]]
+  (cond
+    (not (:has-ui ctx)) (println message)
+    (str/includes? (or message "") "\n")
+    (show-text-dialog! state (or title "MCP") message)
+    :else
+    (ext/ui-notify (:api @state) message "info")))
 
 (defn- handle-connect
   [state server-name ctx]
@@ -410,7 +428,8 @@
     (try
       (let [conn ((:ensure-connected-fn @state) server-name)]
         (if conn
-          (notify-or-print state ctx (:content (proxy/list-text @state server-name)))
+          (notify-or-print state ctx (:content (proxy/list-text @state server-name))
+                           (str "MCP: " server-name))
           (notify-or-print state ctx (str "Failed to connect to \"" server-name "\""))))
       (catch Exception e
         (notify-or-print state ctx (str "Failed to connect to \"" server-name "\": "
@@ -458,20 +477,23 @@
   "The §7.8 interaction map for the OAuth flow, from the extension ctx.
    The manual-paste prompt (pi onAuthorizationInput) is raced against the
    browser callback; :abort-prompt! (pi manualAbort.abort) dismisses the
-   pending dialog and unblocks the prompt when the callback wins — called
-   by the flow's finally."
+   pending prompt dialog and unblocks the prompt when the callback wins —
+   called by the flow's finally. The prompt is the extension's own
+   kmet.tui-built dialog (panel.clj make-prompt-dialog) mounted via
+   ui-custom — no host dialog capabilities."
   [state ctx]
   (let [has-ui (:has-ui ctx)
         signal (when-let [s (:signal ctx)]
                  (try (s) (catch Exception _ nil)))
         prompt-cancelled (atom false)
         prompt-pending (atom nil)
+        prompt-close (atom nil)
         abort-prompt! (fn []
                         (reset! prompt-cancelled true)
                         (when-let [p @prompt-pending]
                           (deliver p ::cancelled))
-                        (when has-ui
-                          (ext/ui-close-dialog (:api @state))))]
+                        (when-let [close @prompt-close]
+                          (close)))]
     {:signal (or signal (atom false))
      :has-ui has-ui
      :open-url open-browser
@@ -490,8 +512,22 @@
                  (notify-or-print state ctx (str "MCP auth: " (:message event)))))
      :prompt (fn [prompt-map]
                (if has-ui
-                 (let [p (ext/ui-input (:api @state) (:message prompt-map) "")]
+                 (let [p (promise)
+                       dialog (atom nil)
+                       finish (fn [v]
+                                (when-let [close @dialog] (close))
+                                (deliver p v))]
                    (reset! prompt-pending p)
+                   (ext/ui-custom
+                    (:api @state)
+                    (fn [_tui th _kb close]
+                      (reset! dialog close)
+                      (reset! prompt-close close)
+                      (panel/make-prompt-dialog th (:message prompt-map)
+                                                (fn [v] (finish v))
+                                                (fn [] (finish nil))))
+                    {:overlay true
+                     :overlay-options {:anchor :center :width 60}})
                    (deref p))
                  ;; headless: wait for the browser callback without a prompt
                  (do (Thread/sleep 600000) nil)))}))
@@ -532,6 +568,93 @@
                                                  "\": " (ex-message e))))))))))
     (notify-or-print state ctx "Usage: /mcp auth <server>")))
 
+;; ─── McpPanel (§10.6 — pi openMcpPanel) ───────────────────────────────────
+
+(defn- panel-connection-status
+  "McpPanel connection status for a server (pi getConnectionStatus):
+   :disabled / :connected / :needs-auth / :failed / :idle. Safe when the
+   server is missing from :servers (e.g. /mcp refresh while the panel is
+   open) — nil connections fall through to :idle."
+  [state name]
+  (let [definition (get-in @state [:config :mcp-servers name])
+        {:keys [conn failed-at]} (get-in @state [:servers name])]
+    (cond
+      (true? (:disabled definition)) :disabled
+      (and conn @conn (client/alive? @conn)) :connected
+      (and (= :oauth (:auth definition))
+           (= :none (auth/auth-status name definition))) :needs-auth
+      (and failed-at @failed-at) :failed
+      :else :idle)))
+
+(defn- apply-direct-tools-changes!
+  "Persist the panel's direct-tools CHANGES into the project config and
+   apply them live (pi writeDirectToolsConfig + applyDirectToolConfigChanges
+   + syncToolSurface): update the in-memory config, resync direct tools,
+   rebuild the proxy description, notify."
+  [state changes ctx]
+  (config/write-direct-tools! changes)
+  (swap! state update-in [:config :mcp-servers]
+         (fn [servers]
+           (reduce (fn [acc [name v]]
+                     (if (contains? acc name)
+                       (update acc name assoc :direct-tools v)
+                       acc))
+                   servers changes)))
+  (sync-direct-tools! state)
+  (register-proxy-tool! state)
+  (notify-or-print state ctx "Direct tools updated for this session."))
+
+(defn- panel-callbacks
+  "McpPanel callbacks over the extension state (pi buildMcpPanelCallbacks)."
+  [state ctx]
+  {:reconnect (fn [name]
+                (try
+                  (boolean ((:ensure-connected-fn @state) name))
+                  (catch Exception _ false)))
+   :can-authenticate (fn [name]
+                       (let [definition (get-in @state [:config :mcp-servers name])]
+                         (and definition
+                              (not (true? (:disabled definition)))
+                              (= :oauth (:auth definition)))))
+   :authenticate (fn [name]
+                   (let [p (promise)]
+                     (spawn
+                      (fn []
+                        (try
+                          (auth/run-flow! name
+                                          (get-in @state [:config :mcp-servers name])
+                                          (build-interaction state ctx))
+                          (deliver p {:ok true :message (str "OAuth finished for " name)})
+                          (catch Exception e
+                            (deliver p {:ok false :message (ex-message e)})))))
+                     p))
+   :get-connection-status (fn [name] (panel-connection-status state name))
+   :get-failure-message
+   (fn [name]
+     (when-let [error (get-in @state [:servers name :error])]
+       @error))
+   :refresh-cache-after-reconnect
+   (fn [name] (get-in @state [:cache :servers name]))})
+
+(defn- open-panel!
+  "Show the pi-style McpPanel over the TUI (§10.6) — ui-custom overlay,
+   width 82 centered like pi's overlayOptions. Non-blocking: kmet command
+   handlers run on the input thread, so the panel drives itself and
+   reports through its done callback (which persists changes and closes)."
+  [state ctx]
+  (ext/ui-custom
+   (:api @state)
+   (fn [tui _th kb close]
+     (panel/make-mcp-panel
+      (:config @state) (:cache @state) (panel-callbacks state ctx) tui
+      (fn [result]
+        (when (and (not (:cancelled result)) (seq (:changes result)))
+          (apply-direct-tools-changes! state (:changes result) ctx))
+        (close result))
+      kb))
+   {:overlay true
+    :overlay-options {:anchor :center :width 82}}))
+
 (defn- handle-mcp-command
   [state args ctx]
   (let [trimmed (str/trim (or args ""))
@@ -540,17 +663,21 @@
         rest-args (if (nil? space) "" (str/trim (subs trimmed (inc space))))]
     (case sub
       ("status" "")
-      (notify-or-print state ctx (proxy/status-text @state))
+      (if (and (:has-ui ctx) (seq (:mcp-servers (:config @state))))
+        (open-panel! state ctx)
+        (notify-or-print state ctx (proxy/status-text @state) "MCP servers"))
 
       "search"
       (let [[q regex] (str/split rest-args #"\s+" 2)]
         (notify-or-print state ctx (:content (proxy/search-text @state (or q "") (proxy/flag regex)
-                                                                nil true 12 0))))
+                                                                nil true 12 0))
+                         "MCP search"))
 
       "list"
       (notify-or-print state ctx (:content (if (seq rest-args)
                                              (proxy/list-text @state rest-args)
-                                             (proxy/list-all-text @state))))
+                                             (proxy/list-all-text @state)))
+                       (if (seq rest-args) (str "MCP: " rest-args) "MCP servers"))
 
       "connect"
       (handle-connect state rest-args ctx)

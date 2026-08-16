@@ -7,7 +7,7 @@
    the navigation event, interactive-mode navigates)."
   (:require [kmet.app.ui :as ui]
             [kmet.app.session :as session]
-            [kmet.app.ui.extension-dialogs :as dialogs]
+            [kmet.app.ui.dialogs :as dialogs]
             [kmet.tui.core :as tui]
             [kmet.tui.theme :as th]
             [kmet.tui.keys :as keys]
@@ -98,7 +98,7 @@
                                       current (session/get-label sess entry-id)]
                                   (tui/tui-show-overlay
                                    (:tui cs)
-                                   (dialogs/make-extension-input
+                                   (dialogs/make-input-dialog
                                     "Edit tree label"
                                     (fn [label]
                                       (tui/tui-hide-overlay (:tui cs))

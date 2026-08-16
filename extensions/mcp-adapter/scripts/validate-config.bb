@@ -152,7 +152,8 @@
                  (and (seq items) (= "connect" (:value (first items))))))
         (check "mcp status handler runs"
                (str/includes? (with-out-str
-                                ((:handler cmd) "" {:has-ui false}))
+                                ;; kmet dispatch contract: (ctx args)
+                                ((:handler cmd) {:has-ui false} ""))
                               "settings:")))
       (mcp/shutdown api)
       (mcp/shutdown api)

@@ -368,12 +368,9 @@
   (fn [event]
     (handler event (build-extension-context))))
 
-(defn ui-select [title options & [_opts]] (ui-call :select title options))
-(defn ui-confirm [title message & [_opts]] (ui-call :confirm title message))
-(defn ui-input [title placeholder & [_opts]] (ui-call :input title placeholder))
 (defn ui-notify [message & [type]] (ui-call :notify message type))
-(defn ui-custom [factory & [{:keys [overlay overlay-options on-handle]}]]
-  (ui-call :custom factory {:overlay overlay :overlay-options overlay-options :on-handle on-handle}))
+(defn ui-custom [factory & [opts]]
+  (ui-call :custom factory opts))
 (defn ui-on-terminal-input [handler] (ui-call :on-terminal-input handler))
 (defn ui-set-status [key text] (ui-call :set-status key text))
 (defn ui-set-widget [key content & [{:keys [placement]}]] (ui-call :set-widget key content {:placement placement}))
@@ -389,28 +386,9 @@
 (defn ui-set-hidden-thinking-label [label] (ui-call :set-hidden-thinking-label label))
 (defn ui-set-editor-component [factory] (ui-call :set-editor-component factory))
 (defn ui-add-autocomplete-provider [factory] (ui-call :add-autocomplete-provider factory))
-(defn ui-get-theme [] (ui-call :get-theme))
-(defn ui-get-all-themes [] (ui-call :get-all-themes))
 (defn ui-set-theme [theme-or-name] (ui-call :set-theme theme-or-name))
 (defn ui-get-tools-expanded [] (ui-call :get-tools-expanded))
 (defn ui-set-tools-expanded [expanded?] (ui-call :set-tools-expanded expanded?))
-(defn ui-editor
-  "Open the modal editor dialog (pi: ui.editor). Returns a promise
-   resolving to the submitted text or nil when dismissed. No-op (nil)
-   headless."
-  [title prefill]
-  (ui-call :editor title prefill))
-(defn ui-close-dialog
-  "Dismiss the currently open extension dialog (pi: manualAbort.abort —
-   the OAuth flows' :abort-prompt! hook). No-op when no dialog is open."
-  []
-  (ui-call :close-dialog))
-(defn ui-get-theme-by-name
-  "Look up a theme by name (pi: getTheme(name)): a real Theme record from
-   the store (builtins + custom themes dir), nil for unknown names.
-   Works in every mode."
-  [name]
-  (theme/get-theme-by-name name))
 (defn ui-reset! [] (ui-call :reset))
 
 ;; ─── Agent control (dispatches through the ui registry; extension api) ───
@@ -531,12 +509,15 @@
 
 (defn- api-ui
   "The :ui capability map — dispatches through the runtime registry, so it
-   is inert before the layout exists and in headless mode."
+   is inert before the layout exists and in headless mode. Only host-owned
+   bridges live here: mounting extension-built components (:custom), the
+   flash (:notify), and integrations with host layout/editor/status state.
+   Extensions build their own components with the shared kmet.tui.* layer
+   (pi: ctx.ui.custom hosting extension-built pi-tui components) — the api
+   carries no host-built dialogs or theme lookups (kmet.tui.theme is
+   shared directly)."
   []
-  {:select ui-select
-   :confirm ui-confirm
-   :input ui-input
-   :notify ui-notify
+  {:notify ui-notify
    :custom ui-custom
    :on-terminal-input ui-on-terminal-input
    :set-status ui-set-status
@@ -553,12 +534,7 @@
    :set-hidden-thinking-label ui-set-hidden-thinking-label
    :set-editor-component ui-set-editor-component
    :add-autocomplete-provider ui-add-autocomplete-provider
-   :get-theme ui-get-theme
-   :get-all-themes ui-get-all-themes
    :set-theme ui-set-theme
-   :editor ui-editor
-   :close-dialog ui-close-dialog
-   :get-theme-by-name ui-get-theme-by-name
    :get-tools-expanded ui-get-tools-expanded
    :set-tools-expanded ui-set-tools-expanded})
 
@@ -805,7 +781,8 @@
     kmet.libs.sse
     kmet.libs.terminal
     kmet.libs.terminal-image
-    kmet.libs.yaml-lite])
+    kmet.libs.yaml-lite
+    kmet.libs.clipboard])
 
 (defn- build-context-namespaces
   "The shared namespace map for extension contexts: kmet.extension (the

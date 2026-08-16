@@ -10,10 +10,7 @@
   []
   (let [calls (atom [])]
     (ex/set-ui-registry!
-     {:select (fn [title options] (swap! calls conj [:select title options]) "sel")
-      :confirm (fn [title message] (swap! calls conj [:confirm title message]) true)
-      :input (fn [title placeholder] (swap! calls conj [:input title placeholder]) "in")
-      :notify (fn [message type] (swap! calls conj [:notify message type]) nil)
+     {:notify (fn [message type] (swap! calls conj [:notify message type]) nil)
       :custom (fn [factory opts]
                 (swap! calls conj [:custom factory opts])
                 (let [p (promise)]
@@ -35,8 +32,7 @@
       :set-hidden-thinking-label (fn [label] (swap! calls conj [:set-hidden-thinking-label label]))
       :set-editor-component (fn [factory] (swap! calls conj [:set-editor-component factory]))
       :add-autocomplete-provider (fn [factory] (swap! calls conj [:add-autocomplete-provider factory]))
-      :get-theme (fn [] (swap! calls conj [:get-theme]) :dark)
-      :get-all-themes (fn [] (swap! calls conj [:get-all-themes]) {})
+      :set-theme (fn [theme-or-name] (swap! calls conj [:set-theme theme-or-name]))
       :get-tools-expanded (fn [] (swap! calls conj [:get-tools-expanded]) false)
       :set-tools-expanded (fn [v] (swap! calls conj [:set-tools-expanded v]))
       :reset (fn [] (swap! calls conj [:reset]))})
@@ -45,9 +41,6 @@
 (deftest test-dispatch-through-registry
   (testing "ui-* fns dispatch to the installed registry impls"
     (let [calls (install-test-registry!)]
-      (t/is (= "sel" (ex/ui-select "Pick" ["a" "b"])))
-      (t/is (= true (ex/ui-confirm "Sure?" "msg")))
-      (t/is (= "in" (ex/ui-input "Name" "hint")))
       (t/is (nil? (ex/ui-notify "hi" :info)))
       (ex/ui-set-status "ext" "● active")
       (ex/ui-set-widget "w" ["line1"] {:placement :below-editor})
@@ -64,24 +57,22 @@
       (ex/ui-set-hidden-thinking-label "Thinking…")
       (ex/ui-set-editor-component (fn [] nil))
       (ex/ui-add-autocomplete-provider (fn [] nil))
-      (t/is (= :dark (ex/ui-get-theme)))
-      (t/is (= {} (ex/ui-get-all-themes)))
+      (ex/ui-set-theme "dark")
       (t/is (= false (ex/ui-get-tools-expanded)))
       (ex/ui-set-tools-expanded true)
       (ex/ui-reset!)
-      (t/is (= [:select :confirm :input :notify
+      (t/is (= [:notify
                 :set-status :set-widget :set-footer :set-header :set-title
                 :on-terminal-input :set-editor-text :get-editor-text
                 :paste-to-editor :set-working-indicator :set-working-message
                 :set-working-visible :set-hidden-thinking-label
                 :set-editor-component :add-autocomplete-provider
-                :get-theme :get-all-themes :get-tools-expanded
+                :set-theme :get-tools-expanded
                 :set-tools-expanded :reset]
                (mapv first @calls)))
-      (t/is (= "Pick" (-> (first @calls) (nth 1))))
-      (t/is (= "● active" (-> (nth @calls 4) (nth 2))))
-      (t/is (= {:placement :below-editor} (-> (nth @calls 5) (nth 3))))
-      (t/is (= {:frames []} (-> (nth @calls 13) (nth 1)))))))
+      (t/is (= "● active" (-> (nth @calls 1) (nth 2))))
+      (t/is (= {:placement :below-editor} (-> (nth @calls 2) (nth 3))))
+      (t/is (= {:frames []} (-> (nth @calls 10) (nth 1)))))))
 
 (deftest test-ui-custom-promise
   (testing "ui-custom returns a promise resolved by the factory's done fn"
@@ -90,14 +81,13 @@
                           {:overlay true})]
       (t/is (= 42 (deref p 1000 ::timeout)))
       (t/is (= :custom (first (first @calls))))
-      (t/is (= {:overlay true :overlay-options nil :on-handle nil}
-               (-> (first @calls) (nth 2)))))))
+      (t/is (= {:overlay true} (-> (first @calls) (nth 2)))
+            "ui-custom forwards its opts map untouched (pi: custom(factory, options))"))))
 
 (deftest test-ui-noop-before-install
   (testing "ui-* fns are inert before the registry is installed (pi: inert
             before startup)"
     (ex/clear-ui-registry!)
-    (t/is (nil? (ex/ui-select "Pick" ["a"])))
     (t/is (nil? (ex/ui-get-editor-text)))
     (t/is (nil? (ex/ui-notify "hi")))
     (t/is (nil? (ex/ui-set-status "k" "v")))))

@@ -47,11 +47,12 @@
 
 (t/deftest test-nullable-api-p2-capabilities
   (let [{:keys [api state]} (ext/create-nullable-api)]
-    (testing "ui.editor and getTheme(name) are captured (pi: ctx.ui.editor, ctx.getTheme)"
-      (ext/ui-editor api "Title" "prefill")
-      (ext/ui-get-theme-by-name api "dark")
-      (t/is (some #(= [:editor "Title" "prefill"] %) (:ui-calls @state)))
-      (t/is (some #(= [:get-theme-by-name "dark"] %) (:ui-calls @state))))
+    (testing "ui-custom opts pass through untouched (pi: ctx.ui.custom options)"
+      (let [factory (fn [_ _ _ _] nil)
+            opts {:overlay true :overlay-options {:anchor :center :width 82}}]
+        (ext/ui-custom api factory opts)
+        (t/is (some (fn [[k f o]] (and (= k :custom) (identical? f factory) (= o opts)))
+                    (:ui-calls @state)))))
     (testing "models register/unregister are captured (pi: ctx.registerProvider)"
       (ext/models-register-provider! api :ext-prov {:models [{:id "m"}]})
       (ext/models-unregister-provider! api :ext-prov)
@@ -59,14 +60,14 @@
                   (:model-calls @state)))
       (t/is (some #(= [:unregister-provider! :ext-prov] %) (:model-calls @state))))))
 
-(t/deftest test-ui-editor-and-theme-by-name-headless
-  (testing "ui-editor is a no-op headless (no ui registry)"
-    (t/is (nil? (extensions/ui-editor "t" "p"))))
-  (testing "getTheme(name) is a pure lookup that works without a ui registry"
-    (t/is (= "dark" (:name (extensions/ui-get-theme-by-name "dark"))))
-    (t/is (= "light" (:name (extensions/ui-get-theme-by-name "light"))))
-    (t/is (nil? (extensions/ui-get-theme-by-name "does-not-exist"))
-          "unknown names return nil (pi: undefined — no dark fallback)")))
+(t/deftest test-theme-lookup-shared-directly
+  (testing "theme lookups come from the shared kmet.tui.theme layer, not the
+            api — extensions use them directly"
+    (t/is (= "dark" (:name (theme/get-theme "dark"))))
+    (t/is (= "dark" (:name (theme/get-theme "does-not-exist")))
+          "get-theme falls back to dark (pi getTheme)")
+    (t/is (nil? (theme/get-theme-by-name "does-not-exist")))
+    (t/is (map? (theme/get-all-themes)))))
 
 (t/deftest test-nullable-api-extension-init
   (testing "a sample extension's init registers what it declares"

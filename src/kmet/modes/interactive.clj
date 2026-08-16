@@ -51,7 +51,7 @@
             [kmet.app.bash-executor :as bash-exec]
             [kmet.app.tools.bash :as bash-tool]
             [kmet.app.ui.bash-execution :as be]
-            [kmet.app.ui.extension-dialogs :as dialogs]
+            [kmet.app.ui.dialogs :as dialogs]
             [kmet.tui.components.spinner :as spinner]
             [kmet.libs.process :as process]
             [kmet.libs.terminal :as lib-term]))
@@ -414,7 +414,7 @@
         (track!)
         (tui/tui-show-overlay
          (:tui cs)
-         (dialogs/make-extension-selector
+         (dialogs/make-selector-dialog
           (:message prompt)
           (mapv :label options)
           (fn [label]
@@ -430,7 +430,7 @@
         (track!)
         (tui/tui-show-overlay
          (:tui cs)
-         (dialogs/make-extension-input
+         (dialogs/make-input-dialog
           (:message prompt)
           (fn [value]
             (tui/tui-hide-overlay (:tui cs))
@@ -538,7 +538,7 @@
   [cs p]
   (tui/tui-show-overlay
    (:tui cs)
-   (dialogs/make-extension-input
+   (dialogs/make-input-dialog
     (str "API key for " (:name p))
     (fn [value]
       (tui/tui-hide-overlay (:tui cs))
@@ -575,7 +575,7 @@
       (do
         (tui/tui-show-overlay
          (:tui cs)
-         (dialogs/make-extension-selector
+         (dialogs/make-selector-dialog
           (str "Select authentication method for " (:name p) ":")
           options
           (fn [label]
@@ -1512,7 +1512,7 @@
   [cs sess entry]
   (tui/tui-show-overlay
    (:tui cs)
-   (dialogs/make-extension-input
+   (dialogs/make-input-dialog
     "Custom branch summarization instructions"
     (fn [instructions]
       (tui/tui-hide-overlay (:tui cs))
@@ -2997,14 +2997,6 @@
         editor-factory-atom (atom nil)
         extension-autocomplete-factories (atom [])
         terminal-input-unsubscribers (atom [])
-        show-dialog (fn [dialog]
-                      ;; pi: extension dialogs replace the editor container
-                      ;; content and take focus (IME propagation handled by
-                      ;; the dialog records)
-                      (container/container-clear editor-container)
-                      (container/container-add-child editor-container dialog)
-                      (tui/tui-set-focus t dialog)
-                      (tui/tui-request-render t))
         hide-dialog (fn []
                       (container/container-clear editor-container)
                       (container/container-add-child editor-container @current-editor-atom)
@@ -3036,51 +3028,13 @@
                                                @(:extension-statuses-atom ftr))
                      :on-branch-change (fn [_f] (fn []))}
         registry
-        {:select (fn [title options]
-                   (let [p (promise)]
-                     (show-dialog (dialogs/make-extension-selector
-                                   title options
-                                   (fn [opt] (hide-dialog) (deliver p opt))
-                                   (fn [] (hide-dialog) (deliver p nil))
-                                   (th/get-current-theme)))
-                     p))
-         :confirm (fn [title message]
-                    (let [p (promise)]
-                      (show-dialog (dialogs/make-extension-selector
-                                    (str title "\n" message) ["Yes" "No"]
-                                    (fn [opt] (hide-dialog) (deliver p (= opt "Yes")))
-                                    (fn [] (hide-dialog) (deliver p false))
-                                    (th/get-current-theme)))
-                      p))
-         :input (fn [title _placeholder]
-                  (let [p (promise)]
-                    (show-dialog (dialogs/make-extension-input
-                                  title
-                                  (fn [v] (hide-dialog) (deliver p v))
-                                  (fn [] (hide-dialog) (deliver p nil))
-                                  (th/get-current-theme)))
-                    p))
-         ;; pi: manualAbort.abort() — dismiss the current extension dialog
-         ;; (used by the OAuth flows' :abort-prompt! when the browser
-         ;; callback wins; the pending prompt promise resolves via the
-         ;; caller's abort hook, hide-dialog only clears the screen)
-         :close-dialog (fn [] (hide-dialog))
-         :editor (fn [title prefill]
-                   (let [p (promise)]
-                     (show-dialog (dialogs/make-extension-editor
-                                   title prefill
-                                   (fn [v] (hide-dialog) (deliver p v))
-                                   (fn [] (hide-dialog) (deliver p nil))
-                                   (th/get-current-theme)
-                                   (fn [] (term/rows @(:terminal t)))
-                                   ;; pi: ExtensionEditorComponent wires
-                                   ;; app.editor.external (ctrl+g) to its own
-                                   ;; external-editor flow
-                                   (fn [ed] (handle-external-editor cs ed))))
-                     p))
-         :notify (fn [message _type]
+        {:notify (fn [message _type]
                    (tui/tui-flash! t message)
                    nil)
+         ;; pi: ctx.ui.custom — mount an extension-built component (built
+         ;; with kmet.tui.*) as an overlay or in the editor dock; the
+         ;; factory gets (tui theme keybindings close) and close resolves
+         ;; the returned promise
          :custom (fn [factory {:keys [overlay overlay-options on-handle]}]
                    (let [p (promise)
                          saved-text (editor-text-get @current-editor-atom)
@@ -3231,8 +3185,6 @@
          :add-autocomplete-provider (fn [factory]
                                       (swap! extension-autocomplete-factories conj factory)
                                       (rebuild-autocomplete-provider!))
-         :get-theme (fn [] (th/get-current-theme))
-         :get-all-themes (fn [] (th/get-all-themes))
          :set-theme (fn [theme-or-name]
                       ;; pi: setTheme — Theme instances go through
                       ;; setThemeInstance; names through setThemeName (which

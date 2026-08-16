@@ -580,9 +580,9 @@ Subcommands (empty = status):
 
 | Subcommand | Behavior |
 |---|---|
-| `status` | §9.5 text |
-| `search <q> [regex]` | §9.3 |
-| `list [server]` | all servers, or one server's tools (cache; live fallback on `connect` only) |
+| `status` (or empty) | **McpPanel** in UI mode — the pi mcp-panel.ts port (§10.6 panel): server/tool rows with direct/proxy toggles, name + description search, reconnect/auth keys, failure display, unsaved-changes discard confirm, 60s inactivity cancel. `ctrl+s` persists the toggles (write-direct-tools! §6.6) and applies them live. No servers → §9.5 text |
+| `search <q> [regex]` | §9.3 — text dialog (multi-line) |
+| `list [server]` | all servers, or one server's tools (cache; live fallback on `connect` only) — text dialog |
 | `connect <server>` | ensure-connected (+ cache refresh + tool resync) |
 | `disconnect <server>` | close + kill |
 | `enable\|disable <server>` | §6.5 write, notify "run /reload to apply" |
@@ -590,10 +590,13 @@ Subcommands (empty = status):
 | `auth <server>` | run the OAuth flow now — fresh login, replaces stored tokens (§7.8) |
 | `logout <server>` | clear stored OAuth tokens + client info |
 
-Output: `ui-notify` when `(:has-ui ctx)`, `println` headless. Multi-line
-notify behavior verified during implementation; fallback is a
-`ui-custom` dialog. Completions: subcommands, then server names for
-connect/disconnect/enable/disable/auth/logout.
+Output: `ui-notify` (flash) for single-line messages, the extension's own
+scrollable TextDialog (panel.clj — a kmet.tui component mounted via
+ui-custom) for multi-line ones, `println` headless. The McpPanel and
+TextDialog are built directly on the shared kmet.tui.* layer (pi-mcp-adapter
+ships mcp-panel.ts the same way) — the extension api carries only the
+ui-custom mount point, no host-built dialogs. Completions: subcommands,
+then server names for connect/disconnect/enable/disable/auth/logout.
 
 Handler order: kmet dispatches extension command handlers as
 `(handler ctx args)` — the extension context first, then the args
@@ -644,7 +647,13 @@ them in that order.
    unit tests are registered in `kmet.runner/all-namespaces` (inside the
    normal gates, unlike extension files); the existing `kmet.ai` OAuth tests
    must stay green unchanged, proving the extraction is behavior-neutral.
-6. **Extension load**: load the entry against
+6. **Panel tests** (`scripts/validate-panel.bb`): McpPanel render (borders,
+   statuses, toggle icons, stats, hints), navigation/expand, toggle →
+   discard confirm → keep & close, discard-cancel, ctrl+s save result,
+   name search, TextDialog scroll/close, OAuth prompt submit, and the
+   inactivity-timer cancellation regression (an interrupted timer must not
+   fire done).
+7. **Extension load**: load the entry against
    `kmet.extension/create-nullable-api` — assert proxy tool, direct tools,
    `/mcp` command, event registrations; then a live smoke in `bb run` with a
    real `mcp.edn` pointing at the fake servers (TUI: status/search/describe/

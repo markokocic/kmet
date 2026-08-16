@@ -47,6 +47,32 @@ the repo gates: `bb lint` / `bb format` / `bb format-check` lint and format
 tests are never selected by the root `bb test` runner — they run from
 inside the extension directory).
 
+## Building UI
+
+Extensions build their own UI with the shared `kmet.tui.*` layer and mount
+it with `ui-custom` (pi: `ctx.ui.custom`) — the api carries no host-built
+dialogs. The factory receives `(tui theme keybindings close)` and returns a
+component (a `defcomponent`, or a duck-typed map `{:render :handle-input
+:invalidate}`); the host mounts it (overlay or editor dock), feeds it
+input, and `close` dismisses it. Pattern (extensions/tools.clj,
+extensions/mcp-adapter/src/extensions/mcp_adapter/panel.clj):
+
+```clojure
+(ext/ui-custom api
+              (fn [tui th kb close]
+                (my-component ... close))
+              {:overlay true
+               :overlay-options {:anchor :center :width 82}})
+```
+
+Only host-owned bridges remain api capabilities: `:custom`, `:notify`
+(the flash — the TUI instance is host-owned), and integrations with the
+host layout/editor/status/theme-controller state. Theme lookups come from
+`kmet.tui.theme` directly (`get-theme` / `get-all-themes` /
+`get-theme-by-name` / `get-current-theme`). `ui-custom` forwards its opts
+map untouched — `{:overlay ... :overlay-options {:anchor :center :width
+82}}` matches pi's overlay placement.
+
 ## Shipped extensions
 
 | Extension | Description |

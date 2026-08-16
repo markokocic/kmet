@@ -6,6 +6,21 @@
    kmet.libs.* (generic, self-contained utilities) — injected by reference,
    never re-evaluated. Everything else in kmet.* is off-limits.
 
+   **Building UI**: extensions build their own components with kmet.tui.*
+   (Container/Text/SelectList/Input/... + kmet.tui.theme for styling) and
+   mount them with `ui-custom` — the one host bridge, pi's ctx.ui.custom:
+   the factory receives (tui theme keybindings close) and returns a
+   component (a defcomponent, or a duck-typed map {:render :handle-input
+   :invalidate} like extensions/tools.clj); the host mounts it (overlay or
+   editor dock), feeds it input, and `close` dismisses it. The api's :ui
+   map carries only host-owned bridges: :custom, :notify (the flash — the
+   TUI instance is host-owned), and integrations with the host layout,
+   editor, status indicator, and theme controller. There are no host-built
+   dialog capabilities — select/input/editor dialogs are kmet.tui
+   components you compose yourself (pi parity: pi-mcp-adapter ships its
+   own panel). kmet.tui.theme exposes get-theme/get-all-themes/
+   get-theme-by-name/get-current-theme directly.
+
    An extension is a Clojure namespace defining:
      (defn init [api] ...)     — required; register everything here
      (defn shutdown [api] ...) — optional; teardown on unload/reload
@@ -45,9 +60,13 @@
 ;;   :register-entry-renderer! :register-message-renderer!
 ;;   :set-model :get-thinking-level :set-thinking-level :send-user-message
 ;;   :exec
-;;   :ui      — map of UI capabilities (dialogs, status, widgets, editor,
-;;              theme, working indicator, terminal input, notify) — inert
-;;              before the layout exists / in headless mode
+;;   :ui      — map of UI capabilities — only host-owned bridges: :custom
+;;              (mount extension-built components; pi: ctx.ui.custom),
+;;              :notify (flash), and layout/editor/status/theme-controller
+;;              integrations. Build components with kmet.tui.* and host
+;;              them via ui-custom — the api carries no host-built dialogs
+;;              or theme lookups (kmet.tui.theme is shared) — inert before
+;;              the layout exists / in headless mode
 ;;   :models  — provider/model facades (get-all, find, auth status, …)
 ;;   :session — live session (append entry/message, labels, name)
 
@@ -107,13 +126,14 @@
   (:ui api))
 
 ;; ─── UI wrappers (dispatch to (:ui api) capabilities) ────────────────────
+;; Only host-owned bridges are api capabilities: :custom mounts
+;; extension-built components (pi: ctx.ui.custom), :notify flashes, and the
+;; layout/editor/status/theme integrations touch host-owned state. Build
+;; components with the shared kmet.tui.* layer instead — the api carries no
+;; host-built dialogs or theme lookups (kmet.tui.theme is shared).
 
-(defn ui-select [api title options & [_opts]] ((:select (ui api)) title options))
-(defn ui-confirm [api title message & [_opts]] ((:confirm (ui api)) title message))
-(defn ui-input [api title placeholder & [_opts]] ((:input (ui api)) title placeholder))
 (defn ui-notify [api message & [type]] ((:notify (ui api)) message type))
-(defn ui-custom [api factory & [{:keys [overlay] :as _opts}]]
-  ((:custom (ui api)) factory {:overlay overlay}))
+(defn ui-custom [api factory & [opts]] ((:custom (ui api)) factory opts))
 (defn ui-set-status [api key text] ((:set-status (ui api)) key text))
 (defn ui-set-widget [api key content & [{:keys [placement]}]]
   ((:set-widget (ui api)) key content {:placement placement}))
@@ -129,27 +149,10 @@
 (defn ui-set-hidden-thinking-label [api label] ((:set-hidden-thinking-label (ui api)) label))
 (defn ui-set-editor-component [api factory] ((:set-editor-component (ui api)) factory))
 (defn ui-add-autocomplete-provider [api factory] ((:add-autocomplete-provider (ui api)) factory))
-(defn ui-get-theme [api] ((:get-theme (ui api))))
-(defn ui-get-all-themes [api] ((:get-all-themes (ui api))))
 (defn ui-set-theme [api theme-or-name] ((:set-theme (ui api)) theme-or-name))
 (defn ui-get-tools-expanded [api] ((:get-tools-expanded (ui api))))
 (defn ui-set-tools-expanded [api expanded?] ((:set-tools-expanded (ui api)) expanded?))
 (defn ui-on-terminal-input [api handler] ((:on-terminal-input (ui api)) handler))
-(defn ui-editor
-  "Open the modal editor dialog (pi: ui.editor): returns a promise for the
-   submitted text, nil when dismissed (nil headless)."
-  [api title prefill]
-  ((:editor (ui api)) title prefill))
-(defn ui-close-dialog
-  "Dismiss the currently open extension dialog (pi: manualAbort.abort —
-   the OAuth flows' :abort-prompt! hook). No-op when no dialog is open."
-  [api]
-  ((:close-dialog (ui api))))
-(defn ui-get-theme-by-name
-  "Look up a theme by name (pi: getTheme(name)); unknown names fall back
-   to dark. Works in every mode."
-  [api name]
-  ((:get-theme-by-name (ui api)) name))
 
 (defn models
   "Provider/model facades: :get-all :get-available :find :has-configured-auth
@@ -262,11 +265,10 @@
                                   (swap! state update :ui-calls conj [:send-user-message text opts]))
              :exec (fn [command args opts]
                      (swap! state update :ui-calls conj [:exec command args opts]))
-             :ui (into {} (for [[k _] {:select 1 :confirm 1 :input 1 :notify 1 :custom 1
+             :ui (into {} (for [[k _] {:notify 1 :custom 1
                                        :set-status 1 :set-widget 1 :set-footer 1 :set-header 1
                                        :set-editor-text 1 :get-editor-text 1 :paste-to-editor 1
-                                       :set-theme 1 :get-theme 1 :get-all-themes 1 :editor 1
-                                       :close-dialog 1 :get-theme-by-name 1 :set-working-indicator 1
+                                       :set-theme 1 :set-working-indicator 1
                                        :set-working-message 1 :set-working-visible 1
                                        :on-terminal-input 1 :set-tools-expanded 1
                                        :get-tools-expanded 1}]

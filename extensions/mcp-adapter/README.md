@@ -130,9 +130,9 @@ cached metadata so no server spawns at startup. Names are lowercased with
 
 | Command | Description |
 |---|---|
-| `/mcp` | status: servers, lifecycle, state, tool counts |
-| `/mcp search <q> [regex]` | search tools (substring or regex) |
-| `/mcp list [server]` | servers, or one server's tools |
+| `/mcp` | interactive McpPanel (pi mcp-panel.ts port): servers, lifecycle, tool counts, direct/proxy toggles, search, reconnect/auth — `ctrl+s` saves, `esc` clears/closes |
+| `/mcp search <q> [regex]` | search tools (substring or regex) — text dialog |
+| `/mcp list [server]` | servers, or one server's tools — text dialog |
 | `/mcp connect <server>` | connect now (+ metadata refresh + tool resync) |
 | `/mcp disconnect <server>` | stop the server process |
 | `/mcp enable\|disable <server>` | write `:disabled` into `.kmet/mcp.edn`; `/reload` to apply |
@@ -168,15 +168,15 @@ configure. Only add servers you trust.
 
 ## Development
 
-The `scripts/` directory carries fake MCP/OAuth servers and three
-validation scripts (client transports, config/extension load, OAuth flow)
-plus an end-to-end smoke of the proxy-tool surface (`e2e.bb`, headless —
-see plan §15.22; the interactive-TUI pass remains a manual checklist
-item):
+The `scripts/` directory carries fake MCP/OAuth servers and four
+validation scripts (client transports, config/extension load, OAuth flow,
+McpPanel/TextDialog/prompt components) plus an end-to-end smoke of the
+proxy-tool surface (`e2e.bb`, headless — see plan §15.22):
 
 ```bash
 bb -cp ../../src:src scripts/validate-client.bb scripts/fake-mcp-server.bb scripts/fake-http-mcp-server.bb
 bb -cp ../../src:src scripts/validate-config.bb
+bb -cp ../../src:src scripts/validate-panel.bb
 bb -cp ../../src:src scripts/validate-oauth.bb scripts/fake-oauth-server.bb
 bb -cp ../../src:src scripts/e2e.bb scripts/fake-mcp-server.bb
 ```

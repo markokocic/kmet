@@ -97,7 +97,7 @@
     kmet.app.ui.test-tool-execution
     kmet.app.ui.test-custom-message
     kmet.app.ui.test-bash-execution
-    kmet.app.ui.test-extension-dialogs
+    kmet.app.ui.test-dialogs
     kmet.app.ui.test-footer
     kmet.app.ui.test-footer-data-provider
     kmet.app.ui.test-pending-messages
