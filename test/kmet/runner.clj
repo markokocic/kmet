@@ -26,7 +26,7 @@
     kmet.ai.test-attribution
     kmet.ai.test-models
     kmet.app.test-model-resolver
-    kmet.ai.test-config-value
+    kmet.libs.test-dynamic-value
     kmet.ai.test-model-config
     kmet.ai.test-provider-composer
     kmet.ai.test-auth

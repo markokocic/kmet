@@ -773,6 +773,7 @@
    re-evaluated, so any protocols they define keep their identity. Keep in
    sync with src/kmet/libs/ when a lib is added or removed."
   '[kmet.libs.diff
+    kmet.libs.dynamic-value
     kmet.libs.file-lock
     kmet.libs.hash
     kmet.libs.highlight

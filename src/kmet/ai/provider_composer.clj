@@ -15,7 +15,7 @@
    headers after them, so a provider-level header wins over a colliding
    model-level one (pi lets the model win). /reload recomposes, so the
    observable behavior is equivalent."
-  (:require [kmet.ai.config-value :as cv]
+  (:require [kmet.libs.dynamic-value :as dynamic-value]
             [kmet.ai.oauth :as oauth]))
 
 (declare adapt-oauth)
@@ -252,11 +252,11 @@
   [config extension]
   (when-let [value (or (:api-key extension) (:api-key config))]
     (cond
-      (cv/is-command-config-value? value)
+      (dynamic-value/is-command-config-value? value)
       {:configured true :source :models-json-command}
 
-      (seq (cv/get-config-value-env-var-names value))
-      (if (cv/is-config-value-configured? value)
+      (seq (dynamic-value/get-config-value-env-var-names value))
+      (if (dynamic-value/is-config-value-configured? value)
         {:configured true :source :environment}
         {:configured false})
 

@@ -1,6 +1,7 @@
 # Moving app/ai modules into kmet.libs — analysis
 
-> Status: analysis only — nothing moved yet.
+> Status: Tier 1 step 1 done — `kmet.ai.config-value` moved to
+> `kmet.libs.dynamic-value` (2026-08-16). Nothing else moved yet.
 > Layer rule enforced by `test/kmet/libs/test-self-contained.clj` (libs must not
 > require anything outside `kmet.libs.*`) and `test/kmet/ai/test-self-contained.clj`.
 

@@ -6,7 +6,7 @@
             [babashka.fs :as fs]
             [kmet.ai.models :as m]
             [kmet.ai.auth :as auth]
-            [kmet.ai.config-value :as config-value]
+            [kmet.libs.dynamic-value :as dynamic-value]
             [kmet.ai.model-config :as model-config]))
 
 ;; ─── Registry semantics (pi: MutableModels) ────────────────────────────────
@@ -386,21 +386,21 @@
         (with-redefs [auth/getenv (fn [k] (when (= k "DEEPSEEK_API_KEY") "env-key"))]
           (t/is (true? (auth/configured? :deepseek)))
           (t/is (nil? (auth/resolve-api-key :deepseek)) "unresolvable $ENV key → no env fallback (pi resolveConfigValueOrThrow)")
-          (with-redefs [config-value/getenv (fn [k] (when (= k "MODELS_CONFIG_TEST_KEY") "cfg-key"))]
+          (with-redefs [dynamic-value/getenv (fn [k] (when (= k "MODELS_CONFIG_TEST_KEY") "cfg-key"))]
             (t/is (= "cfg-key" (auth/resolve-api-key :deepseek)))))
         (with-redefs [auth/getenv (fn [_] nil)
-                      config-value/getenv (fn [_] nil)]
+                      dynamic-value/getenv (fn [_] nil)]
           (t/is (false? (auth/configured? :my-custom)))
           (t/is (true? (auth/configured? :my-literal)) "literal api-key counts as configured (pi configuredRequestAuthStatus)")
           (t/is (= "sk-literal" (auth/resolve-api-key :my-literal))))
         (t/is (nil? (m/get-model-config-error))))
       (t/testing "config-only providers without auth stay unavailable (pi getAvailable)"
         (with-redefs [auth/getenv (fn [_] nil)
-                      config-value/getenv (fn [_] nil)]
+                      dynamic-value/getenv (fn [_] nil)]
           (t/is (false? (auth/configured? :my-custom)))))
       (t/testing "configured custom providers surface in get-available / defaults / cost"
         (with-redefs [auth/getenv (fn [_] nil)
-                      config-value/getenv (fn [_] nil)]
+                      dynamic-value/getenv (fn [_] nil)]
           (t/is (some #(= "lit-1" (:id %)) (m/get-available)))
           (t/is (= "lit-1" (:id (m/default-model-for :my-literal))))
           (t/is (= "lit-1" (m/resolve-config-model {:provider :my-literal})))))
@@ -509,7 +509,7 @@
                (m/get-registered-provider-config :ext-prov)))
       (t/testing "auth: literal api-key counts as configured"
         (with-redefs [auth/getenv (fn [_] nil)
-                      config-value/getenv (fn [_] nil)]
+                      dynamic-value/getenv (fn [_] nil)]
           (t/is (true? (auth/configured? :ext-prov)))
           (t/is (= "sk-ext" (auth/resolve-api-key :ext-prov)))
           (t/is (some #(= "ext-1" (:id %)) (m/get-available))))))
@@ -593,7 +593,7 @@
         (t/is (true? (m/has-configured-auth :facade-ext))))
       (t/testing "get-provider-auth-status sources"
         (with-redefs [auth/getenv (fn [_] nil)
-                      config-value/getenv (fn [_] nil)]
+                      dynamic-value/getenv (fn [_] nil)]
           (t/is (= {:configured true :source :fallback}
                    (m/get-provider-auth-status :facade-ext))
                 "extension-sourced key reports :fallback (pi)")
@@ -608,7 +608,7 @@
       (t/testing "get-api-key-and-headers"
         (with-redefs [auth/auth-atom (atom {})
                       auth/getenv (fn [_] nil)
-                      config-value/getenv (fn [_] nil)]
+                      dynamic-value/getenv (fn [_] nil)]
           (t/is (= {:ok true :api-key "sk-facade" :headers nil}
                    (m/get-api-key-and-headers model)))
           (t/is (= {:ok false :error "Unknown provider: no-such-provider"}
@@ -658,7 +658,7 @@
   (try
     (with-redefs [auth/auth-atom (atom {})
                   auth/getenv (fn [_] nil)
-                  config-value/getenv (fn [_] nil)]
+                  dynamic-value/getenv (fn [_] nil)]
       (t/testing "unresolvable configured header → ok:false with the message"
         (m/register-provider-config! :hdr-ext
                                      {:base-url "https://h/v1" :api :openai-completions

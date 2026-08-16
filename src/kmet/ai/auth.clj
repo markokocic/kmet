@@ -14,7 +14,7 @@
             [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.ai.aws-sigv4 :as aws-sigv4]
-            [kmet.ai.config-value :as config-value]
+            [kmet.libs.dynamic-value :as dynamic-value]
             [kmet.ai.google-adc :as google-adc]
             [kmet.libs.file-lock :as file-lock]))
 
@@ -331,7 +331,7 @@
       (when-not (stored-oauth-credential provider)
         (let [raw (configured-api-key provider)]
           (if raw
-            (when-let [k (config-value/resolve-config-value raw)]
+            (when-let [k (dynamic-value/resolve-config-value raw)]
               {:api-key k})
             (or (when-let [t (anthropic-auth-token provider)]
                   {:bearer t})
@@ -381,6 +381,6 @@
        (stored-oauth-credential provider) (some? (provider-oauth provider))
        stored true
        :else (or (when-let [raw (configured-api-key provider)]
-                   (config-value/is-config-value-configured? raw))
+                   (dynamic-value/is-config-value-configured? raw))
                  (env-key-present? provider)
                  (ambient-configured? provider))))))

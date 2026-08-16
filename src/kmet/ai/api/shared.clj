@@ -6,7 +6,7 @@
    [kmet.ai.hooks :as hooks]
    [kmet.ai.attribution :as attribution]
    [kmet.ai.auth :as auth]
-   [kmet.ai.config-value :as config-value]
+   [kmet.libs.dynamic-value :as dynamic-value]
    [cheshire.core :as json]
    [kmet.ai.models :as models]
    [kmet.ai.usage :as usage]
@@ -89,10 +89,10 @@
                           model session-id)
         merged (merge attribution-hdrs
                       base
-                      (config-value/resolve-headers-or-throw
+                      (dynamic-value/resolve-headers-or-throw
                        (:headers model)
                        (str "model \"" (name (:provider model)) "/" (:id model) "\""))
-                      (config-value/resolve-headers-or-throw
+                      (dynamic-value/resolve-headers-or-throw
                        (:configured-headers provider)
                        (str "provider \"" (name (:id provider)) "\"")))]
     (cond-> merged

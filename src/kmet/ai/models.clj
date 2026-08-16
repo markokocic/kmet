@@ -12,7 +12,7 @@
             [babashka.fs :as fs]
             [kmet.config :as cfg]
             [kmet.ai.auth :as auth]
-            [kmet.ai.config-value :as config-value]
+            [kmet.libs.dynamic-value :as dynamic-value]
             [kmet.ai.model-config :as model-config]
             [kmet.ai.oauth :as oauth]
             [kmet.ai.provider-composer :as composer]))
@@ -562,7 +562,7 @@
         (let [auth (auth/resolve-provider-auth provider-id)
               api-key (:api-key auth)
               bearer (:bearer auth)
-              headers (config-value/resolve-headers-or-throw
+              headers (dynamic-value/resolve-headers-or-throw
                        (merge (:headers model) (:configured-headers provider))
                        (str "model \"" (name provider-id) "/" (:id model) "\""))
               headers (if bearer

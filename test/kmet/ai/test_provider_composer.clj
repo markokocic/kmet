@@ -5,7 +5,7 @@
    last, auth-header flag, configured-auth-status (pi provider-composer.ts)."
   (:require [clojure.test :as t]
             [clojure.string :as str]
-            [kmet.ai.config-value :as config-value]
+            [kmet.libs.dynamic-value :as dynamic-value]
             [kmet.ai.models :as models]
             [kmet.ai.provider-composer :as pc]))
 
@@ -200,7 +200,7 @@
     (t/is (= {:configured true :source :models-json-command}
              (pc/configured-request-auth-status {:api-key "!op read"} nil))))
   (t/testing "$ENV key → configured iff the var is present"
-    (with-redefs [config-value/getenv (fn [k] (when (= k "MY_KEY") "v"))]
+    (with-redefs [dynamic-value/getenv (fn [k] (when (= k "MY_KEY") "v"))]
       (t/is (= {:configured true :source :environment}
                (pc/configured-request-auth-status {:api-key "$MY_KEY"} nil)))
       (t/is (= {:configured false}

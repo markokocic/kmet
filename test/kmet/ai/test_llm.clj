@@ -5,7 +5,7 @@
             [kmet.libs.sse :as sse]
             [kmet.ai.auth :as auth]
             [kmet.ai.aws-sigv4 :as aws-sigv4]
-            [kmet.ai.config-value :as config-value]
+            [kmet.libs.dynamic-value :as dynamic-value]
             [kmet.ai.llm :as llm]
             [kmet.ai.api.shared :as shared]
             [kmet.ai.api.openai-completions :as completions]
@@ -940,7 +940,7 @@
                                             "secret" nil)]
       (t/is (nil? (get merged "Authorization")))))
   (t/testing "configured header values resolve as config values ($ENV)"
-    (with-redefs [config-value/getenv (fn [k] (when (= k "TEST_LLM_HEADER") "hdr"))]
+    (with-redefs [dynamic-value/getenv (fn [k] (when (= k "TEST_LLM_HEADER") "hdr"))]
       (let [merged (@#'shared/request-headers {}
                                               {:provider :p :id "m"}
                                               {:id :p :configured-headers {"X-Custom" "$TEST_LLM_HEADER"}}
@@ -1160,7 +1160,7 @@
                                   :api-key "$KMT_MISSING_ANTHROPIC_KEY"
                                   :models [{:id "claude-sonnet-4.5"}]})
     (with-redefs [auth/getenv (fn [k] (when (= k "ANTHROPIC_AUTH_TOKEN") "tok"))
-                  config-value/getenv (fn [_] nil)]
+                  dynamic-value/getenv (fn [_] nil)]
       (let [errors (atom [])]
         @(llm/send-message {:provider :anthropic
                             :model "claude-sonnet-4.5"

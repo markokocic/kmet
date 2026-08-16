@@ -1,4 +1,4 @@
-(ns kmet.ai.config-value
+(ns kmet.libs.dynamic-value
   "Configuration value resolution (pi: resolve-config-value.ts): shell
    commands, environment interpolation, and literals — used by models.edn
    :api-key and :headers values.

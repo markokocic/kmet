@@ -71,6 +71,8 @@ src/kmet/
 │   │                     yaml-lite parse; pi utils/frontmatter.js)
 │   ├── clipboard.clj   — Clipboard copy via platform tools (Termux/Wayland/
 │   │                     X11/macOS/Windows; OSC52 fallback lives in libs.terminal)
+│   ├── dynamic_value.clj — $ENV/!command config-value resolution (pi:
+│   │                     resolve-config-value.ts; moved from kmet.ai.config-value)
 │   ├── terminal_image.clj — Kitty terminal image protocol + image dimension parsing
 │   │                     (native PNG/JPEG/GIF via f= codes — no conversion)
 │   ├── file_lock.clj   — Cross-process file locking (settings.edn/auth.edn writes)
@@ -90,7 +92,6 @@ src/kmet/
 │   ├── model_config.clj   — models.edn loading + validation (pi: model-config.ts)
 │   ├── provider_composer.clj — builtin+models.edn+extension composition
 │   │                     (pi: provider-composer.ts)
-│   ├── config_value.clj    — $ENV/!command config-value resolution (pi: resolve-config-value.ts)
 │   ├── auth.clj        — env-var table, auth.edn, credential resolution
 │   │                     (pi: env-api-keys.ts + auth-storage.ts)
 │   ├── oauth.clj       — OAuthAuth record, device-code + PKCE loopback
