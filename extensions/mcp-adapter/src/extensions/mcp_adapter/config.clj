@@ -63,7 +63,12 @@
    :clientSecret :client-secret
    :redirectUri :redirect-uri
    :authorizationServerUrl :authorization-server-url
-   :skipIssuerMetadataValidation :skip-issuer-metadata-validation})
+   :skipIssuerMetadataValidation :skip-issuer-metadata-validation
+   :grantType :grant
+   :privateKeyFile :private-key-file
+   :privateKeyJwk :private-key-jwk
+   :tokenEndpoint :token-endpoint
+   :tokenEndpointAuthMethod :token-endpoint-auth-method})
 
 (defn- normalize-key
   "CamelCase known keys → kebab; everything else passes through (a kebab
@@ -83,7 +88,8 @@
     :else v))
 
 (def ^:private keyword-valued-keys
-  #{:lifecycle :tool-prefix :http-transport :auth :flow})
+  #{:lifecycle :tool-prefix :http-transport :auth :flow :grant :algorithm
+    :token-endpoint-auth-method})
 
 (defn- normalize-oauth
   "Normalize an :oauth map (nil → nil, false → false)."
@@ -231,6 +237,17 @@
        "  ;;            :auth :oauth\n"
        "  ;;            :oauth {:flow :auto        ;; :auto | :pkce | :device\n"
        "  ;;                    :scopes [\"read\"]}}\n"
+       "  ;; \"service\" {:url \"https://mcp.example.com/mcp\"\n"
+       "  ;;            :auth :oauth\n"
+       "  ;;            :oauth {:grant :client-credentials ;; machine grant, no browser\n"
+       "  ;;                    :client-id \"svc\"          ;; auth: :client-secret-basic\n"
+       "  ;;                    :client-secret \"...\"}}   ;; | :client-secret-post | :none\n"
+       "  ;; \"svc-jwt\" {:url \"https://mcp.example.com/mcp\"\n"
+       "  ;;            :auth :oauth\n"
+       "  ;;            :oauth {:grant :jwt-bearer        ;; RFC 7523 signed assertion\n"
+       "  ;;                    :private-key-file \"svc.pem\" ;; PKCS#8/PKCS#1 PEM, or\n"
+       "  ;;                    :issuer \"kmet\"            ;; :private-key-jwk {..}\n"
+       "  ;;                    :audience \"https://as.example/token\"}}\n"
        " }}\n"))
 
 (defn ensure-global-template!

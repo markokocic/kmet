@@ -63,7 +63,18 @@ url that supplied them.
   "notion" {:url "https://mcp.notion.com/mcp"
             :auth :oauth
             :oauth {:flow :auto            ;; :auto | :pkce | :device
-                    :scopes ["read"]}}}}   ;; :client-id optional → DCR
+                    :scopes ["read"]}}
+  "service" {:url "https://mcp.example.com/mcp"
+             :auth :oauth
+             :oauth {:grant :client-credentials ;; machine grant, no browser
+                     :client-id "svc"          ;; auth: :client-secret-basic default
+                     :client-secret "..."}}    ;; | :client-secret-post | :none
+  "svc-jwt" {:url "https://mcp.example.com/mcp"
+             :auth :oauth
+             :oauth {:grant :jwt-bearer        ;; RFC 7523 signed assertion
+                     :private-key-file "svc.pem" ;; PKCS#8/PKCS#1 PEM, or
+                     :issuer "kmet"            ;; :private-key-jwk {..}
+                     :audience "https://as.example/token"}}}}
 ```
 
 Server keys: `:command`/`:args` (stdio; `:command` may be a vector = full
@@ -77,8 +88,16 @@ skipped and shows as `misconfigured` in status.
 OAuth config (`:oauth` map): `:client-id` (pre-registered client; omit →
 RFC 7591 dynamic client registration), `:client-secret`, `:scopes`
 (string or vector), `:flow` (`:auto` default | `:pkce` | `:device`),
-`:redirect-uri`, `:authorization-server-url` (fetch metadata directly,
-skips well-known discovery), `:skip-issuer-metadata-validation`.
+`:grant` (`:authorization-code` default | `:client-credentials` |
+`:jwt-bearer` — machine grants, no browser), `:token-endpoint` (explicit,
+skips discovery), `:token-endpoint-auth-method` (`:client-secret-basic`
+default with secret | `:client-secret-post` | `:none`),
+`:private-key-file`/`:private-key-jwk` (jwt-bearer key: PEM path / JWK
+map), `:algorithm` (`:RS256` default | `:ES256`),
+`:issuer`/`:subject`/`:audience` (jwt-bearer claims; sub defaults to
+issuer, aud to the token endpoint), `:redirect-uri`,
+`:authorization-server-url` (fetch metadata directly, skips well-known
+discovery), `:skip-issuer-metadata-validation`.
 
 ## The `mcp` tool
 
@@ -118,7 +137,7 @@ cached metadata so no server spawns at startup. Names are lowercased with
 | `/mcp disconnect <server>` | stop the server process |
 | `/mcp enable\|disable <server>` | write `:disabled` into `.kmet/mcp.edn`; `/reload` to apply |
 | `/mcp refresh` | reload `mcp.edn`, resync tools |
-| `/mcp auth <server>` | run the OAuth flow now (PKCE loopback or device) |
+| `/mcp auth <server>` | run the OAuth flow now (PKCE loopback, device, or a machine-grant token fetch) |
 | `/mcp logout <server>` | clear stored OAuth tokens + client info |
 
 ## HTTP auth
@@ -133,6 +152,13 @@ cached metadata so no server spawns at startup. Names are lowercased with
   expiry; a 401 with a stored refresh token refreshes once and retries.
   Tokens are stored **plaintext** at `~/.kmet/agent/mcp-oauth.edn`
   (0600 perms — Babashka has no OS keyring; `logout` clears them).
+- **Machine grants**: `:oauth {:grant :client-credentials ...}` (RFC 6749
+  §4.4) or `:grant :jwt-bearer` (RFC 7523) skip the browser: a token is
+  fetched from the token endpoint on demand and cached in memory,
+  re-fetched on expiry or 401 (no refresh token). client-credentials
+  authenticates with `Authorization: Basic` by default; jwt-bearer signs
+  a JWT (RS256 default, ES256 supported) with the configured PEM/JWK
+  key. Nothing is persisted — `logout` just clears the cache.
 
 ## Security
 
@@ -146,14 +172,13 @@ The `scripts/` directory carries fake MCP/OAuth servers and three
 validation scripts (client transports, config/extension load, OAuth flow):
 
 ```bash
-bb -cp ../../../src:../src scripts/validate-client.bb scripts/fake-mcp-server.bb scripts/fake-http-mcp-server.bb
-bb -cp ../../../src:../src scripts/validate-config.bb
-bb -cp ../../../src:../src scripts/validate-oauth.bb scripts/fake-oauth-server.bb
+bb -cp ../../src:src scripts/validate-client.bb scripts/fake-mcp-server.bb scripts/fake-http-mcp-server.bb
+bb -cp ../../src:src scripts/validate-config.bb
+bb -cp ../../src:src scripts/validate-oauth.bb scripts/fake-oauth-server.bb
 ```
 
 ## Phase-2 roadmap
 
-OAuth client-credentials/JWT grants, OS-keyring token storage, prompts →
-slash commands, resources → read tool, mcpScript batching, `/mcp serve`
-(expose kmet as an MCP server), setup wizard, include/exclude globs,
-output guards, streaming progress.
+OS-keyring token storage, prompts → slash commands, resources → read
+tool, mcpScript batching, `/mcp serve` (expose kmet as an MCP server),
+setup wizard, include/exclude globs, output guards, streaming progress.

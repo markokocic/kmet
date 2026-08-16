@@ -9,8 +9,11 @@
 ;;                        with ?code=...&state=<echoed> when code_verifier
 ;;                        is echoed via the state (validates challenge)
 ;;   POST /token        — authorization_code / refresh_token / device_code
-;;                        grants (device: fixed code + pending/slow_down
-;;                        sequence)
+;;                        / client_credentials / jwt-bearer grants
+;;                        (device: fixed code + pending/slow_down sequence;
+;;                        client_credentials requires client_id
+;;                        "cc-client-1"; jwt-bearer validates the
+;;                        assertion header/claims)
 ;;   POST /device       — RFC 8628 device authorization
 ;;   GET  /resource     — echo endpoint used by the fake MCP server
 ;;
@@ -46,6 +49,13 @@
              (let [[k v] (str/split pair #"=" 2)]
                [(java.net.URLDecoder/decode k "UTF-8")
                 (java.net.URLDecoder/decode (or v "") "UTF-8")]))))
+
+(defn- b64u-decode
+  "Base64url decode with padding restored (JWT segments are unpadded)."
+  [s]
+  (let [s (str s)
+        padded (str s (apply str (repeat (mod (- 4 (mod (count s) 4)) 4) "=")))]
+    (.decode (java.util.Base64/getUrlDecoder) padded)))
 
 (defn- issue-tokens [& [extra]]
   (let [n (swap! state update :issued-tokens inc)]
@@ -90,7 +100,9 @@
                        :device_authorization_endpoint (str "http://127.0.0.1:" (:port @state) "/device")
                        :response_types_supported ["code"]
                        :grant_types_supported ["authorization_code" "refresh_token"
-                                               "urn:ietf:params:oauth:grant-type:device_code"]
+                                               "urn:ietf:params:oauth:grant-type:device_code"
+                                               "client_credentials"
+                                               "urn:ietf:params:oauth:grant-type:jwt-bearer"]
                        :token_endpoint_auth_methods_supported ["none"]}))
 
       (and (= method "POST") (= path "/register"))
@@ -134,6 +146,31 @@
               1 (http-response 400 (json/generate-string {:error "authorization_pending"}))
               2 (http-response 400 (json/generate-string {:error "slow_down" :interval 1}))
               (http-response 200 (json/generate-string (issue-tokens)))))
+
+          "client_credentials"
+          (if (= "cc-client-1" (get form "client_id"))
+            (let [n (swap! state update :issued-tokens inc)]
+              (http-response 200 (json/generate-string
+                                  (merge (issue-tokens {"scope" (get form "scope")})
+                                         {"access_token" (str "access-cc-" n)}))))
+            (http-response 401 (json/generate-string {:error "invalid_client"})))
+
+          "urn:ietf:params:oauth:grant-type:jwt-bearer"
+          (let [assertion (get form "assertion")
+                parts (when assertion (str/split assertion #"\."))
+                [header payload] (when (= 3 (count parts))
+                                   (mapv #(json/parse-string
+                                           (String. (b64u-decode %) "UTF-8"))
+                                         (take 2 parts)))]
+            (if (and (= "RS256" (get header "alg"))
+                     (seq (get payload "iss"))
+                     (seq (get payload "aud"))
+                     (number? (get payload "exp")))
+              (let [n (swap! state update :issued-tokens inc)]
+                (http-response 200 (json/generate-string
+                                    (merge (issue-tokens {"scope" (get form "scope")})
+                                           {"access_token" (str "access-jwt-" n)}))))
+              (http-response 401 (json/generate-string {:error "invalid_grant"}))))
 
           (http-response 400 (json/generate-string {:error "unsupported_grant_type"}))))
 

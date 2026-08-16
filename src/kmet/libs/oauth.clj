@@ -12,7 +12,10 @@
    - the callback/manual-paste race (wait-for-callback-or-manual),
    - RFC 8414 authorization-server metadata discovery,
    - RFC 7591 dynamic client registration,
-   - token endpoint exchange/refresh + RFC 8628 device-authorization start.
+   - token endpoint exchange/refresh + RFC 8628 device-authorization start,
+   - machine grants: RFC 6749 §4.4 client-credentials and RFC 7523
+     JWT-bearer (JWT signing lives in kmet.libs.crypto — PEM/JWK key
+     parsing + RS256/ES256).
 
    Transport-agnostic: plain babashka.http-client (no kmet.ai.proxy — the
    caller routes through its own transport). The caller supplies token
@@ -20,7 +23,8 @@
    touches the TUI or credential stores."
   (:require [babashka.http-client :as http]
             [cheshire.core :as json]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [kmet.libs.crypto :as crypto]))
 
 ;; ─── Device-code polling (pi: auth/oauth/device-code.ts) ──────────────────
 
@@ -124,10 +128,10 @@
     (.nextBytes (java.security.SecureRandom.) bytes)
     bytes))
 
-(defn- base64url
-  "Base64url without padding (pi: base64urlEncode)."
-  [bytes]
-  (.encodeToString (.withoutPadding (java.util.Base64/getUrlEncoder)) bytes))
+(def base64url
+  "Base64url without padding (pi: base64urlEncode) — re-exported from
+   kmet.libs.crypto."
+  crypto/base64url)
 
 (defn generate-pkce
   "PKCE verifier + challenge (pi pkce.ts): verifier = 32 random bytes
@@ -148,6 +152,15 @@
   "Form-urlencode a string (pi URLSearchParams)."
   [s]
   (java.net.URLEncoder/encode s "UTF-8"))
+
+;; ─── Form encoding (RFC 6749 token requests) ─────────────────────────────
+
+(defn- form-encode
+  "Form-urlencode a map of string keys/values."
+  [params]
+  (str/join "&" (map (fn [[k v]]
+                       (str (url-encode k) "=" (url-encode (str v))))
+                     params)))
 
 ;; ─── OAuth callback server + login pages (pi: node http.createServer in
 ;;    auth/oauth/{anthropic,openai-codex,openrouter}.ts + oauth-page.ts) ────
@@ -446,9 +459,7 @@
                                  :headers {"Content-Type"
                                            "application/x-www-form-urlencoded"
                                            "Accept" "application/json"}
-                                 :body (str/join "&" (map (fn [[k v]]
-                                                            (str (url-encode k) "=" (url-encode (str v))))
-                                                          body))
+                                 :body (form-encode body)
                                  :timeout (or (:timeout-ms opts) 15000)}))]
     (token-response "exchange" data)))
 
@@ -469,9 +480,7 @@
                                  :headers {"Content-Type"
                                            "application/x-www-form-urlencoded"
                                            "Accept" "application/json"}
-                                 :body (str/join "&" (map (fn [[k v]]
-                                                            (str (url-encode k) "=" (url-encode (str v))))
-                                                          body))
+                                 :body (form-encode body)
                                  :timeout (or timeout-ms 15000)}))]
     (token-response "refresh" data)))
 
@@ -492,9 +501,7 @@
                                  :headers {"Accept" "application/json"
                                            "Content-Type"
                                            "application/x-www-form-urlencoded"}
-                                 :body (str/join "&" (map (fn [[k v]]
-                                                            (str (url-encode k) "=" (url-encode (str v))))
-                                                          body))
+                                 :body (form-encode body)
                                  :timeout (or timeout-ms 15000)}))
         device-code (:device_code data)
         user-code (:user_code data)
@@ -519,3 +526,85 @@
        :verification-uri (.toString uri)
        :interval interval
        :expires-in expires-in})))
+
+;; ─── Machine grants: client-credentials (RFC 6749 §4.4) + JWT-bearer
+;;    (RFC 7523) — non-interactive; the caller fetches a token on demand
+;;    and re-fetches on expiry/401 (the re-fetch IS the refresh; no
+;;    refresh token is expected) ──────────────────────────────────────────
+
+(defn client-credentials-token
+  "RFC 6749 §4.4 client-credentials grant at TOKEN-ENDPOINT. OPTS:
+     :client-id (required), :client-secret,
+     :token-endpoint-auth-method — :client-secret-basic (default when a
+       secret is present; Authorization: Basic base64(id:secret)),
+       :client-secret-post (secret in the form body), or :none (client_id
+       in the body only — public clients / DCR'd clients with
+       token_endpoint_auth_method \"none\").
+     :scope, :timeout-ms.
+   Returns the normalized token map {:access :refresh :expires-in :scope}
+   (a refresh token is kept when the server returns one, but none is
+   expected)."
+  [token-endpoint {:keys [client-id client-secret token-endpoint-auth-method
+                          scope timeout-ms]}]
+  (when-not (seq client-id)
+    (throw (ex-info "OAuth client-credentials grant requires a client id"
+                    {:type :oauth-invalid-config})))
+  (let [method (or token-endpoint-auth-method
+                   (if (seq client-secret) :client-secret-basic :none))
+        headers {"Content-Type" "application/x-www-form-urlencoded"
+                 "Accept" "application/json"}
+        headers (if (= method :client-secret-basic)
+                  (assoc headers "Authorization"
+                         (str "Basic "
+                              (.encodeToString (java.util.Base64/getEncoder)
+                                               (.getBytes (str client-id ":"
+                                                               client-secret)
+                                                          "UTF-8"))))
+                  headers)
+        form (cond-> {"grant_type" "client_credentials"
+                      "client_id" client-id}
+               (seq scope) (assoc "scope" scope)
+               (= method :client-secret-post) (assoc "client_secret" client-secret))
+        data (:body (fetch-json token-endpoint
+                                {:method :post
+                                 :headers headers
+                                 :body (form-encode form)
+                                 :timeout (or timeout-ms 15000)}))]
+    (token-response "client-credentials" data)))
+
+(defn jwt-bearer-token
+  "RFC 7523 JWT-bearer grant at TOKEN-ENDPOINT: the client authenticates
+   with a signed JWT assertion (grant_type
+   urn:ietf:params:oauth:grant-type:jwt-bearer). OPTS:
+     :private-key — PEM string or JWK map (required; see
+       kmet.libs.crypto/parse-private-key)
+     :algorithm   — :RS256 (default) | :ES256
+     :issuer      — iss claim (required)
+     :subject     — sub claim (defaults to :issuer)
+     :audience    — aud claim (defaults to the token endpoint URL)
+     :client-id   — optional, sent in the form body (RFC 7523 §2.2)
+     :scope, :timeout-ms
+   Returns the normalized token map."
+  [token-endpoint {:keys [private-key algorithm issuer subject audience
+                          client-id scope timeout-ms]}]
+  (when-not (seq issuer)
+    (throw (ex-info "OAuth jwt-bearer grant requires :issuer"
+                    {:type :oauth-invalid-config})))
+  (let [assertion (crypto/sign-jwt {:algorithm algorithm
+                                    :key private-key
+                                    :claims {"iss" issuer
+                                             "sub" (or subject issuer)
+                                             "aud" (or audience token-endpoint)
+                                             "jti" (random-hex 16)}})
+        form (cond-> {"grant_type" "urn:ietf:params:oauth:grant-type:jwt-bearer"
+                      "assertion" assertion}
+               (seq client-id) (assoc "client_id" client-id)
+               (seq scope) (assoc "scope" scope))
+        data (:body (fetch-json token-endpoint
+                                {:method :post
+                                 :headers {"Content-Type"
+                                           "application/x-www-form-urlencoded"
+                                           "Accept" "application/json"}
+                                 :body (form-encode form)
+                                 :timeout (or timeout-ms 15000)}))]
+    (token-response "jwt-bearer" data)))

@@ -2,7 +2,9 @@
 
 Status: **implemented (Phase 1)** — see §15 for implementation notes and
 recorded deviations. Rev 2: OAuth (RFC 8414/7591, PKCE loopback + RFC 8628
-device flow) added to Phase 1 scope on request.
+device flow) added to Phase 1 scope on request. Rev 3: the Phase-2 OAuth
+machine grants (client-credentials RFC 6749 §4.4 + jwt-bearer RFC 7523,
+§15.17-20) implemented; OS-keyring storage remains out of scope.
 This document is the design contract; deviations during implementation must
 be reflected back here.
 
@@ -63,7 +65,8 @@ never by convenience.
 
 ### Out of scope (Phase 2+)
 
-- OAuth client-credentials / JWT-bearer grants, OS-keyring token storage
+- OS-keyring token storage (plaintext 0600 store stays — no keyring on
+  Termux/Windows; documented tradeoff)
 - Prompts → slash commands, resources → read tool
 - `mcpScript` batching tool (node)
 - `/mcp serve` (expose kmet as an MCP server, dirge-style)
@@ -109,14 +112,19 @@ extensions/mcp-adapter/
     src/extensions/mcp_adapter/proxy.clj    proxy tool executor
 ```
 
-Plus one new core file (outside the extension dir):
+Plus two new core files (outside the extension dir):
 `src/kmet/libs/oauth.clj` — generic OAuth machinery extracted from
 `kmet.ai.oauth` (device-code poll, PKCE, loopback callback server), extended
-with RFC 8414 discovery + RFC 7591 DCR + token exchange/refresh;
-transport-agnostic (plain `babashka.http-client`, no `kmet.ai.proxy`); the
-caller supplies the token store and interaction fns. Unlike the extension
-files it sits inside the `bb lint` / `bb test` gates and must satisfy
-`kmet.libs.test-self-contained`.
+with RFC 8414 discovery + RFC 7591 DCR + token exchange/refresh + the
+machine grants (client-credentials, jwt-bearer); transport-agnostic (plain
+`babashka.http-client`, no `kmet.ai.proxy`); the caller supplies the token
+store and interaction fns.
+`src/kmet/libs/crypto.clj` — generic crypto for bb (no bundled crypto
+lib): base64url, a minimal DER reader/writer, private-key parsing (PEM
+PKCS#8/PKCS#1, JWK RSA/EC) and JWT signing (RS256/ES256); used by
+`kmet.libs.oauth` (jwt-bearer) and reusable by anything else.
+Unlike the extension files both sit inside the `bb lint` / `bb test` gates
+and must satisfy `kmet.libs.test-self-contained`.
 
 Dependencies allowed: `kmet.extension`, `kmet.tui.*`, `kmet.libs.*`,
 `clojure.*`, `babashka.*`, bundled `cheshire.core` + `clojure.core.async` +
@@ -161,7 +169,18 @@ writes).
   "notion" {:url "https://mcp.notion.com/mcp"
             :auth :oauth                              ;; triggers the §7.8 OAuth flow
             :oauth {:flow :auto                       ;; :auto | :pkce | :device
-                    :scopes ["read"]}}}}              ;; :client-id optional → DCR
+                    :scopes ["read"]}}
+  "service" {:url "https://mcp.example.com/mcp"
+             :auth :oauth
+             :oauth {:grant :client-credentials       ;; machine grant, no browser
+                     :client-id "svc"                 ;; auth: :client-secret-basic (default)
+                     :client-secret "..."}}           ;; | :client-secret-post | :none
+  "svc-jwt" {:url "https://mcp.example.com/mcp"
+             :auth :oauth
+             :oauth {:grant :jwt-bearer               ;; RFC 7523 signed assertion
+                     :private-key-file "svc.pem"      ;; PKCS#8/PKCS#1 PEM, or
+                     :issuer "kmet"                    ;; :private-key-jwk {..}
+                     :audience "https://as.example/token"}}}}
 ```
 
 Server key meaning:
@@ -176,7 +195,7 @@ Server key meaning:
 | `:headers` | map | static HTTP headers |
 | `:auth` | `:bearer` \| `:oauth` \| `false` (default) | auth mode; `:oauth` runs the §7.8 flow |
 | `:bearer-token` / `:bearer-token-env` | string | token or env var name; sets `Authorization: Bearer …` when `:auth :bearer` and no explicit header |
-| `:oauth` | map \| `false` | `:client-id`/`:client-secret` (omit → RFC 7591 DCR), `:scopes` (string or vector), `:flow` (`:auto` default \| `:pkce` \| `:device`), `:redirect-uri`, `:authorization-server-url`, `:skip-issuer-metadata-validation`; explicit `false` disables |
+| `:oauth` | map \| `false` | `:client-id`/`:client-secret` (omit → RFC 7591 DCR), `:scopes` (string or vector), `:flow` (`:auto` default \| `:pkce` \| `:device`), `:grant` (`:authorization-code` default \| `:client-credentials` \| `:jwt-bearer` — machine grants, §7.8.6), `:token-endpoint` (explicit, skips discovery), `:token-endpoint-auth-method` (`:client-secret-basic` default with secret \| `:client-secret-post` \| `:none`), `:private-key-file` / `:private-key-jwk` (jwt-bearer key: PEM path / JWK map), `:algorithm` (`:RS256` default \| `:ES256`), `:issuer`/`:subject`/`:audience` (jwt-bearer claims; sub defaults to issuer, aud to the token endpoint), `:redirect-uri`, `:authorization-server-url`, `:skip-issuer-metadata-validation`; explicit `false` disables |
 | `:http-transport` | `:streamable-http` (default) \| `:sse` | forced transport |
 | `:lifecycle` | `:lazy` (default) \| `:eager` \| `:keep-alive` | see §10.3 |
 | `:direct-tools` | bool \| `[name ...]` | opt-in surface; list = only those tools |
@@ -197,9 +216,12 @@ JSON config works with light edits: `:mcpServers`/`:mcp-servers`,
 `:disableProxyTool`/`:disable-proxy-tool`, plus `:settings`; nested under
 `:oauth`: `:clientId`/`:client-id`, `:clientSecret`/`:client-secret`,
 `:redirectUri`/`:redirect-uri`, `:authorizationServerUrl`/`:authorization-server-url`,
-`:skipIssuerMetadataValidation`/`:skip-issuer-metadata-validation`. `:lifecycle` /
-`:tool-prefix` values accept string or keyword. Unknown keys pass through
-unmodified.
+`:skipIssuerMetadataValidation`/`:skip-issuer-metadata-validation`, plus the
+machine-grant keys `:grantType`/`:grant`, `:tokenEndpoint`/`:token-endpoint`,
+`:tokenEndpointAuthMethod`/`:token-endpoint-auth-method`,
+`:privateKeyFile`/`:private-key-file`, `:privateKeyJwk`/`:private-key-jwk`.
+`:lifecycle` / `:tool-prefix` values accept string or keyword. Unknown keys
+pass through unmodified.
 
 ### 6.4 Template creation
 
@@ -359,7 +381,26 @@ token-store file wiring, browser open, status text.
    `Authorization: Bearer <access>` (§7.3/§7.4); on 401 with a stored
    refresh token, refresh once and retry the request once; on expiry,
    refresh silently before sending. Refresh failure → re-run the flow.
-6. **Surfaces**: `/mcp auth <server>` forces a fresh flow; `/mcp logout
+6. **Machine grants** (`kmet.libs.crypto` + `kmet.libs.oauth`, §7.8.6):
+   `:grant :client-credentials` (RFC 6749 §4.4) or `:jwt-bearer` (RFC
+   7523) skip the interactive flows entirely. A token is fetched on
+   demand from the token endpoint (RFC 8414 discovery, or an explicit
+   `:token-endpoint` — no issuer check when explicit), cached in memory
+   with its expiry, and re-fetched on expiry or 401 — the re-fetch IS the
+   refresh (no refresh token is expected). Nothing is persisted: the
+   token store stays for the interactive grants; `logout` clears the
+   cache (a machine token returns on the next request by design).
+   client-credentials authenticates via `Authorization: Basic`
+   (`:client-secret-basic`, default when a secret is present),
+   `:client-secret-post`, or public `:none`; jwt-bearer signs a JWT
+   assertion (RS256 default, ES256) with the configured key — PEM file
+   (`:private-key-file`, PKCS#8 or PKCS#1) or inline JWK map
+   (`:private-key-jwk`) — with `:issuer` (required), `:subject`
+   (defaults to issuer), `:audience` (defaults to the token endpoint).
+   `:flow` is ignored for machine grants; `/mcp auth` validates the
+   config and warms the cache; status shows `client-credentials` /
+   `jwt-bearer` (§9.5).
+7. **Surfaces**: `/mcp auth <server>` forces a fresh flow; `/mcp logout
    <server>` clears the stored entry (§10.6). Status shows
    logged-in/expired/none (§9.5).
 
@@ -766,3 +807,47 @@ landed and every deliberate deviation from the text above.
     server `:direct-tools` / settings `:direct-tools`; disabled and
     misconfigured servers skipped); failures are recorded and swallowed,
     leaving the tools unregistered until a later connect.
+17. **Phase-2 OAuth grants implemented** (client-credentials RFC 6749 §4.4
+    + jwt-bearer RFC 7523; §3 moved them in, keyring stays out). The
+    signing machinery lives in a NEW generic lib `src/kmet/libs/crypto.clj`
+    (base64url, DER reader/writer, PEM PKCS#8/PKCS#1 + JWK RSA/EC key
+    parsing, `sign-jwt` RS256/ES256) — `kmet.libs.oauth` keeps only the
+    flow + token-endpoint logic and calls `crypto/sign-jwt` for the
+    jwt-bearer assertion. Registered in `kmet.runner/all-namespaces` as
+    `kmet.libs.test-crypto`.
+18. **bb crypto constraints** (why the DER code exists): babashka's fixed
+    class registry lacks `RSAPrivateCrtKeySpec` / `ECPrivateKeySpec` /
+    `ECNamedCurveSpec` (`Class/forName` fails), and instance-method
+    interop on key impl classes is unavailable (`.getModulus` throws
+    `NoSuchFieldException`). Keys are therefore constructed ONLY via
+    `PKCS8EncodedKeySpec` (which resolves): PKCS#1 and JWK keys are
+    DER-wrapped into a PKCS#8 PrivateKeyInfo inside `kmet.libs.crypto` —
+    pure byte assembly (a ~60-line DER writer; OIDs for rsaEncryption,
+    id-ecPublicKey, secp256r1/384r1/521r1). ES256 signatures are
+    converted from java's DER form to JWT's raw r||s. Test keys are
+    embedded fixtures (a throwaway RSA-2048 + P-256 keypair) because bb
+    cannot extract CRT components at runtime; the PKCS#8 path is also
+    covered with runtime-generated keys.
+19. **Extension sci ordering**: bb (sci) resolves symbols at analysis
+    time, so extension fns must reference only earlier-defined vars —
+    the machine-grant helpers and the `machine-token-cache` atom were
+    placed before their callers (`logout!`, `make-auth-fns`);
+    `oauth-bearer-header` moved ahead of the machine section.
+20. **Machine-grant wiring** (§7.8.6): `auth.clj` caches machine tokens
+    in an in-memory atom (nothing persisted — the store stays for
+    interactive grants); `:on-401` forces a re-fetch (the cached token
+    was rejected); `run-flow!` for machine grants fetches + caches
+    (validating config) and returns `:logged-in`; `auth-status` returns
+    the grant keyword and the proxy status shows `client-credentials` /
+    `jwt-bearer`; `logout!` clears the cache. `discover-meta` gained an
+    explicit `:token-endpoint` shortcut (no discovery, no issuer check).
+    Config: `:grant`, `:token-endpoint`, `:token-endpoint-auth-method`,
+    `:private-key-file`/`:private-key-jwk`, `:algorithm`, `:issuer` /
+    `:subject`/`:audience` (+ camel aliases `:grantType`,
+    `:privateKeyFile`, `:privateKeyJwk`, `:tokenEndpoint`,
+    `:tokenEndpointAuthMethod`). Validation: `fake-oauth-server.bb`
+    gained `client_credentials` (fixed client id, `access-cc-` tokens)
+    and jwt-bearer (assertion header/claims check, `access-jwt-` tokens)
+    grants; `validate-oauth.bb` gained two flows — all green (30
+    checks), and the existing PKCE/device/redirect-uri checks still
+    pass.

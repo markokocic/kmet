@@ -5,8 +5,10 @@
    loopback callback server, and the RFC 8414 discovery / RFC 7591 DCR /
    token exchange / refresh / RFC 8628 device-start helpers (HTTP mocked
    via with-redefs on fetch-json — no real network)."
-  (:require [clojure.string :as str]
+  (:require [cheshire.core :as json]
+            [clojure.string :as str]
             [clojure.test :as t :refer [deftest is]]
+            [kmet.libs.crypto :as crypto]
             [kmet.libs.oauth :as oauth]))
 
 ;; ─── Poll state machine (directly on the lib) ─────────────────────────────
@@ -257,6 +259,111 @@
                           (oauth/start-device-authorization
                            "https://as.example/device"
                            {:client-id "c"})))))
+
+;; ─── client-credentials grant (RFC 6749 §4.4) ─────────────────────────────
+
+(deftest test-client-credentials
+  (let [captured (atom nil)]
+    (with-redefs [oauth/fetch-json
+                  (fn [url opts]
+                    (reset! captured {:url url :headers (:headers opts) :body (:body opts)})
+                    {:status 200
+                     :body {:access_token "cc-access" :expires_in 3600
+                            :token_type "Bearer" :scope "read"}})]
+      (let [tokens (oauth/client-credentials-token
+                    "https://as.example/token"
+                    {:client-id "cc-client" :client-secret "s3cret" :scope "read"})]
+        (is (= "cc-access" (:access tokens)))
+        (is (= 3600 (:expires-in tokens)))
+        (is (= "read" (:scope tokens)))
+        (is (= "https://as.example/token" (:url @captured)))
+        (is (= (str "Basic " (.encodeToString (java.util.Base64/getEncoder)
+                                              (.getBytes "cc-client:s3cret" "UTF-8")))
+               (get-in @captured [:headers "Authorization"])))
+        (is (str/includes? (get-in @captured [:body]) "grant_type=client_credentials"))
+        (is (str/includes? (get-in @captured [:body]) "client_id=cc-client"))
+        (is (str/includes? (get-in @captured [:body]) "scope=read"))))))
+
+(deftest test-client-credentials-secret-post
+  (let [captured (atom nil)]
+    (with-redefs [oauth/fetch-json
+                  (fn [_ opts]
+                    (reset! captured {:headers (:headers opts) :body (:body opts)})
+                    {:status 200 :body {:access_token "a" :expires_in 60}})]
+      (oauth/client-credentials-token
+       "https://as.example/token"
+       {:client-id "c" :client-secret "s"
+        :token-endpoint-auth-method :client-secret-post})
+      (is (str/includes? (get-in @captured [:body]) "client_secret=s"))
+      (is (nil? (get-in @captured [:headers "Authorization"]))))))
+
+(deftest test-client-credentials-public-client
+  (let [captured (atom nil)]
+    (with-redefs [oauth/fetch-json
+                  (fn [_ opts]
+                    (reset! captured {:headers (:headers opts) :body (:body opts)})
+                    {:status 200 :body {:access_token "a" :expires_in 60}})]
+      (oauth/client-credentials-token
+       "https://as.example/token" {:client-id "public-client"})
+      (is (nil? (get-in @captured [:headers "Authorization"])))
+      (is (str/includes? (get-in @captured [:body]) "client_id=public-client")))))
+
+(deftest test-client-credentials-requires-client-id
+  (is (thrown-with-msg? Exception #"client id"
+                        (oauth/client-credentials-token "https://as.example/token" {}))))
+
+;; ─── JWT-bearer grant (RFC 7523; signing lives in kmet.libs.crypto) ──────
+
+(defn- pem-of
+  "PEM armor for DER bytes (runtime-generated keys)."
+  [label der]
+  (let [body (.encodeToString (java.util.Base64/getEncoder) der)]
+    (str "-----BEGIN " label "-----\n"
+         (str/join "\n" (map #(apply str %) (partition-all 64 body)))
+         "\n-----END " label "-----\n")))
+
+(defn- jwt-parts
+  [jwt]
+  (let [[h p s] (str/split jwt #"\." 3)]
+    {:header (json/parse-string (String. (crypto/base64url-decode h) "UTF-8") true)
+     :payload (json/parse-string (String. (crypto/base64url-decode p) "UTF-8") true)
+     :signature s}))
+
+(deftest test-jwt-bearer-token
+  (let [kg (java.security.KeyPairGenerator/getInstance "RSA")]
+    (.initialize kg 2048)
+    (let [pem (pem-of "PRIVATE KEY" (.getEncoded (.getPrivate (.generateKeyPair kg))))
+          captured (atom nil)]
+      (with-redefs [oauth/fetch-json
+                    (fn [url opts]
+                      (reset! captured {:url url :body (:body opts)})
+                      {:status 200 :body {:access_token "jb-access" :expires_in 300}})]
+        (let [tokens (oauth/jwt-bearer-token
+                      "https://as.example/token"
+                      {:private-key pem
+                       :issuer "svc@example.com"
+                       :scope "read"})]
+          (is (= "jb-access" (:access tokens)))
+          (is (= 300 (:expires-in tokens)))
+          (is (= "https://as.example/token" (:url @captured)))
+          (let [body (get-in @captured [:body])
+                grant (some-> (re-find #"grant_type=([^&]+)" body) second
+                              (java.net.URLDecoder/decode "UTF-8"))
+                assertion (some-> (re-find #"assertion=([^&]+)" body) second
+                                  (java.net.URLDecoder/decode "UTF-8"))]
+            (is (= "urn:ietf:params:oauth:grant-type:jwt-bearer" grant))
+            (is (str/includes? body "scope=read"))
+            (let [{:keys [payload]} (jwt-parts assertion)]
+              (is (= "svc@example.com" (:iss payload)))
+              (is (= "svc@example.com" (:sub payload)))
+              ;; the audience defaults to the token endpoint
+              (is (= "https://as.example/token" (:aud payload)))
+              (is (seq (:jti payload))))))))))
+
+(deftest test-jwt-bearer-requires-issuer
+  (is (thrown-with-msg? Exception #"issuer"
+                        (oauth/jwt-bearer-token "https://as.example/token"
+                                                {:private-key "x"}))))
 
 (deftest test-start-device-authorization-requires-client-id
   (is (thrown-with-msg? Exception #"client id"

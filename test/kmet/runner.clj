@@ -83,6 +83,7 @@
     kmet.tui.test-terminal-response
     kmet.tui.test-render-loop
     kmet.libs.test-self-contained
+    kmet.libs.test-crypto
     kmet.libs.test-frontmatter
     kmet.libs.test-sse
     kmet.libs.test-terminal-image

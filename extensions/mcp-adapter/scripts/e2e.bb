@@ -21,7 +21,7 @@
       cache-file (str (System/getProperty "user.dir") "/.e2e-cache-" (System/nanoTime) ".edn")]
   (spit global (pr-str {:mcp-servers
                         {"e2e" {:command "bb" :args [fake-stdio] :lifecycle :lazy
-                                 :direct-tools ["echo"]}
+                                :direct-tools ["echo"]}
                          "bad" {:command "sh" :args ["-c" "exit 3"] :lifecycle :lazy}}}))
   (with-redefs [config/global-config-path (delay global)
                 config/project-config-path (fn [& _] (str global ".project"))

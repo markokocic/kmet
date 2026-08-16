@@ -1,9 +1,10 @@
 #!/usr/bin/env bb
 ;; OAuth adapter validation (§12.5) against scripts/fake-oauth-server.bb:
 ;; DCR → PKCE loopback → token → authenticated request headers → 401
-;; refresh → device flow → status → logout. The token store is redirected
-;; to a temp file; the "browser" is simulated by hitting the redirect URI
-;; directly (the state is read from the authorize URL the flow emits).
+;; refresh → device flow → client-credentials + jwt-bearer machine grants
+;; → status → logout. The token store is redirected to a temp file; the
+;; "browser" is simulated by hitting the redirect URI directly (the state
+;; is read from the authorize URL the flow emits).
 ;;
 ;; Usage: bb validate-oauth.bb <fake-oauth-server.bb>
 (require '[babashka.process :as proc]
@@ -188,6 +189,66 @@
     (check "logout clears store" (nil? (auth/server-entry "device-server")))
     (check "status none after logout" (= :none (auth/auth-status "device-server" definition)))))
 
+(defn test-client-credentials-flow [oauth-port store-path]
+  (println "\n── client-credentials grant ──")
+  (let [definition {:url (str "http://127.0.0.1:" oauth-port "/mcp")
+                    :auth :oauth
+                    :oauth {:grant :client-credentials
+                            :client-id "cc-client-1"
+                            :client-secret "cc-secret"
+                            :scopes ["read"]}}
+        interaction {:signal (atom false) :has-ui false
+                     :notify (fn [_]) :prompt (fn [_] nil) :open-url (fn [_])}
+        status (auth/run-flow! "cc-server" definition interaction)]
+    (check "machine flow returns :logged-in" (= :logged-in status))
+    (let [auth-fns (auth/make-auth-fns "cc-server" definition)
+          headers ((:auth-headers auth-fns))]
+      (check "machine auth headers bearer"
+             (str/starts-with? (get headers "Authorization") "Bearer access-cc-")))
+    (check "status shows client-credentials grant"
+           (= :client-credentials (auth/auth-status "cc-server" definition)))
+    ;; the 401 retry path re-fetches (forced) — a fresh token id
+    (let [auth-fns (auth/make-auth-fns "cc-server" definition)
+          headers ((:on-401 auth-fns))]
+      (check "401 re-fetch gets a fresh token"
+             (str/starts-with? (get headers "Authorization") "Bearer access-cc-")))
+    (auth/logout! "cc-server")
+    (check "logout clears machine cache"
+           (nil? (get @(resolve 'extensions.mcp-adapter.auth/machine-token-cache)
+                      "cc-server")))))
+
+(defn test-jwt-bearer-flow [oauth-port store-path]
+  (println "\n── jwt-bearer grant (RFC 7523) ──")
+  (let [kg (java.security.KeyPairGenerator/getInstance "RSA")]
+    (.initialize kg 2048)
+    (let [der (.getEncoded (.getPrivate (.generateKeyPair kg)))
+          b64 (.encodeToString (java.util.Base64/getEncoder) der)
+          pem (str "-----BEGIN PRIVATE KEY-----\n"
+                   (str/join "\n" (map #(apply str %) (partition-all 64 b64)))
+                   "\n-----END PRIVATE KEY-----\n")
+          key-file (str (System/getProperty "user.dir") "/.mcp-jwt-key-"
+                        (System/nanoTime) ".pem")]
+      (spit key-file pem)
+      (try
+        (let [definition {:url (str "http://127.0.0.1:" oauth-port "/mcp")
+                          :auth :oauth
+                          :oauth {:grant :jwt-bearer
+                                  :private-key-file key-file
+                                  :issuer "kmet-validator"
+                                  :audience (str "http://127.0.0.1:" oauth-port "/token")}}
+              interaction {:signal (atom false) :has-ui false
+                           :notify (fn [_]) :prompt (fn [_] nil) :open-url (fn [_])}
+              status (auth/run-flow! "jwt-server" definition interaction)]
+          (check "jwt flow returns :logged-in" (= :logged-in status))
+          (let [auth-fns (auth/make-auth-fns "jwt-server" definition)
+                headers ((:auth-headers auth-fns))]
+            (check "jwt auth headers bearer"
+                   (str/starts-with? (get headers "Authorization")
+                                     "Bearer access-jwt-")))
+          (check "status shows jwt-bearer grant"
+                 (= :jwt-bearer (auth/auth-status "jwt-server" definition))))
+        (finally (io/delete-file key-file true))))))
+
 (let [[fake-oauth] *command-line-args*]
   (when-not fake-oauth
     (println "Usage: bb validate-oauth.bb <fake-oauth-server.bb>")
@@ -201,6 +262,8 @@
         (test-configured-redirect-uri port store-path)
         (test-pkce-flow port store-path)
         (test-device-flow port store-path)
+        (test-client-credentials-flow port store-path)
+        (test-jwt-bearer-flow port store-path)
         (finally
           (stop-server! {:proc proc})
           (io/delete-file store-path true)))))

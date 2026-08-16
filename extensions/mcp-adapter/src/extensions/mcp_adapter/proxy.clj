@@ -130,6 +130,8 @@
       :logged-in "oauth logged-in"
       :expired "oauth expired"
       :none "oauth none"
+      :client-credentials "client-credentials"
+      :jwt-bearer "jwt-bearer"
       nil)))
 
 (defn status-text

@@ -89,9 +89,15 @@
     (and (number? expires)
          (<= expires (+ (System/currentTimeMillis) 60000)))))
 
+;; in-memory cache for machine-grant tokens (client-credentials /
+;; jwt-bearer — §7.8.6); defined before logout! below
+(defonce ^:private machine-token-cache (atom {}))
+
 (defn logout!
-  "Clear the stored OAuth tokens + client info for a server (§10.6)."
+  "Clear the stored OAuth tokens + client info for a server (§10.6), and
+   any cached machine-grant token."
   [name]
+  (swap! machine-token-cache dissoc name)
   (let [store (read-store)]
     (when (contains? (:servers store) name)
       (write-store! (update store :servers dissoc name)))))
@@ -127,17 +133,24 @@
   (let [cfg (:oauth definition)
         url (:url definition)
         headers (:headers definition)
-        metadata (if-let [as-url (:authorization-server-url cfg)]
-                   (:body (oauth-lib/fetch-json as-url
+        metadata (cond
+                   ;; an explicit token endpoint needs no discovery at all
+                   (:token-endpoint cfg) {:token_endpoint (:token-endpoint cfg)}
+
+                   (:authorization-server-url cfg)
+                   (:body (oauth-lib/fetch-json (:authorization-server-url cfg)
                                                 {:method :get
                                                  :headers headers
                                                  :timeout 5000}))
+
+                   :else
                    (oauth-lib/discover-authorization-server url {:headers headers}))]
     (when-not (map? metadata)
       (throw (ex-info (str "MCP auth failed: no OAuth authorization server metadata "
                            "discovered at " url)
                       {:type :oauth-no-metadata})))
-    (when-not (true? (:skip-issuer-metadata-validation cfg))
+    (when-not (or (:token-endpoint cfg)
+                  (true? (:skip-issuer-metadata-validation cfg)))
       (when (and (seq (:issuer metadata))
                  (not (issuer-matches? url (:issuer metadata))))
         (throw (ex-info (str "MCP auth failed: authorization server issuer mismatch ("
@@ -244,8 +257,10 @@
       (str "http://" (oauth-lib/callback-host) ":" port path))))
 
 (defn shutdown!
-  "Close the callback server (extension unload). Idempotent."
+  "Close the callback server and drop machine-token caches (extension
+   unload). Idempotent."
   []
+  (reset! machine-token-cache {})
   (when-let [{:keys [server]} @callback-state]
     (try ((:close server)) (catch Exception _ nil))
     (reset! callback-state nil)
@@ -308,10 +323,6 @@
   [name tokens]
   (store-server! name (assoc (or (server-entry name) {}) :tokens tokens)))
 
-;; ─── Request auth (§7.8.5) ────────────────────────────────────────────────
-
-(declare refresh-tokens!)
-
 (defn- bearer-token
   "The static bearer token from config (:bearer-token or
    :bearer-token-env)."
@@ -329,6 +340,83 @@
 (defn- oauth-bearer-header
   [tokens]
   {"Authorization" (str "Bearer " (:access tokens))})
+
+;; ─── Machine grants (client-credentials / jwt-bearer, §7.8.6) ────────────
+;; Non-interactive grants: a token is fetched on demand from the token
+;; endpoint (discovery, :authorization-server-url, or an explicit
+;; :token-endpoint), cached in memory with its expiry, and re-fetched on
+;; expiry or 401 — the re-fetch IS the refresh (no refresh token is
+;; expected). Nothing is persisted: the token store stays for the
+;; interactive grants.
+
+(defn- grant-of
+  "The configured grant: :authorization-code (default) |
+   :client-credentials | :jwt-bearer."
+  [definition]
+  (or (get-in definition [:oauth :grant]) :authorization-code))
+
+(defn- machine-grant?
+  [definition]
+  (contains? #{:client-credentials :jwt-bearer} (grant-of definition)))
+
+(defn- fetch-machine-token!
+  "Fetch a fresh token for a machine-grant server and cache it. Throws
+   MCP auth failed on any error (§7.7)."
+  [name definition]
+  (let [cfg (:oauth definition)
+        token-endpoint (required-endpoint (discover-meta definition)
+                                          :token_endpoint name)
+        tokens (case (grant-of definition)
+                 :client-credentials
+                 (oauth-lib/client-credentials-token
+                  token-endpoint
+                  {:client-id (:client-id cfg)
+                   :client-secret (:client-secret cfg)
+                   :token-endpoint-auth-method (:token-endpoint-auth-method cfg)
+                   :scope (scopes-string cfg)})
+
+                 :jwt-bearer
+                 (let [key-file (:private-key-file cfg)
+                       jwk (:private-key-jwk cfg)]
+                   (when-not (or key-file jwk)
+                     (throw (ex-info (str "MCP auth failed: " name " jwt-bearer grant "
+                                          "requires :oauth {:private-key-file ...} or "
+                                          ":private-key-jwk ...")
+                                     {:type :oauth-invalid-config})))
+                   (when (and key-file (not (fs/exists? key-file)))
+                     (throw (ex-info (str "MCP auth failed: private key file not found: "
+                                          key-file)
+                                     {:type :oauth-invalid-config})))
+                   (oauth-lib/jwt-bearer-token
+                    token-endpoint
+                    {:private-key (if (and key-file (string? key-file))
+                                    (read-text key-file)
+                                    jwk)
+                     :algorithm (:algorithm cfg)
+                     :issuer (:issuer cfg)
+                     :subject (:subject cfg)
+                     :audience (:audience cfg)
+                     :client-id (:client-id cfg)
+                     :scope (scopes-string cfg)})))
+        stored (tokens->store tokens)]
+    (swap! machine-token-cache assoc name stored)
+    stored))
+
+(defn- machine-token-header
+  "Authorization header for a machine-grant server: the cached token, or
+   a fresh fetch when missing/expired. FORCE skips the cache — the 401
+   retry path must not resend a rejected token."
+  [name definition force]
+  (let [entry (get @machine-token-cache name)
+        expired? (and entry (<= (:expires entry)
+                                (+ (System/currentTimeMillis) 60000)))]
+    (if (and entry (not force) (not expired?))
+      (oauth-bearer-header entry)
+      (oauth-bearer-header (fetch-machine-token! name definition)))))
+
+;; ─── Request auth (§7.8.5) ────────────────────────────────────────────────
+
+(declare refresh-tokens!)
 
 (defn- oauth-header
   "Authorization header from the stored tokens; refreshes silently when
@@ -390,8 +478,11 @@
                           auth))]
     (cond
       (= :oauth (:auth definition))
-      {:auth-headers (fn [] (merge-headers (oauth-header name definition)))
-       :on-401 (fn [] (merge-headers (oauth-header-after-401 name definition)))}
+      (if (machine-grant? definition)
+        {:auth-headers (fn [] (merge-headers (machine-token-header name definition false)))
+         :on-401 (fn [] (merge-headers (machine-token-header name definition true)))}
+        {:auth-headers (fn [] (merge-headers (oauth-header name definition)))
+         :on-401 (fn [] (merge-headers (oauth-header-after-401 name definition)))})
 
       (= :bearer (:auth definition))
       {:auth-headers (fn [] (merge-headers (oauth-bearer-header
@@ -555,29 +646,35 @@
       :logged-in)))
 
 (defn run-flow!
-  "Run the full OAuth flow for a server (§7.8) — fresh login, replaces
-   stored tokens. INTERACTION: {:signal cancel-atom :has-ui bool :notify
-   (fn [event-map]) :prompt (fn [prompt-map] → string) :open-url (fn
-   [url])}. Returns :logged-in; throws on failure/cancel."
+  "Run the auth flow for a server (§7.8) — fresh login, replaces stored
+   tokens. Machine grants (client-credentials / jwt-bearer) just fetch +
+   cache a token, validating the config. INTERACTION: {:signal
+   cancel-atom :has-ui bool :notify (fn [event-map]) :prompt (fn
+   [prompt-map] → string) :open-url (fn [url])}. Returns :logged-in;
+   throws on failure/cancel."
   [name definition interaction]
-  (let [metadata (discover-meta definition)
-        flow (resolve-flow (:oauth definition) metadata interaction)]
-    (case flow
-      :pkce (run-pkce-flow name definition metadata interaction)
-      :device (run-device-flow name definition metadata interaction))))
+  (if (machine-grant? definition)
+    (do (fetch-machine-token! name definition) :logged-in)
+    (let [metadata (discover-meta definition)
+          flow (resolve-flow (:oauth definition) metadata interaction)]
+      (case flow
+        :pkce (run-pkce-flow name definition metadata interaction)
+        :device (run-device-flow name definition metadata interaction)))))
 
 ;; ─── Status (§9.5) ────────────────────────────────────────────────────────
 
 (defn auth-status
   "Auth state for a server: nil (not configured) | :bearer | :logged-in |
-   :expired | :none (oauth configured, no tokens)."
+   :expired | :none (oauth configured, no tokens) | :client-credentials |
+   :jwt-bearer (machine grants — always available, tokens fetched on
+   demand)."
   [name definition]
   (when (and (:url definition) (:auth definition))
     (case (:auth definition)
       :bearer (if (seq (bearer-token definition)) :bearer :none)
-      :oauth (let [entry (server-entry name)]
-               (cond
-                 (nil? entry) :none
-                 (token-expired? entry) :expired
-                 :else :logged-in))
+      :oauth (cond
+               (machine-grant? definition) (grant-of definition)
+               (nil? (server-entry name)) :none
+               (token-expired? (server-entry name)) :expired
+               :else :logged-in)
       nil)))
