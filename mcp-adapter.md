@@ -1078,10 +1078,13 @@ landed and every deliberate deviation from the text above.
     e2e.bb pass. A headless REAL-loader smoke (kmet.app.extensions/
     load-extension!, sci context) passes: extension load, proxy connect/
     call, mcpScript call/search through the real tool registry.
-34. **Discovered pre-existing host bug**: `kmet.app.extensions/
-    unload-extension!` throws an NPE (a future deref inside the sci
-    context) even for a minimal extension with a trivial shutdown that
-    never runs — reproduced with the committed Phase-1 code and a
-    10-line stub extension; out of scope for this plan (a kmet host fix
-    with gates coverage), recorded here so the TUI reload/exit paths are
-    not blamed on the extension.
+34. **Unload NPE — resolved, not a host bug**: the headless real-loader
+    smoke's unload failure (a `(deref nil)` NPE inside unload-extension!)
+    was a bug in the TEST HARNESS, not the host: `load-extension!` returns
+    `{:extension name :error nil}` (the NAME), while `unload-extension!`
+    takes the Extension RECORD (from the registry / unload-all- extensions!)
+    — the smoke passed `(:name result)` = nil. The host was hardened
+    anyway: `unload-extension!` now treats nil as a no-op (the cryptic
+    deref-nil NPE becomes silence), with a regression test
+    (`test-unload-extension-nil-noop` in kmet.app.test-extensions). The
+    corrected loader smoke passes end-to-end including clean unload.

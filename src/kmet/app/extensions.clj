@@ -1170,20 +1170,24 @@
 (defn unload-extension!
   "Unload an extension: shutdown (if initialized), deregister everything it
    registered, then drop its isolated context — namespaces and jars become
-   unreachable, nothing global is touched."
+   unreachable, nothing global is touched. Expects the Extension record
+   (from the registry / reload-extensions!); nil is a no-op — the load
+   result map carries only its :extension name, and (deref nil) would
+   otherwise surface as a cryptic NPE."
   [ext]
-  (when (and @(:initialized? ext) @(:entry-ns ext))
-    (when-let [shutdown (extension-var ext @(:entry-ns ext) 'shutdown)]
-      (try (shutdown @(:api ext))
-           (catch Exception e
-             (binding [*out* *err*]
-               (println "Warning: extension shutdown error:" (ex-message e)))))))
-  (doseq [f @(:deregister-fns ext)]
-    (try (f) (catch Exception _)))
-  (reset! (:ctx ext) nil)
-  (reset! (:jars ext) [])
-  (swap! extensions (fn [exts] (remove #(identical? % ext) exts)))
-  nil)
+  (when ext
+    (when (and @(:initialized? ext) @(:entry-ns ext))
+      (when-let [shutdown (extension-var ext @(:entry-ns ext) 'shutdown)]
+        (try (shutdown @(:api ext))
+             (catch Exception e
+               (binding [*out* *err*]
+                 (println "Warning: extension shutdown error:" (ex-message e)))))))
+    (doseq [f @(:deregister-fns ext)]
+      (try (f) (catch Exception _)))
+    (reset! (:ctx ext) nil)
+    (reset! (:jars ext) [])
+    (swap! extensions (fn [exts] (remove #(identical? % ext) exts)))
+    nil))
 
 (defn unload-all-extensions!
   "Unload every loaded extension (reverse order)."

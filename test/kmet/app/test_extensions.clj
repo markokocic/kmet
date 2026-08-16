@@ -174,6 +174,18 @@
       (t/is (nil? (tools/get-tool "multi-ext-tool")))
       (t/is (empty? (extensions/get-loaded-extensions))))))
 
+(t/deftest test-unload-extension-nil-noop
+  (extensions/clear-extensions!)
+  ;; the load result map carries :extension (the name), not the Extension
+  ;; record — passing nil to unload-extension! used to throw a cryptic
+  ;; (deref nil) NPE; it must be a silent no-op
+  (t/is (nil? (extensions/unload-extension! nil)))
+  (let [result (extensions/load-extension! "test/fixtures/ext-single/hello_ext.clj")]
+    (t/is (nil? (:error result)))
+    (testing "unload still works on the real record"
+      (extensions/unload-all-extensions!)
+      (t/is (empty? (extensions/get-loaded-extensions))))))
+
 (t/deftest test-load-manifest-extension-via-symlink
   ;; extension dirs are commonly installed as symlinks into a repo checkout;
   ;; the ns-file scan must follow the link or every own-file require fails
