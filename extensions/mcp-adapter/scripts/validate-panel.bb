@@ -128,9 +128,12 @@
 
 (println "\n── TextDialog ──")
 (let [closed (atom 0)
+      ;; the host ui-custom close is (fn [result] ...) — the real-contract
+      ;; regression guard: TextDialog must adapt, not pass its 0-arg call
+      ;; through (caught in the TUI smoke)
       dlg (panel/make-text-dialog "MCP search"
                                   (apply str (map #(str "line-" % "\n") (range 30)))
-                                  (fn [] (swap! closed inc)))
+                                  (fn [_result] (swap! closed inc)))
       lines (mapv strip (core/render dlg 60))]
   (check "bordered, windowed view" (and (some #(str/includes? % "MCP search") lines)
                                         (< (count lines) 20)))

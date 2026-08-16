@@ -520,12 +520,16 @@
                    (reset! prompt-pending p)
                    (ext/ui-custom
                     (:api @state)
-                    (fn [_tui th _kb close]
-                      (reset! dialog close)
-                      (reset! prompt-close close)
-                      (panel/make-prompt-dialog th (:message prompt-map)
-                                                (fn [v] (finish v))
-                                                (fn [] (finish nil))))
+                    (fn [_tui th _kb host-close]
+                      ;; the host close is (fn [result] ...) — finish and
+                      ;; abort-prompt! call it with no args, so adapt here
+                      ;; (same contract fix as make-text-dialog)
+                      (let [close (fn [] (host-close nil))]
+                        (reset! dialog close)
+                        (reset! prompt-close close)
+                        (panel/make-prompt-dialog th (:message prompt-map)
+                                                  (fn [v] (finish v))
+                                                  (fn [] (finish nil)))))
                     {:overlay true
                      :overlay-options {:anchor :center :width 60}})
                    (deref p))

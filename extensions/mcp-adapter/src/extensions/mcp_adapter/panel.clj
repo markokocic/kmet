@@ -828,13 +828,16 @@
   (invalidate [_this] nil))
 
 (defn make-text-dialog
-  "Scrollable text dialog for multi-line command output (search/list)."
+  "Scrollable text dialog for multi-line command output (search/list).
+   `close` is the host ui-custom close callback (fn [result] ...) —
+   TextDialog invokes it with no args, so adapt here (the result value
+   is unused by the extension)."
   [title content close]
   (map->TextDialog {:title title
                     :content-atom (atom (or content ""))
                     :scroll-top-atom (atom 0)
                     :wrapped-atom (atom {:count 0 :max-lines 0})
-                    :close-fn (atom close)}))
+                    :close-fn (atom (fn [] (close nil)))}))
 
 ;; ─── OAuth prompt dialog (pi AuthPrompt → LoginDialog) ────────────────────
 

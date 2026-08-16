@@ -881,15 +881,47 @@ landed and every deliberate deviation from the text above.
     `../../mcp-adapter.md`; the tree entry was removed and this note
     records the deviation (the config.clj docstring reference was
     updated to match).
-22. **TUI live smoke not performed** (§12.6): the promised interactive
-    `bb run` smoke (TUI: status/search/describe/call/connect/disconnect/
-    enable/disable/refresh/auth/logout) was never run. The /mcp command
-    surface is instead verified headlessly: registrations against
-    `create-nullable-api` (validate-config.bb) and the proxy-tool
-    surface end-to-end via `scripts/e2e.bb` (status → search → connect
-    → call → error → describe → disconnect → backoff window →
-    bootstrap, against the fake stdio server) plus a real-loader run
-    (note 15). The interactive-TUI pass remains the one outstanding
-    validation item; the headless checks cover the same handler code
-    paths, so it is a manual checklist item rather than a correctness
-    risk.
+22. **TUI live smoke performed** (§12.6): the interactive `bb run` pass was
+    run in tmux against the fake servers (project `.kmet/mcp.edn` in the
+    repo root, throwaway; removed after). Stdio round: McpPanel render +
+    expand + toggle + ctrl+s save (writes `:direct-tools` to the project
+    file and applies live — direct count 7→2, server row flips to
+    `(not cached)`), status/search/list/connect/disconnect/enable/disable/
+    refresh/auth/logout flashes and dialogs, enable/disable project-file
+    writes (`:disabled true` add / remove), refresh reloading config into
+    the panel (`e2e (not cached) disabled`), auth/logout error paths on a
+    stdio server, subcommand + server-name tab completions, clean exit
+    with no orphaned server processes. HTTP/OAuth round (fake oauth +
+    fake http servers, separate origin via
+    `:authorization-server-url` pointing at the metadata document +
+    `:skip-issuer-metadata-validation`): `/mcp auth` device flow
+    (verification-URI flash → in-place polling pending/slow_down →
+    success, tokens stored), PKCE flow (authorize-URL TextDialog + the
+    manual-paste prompt dialog — completed by typing the fake server's
+    `fake-code` into the prompt; exchange + store + abort-prompt! closing
+    the prompt), `/mcp connect` over streamable HTTP and legacy SSE
+    (tools listed), status panel auth states (`needs auth` before login,
+    gone after), `/mcp logout` clearing the store entry (live session
+    stays connected — pi parity). **Bug found and fixed**: the
+    TextDialog's close-fn invoked the host ui-custom `close` callback
+    with 0 args while the host contract is `(fn [result] ...)` — Escape
+    on a search/list dialog threw `Wrong number of args (0) passed to:
+    sci.impl.fns/fun/arity-1--1465`, the overlay stayed open and the next
+    input errored. `make-text-dialog` now adapts (`(fn [] (close nil))`),
+    and validate-panel.bb passes a 1-arity close (the host contract) so
+    the regression is caught headlessly. **Same bug class found again in
+    the OAuth prompt dialog**: `build-interaction`'s `:prompt` stored the
+    raw host close and `finish`/`abort-prompt!` called it with 0 args —
+    submitting the manual code threw the same arity error AFTER the DCR,
+    so the flow died before the token exchange (the client-info stayed,
+    tokens never stored). Fixed by adapting the close in the ui-custom
+    factory (`host-close` → 0-arity wrapper); headless coverage would
+    need a full state/ctx harness, so this one is recorded rather than
+    unit-tested (the live smoke re-verified the complete PKCE flow).
+    `describe` is not a `/mcp` subcommand (proxy-tool-only, per §10.6) —
+    `/mcp describe` correctly reports `Unknown /mcp subcommand`; the
+    plan's §12.6 wording implied a TUI describe path that does not exist.
+    Note: e2e.bb must be invoked with the fake-server script argument
+    (`bb -cp ../../src:src scripts/e2e.bb scripts/fake-mcp-server.bb`) —
+    without it the server path is `.../nil` and the connect-dependent
+    checks fail.
