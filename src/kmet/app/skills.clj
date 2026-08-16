@@ -8,14 +8,14 @@
    prompt (pi: core/system-prompt.js buildSystemPrompt).
 
    Deviations from pi: no .gitignore/.ignore/.fdignore support (kmet scans only
-   its own skills dirs); frontmatter parses via kmet.libs.yaml-lite (a minimal YAML
+   its own skills dirs); frontmatter parses via kmet.libs.yaml (a minimal YAML
    subset parser — babashka has no YAML lib)."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.debug :as debug]
             [kmet.app.tools.registry :as tools-registry]
-            [kmet.libs.frontmatter :as fm]))
+            [kmet.libs.yaml :as yaml]))
 
 ;; ─── Constants (pi: MAX_NAME_LENGTH / MAX_DESCRIPTION_LENGTH) ─────────────
 
@@ -61,7 +61,7 @@
   [file-path]
   (try
     (let [raw (slurp file-path)
-          {:keys [frontmatter]} (fm/parse-frontmatter raw)
+          {:keys [frontmatter]} (yaml/parse-frontmatter raw)
           name (str (or (get frontmatter "name") (fs/file-name (fs/parent file-path))))
           description (some-> (get frontmatter "description") str str/trim)
           errors (concat (if (str/blank? description)
@@ -168,7 +168,7 @@
           args (if (nil? space-idx) "" (str/trim (subs text (inc space-idx))))]
       (if-let [skill (get-skill skill-name)]
         (try
-          (let [body (str/trim (:body (fm/parse-frontmatter (slurp (:file-path skill)))))
+          (let [body (str/trim (:body (yaml/parse-frontmatter (slurp (:file-path skill)))))
                 block (str "<skill name=\"" (:name skill) "\" location=\"" (:file-path skill) "\">\n"
                            "References are relative to " (:base-dir skill) ".\n\n"
                            body "\n</skill>")]

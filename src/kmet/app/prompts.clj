@@ -8,7 +8,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [babashka.fs :as fs]
-            [kmet.libs.frontmatter :as fm]))
+            [kmet.libs.yaml :as yaml]))
 
 ;; ─── Template state ────────────────────────────────────────────────────────
 
@@ -96,7 +96,7 @@
   [file-path]
   (try
     (let [raw (slurp file-path)
-          {:keys [frontmatter body]} (fm/parse-frontmatter raw)
+          {:keys [frontmatter body]} (yaml/parse-frontmatter raw)
           name (str/replace (fs/file-name file-path) #"\.md$" "")
           fm-desc (some-> (get frontmatter "description") str str/trim)
           first-line (first (filter #(seq (str/trim %)) (str/split-lines body)))

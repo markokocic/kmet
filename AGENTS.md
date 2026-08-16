@@ -66,16 +66,18 @@ src/kmet/
 │   ├── terminal.clj    — Terminal protocol knowledge: Kitty keyboard
 │   │                     negotiation, escape sequences, raw-ANSI write log
 │   │                     (pi terminal.ts; writer-fn based)
-│   ├── yaml_lite.clj   — Minimal YAML subset parser (frontmatter; babashka-compatible)
-│   ├── frontmatter.clj — YAML frontmatter extraction (--- delimited block +
-│   │                     yaml-lite parse; pi utils/frontmatter.js)
+│   ├── yaml.clj        — Minimal YAML subset parser + frontmatter extraction
+│   │                     (pi: yaml npm package + utils/frontmatter.js; merged
+│   │                     from yaml_lite + frontmatter)
 │   ├── clipboard.clj   — Clipboard copy via platform tools (Termux/Wayland/
 │   │                     X11/macOS/Windows; OSC52 fallback lives in libs.terminal)
 │   ├── dynamic_value.clj — $ENV/!command config-value resolution (pi:
 │   │                     resolve-config-value.ts; moved from kmet.ai.config-value)
 │   ├── terminal_image.clj — Kitty terminal image protocol + image dimension parsing
 │   │                     (native PNG/JPEG/GIF via f= codes — no conversion)
-│   ├── file_lock.clj   — Cross-process file locking (settings.edn/auth.edn writes)
+│   ├── edn_store.clj   — EDN settings/credential persistence + cross-process
+│   │                     file locking (settings.edn/auth.edn writes; merged
+│   │                     from file_lock + edn_settings + credential_store)
 │   ├── hash.clj        — pi shortHash port (32-bit imul/ushr, byte-exact)
 │   ├── highlight.clj   — Syntax highlighting (pi highlight.ts)
 │   └── markdown.clj    — Markdown rendering for the chat view

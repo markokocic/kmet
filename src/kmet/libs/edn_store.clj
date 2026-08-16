@@ -1,15 +1,43 @@
-(ns kmet.libs.edn-settings
-  "Generic EDN settings primitives: pretty-printing, deep merge, path
-   expansion, text-surgery persistence, and lenient parsing.
+(ns kmet.libs.edn-store
+  "EDN settings and credential store primitives: file locking, pretty-
+   printing, deep merge, path expansion, text-surgery persistence, and
+   lenient read/write/update under file lock.
 
-   This is the shared foundation for kmet.config (settings.edn) and
-   kmet.ai.auth (auth.edn) — and any extension that needs to read/write
-   EDN files under a file lock (e.g. mcp-adapter's mcp-oauth.edn)."
+   Combines the former kmet.libs.file-lock, kmet.libs.edn-settings, and
+   kmet.libs.credential-store into a single module — they form a tight
+   dependency chain for EDN file persistence."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [babashka.fs :as fs]
-            [kmet.libs.file-lock :as file-lock]))
+            [babashka.fs :as fs]))
+
+;; ─── File locking ──────────────────────────────────────────────────────────
+
+(def ^:private lock-stale-ms 10000)
+(def ^:private lock-acquire-attempts 10)
+(def ^:private lock-acquire-delay-ms 20)
+
+(defn- acquire-lock!
+  [lock-path]
+  (loop [attempt 1]
+    (cond
+      (try (fs/create-dir lock-path) true (catch Exception _ false)) :ok
+      (try (> (- (System/currentTimeMillis) (.toMillis (fs/last-modified-time lock-path)))
+              lock-stale-ms)
+           (catch Exception _ false))
+      (do (fs/delete-tree lock-path) (Thread/sleep lock-acquire-delay-ms) (recur attempt))
+      (< attempt lock-acquire-attempts)
+      (do (Thread/sleep lock-acquire-delay-ms) (recur (inc attempt)))
+      :else (throw (ex-info "Timed out acquiring file lock"
+                            {:type :file-lock-timeout :path lock-path})))))
+
+(defn with-file-lock
+  "Run F with the lock at LOCK-PATH held (directory lock; stale locks older
+   than 10s are broken)."
+  [lock-path f]
+  (acquire-lock! lock-path)
+  (try (f)
+       (finally (fs/delete-tree lock-path))))
 
 ;; ─── Path expansion ────────────────────────────────────────────────────────
 
@@ -92,7 +120,7 @@
   (let [path (if (vector? path) path [path])
         file (io/file file-path)]
     (fs/create-dirs (fs/parent file-path))
-    (file-lock/with-file-lock (str file-path ".lock")
+    (with-file-lock (str file-path ".lock")
       (fn []
         (if-not (fs/exists? file)
           (spit file-path (pretty-edn (assoc-in {} path value)))
@@ -108,3 +136,43 @@
               (spit file-path edited)
               (spit file-path
                     (pretty-edn (assoc-in base path value))))))))))
+
+;; ─── EDN map store (read/write/update under lock) ─────────────────────────
+
+(defn read-edn-map
+  "Parse an EDN file as a map, nil when missing or malformed. When VALIDATE
+   is provided, only entries passing it are kept (invalid entries are
+   silently dropped — startup leniency)."
+  ([path] (read-edn-map path nil))
+  ([path validate]
+   (let [f (fs/file path)]
+     (when (fs/exists? f)
+       (try (let [parsed (edn/read-string (slurp f))]
+              (when (map? parsed)
+                (if validate
+                  (into {} (filter (fn [[_ v]] (validate v))) parsed)
+                  parsed)))
+            (catch Exception _ nil))))))
+
+(defn write-edn-map!
+  "Write a map to PATH as pretty EDN, under a file lock. Creates parent
+   directories as needed."
+  [path m]
+  (fs/create-dirs (fs/parent path))
+  (with-file-lock (str path ".lock")
+    (fn [] (spit path (pretty-edn m)))))
+
+(defn update-edn-map!
+  "Read-modify-write: apply F to the current map on disk, persist the result
+   under the file lock, return the new map. The read and write are both
+   inside the lock so concurrent callers can't lose each other's updates.
+   When VALIDATE is provided, the read pass filters entries through it."
+  ([path f] (update-edn-map! path f nil))
+  ([path f validate]
+   (fs/create-dirs (fs/parent path))
+   (with-file-lock (str path ".lock")
+     (fn []
+       (let [current (or (read-edn-map path validate) {})
+             updated (f current)]
+         (spit path (pretty-edn updated))
+         updated)))))

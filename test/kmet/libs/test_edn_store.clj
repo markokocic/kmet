@@ -1,9 +1,9 @@
-(ns kmet.libs.test-edn-settings
+(ns kmet.libs.test-edn-store
   (:require [clojure.test :as t :refer [deftest is testing]]
             [clojure.edn :as edn]
             [clojure.string :as str]
             [babashka.fs :as fs]
-            [kmet.libs.edn-settings :as eds]))
+            [kmet.libs.edn-store :as eds]))
 
 ;; ─── expand-path ───────────────────────────────────────────────────────────
 

@@ -8,7 +8,7 @@
             [babashka.fs :as fs]
             [kmet.tui.theme :as theme]
             [kmet.ai.auth :as auth]
-            [kmet.libs.edn-settings :as eds]))
+            [kmet.libs.edn-store :as eds]))
 
 ;; ─── Defaults ───────────────────────────────────────────────────────────────
 

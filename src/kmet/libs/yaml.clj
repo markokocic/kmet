@@ -1,6 +1,11 @@
-(ns kmet.libs.yaml-lite
-  "Minimal YAML subset parser (yaml-lite) for skill/template frontmatter (pi: the yaml
-   npm package). Self-contained, babashka-compatible (stdlib only).
+(ns kmet.libs.yaml
+  "Minimal YAML subset parser + frontmatter extraction (pi: the yaml npm
+   package + utils/frontmatter.js). Self-contained, babashka-compatible
+   (stdlib only).
+
+   Combines the former kmet.libs.yaml-lite (parsing) and
+   kmet.libs.frontmatter (--- delimiter extraction) into a single module —
+   frontmatter is a thin wrapper over the parser.
 
    Supports: top-level maps, plain scalars (strings, booleans incl. case
    variants, null, integers, floats), single/double-quoted scalars (with
@@ -315,7 +320,7 @@
         (parse-map ls (:indent nl)))
       [nil nil])))
 
-;; ─── Entry point ───────────────────────────────────────────────────────────
+;; ─── Entry points ──────────────────────────────────────────────────────────
 
 (defn parse
   "Parse a YAML string into Clojure data: a map with string keys for a
@@ -324,3 +329,20 @@
   [s]
   (when (and s (not (str/blank? s)))
     (first (parse-block (preprocess s)))))
+
+;; ─── Frontmatter extraction ────────────────────────────────────────────────
+
+(defn parse-frontmatter
+  "Parse YAML frontmatter (--- delimited) from markdown content.
+   Returns {:frontmatter map :body string}. Content without frontmatter yields
+   an empty frontmatter map and the full content as body (pi: extractFrontmatter)."
+  [content]
+  (let [normalized (str/replace content #"\r\n|\r" "\n")]
+    (if-not (str/starts-with? normalized "---")
+      {:frontmatter {} :body normalized}
+      (let [end-idx (str/index-of normalized "\n---" 3)]
+        (if (nil? end-idx)
+          {:frontmatter {} :body normalized}
+          ;; max clamps for empty frontmatter (---\n---): pi's slice returns ""
+          {:frontmatter (or (parse (subs normalized 4 (max 4 end-idx))) {})
+           :body (str/trim (subs normalized (+ end-idx 4)))})))))

@@ -438,7 +438,7 @@
       (let [result (load "tui" "(ns good-tui\n  (:require [kmet.tui.components.text :as text]\n            [kmet.tui.protocols :as protocols]))\n(defn init [api]\n  (let [c (text/make-text \"hi\")]\n    (when-not (vector? (protocols/render c 20))\n      (throw (ex-info \"render failed\" {})))))\n")]
         (t/is (nil? (:error result)) (str "loaded: " (:error result)))))
     (testing "valid kmet.libs.* requires load and share the real library"
-      (let [result (load "lib" "(ns good-lib\n  (:require [kmet.libs.hash :as hash]\n            [kmet.libs.yaml-lite :as yaml]))\n(defn init [api]\n  (let [s (hash/short-hash \"hi\")]\n    (when-not (string? s)\n      (throw (ex-info \"hash failed\" {})))))\n")]
+      (let [result (load "lib" "(ns good-lib\n  (:require [kmet.libs.hash :as hash]\n            [kmet.libs.yaml :as yaml]))\n(defn init [api]\n  (let [s (hash/short-hash \"hi\")]\n    (when-not (string? s)\n      (throw (ex-info \"hash failed\" {})))))\n")]
         (t/is (nil? (:error result)) (str "loaded: " (:error result)))))))
 
 (t/deftest ^:slow test-extension-bad-deps-fails-load

@@ -83,14 +83,13 @@
     kmet.tui.test-render-loop
     kmet.libs.test-self-contained
     kmet.libs.test-crypto
-    kmet.libs.test-frontmatter
     kmet.libs.test-sse
     kmet.libs.test-terminal-image
-    kmet.libs.test-yaml-lite
+    kmet.libs.test-yaml
     kmet.libs.test-markdown
     kmet.libs.test-highlight
     kmet.libs.test-oauth
-    kmet.libs.test-edn-settings
+    kmet.libs.test-edn-store
     kmet.libs.test-proxy
     kmet.libs.test-aws-sigv4
     kmet.libs.test-context

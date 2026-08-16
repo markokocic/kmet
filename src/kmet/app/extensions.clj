@@ -774,7 +774,7 @@
    sync with src/kmet/libs/ when a lib is added or removed."
   '[kmet.libs.diff
     kmet.libs.dynamic-value
-    kmet.libs.file-lock
+    kmet.libs.edn-store
     kmet.libs.hash
     kmet.libs.highlight
     kmet.libs.markdown
@@ -782,7 +782,7 @@
     kmet.libs.sse
     kmet.libs.terminal
     kmet.libs.terminal-image
-    kmet.libs.yaml-lite
+    kmet.libs.yaml
     kmet.libs.clipboard])
 
 (defn- build-context-namespaces

@@ -12,7 +12,7 @@
    order."
   (:require [babashka.fs :as fs]
             [kmet.libs.aws-sigv4 :as aws-sigv4]
-            [kmet.libs.credential-store :as cred]
+            [kmet.libs.edn-store :as cred]
             [kmet.libs.dynamic-value :as dynamic-value]
             [kmet.libs.hooks :as hooks]
             [kmet.ai.google-adc :as google-adc]))
