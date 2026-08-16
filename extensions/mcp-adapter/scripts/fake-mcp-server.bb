@@ -56,10 +56,10 @@
       "echo" (send-result! id {:content [{:type "text" :text (str "echo: " (:message args))}]})
       "add" (send-result! id {:content [{:type "text" :text (str (+ (:a args) (:b args)))}]})
       "slow" (do (doseq [i [25 50 75]]
-                     (send! {:jsonrpc "2.0" :method "notifications/progress"
-                             :params {:progress i :total 100
-                                      :message (str "working " i "%")}})
-                     (Thread/sleep (long (/ (or (:ms args) 100) 4))))
+                   (send! {:jsonrpc "2.0" :method "notifications/progress"
+                           :params {:progress i :total 100
+                                    :message (str "working " i "%")}})
+                   (Thread/sleep (long (/ (or (:ms args) 100) 4))))
                  (send-result! id {:content [{:type "text" :text "slept"}]}))
       "boom" (send-result! id {:content [{:type "text" :text "kaboom"}]
                                :isError true})
@@ -98,27 +98,27 @@
               args (or (:arguments (:params msg)) {})]
           (case name
             "brief" (send-result! id {:description "Summarize a topic briefly"
+                                      :messages [{:role "user"
+                                                  :content {:type "text"
+                                                            :text (str "Briefly summarize: " (:topic args))}}]})
+            "review" (send-result! id {:description "Review code"
                                        :messages [{:role "user"
                                                    :content {:type "text"
-                                                             :text (str "Briefly summarize: " (:topic args))}}]})
-            "review" (send-result! id {:description "Review code"
-                                        :messages [{:role "user"
-                                                    :content {:type "text"
-                                                              :text (str "Review " (:path args))}}
-                                                   {:role "assistant"
-                                                    :content {:type "text"
-                                                              :text (str "Focus: " (or (:focus args) "overall"))}}]})
+                                                             :text (str "Review " (:path args))}}
+                                                  {:role "assistant"
+                                                   :content {:type "text"
+                                                             :text (str "Focus: " (or (:focus args) "overall"))}}]})
             (send-error! id -32602 (str "Unknown prompt: " name))))
         "resources/list" (send-result! id {:resources resources})
         "resources/read"
         (let [uri (:uri (:params msg))]
           (case uri
             "file:///README.md" (send-result! id {:contents [{:type "text"
-                                                               :uri uri
-                                                               :text "# Fake README\ncontent"}]})
+                                                              :uri uri
+                                                              :text "# Fake README\ncontent"}]})
             "file:///schema.json" (send-result! id {:contents [{:type "text"
-                                                                 :uri uri
-                                                                 :text "{\"type\": \"object\"}"}]})
+                                                                :uri uri
+                                                                :text "{\"type\": \"object\"}"}]})
             (send-error! id -32602 (str "Unknown resource: " uri))))
         (send-error! id -32601 (str "Method not found: " method))))))
 

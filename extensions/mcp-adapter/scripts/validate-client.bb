@@ -63,9 +63,9 @@
     ;; Phase 2: prompts/resources capability + progress streaming
     (let [result (client/connect! definition {})]
       (check "prompts/list" (= #{"brief" "review"}
-                                (set (map :name (:prompts result)))))
+                               (set (map :name (:prompts result)))))
       (check "resources/list" (= #{"README" "schema"}
-                                  (set (map :name (:resources result))))))
+                                 (set (map :name (:resources result))))))
     (let [result (client/get-prompt conn "brief" {"topic" "clojure"})]
       (check "prompts/get args"
              (str/includes? (get-in result [:messages 0 :content :text])

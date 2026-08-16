@@ -101,7 +101,7 @@
       (let [partials (atom [])
             tool (get-in @state [:tools "mcpScript"])
             r ((:execute tool) {:code "(emit (tools/call \"fake_slow\" {:ms 600}))"}
-               (fn [partial] (swap! partials conj (:content partial))))]
+                               (fn [partial] (swap! partials conj (:content partial))))]
         (check "streaming partials arrive" (seq @partials))
         (check "slow call result" (str/includes? (:content r) "slept")))
       ;; detail: call trace present

@@ -146,7 +146,7 @@
 (println "\n── OAuth prompt dialog ──")
 (let [submitted (atom nil)
       comp (normalize (panel/make-prompt-dialog theme/dark-theme "Enter token"
-                                        (fn [v] (reset! submitted v)) (fn [])))
+                                                (fn [v] (reset! submitted v)) (fn [])))
       rendered (mapv strip (core/render comp 40))]
   (check "renders title" (some #(str/includes? % "MCP OAuth") rendered))
   (core/handle-input comp "\r")

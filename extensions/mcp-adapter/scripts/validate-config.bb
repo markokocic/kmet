@@ -151,8 +151,7 @@
                                 :excludeTools ["srv_secret"]
                                 :searchKeywords {"srv_*" ["capture" "snapshot"]}
                                 :idleTimeout 5
-                                :exposeResources false}}}
-                       ))
+                                :exposeResources false}}}))
   (let [cfg (config/load-config)
         defn (get-in cfg [:mcp-servers "srv"])]
     (check "camel include/exclude normalized"
@@ -194,7 +193,7 @@
         (check "write-server-entry!"
                (and changed
                     (= {:command "x"} (get-in (config/load-config)
-                                               [:mcp-servers "custom"])))))
+                                              [:mcp-servers "custom"])))))
       (finally
         (io/delete-file host-path true)
         (fs/delete-tree (fs/parent host-path)))))

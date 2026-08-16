@@ -121,9 +121,9 @@
       "prompts/get"
       {:jsonrpc "2.0" :id id
        :result {:messages [{:role "user"
-                           :content {:type "text"
-                                     :text (str "http brief: "
-                                                (get-in msg [:params :arguments :topic]))}}]}}
+                            :content {:type "text"
+                                      :text (str "http brief: "
+                                                 (get-in msg [:params :arguments :topic]))}}]}}
       "resources/list"
       {:jsonrpc "2.0" :id id
        :result {:resources [{:name "HTTP doc" :uri "http://fake/doc"
