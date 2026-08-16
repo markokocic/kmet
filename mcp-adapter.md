@@ -97,7 +97,6 @@ Deliberately not ported in Phase 1 (see §3): `mcp-panel.ts`, `mcp-setup-panel.t
 ```
 extensions/mcp-adapter/
 ├── extension.edn                 {:name "mcp-adapter" :entry "src/extensions/mcp_adapter.clj"}
-├── mcp-adapter.md                this plan
 ├── README.md                     usage, config reference, /mcp reference, security note
 ├── skills/mcp/SKILL.md           usage skill (contributed via :resources-discover)
 ├── scripts/
@@ -111,6 +110,9 @@ extensions/mcp-adapter/
     src/extensions/mcp_adapter/metadata.clj cache
     src/extensions/mcp_adapter/proxy.clj    proxy tool executor
 ```
+
+This plan lives at the repo root (`mcp-adapter.md`), not inside the
+extension directory — deviation recorded in §15.21.
 
 Plus two new core files (outside the extension dir):
 `src/kmet/libs/oauth.clj` — generic OAuth machinery extracted from
@@ -439,7 +441,13 @@ offset    (number, optional)  — search offset (default 0)
 ```
 
 No params → status. `args` is declared `object`; the registry's
-`normalize-args` also accepts a JSON string defensively.
+`normalize-args` also accepts a JSON string defensively. Every param is
+type-checked at the dispatch boundary (`validate-params`): a non-string in
+a string param, a non-number in `limit`/`offset`, or a non-boolean in
+`regex`/`includeSchemas` returns a readable error instead of surfacing a
+raw ClassCastException from the string fns; `regex`/`includeSchemas` also
+accept the strings `"true"`/`"false"` (LLMs commonly send them as
+strings).
 
 ### 9.2 Dispatch
 
@@ -586,6 +594,12 @@ Output: `ui-notify` when `(:has-ui ctx)`, `println` headless. Multi-line
 notify behavior verified during implementation; fallback is a
 `ui-custom` dialog. Completions: subcommands, then server names for
 connect/disconnect/enable/disable/auth/logout.
+
+Handler order: kmet dispatches extension command handlers as
+`(handler ctx args)` — the extension context first, then the args
+string (pi passes `(args ctx)`; kmet's contract and dispatch use
+`(ctx args)`, see `test-extensions` "ctx dispatch"). The handler binds
+them in that order.
 
 ### 10.7 Events
 
@@ -851,3 +865,22 @@ landed and every deliberate deviation from the text above.
     grants; `validate-oauth.bb` gained two flows — all green (30
     checks), and the existing PKCE/device/redirect-uri checks still
     pass.
+21. **Plan location deviation** (§5): the plan file lives at the repo
+    root (`mcp-adapter.md`), not at
+    `extensions/mcp-adapter/mcp-adapter.md` as the §5 layout tree
+    states. The README links it from the extension dir via
+    `../../mcp-adapter.md`; the tree entry was removed and this note
+    records the deviation (the config.clj docstring reference was
+    updated to match).
+22. **TUI live smoke not performed** (§12.6): the promised interactive
+    `bb run` smoke (TUI: status/search/describe/call/connect/disconnect/
+    enable/disable/refresh/auth/logout) was never run. The /mcp command
+    surface is instead verified headlessly: registrations against
+    `create-nullable-api` (validate-config.bb) and the proxy-tool
+    surface end-to-end via `scripts/e2e.bb` (status → search → connect
+    → call → error → describe → disconnect → backoff window →
+    bootstrap, against the fake stdio server) plus a real-loader run
+    (note 15). The interactive-TUI pass remains the one outstanding
+    validation item; the headless checks cover the same handler code
+    paths, so it is a manual checklist item rather than a correctness
+    risk.

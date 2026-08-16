@@ -8,7 +8,8 @@
    Search/describe read the metadata cache only (no spawn); call/connect
    ensure a live connection. Every mode returns the kmet tool result shape
    {:content str :is-error bool}."
-  (:require [clojure.string :as str]
+  (:require [cheshire.core :as json]
+            [clojure.string :as str]
             [extensions.mcp-adapter.auth :as auth]
             [extensions.mcp-adapter.client :as client]
             [extensions.mcp-adapter.metadata :as metadata]))
@@ -195,6 +196,59 @@
 (defn- return-error
   [message]
   {:content message :is-error true})
+
+(defn flag
+  "Coerce a boolean proxy param (§9.1): booleans pass through; the strings
+   \"true\"/\"false\" (LLMs commonly send them as strings) coerce; anything
+   else passes through unchanged (truthy for the dispatch's `when`)."
+  [v]
+  (cond
+    (boolean? v) v
+    (= "true" v) true
+    (= "false" v) false
+    :else v))
+
+(defn- flag-value?
+  "True when v is a boolean or its string form (see flag)."
+  [v]
+  (or (boolean? v) (= "true" v) (= "false" v)))
+
+(defn- validate-params
+  "nil when every present param has its documented §9.1 type, else an error
+   result naming the offending param. The model can put anything in the
+   JSON args, and a non-string in a string param would surface as a raw
+   ClassCastException from str/lower-case & co — rejected here with a
+   readable message the model can act on."
+  [params]
+  (let [bad (or (first (for [k [:search :describe :tool :server :connect
+                                :disconnect :list]
+                             :when (and (some? (get params k))
+                                        (not (string? (get params k))))]
+                         [k "a string"]))
+                (first (for [k [:limit :offset]
+                             :when (and (some? (get params k))
+                                        (not (number? (get params k))))]
+                         [k "a number"]))
+                (first (for [k [:regex :includeSchemas]
+                             :when (and (some? (get params k))
+                                        (not (flag-value? (get params k))))]
+                         [k "a boolean"])))]
+    (when bad
+      (let [[k expected] bad]
+        (return-error (str "mcp({ " (name k) ": " (pr-str (get params k))
+                           " }) — expected " expected))))))
+
+(defn- normalize-args
+  "§9.2/§10.4: args is a JSON object; a JSON string is also accepted —
+   parse it (unparseable → {}). Anything else (numbers, vectors) is not a
+   valid tool input."
+  [args]
+  (cond
+    (map? args) args
+    (string? args) (try (let [parsed (json/parse-string args true)]
+                          (if (map? parsed) parsed {}))
+                        (catch Exception _ {}))
+    :else {}))
 
 (defn- search-tools
   "Search cached tools (§9.3): substring (case-insensitive) or regex
@@ -399,7 +453,7 @@
             (if conn
               (let [timeout-ms (or (:request-timeout-ms definition) 120000)
                     result (client/request! conn "tools/call"
-                                            {:name tool-name :arguments (or args {})}
+                                            {:name tool-name :arguments (normalize-args args)}
                                             {:timeout-ms timeout-ms})
                     formatted (client/format-result result)]
                 (if (:is-error formatted)
@@ -418,54 +472,57 @@
   [state-atom params]
   (let [params (or params {})
         state @state-atom]
-    (cond
-      (some? (:search params))
-      (search-text state (:search params) (:regex params) (:server params)
-                   (:includeSchemas params) (:limit params) (:offset params))
+    (or (validate-params params)
+        (let [regex? (flag (:regex params))
+              include-schemas? (flag (:includeSchemas params))]
+          (cond
+            (some? (:search params))
+            (search-text state (:search params) regex? (:server params)
+                         include-schemas? (:limit params) (:offset params))
 
-      (some? (:describe params))
-      (describe-text state (:describe params))
+            (some? (:describe params))
+            (describe-text state (:describe params))
 
-      (some? (:tool params))
-      (let [match (find-tool state (:tool params))
-            server (or (:server params)
-                       (when (and match (not= :ambiguous match))
-                         (:server match)))]
-        (if (nil? server)
-          (if (= :ambiguous match)
-            (return-error (str "Tool \"" (:tool params) "\" matches multiple servers. "
-                               "Specify a server with mcp({ tool: ..., server: \"...\" })."))
-            (return-error (str "Tool \"" (:tool params) "\" not found. "
-                               "Use mcp({ search: \"...\" }) to search.")))
-          ;; the wire call uses the RAW tool name — prefixed spellings
-          ;; (plan §10.4: tool: "server_tool") resolve through the cache
-          (call-mcp-tool state server
-                         (if (and match (not= :ambiguous match))
-                           (:name (:tool match))
-                           (:tool params))
-                         (:args params))))
+            (some? (:tool params))
+            (let [match (find-tool state (:tool params))
+                  server (or (:server params)
+                             (when (and match (not= :ambiguous match))
+                               (:server match)))]
+              (if (nil? server)
+                (if (= :ambiguous match)
+                  (return-error (str "Tool \"" (:tool params) "\" matches multiple servers. "
+                                     "Specify a server with mcp({ tool: ..., server: \"...\" })."))
+                  (return-error (str "Tool \"" (:tool params) "\" not found. "
+                                     "Use mcp({ search: \"...\" }) to search.")))
+                ;; the wire call uses the RAW tool name — prefixed spellings
+                ;; (plan §10.4: tool: "server_tool") resolve through the cache
+                (call-mcp-tool state server
+                               (if (and match (not= :ambiguous match))
+                                 (:name (:tool match))
+                                 (:tool params))
+                               (:args params))))
 
-      (some? (:connect params))
-      (try
-        (let [conn ((:ensure-connected-fn state) (:connect params))
-              ;; fresh view after the connect refreshed the cache
-              fresh @state-atom]
-          (if conn
-            (list-text fresh (:connect params))
-            (return-error (str "Failed to connect to \"" (:connect params) "\""))))
-        (catch Exception e
-          (return-error (str "Failed to connect to \"" (:connect params) "\": "
-                             (ex-message e)))))
+            (some? (:connect params))
+            (try
+              (let [conn ((:ensure-connected-fn state) (:connect params))
+                    ;; fresh view after the connect refreshed the cache
+                    fresh @state-atom]
+                (if conn
+                  (list-text fresh (:connect params))
+                  (return-error (str "Failed to connect to \"" (:connect params) "\""))))
+              (catch Exception e
+                (return-error (str "Failed to connect to \"" (:connect params) "\": "
+                                   (ex-message e)))))
 
-      (some? (:disconnect params))
-      (do ((:disconnect-fn state) (:disconnect params))
-          {:content (str "Disconnected \"" (:disconnect params) "\".") :is-error false})
+            (some? (:disconnect params))
+            (do ((:disconnect-fn state) (:disconnect params))
+                {:content (str "Disconnected \"" (:disconnect params) "\".") :is-error false})
 
-      (some? (:list params))
-      (list-text state (:list params))
+            (some? (:list params))
+            (list-text state (:list params))
 
-      (some? (:server params))
-      (list-text state (:server params))
+            (some? (:server params))
+            (list-text state (:server params))
 
-      :else
-      {:content (status-text state) :is-error false})))
+            :else
+            {:content (status-text state) :is-error false})))))

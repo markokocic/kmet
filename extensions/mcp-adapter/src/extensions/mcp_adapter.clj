@@ -544,7 +544,7 @@
 
       "search"
       (let [[q regex] (str/split rest-args #"\s+" 2)]
-        (notify-or-print state ctx (:content (proxy/search-text @state (or q "") (boolean regex)
+        (notify-or-print state ctx (:content (proxy/search-text @state (or q "") (proxy/flag regex)
                                                                 nil true 12 0))))
 
       "list"
@@ -636,7 +636,11 @@
                             :description "MCP server status, search, connect, auth"
                             :get-argument-completions (fn [arg-prefix]
                                                         (mcp-completions state arg-prefix))
-                            :handler (fn [args ctx]
+                            ;; handlers receive (ctx args) — the extension
+                            ;; context first, then the command args (pi passes
+                            ;; (args ctx); kmet's dispatch and contract use
+                            ;; (ctx args), see test-extensions "ctx dispatch")
+                            :handler (fn [ctx args]
                                        (handle-mcp-command state args ctx))})
     ;; 5. events (§10.7)
     (ext/on-event api :session-start (fn [event ctx]

@@ -169,12 +169,16 @@ configure. Only add servers you trust.
 ## Development
 
 The `scripts/` directory carries fake MCP/OAuth servers and three
-validation scripts (client transports, config/extension load, OAuth flow):
+validation scripts (client transports, config/extension load, OAuth flow)
+plus an end-to-end smoke of the proxy-tool surface (`e2e.bb`, headless —
+see plan §15.22; the interactive-TUI pass remains a manual checklist
+item):
 
 ```bash
 bb -cp ../../src:src scripts/validate-client.bb scripts/fake-mcp-server.bb scripts/fake-http-mcp-server.bb
 bb -cp ../../src:src scripts/validate-config.bb
 bb -cp ../../src:src scripts/validate-oauth.bb scripts/fake-oauth-server.bb
+bb -cp ../../src:src scripts/e2e.bb scripts/fake-mcp-server.bb
 ```
 
 ## Phase-2 roadmap

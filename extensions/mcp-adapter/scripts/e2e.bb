@@ -35,9 +35,31 @@
             result (s {})]
         (check "status text lists server"
                (str/includes? (:content result) "e2e"))
+        ;; /mcp slash command — the interactive mode dispatches extension
+        ;; command handlers as (handler ctx args) (kmet contract; pi passes
+        ;; (args ctx)). The mcp handler used to reverse them, so args was
+        ;; the context map and str/trim threw a ClassCastException on every
+        ;; /mcp run — dispatch exactly like the interactive mode here.
+        (let [cmd (get-in @state [:commands "mcp"])
+              r (with-out-str ((:handler cmd) {:has-ui false} "status"))]
+          (check "/mcp command dispatches (ctx args)"
+                 (str/includes? r "e2e")))
         (let [r (s {:search "echo"})]
           (check "search finds tool"
                  (str/includes? (:content r) "echo")))
+        (let [r (s {:search {"query" "echo"}})]
+          (check "non-string search -> readable error"
+                 (and (:is-error r)
+                      (str/includes? (:content r) "mcp({ search")
+                      (str/includes? (:content r) "expected a string"))))
+        (let [r (s {:limit "5"})]
+          (check "non-number limit -> readable error"
+                 (and (:is-error r)
+                      (str/includes? (:content r) "mcp({ limit")
+                      (str/includes? (:content r) "expected a number"))))
+        (let [r (s {:search "echo" :regex "false"})]
+          (check "string 'false' regex flag is falsy"
+                 (and (not (:is-error r)) (str/includes? (:content r) "echo"))))
         (let [r (s {:connect "e2e"})]
           (check "connect lists tools"
                  (and (not (:is-error r)) (str/includes? (:content r) "e2e_ping_mid"))))

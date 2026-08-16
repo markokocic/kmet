@@ -1,6 +1,6 @@
 (ns extensions.mcp-adapter.config
   "EDN MCP config loading/merging for the mcp-adapter extension (§6 of the
-   design contract, extensions/mcp-adapter/mcp-adapter.md — pi:
+   design contract, mcp-adapter.md at the repo root (§15.21) — pi:
    config.ts loadMcpConfig / writeProjectServerDisabledOverride, adapted to
    kmet: EDN only, exactly two sources, no imports/host discovery).
 
