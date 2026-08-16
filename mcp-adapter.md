@@ -750,3 +750,19 @@ landed and every deliberate deviation from the text above.
     `kmet.app.extensions/load-extension!` in a headless runner and driving
     the `mcp` tool against the fake stdio server from inside the sci
     context (status → connect → call → search → describe → disconnect).
+16. **Direct-tools bootstrap** — pi's `init.ts` connects configured
+    direct-tool servers that are missing from the metadata cache at
+    startup (`direct-tools-bootstrap`, after the eager/keep-alive
+    connects); §10.5's cache-only registration made this invisible in the
+    plan text, and the first port skipped it. Consequence: after adding a
+    `:direct-tools` server to the config, its tools did not register
+    (and so did not appear in `/tools`) until the server was connected
+    once by hand. Fixed in `mcp_adapter.clj` with
+    `bootstrap-direct-tools!` — background-connects direct-tool servers
+    without a fresh cache entry at init and after `/mcp refresh`; each
+    connect refreshes the cache and resyncs direct tools via
+    `refresh-after-connect!`. Selection matches pi
+    (`MCP_DIRECT_TOOLS` env → listed servers, `__none__` → none, else
+    server `:direct-tools` / settings `:direct-tools`; disabled and
+    misconfigured servers skipped); failures are recorded and swallowed,
+    leaving the tools unregistered until a later connect.

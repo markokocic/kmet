@@ -251,6 +251,59 @@
      :properties (or (:properties schema) {})
      :required (or (:required schema) [])}))
 
+(defn- direct-tool-server-names
+  "Configured servers whose tools are direct (pi
+   getMissingConfiguredDirectToolServers hasDirectTools): MCP_DIRECT_TOOLS
+   env → only the listed servers (config ignored); __none__ → none; else
+   server :direct-tools (bool | name list), else settings :direct-tools,
+   else false. Skips disabled and misconfigured servers."
+  [state]
+  (let [config (:config @state)
+        settings (:settings config)
+        env-raw (System/getenv "MCP_DIRECT_TOOLS")
+        env-servers (when (and env-raw (not= "__none__" env-raw))
+                      (set (map str/trim (str/split env-raw #","))))
+        env-none? (= "__none__" env-raw)]
+    (for [[name definition] (:mcp-servers config)
+          :when (not (true? (:disabled definition)))
+          :when (or (:command definition) (:url definition))
+          :when (cond
+                  env-none? false
+                  env-servers (contains? env-servers name)
+                  :else (if (contains? definition :direct-tools)
+                          (boolean (:direct-tools definition))
+                          (boolean (:direct-tools settings))))]
+      name)))
+
+(defn- missing-direct-tool-servers
+  "Direct-tool servers without a fresh metadata cache entry — their direct
+   tools are not registered (§10.5 registers from the cache only)."
+  [state]
+  (let [config (:config @state)
+        settings (:settings config)]
+    (filterv (fn [name]
+               (nil? (metadata/server-entry (:cache @state) name
+                                            (get-in config [:mcp-servers name])
+                                            settings)))
+             (direct-tool-server-names state))))
+
+(defn- bootstrap-direct-tools!
+  "Background-connect direct-tool servers missing from the metadata cache
+   so their direct tools register without a manual first connect (pi
+   init.ts direct-tools-bootstrap: after the startup connects, connect the
+   still-missing configured direct-tool servers; each connect refreshes
+   the cache and resyncs direct tools via refresh-after-connect!).
+   Failures are recorded by ensure-connected! and swallowed here — the
+   direct tools stay unregistered until a later connect, exactly like pi."
+  [state]
+  (when-let [names (seq (missing-direct-tool-servers state))]
+    (spawn
+     (fn []
+       (doseq [name names]
+         (try
+           ((:ensure-connected-fn @state) name)
+           (catch Exception _ nil)))))))
+
 (defn- sync-direct-tools!
   "Diff-based resync (§10.5): register new/updated (by fingerprint),
    unregister removed. Runs at init and after every connect/refresh."
@@ -386,6 +439,7 @@
       ((:disconnect-fn @state) name))
     (swap! state assoc :config config :servers (rebuild-servers state config))
     (sync-direct-tools! state)
+    (bootstrap-direct-tools! state)
     (register-proxy-tool! state)
     (notify-or-print state ctx "MCP config reloaded.")))
 
@@ -572,6 +626,10 @@
     (register-proxy-tool! state)
     ;; 3. direct tools from cache (§10.5)
     (sync-direct-tools! state)
+    ;; 3b. direct-tools bootstrap (pi init.ts): background-connect servers
+    ;; whose direct tools aren't in the metadata cache yet, so they
+    ;; register without a manual first connect
+    (bootstrap-direct-tools! state)
     ;; 4. /mcp command + completions (§10.6)
     (ext/register-command! api
                            {:name "mcp"
