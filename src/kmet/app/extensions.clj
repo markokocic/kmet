@@ -842,7 +842,9 @@
 
 (defn- scan-ns-files
   "Map namespace symbol → file for every .clj file under DIR with a
-   (ns ...) form."
+   (ns ...) form. Follows symlinks — extension dirs are commonly installed
+   as symlinks into a dotfiles/repo checkout, and the glob walk skips them
+   by default (leaving the entry's requires unresolvable)."
   [dir]
   (reduce (fn [acc f]
             (let [f (io/file (str f))]
@@ -850,7 +852,7 @@
                 (assoc acc ns-sym f)
                 acc)))
           {}
-          (fs/glob dir "**/*.clj")))
+          (fs/glob dir "**/*.clj" {:follow-links true})))
 
 (defn- resolve-extension
   "Resolve PATH into {:name str :entry io.File}. A directory must contain
@@ -1045,7 +1047,7 @@
   (fn [{:keys [namespace]}]
     (or (when-let [f (get ns-files namespace)]
           {:file (str f) :source (slurp f)})
-        (when-let [jars (deps-resolver)]
+        (when-let [jars (and deps-resolver (deps-resolver))]
           (some (fn [j] (when-let [s (jar-source j namespace)]
                           {:file (str j) :source s}))
                 jars))

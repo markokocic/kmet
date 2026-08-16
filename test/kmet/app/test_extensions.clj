@@ -173,6 +173,42 @@
       (t/is (nil? (tools/get-tool "multi-ext-tool")))
       (t/is (empty? (extensions/get-loaded-extensions))))))
 
+(t/deftest test-load-manifest-extension-via-symlink
+  ;; extension dirs are commonly installed as symlinks into a repo checkout;
+  ;; the ns-file scan must follow the link or every own-file require fails
+  ;; (skipped on Windows: creating symlinks needs SeCreateSymbolicLinkPrivilege)
+  (when-not (fs/windows?)
+    (extensions/clear-extensions!)
+    (let [link "target/ext-dir-link"]
+      (fs/create-dirs "target")
+      (fs/delete-if-exists link)
+      (fs/create-sym-link link (fs/absolutize "test/fixtures/ext-dir"))
+      (try
+        (let [result (extensions/load-extension! link)]
+          (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+          (testing "multi-file extension loads through a symlinked dir"
+            (t/is (= "multi-ok" (:content (tools/execute-tool "multi-ext-tool" {}))))))
+        (finally
+          (extensions/unload-all-extensions!)
+          (fs/delete-if-exists link))))))
+
+(t/deftest test-load-missing-require-error
+  ;; a require the loader cannot serve must surface an actionable message,
+  ;; not a bare NullPointerException (the load-fn used to call a nil
+  ;; deps-resolver when the extension had no deps.edn)
+  (extensions/clear-extensions!)
+  (let [dir "target/test-ext-missing-req"]
+    (fs/delete-tree dir)
+    (fs/create-dirs (str dir "/src"))
+    (spit (str dir "/extension.edn") "{:name \"missing-req\" :entry \"src/main.clj\"}\n")
+    (spit (str dir "/src/main.clj")
+          "(ns missing-req.main\n  (:require [no.such.namespace]))\n(defn init [api] nil)\n")
+    (let [result (extensions/load-extension! dir)]
+      (t/is (str/includes? (:error result) "no.such.namespace")
+            (str "actionable error, got: " (:error result)))
+      (t/is (empty? (extensions/get-loaded-extensions))))
+    (fs/delete-tree dir)))
+
 (t/deftest ^:slow test-extension-lib-version-isolation
   (extensions/clear-extensions!)
   (let [ra (extensions/load-extension! "test/fixtures/ext-iso-a")
