@@ -4,8 +4,8 @@ argument-hint: "[scope or extra instructions]"
 ---
 Run the full validation gate for this project and fix any failures, strictly in this order:
 
-1. `bb lint` — must pass with 0 errors, warnings, and info findings
-2. `bb format-check` — if it fails, run `bb format` to fix the formatting, then re-check
+1. `bb format-check` — if it fails, run `bb format` to fix the formatting, then re-check
+2. `bb lint` — must pass with 0 errors, warnings, and info findings
 3. `bb test` — the non-slow test suite
 4. `bb test-ext` — the slow (^:slow) tests
 

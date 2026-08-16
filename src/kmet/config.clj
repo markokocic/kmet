@@ -8,8 +8,7 @@
             [babashka.fs :as fs]
             [kmet.tui.theme :as theme]
             [kmet.ai.auth :as auth]
-            [kmet.libs.edn-settings :as eds]
-            [kmet.libs.file-lock :as file-lock]))
+            [kmet.libs.edn-settings :as eds]))
 
 ;; ─── Defaults ───────────────────────────────────────────────────────────────
 
@@ -150,8 +149,6 @@
   "Path of the global settings file (~/.kmet/agent/settings.edn)."
   []
   (expand-path "~/.kmet/agent/settings.edn"))
-
-
 
 (defn save-setting!
   "Persist a setting to the global settings.edn (pi: SettingsManager.save —

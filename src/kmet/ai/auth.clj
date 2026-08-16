@@ -11,7 +11,6 @@
    set-config-key-source! by models/load-models-config!) → env vars in pi
    order."
   (:require [clojure.edn :as edn]
-            [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.ai.aws-sigv4 :as aws-sigv4]
             [kmet.libs.dynamic-value :as dynamic-value]
@@ -135,8 +134,6 @@
              (when (map? parsed)
                (into {} (filter (fn [[_ v]] (valid-credential? v))) parsed)))
            (catch Exception _ nil)))))
-
-
 
 (defn load-auth!
   "Load auth.edn into the auth atom; returns the auth map. Called at startup

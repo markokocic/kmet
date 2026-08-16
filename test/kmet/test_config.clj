@@ -5,8 +5,7 @@
             [clojure.java.io :as io]
             [babashka.fs :as fs]
             [kmet.config :as cfg]
-            [kmet.ai.auth :as auth]
-            [kmet.libs.edn-settings :as eds]))
+            [kmet.ai.auth :as auth]))
 
 ;; ─── Defaults ──────────────────────────────────────────────────────────────
 
@@ -22,8 +21,6 @@
   ;; Phase 0: the :providers map is replaced by the models registry — the
   ;; provider defaults live in the catalog EDN, not in default-config.
   (t/is (not (contains? cfg/default-config :providers))))
-
-
 
 ;; ─── Load config ──────────────────────────────────────────────────────────
 
@@ -70,8 +67,6 @@
 (t/deftest test-get-theme-name-default
   (let [c (dissoc cfg/default-config :theme)]
     (t/is (= "dark" (cfg/get-theme-name c)))))
-
-
 
 ;; ─── Scope-relative path resolution ────────────────────────────────────────
 
