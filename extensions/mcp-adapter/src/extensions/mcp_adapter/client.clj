@@ -54,11 +54,9 @@
     t))
 
 (defn- read-stream
-  "Read an InputStream fully as text (slurp is not available in the
-   extension sci context)."
+  "Read an InputStream fully as text."
   [in]
-  (with-open [rdr (io/reader in)]
-    (str/join "\n" (line-seq rdr))))
+  (slurp in))
 
 ;; ─── stdio transport (§7.2) ───────────────────────────────────────────────
 

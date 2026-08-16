@@ -192,6 +192,61 @@
           (extensions/unload-all-extensions!)
           (fs/delete-if-exists link))))))
 
+(t/deftest test-extension-context-has-slurp-spit
+  ;; slurp/spit are absent from SCI's builtin clojure.core; the context
+  ;; injects the host fns (see build-context-namespaces), so extensions
+  ;; can read/write files without babashka.fs workarounds
+  (extensions/clear-extensions!)
+  (let [dir "target/test-ext-slurp"]
+    (fs/delete-tree dir)
+    (fs/create-dirs (str dir "/src"))
+    (spit (str dir "/extension.edn") "{:name \"slurp-ext\" :entry \"src/main.clj\"}\n")
+    (spit (str dir "/src/main.clj")
+          (str "(ns slurp-ext.main\n  (:require [kmet.extension :as ext]))\n"
+               "(defn init [api]\n"
+               "  (ext/register-tool! api {:name \"slurp-tool\"\n"
+               "                           :description \"reads/writes via slurp/spit\"\n"
+               "                           :execute (fn [_]\n"
+               "                                      (spit \"target/slurp-ext-out.txt\" \"written\")\n"
+               "                                      {:content (slurp \"target/slurp-ext-in.txt\")})}))\n"))
+    (spit "target/slurp-ext-in.txt" "input")
+    (try
+      (let [result (extensions/load-extension! dir)]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+        (t/is (= "input" (:content (tools/execute-tool "slurp-tool" {}))))
+        (t/is (= "written" (slurp "target/slurp-ext-out.txt"))))
+      (finally
+        (extensions/unload-all-extensions!)
+        (fs/delete-tree dir)
+        (fs/delete-if-exists "target/slurp-ext-out.txt")
+        (fs/delete-if-exists "target/slurp-ext-in.txt")))))
+
+(t/deftest test-extension-gets-bundled-tools-reader-port
+  ;; bb's tools.reader is a reduced custom port; the Maven copies have
+  ;; deftypes implementing java.io.Closeable and fail under SCI. The
+  ;; context injects the port by reference (bundled-port-namespaces), so
+  ;; extensions can require clojure.tools.reader* without deps.edn pins
+  (extensions/clear-extensions!)
+  (let [dir "target/test-ext-tools-reader"]
+    (fs/delete-tree dir)
+    (fs/create-dirs (str dir "/src"))
+    (spit (str dir "/extension.edn") "{:name \"tr-ext\" :entry \"src/main.clj\"}\n")
+    (spit (str dir "/src/main.clj")
+          (str "(ns tr-ext.main\n  (:require [kmet.extension :as ext]\n            [clojure.tools.reader :as r]\n            [clojure.tools.reader.reader-types :as rt]))\n"
+               "(defn init [api]\n"
+               "  (ext/register-tool! api {:name \"tr-tool\"\n"
+               "                           :description \"uses the bundled tools.reader port\"\n"
+               "                           :execute (fn [_]\n"
+               "                                      {:content (str (rt/read-char (rt/string-push-back-reader \"hi\"))\n"
+               "                                                     (r/read-string \"(1 2 3)\"))})}))\n"))
+    (try
+      (let [result (extensions/load-extension! dir)]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+        (t/is (= "h(1 2 3)" (:content (tools/execute-tool "tr-tool" {})))))
+      (finally
+        (extensions/unload-all-extensions!)
+        (fs/delete-tree dir)))))
+
 (t/deftest test-load-missing-require-error
   ;; a require the loader cannot serve must surface an actionable message,
   ;; not a bare NullPointerException (the load-fn used to call a nil

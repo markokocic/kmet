@@ -16,18 +16,16 @@
    Writes merge with the existing file and go through temp-file + rename
    (atomic-ish, single process — no lock needed)."
   (:require [babashka.fs :as fs]
-            [clojure.edn :as edn]
-            [clojure.string :as str]))
+            [clojure.edn :as edn]))
 
-;; slurp/spit are not available in the extension sci context (see config.clj).
 (defn- read-text
   [path]
   (when (fs/exists? path)
-    (str/join "\n" (fs/read-all-lines path))))
+    (slurp path)))
 
 (defn- write-text
   [path text]
-  (fs/write-bytes path (.getBytes (str text) "UTF-8")))
+  (spit path (str text)))
 
 (def ^:private cache-version 1)
 (def ^:private max-age-ms (* 7 24 60 60 1000))

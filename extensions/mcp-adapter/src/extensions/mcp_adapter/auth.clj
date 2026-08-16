@@ -25,15 +25,14 @@
             [clojure.string :as str]
             [kmet.libs.oauth :as oauth-lib]))
 
-;; slurp/spit are not available in the extension sci context (see config.clj).
 (defn- read-text
   [path]
   (when (fs/exists? path)
-    (str/join "\n" (fs/read-all-lines path))))
+    (slurp path)))
 
 (defn- write-text
   [path text]
-  (fs/write-bytes path (.getBytes (str text) "UTF-8")))
+  (spit path (str text)))
 
 ;; ─── Token store (~/.kmet/agent/mcp-oauth.edn) ────────────────────────────
 ;; {:servers {name {:tokens {:access .. :refresh .. :expires ms :scope ..}

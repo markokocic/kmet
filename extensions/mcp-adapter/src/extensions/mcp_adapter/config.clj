@@ -20,21 +20,18 @@
    pass through unmodified. :lifecycle / :tool-prefix values accept string
    or keyword."
   (:require [babashka.fs :as fs]
-            [clojure.edn :as edn]
-            [clojure.string :as str]))
+            [clojure.edn :as edn]))
 
-;; slurp/spit are not available in the extension sci context — read/write
-;; text via babashka.fs (read-all-lines / write-bytes).
 (defn- read-text
   "The text of PATH, or nil when the file does not exist."
   [path]
   (when (fs/exists? path)
-    (str/join "\n" (fs/read-all-lines path))))
+    (slurp path)))
 
 (defn- write-text
   "Write TEXT to PATH (UTF-8), replacing any existing content."
   [path text]
-  (fs/write-bytes path (.getBytes (str text) "UTF-8")))
+  (spit path (str text)))
 
 (def global-config-path
   "Global config file (~/.kmet/agent/mcp.edn)."

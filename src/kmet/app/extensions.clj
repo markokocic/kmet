@@ -746,8 +746,8 @@
   "Libraries babashka ships adapted (SCI implementations baked into the
    binary) whose raw Maven versions generally fail in bb. Extensions should
    omit them from deps.edn and use the bundled copy. Plain-bundled libs
-   whose Maven copies run fine (tools.cli, data.json, tools.reader, ...)
-   are not listed — they resolve to declared versions normally."
+   whose Maven copies run fine (tools.cli, data.json, ...) are not listed —
+   they resolve to declared versions normally."
   #{"cheshire/cheshire"
     "org.clojure/core.async"
     "org.clojure/core.cache"
@@ -756,6 +756,17 @@
     "potemkin/potemkin"
     "ring/ring-core"
     "selmer/selmer"})
+
+(def ^:private bundled-port-namespaces
+  "bb-bundled namespaces that are reduced custom ports, not the Maven
+   sources: bb pre-loads them and serves them under its own require, and
+   the raw Maven copies fail under SCI (tools.reader 1.3+ has deftypes
+   implementing the java.io.Closeable interface, which SCI's deftype
+   rejects). Injected by reference like the adapted libs — a declared
+   Maven version cannot win for these, because it would not evaluate."
+  '#{clojure.tools.reader
+     clojure.tools.reader.edn
+     clojure.tools.reader.reader-types})
 
 (defonce ^:private context-classes
   (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
@@ -798,24 +809,35 @@
 
 (defn- build-context-namespaces
   "The shared namespace map for extension contexts: kmet.extension (the
-   contract), the clojure.*/babashka.* builtins, and the shared library
-   layers kmet.tui.* and kmet.libs.*. Rebuilt per context so namespaces
-   required since the last build (the shared library layers) are included."
+   contract), the clojure.*/babashka.* builtins (incl. slurp/spit, which
+   SCI's builtin clojure.core lacks but bb's env has), and the shared
+   library layers kmet.tui.* and kmet.libs.*. Rebuilt per context so
+   namespaces required since the last build (the shared library layers)
+   are included."
   []
-  (into {'kmet.extension (ns-interns 'kmet.extension)}
+  (into {'kmet.extension (ns-interns 'kmet.extension)
+         ;; slurp/spit are absent from SCI's builtin clojure.core — inject
+         ;; the host fns so extensions can read/write files directly (the
+         ;; mcp-adapter used to work around this with babashka.fs
+         ;; read-all-lines/write-bytes). sci merges these into its core.
+         'clojure.core {'slurp (deref #'slurp)
+                        'spit (deref #'spit)}}
         (keep (fn [ns-obj]
                 (let [n (str (ns-name ns-obj))]
                   (when (and (not (str/starts-with? n "sci."))
                              (not= n "clojure.core")
-                             ;; bundled libraries (clojure.tools.cli, data.json, ...)
-                             ;; are NOT injected — they resolve through the load-fn,
-                             ;; so a declared Maven version wins over the bundled copy.
-                             ;; (Only clojure.tools.* / clojure.data.*: the ones whose
-                             ;; Maven versions actually run in bb. The adapted libs —
-                             ;; core.async, cheshire, ... — stay injected: their Maven
-                             ;; copies fail anyway, so the bundled copy is correct.)
-                             (not (or (str/starts-with? n "clojure.tools.")
-                                      (str/starts-with? n "clojure.data.")))
+                             ;; bundled libraries whose Maven versions run under
+                             ;; SCI (clojure.tools.cli, data.json, ...) are NOT
+                             ;; injected — they resolve through the load-fn, so a
+                             ;; declared Maven version wins over the bundled copy.
+                             ;; The adapted libs (core.async, cheshire, ...) and
+                             ;; the custom-port namespaces (bundled-port-namespaces)
+                             ;; stay injected: their Maven copies fail under SCI,
+                             ;; so the bundled copy is the only working one.
+                             (not (or (str/starts-with? n "clojure.data.")
+                                      (and (str/starts-with? n "clojure.tools.")
+                                           (not (contains? bundled-port-namespaces
+                                                           (ns-name ns-obj))))))
                              (or (str/starts-with? n "clojure.")
                                  (str/starts-with? n "babashka.")
                                  (str/starts-with? n "cheshire.")
