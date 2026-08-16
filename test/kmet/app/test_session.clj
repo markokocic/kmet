@@ -5,7 +5,7 @@
             [clojure.java.io :as io]
             [babashka.fs :as fs]
             [kmet.app.session :as s]
-            [kmet.ai.usage :as usage]))
+            [kmet.libs.usage :as usage]))
 
 (def test-dir "target/test-sessions")
 

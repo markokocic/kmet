@@ -10,14 +10,12 @@
    models.edn/extension :api-key config value (registered via
    set-config-key-source! by models/load-models-config!) → env vars in pi
    order."
-  (:require [clojure.edn :as edn]
-            [babashka.fs :as fs]
+  (:require [babashka.fs :as fs]
             [kmet.libs.aws-sigv4 :as aws-sigv4]
+            [kmet.libs.credential-store :as cred]
             [kmet.libs.dynamic-value :as dynamic-value]
             [kmet.libs.hooks :as hooks]
-            [kmet.ai.google-adc :as google-adc]
-            [kmet.libs.edn-settings :as eds]
-            [kmet.libs.file-lock :as file-lock]))
+            [kmet.ai.google-adc :as google-adc]))
 
 ;; ─── Env var table (pi env-api-keys.ts) ────────────────────────────────────
 
@@ -124,25 +122,13 @@
               (Double/isFinite (:expires credential)))
          (or (nil? (:key credential)) (string? (:key credential))))))
 
-(defn- read-auth-file
-  "Parse auth.edn as a map, nil when missing or malformed. Entries failing
-   valid-credential? are dropped (pi auth-storage parse throws — kmet keeps
-   startup lenient, the invalid entry just never resolves)."
-  []
-  (let [f (fs/file (auth-file-path))]
-    (when (fs/exists? f)
-      (try (let [parsed (edn/read-string (slurp f))]
-             (when (map? parsed)
-               (into {} (filter (fn [[_ v]] (valid-credential? v))) parsed)))
-           (catch Exception _ nil)))))
-
 (defn load-auth!
   "Load auth.edn into the auth atom; returns the auth map. Called at startup
    (config/load-config); /login and /logout refresh the atom directly."
   []
-  (let [auth (or (read-auth-file) {})]
-    (reset! auth-atom auth)
-    auth))
+  (let [auth (cred/read-edn-map (auth-file-path) valid-credential?)]
+    (reset! auth-atom (or auth {}))
+    (or auth {})))
 
 (defn get-credentials
   "The current auth map (auth.edn content, as loaded)."
@@ -154,13 +140,9 @@
    file lock — read-modify-write is serialized, so concurrent writers can't
    lose each other's updates (pi: SettingsStorage.withLock)."
   [f]
-  (let [path (auth-file-path)]
-    (fs/create-dirs (fs/parent path))
-    (file-lock/with-file-lock (str path ".lock")
-      (fn []
-        (let [updated (f (or (read-auth-file) {}))]
-          (spit path (eds/pretty-edn updated))
-          updated)))))
+  (let [updated (cred/update-edn-map! (auth-file-path) f valid-credential?)]
+    (reset! auth-atom updated)
+    updated))
 
 (defn set-credential!
   "Store an API key for PROVIDER in auth.edn and refresh the auth atom.
@@ -191,17 +173,13 @@
   (when-not (valid-credential? credential)
     (throw (ex-info (str "Invalid OAuth credential for " (name provider))
                     {:type :oauth-credential-invalid})))
-  (let [auth (update-auth! #(assoc % provider credential))]
-    (reset! auth-atom auth)
-    auth))
+  (update-auth! #(assoc % provider credential)))
 
 (defn remove-credential!
   "Remove PROVIDER's auth.edn entry (no-op when absent) and refresh the auth
    atom. Returns the new auth map."
   [provider]
-  (let [auth (update-auth! #(dissoc % provider))]
-    (reset! auth-atom auth)
-    auth))
+  (update-auth! #(dissoc % provider)))
 
 ;; ─── Resolution (pi: credential-store resolveApiKey) ──────────────────────
 

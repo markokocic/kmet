@@ -9,7 +9,7 @@
    [kmet.libs.dynamic-value :as dynamic-value]
    [cheshire.core :as json]
    [kmet.ai.models :as models]
-   [kmet.ai.usage :as usage]
+   [kmet.libs.usage :as usage]
    [kmet.ai.constrained-sampling :as cs]
    [clojure.string :as str]))
 

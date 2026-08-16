@@ -1,6 +1,6 @@
 # Moving app/ai modules into kmet.libs — analysis
 
-> Status: Tier 1 steps 1-6 done.
+> Status: Tier 1 steps 1-8 done (all planned moves complete).
 > - Step 1: `kmet.ai.config-value` → `kmet.libs.dynamic-value` (2026-08-16)
 > - Step 2: `kmet.libs.edn-settings` extracted from `kmet.config` + `kmet.ai.auth`
 >   (pretty-edn, deep-merge, expand-path, update-setting-text, save-edn-setting!).
@@ -12,6 +12,9 @@
 > - Step 5: `kmet.app.context` → `kmet.libs.context` (move as-is)
 > - Step 6: `kmet.libs.hooks` extracted — generic single-fn slot registry;
 >   `ai.hooks` and `ai.auth` (config-key-source, oauth-source) use it.
+> - Step 7: `kmet.ai.usage` → `kmet.libs.usage` (move as-is)
+> - Step 8: `kmet.libs.credential-store` extracted from `ai.auth` — generic
+>   EDN store under file lock; auth uses it for auth.edn.
 >
 > Layer rule enforced by `test/kmet/libs/test-self-contained.clj` (libs must not
 > require anything outside `kmet.libs.*`) and `test/kmet/ai/test-self-contained.clj`.
@@ -42,7 +45,8 @@ It *does* share `kmet.libs.oauth` — the seam that already works.
 | `kmet.libs.aws-sigv4` | ~206 | stdlib + JVM crypto | SigV4 signing + ambient credential resolution. **Done** — moved as-is. |
 | `kmet.libs.context` | 44 | `babashka.fs` only | AGENTS.md/CLAUDE.md discovery. **Done** — moved as-is. |
 | `kmet.libs.hooks` | ~40 | none | Generic single-fn slot registry. **Done** — extracted; `ai.hooks` and `ai.auth` use it. |
-| `kmet.ai.usage` | 58 | none | Borderline. Token accounting is generic; the key shapes are provider-flavored. Moves cleanly but the only consumers are `api.shared` + `session` + footer. Low urgency. |
+| `kmet.libs.usage` | ~58 | none | Token accounting normalization. **Done** — moved as-is. |
+| `kmet.libs.credential-store` | ~60 | libs only | EDN store under file lock (read/write/update). **Done** — extracted from `ai.auth`; auth.edn and mcp-oauth.edn can share it. |
 
 ## Tier 2 — detach a small dep, then move
 
@@ -124,7 +128,7 @@ gain a shared writer.
 4. **`kmet.libs.aws-sigv4`, `kmet.libs.context`, `kmet.libs.hooks`** —
    trivially clean, smaller wins. **Done**.
 5. **`kmet.libs.credential-store`** (from `ai.auth`) — medium value; do it
-   after #2 since it builds on the same EDN-store primitives.
+   after #2 since it builds on the same EDN-store primitives. **Done**.
 
 ## Mechanics
 

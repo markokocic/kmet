@@ -7,7 +7,7 @@
             [kmet.ai.auth :as auth]
             [kmet.libs.aws-sigv4 :as aws-sigv4]
             [kmet.ai.google-adc :as google-adc]
-            [kmet.ai.usage :as usage]
+            [kmet.libs.usage :as usage]
             [kmet.app.tools.core :as tools]
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
