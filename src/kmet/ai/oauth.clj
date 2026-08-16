@@ -657,7 +657,8 @@
         (codex-credential-from-token
          (codex-exchange-authorization-code code verifier codex-redirect-uri)))
       (finally
-        (some-> (:abort-prompt! interaction))
+        (when-let [abort-prompt! (:abort-prompt! interaction)]
+          (abort-prompt!))
         ((:close server))))))
 
 (defn make-openai-codex-oauth
@@ -839,7 +840,8 @@
          {:type :progress :message "Exchanging authorization code for tokens..."})
         (exchange-anthropic-authorization-code code state verifier))
       (finally
-        (some-> (:abort-prompt! interaction))
+        (when-let [abort-prompt! (:abort-prompt! interaction)]
+          (abort-prompt!))
         ((:close server))))))
 
 (defn make-anthropic-oauth
@@ -993,7 +995,8 @@
           :timeout (throw (ex-info "OpenRouter OAuth login timed out" {:type :oauth-timeout}))
           :error (throw (:error result))))
       (finally
-        (some-> (:abort-prompt! interaction))
+        (when-let [abort-prompt! (:abort-prompt! interaction)]
+          (abort-prompt!))
         ((:close callback))))))
 
 (defn make-open-router-oauth

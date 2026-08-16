@@ -3060,6 +3060,11 @@
                                   (fn [] (hide-dialog) (deliver p nil))
                                   (th/get-current-theme)))
                     p))
+         ;; pi: manualAbort.abort() — dismiss the current extension dialog
+         ;; (used by the OAuth flows' :abort-prompt! when the browser
+         ;; callback wins; the pending prompt promise resolves via the
+         ;; caller's abort hook, hide-dialog only clears the screen)
+         :close-dialog (fn [] (hide-dialog))
          :editor (fn [title prefill]
                    (let [p (promise)]
                      (show-dialog (dialogs/make-extension-editor

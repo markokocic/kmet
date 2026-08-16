@@ -140,6 +140,11 @@
    submitted text, nil when dismissed (nil headless)."
   [api title prefill]
   ((:editor (ui api)) title prefill))
+(defn ui-close-dialog
+  "Dismiss the currently open extension dialog (pi: manualAbort.abort —
+   the OAuth flows' :abort-prompt! hook). No-op when no dialog is open."
+  [api]
+  ((:close-dialog (ui api))))
 (defn ui-get-theme-by-name
   "Look up a theme by name (pi: getTheme(name)); unknown names fall back
    to dark. Works in every mode."
@@ -261,7 +266,7 @@
                                        :set-status 1 :set-widget 1 :set-footer 1 :set-header 1
                                        :set-editor-text 1 :get-editor-text 1 :paste-to-editor 1
                                        :set-theme 1 :get-theme 1 :get-all-themes 1 :editor 1
-                                       :get-theme-by-name 1 :set-working-indicator 1
+                                       :close-dialog 1 :get-theme-by-name 1 :set-working-indicator 1
                                        :set-working-message 1 :set-working-visible 1
                                        :on-terminal-input 1 :set-tools-expanded 1
                                        :get-tools-expanded 1}]

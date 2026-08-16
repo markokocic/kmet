@@ -487,6 +487,11 @@
                                                      :redirect-uris [redirect-uri]}))
             :logged-in)))
       (finally
+        ;; pi: manualAbort.abort — dismiss the pending manual-paste dialog
+        ;; and unblock its prompt when the callback won (no-op when the
+        ;; user already dismissed it)
+        (when-let [abort-prompt! (:abort-prompt! interaction)]
+          (abort-prompt!))
         (reset! current-flow nil)))))
 
 (defn- run-device-flow

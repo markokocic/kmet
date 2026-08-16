@@ -36,12 +36,14 @@
 
 (defn- build-servers
   "Build the :servers map from config: {name {:definition .. :conn atom
-   :error atom :lock Object}}."
+   :error atom :failed-at atom :lock Object}} — :failed-at records the
+   last connect failure (60s backoff window, pi FAILURE_BACKOFF_MS)."
   [config]
   (into {} (map (fn [[name definition]]
                   [name {:definition definition
                          :conn (atom nil)
                          :error (atom nil)
+                         :failed-at (atom nil)
                          :lock (Object.)}]))
         (:mcp-servers config)))
 
@@ -54,6 +56,7 @@
                     [name (assoc (or (get old name)
                                      {:conn (atom nil)
                                       :error (atom nil)
+                                      :failed-at (atom nil)
                                       :lock (Object.)})
                                  :definition definition)]))
           (:mcp-servers config))))
@@ -71,6 +74,24 @@
            :ensure-connected-fn (fn [name] (ensure-connected! state name))
            :disconnect-fn (fn [name] (disconnect-server! state name)))
     state))
+
+;; ─── Failure backoff (pi init.ts: FAILURE_BACKOFF_MS) ─────────────────────
+;; A failed connect records :failed-at + :error; within the 60s window the
+;; LAZY connect path (tool calls) reports "not available (last failed Ns
+;; ago)" instead of retrying; explicit connects (/mcp connect,
+;; mcp({connect})) bypass the window and clear the failure on success.
+
+(defn- record-failure!
+  [state name message]
+  (let [{:keys [error failed-at]} (get-in @state [:servers name])]
+    (when error (reset! error message))
+    (when failed-at (reset! failed-at (System/currentTimeMillis)))))
+
+(defn- clear-failure!
+  [state name]
+  (let [{:keys [error failed-at]} (get-in @state [:servers name])]
+    (when error (reset! error nil))
+    (when failed-at (reset! failed-at nil))))
 
 ;; ─── Connection lifecycle (§10.3) ─────────────────────────────────────────
 
@@ -100,7 +121,7 @@
    resync direct tools, rebuild the proxy description. On failure: record
    :error, throw."
   [state name]
-  (let [{:keys [conn error lock]} (get-in @state [:servers name])]
+  (let [{:keys [conn lock]} (get-in @state [:servers name])]
     (when (nil? lock)
       (throw (ex-info (str "MCP server \"" name "\" not found")
                       {:type :mcp-error})))
@@ -120,11 +141,11 @@
                     new-conn (:conn result)
                     tools (:tools result)]
                 (reset! conn new-conn)
-                (reset! error nil)
+                (clear-failure! state name)
                 (refresh-after-connect! state name tools)
                 new-conn)
               (catch Exception e
-                (reset! error (ex-message e))
+                (record-failure! state name (ex-message e))
                 (throw e)))))))))
 
 (defn- disconnect-server!
@@ -380,14 +401,27 @@
       (catch Exception _ nil))))
 
 (defn- build-interaction
-  "The §7.8 interaction map for the OAuth flow, from the extension ctx."
+  "The §7.8 interaction map for the OAuth flow, from the extension ctx.
+   The manual-paste prompt (pi onAuthorizationInput) is raced against the
+   browser callback; :abort-prompt! (pi manualAbort.abort) dismisses the
+   pending dialog and unblocks the prompt when the callback wins — called
+   by the flow's finally."
   [state ctx]
   (let [has-ui (:has-ui ctx)
         signal (when-let [s (:signal ctx)]
-                 (try (s) (catch Exception _ nil)))]
+                 (try (s) (catch Exception _ nil)))
+        prompt-cancelled (atom false)
+        prompt-pending (atom nil)
+        abort-prompt! (fn []
+                        (reset! prompt-cancelled true)
+                        (when-let [p @prompt-pending]
+                          (deliver p ::cancelled))
+                        (when has-ui
+                          (ext/ui-close-dialog (:api @state))))]
     {:signal (or signal (atom false))
      :has-ui has-ui
      :open-url open-browser
+     :abort-prompt! abort-prompt!
      :notify (fn [event]
                (case (:type event)
                  :auth-url
@@ -402,7 +436,9 @@
                  (notify-or-print state ctx (str "MCP auth: " (:message event)))))
      :prompt (fn [prompt-map]
                (if has-ui
-                 (deref (ext/ui-input (:api @state) (:message prompt-map) ""))
+                 (let [p (ext/ui-input (:api @state) (:message prompt-map) "")]
+                   (reset! prompt-pending p)
+                   (deref p))
                  ;; headless: wait for the browser callback without a prompt
                  (do (Thread/sleep 600000) nil)))}))
 

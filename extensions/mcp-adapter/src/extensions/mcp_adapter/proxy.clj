@@ -15,6 +15,7 @@
 
 (def ^:private desc-truncate-length 50)
 (def ^:private max-regex-query-length 256)
+(def ^:private failure-backoff-ms 60000)
 
 ;; ─── Tool/state helpers ───────────────────────────────────────────────────
 
@@ -30,6 +31,16 @@
 (defn- server-state
   [state name]
   (get-in state [:servers name]))
+
+(defn- failure-age-seconds
+  "Seconds since the server's last recorded connect failure, or nil
+   outside the 60s backoff window (pi getFailureAgeSeconds — a failed
+   lazy use does not retry inside the window)."
+  [state name]
+  (when-let [failed-at @(get-in state [:servers name :failed-at])]
+    (let [age (- (System/currentTimeMillis) failed-at)]
+      (when (< age failure-backoff-ms)
+        (quot age 1000)))))
 
 (defn- disabled?
   [state name]
@@ -105,10 +116,10 @@
     (true? (:disabled definition)) :disabled
     (misconfigured? definition) :misconfigured
     :else
-    (let [{:keys [conn error]} (server-state state name)]
+    (let [{:keys [conn]} (server-state state name)]
       (cond
         (and @conn (client/alive? @conn)) :connected
-        @error :failed
+        (failure-age-seconds state name) :failed
         :else :idle))))
 
 (defn- auth-state-label
@@ -130,17 +141,22 @@
         lines (atom [])]
     (doseq [[server-name definition] (sort-by key (:mcp-servers config))]
       (let [slabel (state-label state server-name definition)
-            tool-count (count (or (cached-tools state server-name) []))
+            failed-ago (failure-age-seconds state server-name)
             error (:error (server-state state server-name))
+            tool-count (count (or (cached-tools state server-name) []))
             auth-label (auth-state-label server-name definition)
             age (when-let [entry (get-in (:cache state) [:servers server-name])]
-                  (quot (- (System/currentTimeMillis) (:fetched-at entry)) 60000))]
+                  (quot (- (System/currentTimeMillis) (:fetched-at entry)) 60000))
+            state-part (if failed-ago
+                         (str "failed " failed-ago "s ago"
+                              (when (seq @error)
+                                (str " — " (truncate-at-word @error 120))))
+                         (name slabel))]
         (swap! lines conj
-               (str server-name " (" (lifecycle-label definition) ", " (name slabel)
+               (str server-name " (" (lifecycle-label definition) ", " state-part
                     (when (and tool-count (not= :connected slabel)) (str ", " tool-count " tools"))
                     (when auth-label (str ", " auth-label))
                     (when age (str ", cache " age "m old"))
-                    (when @error (str " — " (truncate-at-word @error 120)))
                     ")"))))
     (let [s (settings state)]
       (swap! lines conj
@@ -371,20 +387,25 @@
                          " and /reload to enable it."))
 
       :else
-      (try
-        (let [conn ((:ensure-connected-fn state) server)]
-          (if conn
-            (let [timeout-ms (or (:request-timeout-ms definition) 120000)
-                  result (client/request! conn "tools/call"
-                                          {:name tool-name :arguments (or args {})}
-                                          {:timeout-ms timeout-ms})
-                  formatted (client/format-result result)]
-              (if (:is-error formatted)
-                (return-error (:text formatted))
-                {:content (:text formatted) :is-error false}))
-            (return-error (str "Server \"" server "\" not connected"))))
-        (catch Exception e
-          (return-error (str "MCP call failed: " (ex-message e))))))))
+      (if-let [failed-ago (failure-age-seconds state server)]
+        ;; pi executeCall: inside the 60s backoff window a lazy use does
+        ;; not retry — explicit mcp({connect}) bypasses this
+        (return-error (str "Server \"" server "\" not available (last failed "
+                           failed-ago "s ago)"))
+        (try
+          (let [conn ((:ensure-connected-fn state) server)]
+            (if conn
+              (let [timeout-ms (or (:request-timeout-ms definition) 120000)
+                    result (client/request! conn "tools/call"
+                                            {:name tool-name :arguments (or args {})}
+                                            {:timeout-ms timeout-ms})
+                    formatted (client/format-result result)]
+                (if (:is-error formatted)
+                  (return-error (:text formatted))
+                  {:content (:text formatted) :is-error false}))
+              (return-error (str "Server \"" server "\" not connected"))))
+          (catch Exception e
+            (return-error (str "MCP call failed: " (ex-message e)))))))))
 
 ;; ─── Dispatch (§9.2) ──────────────────────────────────────────────────────
 

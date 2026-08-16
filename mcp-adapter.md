@@ -725,7 +725,21 @@ landed and every deliberate deviation from the text above.
     bound server, so a DCR'd client's registered URI stays valid);
     `/mcp enable|disable` creates the project `.kmet/` directory before
     writing; RFC 7591 DCR preserves an existing token-store entry.
-14. **`cheshire.core` is injected into extension contexts** — the loader's
+14. **pi-parity additions** (post-Phase-1 review): the OAuth interaction
+    map carries `:abort-prompt!` — the flows' finally dismisses the
+    pending manual-paste dialog and unblocks its prompt when the browser
+    callback wins (pi `manualAbort.abort` / `inputController.abort()`);
+    this required a new `ui-close-dialog` extension capability
+    (`:close-dialog` in the interactive registry, `api-ui`, the
+    `kmet.extension` wrapper, and `create-nullable-api`). Connect
+    failures now follow pi's 60s backoff (`FAILURE_BACKOFF_MS`): a
+    failed connect records `:failed-at` + message, lazy uses (proxy tool
+    calls, direct tools) report `Server "x" not available (last failed
+    Ns ago)` inside the window instead of retrying, explicit
+    `mcp({connect})`/`/mcp connect` bypass the window and clear the
+    failure on success, and status shows `failed Ns ago — reason`
+    (reverting to the normal label after expiry).
+15. **`cheshire.core` is injected into extension contexts** — the loader's
     context-injection filter gained the `cheshire.` prefix
     (`src/kmet/app/extensions.clj`; the filter's own comment already
     documented that cheshire "stays injected", the whitelist just lacked

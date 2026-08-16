@@ -20,7 +20,8 @@
       global (str (System/getProperty "user.dir") "/.e2e-global-" (System/nanoTime) ".edn")
       cache-file (str (System/getProperty "user.dir") "/.e2e-cache-" (System/nanoTime) ".edn")]
   (spit global (pr-str {:mcp-servers
-                        {"e2e" {:command "bb" :args [fake-stdio] :lifecycle :lazy}}}))
+                        {"e2e" {:command "bb" :args [fake-stdio] :lifecycle :lazy}
+                         "bad" {:command "sh" :args ["-c" "exit 3"] :lifecycle :lazy}}}))
   (with-redefs [config/global-config-path (delay global)
                 config/project-config-path (fn [& _] (str global ".project"))
                 metadata/cache-path (constantly cache-file)]
@@ -49,6 +50,21 @@
                  (str/includes? (:content r) "message")))
         (let [r (s {:disconnect "e2e"})]
           (check "disconnect" (str/includes? (:content r) "Disconnected")))
+        ;; pi failure backoff: a failed connect is recorded; lazy uses
+        ;; report the backoff window, explicit connect bypasses it
+        (let [r (s {:connect "bad"})]
+          (check "failing server explicit connect errors"
+                 (str/includes? (:content r) "Failed to connect")))
+        (let [r (s {:tool "x" :server "bad"})]
+          (check "lazy use inside backoff window"
+                 (str/includes? (:content r) "not available (last failed")))
+        (let [r (s {})]
+          (check "status shows failed"
+                 (and (re-find #"failed \d+s ago" (:content r))
+                      (str/includes? (:content r) "bad ("))))
+        (let [r (s {:connect "bad"})]
+          (check "explicit connect bypasses backoff"
+                 (str/includes? (:content r) "Failed to connect")))
         (let [r (s {:server "e2e"})]
           (check "server list after disconnect (cached)"
                  (str/includes? (:content r) "not connected, cached")))

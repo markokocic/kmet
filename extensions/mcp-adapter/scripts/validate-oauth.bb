@@ -94,9 +94,14 @@
         definition {:url (str "http://127.0.0.1:" oauth-port "/mcp")
                     :auth :oauth
                     :oauth {:flow :pkce :scopes ["read"]}}
-        status (auth/run-flow! "pkce-server" definition (interaction events))
+        abort-called (atom false)
+        interaction (assoc (interaction events)
+                           :abort-prompt! (fn [] (reset! abort-called true)))
+        status (auth/run-flow! "pkce-server" definition interaction)
         auth-event (first (filter #(= :auth-url (:type %)) @events))]
     (check "flow returns :logged-in" (= :logged-in status))
+    (check "abort-prompt! invoked after the callback (pi manualAbort.abort)"
+           (true? @abort-called))
     (check "authorize URL emitted"
            (and auth-event (str/includes? (:url auth-event) "/authorize")))
     (check "authorize URL carries PKCE params"

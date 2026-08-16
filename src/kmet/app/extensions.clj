@@ -400,6 +400,11 @@
    headless."
   [title prefill]
   (ui-call :editor title prefill))
+(defn ui-close-dialog
+  "Dismiss the currently open extension dialog (pi: manualAbort.abort —
+   the OAuth flows' :abort-prompt! hook). No-op when no dialog is open."
+  []
+  (ui-call :close-dialog))
 (defn ui-get-theme-by-name
   "Look up a theme by name (pi: getTheme(name)): a real Theme record from
    the store (builtins + custom themes dir), nil for unknown names.
@@ -552,6 +557,7 @@
    :get-all-themes ui-get-all-themes
    :set-theme ui-set-theme
    :editor ui-editor
+   :close-dialog ui-close-dialog
    :get-theme-by-name ui-get-theme-by-name
    :get-tools-expanded ui-get-tools-expanded
    :set-tools-expanded ui-set-tools-expanded})
