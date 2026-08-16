@@ -280,13 +280,14 @@ src/kmet/
 - New test namespaces must be registered in `kmet.runner/all-namespaces` (the full run loads
   exactly that list).
 - During development, validate only what changed with `bb test-changed` / `bb lint-changed` /
-  `bb format-check-changed` (see Build & Run); the full suite stays the pre-wrap-up gate.
+  `bb format-check-changed` (see Build & Run), or run individual test namespaces with filters.
 
 ### Final validation
 `bb lint` and `bb format-check` are slow — don't run them during iterative
-development. Run the full gate once before wrapping up:
-`bb lint` + `bb format-check` + `bb test` + `bb test-ext` (plus `bb test` inside any
-extension directory that carries its own tests).
+development. **Do not run the full gates unless explicitly told to**: `bb lint` +
+`bb format-check` + `bb test` + `bb test-ext` (plus `bb test` inside any extension
+directory that carries its own tests) are only run when the user explicitly asks
+for a full gate. The default validation loop is the changed-file tasks above.
 `bb lint` must pass with 0 errors, warnings, and info findings.
 
 ## Platform
