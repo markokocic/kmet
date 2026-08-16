@@ -243,8 +243,10 @@
                     "assistant"
                     (let [text (content-text (:content m))
                           thinking (str/trim (or (:thinking m) ""))
-                          msg (cond-> {:role "assistant" :content text}
-                                (:tool-calls m)
+                          has-tc (seq (:tool-calls m))
+                          msg (cond-> {:role "assistant"}
+                                (seq text) (assoc :content text)
+                                has-tc
                                 (assoc :tool_calls
                                        (mapv (fn [tc]
                                                {:id (:id tc)
@@ -253,8 +255,14 @@
                                                            :arguments (cheshire.core/generate-string
                                                                        (:arguments tc))}})
                                              (:tool-calls m))))]
-                      (cond-> msg
-                        (seq thinking) (assoc :reasoning_content thinking)))
+                      ;; pi: some providers require "either content or
+                      ;; tool_calls, but not none" — skip empty assistant
+                      ;; messages (a turn that ended with only reasoning, or
+                      ;; an aborted response that got no content) instead of
+                      ;; sending content ""
+                      (when (or (seq text) has-tc)
+                        (cond-> msg
+                          (seq thinking) (assoc :reasoning_content thinking))))
                     ;; custom messages (pi: convertToLlm custom→user)
                     "custom"
                     {:role "user" :content (openai-content (:content m))}
@@ -293,8 +301,12 @@
                                                                           :arguments (cheshire.core/generate-string
                                                                                       (:arguments tc))}})
                                                             (:tool-calls m))))]
-                              ;; opencode-go requires reasoning_content on assistant messages
-                              (assoc msg :reasoning_content (or (str/trim (or (:thinking m) "")) "")))
+                              ;; skip empty assistant messages (pi: providers
+                              ;; require content or tool_calls) — an empty
+                              ;; reasoning_content-only message is rejected too
+                              (when (or (seq text) has-tc)
+                                ;; opencode-go requires reasoning_content on assistant messages
+                                (assoc msg :reasoning_content (or (str/trim (or (:thinking m) "")) ""))))
                             ;; custom messages (pi: convertToLlm custom→user)
                             "custom"
                             {:role "user"

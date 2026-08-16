@@ -544,6 +544,40 @@
     (t/is (nil? (:reasoning_content (first (@#'shared/openai-messages msgs)))))
     (t/is (= "" (:reasoning_content (first (@#'shared/openai-messages-with-reasoning msgs)))))))
 
+(t/deftest test-llm-empty-assistant-dropped
+  ;; pi: "some providers require either content or tool_calls, but not none" —
+  ;; an empty assistant message (e.g. a resumed session whose last turn ended
+  ;; with only reasoning, or an aborted response that got no content) must be
+  ;; skipped, not sent as content "" ("Invalid assistant message: content or
+  ;; tool_calls must be set")
+  (let [msgs [{:role :user :content [{:type :text :text "hi"}]}
+              {:role :assistant :content []}
+              {:role :assistant :content [] :thinking "only reasoning"}
+              {:role :assistant :content [{:type :text :text "answer"}]}]
+        openai (@#'shared/openai-messages msgs)
+        reasoning (@#'shared/openai-messages-with-reasoning msgs)
+        roles (mapv :role openai)
+        roles-reasoning (mapv :role reasoning)]
+    (t/is (= ["user" "assistant"] roles)
+          "empty assistant messages are dropped")
+    (t/is (= "answer" (:content (last openai)))
+          "non-empty assistant messages are kept")
+    (t/is (= ["user" "assistant"] roles-reasoning)
+          "with-reasoning variant drops empty assistant messages too")
+    (t/is (= "" (:reasoning_content (last reasoning)))
+          "with-reasoning variant keeps the empty-field compat on kept messages"))
+  ;; a tool-call assistant message with no text is kept (content stays unset)
+  (let [msgs [{:role :assistant
+               :content []
+               :tool-calls [{:id "t1" :name "bash" :arguments {}}]}]
+        openai (@#'shared/openai-messages msgs)
+        reasoning (@#'shared/openai-messages-with-reasoning msgs)]
+    (t/is (= "t1" (-> openai first :tool_calls first :id)))
+    (t/is (nil? (:content (first openai)))
+          "content is not set to empty string")
+    (t/is (= "t1" (-> reasoning first :tool_calls first :id)))
+    (t/is (= "" (:reasoning_content (first reasoning))))))
+
 ;; ─── Bash result conversion (pi: convertToLlm bashExecution) ──────────────
 
 (t/deftest test-llm-bash-conversion
