@@ -65,6 +65,17 @@
     (t/is (str/includes? (row-text sel 0) "→") "the current model is selected")
     (t/is (str/includes? (row-text sel 0) "✓") "and marked with the checkmark")))
 
+(t/deftest test-scoped-current-model-selected
+  ;; scoped scope: the initial selection lands on the current model within
+  ;; the scoped list (pi loadModelsFromSnapshot uses the active list) — the
+  ;; all-models index must not be reused for the scoped list
+  (let [sel (selector :scoped [(model :p1 "b") (model :p2 "x")]
+                      :current (model :p2 "x"))]
+    (t/is (str/includes? (row-text sel 1) "→") "the current model is selected")
+    (t/is (str/includes? (row-text sel 1) "✓") "and marked")
+    (t/is (not (str/includes? (row-text sel 0) "→"))
+          "the first scoped row is not selected")))
+
 (t/deftest test-arrow-keys-move-selection
   ;; navigation must rebuild the rows (pi updateList), not just move the
   ;; state — the rendered selection arrow follows the selection

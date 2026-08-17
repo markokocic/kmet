@@ -15,7 +15,7 @@
             [kmet.app.ui.external-editor :refer [editor-text-get editor-text-get-expanded
                                                  editor-text-set! handle-external-editor]]
             [kmet.app.ui.fork-selector :refer [show-fork-selector]]
-            [kmet.app.ui.model-selector :refer [apply-model-switch! model-full-id
+            [kmet.app.ui.model-selector :refer [apply-model-switch!
                                                 resolve-model-ref scoped-or-available-models
                                                 show-model-selector show-scoped-models-selector
                                                 sync-footer-model!]]
@@ -28,7 +28,6 @@
             [kmet.tui.components.select-list :as select-list]
             [kmet.app.loop :as agent]
             [kmet.ai.models :as models]
-            [kmet.app.model-resolver :as resolver]
             [kmet.ai.auth :as auth]
             [kmet.app.session :as session]
             [kmet.app.session-export :as session-export]
@@ -37,6 +36,7 @@
             [kmet.app.keybindings :as app-kb]
             [kmet.tui.keybindings :as tui-kb]
             [kmet.config :as cfg]
+            [kmet.ai.api.shared :as shared]
             [kmet.app.skills :as skills]
             [kmet.libs.context :as context]
             [kmet.app.prompts :as prompts]
@@ -2597,16 +2597,11 @@
                        {:chat-history ch :tui t :cs-ref cs-ref
                         :pending-tool-comps pending-tool-comps}))
             ;; Session scoped model list for cycle-model! / the scoped-models
-            ;; selector (pi: resolveModelScope → session.scopedModels at
-            ;; startup — full "provider/id" refs so cycling can switch
+            ;; selector / the /model scope toggle (pi: resolveModelScope →
+            ;; session.scopedModels at startup — parsed.models ?? settings
+            ;; enabledModels, full "provider/id" refs so cycling can switch
             ;; providers)
-        _ (when (seq (:models config))
-            (let [{:keys [models warnings]}
-                  (resolver/resolve-model-scope-models (:models config)
-                                                       (models/get-models))]
-              (doseq [w warnings]
-                (binding [*out* *err*] (println "Warning:" w)))
-              (agent/set-scoped-models! ag (mapv model-full-id models))))
+        _ (agent/init-scoped-models! ag config)
         sp2 (spacer/make-spacer 1)
         ;; B.1: welcome header — ExpandableText with compact/full variants
         ;; (pi: builtInHeader), toggled by app.tools.expand
@@ -2794,6 +2789,24 @@
                                         (ui/chat-history-show-status! ch
                                                                       (str "Thinking blocks: " (if hidden? "hidden" "visible")))
                                         (tui/tui-request-render t))))
+      ;; pi: cycleThinkingLevel — Shift+Tab cycles through available levels
+      (editor/editor-set-on-action! ed "app.thinking.cycle"
+                                    (fn []
+                                      (let [ag @(:agent-state cs)
+                                            model (models/get-model @(:provider ag) @(:model ag))
+                                            levels (if model
+                                                     (shared/get-supported-thinking-levels model)
+                                                     [:off])]
+                                        (if (<= (count levels) 1)
+                                          (ui/chat-history-show-status! ch "Current model does not support thinking")
+                                          (let [current @(:thinking ag)
+                                                idx (or (first (keep-indexed (fn [i l] (when (= l current) i)) levels))
+                                                        0)
+                                                next-level (nth levels (mod (inc idx) (count levels)))]
+                                            (agent/set-thinking-level! ag next-level)
+                                            (sync-footer-model! cs)
+                                            (ui/chat-history-show-status! ch (str "Thinking level: " (name next-level)))
+                                            (tui/tui-request-render t))))))
       (editor/editor-set-on-action! ed "app.editor.external"
                                     (fn [] (handle-external-editor cs)))
       ;; B.3: Alt+Enter queues a follow-up (pi: handleFollowUp); Alt+Up
@@ -2812,7 +2825,9 @@
       (editor/editor-set-on-action! ed "app.model.cycleForward"
                                     (fn []
                                       (if (agent/cycle-model! @(:agent-state cs) 1)
-                                        (sync-footer-model! cs)
+                                        (do (cfg/set-default-model! @(:provider @(:agent-state cs))
+                                                                    @(:model @(:agent-state cs)))
+                                            (sync-footer-model! cs))
                                         (ui/chat-history-show-status!
                                          (:chat-history cs)
                                          (if (seq (agent/get-scoped-models @(:agent-state cs)))
@@ -2821,7 +2836,9 @@
       (editor/editor-set-on-action! ed "app.model.cycleBackward"
                                     (fn []
                                       (if (agent/cycle-model! @(:agent-state cs) -1)
-                                        (sync-footer-model! cs)
+                                        (do (cfg/set-default-model! @(:provider @(:agent-state cs))
+                                                                    @(:model @(:agent-state cs)))
+                                            (sync-footer-model! cs))
                                         (ui/chat-history-show-status!
                                          (:chat-history cs)
                                          (if (seq (agent/get-scoped-models @(:agent-state cs)))
@@ -3227,9 +3244,13 @@
          ;; setActiveTools)
          :set-model (fn [model]
                       (if (and model (models/has-configured-auth model))
-                        (let [ag @(:agent-state cs)]
+                        (let [ag @(:agent-state cs)
+                              old-model (models/get-model @(:provider ag) @(:model ag))]
                           (agent/set-provider! ag (:provider model))
                           (agent/set-model! ag (:id model))
+                          (agent/set-thinking-level!
+                           ag (agent/switch-thinking-level old-model model @(:thinking ag) nil))
+                          (cfg/set-default-model! (:provider model) (:id model))
                           (sync-footer-model! cs)
                           true)
                         false))

@@ -72,6 +72,8 @@
             [kmet.ai.auth :as auth]
             [kmet.app.session :as session]
             [kmet.ai.models :as models]
+            [kmet.ai.api.shared :as shared]
+            [kmet.app.model-resolver :as resolver]
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
             [kmet.debug :as debug]
@@ -1560,6 +1562,25 @@ Be precise and concise in your responses."}}]
   [agent]
   @(:scoped-models agent))
 
+(defn init-scoped-models!
+  "Seed the session scoped model list from the config at startup (pi:
+   parsed.models ?? settingsManager.getEnabledModels → resolveModelScope at
+   runtime creation): CLI/config :models patterns when set, else the settings
+   :enabled-models patterns. Patterns resolve against the catalog; unresolved
+   ones print a warning to stderr and are skipped (pi: no-match diagnostics).
+   Nothing set leaves the list empty — cycling falls back to all available
+   models and /model shows no scope toggle. Returns AGENT."
+  [agent config]
+  (when-let [patterns (or (seq (:models config))
+                          (seq (cfg/get-enabled-models config)))]
+    (let [{:keys [models warnings]}
+          (resolver/resolve-model-scope-models patterns (models/get-models))]
+      (doseq [w warnings]
+        (binding [*out* *err*] (println "Warning:" w)))
+      (set-scoped-models!
+       agent (mapv (fn [m] (str (name (:provider m)) "/" (:id m))) models))))
+  agent)
+
 (defn set-max-retries!
   "Set the auto-retry attempt limit live (pi: retry settings change — the
    /settings rows apply immediately). 0 disables auto-retry."
@@ -1570,6 +1591,8 @@ Be precise and concise in your responses."}}]
   "Set the auto-retry backoff base in ms live (pi: retry baseDelayMs)."
   [agent ms]
   (reset! (:base-delay-ms agent) ms))
+
+(declare switch-thinking-level set-thinking-level!)
 
 (defn- resolve-scoped-model
   "Resolve a scoped-list entry (full \"provider/id\" or bare id) to a Model
@@ -1598,9 +1621,11 @@ Be precise and concise in your responses."}}]
 
 (defn cycle-model!
   "Cycle to the next/previous model in the scoped model list (pi: cycleModel
-   → _cycleScopedModel / _cycleAvailableModel). The session scoped list
-   (set via /scoped-models, seeded from config :models) is used when
-   non-empty; otherwise all available models cycle. Entries are filtered to
+   → _cycleScopedModel / _cycleAvailableModel; kmet deviation — thinking
+   follows the switch-thinking-level rank rule instead of pi's keep-with-
+   clamp). The session scoped list (set via /scoped-models, seeded from
+   config :models / settings :enabled-models) is used when non-empty;
+   otherwise all available models cycle. Entries are filtered to
    authenticated models; a scoped entry may switch the provider. Returns the
    new model id, or nil when fewer than two models are available."
   [agent direction]
@@ -1617,11 +1642,14 @@ Be precise and concise in your responses."}}]
                                          models))
                     -1)
             previous @(:model agent)
-            next (nth models (mod (+ idx direction) (count models)))]
+            next (nth models (mod (+ idx direction) (count models)))
+            old-model (models/get-model current-provider previous)
+            new-thinking (switch-thinking-level old-model next @(:thinking agent) nil)]
         (reset! (:provider agent) (:provider next))
         (reset! (:model agent) (:id next))
         (when-let [sess (:session agent)]
           (session/append-model-change! sess (:provider next) (:id next)))
+        (set-thinking-level! agent new-thinking)
         (emit agent {:type :model-select
                      :model (:id next)
                      :previous-model previous
@@ -1638,6 +1666,41 @@ Be precise and concise in your responses."}}]
     (when-let [sess (:session agent)]
       (session/append-thinking-level-change! sess level))
     (emit agent {:type :thinking-level-select :level level})))
+
+(defn switch-thinking-level
+  "Thinking level when switching OLD-MODEL → NEW-MODEL (kmet-specific rule;
+   the rank mapping is a deliberate deviation from pi's keep-with-clamp):
+   the current level's rank among the old model's supported thinking levels
+   (highest = 1) maps to the same rank on the new model, clamped to the new
+   model's level count — an old highest stays the new highest, the old
+   second-highest becomes the new second-highest, and so on. With thinking
+   :off, a reasoning NEW-MODEL jumps to its highest level (pi parity); a
+   non-reasoning one stays :off. EXPLICIT-LEVEL wins when given (clamped to
+   the new model). Levels the old model can't express are clamped to its
+   range first; when there is no position to preserve (non-reasoning/unknown
+   old model), falls back to clamping CURRENT-LEVEL to the new model."
+  [old-model new-model current-level explicit-level]
+  (cond
+    explicit-level (shared/clamp-thinking-level new-model explicit-level)
+
+    (= current-level :off)
+    (if (:reasoning new-model)
+      (last (shared/get-supported-thinking-levels new-model))
+      :off)
+
+    :else
+    (let [old-think (vec (remove #{:off} (shared/get-supported-thinking-levels old-model)))
+          new-think (vec (remove #{:off} (shared/get-supported-thinking-levels new-model)))
+          old-effective (when (seq old-think)
+                          (shared/clamp-thinking-level old-model current-level))
+          i (when old-effective
+              (first (keep-indexed (fn [j l] (when (= l old-effective) j)) old-think)))]
+      (if (and i (seq new-think))
+        (let [rank (- (count old-think) i)                ;; 1 = highest
+              new-i (max 0 (min (dec (count new-think))
+                                (- (count new-think) rank)))]
+          (nth new-think new-i))
+        (shared/clamp-thinking-level new-model current-level)))))
 
 (defn set-system-prompt-override!
   "Set the per-run system prompt override (pi: _systemPromptOverride).

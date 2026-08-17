@@ -106,9 +106,9 @@
    defaults < user < project, with nested maps merged key-by-key (pi: project
    settings override global, nested objects merge).
    Returns merged map."
-  [& {:keys [no-env?]}]
-  (let [user-config (load-edn-file "~/.kmet/agent/settings.edn")
-        project-config (load-edn-file ".kmet/settings.edn")
+  [& {:keys [no-env? no-settings?]}]
+  (let [user-config (when-not no-settings? (load-edn-file "~/.kmet/agent/settings.edn"))
+        project-config (when-not no-settings? (load-edn-file ".kmet/settings.edn"))
         _ (auth/load-auth!)
         global-dir (expand-path "~/.kmet/agent")
         project-dir (str (fs/absolutize ".kmet"))
@@ -206,6 +206,14 @@
    enabled."
   [patterns]
   (save-setting! [:enabled-models] patterns))
+
+(defn set-default-model!
+  "Persist the default model and provider to the global settings file (pi:
+   settingsManager.setDefaultModelAndProvider). Called when the user picks
+   a model via /model, the selector, or Ctrl+P cycling."
+  [provider model-id]
+  (save-setting! [:provider] provider)
+  (save-setting! [:model] (str model-id)))
 
 (defn get-retry-settings
   "Retry settings (pi: settings-manager retry block — enabled, maxRetries,

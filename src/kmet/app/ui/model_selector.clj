@@ -87,25 +87,32 @@
    (count (distinct (map :provider (scoped-or-available-models @(:agent-state cs)))))))
 
 (defn apply-model-switch!
-  "Switch the agent's model (and optional thinking level), report the switch
-   in the chat, and sync the footer (pi setModel + showStatus — shared by
-   /model, the selector, and cycling)."
+  "Switch the agent's model (and optional explicit thinking level) with
+   position-preserving thinking (the kmet rank rule — agent/switch-thinking-
+   level: an old model's highest stays the new model's highest, second-
+   highest → second-highest, ...; pi diverges here by keeping the level
+   name clamped). Persists the selection as the new default (pi
+   settingsManager.setDefaultModelAndProvider), reports the switch in the
+   chat, and syncs the footer (pi setModel + showStatus — shared by /model,
+   the selector, and cycling)."
   [cs model thinking-level]
-  (let [ag @(:agent-state cs)]
+  (let [ag @(:agent-state cs)
+        old-model (models/get-model @(:provider ag) @(:model ag))
+        clamped (agent/switch-thinking-level old-model model @(:thinking ag) thinking-level)]
     (agent/set-provider! ag (:provider model))
     (agent/set-model! ag (:id model))
-    (when thinking-level
-      (agent/set-thinking-level! ag thinking-level))
+    (cfg/set-default-model! (:provider model) (:id model))
+    (agent/set-thinking-level! ag clamped)
     (chat-history/chat-history-add-message! (:chat-history cs)
                                             {:role :assistant
                                              :content (str "Switched to " (fmt-model (:provider model) (:id model))
-                                                           (when thinking-level
-                                                             (str " (thinking " (name thinking-level) ")")))})
+                                                           (when (not= clamped :off)
+                                                             (str " (thinking " (name clamped) ")")))})
     (sync-footer-model! cs)))
 
 ;; ─── ModelSelector component (pi ModelSelectorComponent) ───────────────────
 
-(declare model-refresh! filtered-items)
+(declare model-refresh! filtered-items models-equal?)
 
 (defcomponent ModelSelector nil
               [container search-input list-container state-atom
@@ -124,8 +131,18 @@
         ;; even when no scoped models exist, pi parity)
         (kb/matches-key kmgr data "tui.input.tab")
         (do (when (seq (:scoped-models st))
-              (swap! state-atom assoc :scope (if (= :all (:scope st)) :scoped :all))
-              (model-refresh! this))
+              (let [new-scope (if (= :all (:scope st)) :scoped :all)
+                    ;; pi setScope: reset selection to current model position
+                    new-active (if (= :scoped new-scope)
+                                 (:scoped-models st)
+                                 (:all-models st))
+                    cur (:current st)
+                    idx (or (first (keep-indexed
+                                    (fn [i m] (when (models-equal? cur (:model m)) i))
+                                    new-active))
+                            0)]
+                (swap! state-atom assoc :scope new-scope :selected-idx idx)
+                (model-refresh! this)))
             nil)
 
         ;; Navigation (pi tui.select.up/down — wraps; rebuilds the rows so
@@ -194,14 +211,12 @@
       (mapv (fn [m] {:model m}) active)
       (mapv (fn [m] {:model m})
             (fuzzy/fuzzy-filter active query
-                                (fn [m] (str (name (:provider m)) "/" (:id m)
-                                             " " (or (:name m) ""))))))))
-
-(defn- key-or
-  "The resolved key text for a keybinding id, or FALLBACK when unbound."
-  [id fallback]
-  (let [t (app-kb/key-text id)]
-    (if (seq t) t fallback)))
+                                (fn [m] (let [nm (:name m)
+                                              name-part (if nm (str " " nm) "")]
+                                          (str (name (:provider m)) " "
+                                               (name (:provider m)) "/" (:id m) " "
+                                               (name (:provider m)) " " (:id m)
+                                               name-part))))))))
 
 (defn- scope-text-str
   "Pi getScopeText — the active scope accented."
@@ -214,9 +229,12 @@
          (scope :all) (theme/fg th :muted " | ") (scope :scoped))))
 
 (defn- scope-hint-str
-  "Pi getScopeHintText — the Tab scope hint."
+  "Pi getScopeHintText — the Tab scope hint, styled with dim key + muted
+   description (pi keyHint + theme.fg muted)."
   []
-  (str (key-or "tui.input.tab" "tab") " scope (all/scoped)"))
+  (str (app-kb/key-hint "tui.input.tab" "scope")
+       (let [th (theme/get-current-theme)]
+         (theme/fg th :muted " (all/scoped)"))))
 
 (defn- model-refresh!
   "Rebuild the list rows and scope text from the current state (pi
@@ -317,9 +335,12 @@
       (when (seq search)
         (input/input-set-value! search-input search))
       ;; initial selection: the current model when present, else the top row
-      ;; (pi loadModelsFromSnapshot); a pre-filled search moves to the top
-      (let [idx (first (keep-indexed (fn [i m] (when (models-equal? current-model m) i))
-                                     sorted))]
+      ;; (pi loadModelsFromSnapshot — the index comes from the ACTIVE list:
+      ;; the scoped models when scoped, else all models); a pre-filled
+      ;; search moves to the top
+      (let [active (if (seq scoped-models) (vec scoped-models) sorted)
+            idx (first (keep-indexed (fn [i m] (when (models-equal? current-model m) i))
+                                     active))]
         (swap! st assoc :selected-idx (if (seq search) 0 (or idx 0))))
       (model-refresh! sel)
       sel)))

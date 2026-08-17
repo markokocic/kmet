@@ -25,7 +25,7 @@
 ;; ─── Load config ──────────────────────────────────────────────────────────
 
 (t/deftest test-load-config-defaults
-  (let [c (cfg/load-config :no-env? true)]
+  (let [c (cfg/load-config :no-env? true :no-settings? true)]
     (t/is (map? c))
     (t/is (= :opencode-go (:provider c)))
     (t/is (= "dark" (:theme c)))))

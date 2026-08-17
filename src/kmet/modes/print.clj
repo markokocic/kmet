@@ -5,7 +5,6 @@
             [babashka.fs :as fs]
             [kmet.app.loop :as agent]
             [kmet.ai.models :as models]
-            [kmet.app.model-resolver :as resolver]
             [kmet.app.skills :as skills]
             [kmet.libs.context :as context]
             [kmet.app.prompts :as prompts]
@@ -37,12 +36,7 @@
             :max-retries (let [retry (cfg/get-retry-settings config)]
                            (if (:enabled retry) (:max-retries retry) 0))
             :base-delay-ms (:base-delay-ms (cfg/get-retry-settings config)))
-        _ (when (seq (:models config))
-            (let [{:keys [models]}
-                  (resolver/resolve-model-scope-models (:models config)
-                                                       (models/get-models))]
-              (agent/set-scoped-models!
-               ag (mapv (fn [m] (str (name (:provider m)) "/" (:id m))) models))))
+        _ (agent/init-scoped-models! ag config)
         result-promise (promise)
         ;; pi: session.prompt expands skill commands + prompt templates
         message (-> (str/join " " messages)

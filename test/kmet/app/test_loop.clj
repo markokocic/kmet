@@ -1574,6 +1574,100 @@
   (let [agent (loop/make-agent-state :model "a")]
     (t/is (nil? (loop/cycle-model! agent 1)) "no scoped models and no available models → nil")))
 
+(t/deftest test-loop-init-scoped-models
+  ;; pi: parsed.models ?? settingsManager.getEnabledModels — CLI/config
+  ;; :models patterns win, else settings :enabled-models seed the session
+  ;; scoped list at startup (the /model all/scoped toggle and Ctrl+P cycling
+  ;; depend on it). Unresolved patterns are skipped with a stderr warning.
+  (with-test-provider
+    (fn []
+      ;; config :models wins over :enabled-models (pi: parsed.models ?? …)
+      (let [agent (loop/init-scoped-models!
+                   (loop/make-agent-state)
+                   {:models ["test-prov/b"] :enabled-models ["test-prov/a"]})]
+        (t/is (= ["test-prov/b"] @(:scoped-models agent))))
+      ;; :enabled-models falls back when :models is unset
+      (let [agent (loop/init-scoped-models!
+                   (loop/make-agent-state)
+                   {:enabled-models ["test-prov/a" "test-prov/c"]})]
+        (t/is (= ["test-prov/a" "test-prov/c"] @(:scoped-models agent))))
+      ;; no patterns → list stays empty (no scoping)
+      (let [agent (loop/init-scoped-models!
+                   (loop/make-agent-state)
+                   {:enabled-models nil})]
+        (t/is (= [] @(:scoped-models agent))))
+      ;; unresolved patterns are skipped with a stderr warning
+      (let [agent (loop/init-scoped-models!
+                   (loop/make-agent-state)
+                   {:enabled-models ["test-prov/a" "ghost/model"]})]
+        (t/is (= ["test-prov/a"] @(:scoped-models agent)))))))
+
+(defn- thinking-model
+  "Reasoning model supporting exactly the non-off LEVELS (pi
+   getSupportedThinkingLevels): levels absent from the set are pinned to nil
+   in the thinking-level-map; :xhigh/:max need a non-nil entry to be
+   supported."
+  [id levels]
+  (let [supported (set levels)]
+    (models/map->Model
+     {:id id :name (str "Model " id) :provider :test-prov
+      :api :openai-completions :base-url "https://test"
+      :reasoning true :input [:text]
+      :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+      :context-window 1000 :max-tokens 100
+      :thinking-level-map
+      (into {}
+            (concat
+             ;; exclude non-:xhigh/:max levels not in the set
+             (for [l [:minimal :low :medium :high]
+                   :when (not (contains? supported l))]
+               [l nil])
+             ;; :xhigh/:max require a non-nil map entry to be enabled
+             (for [l [:xhigh :max]
+                   :when (contains? supported l)]
+               [l (name l)])))})))
+
+(t/deftest test-loop-switch-thinking-level
+  ;; kmet rank rule (deliberately not pi's keep-with-clamp): the current
+  ;; level's position among the old model's levels maps to the same position
+  ;; on the new model, clamped to the new model's level count.
+  (let [a (thinking-model "a" [:low :medium :high])     ;; 3 levels
+        b (thinking-model "b" [:low :medium :high :max]) ;; 4 levels
+        c (thinking-model "c" [:low :high])             ;; 2 levels
+        d (thinking-model "d" [:max])]                  ;; 1 level
+    (t/is (= :max (loop/switch-thinking-level a b :high nil))
+          "old highest → new highest")
+    (t/is (= :high (loop/switch-thinking-level a b :medium nil))
+          "old second-highest → new second-highest")
+    (t/is (= :medium (loop/switch-thinking-level b a :high nil))
+          "old second-highest (4 levels) → new second-highest (3 levels)")
+    (t/is (= :low (loop/switch-thinking-level b c :medium nil))
+          "rank clamps to the new model's level count (3rd of 4 → last of 2)")
+    (t/is (= :max (loop/switch-thinking-level b d :medium nil))
+          "rank clamps to the single available level")
+    (t/is (= :max (loop/switch-thinking-level a b :off nil))
+          ":off jumps to the reasoning model's highest (pi parity)")
+    (t/is (= :off (loop/switch-thinking-level a (models/map->Model
+                                                 {:id "n" :reasoning false})
+                                              :off nil))
+          "non-reasoning new model keeps :off")
+    (t/is (= :high
+             (loop/switch-thinking-level
+              a
+              (models/map->Model {:id "no-off" :provider :test-prov
+                                  :reasoning true :api :openai-completions
+                                  :base-url "https://test"
+                                  :cost {:input 0 :output 0 :cache-read 0
+                                         :cache-write 0}
+                                  :context-window 1000 :max-tokens 100
+                                  :thinking-level-map {:off nil}})
+              :off nil))
+          "a model that can't disable thinking gets its highest")
+    (t/is (= :low (loop/switch-thinking-level a b :medium :low))
+          "explicit level wins (clamped)")
+    (t/is (= :off (loop/switch-thinking-level a b :off :off))
+          "explicit :off wins when given")))
+
 (t/deftest test-loop-retry-setters
   (let [agent (loop/make-agent-state)]
     (t/is (= 3 @(:max-retries agent)))
