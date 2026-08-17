@@ -58,6 +58,43 @@
     (swap! (:messages agent) conj {:role :user :content "hi"})
     (t/is (= 1 (count (loop/get-context agent))))))
 
+(t/deftest test-loop-drop-incomplete-tool-calls
+  ;; A corrupted session (assistant tool calls without their results, or
+  ;; orphaned tool results) must be repaired before it reaches a provider
+  ;; that requires a tool message per tool_call_id.
+  (let [tc-msg (fn [& ids]
+                 {:role :assistant :content [{:type :text :text "hi"}]
+                  :tool-calls (mapv (fn [id] {:id id :name "bash" :arguments {}})
+                                    ids)})
+        tr-msg (fn [id]
+                 {:role :tool :content [{:type :tool_result :tool_use_id id :content "out"}]})
+        user-msg {:role :user :content [{:type :text :text "q"}]}
+        healthy [(tc-msg "a") (tr-msg "a") user-msg]]
+    ;; healthy conversation passes through unchanged
+    (t/is (= healthy (loop/drop-incomplete-tool-calls healthy)))
+    ;; unanswered tool calls are dropped from their assistant message
+    (t/is (= [(tc-msg "a") (tr-msg "a")]
+             (loop/drop-incomplete-tool-calls [(tc-msg "a" "b") (tr-msg "a")])))
+    ;; orphaned tool results (no matching tool call) are dropped
+    (t/is (= [(tc-msg "a") (tr-msg "a")]
+             (loop/drop-incomplete-tool-calls [(tr-msg "zzz") (tc-msg "a") (tr-msg "a")])))
+    ;; an assistant message left without content and without tool calls is
+    ;; dropped entirely
+    (t/is (= []
+             (loop/drop-incomplete-tool-calls
+              [{:role :assistant :content []
+                :tool-calls [{:id "a" :name "bash" :arguments {}}]}])))
+    ;; text/thinking on the assistant message survives the tool-call drop
+    (t/is (= [{:role :assistant :content [] :thinking "hmm"}]
+             (loop/drop-incomplete-tool-calls
+              [{:role :assistant :content [] :thinking "hmm"
+                :tool-calls [{:id "a" :name "bash" :arguments {}}]}])))
+    ;; a second batch's tool calls don't answer the first batch's orphans
+    (t/is (= [(tc-msg "a") (tr-msg "a") user-msg
+              {:role :assistant :content [{:type :text :text "hi"}]}]
+             (loop/drop-incomplete-tool-calls
+              [(tc-msg "a") (tr-msg "a") user-msg (tc-msg "b")])))))
+
 (t/deftest test-loop-restore-session-context
   ;; Restoring a session rebuilds the agent context from the session branch —
   ;; steered and follow-up user messages come back for the next LLM call.
@@ -184,6 +221,33 @@
           (t/is (= :off @(:thinking agent)))
           (t/is (= [:user :assistant] (mapv :role (loop/get-context agent)))
                 "change entries are metadata — not context")))
+      (finally
+        (fs/delete-tree dir)))))
+
+(t/deftest test-loop-restore-session-context-drops-incomplete-tool-calls
+  ;; A session interrupted mid-tool-batch (process death between the assistant
+  ;; tool-call message and its results) resumes without the dangling tool
+  ;; calls — restore drops them so the next provider request stays valid.
+  (let [dir (str (fs/create-dirs (fs/path "target" "test-loop-restore-dangling")))]
+    (try
+      (let [sess (session/create-session dir)]
+        (session/append-entry sess {:role :user :content [{:type :text :text "hello"}]})
+        (session/append-entry sess {:role :assistant
+                                    :content [{:type :text :text "running tools"}]
+                                    :tool-calls [{:id "a" :name "bash" :arguments {}}
+                                                 {:id "b" :name "bash" :arguments {}}]})
+        ;; only one result was recorded before the crash
+        (session/append-entry sess {:role :tool
+                                    :content [{:type :tool_result :tool_use_id "a" :content "out"}]})
+        (let [loaded (session/load-session (:file sess))
+              agent (loop/make-agent-state :session loaded)]
+          (loop/restore-session-context! agent)
+          (let [ctx (loop/get-context agent)
+                assistant (second ctx)]
+            (t/is (= [:user :assistant :tool] (mapv :role ctx)))
+            (t/is (= [{:id "a" :name "bash" :arguments {}}]
+                     (:tool-calls assistant))
+                  "the unanswered tool call is dropped on restore"))))
       (finally
         (fs/delete-tree dir)))))
 

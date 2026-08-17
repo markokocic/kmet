@@ -243,7 +243,65 @@ Be precise and concise in your responses."}}]
     (:truncation result) (assoc :truncation (:truncation result))
     (:details result) (assoc :details (:details result))))
 
-;; ─── Error classification (auto-retry) ─────────────────────────────────────
+(defn drop-incomplete-tool-calls
+  "Defensive repair of a corrupted conversation: strict providers (OpenAI-style,
+   Mistral, Anthropic, Gemini) reject an assistant message whose tool calls are
+   not all answered by tool result messages (and orphaned tool results with no
+   matching tool call). Sessions can end up that way when the process dies
+   between recording an assistant tool-call message and its results, or when a
+   tool batch is interrupted mid-run. Drops the unmatched tool calls from their
+   assistant message (keeping any text/thinking) and drops orphaned tool
+   results; an assistant message left with no content at all is dropped.
+   Healthy pi-style conversations never need this — pi always records a tool
+   result per call (failToolCallsFromTruncatedMessage attaches error results)
+   — so it only triggers on corruption.
+
+   Returns a new message vector; the input is not mutated."
+  [messages]
+  (let [answered (volatile! #{})
+        ;; Pass 1: which assistant tool-call ids actually have a following tool
+        ;; result. Non-tool messages close the current batch; an assistant tool
+        ;; message opens a new one.
+        _ (loop [pending #{} ;; tool-call ids of the open batch still awaiting a result
+                 msgs (seq messages)]
+            (when-let [m (first msgs)]
+              (let [role (:role m)]
+                (cond
+                  (= role :tool)
+                  (let [id (-> m :content first :tool_use_id)]
+                    (if (and id (contains? pending id))
+                      (do (vswap! answered conj id)
+                          (recur (disj pending id) (next msgs)))
+                      ;; orphaned tool result — not answered
+                      (recur pending (next msgs))))
+                  (and (= role :assistant) (seq (:tool-calls m)))
+                  ;; new batch; the previous batch's leftover pending ids die
+                  (recur (into #{} (keep :id) (:tool-calls m)) (next msgs))
+                  :else
+                  ;; closes the current batch
+                  (recur #{} (next msgs))))))]
+    (into []
+          (keep (fn [m]
+                  (let [role (:role m)]
+                    (cond
+                      (= role :tool)
+                      (when (contains? @answered (-> m :content first :tool_use_id))
+                        m)
+                      (= role :assistant)
+                      (if-let [tcs (seq (:tool-calls m))]
+                        (let [kept (filterv #(contains? @answered (:id %)) tcs)]
+                          (if (seq kept)
+                            (assoc m :tool-calls kept)
+                            ;; no tool call survived — keep the message only when
+                            ;; it still carries text or thinking (empty assistant
+                            ;; messages are rejected by providers)
+                            (when (or (seq (str/trim (or (:thinking m) "")))
+                                      (some (fn [b] (seq (or (:text b) "")))
+                                            (:content m)))
+                              (dissoc m :tool-calls))))
+                        m)
+                      :else m))))
+          messages)))
 
 (def ^:private non-retryable-error-regex
   "Combined regex for quota/billing/account-limit error messages — never retried.
@@ -451,7 +509,10 @@ Be precise and concise in your responses."}}]
    on the next pending future (max 100ms) instead of a fixed sleep, so fast
    tools finish without artificial delay. No progress pings are emitted —
    the UI updates only on real tool output (pi: agent-loop
-   executePreparedToolCall)."
+   executePreparedToolCall). A failed future turns into an error result so
+   the batch still records a result per tool call (pi:
+   failToolCallsFromTruncatedMessage) instead of leaving the assistant
+   tool calls dangling in the saved context."
   [futures]
   (let [results (atom {})]
     (loop []
@@ -460,7 +521,11 @@ Be precise and concise in your responses."}}]
           @results
           (do (doseq [[tc-id f] remaining]
                 (when-not (= :pending (deref f 0 :pending))
-                  (swap! results assoc tc-id @f)))
+                  (swap! results assoc tc-id
+                         (try @f
+                              (catch Exception e
+                                {:content (str "Error executing tool: " (ex-message e))
+                                 :is-error true})))))
               (when-let [[_ f] (first (filter (fn [[_ f]] (= :pending (deref f 0 :pending)))
                                               remaining))]
                 (deref f 100 :pending))
@@ -717,6 +782,10 @@ Be precise and concise in your responses."}}]
         ;; Display-only :info messages (injected by before-agent-start hooks)
         ;; never reach the provider — they exist for the UI/session only.
         messages (into [] (remove #(= :info (:role %))) messages)
+        ;; Defensive: drop tool calls/results left dangling by a corrupted
+        ;; session (process death between recording an assistant tool-call
+        ;; message and its results) — strict providers reject those.
+        messages (drop-incomplete-tool-calls messages)
         messages (if system
                    (into [{:role :system :content [{:type :text :text system}]}]
                          (vec messages))
@@ -978,7 +1047,8 @@ Be precise and concise in your responses."}}]
   [agent]
   (when-let [sess (:session agent)]
     (reset! (:messages agent)
-            (vec (mapcat session/context-messages (session/build-context sess))))))
+            (drop-incomplete-tool-calls
+             (vec (mapcat session/context-messages (session/build-context sess)))))))
 
 (defn compact-context!
   "LLM-based compaction (pi: prepareCompaction → compact): summarize the
@@ -1102,7 +1172,7 @@ Be precise and concise in your responses."}}]
    emit :context-replaced so the UI can mirror the new context
    (pi: prepareNextTurnWithContext context replacement)."
   [agent messages]
-  (let [msgs (vec messages)]
+  (let [msgs (drop-incomplete-tool-calls (vec messages))]
     (reset! (:messages agent) msgs)
     (when-let [sess (:session agent)]
       ;; Rebuild the session as a fresh linear branch mirroring the new
@@ -1477,7 +1547,8 @@ Be precise and concise in your responses."}}]
   [agent]
   (when-let [sess (:session agent)]
     (reset! (:messages agent)
-            (vec (mapcat session/context-messages (session/build-context sess))))))
+            (drop-incomplete-tool-calls
+             (vec (mapcat session/context-messages (session/build-context sess)))))))
 
 (defn apply-session-settings!
   "Apply the session-derived model/thinking to the agent state (pi: sdk.ts
