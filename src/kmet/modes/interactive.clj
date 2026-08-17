@@ -2549,10 +2549,10 @@
             :keep-recent-tokens (or (:keep-recent-tokens config) 20000)
             :http-idle-timeout-ms (:http-idle-timeout-ms config)
             :thinking (let [model-rec (models/get-model provider model)
-                             raw-level (:thinking config :off)]
-                         (if (:reasoning model-rec)
-                           (shared/clamp-thinking-level model-rec raw-level)
-                           raw-level))
+                            raw-level (:thinking config :off)]
+                        (if (:reasoning model-rec)
+                          (shared/clamp-thinking-level model-rec raw-level)
+                          raw-level))
             ;; pi: retry settings (settings.edn :retry block — enabled gates
             ;; max-retries to 0)
             :max-retries (let [retry (cfg/get-retry-settings config)]
