@@ -181,6 +181,15 @@
         onboarding (th/dim "kmet can explain its own features. Ask it how to use or extend kmet.")]
     (str (fmt-header-logo) "\n" expanded-instructions "\n\n" onboarding)))
 
+(defn- update-editor-border-color!
+  "Update the editor border color to reflect the given thinking LEVEL.
+   Pi: updateEditorBorderColor — sets borderColor based on session.thinkingLevel."
+  [cs level]
+  (let [config (:config cs)
+        theme (cfg/get-theme config)]
+    (reset! (:border-fn (:editor cs))
+            (th/get-thinking-border-color theme level))))
+
 (defn- update-footer!
   "Sync the footer's session data source and request a re-render. The
    footer's model/provider/thinking live in the fdp atoms (set once at
@@ -2618,10 +2627,13 @@
         pm (ui/make-pending-messages
             :hint (fmt-key-display (app-kb/key-text "app.message.dequeue")))
         ;; B.5: editor dynamic height — max(5, rows*0.3) via :terminal-rows;
-        ;; the fixed :height fallback stays at the default 12
+        ;; the fixed :height fallback stays at the default 12;
+        ;; border color reflects the current thinking level (pi: updateEditorBorderColor)
         ed (tui/make-editor :padding-x 0
                             :terminal-rows (fn [] (term/rows @(:terminal t)))
-                            :border-fn (fn [c] (th/dim c)))
+                            :border-fn (th/get-thinking-border-color
+                                        (cfg/get-theme config)
+                                        (or @(:thinking ag) :off)))
         ;; B.6: footer data provider + footer (pi: FooterComponent; the
         ;; model line wraps to its own line when the stats line is too narrow)
         fdp (ui/make-footer-data-provider
@@ -2810,6 +2822,7 @@
                                             (agent/set-thinking-level! ag next-level)
                                             (cfg/save-setting! [:thinking] next-level)
                                             (sync-footer-model! cs)
+                                            (update-editor-border-color! cs next-level)
                                             (ui/chat-history-show-status! ch (str "Thinking level: " (name next-level)))
                                             (tui/tui-request-render t))))))
       (editor/editor-set-on-action! ed "app.editor.external"
@@ -3253,17 +3266,21 @@
                               old-model (models/get-model @(:provider ag) @(:model ag))]
                           (agent/set-provider! ag (:provider model))
                           (agent/set-model! ag (:id model))
-                          (agent/set-thinking-level!
-                           ag (agent/switch-thinking-level old-model model @(:thinking ag) nil))
-                          (cfg/set-default-model! (:provider model) (:id model))
-                          (sync-footer-model! cs)
+                          (let [new-thinking (agent/switch-thinking-level old-model model @(:thinking ag) nil)]
+                            (agent/set-thinking-level! ag new-thinking)
+                            (cfg/set-default-model! (:provider model) (:id model))
+                            (sync-footer-model! cs)
+                            (update-editor-border-color! cs new-thinking)
+                            (tui/tui-request-render (:tui cs)))
                           true)
                         false))
          :set-thinking-level (fn [level]
                                (when (contains? #{:off :minimal :low :medium
                                                   :high :xhigh :max} level)
                                  (agent/set-thinking-level! @(:agent-state cs) level)
-                                 (sync-footer-model! cs))
+                                 (sync-footer-model! cs)
+                                 (update-editor-border-color! cs level)
+                                 (tui/tui-request-render (:tui cs)))
                                nil)
          :get-thinking-level (fn []
                                (agent/get-thinking-level @(:agent-state cs)))

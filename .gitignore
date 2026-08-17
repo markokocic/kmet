@@ -2,6 +2,7 @@
 /target
 /classes
 /checkouts
+extensions/clojure/target/
 pom.xml
 pom.xml.asc
 *.jar
