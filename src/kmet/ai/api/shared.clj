@@ -125,20 +125,17 @@
               level)))))
 
 (defn clamp-thinking-level
-  "pi clampThinkingLevel: the requested level when supported, else the
-   nearest supported level (searching up from the request, then down), else
-   the first supported level."
+  "The requested level when supported; :off stays :off; nil or unsupported
+   levels clamp to the highest supported level."
   [model level]
   (let [available (get-supported-thinking-levels model)]
-    (if (some #{level} available)
-      level
-      (let [idx (first (keep-indexed (fn [i l] (when (= l level) i)) thinking-levels))]
-        (if (nil? idx)
-          (or (first available) :off)
-          (or (first (filter (set available) (drop idx thinking-levels)))
-              (first (filter (set available) (reverse (take idx thinking-levels))))
-              (first available)
-              :off))))))
+    (cond
+      ;; Explicit :off — respect it
+      (= level :off) :off
+      ;; Level is supported — use it
+      (some #{level} available) level
+      ;; Nil or unsupported — highest supported (or :off if nothing else)
+      :else (or (last available) :off))))
 
 (defn effort-value
   "Wire reasoning_effort string for a level: the model's mapped value, else

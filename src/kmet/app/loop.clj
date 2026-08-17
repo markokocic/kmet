@@ -1194,7 +1194,12 @@ Be precise and concise in your responses."}}]
           (reset! (:model agent) m)
           (emit agent {:type :model-select :model m :previous-model previous :source :set}))))
     (when-let [s (:system update)] (reset! (:system agent) s))
-    (when-let [th (:thinking update)] (reset! (:thinking agent) th))
+    (when-let [th (:thinking update)]
+      (let [model-rec (models/get-model @(:provider agent) @(:model agent))
+            clamped (if (:reasoning model-rec)
+                      (shared/clamp-thinking-level model-rec th)
+                      th)]
+        (reset! (:thinking agent) clamped)))
     (when-let [o (:system-prompt-override update)]
       (reset! (:system-prompt-override agent) o))
     (when-let [c (:context update)] (replace-context! agent c))))
@@ -1577,7 +1582,13 @@ Be precise and concise in your responses."}}]
         (reset! (:provider agent) provider)
         (vreset! changed true))
       (when thinking-recorded?
-        (reset! (:thinking agent) thinking-level)
+        ;; Clamp the restored thinking level to the current model's capabilities
+        ;; (only for reasoning models; non-reasoning models keep the value as-is)
+        (let [model-rec (models/get-model @(:provider agent) @(:model agent))
+              clamped (if (:reasoning model-rec)
+                        (shared/clamp-thinking-level model-rec thinking-level)
+                        thinking-level)]
+          (reset! (:thinking agent) clamped))
         (vreset! changed true))
       @changed)))
 

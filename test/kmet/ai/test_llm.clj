@@ -690,14 +690,16 @@
 
 (t/deftest test-clamp-thinking-level
   (let [deepseek (tmodel :tlm {:minimal nil :low nil :medium nil :high "high" :max "max"})]
-    (t/is (= :high (@#'shared/clamp-thinking-level deepseek :low))
-          "unsupported levels clamp up to the nearest supported")
+    (t/is (= :max (@#'shared/clamp-thinking-level deepseek :low))
+          "unsupported levels clamp to the highest supported")
     (t/is (= :max (@#'shared/clamp-thinking-level deepseek :max)))
     (t/is (= :off (@#'shared/clamp-thinking-level deepseek :off)))
     (t/is (= :max (@#'shared/clamp-thinking-level deepseek :xhigh))
-          "xhigh unsupported → clamps up to :max"))
+          "xhigh unsupported → clamps to :max"))
   (t/is (= :high (@#'shared/clamp-thinking-level (tmodel :tlm nil) :max))
         "no map → :max clamps to :high")
+  (t/is (= :high (@#'shared/clamp-thinking-level (tmodel :tlm nil) nil))
+        "nil → clamps to highest supported")
   (t/is (= :off (@#'shared/clamp-thinking-level (tmodel :reasoning false) :high))
         "non-reasoning model → everything clamps to :off"))
 
