@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-16T17:43:20Z"
+ :generated-at "2026-08-17T07:16:16Z"
  :provider {:id :minimax
             :name "MiniMax"
             :env-vars ["MINIMAX_API_KEY"]

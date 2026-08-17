@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-16T17:43:20Z"
+ :generated-at "2026-08-17T07:16:16Z"
  :provider {:id :cloudflare-workers-ai
             :name "Cloudflare Workers AI"
             :env-vars ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"]
@@ -22,7 +22,7 @@
                          :xhigh nil}
     :input [:text]
     :cost {:input 0.44 :output 1.32 :cache-read 0.014 :cache-write 0}
-    :context-window 1048576
+    :context-window 1310720
     :max-tokens 1048576
     :compat {:supports-store false
              :supports-developer-role false
