@@ -6,95 +6,11 @@
 
 (ns edit-tool
   (:require [babashka.fs :as fs]
-            [babashka.process :as proc]
-            [cljfmt.core :as fmt]
             [clojure.string :as str]
+            [edit-util :as util]
             [rewrite-clj.node :as n]
             [rewrite-clj.parser :as p]
-            [rewrite-clj.zip :as z])
-  (:import [java.util UUID]))
-
-;; ═══════════════════════════════════════════════════════════════════════════════
-;; File I/O (UTF-8)
-;; ═══════════════════════════════════════════════════════════════════════════════
-
-(defn- slurp-utf8 [f]
-  (slurp f :encoding "UTF-8"))
-
-(defn- spit-utf8 [f content]
-  (spit f content :encoding "UTF-8"))
-
-;; ═══════════════════════════════════════════════════════════════════════════════
-;; Lint
-;; ═══════════════════════════════════════════════════════════════════════════════
-
-(defn- lint-repair
-  "Returns [code false]. Delimiter auto-repair is unavailable: it needs the
-   parinfer JVM lib, and kmet extensions can't load third-party classes —
-   broken delimiters surface as an error downstream instead."
-  [code]
-  [code false])
-
-;; ═══════════════════════════════════════════════════════════════════════════════
-;; Diff (shell diff via babashka.process)
-;; ═══════════════════════════════════════════════════════════════════════════════
-
-(defn- generate-unified-diff
-  "Unified diff via /usr/bin/diff -u.  Returns diff string or nil."
-  [old-content new-content]
-  (when (not= old-content new-content)
-    (let [id    (str (UUID/randomUUID))
-          dir   (fs/temp-dir)
-          old-f (fs/file dir (str id "-old.clj"))
-          new-f (fs/file dir (str id "-new.clj"))]
-      (try
-        (spit-utf8 old-f old-content)
-        (spit-utf8 new-f new-content)
-        (let [{:keys [out]} (proc/shell {:out :string :err :string}
-                                        "diff" "-u"
-                                        "--label" "original" "--label" "revised"
-                                        (str old-f) (str new-f))]
-          (when-not (str/blank? out) out))
-        (finally
-          (fs/delete old-f)
-          (fs/delete new-f))))))
-
-;; ═══════════════════════════════════════════════════════════════════════════════
-;; Formatting (cljfmt)
-;; ═══════════════════════════════════════════════════════════════════════════════
-
-(def ^:private fmt-opts
-  "Matches clojure-mcp default-formatting-options."
-  {:indentation?                          true
-   :remove-surrounding-whitespace?        true
-   :remove-trailing-whitespace?           true
-   :insert-missing-whitespace?            true
-   :remove-consecutive-blank-lines?       true
-   :remove-multiple-non-indenting-spaces? true
-   :split-keypairs-over-multiple-lines?   false
-   :sort-ns-references?                   false
-   :function-arguments-indentation        :community
-   :indents                               fmt/default-indents})
-
-(defn- format-source-string [s]
-  (try (fmt/reformat-string s fmt-opts)
-       (catch Exception _ s)))
-
-(defn- re-indent-to-column [form-str target-col]
-  (if (<= target-col 1)
-    form-str
-    (let [lines      (str/split form-str #"\n" -1)
-          indent-str (apply str (repeat (dec target-col) " "))]
-      (str/join "\n"
-                (cons (first lines)
-                      (map (fn [l] (if (str/blank? l) l (str indent-str l)))
-                           (rest lines)))))))
-
-(defn- format-form-in-isolation [form-str target-col]
-  (try
-    (let [formatted (fmt/reformat-string form-str fmt-opts)]
-      (re-indent-to-column formatted target-col))
-    (catch Exception _ form-str)))
+            [rewrite-clj.zip :as z]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Zipper: form matching
@@ -143,8 +59,9 @@
 (defn- find-top-level-form
   ([zloc tag dname] (find-top-level-form zloc tag dname 3))
   ([zloc tag dname max-depth]
-   (let [similar (atom [])
-         queue   (atom [[zloc 0]])]
+   (let [similar   (atom [])
+         queue     (atom [[zloc 0]])
+         base-name (first (parse-form-name dname))]
      (letfn [(collect-similar [loc]
                (try
                  (let [sexpr (z/sexpr loc)]
@@ -153,7 +70,7 @@
                            fname (second sexpr)]
                        (when (and (symbol? ftag) (symbol? fname)
                                   (tag-match? tag (name ftag))
-                                  (= (name fname) dname))
+                                  (= (name fname) base-name))
                          (swap! similar conj {:form-name     dname
                                               :qualified-name fname
                                               :tag            ftag})))))
@@ -179,26 +96,9 @@
 ;; Zipper: edit operations
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
-(defn- walk-back-to-non-comment [zloc]
-  (z/find-next zloc z/prev*
-               (fn [z] (not (#{:whitespace :comment} (n/tag (z/node z)))))))
-
-(defn- remove-consecutive-comments [zloc]
-  (if (n/whitespace-or-comment? (z/node zloc))
-    (recur (-> zloc z/remove* z/next*))
-    zloc))
-
-(defn- replace-form [form-zloc content-str]
-  (if (-> content-str str/trim (str/starts-with? ";"))
-    (-> form-zloc
-        walk-back-to-non-comment z/next*
-        remove-consecutive-comments
-        (z/replace (p/parse-string-all content-str)))
-    (z/replace form-zloc (p/parse-string-all content-str))))
-
 (defn- insert-before-form [zloc content-str]
   (-> zloc
-      walk-back-to-non-comment z/next*
+      util/walk-back-to-non-comment z/next*
       (z/insert-left* (p/parse-string-all "\n\n"))
       z/left
       (z/insert-left* (p/parse-string-all content-str))
@@ -218,7 +118,7 @@
        :message         (str "Could not find form '" dname "' of type '" tag "'")
        :similar-matches similar-matches}
       (let [updated (case edit-type
-                      :replace       (replace-form zloc content-str)
+                      :replace       (util/replace-form zloc content-str)
                       :insert-before (insert-before-form zloc content-str)
                       :insert-after  (insert-after-form zloc content-str))]
         {:zloc updated :similar-matches similar-matches}))))
@@ -229,7 +129,7 @@
 
 (defn- extract-dispatch-from-defmethod [source-str]
   (try
-    (let [zloc (z/of-string source-str)
+    (let [zloc  (z/of-string source-str)
           sexpr (z/sexpr zloc)]
       (when (and (list? sexpr)
                  (= (first sexpr) 'defmethod)
@@ -299,14 +199,13 @@
       :else
       (try
         (let [;; 1. Lint-repair replacement content
-              [content-fixed repaired?] (lint-repair content)
-              content' (if repaired? content-fixed content)
+              content' (first (util/lint-repair content))
 
               ;; 2. Enhance defmethod name
               enhanced-name (enhance-defmethod-name form_type form_identifier content')
 
               ;; 3. Load source
-              original (slurp-utf8 file_path)
+              original (util/slurp-utf8 file_path)
 
               ;; 4. Parse source into zipper
               zloc (z/of-string original {:track-position? true})
@@ -316,13 +215,13 @@
           (if (:error result)
             (let [msg     (:message result)
                   similar (:similar-matches result)]
-              {:content (str msg (format-similar-matches similar))
+              {:content  (str msg (format-similar-matches similar))
                :is-error true})
             (let [found-zloc (:zloc result)
                   form-col   (second (z/position found-zloc))
                   ;; 6. Partial format
                   content''  (if form-col
-                               (format-form-in-isolation content' form-col)
+                               (util/format-form-in-isolation content' form-col)
                                content')
                   ;; 7. Re-edit with formatted content
                   zloc-full  (z/of-string original {:track-position? true})
@@ -332,9 +231,9 @@
                 {:content (str "Internal error: " (:message result2)) :is-error true}
                 ;; 8. Format whole file + write
                 (let [new-source (z/root-string (:zloc result2))
-                      formatted  (format-source-string new-source)]
-                  (spit-utf8 file_path formatted)
-                  (let [diff-str (generate-unified-diff original formatted)]
+                      formatted  (util/format-source-string new-source)]
+                  (util/spit-utf8 file_path formatted)
+                  (let [diff-str (util/generate-unified-diff original formatted)]
                     {:content  (if diff-str
                                  (str "Edit applied.\n\n" diff-str)
                                  "Edit applied — no visible diff.")
