@@ -2808,6 +2808,7 @@
                                                         0)
                                                 next-level (nth levels (mod (inc idx) (count levels)))]
                                             (agent/set-thinking-level! ag next-level)
+                                            (cfg/save-setting! [:thinking] next-level)
                                             (sync-footer-model! cs)
                                             (ui/chat-history-show-status! ch (str "Thinking level: " (name next-level)))
                                             (tui/tui-request-render t))))))
