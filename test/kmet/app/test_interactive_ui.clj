@@ -143,7 +143,8 @@
               :tui nil}]
       (with-redefs [auth/configured? (fn [_] true)
                     chat-history/chat-history-add-message! (fn [_ _] nil)
-                    model-selector/sync-footer-model! (fn [_] nil)]
+                    model-selector/sync-footer-model! (fn [_] nil)
+                    cfg/set-default-model! (fn [_ _] nil)]
         (testing "provider/model pattern"
           ((:handler (commands/find-command "model")) cs "deepseek/deepseek-v4-pro")
           (t/is (= :deepseek @(:provider ag)))
