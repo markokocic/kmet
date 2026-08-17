@@ -730,6 +730,8 @@
     "org.clojure/core.memoize"
     "org.clojure/core.rrb-vector"
     "potemkin/potemkin"
+    "rewrite-clj/rewrite-clj"
+    "borkdude/edamame"
     "ring/ring-core"
     "selmer/selmer"})
 
@@ -743,6 +745,21 @@
   '#{clojure.tools.reader
      clojure.tools.reader.edn
      clojure.tools.reader.reader-types})
+
+(def ^:private bb-shared-namespaces
+  "bb pre-loads these adapted-lib namespaces at startup (rewrite-clj ports,
+   edamame) and their Maven copies cannot run under SCI: they require
+   clojure.tools.reader.impl.* (impl.inspect dispatches on the removed
+   PersistentArrayMap$Seq class), which bb does not bundle. Injected by
+   reference into extension contexts like the custom ports, so extensions
+   resolving them get the bundled copy and must not declare the Maven libs
+   in deps.edn."
+  '#{rewrite-clj.node
+     rewrite-clj.parser
+     rewrite-clj.paredit
+     rewrite-clj.zip
+     rewrite-clj.zip.subedit
+     edamame.core})
 
 (defonce ^:private context-classes
   (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
@@ -808,10 +825,11 @@
                              ;; SCI (clojure.tools.cli, data.json, ...) are NOT
                              ;; injected — they resolve through the load-fn, so a
                              ;; declared Maven version wins over the bundled copy.
-                             ;; The adapted libs (core.async, cheshire, ...) and
-                             ;; the custom-port namespaces (bundled-port-namespaces)
-                             ;; stay injected: their Maven copies fail under SCI,
-                             ;; so the bundled copy is the only working one.
+                             ;; The adapted libs (core.async, cheshire, ...),
+                             ;; the custom ports (bundled-port-namespaces) and
+                             ;; bb-shared-namespaces stay injected: their Maven
+                             ;; copies fail under SCI, so the bundled copy is
+                             ;; the only working one.
                              (not (or (str/starts-with? n "clojure.data.")
                                       (and (str/starts-with? n "clojure.tools.")
                                            (not (contains? bundled-port-namespaces
@@ -819,6 +837,7 @@
                              (or (str/starts-with? n "clojure.")
                                  (str/starts-with? n "babashka.")
                                  (str/starts-with? n "cheshire.")
+                                 (contains? bb-shared-namespaces (ns-name ns-obj))
                                  (str/starts-with? n "kmet.tui.")
                                  (str/starts-with? n "kmet.libs.")))
                     [(ns-name ns-obj) (ns-interns ns-obj)])))
@@ -975,7 +994,8 @@
                                          (throw (ex-info (or message "deps resolution failed")
                                                          {:deps deps-map})))]
                (bdeps/-main "-Srepro" "-Spath"
-                            "-Sdeps" (pr-str {:deps deps-map})
+                            "-Sdeps" (pr-str {:deps deps-map
+                                              :mvn/repos {"clojars" {:url "https://repo.clojars.org/"}}})
                             "-Sdeps-file" "__kmet_no_deps__.edn")))]
     (->> (str/split (str/trim cp) (re-pattern (System/getProperty "path.separator")))
          (filter #(or (str/includes? % ".m2") (str/includes? % ".gitlibs")))
