@@ -142,11 +142,18 @@
 (defn parse-negotiation-sequence
   "Parse a Kitty keyboard protocol negotiation response (pi:
    parseKeyboardProtocolNegotiationSequence): {:type :kitty-flags
-   :flags n} or {:type :device-attributes}, or nil."
+   :flags n} or {:type :device-attributes}, or nil. The flags response can
+   arrive as \u001b[?N u (plain query response) or \u001b[>N u (push/pop
+   protocol — Termux answers the query this way); both are recognized so
+   the response is consumed instead of leaking into the input buffer, where
+   an unparseable ESC sequence would swallow every subsequent key."
   [s]
   (cond
     (re-matches #"\u001b\[\?(\d+)u" s)
     {:type :kitty-flags :flags (parse-long (second (re-matches #"\u001b\[\?(\d+)u" s)))}
+
+    (re-matches #"\u001b\[>(\d+)(?:;[\d;]*)?u" s)
+    {:type :kitty-flags :flags (parse-long (second (re-matches #"\u001b\[>(\d+)(?:;[\d;]*)?u" s)))}
 
     (re-matches #"\u001b\[\?[\d;]*c" s)
     {:type :device-attributes}
@@ -157,10 +164,11 @@
   "True when s could still become a negotiation response (pi:
    isKeyboardProtocolNegotiationSequencePrefix). Note a bare \"\u001b[\"
    is also an arrow-key prefix — holding it for negotiation adds at most
-   one char of latency."
+   one char of latency. The \u001b[>...u push form is a prefix too."
   [s]
   (or (= s "\u001b[")
-      (boolean (re-matches #"\u001b\[\?[\d;]*" s))))
+      (boolean (re-matches #"\u001b\[\?[\d;]*" s))
+      (boolean (re-matches #"\u001b\[>[\d;]*" s))))
 
 (defn cell-size-response-prefix?
   "True when s could still become a cell size response (\u001b[6;h;wt).

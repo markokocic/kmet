@@ -205,3 +205,39 @@
                                                   "\u001b[A")]
       (t/is (= ["\u001b[A"] dispatched) "arrow key reaches the input path")
       (t/is (= "" buf)))))
+
+(deftest test-negotiation-parses-kitty-push-response
+  ;; Termux answers the kitty push query (\u001b[>7u) with \u001b[>...u —
+  ;; this format must be parsed as kitty flags so it is consumed by the
+  ;; negotiation intercept (previously unrecognized, it leaked into the
+  ;; input buffer and swallowed every subsequent key).
+  (t/is (= {:type :kitty-flags :flags 7}
+           (lib/parse-negotiation-sequence "\u001b[>7u")))
+  (t/is (= {:type :kitty-flags :flags 7}
+           (lib/parse-negotiation-sequence "\u001b[>7;1;2u"))
+        "push response with mods/event-type flags parses")
+  (t/is (true? (lib/negotiation-prefix? "\u001b[>"))
+        "push prefix is held by the negotiation interception")
+  (t/is (true? (lib/negotiation-prefix? "\u001b[>7;1")))
+  (testing "the push response is consumed through the ESC loop, not dispatched"
+    (let [{:keys [dispatched buf]} (process-chars (core/create-tui (recording-terminal))
+                                                  "\u001b[>7;1;2u")]
+      (t/is (= [] dispatched) "push response never reaches the input path")
+      (t/is (= "" buf))
+      (t/is (true? (keys/kitty-active?)) "kitty enabled from the push response"))))
+
+(deftest test-unparseable-complete-sequence-does-not-swallow-input
+  ;; A complete ESC sequence that nothing recognizes (neither negotiation,
+  ;; parse-key, mouse nor focus) must be DROPPED, not held in the buffer —
+  ;; holding it appended every subsequent char to it and swallowed all input
+  ;; forever (the reported freeze: app alive, keys dead, no crash log).
+  (testing "an unrecognized complete sequence is dropped; later chars dispatch"
+    (let [{:keys [dispatched buf]} (process-chars (core/create-tui (recording-terminal))
+                                                  "\u001b[?99;5uabc")]
+      (t/is (= ["a" "b" "c"] dispatched)
+            "subsequent characters reach the input path")
+      (t/is (= "" buf) "the garbage sequence is gone from the buffer")))
+  (testing "a known complete sequence still dispatches normally"
+    (let [{:keys [dispatched]} (process-chars (core/create-tui (recording-terminal))
+                                              "\u001b[A")]
+      (t/is (= ["\u001b[A"] dispatched)))))

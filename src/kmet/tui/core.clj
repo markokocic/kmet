@@ -1040,6 +1040,13 @@
            (keys/complete-sequence? content))
       (do (dispatch-input! tui content) true)
 
+      ;; Complete but unrecognized ESC sequence — garbage. Returning true
+      ;; makes the caller clear the buffer so it can never grow and swallow
+      ;; subsequent input (see the ESC branch of process-input-buffer!).
+      (and (not= content "\u001b")
+           (keys/complete-sequence? content))
+      true
+
       :else false)))
 
 (defn- schedule-incomplete-flush!
@@ -1104,7 +1111,12 @@
           ;; ESC-prefixed: dispatch only complete sequences (pi: a complete
           ;; CSI/SS3/OSC/mouse sequence, or a meta key). Incomplete prefixes
           ;; ("\u001b", "\u001b[", "\u001b[<...") wait for more characters;
-          ;; the lone-ESC case is flushed after INCOMPLETE-FLUSH-MS.
+          ;; the lone-ESC case is flushed after INCOMPLETE-FLUSH-MS. A COMPLETE
+          ;; sequence that nothing recognizes (e.g. a terminal response the
+          ;; interceptors missed — Termux's \u001b[?64;...c DA or a kitty
+          ;; push response in an unparsed format) is garbage: holding it in the
+          ;; buffer would append every subsequent key to it and swallow all
+          ;; input forever ("kmet frozen, keys dead, no crash log"). Drop it.
           (= (first s) \u001b)
           (if (and (or (keys/parse-key s)
                        (keys/mouse-sequence? s)
@@ -1113,7 +1125,9 @@
                    (keys/complete-sequence? s))
             (do (reset! buf "")
                 (dispatch-input! tui s))
-            (schedule-incomplete-flush! tui buf))
+            (if (and (not= s "\u001b") (keys/complete-sequence? s))
+              (reset! buf "")
+              (schedule-incomplete-flush! tui buf)))
 
           ;; Non-ESC — dispatch immediately (single char)
           :else
@@ -1611,21 +1625,20 @@
                                                         (emit! (str "\u001b[" (dec rows) "B"))
                                                         (recur (+ i rows)))))
                                                 (do (emit! "\u001b[2K")
-                                                    (when (and (not is-image)
-                                                               (> (utils/visible-width line) w))
-                                                      (write-crash-log! lines w i (utils/visible-width line))
-                                                      (tui-stop tui)
-                                                      (throw (ex-info
-                                                              (str "Rendered line " i
-                                                                   " exceeds terminal width (" (utils/visible-width line) " > " w ").\n\n"
-                                                                   "This is likely caused by a custom TUI component not "
-                                                                   "truncating its output.\n"
-                                                                   "Use visibleWidth() to measure and truncateToWidth() "
-                                                                   "to truncate lines.\n\n"
-                                                                   "Debug log written to: " (log-path "kmet-crash.log"))
-                                                              {:type :width-overflow})))
-                                                    (emit! line)
-                                                    (recur (inc i)))))))
+                                                    ;; A line wider than the terminal must NEVER kill the app — that
+                                                    ;; leaves a frozen frame on screen and a dead reader ("fully
+                                                    ;; stuck, had to kill it from the OS"). Log it and truncate the
+                                                    ;; line instead so the TUI keeps running; the ANSI-aware slice
+                                                    ;; drops the pending SGR/OSC reset, so re-append it to keep the
+                                                    ;; truncated line self-cleaning.
+                                                    (let [line (if (and (not is-image)
+                                                                        (> (utils/visible-width line) w))
+                                                                 (do (write-crash-log! lines w i (utils/visible-width line))
+                                                                     (str (:text (utils/slice-with-width line 0 w :strict? true))
+                                                                          utils/SEGMENT-RESET))
+                                                                 line)]
+                                                      (emit! line)
+                                                      (recur (inc i))))))))
                                         (when (> prev-count new-count)
                                           (when (< render-end (dec new-count))
                                             (emit! (str "\u001b[" (- (dec new-count) render-end) "B"))

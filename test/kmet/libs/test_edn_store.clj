@@ -150,3 +150,39 @@
       (eds/save-edn-setting! f [:hide-thinking-block] true)
       (is (= {:hide-thinking-block true} (edn/read-string (slurp f))))
       (finally (fs/delete-tree tmp)))))
+
+;; ─── File lock bounded retry (regression) ──────────────────────────────────
+
+(deftest file-lock-fresh-lock-times-out-bounded
+  ;; A lock directory held by another writer (fresh mtime) must make
+  ;; acquire-lock! give up with :file-lock-timeout after a BOUNDED number of
+  ;; attempts — the stale-break branch used to `recur` with the same attempt
+  ;; counter, so any failed delete-tree looped forever on the calling thread
+  ;; (a frozen app with no crash log — the /login save hang).
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-edn-lock-fresh-" (System/currentTimeMillis)))))
+        f (str tmp "/settings.edn")]
+    (fs/create-dirs tmp)
+    (try
+      ;; simulate another process holding the lock: fresh dir, recent mtime
+      (fs/create-dir (str f ".lock"))
+      (let [start (System/currentTimeMillis)
+            err (try (eds/save-edn-setting! f [:a] 1) nil
+                     (catch Exception e e))]
+        (is (some? err) "a held lock must throw, not hang")
+        (is (= :file-lock-timeout (:type (ex-data err))) "timeout error type")
+        (is (< (- (System/currentTimeMillis) start) 5000)
+            "bounded retries return quickly (10 x 20ms), not forever"))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest file-lock-stale-lock-is-broken
+  ;; A stale lock (mtime older than the stale threshold) is broken and the
+  ;; write proceeds.
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-edn-lock-stale-" (System/currentTimeMillis)))))
+        f (str tmp "/settings.edn")]
+    (fs/create-dirs tmp)
+    (try
+      (fs/create-dir (str f ".lock"))
+      (fs/set-last-modified-time (str f ".lock") (- (System/currentTimeMillis) 60000))
+      (eds/save-edn-setting! f [:provider] :openai)
+      (is (= {:provider :openai} (edn/read-string (slurp f))) "stale lock broken, write succeeds")
+      (finally (fs/delete-tree tmp)))))

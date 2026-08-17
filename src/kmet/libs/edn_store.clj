@@ -22,10 +22,18 @@
   (loop [attempt 1]
     (cond
       (try (fs/create-dir lock-path) true (catch Exception _ false)) :ok
-      (try (> (- (System/currentTimeMillis) (.toMillis (fs/last-modified-time lock-path)))
-              lock-stale-ms)
-           (catch Exception _ false))
-      (do (fs/delete-tree lock-path) (Thread/sleep lock-acquire-delay-ms) (recur attempt))
+      ;; Stale lock (mtime older than LOCK-STALE-MS): break it and retry —
+      ;; the attempt counter MUST advance, or a single failed delete-tree
+      ;; would loop forever on the calling thread (a frozen app with no
+      ;; crash log; e.g. a lock dir left by a force-killed run that cannot
+      ;; be deleted). Bounded either way below.
+      (and (< attempt lock-acquire-attempts)
+           (try (> (- (System/currentTimeMillis) (.toMillis (fs/last-modified-time lock-path)))
+                   lock-stale-ms)
+                (catch Exception _ false)))
+      (do (fs/delete-tree lock-path)
+          (Thread/sleep lock-acquire-delay-ms)
+          (recur (inc attempt)))
       (< attempt lock-acquire-attempts)
       (do (Thread/sleep lock-acquire-delay-ms) (recur (inc attempt)))
       :else (throw (ex-info "Timed out acquiring file lock"
