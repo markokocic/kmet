@@ -408,3 +408,48 @@
         (is took-idx)
         (is (= "" (str/trim (nth plain (dec out-idx)))) "blank line before output")
         (is (= "" (str/trim (nth plain (dec took-idx)))) "blank line before Took")))))
+
+;; ─── Default renderer (fallback for extension tools) ──────────────────────
+
+(deftest test-default-render-call-shows-args
+  (testing "default call shows tool name + arg values"
+    (let [plain (render-tool :name "custom" :args {:path "/foo/bar" :verbose true})]
+      (is (some #(re-find #"custom" %) plain))
+      (is (some #(re-find #"/foo/bar" %) plain))
+      (is (some #(re-find #"true" %) plain)))))
+
+(deftest test-default-render-call-no-args
+  (testing "default call with no args shows just the name"
+    (let [plain (render-tool :name "custom" :args {})]
+      (is (some #(re-find #"custom" %) plain))
+      (is (not-any? #(re-find #"=" %) plain)))))
+
+(deftest test-default-render-call-truncates-long-args
+  (testing "default call truncates args to fit width"
+    (let [long-path (apply str (repeat 100 "x"))
+          plain (render-tool :name "custom" :args {:path long-path})]
+      ;; should not contain the full 100-char path
+      (is (not-any? #(re-find (re-pattern long-path) %) plain))
+      (is (some #(re-find #"custom" %) plain)))))
+
+(deftest test-default-render-result-collapsed-preview
+  (testing "default result shows 5-line preview with expand hint"
+    (let [content (str/join "\n" (map #(str "line" %) (range 1 11)))
+          plain (render-tool :name "custom" :content content)]
+      (is (some #(re-find #"line1" %) plain))
+      (is (some #(re-find #"line5" %) plain))
+      (is (not-any? #(re-find #"line6" %) plain))
+      (is (some #(re-find #"5 more lines" %) plain)))))
+
+(deftest test-default-render-result-expanded
+  (testing "default result shows all lines when expanded"
+    (let [content (str/join "\n" (map #(str "line" %) (range 1 11)))
+          plain (render-tool :name "custom" :content content :expanded? true)]
+      (is (some #(re-find #"line10" %) plain))
+      (is (not-any? #(re-find #"more lines" %) plain)))))
+
+(deftest test-default-render-result-empty
+  (testing "default result with empty content shows just spacer"
+    (let [plain (render-tool :name "custom" :content "")]
+      (is (some #(re-find #"custom" %) plain))
+      (is (not-any? #(re-find #"more lines" %) plain)))))
