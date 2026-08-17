@@ -79,7 +79,7 @@
                                              (:name t))
                                 "enabled" "disabled")
                        :values ["enabled" "disabled"]})
-                    (:all-tools @state))
+                    (sort-by :name (:all-tools @state)))
         settings (settings-list/make-settings-list
                   items
                   :theme (theme/get-settings-list-theme th)
