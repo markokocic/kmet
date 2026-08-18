@@ -249,18 +249,20 @@
 
 (defn- model-cost-str
   "Compact cost summary line for the selected model's details — input/output
-   rates, plus the cache-read rate when the model prices it (pi doesn't show
-   cost in the selector; kmet adds it opportunistically). nil when the model
-   carries no cost data."
+   rates, plus cache-read/cache-write rates when the model prices them (pi
+   doesn't show cost in the selector; kmet adds it opportunistically). nil
+   when the model carries no cost data."
   [model]
   (when-let [c (:cost model)]
     (let [in-rate (fmt-usd-rate (:input c))
           out-rate (fmt-usd-rate (:output c))
           cr-rate (fmt-usd-rate (:cache-read c))
+          cw-rate (fmt-usd-rate (:cache-write c))
           parts (cond-> []
                   in-rate (conj (str in-rate " in"))
                   out-rate (conj (str out-rate " out"))
-                  cr-rate (conj (str cr-rate " cached")))]
+                  cr-rate (conj (str cr-rate " cached"))
+                  cw-rate (conj (str cw-rate " cache-write")))]
       (when (seq parts)
         (str "  Cost: " (str/join " · " parts))))))
 
