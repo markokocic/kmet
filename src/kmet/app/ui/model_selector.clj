@@ -241,9 +241,9 @@
    nil when absent or zero."
   [v]
   (when (and (number? v) (pos? v))
-    (let [s (str/replace (format "%.4g" (double v)) #"\.\d*?0+$"
-                         (fn [m] (str/replace m #"0+$" "")))
-          s (str/replace s #"\.$" "")]
+    (let [s (-> (format "%.4g" (double v))
+                (str/replace #"(\.\d*?)0+$" "$1")
+                (str/replace #"\.$" ""))]
       (str "$" s "/M"))))
 
 (defn- model-cost-str
@@ -301,15 +301,15 @@
                                       (str "  (" (inc selected) "/" n ")"))
                             1 0)))
     (when (pos? n)
-      (container/container-add-child rows (spacer/make-spacer 1))
-      (container/container-add-child
-       rows (text/make-text
-             (theme/fg th :muted
-                       (str "  Model Name: " (:name (:model (nth filtered selected)))))
-             1 0))
-      (when-let [cost-str (model-cost-str (:model (nth filtered selected)))]
+      (let [selected-model (:model (nth filtered selected))]
+        (container/container-add-child rows (spacer/make-spacer 1))
         (container/container-add-child
-         rows (text/make-text (theme/fg th :muted cost-str) 1 0))))
+         rows (text/make-text
+               (theme/fg th :muted (str "  Model Name: " (:name selected-model)))
+               1 0))
+        (when-let [cost-str (model-cost-str selected-model)]
+          (container/container-add-child
+           rows (text/make-text (theme/fg th :muted cost-str) 1 0)))))
     (container/container-set-children! (:list-container this) @(:children rows))
     (when-let [stx (:scope-text this)]
       (text/text-set! stx (scope-text-str st)))
