@@ -4,7 +4,9 @@
 ;; edit-tool (clojure_edit) and sexp-tool (clojure_edit_replace_sexp).
 
 (ns edit-util
-  (:require [cljfmt.core :as fmt]
+  (:require [babashka.fs :as fs]
+            [cljfmt.config :as config]
+            [cljfmt.core :as fmt]
             [clojure.string :as str]
             [rewrite-clj.node :as n]
             [rewrite-clj.parser :as p]
@@ -77,28 +79,26 @@
       (str/join "\n" diff-lines))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
-;; Formatting (cljfmt)
+;; Formatting (cljfmt, honoring the project's cljfmt.edn)
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
-(def fmt-opts
-  "cljfmt formatting options shared by both tools."
-  {:indentation?                          true
-   :remove-surrounding-whitespace?        true
-   :remove-trailing-whitespace?           true
-   :insert-missing-whitespace?            true
-   :remove-consecutive-blank-lines?       true
-   :remove-multiple-non-indenting-spaces? true
-   :split-keypairs-over-multiple-lines?   false
-   :sort-ns-references?                   false
-   :function-arguments-indentation        :community
-   :indents                               fmt/default-indents})
+(defn project-fmt-opts
+  "cljfmt options for FILE-PATH mirroring cljfmt.tool/fix (what `bb format`
+   produces): the project's cljfmt.edn — walked up from the file's directory —
+   merged over cljfmt's defaults, so :extra-indents/:indents/:alias-map etc.
+   apply to custom macros (defcomponent, defsetter, ...). Falls back to plain
+   defaults when no config file exists."
+  [file-path]
+  (config/load-config (str (or (fs/parent file-path) "."))))
 
 (defn format-source-string
   "Format a complete Clojure source string.  Returns formatted string,
-   or the original on parse error."
-  [s]
-  (try (fmt/reformat-string s fmt-opts)
-       (catch Exception _ s)))
+   or the original on parse error.  With no opts, resolves the project
+   config from the current directory."
+  ([s] (format-source-string s (project-fmt-opts ".")))
+  ([s opts]
+   (try (fmt/reformat-string s opts)
+        (catch Exception _ s))))
 
 (defn re-indent-to-column
   "Re-indent all lines after the first to TARGET-COL (1-based)."
@@ -114,11 +114,13 @@
 
 (defn format-form-in-isolation
   "Format FORM-STR with cljfmt, then re-indent to TARGET-COL."
-  [form-str target-col]
-  (try
-    (let [formatted (fmt/reformat-string form-str fmt-opts)]
-      (re-indent-to-column formatted target-col))
-    (catch Exception _ form-str)))
+  ([form-str target-col]
+   (format-form-in-isolation form-str target-col (project-fmt-opts ".")))
+  ([form-str target-col opts]
+   (try
+     (let [formatted (fmt/reformat-string form-str opts)]
+       (re-indent-to-column formatted target-col))
+     (catch Exception _ form-str))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Zipper: navigation

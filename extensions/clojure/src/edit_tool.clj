@@ -201,6 +201,9 @@
         (let [;; 1. Lint-repair replacement content
               content' (first (util/lint-repair content))
 
+              ;; 1b. Project cljfmt config (cljfmt.edn extra-indents etc.)
+              fmt-opts (util/project-fmt-opts file_path)
+
               ;; 2. Enhance defmethod name
               enhanced-name (enhance-defmethod-name form_type form_identifier content')
 
@@ -221,7 +224,7 @@
                   form-col   (second (z/position found-zloc))
                   ;; 6. Partial format
                   content''  (if form-col
-                               (util/format-form-in-isolation content' form-col)
+                               (util/format-form-in-isolation content' form-col fmt-opts)
                                content')
                   ;; 7. Re-edit with formatted content
                   zloc-full  (z/of-string original {:track-position? true})
@@ -231,7 +234,7 @@
                 {:content (str "Internal error: " (:message result2)) :is-error true}
                 ;; 8. Format whole file + write
                 (let [new-source (z/root-string (:zloc result2))
-                      formatted  (util/format-source-string new-source)]
+                      formatted  (util/format-source-string new-source fmt-opts)]
                   (util/spit-utf8 file_path formatted)
                   (let [diff-str (util/generate-unified-diff original formatted)]
                     {:content  (if diff-str

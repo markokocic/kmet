@@ -76,6 +76,48 @@
     (is (string? result))
     (is (str/includes? result "let"))))
 
+(deftest test-project-fmt-opts
+  (testing "finds cljfmt.edn walking up from the file's directory"
+    (let [dir (fs/create-dir (fs/path "target" "fmt-config-test"))
+          _   (spit (fs/file dir "cljfmt.edn")
+                    "{:extra-indents {mydef [[:block 3] [:inner 1]]}}")
+          clj (fs/file dir "sample.clj")]
+      (spit clj "")
+      (try
+        (let [opts (util/project-fmt-opts (str clj))]
+          (is (= [[:block 3] [:inner 1]]
+                 (get (:extra-indents opts) 'mydef)))
+          ;; the tool defaults still apply (cljfmt's own defaults merged)
+          (is (true? (:remove-consecutive-blank-lines? opts))))
+        (finally (fs/delete-tree dir)))))
+  (testing "no config file — plain cljfmt defaults"
+    (let [dir (fs/create-dir (fs/path "target" "fmt-config-test"))
+          clj (fs/file dir "sample.clj")]
+      (spit clj "")
+      (try
+        (let [opts (util/project-fmt-opts (str clj))]
+          (is (not (contains? (:extra-indents opts) 'mydef))))
+        (finally (fs/delete-tree dir)))))
+  (testing "bare filename — searches from the current directory"
+    (is (map? (util/project-fmt-opts "sample.clj")))))
+
+(deftest test-format-honors-project-extra-indents
+  (let [dir (fs/create-dir (fs/path "target" "fmt-config-test"))
+        _   (spit (fs/file dir "cljfmt.edn")
+                  "{:extra-indents {mydef [[:block 3] [:inner 1]]}}")
+        clj (fs/file dir "sample.clj")]
+    (spit clj "")
+    (try
+      (let [opts (util/project-fmt-opts (str clj))
+            src  "(mydef Foo nil\n[container search-input list-container state-atom]\n(render [this w] (str a))\n(handle-input [this d] (cond\n(keys/matches-key? d \"x\") (do (foo this) nil)\n:else nil)))\n"
+            out  (util/format-source-string src opts)]
+        ;; [:block 3]: method forms at index >= 3 start on their own line
+        ;; at block indent, NOT aligned under the first argument
+        (is (str/includes? out "\n  (render [this w] (str a))"))
+        (is (str/includes? out "\n  (handle-input [this d] (cond"))
+        (is (not (str/includes? out "\n       (render"))))
+      (finally (fs/delete-tree dir)))))
+
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Zipper navigation
 ;; ═══════════════════════════════════════════════════════════════════════════════
@@ -83,15 +125,14 @@
 (deftest test-walk-back-to-non-comment
   (testing "walks backward past comments and whitespace to a non-comment node"
     ;; walk-back-to-non-comment uses z/prev* which traverses the full tree.
-    ;; Verify it finds a non-whitespace/non-comment node.
-    (let [parsed (p/parse-string-all ";; comment\n;; another\n(+ x 1)")
-          zloc   (z/of-node parsed)
+    ;; Verify it finds a non-comment node going backward.
+    (let [parsed   (p/parse-string-all ";; comment\n;; another\n(+ x 1)")
+          zloc     (z/of-node parsed)
           ;; Navigate into the list node: down goes to the first child (+)
-          list-loc (-> zloc z/down z/right)] ;; skip comment, get to list
-      ;; The function should find a non-comment node going backward
-      (let [back (util/walk-back-to-non-comment list-loc)]
-        (is (some? back))
-        (is (not (#{:whitespace :comment} (node/tag (z/node back))))))))
+          list-loc (-> zloc z/down z/right) ;; skip comment, get to list
+          back     (util/walk-back-to-non-comment list-loc)]
+      (is (some? back))
+      (is (not (#{:whitespace :comment} (node/tag (z/node back)))))))
   (testing "returns the node itself when no preceding comment"
     (let [zloc (z/of-string "(+ x 1)")
           expr (z/down zloc)

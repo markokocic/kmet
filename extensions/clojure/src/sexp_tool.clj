@@ -263,7 +263,8 @@
              :is-error true}
             ;; 4. Format + write + diff
             (let [new-source (z/root-string (:zloc result))
-                  formatted  (util/format-source-string new-source)]
+                  fmt-opts  (util/project-fmt-opts file_path)
+                  formatted (util/format-source-string new-source fmt-opts)]
               (case dry_run
                 "new-source"
                 {:content formatted}
