@@ -11,6 +11,52 @@
   (t/is (= 6 (u/visible-width "中文🍎")))   ;; 2+2+2=6
   (t/is (= 6 (u/visible-width "ab\tc"))))   ;; tab expands to 3 spaces (pi)
 
+(t/deftest test-visible-width-narrow-dingbats
+  ;; Regression: the coarse emoji block ranges (0x2600-0x27BF etc.) counted
+  ;; text-presentation dingbats as 2 columns, so background padding ended a
+  ;; column short (e.g. "✓" in the model selector) and markdown table
+  ;; separators misaligned. Only RGI emoji / EAW-wide chars are 2-wide.
+  (doseq [s ["✓" "✗" "★" "☆" "❶" "➤" "✦" "✔" "☑" "☀" "❤" "⌚" "⏰" "⚽" "☕" "😀"]]
+    (t/is (= (if (contains? #{"✔" "☑" "☀" "❤" "⌚" "⏰" "⚽" "☕" "😀"} s) 2 1)
+             (u/visible-width s))
+          (str "width of " (pr-str s)))))
+
+(t/deftest test-visible-width-vs16
+  ;; Text-presentation bases stay narrow bare but turn 2-wide with U+FE0F
+  ;; (©️ ™️ ↔️ ▶️ ▪️ ⬛️ …); RGI emoji keep their width with or without it.
+  (t/is (= 1 (u/visible-width "©")))
+  (t/is (= 2 (u/visible-width "©️")))
+  (t/is (= 2 (u/visible-width "™️")))
+  (t/is (= 2 (u/visible-width "↔️")))
+  (t/is (= 1 (u/visible-width "▶")))
+  (t/is (= 2 (u/visible-width "▶️")))
+  (t/is (= 2 (u/visible-width "▪️")))
+  (t/is (= 1 (u/visible-width "⬛")))
+  (t/is (= 2 (u/visible-width "⬛️")))
+  (t/is (= 2 (u/visible-width "❤️"))))
+
+(t/deftest test-visible-width-zwj-vs16-chain
+  ;; A VS16 between the emoji base and the ZWJ must not break the chain
+  ;; (❤️‍🔥 🏳️‍🌈); plain wide chars never chain (漢‍🔥 = 4); keycaps keep 2.
+  (t/is (= 2 (u/visible-width "❤️‍🔥")))
+  (t/is (= 2 (u/visible-width "🏳️‍🌈")))
+  (t/is (= 2 (u/visible-width "👨‍👩‍👧‍👦")))
+  (t/is (= 4 (u/visible-width "漢‍🔥")))
+  (t/is (= 2 (u/visible-width "1️⃣"))))
+
+(t/deftest test-visible-width-halfwidth
+  ;; FF61..FFDC are halfwidth forms (ｱｲｳ…) — narrow, not 2 columns.
+  (t/is (= 1 (u/visible-width "ｱ")))
+  (t/is (= 3 (u/visible-width "ｱｲｳ")))
+  (t/is (= 2 (u/visible-width "Ａ"))))
+
+(t/deftest test-apply-background-to-line
+  ;; The reported bug: a line ending in a non-ASCII narrow char (✓) must pad
+  ;; to full width so the background reaches the line end.
+  (t/is (= 4 (u/visible-width (u/apply-background-to-line "a✓" 4 nil))))
+  (t/is (= 4 (u/visible-width (u/apply-background-to-line "a✔" 4 nil))))
+  (t/is (= 4 (u/visible-width (u/apply-background-to-line "中" 4 nil)))))
+
 (t/deftest test-truncate-to-width
   (t/is (= "hello" (u/truncate-to-width "hello" 10)))
   (t/is (= "" (u/truncate-to-width "" 5)))
