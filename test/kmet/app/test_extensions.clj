@@ -260,6 +260,66 @@
         (extensions/unload-all-extensions!)
         (fs/delete-tree dir)))))
 
+(t/deftest test-extension-gets-bundled-spec-port-and-file-seq
+  ;; bb's clojure.spec.alpha is a bundled port bb does not preload (unlike
+  ;; tools.reader), and its Maven copy fails under SCI (spec.gen.alpha's
+  ;; locking2 macro expands monitor-enter, which SCI's core lacks) — the
+  ;; context requires the port and injects it by reference
+  ;; (spec-port-namespaces), so extensions get working clojure.spec.alpha
+  ;; without deps.edn pins. file-seq is likewise absent from SCI's core and
+  ;; injected with slurp/spit (cljfmt.io's FileEntity protocol needs it).
+  (extensions/clear-extensions!)
+  (let [dir "target/test-ext-spec-file-seq"]
+    (fs/delete-tree dir)
+    (fs/create-dirs (str dir "/src"))
+    (fs/create-dirs (str dir "/data"))
+    (spit (str dir "/data/a.clj") "x")
+    (spit (str dir "/data/b.clj") "y")
+    (spit (str dir "/extension.edn") "{:name \"spec-ext\" :entry \"src/main.clj\"}\n")
+    (spit (str dir "/src/main.clj")
+          (str "(ns spec-ext.main\n"
+               "  (:require [kmet.extension :as ext]\n"
+               "            [clojure.spec.alpha :as s]\n"
+               "            [clojure.java.io :as io]))\n"
+               "(s/def ::x int?)\n"
+               "(defn init [api]\n"
+               "  (ext/register-tool! api {:name \"spec-tool\"\n"
+               "                           :description \"uses the bundled spec port + file-seq\"\n"
+               "                           :execute (fn [_]\n"
+               "                                      {:content (str (s/valid? ::x 5)\n"
+               "                                                     \" \"\n"
+               "                                                     (count (file-seq (io/file \"target/test-ext-spec-file-seq/data\"))))})}))\n"))
+    (try
+      (let [result (extensions/load-extension! dir)]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+        (t/is (= "true 3" (:content (tools/execute-tool "spec-tool" {})))))
+      (finally
+        (extensions/unload-all-extensions!)
+        (fs/delete-tree dir)))))
+
+(t/deftest ^:slow test-extension-cljfmt-deps-load
+  ;; regression: an extension pinning cljfmt failed to load with "Unable to
+  ;; resolve symbol: monitor-enter" — the Maven spec.alpha/core.specs.alpha
+  ;; jars leaked into the closure (bundled-artifact? slash-munged dots in
+  ;; artifact names, missing repository/org/clojure/spec.alpha/) and failed
+  ;; under SCI, while cljfmt.io's file-seq and cljfmt.config's
+  ;; clojure.spec.alpha had no working source. The bundled ports are now
+  ;; injected and the bundled jars excluded.
+  (extensions/clear-extensions!)
+  (let [result (extensions/load-extension! "test/fixtures/ext-cljfmt")]
+    (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+    (testing "bb-bundled artifacts are excluded from the closure"
+      (let [jars (extensions/extension-jars "cljfmt-ext")]
+        (t/is (some #(str/includes? % "cljfmt-0.16.5.jar") jars))
+        (t/is (not-any? #(str/includes? % "spec.alpha-") jars))
+        (t/is (not-any? #(str/includes? % "core.specs.alpha-") jars))
+        (t/is (not-any? #(re-find #"/clojure-\\d" %) jars))))
+    (testing "cljfmt works end-to-end in the extension context"
+      (t/is (= "(defn foo [x]\n  (if x\n    1\n    2))"
+               (:content (tools/execute-tool "cljfmt-fmt"
+                                             {:code "(defn foo [x]\n  (if x\n   1\n   2))"})))))
+    (extensions/unload-all-extensions!)))
+
 (t/deftest test-load-missing-require-error
   ;; a require the loader cannot serve must surface an actionable message,
   ;; not a bare NullPointerException (the load-fn used to call a nil

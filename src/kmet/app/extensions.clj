@@ -811,12 +811,14 @@
    are included."
   []
   (into {'kmet.extension (ns-interns 'kmet.extension)
-         ;; slurp/spit are absent from SCI's builtin clojure.core — inject
-         ;; the host fns so extensions can read/write files directly (the
-         ;; mcp-adapter used to work around this with babashka.fs
-         ;; read-all-lines/write-bytes). sci merges these into its core.
+         ;; slurp/spit/file-seq are absent from SCI's builtin clojure.core —
+         ;; inject the host fns so extensions can read/write files directly
+         ;; (the mcp-adapter used to work around this with babashka.fs
+         ;; read-all-lines/write-bytes; file-seq is needed by libs such as
+         ;; cljfmt.io's FileEntity protocol). sci merges these into its core.
          'clojure.core {'slurp (deref #'slurp)
-                        'spit (deref #'spit)}}
+                        'spit (deref #'spit)
+                        'file-seq (deref #'file-seq)}}
         (keep (fn [ns-obj]
                 (let [n (str (ns-name ns-obj))]
                   (when (and (not (str/starts-with? n "sci."))
@@ -978,8 +980,16 @@
     "org.clojure/core.specs.alpha"})
 
 (defn- bundled-artifact?
+  "True when ENTRY is a jar of one of the artifacts babashka ships (clojure
+   + spec are always bundled), which must not be served to extension
+   contexts — the SCI-incompatible Maven copies would be evaluated instead
+   of bb's bundled ports. Matches the m2 layout: only the group is
+   slash-munged, the artifact name keeps its dots (org.clojure/spec.alpha
+   lives at repository/org/clojure/spec.alpha/)."
   [entry]
-  (some #(str/includes? entry (str "repository/" (str/replace % "." "/") "/"))
+  (some (fn [ga]
+          (let [[g a] (str/split ga #"/" 2)]
+            (str/includes? entry (str "repository/" (str/replace g "." "/") "/" a "/"))))
         bundled-artifacts))
 
 (defn- closure-jars
@@ -1094,6 +1104,18 @@
                        " — not declared in deps.edn and not a babashka-bundled library"))
                 {:extension ext-name :ns namespace})))))
 
+(def ^:private spec-port-namespaces
+  "bb-bundled clojure.spec ports (spec.alpha and, transitively, its
+   spec.gen.alpha / core.specs.alpha deps). bb does not preload them at
+   startup (unlike tools.reader / rewrite-clj), and the Maven copies fail
+   under SCI — spec.gen.alpha's locking2 macro expands to
+   monitor-enter/monitor-exit, which SCI's core lacks — so they are
+   required here (bb serves its own ports) and injected by reference into
+   extension contexts by the all-ns scan in build-context-namespaces.
+   Extensions (e.g. cljfmt.config) get a working clojure.spec.alpha
+   without deps.edn pins."
+  '[clojure.spec.alpha])
+
 (defn- create-context
   "Build the isolated sci context for one extension: full bb classes and
    imports, shared global namespaces (contract + builtins + the kmet.tui.*
@@ -1102,7 +1124,8 @@
    — own files, declared deps (resolved lazily on first library require),
    bb-bundled namespaces, with actionable errors for everything else."
   [ext-name ns-files deps-resolver]
-  (apply require (concat tui-library-namespaces libs-library-namespaces))
+  (apply require (concat tui-library-namespaces libs-library-namespaces
+                         spec-port-namespaces))
   (sci/init {:classes context-classes
              :imports bb-imports
              :features #{:bb :clj}
