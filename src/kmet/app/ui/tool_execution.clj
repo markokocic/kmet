@@ -662,17 +662,17 @@
 
 (defn- default-render-call
   "Default render-call: show tool name bolded in tool-title color,
-   followed by a compact representation of the args."
+   followed by a compact representation of the args.  Truncation is
+   column-width-aware (pi: truncateToWidth) so wide CJK/emoji glyphs
+   are never split or overcounted."
   [name args theme width & [_context]]
   (let [title (theme/fg theme :tool-title (theme/bold name))
-        title-len (+ (count name) 2)  ;; name + space
-        avail (- width title-len)
+        title-width (+ (utils/visible-width name) 2) ;; name + space
+        avail (- width title-width)
         param-str (when (and (pos? avail) (map? args) (seq args))
                     (let [values (map (comp pr-str val) args)
                           joined (str/join " " values)]
-                      (if (> (count joined) avail)
-                        (subs joined 0 (max 0 (dec avail)))
-                        joined)))]
+                      (utils/truncate-to-width joined avail "...")))]
     (text/make-text
      (if (seq param-str)
        (str title " " param-str)
