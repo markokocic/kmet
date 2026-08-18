@@ -55,7 +55,15 @@
                                          ;; Total request deadline = the idle timeout (pi: SDK
                                          ;; timeoutMs ?? httpIdleTimeoutMs); nil when disabled
                                          :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
-                                        signal)]
+                                        signal)
+            ;; The terminal :done is deferred until the whole stream is
+            ;; consumed: openai-completions sends the usage-only chunk AFTER
+            ;; the finish_reason chunk, so an on-done fired at the first
+            ;; :done would capture an empty usage buffer and drop the
+            ;; provider usage (footer token counts / cost never update — pi
+            ;; resolves its stream only after the final chunk).
+            stop-reason (atom nil)
+            errored? (atom false)]
         (sse/process-openai-stream response
                                    (fn [event]
                                      (case (:type event)
@@ -69,13 +77,22 @@
                                        :tool-call-args (when on-tool-call
                                                          (on-tool-call {:arguments (:arguments event)
                                                                         :index (:index event)}))
-                                       :done (when on-done (on-done (:stop-reason event)))
+                                       :done (compare-and-set! stop-reason nil (:stop-reason event))
                                        :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
-                                       :error (when on-error (on-error (:message event)))
+                                       :error (do (reset! errored? true)
+                                                  (when on-error (on-error (:message event))))
                                        nil))
                                    signal
                                    idle-timeout-ms
                                    (fn [] (proxy/abort-stream! response)))
+        ;; stream fully consumed — the trailing usage chunk (if any) was
+        ;; dispatched; emit the deferred terminal done now (unless the run
+        ;; was cancelled or an error already surfaced)
+        (when (and on-done
+                   (some? @stop-reason)
+                   (not @errored?)
+                   (not (and signal @signal)))
+          (on-done @stop-reason))
         (proxy/finish-curl! response signal on-error))
       (catch Exception e
         (when on-error (on-error (transport-error-message e)))))))

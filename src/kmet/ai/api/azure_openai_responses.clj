@@ -101,11 +101,15 @@
                                          :as :stream
                                          :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
                                         signal)]
-        (sse/process-responses-stream response
-                                      (responses-events-handler opts model-record)
-                                      signal
-                                      idle-timeout-ms
-                                      (fn [] (proxy/abort-stream! response)))
+        (let [[dispatch finalize] (responses-events-handler opts model-record)]
+          (sse/process-responses-stream response
+                                        dispatch
+                                        signal
+                                        idle-timeout-ms
+                                        (fn [] (proxy/abort-stream! response)))
+          ;; the stream is fully consumed — a trailing usage chunk (if any)
+          ;; is dispatched; emit the deferred terminal done now
+          (finalize (some-> signal deref)))
         (proxy/finish-curl! response signal on-error))
       (catch Exception e
         (when on-error (on-error (transport-error-message e)))))))

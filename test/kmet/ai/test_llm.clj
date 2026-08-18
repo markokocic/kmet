@@ -2,6 +2,7 @@
   (:require [clojure.test :as t]
             [cheshire.core :as json]
             [clojure.string :as str]
+            [babashka.fs :as fs]
             [kmet.libs.sse :as sse]
             [kmet.ai.auth :as auth]
             [kmet.libs.aws-sigv4 :as aws-sigv4]
@@ -18,6 +19,8 @@
             [kmet.ai.api.google-vertex :as vertex]
             [kmet.ai.api.bedrock-converse-stream :as bedrock]
             [kmet.app.loop :as loop]
+            [kmet.app.session :as session]
+            [kmet.config :as cfg]
             [kmet.ai.models :as m]
             [kmet.app.tools.core :as tools]))
 
@@ -985,6 +988,64 @@
                (:compat (m/get-model :opencode "glm-5.2")))))
   (t/is (nil? (:requires-reasoning-content-on-assistant-messages
                (:compat (m/get-model :github-copilot "claude-sonnet-4.5"))))))
+
+;; ─── Regression: openai-completions trailing usage chunk (footer tokens/cost) ──
+
+(t/deftest test-openai-completions-trailing-usage-chunk
+  ;; Regression: the openai-completions wire must deliver the provider usage
+  ;; from the FINAL usage-only chunk. Standard OpenAI-compatible servers
+  ;; (opencode-go mimo, hetzner, opencode, ...) stream: content chunks → a
+  ;; finish_reason chunk → a usage-only chunk → [DONE]. Emitting on-done at
+  ;; the first :done (the finish_reason chunk) let call-llm deliver the run
+  ;; result before the usage chunk was processed — the assistant message was
+  ;; persisted without :usage, so the footer showed no token counts and no
+  ;; price while the context % (chars-based fallback estimate) kept
+  ;; updating. The terminal done must be deferred until the whole stream is
+  ;; consumed (pi resolves its stream only after the final chunk), so the
+  ;; trailing usage chunk is dispatched before on-done fires.
+  (m/load-catalogs!)
+  (let [dir (str "target/test-llm-trailing-usage-" (System/currentTimeMillis))
+        sess (session/create-session dir)
+        ss (java.net.ServerSocket. 0)
+        port (.getLocalPort ss)
+        _ (doto (Thread.
+                 (fn []
+                   (try
+                     (let [s (.accept ss)
+                           rdr (java.io.BufferedReader.
+                                (java.io.InputStreamReader. (.getInputStream s)))]
+                       ;; drain request headers
+                       (while (seq (.readLine rdr)) nil)
+                       (let [out (.getOutputStream s)
+                             stream-body (str "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"
+                                              "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+                                              "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":200,\"total_tokens\":1200,\"prompt_tokens_details\":{\"cached_tokens\":300}}}\n\n"
+                                              "data: [DONE]\n\n")]
+                         (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                     "Content-Type: text/event-stream\r\n"
+                                                     "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                     stream-body)))
+                         (.flush out)
+                         (.close s)))
+                     (catch Exception _ nil))))
+            (.setDaemon true)
+            (.start))
+        ag (loop/make-agent-state :session sess :provider :opencode-go :model "mimo-v2.5"
+                                  :base-url (str "http://localhost:" port "/v1/chat/completions"))]
+    (try
+      (with-redefs [cfg/get-api-key (fn [_] "sk-test")]
+        @(loop/run-agent-turn ag {:message "hi" :on-done (fn [_]) :on-error (fn [_])}))
+      (let [assistant (last (filter #(= :assistant (:role %)) (session/get-branch sess)))]
+        (t/is (= :idle (loop/get-status ag)))
+        (t/is (= {:prompt_tokens 1000 :completion_tokens 200 :total_tokens 1200
+                  :prompt_tokens_details {:cached_tokens 300}
+                  :cost {:input 9.800000000000001E-5 :output 5.6000000000000006E-5
+                         :cache-read 8.4E-7 :cache-write 0.0 :total 1.5484E-4}}
+                 (:usage assistant))
+              "the trailing usage chunk reaches the persisted assistant message (mimo-v2.5 rates: 700 input = 0.14/1M, 200 output = 0.28/1M, 300 cache-read = 0.0028/1M)"))
+      (finally
+        (.close ss)
+        (fs/delete-tree dir)))))
 
 ;; ─── Transport total timeout follows the configured idle timeout ──────────
 
@@ -2121,9 +2182,13 @@
                              frames (bedrock-e2e-frames
                                      (bedrock-e2e-frame "contentBlockDelta"
                                                         "{\"contentBlockIndex\":0,\"delta\":{\"text\":\"hello\"}}")
+                                     (bedrock-e2e-frame "messageStop" "{\"stopReason\":\"end_turn\"}")
+                                     ;; real ConverseStream sends the usage metadata frame
+                                     ;; AFTER messageStop (the trailing-usage ordering the
+                                     ;; deferred-done fix in responses-events-handler exists
+                                     ;; for)
                                      (bedrock-e2e-frame "metadata"
-                                                        "{\"usage\":{\"inputTokens\":10,\"outputTokens\":5,\"totalTokens\":15,\"cacheReadInputTokens\":2,\"cacheWriteInputTokens\":1}}")
-                                     (bedrock-e2e-frame "messageStop" "{\"stopReason\":\"end_turn\"}"))]
+                                                        "{\"usage\":{\"inputTokens\":10,\"outputTokens\":5,\"totalTokens\":15,\"cacheReadInputTokens\":2,\"cacheWriteInputTokens\":1}}"))]
                          (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
                                                      "Content-Type: application/vnd.amazon.eventstream\r\n"
                                                      "Content-Length: " (count frames) "\r\n\r\n")))

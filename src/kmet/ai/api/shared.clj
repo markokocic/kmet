@@ -499,25 +499,46 @@
 
 (defn responses-events-handler
   "The event dispatch shared by the responses-family request builders
-   (openai-responses / azure / codex): text/thinking/tool-call deltas,
-   done/usage/error."
+   (openai-responses / azure / codex) and the other stream wires (mistral,
+   bedrock, google-vertex): text/thinking/tool-call deltas, done/usage/error.
+
+   Returns [dispatch finalize]. DISPATCH handles one stream event but
+   DEFERS the terminal :done — it only captures the first stop-reason. The
+   chat-format streams (mistral / bedrock) send their usage-only chunk AFTER
+   the finish_reason / messageStop chunk, so emitting on-done at the first
+   :done would fire before the final :usage and drop the provider usage
+   (footer token counts / cost never update; pi resolves its stream only
+   after the final chunk, so usage is always captured). The responses family
+   and google-vertex emit usage with the terminal event already, where the
+   deferral is a no-op. FINALIZE emits the deferred on-done once the stream
+   processor consumed the whole body (skipped on cancel / error / no
+   stop-reason)."
   [{:keys [on-text on-thinking on-tool-call on-done on-error on-usage]} model-record]
-  (fn [event]
-    (case (:type event)
-      :text (when on-text (on-text (:content event)))
-      :thinking (when on-thinking (on-thinking (:content event)))
-      :tool-call (when on-tool-call
-                   (on-tool-call {:id (:id event)
-                                  :name (:name event)
-                                  :arguments (:arguments event)
-                                  :index (:index event)}))
-      :tool-call-args (when on-tool-call
-                        (on-tool-call {:arguments (:arguments event)
-                                       :index (:index event)}))
-      :done (when on-done (on-done (:stop-reason event)))
-      :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
-      :error (when on-error (on-error (:message event)))
-      nil)))
+  (let [stop-reason (atom nil)
+        errored? (atom false)]
+    [(fn [event]
+       (case (:type event)
+         :text (when on-text (on-text (:content event)))
+         :thinking (when on-thinking (on-thinking (:content event)))
+         :tool-call (when on-tool-call
+                      (on-tool-call {:id (:id event)
+                                     :name (:name event)
+                                     :arguments (:arguments event)
+                                     :index (:index event)}))
+         :tool-call-args (when on-tool-call
+                           (on-tool-call {:arguments (:arguments event)
+                                          :index (:index event)}))
+         :done (compare-and-set! stop-reason nil (:stop-reason event))
+         :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
+         :error (do (reset! errored? true)
+                    (when on-error (on-error (:message event))))
+         nil))
+     (fn [cancelled?]
+       (when (and on-done
+                  (some? @stop-reason)
+                  (not @errored?)
+                  (not cancelled?))
+         (on-done @stop-reason)))]))
 
 (def network-exception-classes
   "JVM exception classes indicating a transport/network failure (connect,
