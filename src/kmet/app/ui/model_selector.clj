@@ -237,31 +237,30 @@
          (theme/fg th :muted " (all/scoped)"))))
 
 (defn- fmt-usd-rate
-  "$/M rate as a compact string (0.44 → \"$0.44/M\", 15 → \"$15/M\");
-   nil when absent or zero."
+  "$/M rate as a compact string (0.44 → \"$0.44\", 15 → \"$15\"); the
+   per-million-tokens unit is implied by the context. nil when absent
+   or zero."
   [v]
   (when (and (number? v) (pos? v))
     (let [s (-> (format "%.4g" (double v))
                 (str/replace #"(\.\d*?)0+$" "$1")
                 (str/replace #"\.$" ""))]
-      (str "$" s "/M"))))
+      (str "$" s))))
 
 (defn- model-cost-str
-  "Cost summary line for the selected model's details — input/output rates
-   always, cache-read/cache-write rates when the model prices them (pi
-   doesn't show cost in the selector; kmet adds it opportunistically).
-   nil when the model carries no cost data."
+  "Compact cost summary line for the selected model's details — input/output
+   rates, plus the cache-read rate when the model prices it (pi doesn't show
+   cost in the selector; kmet adds it opportunistically). nil when the model
+   carries no cost data."
   [model]
   (when-let [c (:cost model)]
     (let [in-rate (fmt-usd-rate (:input c))
           out-rate (fmt-usd-rate (:output c))
           cr-rate (fmt-usd-rate (:cache-read c))
-          cw-rate (fmt-usd-rate (:cache-write c))
           parts (cond-> []
                   in-rate (conj (str in-rate " in"))
                   out-rate (conj (str out-rate " out"))
-                  cr-rate (conj (str cr-rate " cached"))
-                  cw-rate (conj (str cw-rate " cache-write")))]
+                  cr-rate (conj (str cr-rate " cached")))]
       (when (seq parts)
         (str "  Cost: " (str/join " · " parts))))))
 
