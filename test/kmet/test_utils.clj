@@ -73,6 +73,22 @@
   (t/is (= ".." (u/truncate-to-width "hello world" 2 "...")))
   (t/is (= "" (u/truncate-to-width "hello world" 0 "..."))))
 
+(t/deftest test-truncate-to-width-pad
+  ;; pi: truncateToWidth's pad flag — the result is right-padded with
+  ;; spaces to exactly max-width, keeping box borders aligned for short
+  ;; rows (the mcp-adapter panel renders every row padded)
+  (t/is (= "hello     " (u/truncate-to-width "hello" 10 "…" true)))
+  (t/is (= "hello" (u/truncate-to-width "hello" 10 "…" false)))
+  (t/is (= "a very ..." (u/truncate-to-width "a very long line here" 10 "..." true))
+        "truncated result already fills max-width — pad is a no-op")
+  (t/is (= 10 (u/visible-width (u/truncate-to-width "hello" 10 "…" true))))
+  (t/is (= 10 (u/visible-width (u/truncate-to-width "\u001b[31mhello\u001b[0m" 10 "…" true)))
+        "ANSI codes are preserved and don't count toward the pad")
+  (t/is (= 8 (u/visible-width (u/truncate-to-width "中文服务器" 8 "…" true)))
+        "wide chars pad correctly")
+  (t/is (= "     " (u/truncate-to-width "" 5 "…" true)))
+  (t/is (= "" (u/truncate-to-width "" 5 "…" false))))
+
 (t/deftest test-truncate-to-width-osc-8-close
   ;; pi: getActiveOsc8Close — cutting through a hyperlink label must close
   ;; the link before the ellipsis so following text isn't swallowed by it

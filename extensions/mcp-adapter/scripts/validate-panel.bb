@@ -18,6 +18,7 @@
 
 (defn strip [s] (str/replace s #"\x1b\[[0-9;]*m" ""))
 (defn render-lines [comp] (mapv strip (core/render comp 82)))
+(defn all-same-width? [lines] (= 1 (count (distinct (map count lines)))))
 
 (defn normalize
   "Host normalize-custom-component: duck-typed {:render :handle-input
@@ -70,6 +71,7 @@
       lines (render-lines pan)]
   (check "title + border box" (some #(str/includes? % "MCP Servers") lines))
   (check "search placeholder" (some #(str/includes? % "◎ search...") lines))
+  (check "all rows same width (borders aligned)" (all-same-width? lines))
   (check "failed server row + failure message"
          (and (some #(str/includes? % "broken (not cached) failed") lines)
               (some #(str/includes? % "spawn failed: no such file") lines)))
@@ -84,7 +86,8 @@
   (core/handle-input pan "\r")            ;; expand
   (let [lines (render-lines pan)]
     (check "expanded server row" (some #(str/includes? % "▾ ◐ exa") lines))
-    (check "tool rows" (some #(str/includes? % "web_search_exa — Search the web") lines))))
+    (check "tool rows" (some #(str/includes? % "web_search_exa — Search the web") lines))
+    (check "rows still aligned when expanded" (all-same-width? lines))))
 
 (println "\n── toggle → discard confirm → keep & close ──")
 (let [done (atom nil)
@@ -137,6 +140,7 @@
       lines (mapv strip (core/render dlg 60))]
   (check "bordered, windowed view" (and (some #(str/includes? % "MCP search") lines)
                                         (< (count lines) 20)))
+  (check "rows aligned" (all-same-width? lines))
   (core/handle-input dlg "\u001b[B")      ;; down
   (let [lines2 (mapv strip (core/render dlg 60))]
     (check "scrolled down" (some #(str/includes? % "line-1") lines2)))

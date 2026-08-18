@@ -280,58 +280,62 @@
    truncateToWidth guards on max-width, not target). When the ellipsis
    alone doesn't fit, it is clipped to max-width (pi:
    truncateFragmentToWidth). ANSI escape codes are preserved for the kept
-   prefix, so styling survives truncation."
+   prefix, so styling survives truncation. With PAD true the result is
+   right-padded with spaces to exactly max-width visible columns (pi:
+   truncateToWidth's pad flag) — short text keeps box borders aligned."
   ([s max-width] (truncate-to-width s max-width ""))
-  ([s max-width ellipsis]
-   (cond
-     (<= max-width 0) ""
-     (<= (visible-width s) max-width) s
-     :else
-     (let [e-width (visible-width ellipsis)
-           target (- max-width e-width)]
-       (if (>= e-width max-width)
-         ;; The ellipsis alone doesn't fit — clip it to max-width
-         (let [clipped (truncate-to-width ellipsis max-width)]
-           (if (pos? (visible-width clipped)) clipped ""))
-         (if-not (or (clojure.string/includes? s "\u001b[")
-                     (clojure.string/includes? s "\u001b]"))
-           ;; Fast path: plain text — truncate by codepoint, never letting
-           ;; the kept prefix cross target (pi: keptWidth + width <= target)
-           (let [sb (atom "")
-                 total (atom 0)
-                 n (count s)
-                 _ (loop [i 0]
-                     (when (and (< i n)
-                                (<= (+ @total (char-width (code-point-at s i))) target))
-                       (let [cp (code-point-at s i)
-                             w (char-width cp)
-                             nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
-                         (swap! sb str (subs s i (+ i nchars)))
-                         (swap! total + w)
-                         (recur (+ i nchars)))))]
-             (str @sb ellipsis))
-           ;; ANSI path: keep escape codes with the characters they style;
-           ;; pending (unflushed) codes are dropped once truncation starts
-           (let [sb (StringBuilder.)
-                 n (count s)
-                 ansi-re ANSI-CODE-RE
-                 ansi-at (fn [i]
-                           (let [m (re-matcher ansi-re s)]
-                             (when (and (.find m i) (= (.start m) i))
-                               [(.group m) (.end m)])))]
-             (loop [i 0 total 0 pending ""]
-               (if (or (>= i n) (>= total target))
-                 (str sb (active-osc-8-close (str sb)) ellipsis)
-                 (if-let [[code end] (ansi-at i)]
-                   (recur end total (str pending code))
-                   (let [cp (code-point-at s i)
-                         w (char-width cp)
-                         nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
-                     (if (<= (+ total w) target)
-                       (do (.append sb pending)
-                           (.append sb (subs s i (+ i nchars)))
-                           (recur (+ i nchars) (+ total w) ""))
-                       (str sb (active-osc-8-close (str sb)) ellipsis)))))))))))))
+  ([s max-width ellipsis] (truncate-to-width s max-width ellipsis false))
+  ([s max-width ellipsis pad]
+   (let [pad-to (fn [result]
+                  (if pad
+                    (str result (apply str (repeat (max 0 (- max-width (visible-width result))) \space)))
+                    result))]
+     (cond
+       (<= max-width 0) ""
+       (empty? s) (pad-to "")
+       (<= (visible-width s) max-width) (pad-to s)
+       :else
+       (let [e-width (visible-width ellipsis)
+             target (- max-width e-width)]
+         (if (>= e-width max-width)
+           (let [clipped (truncate-to-width ellipsis max-width)]
+             (pad-to (if (pos? (visible-width clipped)) clipped "")))
+           (pad-to
+            (if-not (or (clojure.string/includes? s "\u001b[")
+                        (clojure.string/includes? s "\u001b]"))
+              (let [sb (atom "")
+                    total (atom 0)
+                    n (count s)
+                    _ (loop [i 0]
+                        (when (and (< i n)
+                                   (<= (+ @total (char-width (code-point-at s i))) target))
+                          (let [cp (code-point-at s i)
+                                w (char-width cp)
+                                nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
+                            (swap! sb str (subs s i (+ i nchars)))
+                            (swap! total + w)
+                            (recur (+ i nchars)))))]
+                (str @sb ellipsis))
+              (let [sb (StringBuilder.)
+                    n (count s)
+                    ansi-re ANSI-CODE-RE
+                    ansi-at (fn [i]
+                              (let [m (re-matcher ansi-re s)]
+                                (when (and (.find m i) (= (.start m) i))
+                                  [(.group m) (.end m)])))]
+                (loop [i 0 total 0 pending ""]
+                  (if (or (>= i n) (>= total target))
+                    (str sb (active-osc-8-close (str sb)) ellipsis)
+                    (if-let [[code end] (ansi-at i)]
+                      (recur end total (str pending code))
+                      (let [cp (code-point-at s i)
+                            w (char-width cp)
+                            nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
+                        (if (<= (+ total w) target)
+                          (do (.append sb pending)
+                              (.append sb (subs s i (+ i nchars)))
+                              (recur (+ i nchars) (+ total w) ""))
+                          (str sb (active-osc-8-close (str sb)) ellipsis)))))))))))))))
 
 ;; ─── Word wrapping ──────────────────────────────────────────────────────────
 

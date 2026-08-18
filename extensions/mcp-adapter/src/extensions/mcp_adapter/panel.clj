@@ -380,7 +380,7 @@
 
 (defn- row [t content inner-width]
   (str (fg (:border t) "│")
-       (u/truncate-to-width (str " " content) inner-width "…")
+       (u/truncate-to-width (str " " content) inner-width "…" true)
        (fg (:border t) "│")))
 
 (defn- empty-row [t inner-width]
