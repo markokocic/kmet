@@ -11,6 +11,7 @@
             [kmet.tui.theme :as theme]
             [kmet.tui.keybindings :as kb]
             [kmet.app.keybindings :as app-kb]
+            [kmet.app.ui.model-cost :as model-cost]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.spacer :as spacer]
@@ -328,9 +329,13 @@
                                       (str "  (" (inc selected) "/" n ")"))
                             1 0)))
     (when (pos? n)
-      (container/container-add-child rows (spacer/make-spacer 1))
-      (container/container-add-child
-       rows (text/make-text (model-name-line st n) 1 0)))
+      (let [item (nth filtered selected)]
+        (container/container-add-child rows (spacer/make-spacer 1))
+        (container/container-add-child
+         rows (text/make-text (model-name-line st n) 1 0))
+        (when-let [cost-str (model-cost/model-cost-str (:model item))]
+          (container/container-add-child
+           rows (text/make-text (theme/fg th :muted cost-str) 1 0)))))
     (container/container-set-children! (:rows-container this) @(:children rows))
     (text/text-set! (:footer-text this) (footer-text-str st))))
 

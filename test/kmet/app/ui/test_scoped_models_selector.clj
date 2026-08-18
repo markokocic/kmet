@@ -185,3 +185,23 @@
     (press sel "enter")
     (t/is (= ["ghost/id"] @changed) "available row removed, unavailable kept")))
 
+(t/deftest test-cost-line-for-priced-model
+  ;; A priced selected model renders the cost line under the name, marked
+  ;; with the footer's direction marks (↑ in · ↓ out · C↑ cache read ·
+  ;; C↓ cache write); zero-cost models render no line
+  (let [priced (assoc (model :p1 "a")
+                      :cost {:input 0.44 :output 1.5 :cache-read 0.11 :cache-write 3.3})
+        dir (str (fs/create-dirs (fs/path "target" "test-sms-keybindings")))
+        _ (tui-kb/set-global-keybindings! (kb/create-agent-keybindings-manager dir))
+        sel (sms/make-scoped-models-selector
+             [priced (model :p1 "b") (model :p2 "x")]
+             nil)
+        text (fn [i] @(:text-atom (nth @(:children (:rows-container sel)) i)))]
+    (t/is (str/includes? (text 5) "↑$0.44") "input rate marked ↑")
+    (t/is (str/includes? (text 5) "↓$1.5") "output rate marked ↓")
+    (t/is (str/includes? (text 5) "C↑$0.11") "cache read marked C↑")
+    (t/is (str/includes? (text 5) "C↓$3.3") "cache write marked C↓")
+    (press sel "down")
+    (t/is (= (count @(:children (:rows-container sel))) 5)
+          "zero-cost model renders no cost line")))
+

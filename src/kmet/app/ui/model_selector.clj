@@ -11,6 +11,7 @@
             [kmet.app.model-resolver :as resolver]
             [kmet.app.ui.chat-history :as chat-history]
             [kmet.app.ui.footer-data-provider :as fdp]
+            [kmet.app.ui.model-cost :as model-cost]
             [kmet.app.ui.scoped-models-selector :as scoped-models-selector]
             [kmet.config :as cfg]
             [kmet.tui.components.container :as container]
@@ -236,37 +237,6 @@
        (let [th (theme/get-current-theme)]
          (theme/fg th :muted " (all/scoped)"))))
 
-(defn- fmt-usd-rate
-  "$/M rate as a compact string (0.44 → \"$0.44\", 15 → \"$15\"); the
-   per-million-tokens unit is implied by the context. nil when absent
-   or zero."
-  [v]
-  (when (and (number? v) (pos? v))
-    (let [s (-> (format "%.4g" (double v))
-                (str/replace #"(\.\d*?)0+$" "$1")
-                (str/replace #"\.$" ""))]
-      (str "$" s))))
-
-(defn- model-cost-str
-  "Compact cost summary line for the selected model's details — input/output
-   rates marked ↑/↓ (the footer's token-direction convention), plus
-   cache-read/cache-write rates as C↑/C↓ when the model prices them (pi
-   doesn't show cost in the selector; kmet adds it opportunistically). nil
-   when the model carries no cost data."
-  [model]
-  (when-let [c (:cost model)]
-    (let [in-rate (fmt-usd-rate (:input c))
-          out-rate (fmt-usd-rate (:output c))
-          cr-rate (fmt-usd-rate (:cache-read c))
-          cw-rate (fmt-usd-rate (:cache-write c))
-          parts (cond-> []
-                  in-rate (conj (str "↑" in-rate))
-                  out-rate (conj (str "↓" out-rate))
-                  cr-rate (conj (str "C↑" cr-rate))
-                  cw-rate (conj (str "C↓" cw-rate)))]
-      (when (seq parts)
-        (str "  Cost: " (str/join " · " parts))))))
-
 (defn- model-refresh!
   "Rebuild the list rows and scope text from the current state (pi
    ModelSelectorComponent.updateList + filterModels)."
@@ -309,7 +279,7 @@
          rows (text/make-text
                (theme/fg th :muted (str "  Model Name: " (:name selected-model)))
                1 0))
-        (when-let [cost-str (model-cost-str selected-model)]
+        (when-let [cost-str (model-cost/model-cost-str selected-model)]
           (container/container-add-child
            rows (text/make-text (theme/fg th :muted cost-str) 1 0)))))
     (container/container-set-children! (:list-container this) @(:children rows))
