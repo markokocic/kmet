@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-17T07:16:16Z"
+ :generated-at "2026-08-18T13:55:21Z"
  :provider {:id :cerebras
             :name "Cerebras"
             :env-vars ["CEREBRAS_API_KEY"]
@@ -43,27 +43,6 @@
                          :xhigh nil}
     :input [:text]
     :cost {:input 0.35 :output 0.75 :cache-read 0 :cache-write 0}
-    :context-window 131072
-    :max-tokens 40960
-    :compat {:supports-store false
-             :supports-developer-role false
-             :max-tokens-field :max-tokens}}
-   "zai-glm-4.7"
-   {:id "zai-glm-4.7"
-    :name "Z.AI GLM-4.7"
-    :provider :cerebras
-    :api :openai-completions
-    :base-url "https://api.cerebras.ai/v1"
-    :reasoning true
-    :thinking-level-map {:high nil
-                         :low nil
-                         :max nil
-                         :medium nil
-                         :minimal nil
-                         :off "none"
-                         :xhigh nil}
-    :input [:text]
-    :cost {:input 2.25 :output 2.75 :cache-read 2.25 :cache-write 0}
     :context-window 131072
     :max-tokens 40960
     :compat {:supports-store false

@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-17T07:16:16Z"
+ :generated-at "2026-08-18T13:55:21Z"
  :provider {:id :vercel-ai-gateway
             :name "Vercel AI Gateway"
             :env-vars ["AI_GATEWAY_API_KEY"]
@@ -300,7 +300,7 @@
     :base-url "https://ai-gateway.vercel.sh"
     :reasoning true
     :input [:text :image]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :cost {:input 0.1 :output 0.4 :cache-read 0.01 :cache-write 0}
     :context-window 262144
     :max-tokens 262133}
    "alibaba/qwen3.8-max"
@@ -812,7 +812,7 @@
     :reasoning true
     :thinking-level-map {:off nil}
     :input [:text :image]
-    :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 0}
+    :cost {:input 0.75 :output 3.75 :cache-read 0.075 :cache-write 0}
     :context-window 1000000
     :max-tokens 64000}
    "google/gemini-3.7-flash"
@@ -1475,6 +1475,17 @@
     :cost {:input 2 :output 8 :cache-read 0.5 :cache-write 0}
     :context-window 1047576
     :max-tokens 32768}
+   "openai/gpt-4.1-fast"
+   {:id "openai/gpt-4.1-fast"
+    :name "GPT-4.1 (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 3.5 :output 14 :cache-read 0.875 :cache-write 0}
+    :context-window 1047576
+    :max-tokens 32768}
    "openai/gpt-4.1-mini"
    {:id "openai/gpt-4.1-mini"
     :name "GPT-4.1 mini"
@@ -1484,6 +1495,17 @@
     :reasoning false
     :input [:text :image]
     :cost {:input 0.4 :output 1.6 :cache-read 0.1 :cache-write 0}
+    :context-window 1047576
+    :max-tokens 32768}
+   "openai/gpt-4.1-mini-fast"
+   {:id "openai/gpt-4.1-mini-fast"
+    :name "GPT-4.1 mini (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.7 :output 2.8 :cache-read 0.175 :cache-write 0}
     :context-window 1047576
     :max-tokens 32768}
    "openai/gpt-4.1-nano"
@@ -1497,6 +1519,17 @@
     :cost {:input 0.1 :output 0.4 :cache-read 0.025 :cache-write 0}
     :context-window 1047576
     :max-tokens 32768}
+   "openai/gpt-4.1-nano-fast"
+   {:id "openai/gpt-4.1-nano-fast"
+    :name "GPT-4.1 nano (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.2 :output 0.8 :cache-read 0.05 :cache-write 0}
+    :context-window 1047576
+    :max-tokens 32768}
    "openai/gpt-4o"
    {:id "openai/gpt-4o"
     :name "GPT-4o"
@@ -1508,6 +1541,17 @@
     :cost {:input 2.5 :output 10 :cache-read 1.25 :cache-write 0}
     :context-window 128000
     :max-tokens 16384}
+   "openai/gpt-4o-fast"
+   {:id "openai/gpt-4o-fast"
+    :name "GPT-4o (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 4.25 :output 17 :cache-read 2.125 :cache-write 0}
+    :context-window 128000
+    :max-tokens 16384}
    "openai/gpt-4o-mini"
    {:id "openai/gpt-4o-mini"
     :name "GPT-4o mini"
@@ -1517,6 +1561,17 @@
     :reasoning false
     :input [:text :image]
     :cost {:input 0.15 :output 0.6 :cache-read 0.075 :cache-write 0}
+    :context-window 128000
+    :max-tokens 16384}
+   "openai/gpt-4o-mini-fast"
+   {:id "openai/gpt-4o-mini-fast"
+    :name "GPT-4o mini (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.25 :output 1 :cache-read 0.125 :cache-write 0}
     :context-window 128000
     :max-tokens 16384}
    "openai/gpt-5"
@@ -1541,6 +1596,17 @@
     :cost {:input 1.25 :output 10 :cache-read 0.13 :cache-write 0}
     :context-window 400000
     :max-tokens 128000}
+   "openai/gpt-5-fast"
+   {:id "openai/gpt-5-fast"
+    :name "GPT-5 (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 2.5 :output 20 :cache-read 0.25 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000}
    "openai/gpt-5-mini"
    {:id "openai/gpt-5-mini"
     :name "GPT-5 mini"
@@ -1550,6 +1616,17 @@
     :reasoning true
     :input [:text :image]
     :cost {:input 0.25 :output 2 :cache-read 0.025 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000}
+   "openai/gpt-5-mini-fast"
+   {:id "openai/gpt-5-mini-fast"
+    :name "GPT-5 mini (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.45 :output 3.6 :cache-read 0.045 :cache-write 0}
     :context-window 400000
     :max-tokens 128000}
    "openai/gpt-5-nano"
@@ -1618,6 +1695,17 @@
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0}
     :context-window 400000
     :max-tokens 128000}
+   "openai/gpt-5.1-thinking-fast"
+   {:id "openai/gpt-5.1-thinking-fast"
+    :name "GPT 5.1 Thinking (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 2.5 :output 20 :cache-read 0.25 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000}
    "openai/gpt-5.2"
    {:id "openai/gpt-5.2"
     :name "GPT 5.2"
@@ -1640,6 +1728,18 @@
     :thinking-level-map {:xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1.75 :output 14 :cache-read 0.175 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000}
+   "openai/gpt-5.2-fast"
+   {:id "openai/gpt-5.2-fast"
+    :name "GPT 5.2 (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 3.5 :output 28 :cache-read 0.35 :cache-write 0}
     :context-window 400000
     :max-tokens 128000}
    "openai/gpt-5.2-pro"
@@ -1666,6 +1766,18 @@
     :cost {:input 1.75 :output 14 :cache-read 0.175 :cache-write 0}
     :context-window 400000
     :max-tokens 128000}
+   "openai/gpt-5.3-codex-fast"
+   {:id "openai/gpt-5.3-codex-fast"
+    :name "GPT 5.3 Codex (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 3.5 :output 28 :cache-read 0.35 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000}
    "openai/gpt-5.4"
    {:id "openai/gpt-5.4"
     :name "GPT 5.4"
@@ -1678,6 +1790,18 @@
     :cost {:input 2.5 :output 15 :cache-read 0.25 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000}
+   "openai/gpt-5.4-fast"
+   {:id "openai/gpt-5.4-fast"
+    :name "GPT 5.4 (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 0}
+    :context-window 1050000
+    :max-tokens 128000}
    "openai/gpt-5.4-mini"
    {:id "openai/gpt-5.4-mini"
     :name "GPT 5.4 Mini"
@@ -1688,6 +1812,18 @@
     :thinking-level-map {:xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.75 :output 4.5 :cache-read 0.075 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000}
+   "openai/gpt-5.4-mini-fast"
+   {:id "openai/gpt-5.4-mini-fast"
+    :name "GPT 5.4 Mini (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 1.5 :output 9 :cache-read 0.15 :cache-write 0}
     :context-window 400000
     :max-tokens 128000}
    "openai/gpt-5.4-nano"
@@ -1726,6 +1862,18 @@
     :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 0}
     :context-window 1000000
     :max-tokens 128000}
+   "openai/gpt-5.5-fast"
+   {:id "openai/gpt-5.5-fast"
+    :name "GPT 5.5 (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 12.5 :output 75 :cache-read 1.25 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 128000}
    "openai/gpt-5.5-pro"
    {:id "openai/gpt-5.5-pro"
     :name "GPT 5.5 Pro"
@@ -1750,6 +1898,18 @@
     :cost {:input 0.2 :output 1.2 :cache-read 0.02 :cache-write 0.25}
     :context-window 1050000
     :max-tokens 128000}
+   "openai/gpt-5.6-luna-fast"
+   {:id "openai/gpt-5.6-luna-fast"
+    :name "GPT 5.6 Luna (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 0.4 :output 2.4 :cache-read 0.04 :cache-write 0.25}
+    :context-window 1050000
+    :max-tokens 128000}
    "openai/gpt-5.6-sol"
    {:id "openai/gpt-5.6-sol"
     :name "GPT 5.6 Sol"
@@ -1759,7 +1919,19 @@
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
     :input [:text :image]
-    :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 6.25}
+    :cost {:input 2.5 :output 15 :cache-read 0.25 :cache-write 3.125}
+    :context-window 1050000
+    :max-tokens 128000}
+   "openai/gpt-5.6-sol-fast"
+   {:id "openai/gpt-5.6-sol-fast"
+    :name "GPT 5.6 Sol (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 3.125}
     :context-window 1050000
     :max-tokens 128000}
    "openai/gpt-5.6-terra"
@@ -1772,6 +1944,18 @@
     :thinking-level-map {:xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 2.5}
+    :context-window 1050000
+    :max-tokens 128000}
+   "openai/gpt-5.6-terra-fast"
+   {:id "openai/gpt-5.6-terra-fast"
+    :name "GPT 5.6 Terra (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 4 :output 24 :cache-read 0.4 :cache-write 2.5}
     :context-window 1050000
     :max-tokens 128000}
    "openai/gpt-oss-120b"
@@ -1840,6 +2024,17 @@
     :cost {:input 10 :output 40 :cache-read 2.5 :cache-write 0}
     :context-window 200000
     :max-tokens 100000}
+   "openai/o3-fast"
+   {:id "openai/o3-fast"
+    :name "o3 (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 3.5 :output 14 :cache-read 0.875 :cache-write 0}
+    :context-window 200000
+    :max-tokens 100000}
    "openai/o3-mini"
    {:id "openai/o3-mini"
     :name "o3-mini"
@@ -1871,6 +2066,17 @@
     :reasoning true
     :input [:text :image]
     :cost {:input 1.1 :output 4.4 :cache-read 0.275 :cache-write 0}
+    :context-window 200000
+    :max-tokens 100000}
+   "openai/o4-mini-fast"
+   {:id "openai/o4-mini-fast"
+    :name "o4-mini (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 2 :output 8 :cache-read 0.5 :cache-write 0}
     :context-window 200000
     :max-tokens 100000}
    "poolside/laguna-s-2.1"

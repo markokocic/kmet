@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-17T07:16:16Z"
+ :generated-at "2026-08-18T13:55:21Z"
  :provider {:id :cloudflare-workers-ai
             :name "Cloudflare Workers AI"
             :env-vars ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"]
@@ -250,6 +250,28 @@
     :cost {:input 0.0509 :output 0.335 :cache-read 0 :cache-write 0}
     :context-window 32768
     :max-tokens 32768
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
+   "@cf/qwen/qwen3.8-27b"
+   {:id "@cf/qwen/qwen3.8-27b"
+    :name "Qwen3.8 27B"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :thinking-level-map {:high nil
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 0.45 :output 3.2 :cache-read 0.05 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144
     :compat {:supports-store false
              :supports-developer-role false
              :supports-long-cache-retention false

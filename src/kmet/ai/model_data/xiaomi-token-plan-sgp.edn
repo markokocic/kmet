@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-17T07:16:16Z"
+ :generated-at "2026-08-18T13:55:21Z"
  :provider {:id :xiaomi-token-plan-sgp
             :name "Xiaomi MiMo Token Plan (SGP)"
             :env-vars ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"]

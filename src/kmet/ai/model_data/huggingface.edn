@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-17T07:16:16Z"
+ :generated-at "2026-08-18T13:55:21Z"
  :provider {:id :huggingface
             :name "Hugging Face"
             :env-vars ["HF_TOKEN"]
@@ -197,6 +197,37 @@
     :cost {:input 0.3 :output 2 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 131072
+    :compat {:supports-developer-role false}}
+   "Qwen/Qwen3-VL-235B-A22B-Instruct"
+   {:id "Qwen/Qwen3-VL-235B-A22B-Instruct"
+    :name "Qwen3 VL 235B A22B Instruct"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.3 :output 1.5 :cache-read 0 :cache-write 0}
+    :context-window 131072
+    :max-tokens 32768
+    :compat {:supports-developer-role false}}
+   "Qwen/Qwen3-VL-235B-A22B-Thinking"
+   {:id "Qwen/Qwen3-VL-235B-A22B-Thinking"
+    :name "Qwen3 VL 235B A22B Thinking"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text :image]
+    :cost {:input 0.98 :output 3.95 :cache-read 0 :cache-write 0}
+    :context-window 131072
+    :max-tokens 32768
     :compat {:supports-developer-role false}}
    "Qwen/Qwen3.5-122B-A10B"
    {:id "Qwen/Qwen3.5-122B-A10B"

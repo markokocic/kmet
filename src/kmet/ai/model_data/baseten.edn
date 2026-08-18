@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-17T07:16:16Z"
+ :generated-at "2026-08-18T13:55:21Z"
  :provider {:id :baseten
             :name "Baseten"
             :env-vars ["BASETEN_API_KEY"]
@@ -16,7 +16,7 @@
     :input [:text]
     :cost {:input 0.13 :output 0.26 :cache-read 0.028 :cache-write 0}
     :context-window 1048576
-    :max-tokens 1048576
+    :max-tokens 384000
     :compat {:supports-store false
              :supports-developer-role false
              :supports-reasoning-effort false
@@ -39,7 +39,7 @@
                          :xhigh "xhigh"}
     :input [:text]
     :cost {:input 1.74 :output 3.48 :cache-read 0.145 :cache-write 0}
-    :context-window 262144
+    :context-window 1048576
     :max-tokens 262144
     :compat {:supports-store false
              :supports-developer-role false
@@ -403,7 +403,7 @@
                          :minimal nil
                          :off "none"
                          :xhigh nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 1.4 :output 4.4 :cache-read 0.3 :cache-write 0}
     :context-window 1048576
     :max-tokens 262144
@@ -430,7 +430,7 @@
                          :minimal nil
                          :off "none"
                          :xhigh nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 2.1 :output 6.6 :cache-read 0.21 :cache-write 0}
     :context-window 1048576
     :max-tokens 262144
