@@ -236,6 +236,35 @@
        (let [th (theme/get-current-theme)]
          (theme/fg th :muted " (all/scoped)"))))
 
+(defn- fmt-usd-rate
+  "$/M rate as a compact string (0.44 → \"$0.44/M\", 15 → \"$15/M\");
+   nil when absent or zero."
+  [v]
+  (when (and (number? v) (pos? v))
+    (let [s (str/replace (format "%.4g" (double v)) #"\.\d*?0+$"
+                         (fn [m] (str/replace m #"0+$" "")))
+          s (str/replace s #"\.$" "")]
+      (str "$" s "/M"))))
+
+(defn- model-cost-str
+  "Cost summary line for the selected model's details — input/output rates
+   always, cache-read/cache-write rates when the model prices them (pi
+   doesn't show cost in the selector; kmet adds it opportunistically).
+   nil when the model carries no cost data."
+  [model]
+  (when-let [c (:cost model)]
+    (let [in-rate (fmt-usd-rate (:input c))
+          out-rate (fmt-usd-rate (:output c))
+          cr-rate (fmt-usd-rate (:cache-read c))
+          cw-rate (fmt-usd-rate (:cache-write c))
+          parts (cond-> []
+                  in-rate (conj (str in-rate " in"))
+                  out-rate (conj (str out-rate " out"))
+                  cr-rate (conj (str cr-rate " cached"))
+                  cw-rate (conj (str cw-rate " cache-write")))]
+      (when (seq parts)
+        (str "  Cost: " (str/join " · " parts))))))
+
 (defn- model-refresh!
   "Rebuild the list rows and scope text from the current state (pi
    ModelSelectorComponent.updateList + filterModels)."
@@ -277,7 +306,10 @@
        rows (text/make-text
              (theme/fg th :muted
                        (str "  Model Name: " (:name (:model (nth filtered selected)))))
-             1 0)))
+             1 0))
+      (when-let [cost-str (model-cost-str (:model (nth filtered selected)))]
+        (container/container-add-child
+         rows (text/make-text (theme/fg th :muted cost-str) 1 0))))
     (container/container-set-children! (:list-container this) @(:children rows))
     (when-let [stx (:scope-text this)]
       (text/text-set! stx (scope-text-str st)))
