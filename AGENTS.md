@@ -50,6 +50,14 @@
 - **Private vars**: use `defn-` / `def-` for implementation details not part of public API
 
 ## Editing
+- For Clojure, Babashka and EDN files (`.clj` `.cljs` `.cljc` `.bb` `.edn`), prefer the
+  structure-aware extension tools over the generic `write`/`edit` tools:
+  `clojure_edit` finds a definition by `form_type` + `form_identifier` and
+  `replace`/`insert_before`/`insert_after`s it; `clojure_edit_replace_sexp`
+  replaces an s-expression by content match (`replace_all` to rename a symbol
+  file-wide). They validate structure, auto-repair delimiters and format with
+  cljfmt. Keep the generic `edit`/`write` tools for plain textual changes
+  (comments, docstrings, non-form text).
 - When an `edit` call fails because of unbalanced parens, try the `clojure_paren_repair` tool first; if that doesn't help, split the change into smaller focused edits.
 
 ## File layout
