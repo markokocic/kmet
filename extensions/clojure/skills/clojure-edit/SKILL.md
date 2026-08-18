@@ -32,6 +32,21 @@ These tools understand Clojure syntax and prevent common errors.
 - Use meaningful function and parameter names instead
 - If comments are needed, add them in separate edits
 
+## insert_after / insert_before Semantics
+- Pass ONLY the new content — never repeat the anchor form inside `content`
+- The inserted form lands OUTSIDE the anchor's own line:
+  - a same-line trailing comment stays with the anchor form (`(defn a ...) ;; note` keeps its note)
+  - a comment on its own line leads the NEXT form and stays with it
+- The inserted form is blank-line separated from surrounding forms
+
+## Alias-Qualified Forms
+- `(t/deftest my-test ...)` matches with plain `form_type: "deftest"`
+  (the qualified name `t/deftest` also works)
+
+## match_form Must Be Complete
+- `clojure_edit_replace_sexp` match_form/new_form need COMPLETE expressions with balanced parens
+- Fragments like `...x]]` or `:else [w j])` are rejected — include the full enclosing form
+
 ## Handling Parenthesis Errors
 - Break complex functions into smaller, focused ones
 - Start with minimal code and add incrementally
@@ -58,3 +73,7 @@ Remember to include dispatch values:
 | Insert a new function before/after another | `clojure_edit` |
 | Rename a symbol everywhere in a file | `clojure_edit_replace_sexp` with `replace_all` |
 | Edit an ns declaration | `clojure_edit` |
+
+**Rule of thumb:** prefer `insert_before`/`insert_after` for ADDING new forms
+(no need to reproduce the anchor's text); use `replace` only to MODIFY an
+existing form's body.

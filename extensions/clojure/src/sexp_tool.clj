@@ -152,10 +152,23 @@
                         (zright-n (count (n/child-sexprs replacement-node))))}))
 
 (defn- insert-after-multi [zloc match-sexprs replacement-node]
-  (let [edit-loc (-> (take (count match-sexprs) (iterate z/right zloc))
-                     last
-                     (z/insert-right replacement-node)
-                     z/right)]
+  (let [anchor (-> (take (count match-sexprs) (iterate z/right zloc))
+                   last
+                   ;; past the match's own same-line trailing trivia, so a
+                   ;; trailing comment stays with the matched form
+                   util/walk-forward-past-trailing-comments)
+        comment-anchor? (= :comment (n/tag (z/node anchor)))
+        sep-node (p/parse-string-all (if comment-anchor? "\n" "\n\n"))
+        edit-loc (-> anchor
+                     (z/insert-right* sep-node)
+                     z/right
+                     (z/insert-right* replacement-node)
+                     z/right)
+        ;; a comment anchor already ends its line — terminate the inserted
+        ;; content's line too, or it glues to the next form
+        edit-loc (if comment-anchor?
+                   (z/insert-right* edit-loc (p/parse-string-all "\n"))
+                   edit-loc)]
     {:edit-span-loc edit-loc
      :after-loc     (-> edit-loc z/splice
                         (zright-n (count (n/child-sexprs replacement-node))))}))
@@ -294,7 +307,7 @@
    {:name            "clojure_edit_replace_sexp"
     :label           "Clojure s-expression edit"
     :description
-    "Replaces Clojure expressions in a file.\n\nThis tool provides targeted replacement of Clojure expressions within forms. For complete top-level form operations, use clojure_edit instead.\n\nKEY BENEFITS:\n- Syntax-aware matching that understands Clojure code structure\n- Ignores whitespace differences by default, focusing on actual code meaning\n- Matches expressions regardless of formatting, indentation, or spacing\n- Prevents errors from mismatched text or irrelevant formatting differences\n- Can replace all occurrences with replace_all: true\n\nCONSTRAINTS:\n- match_form must contain one or more complete Clojure expressions\n- new_form must contain zero or more complete Clojure expressions\n- Both must be valid Clojure code that can be parsed\n\nWARNING: Incomplete forms like (defn foo, (try, or (let [x 1] will cause errors.\n\nExamples:\n- Replace a calculation: match_form: (+ x 2)  new_form: (* x 2)\n- Rename a symbol everywhere: match_form: old-name  new_form: new-name  replace_all: true\n- Remove debug statements: match_form: (println \"Debug\")  new_form: (empty)\n- Replace multiple expressions: match_form: (validate x) (transform x)  new_form: (-> x validate transform)"
+    "Replaces Clojure expressions in a file.\n\nThis tool provides targeted replacement of Clojure expressions within forms. For complete top-level form operations, use clojure_edit instead.\n\nKEY BENEFITS:\n- Syntax-aware matching that understands Clojure code structure\n- Ignores whitespace differences by default, focusing on actual code meaning\n- Matches expressions regardless of formatting, indentation, or spacing\n- Prevents errors from mismatched text or irrelevant formatting differences\n- Can replace all occurrences with replace_all: true\n\nCONSTRAINTS:\n- match_form must contain one or more complete Clojure expressions\n- new_form must contain zero or more complete Clojure expressions\n- Both must be valid Clojure code that can be parsed\n\nWARNING: Incomplete forms like (defn foo, (try, or (let [x 1] will cause errors. match_form must be a COMPLETE expression (balanced parens) — trailing fragments like \"...x]]\" or \"x])\" are rejected.\n\nFor insert_before/insert_after, pass ONLY the new content (never repeat the matched form). The inserted form lands outside the match's own line: a same-line trailing comment stays with the matched form, and a comment on its own line stays with the next form.\n\nExamples:\n- Replace a calculation: match_form: (+ x 2)  new_form: (* x 2)\n- Rename a symbol everywhere: match_form: old-name  new_form: new-name  replace_all: true\n- Remove debug statements: match_form: (println \"Debug\")  new_form: (empty)\n- Replace multiple expressions: match_form: (validate x) (transform x)  new_form: (-> x validate transform)"
     :prompt-snippet "Replace s-expressions in Clojure code (find by content, replace all or one)"
     :prompt-guidelines
     ["Use clojure_edit_replace_sexp to change a specific expression inside a function without touching the surrounding code."

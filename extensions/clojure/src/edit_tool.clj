@@ -37,7 +37,12 @@
 
 (defn- check-tag [first-elem tag]
   (let [actual (str/trim (n/string (z/node first-elem)))]
-    (when (tag-match? tag actual) first-elem)))
+    (when (or (tag-match? tag actual)
+              ;; alias-qualified macros (t/deftest, s/def, my/defmethod) match
+              ;; by unqualified name — consistent with collect-similar
+              (when-let [sym (try (z/sexpr first-elem) (catch Exception _ nil))]
+                (and (symbol? sym) (tag-match? tag (name sym)))))
+      first-elem)))
 
 (defn- matches-dispatch? [dispatch-elem expected]
   (when (and dispatch-elem expected)
@@ -105,11 +110,22 @@
       z/left))
 
 (defn- insert-after-form [zloc content-str]
-  (-> zloc
-      (z/insert-right* (p/parse-string-all "\n\n"))
-      z/right
-      (z/insert-right* (p/parse-string-all content-str))
-      z/right))
+  ;; Anchor past the form's own same-line trailing trivia (whitespace and
+  ;; trailing comments) so the inserted content lands after them — otherwise
+  ;; the comment detaches from its form and sticks to the inserted one.
+  ;; A comment anchor already ends its line, so it takes a single "\n"
+  ;; before (blank line) and after (line terminator) the content.
+  (let [anchor (util/walk-forward-past-trailing-comments zloc)
+        comment-anchor? (= :comment (n/tag (z/node anchor)))
+        sep (p/parse-string-all (if comment-anchor? "\n" "\n\n"))
+        at-content (-> anchor
+                       (z/insert-right* sep)
+                       z/right
+                       (z/insert-right* (p/parse-string-all content-str))
+                       z/right)]
+    (if comment-anchor?
+      (z/insert-right* at-content (p/parse-string-all "\n"))
+      at-content)))
 
 (defn- edit-top-level-form [zloc tag dname content-str edit-type]
   (let [{:keys [zloc similar-matches]} (find-top-level-form zloc tag dname)]
@@ -256,7 +272,7 @@
    {:name            "clojure_edit"
     :label           "Clojure form edit"
     :description
-    "Edits a top-level form (`defn`, `def`, `defmethod`, `ns`, `deftest`) in a Clojure file using the specified operation.\n\nPREFER this tool over generic file editing tools for Clojure files (`.clj` `.cljs` `.cljc` `.bb`).\n\nThis tool MAKES it EASIER to match a definition that exists in the file AS you only have to match the type of definition `form_type` and the complete identifier `form_identifier` of the definition. This prevents the repeated mismatch errors that occur when trying match an entire string of text for replacement.\nThis tool validates the structure of the Clojure code that is being inserted into the file and will provide linting feedback for things such as parenthetical errors.\n\nWARNING: you will receive errors if the syntax is wrong, the most common error is an extra or missing parenthesis in the `content`, so be careful with parenthesis.\n\nOperations:\n- \"replace\": Replaces the form with new content\n- \"insert_before\": Inserts content before the form\n- \"insert_after\": Inserts content after the form\n\nThe form is identified by its type (defn, def, deftest, s/def, ns, defmethod etc.) and complete identifier.\n\nExample: Replace a function definition:\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"example-fn\"\n- form_type: \"defn\"\n- operation: \"replace\"\n- content: \"(defn example-fn [x] (* x 2))\"\n\nExample: Insert a helper function before a function:\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"example-fn\"\n- form_type: \"defn\"\n- operation: \"insert_before\"\n- content: \"(defn helper-fn [x] (* x 2))\"\n\nExample: Edit a namespace declaration (form_identifier is the namespace name):\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"my.app.core\"\n- form_type: \"ns\"\n- operation: \"replace\"\n- content: \"(ns my.app.core (:require [clojure.string :as str]))\"\n\nFor `defmethod` forms, include the dispatch value (`area :rectangle`) in `form_identifier`.\nMany `defmethod` definitions have qualified names like `shape/area`, so use the complete identifier.\n\nExample: Replace a specific `defmethod` implementation:\n- form_identifier: \"shape/area :square\"\n- form_type: \"defmethod\"\n- operation: \"replace\"\n- content: \"(defmethod shape/area :square [{:keys [w h]}] (* w h))\"\n\nThe tool returns a diff showing the changes made to the file."
+    "Edits a top-level form (`defn`, `def`, `defmethod`, `ns`, `deftest`) in a Clojure file using the specified operation.\n\nPREFER this tool over generic file editing tools for Clojure files (`.clj` `.cljs` `.cljc` `.bb`).\n\nThis tool MAKES it EASIER to match a definition that exists in the file AS you only have to match the type of definition `form_type` and the complete identifier `form_identifier` of the definition. This prevents the repeated mismatch errors that occur when trying match an entire string of text for replacement.\nThis tool validates the structure of the Clojure code that is being inserted into the file and will provide linting feedback for things such as parenthetical errors.\n\nWARNING: you will receive errors if the syntax is wrong, the most common error is an extra or missing parenthesis in the `content`, so be careful with parenthesis.\n\nOperations:\n- \"replace\": Replaces the form with new content\n- \"insert_before\": Inserts content before the form\n- \"insert_after\": Inserts content after the form\n\nFor insert_before/insert_after, pass ONLY the new content (never repeat the anchor form). The inserted form lands outside the anchor's own line: a same-line trailing comment stays with the anchor form, and a comment on its own line stays with the next form.\n\nThe form is identified by its type (defn, def, deftest, s/def, ns, defmethod etc.) and complete identifier. Alias-qualified macros (t/deftest, s/def) match by their plain keyword (deftest, def).\n\nExample: Replace a function definition:\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"example-fn\"\n- form_type: \"defn\"\n- operation: \"replace\"\n- content: \"(defn example-fn [x] (* x 2))\"\n\nExample: Insert a helper function before a function:\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"example-fn\"\n- form_type: \"defn\"\n- operation: \"insert_before\"\n- content: \"(defn helper-fn [x] (* x 2))\"\n\nExample: Edit a namespace declaration (form_identifier is the namespace name):\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"my.app.core\"\n- form_type: \"ns\"\n- operation: \"replace\"\n- content: \"(ns my.app.core (:require [clojure.string :as str]))\"\n\nFor `defmethod` forms, include the dispatch value (`area :rectangle`) in `form_identifier`.\nMany `defmethod` definitions have qualified names like `shape/area`, so use the complete identifier.\n\nExample: Replace a specific `defmethod` implementation:\n- form_identifier: \"shape/area :square\"\n- form_type: \"defmethod\"\n- operation: \"replace\"\n- content: \"(defmethod shape/area :square [{:keys [w h]}] (* w h))\"\n\nThe tool returns a diff showing the changes made to the file."
     :prompt-snippet "Structure-aware Clojure form editing (replace, insert_before, insert_after)"
     :prompt-guidelines
     ["Use clojure_edit instead of the generic edit tool for Clojure files when targeting a specific form by name."

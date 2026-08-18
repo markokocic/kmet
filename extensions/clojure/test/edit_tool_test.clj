@@ -276,6 +276,70 @@
       (is (< (.indexOf content "first-fn")
              (.indexOf content "second-fn"))))))
 
+(deftest test-insert-after-keeps-trailing-comment
+  ;; Regression: insert_after used to land between the anchor form and its
+  ;; same-line trailing comment, detaching the comment onto the inserted
+  ;; form. The comment must stay on the anchor's line, with the inserted
+  ;; form following on its own line, blank-separated on both sides.
+  (let [path (write-test-file! "insert-after-trailing-cmt"
+                               "(defn probe-a [x] (* x 2)) ;; trailing comment on a\n\n(defn probe-b [x] (+ x 1))\n")
+        result (edit-tool/execute
+                (edit-opts path "defn" "probe-a"
+                           "(defn probe-c [x] (- x 3))"
+                           "insert_after"))]
+    (is (not (:is-error result)))
+    (let [content (read-test-file path)]
+      (is (str/includes? content "(defn probe-a [x] (* x 2)) ;; trailing comment on a")
+          "trailing comment stays on the anchor form's line")
+      (is (< (.indexOf content "trailing comment on a")
+             (.indexOf content "probe-c"))
+          "inserted form comes after the anchor's comment")
+      (is (< (.indexOf content "probe-c")
+             (.indexOf content "probe-b"))
+          "next form still follows"))))
+
+(deftest test-insert-after-keeps-next-form-doc-comment
+  ;; A comment starting on its own line leads the NEXT form — the inserted
+  ;; form goes above it, the comment stays with its form.
+  (let [path (write-test-file! "insert-after-doc-cmt"
+                               "(defn probe-a [x] (* x 2))\n\n;; doc for probe-b\n(defn probe-b [x] (+ x 1))\n")
+        result (edit-tool/execute
+                (edit-opts path "defn" "probe-a"
+                           "(defn probe-c [x] (- x 3))"
+                           "insert_after"))]
+    (is (not (:is-error result)))
+    (let [content (read-test-file path)]
+      (is (< (.indexOf content "probe-c")
+             (.indexOf content "doc for probe-b"))
+          "own-line comment stays with the next form"))))
+
+(deftest test-insert-after-trailing-comment-at-eof
+  (let [path (write-test-file! "insert-after-cmt-eof"
+                               "(defn probe-a [x] (* x 2)) ;; last form\n")
+        result (edit-tool/execute
+                (edit-opts path "defn" "probe-a"
+                           "(defn probe-c [x] (- x 3))"
+                           "insert_after"))]
+    (is (not (:is-error result)))
+    (let [content (read-test-file path)]
+      (is (str/includes? content "(defn probe-a [x] (* x 2)) ;; last form")
+          "comment stays with the anchor at EOF"))))
+
+(deftest test-alias-qualified-macro-matched-by-plain-tag
+  ;; form_type "deftest" must match (t/deftest ...): the tag check compares
+  ;; the unqualified name (consistent with the similar-matches hint) — it
+  ;; used to fail with "Could not find form" unless the full "t/deftest"
+  ;; was given.
+  (let [path (write-test-file! "qualified-deftest"
+                               "(ns foo (:require [clojure.test :as t]))\n\n(t/deftest my-test\n  (t/is (= 1 1)))\n")
+        result (edit-tool/execute
+                (edit-opts path "deftest" "my-test"
+                           "(t/deftest other-test\n  (t/is (= 2 2)))"
+                           "insert_after"))]
+    (is (not (:is-error result)))
+    (let [content (read-test-file path)]
+      (is (str/includes? content "other-test")))))
+
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Not found — error + similar matches
 ;; ═══════════════════════════════════════════════════════════════════════════════

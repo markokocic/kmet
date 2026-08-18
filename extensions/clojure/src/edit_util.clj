@@ -132,6 +132,26 @@
   (z/find-next zloc z/prev*
                (fn [z] (not (#{:whitespace :comment} (n/tag (z/node z)))))))
 
+(defn walk-forward-past-trailing-comments
+  "Walk forward from ZLOC past whitespace and comments sitting on the same
+   line — the form's own trailing trivia (e.g. `(defn a ...) ;; note`).
+   Stops before any node that starts a new line: a comment there leads the
+   NEXT form and must stay with it. Returns the last node of the same-line
+   run, which is the right anchor for insert-after."
+  [zloc]
+  (loop [loc zloc]
+    (let [nxt (z/right* loc)]
+      (if-not nxt
+        loc
+        (let [tag (n/tag (z/node nxt))]
+          (cond
+            (= tag :comment) (recur nxt)
+            (= tag :whitespace)
+            (if (str/includes? (n/string (z/node nxt)) "\n")
+              loc
+              (recur nxt))
+            :else loc))))))
+
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Zipper: form replacement
 ;; ═══════════════════════════════════════════════════════════════════════════════

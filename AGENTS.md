@@ -58,6 +58,16 @@
   file-wide). They validate structure, auto-repair delimiters and format with
   cljfmt. Keep the generic `edit`/`write` tools for plain textual changes
   (comments, docstrings, non-form text).
+- For `insert_before`/`insert_after`, pass ONLY the new content — never
+  re-include the anchor form. The inserted form lands outside the anchor's
+  own line: a same-line trailing comment stays with the anchor, and a
+  comment on its own line stays with the next form.
+- Alias-qualified forms (`(t/deftest ...)`, `(s/def ...)`) match with the
+  plain `form_type` keyword (`deftest`, `def`) — the qualified name also
+  works.
+- `clojure_edit_replace_sexp` `match_form`/`new_form` must be COMPLETE
+  expressions with balanced parens; fragments like `:else [w j])` are
+  rejected.
 - When an `edit` call fails because of unbalanced parens, try the `clojure_paren_repair` tool first; if that doesn't help, split the change into smaller focused edits.
 
 ## File layout

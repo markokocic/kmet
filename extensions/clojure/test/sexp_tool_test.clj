@@ -308,6 +308,41 @@
       (is (< (.indexOf content "prn")
              (.indexOf content "println"))))))
 
+(deftest test-insert-after-keeps-trailing-comment
+  ;; Regression: insert_after used to land between the matched expression
+  ;; and its same-line trailing comment, detaching the comment onto the
+  ;; inserted form. The comment stays with the match, and the inserted
+  ;; form gets its own line (it was glued to the next form before).
+  (let [path (write-test-file! "insert-after-trailing-cmt"
+                               "(prn \"a\") ;; log line
+(prn \"b\")\n")
+        result (sexp-tool/execute
+                (sexp-opts path "(prn \"a\")"
+                           "(prn \"inserted\")"
+                           :operation "insert_after"))]
+    (is (not (:is-error result)))
+    (let [content (read-test-file path)]
+      (is (str/includes? content "(prn \"a\") ;; log line")
+          "trailing comment stays with the matched form")
+      (is (< (.indexOf content "log line")
+             (.indexOf content "inserted")))
+      (is (str/includes? content "(prn \"inserted\")\n(prn \"b\")")
+          "inserted form on its own line, not glued to the next"))))
+
+(deftest test-insert-after-separates-forms
+  ;; insert_after must separate the inserted form from the next one with a
+  ;; newline — it used to glue them onto one line (cljfmt only added a space).
+  (let [path (write-test-file! "insert-after-sep"
+                               "(defn first [] 1)\n")
+        result (sexp-tool/execute
+                (sexp-opts path "(defn first [] 1)"
+                           "(defn second [] 2)"
+                           :operation "insert_after"))]
+    (is (not (:is-error result)))
+    (let [content (read-test-file path)]
+      (is (str/includes? content "(defn first [] 1)\n\n(defn second [] 2)")
+          "inserted form is newline-separated from the next"))))
+
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; replace_all forced false for insert operations
 ;; ═══════════════════════════════════════════════════════════════════════════════
