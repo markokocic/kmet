@@ -74,6 +74,13 @@
 
 (def bedrock-empty-text-placeholder "<empty>")
 
+(defn bedrock-normalize-tool-call-id
+  "Pi normalizeToolCallId: Bedrock tool-use ids allow only alphanumeric
+   characters, underscores, and hyphens, up to 64 characters."
+  [id]
+  (let [sanitized (str/replace (or id "") #"[^a-zA-Z0-9_-]" "_")]
+    (subs sanitized 0 (min 64 (count sanitized)))))
+
 (defn bedrock-text-block
   "A non-blank text block; nil when the text is blank (pi
    createNonBlankTextBlock)."
@@ -126,7 +133,8 @@
                        ;; merge consecutive tool results into one user message
                        (let [tool-results (take-while #(= :tool (:role %)) msgs)
                              blocks (mapv (fn [tr]
-                                            {:toolResult {:toolUseId (-> tr :content first :tool_use_id)
+                                            {:toolResult {:toolUseId (bedrock-normalize-tool-call-id
+                                                                      (-> tr :content first :tool_use_id))
                                                           :content (bedrock-tool-result-content
                                                                     (or (-> tr :content first :content) "")
                                                                     (:images tr))
@@ -142,7 +150,7 @@
                                                              (bedrock-text-block (:text b))))
                                                          (:content m))
                                                    (for [tc (:tool-calls m)]
-                                                     {:toolUse {:toolUseId (:id tc)
+                                                     {:toolUse {:toolUseId (bedrock-normalize-tool-call-id (:id tc))
                                                                 :name (:name tc)
                                                                 :input (:arguments tc {})}})
                                                    ;; kmet stores thinking as text only — no

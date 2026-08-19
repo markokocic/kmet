@@ -11,6 +11,7 @@
    [kmet.ai.models :as models]
    [kmet.libs.usage :as usage]
    [kmet.ai.constrained-sampling :as cs]
+   [kmet.libs.hash :as hash]
    [clojure.string :as str]))
 
 ;; ─── Provider-event hooks (pi: context / before_provider_request) ────────
@@ -219,13 +220,35 @@
                :image_url {:url (str "data:" (:mime-type i) ";base64," (:data i))}}))
       text)))
 
+(defn normalize-openai-tool-call-id
+  "Pi normalizeToolCallId for Chat Completions: Responses ids use
+   `call_id|item_id`, while Chat Completions requires one distinct id of at
+   most 40 characters. Preserve the item distinction and hash only when the
+   sanitized combined id is too long."
+  [id & [provider]]
+  (let [id (or id "")]
+    (if (str/includes? id "|")
+      (let [[call-id item-id] (str/split id #"\|" 2)
+            call-id (str/replace call-id #"[^a-zA-Z0-9_-]" "_")
+            item-id (str/replace (or item-id "") #"[^a-zA-Z0-9_-]" "_")
+            combined (str call-id (when (seq item-id) (str "_" item-id)))]
+        (if (<= (count combined) 40)
+          combined
+          (let [digest (subs (hash/short-hash id) 0 8)
+                prefix (subs call-id 0 (min (count call-id)
+                                            (max 1 (- 40 (count digest) 1))))]
+            (str prefix "_" digest))))
+      (if (and (= :openai provider) (> (count id) 40))
+        (subs id 0 40)
+        id))))
+
 (defn openai-messages
   "Map agent messages to OpenAI chat-completion messages.
    Bash entries become user messages (pi: convertToLlm bashExecution);
    excluded ones are dropped. Assistant messages with :thinking send it back
    as reasoning_content (pi: the thinking signature field — DeepSeek thinking
    mode round-trips the CoT). Tested directly by test_llm, hence public."
-  [messages]
+  [messages & [provider]]
   (into []
         (keep (fn [m]
                 (let [role (name (:role m))]
@@ -235,7 +258,8 @@
                       {:role "user" :content (bash-execution-text m)})
                     "tool"
                     {:role "tool"
-                     :tool_call_id (-> m :content first :tool_use_id)
+                     :tool_call_id (normalize-openai-tool-call-id
+                                    (-> m :content first :tool_use_id) provider)
                      :content (tool-result-content m)}
                     "assistant"
                     (let [text (content-text (:content m))
@@ -246,7 +270,7 @@
                                 has-tc
                                 (assoc :tool_calls
                                        (mapv (fn [tc]
-                                               {:id (:id tc)
+                                               {:id (normalize-openai-tool-call-id (:id tc) provider)
                                                 :type "function"
                                                 :function {:name (:name tc)
                                                            :arguments (cheshire.core/generate-string
@@ -273,7 +297,7 @@
    reasoning_content field on assistant messages even when empty; a message's
    own :thinking is sent back verbatim (pi round-trips the thinking
    signature)."
-  [messages]
+  [messages & [provider]]
   (into []
         (keep (fn [m]
                 (let [role (name (:role m))
@@ -283,7 +307,8 @@
                               {:role "user" :content (bash-execution-text m)})
                             "tool"
                             {:role "tool"
-                             :tool_call_id (-> m :content first :tool_use_id)
+                             :tool_call_id (normalize-openai-tool-call-id
+                                            (-> m :content first :tool_use_id) provider)
                              :content (tool-result-content m)}
                             "assistant"
                             (let [text (content-text (:content m))
@@ -292,7 +317,7 @@
                                         (seq text) (assoc :content text)
                                         has-tc (assoc :tool_calls
                                                       (mapv (fn [tc]
-                                                              {:id (:id tc)
+                                                              {:id (normalize-openai-tool-call-id (:id tc) provider)
                                                                :type "function"
                                                                :function {:name (:name tc)
                                                                           :arguments (cheshire.core/generate-string

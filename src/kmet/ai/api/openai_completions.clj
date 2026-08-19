@@ -23,7 +23,7 @@
                       openai-messages-with-reasoning
                       openai-messages)]
     (cond-> {:model model-id
-             :messages (messages-fn messages)
+             :messages (messages-fn messages (:provider model-record))
              :stream true
              :stream_options {:include_usage true}}
       (seq tools) (assoc :tools (mapv #(tool->openai-schema %

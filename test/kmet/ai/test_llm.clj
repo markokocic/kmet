@@ -508,6 +508,27 @@
              (:content (first converted)))
           "image blocks convert to OpenAI image_url blocks")))
 
+(t/deftest test-llm-openai-completions-cross-provider-tool-id
+  (let [id "call_qwen|V7tZ6kGdR7aeKl14cUq9F_cRTzluuKfD1RULCNcPpxaaOuVPvzVouaxmjWg0G9H"
+        msgs [{:role :assistant :content []
+               :tool-calls [{:id id :name "bash" :arguments {}}]}
+              {:role :tool :content [{:type :tool_result :tool_use_id id :content "done"}]}]
+        converted (@#'shared/openai-messages msgs :opencode)
+        assistant-id (-> converted first :tool_calls first :id)
+        result-id (-> converted second :tool_call_id)]
+    (t/is (= assistant-id result-id))
+    (t/is (<= (count assistant-id) 40))
+    (t/is (re-matches #"[a-zA-Z0-9_-]+" assistant-id))))
+
+(t/deftest test-llm-anthropic-tool-id-normalization
+  (let [id "call_qwen|opaque/tool-id"
+        converted (@#'anthropic/anthropic-messages
+                   [{:role :assistant :content []
+                     :tool-calls [{:id id :name "bash" :arguments {}}]}])]
+    (t/is (= "call_qwen_opaque_tool-id"
+             (-> converted first :content first :id)))
+    (t/is (<= (count (-> converted first :content first :id)) 64))))
+
 (t/deftest test-llm-anthropic-image-conversion
   (let [msgs [{:role :user
                :content [{:type :text :text "look"}
@@ -554,9 +575,11 @@
                :image_url {:url "data:image/png;base64,AA"}}]
              (:content (first openai)))
           "tool-result :images convert to OpenAI image_url blocks")
-    (t/is (= [{:type "text" :text "saw it"}
-              {:type "image"
-               :source {:type "base64" :media_type "image/png" :data "AA"}}]
+    (t/is (= [{:type "tool_result"
+               :tool_use_id "t1"
+               :content [{:type "text" :text "saw it"}
+                         {:type "image"
+                          :source {:type "base64" :media_type "image/png" :data "AA"}}]}]
              (:content (first anthropic)))
           "tool-result :images convert to Anthropic image blocks")))
 
@@ -2106,6 +2129,19 @@
                              (remove #(= :system (:role %)) msgs) (bedrock-model) :short)]
         (t/is (nil? system))
         (t/is (= 4 (count result)))))))
+
+(t/deftest test-llm-bedrock-tool-id-normalization
+  (let [id "call_qwen|opaque/tool-id"
+        [messages _] (@#'bedrock/bedrock-messages
+                      [{:role :assistant :content []
+                        :tool-calls [{:id id :name "bash" :arguments {}}]}
+                       {:role :tool
+                        :content [{:content "done" :tool_use_id id}]}]
+                      (bedrock-model) :none)]
+    (t/is (= "call_qwen_opaque_tool-id"
+             (get-in messages [0 :content 0 :toolUse :toolUseId])))
+    (t/is (= "call_qwen_opaque_tool-id"
+             (get-in messages [1 :content 0 :toolResult :toolUseId])))))
 
 (t/deftest test-bedrock-messages-images
   (let [msgs [{:role :user :content [{:type :image :mime-type "image/png" :data "AAAA"}]}

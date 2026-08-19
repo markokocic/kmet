@@ -10,6 +10,13 @@
 
 (def default-anthropic-version "2023-06-01")
 
+(defn anthropic-normalize-tool-call-id
+  "Pi normalizeToolCallId: Anthropic tool-use ids allow only alphanumeric
+   characters, underscores, and hyphens, up to 64 characters."
+  [id]
+  (let [sanitized (str/replace (or id "") #"[^a-zA-Z0-9_-]" "_")]
+    (subs sanitized 0 (min 64 (count sanitized)))))
+
 (defn anthropic-content-text
   "Extract plain text from Anthropic message content.
    Returns the content as-is if it is a string, otherwise joins text blocks."
@@ -61,7 +68,13 @@
                     (when-not (:exclude-from-context? m)
                       {:role "user" :content (bash-execution-text m)})
                     "tool"
-                    {:role "tool" :content (anthropic-tool-result-content m)}
+                    (let [tool-use-id (anthropic-normalize-tool-call-id
+                                       (-> m :content first :tool_use_id))]
+                      {:role "user"
+                       :content [(cond-> {:type "tool_result"
+                                          :tool_use_id tool-use-id
+                                          :content (anthropic-tool-result-content m)}
+                                   (:is-error m) (assoc :is_error true))]})
                     ;; custom messages (pi: convertToLlm custom→user)
                     "custom"
                     {:role "user" :content (anthropic-content (:content m))}
@@ -72,7 +85,7 @@
                                (vec (concat (if (string? (:content m)) [] (:content m))
                                             (mapv (fn [tc]
                                                     {:type "tool_use"
-                                                     :id (:id tc)
+                                                     :id (anthropic-normalize-tool-call-id (:id tc))
                                                      :name (:name tc)
                                                      :input (:arguments tc)})
                                                   (:tool-calls m)))))))))))
