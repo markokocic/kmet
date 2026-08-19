@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-18T13:55:21Z"
+ :generated-at "2026-08-19T11:18:42Z"
  :provider {:id :baseten
             :name "Baseten"
             :env-vars ["BASETEN_API_KEY"]
@@ -13,13 +13,21 @@
     :api :openai-completions
     :base-url "https://inference.baseten.co/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text]
     :cost {:input 0.13 :output 0.26 :cache-read 0.028 :cache-write 0}
     :context-window 1048576
     :max-tokens 384000
     :compat {:supports-store false
              :supports-developer-role false
-             :supports-reasoning-effort false
+             :supports-reasoning-effort true
+             :thinking-format :openai
              :max-tokens-field :max-tokens
              :supports-long-cache-retention false
              :supports-strict-mode true}}
@@ -58,10 +66,10 @@
     :thinking-level-map {:high "high"
                          :low "low"
                          :max "max"
-                         :medium "medium"
-                         :minimal "minimal"
+                         :medium nil
+                         :minimal nil
                          :off "none"
-                         :xhigh "xhigh"}
+                         :xhigh nil}
     :input [:text]
     :cost {:input 1.32 :output 3.96 :cache-read 0 :cache-write 0}
     :context-window 1048576

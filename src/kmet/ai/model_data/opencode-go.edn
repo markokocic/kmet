@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-18T13:55:21Z"
+ :generated-at "2026-08-19T11:18:42Z"
  :provider {:id :opencode-go
             :name "OpenCode Go"
             :env-vars ["OPENCODE_API_KEY"]
@@ -307,7 +307,7 @@
   :openai-responses
   {"gpt-5.6-luna"
    {:id "gpt-5.6-luna"
-    :name "GPT-5.6 Luna (2x usage)"
+    :name "GPT-5.6 Luna"
     :provider :opencode-go
     :api :openai-responses
     :base-url "https://opencode.ai/zen/go/v1"
@@ -320,11 +320,11 @@
                          :off nil
                          :xhigh "xhigh"}
     :input [:text :image]
-    :cost {:input 0.1
-           :tiers [{:input 0.2 :input-tokens-above 272000 :output 0.9 :cache-read 0.02 :cache-write 0.25}]
-           :output 0.6
-           :cache-read 0.01
-           :cache-write 0.125}
+    :cost {:input 0.2
+           :tiers [{:input 0.4 :input-tokens-above 272000 :output 1.8 :cache-read 0.04 :cache-write 0.5}]
+           :output 1.2
+           :cache-read 0.02
+           :cache-write 0.25}
     :context-window 1050000
     :max-tokens 128000
     :compat {:session-affinity-format :openai-nosession}}
@@ -350,4 +350,23 @@
            :cache-write 0}
     :context-window 500000
     :max-tokens 500000
+    :compat {:session-affinity-format :openai-nosession}}
+   "muse-spark-1.2-contributor"
+   {:id "muse-spark-1.2-contributor"
+    :name "Muse Spark 1.2 Contributor"
+    :provider :opencode-go
+    :api :openai-responses
+    :base-url "https://opencode.ai/zen/go/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 0.1 :output 0.2 :cache-read 0.002 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 131072
     :compat {:session-affinity-format :openai-nosession}}}}}
