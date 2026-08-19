@@ -1184,6 +1184,12 @@
   ;; 'Stream error: ' prefix (no other token in the message)
   (t/is (loop/retryable-error? "Stream error: closed"))
   (t/is (loop/retryable-error? "Stream error: Connection is closed"))
+  ;; premature EOF on the response stream — same mid-drop family as the
+  ;; stream-close / connection-lost tokens ('EOF reached while reading' is
+  ;; the JDK HTTP client's wording for a connection that ended mid-body)
+  (t/is (loop/retryable-error? "Error: EOF reached while reading"))
+  (t/is (loop/retryable-error? "Unexpected EOF"))
+  (t/is (not (loop/retryable-error? "EOF Exception: quota exceeded")))
   ;; non-close stream errors stay non-retryable
   (t/is (not (loop/retryable-error? "Stream error: Bedrock stream frame CRC mismatch")))
   ;; OpenRouter upstream-routing failure — transient even without a status

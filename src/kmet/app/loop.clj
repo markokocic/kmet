@@ -355,6 +355,9 @@ Be precise and concise in your responses."}}]
                               ;; kmet's SSE wrapper over a mid-stream close (java.net.http
                               ;; surfaces a dropped connection as a bare "closed")
                               "stream error: .*closed"
+                              ;; premature end of the response stream (e.g. the JDK
+                              ;; HTTP client's 'EOF reached while reading')
+                              "eof"
                               "timed? out"
                               "timeout"
                               "terminated"
