@@ -107,7 +107,8 @@
 
 (def ^:private keyword-valued-keys
   #{:lifecycle :tool-prefix :http-transport :auth :flow :grant :algorithm
-    :token-endpoint-auth-method :token-storage :host-config-discovery})
+    :token-endpoint-auth-method :token-storage :host-config-discovery
+    :mcp-footer-status})
 
 (defn- normalize-map-value
   "Normalize a nested option map (:oauth, :output-guard): known camel keys
@@ -247,6 +248,8 @@
        "            :tool-prefix :server          ;; :server | :none | :short | :mcp\n"
        "            :disable-proxy-tool false}\n"
        "            ;; :script-mode true            ;; gates the mcpScript tool\n"
+       "            ;; :mcp-footer-status :full     ;; :full | :compact | :off (footer)\n"
+       "            ;; :show-status-icon true      ;; show the 🔌 prefix (footer)\n"
        "            ;; :idle-timeout 10             ;; minutes; 0 disables reaping\n"
        "            ;; :output-guard {}             ;; false disables; {\":max-bytes\" ..}\n"
        "            ;; :token-storage :auto         ;; :auto | :keyring | :file\n"

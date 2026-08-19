@@ -5,7 +5,8 @@
             [kmet.tui.core :as core]
             [kmet.app.session :as s]
             [kmet.app.ui.footer :as ft]
-            [kmet.app.ui.footer-data-provider :as fdp]))
+            [kmet.app.ui.footer-data-provider :as fdp]
+            [kmet.tui.theme :as theme]))
 
 (defn- strip-ansi [s]
   (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))
@@ -119,7 +120,7 @@
       (is (some #(re-find #"\(auto\)" %) plain)))))
 
 (deftest test-extension-statuses
-  (testing "keyed extension statuses render dim on a third line, sorted by key"
+  (testing "keyed extension statuses render on a third line (not dimmed — pi parity), sorted by key"
     (let [c (make-footer-with-session)]
       (ft/footer-set-extension-status! c "ext-b" "✓ ready")
       (ft/footer-set-extension-status! c "ext-a" "● active")
@@ -134,6 +135,34 @@
         (let [plain (render-plain c 60)]
           (is (= 2 (count plain)))
           (is (not-any? #(re-find #"● active" %) plain)))))))
+
+(deftest test-mcp-extension-status
+  (testing "the mcp-adapter status segment renders accent-colored and
+            emoji-prefixed on its own footer line, verbatim (pi parity
+            — accent preserved, not dimmed)"
+    (let [c (make-footer-with-session)
+          accent (theme/fg theme/dark-theme :accent
+                           "🔌 MCP: 1 server enabled (1 connected)")]
+      (ft/footer-set-extension-status! c "mcp" accent)
+      (let [plain (render-plain c 80)
+            raw (render c 80)
+            mcp-line (some #(when (str/includes? % "MCP") %) raw)]
+        (is (= 3 (count plain)) "pwd + stats + mcp status line")
+        (is (some #(re-find #"MCP: 1 server enabled \(1 connected\)" %) plain)
+            "status text renders in the ansi-stripped output")
+        (is mcp-line "status renders on its own footer line")
+        (is (= mcp-line accent)
+            "renders verbatim — accent color preserved, not dimmed (pi parity)"))))
+  (testing "nil status clears the mcp key, collapsing the status line"
+    (let [c (make-footer-with-session)
+          accent (theme/fg theme/dark-theme :accent "🔌 MCP: 2 servers enabled")]
+      (ft/footer-set-extension-status! c "mcp" accent)
+      (ft/footer-set-extension-status! c "mcp" nil)
+      (let [plain (render-plain c 80)]
+        (is (not-any? #(re-find #"MCP: 2 servers" %) plain)
+            "cleared mcp status no longer renders")
+        (is (= 2 (count plain))
+            "footer collapses back to the two content lines")))))
 
 (deftest test-wide-footer
   (testing "footer handles wide terminal"

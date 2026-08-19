@@ -147,13 +147,16 @@
             dim-left (theme/dim stats-left)
             dim-remainder (theme/dim (subs stats-line (count stats-left)))
             ;; ── Extension statuses (line 3, pi) ───────────────────────────
+            ;; pi renders extension-set statuses verbatim (only the ellipsis
+            ;; is dimmed) so an extension may carry its own accent color —
+            ;; kmet dim-wrapped these previously, muting any embedded color.
             ext-statuses (->> @extension-statuses-atom
                               (sort-by key)
                               (keep (fn [[_k v]] (when v (sanitize-status-text v))))
                               (remove str/blank?))
             ext-line (when (seq ext-statuses)
                        (u/truncate-to-width
-                        (theme/dim (str/join " " ext-statuses))
+                        (str/join " " ext-statuses)
                         width (theme/dim "...")))]
         (into [pwd-line (str dim-left dim-remainder)]
               (cond-> []
@@ -191,9 +194,10 @@
   (protocols/invalidate comp))
 
 (defn footer-set-extension-status!
-  "Set/clear a keyed extension status shown on the footer's status line
-   (pi: FooterDataProvider.setExtensionStatus). Pass nil text to clear the
-   key. Statuses render dim, sorted by key."
+  "Set/clear a keyed extension status shown on footer line 3 (pi:
+   FooterDataProvider.setExtensionStatus). Statuses render verbatim,
+   sorted by key — an extension may carry its own accent color (only the
+   truncation ellipsis is dimmed). Pass nil text to clear the key."
   [comp key text]
   (swap! (:extension-statuses-atom comp)
          (fn [m] (if (nil? text) (dissoc m key) (assoc m key text))))

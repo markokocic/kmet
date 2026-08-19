@@ -18,7 +18,8 @@
             [extensions.mcp-adapter.proxy :as proxy]
             [extensions.mcp-adapter.script :as script]
             [extensions.mcp-adapter.setup :as setup]
-            [kmet.extension :as ext]))
+            [kmet.extension :as ext]
+            [kmet.tui.theme :as theme]))
 
 (def ^:private state-atom (atom nil))
 
@@ -33,7 +34,8 @@
 
 (declare ensure-connected! disconnect-server! sync-direct-tools!
          sync-prompt-commands! register-proxy-tool!
-         handle-import open-setup-panel!)
+         handle-import open-setup-panel!
+         update-status-bar!)
 
 (def ^:private builtin-tool-names
   #{"read" "bash" "edit" "write" "grep" "find" "ls" "mcp"})
@@ -93,7 +95,8 @@
   [state name message]
   (let [{:keys [error failed-at]} (get-in @state [:servers name])]
     (when error (reset! error message))
-    (when failed-at (reset! failed-at (System/currentTimeMillis)))))
+    (when failed-at (reset! failed-at (System/currentTimeMillis)))
+    (update-status-bar! state)))
 
 (defn- clear-failure!
   [state name]
@@ -115,7 +118,8 @@
                                                   tools prompts resources))))
     (sync-direct-tools! state)
     (prompts/sync-prompt-commands! state)
-    (register-proxy-tool! state)))
+    (register-proxy-tool! state)
+    (update-status-bar! state)))
 
 (defn- connect-with-auth
   "Connect a server, wiring the HTTP auth fns (§7.8.5) when configured."
@@ -166,6 +170,7 @@
     (when-let [c @conn]
       (try (client/close! c) (catch Exception _ nil)))
     (reset! conn nil))
+  (update-status-bar! state)
   nil)
 
 (defn- disconnect-all!
@@ -519,7 +524,8 @@
     (prompts/sync-prompt-commands! state)
     (bootstrap-direct-tools! state)
     (register-proxy-tool! state)
-    (notify-or-print state ctx "MCP config reloaded.")))
+    (notify-or-print state ctx "MCP config reloaded.")
+    (update-status-bar! state)))
 
 (defn- open-browser
   "Open a URL with the platform helper (xdg-open / open /
@@ -648,6 +654,65 @@
            (= :none (auth/auth-status name definition))) :needs-auth
       (and failed-at @failed-at) :failed
       :else :idle)))
+
+(defn- mcp-status-text
+  "Compute the MCP footer status string for the live state (pi:
+   init.ts updateStatusBar → formatMcpStatus). Returns nil when the
+   status should be cleared — no servers configured, or
+   :mcp-footer-status :off. Honors settings :mcp-footer-status
+   (:full | :compact | :off, default :full) and :show-status-icon
+   (emoji prefix, default on), matching pi exactly:
+     :compact → \"MCP <connected>/<enabled>\"
+     :full    → \"<enabled> server(s) enabled\" plus, when present,
+                 \" (<connected> connected)\" and \" (<disabled> disabled)\"
+                 segments, prefixed \"🔌 MCP: \" (\"MCP: \" when
+                 :show-status-icon is false). enabled counts every server
+   that is not disabled; connected counts servers with a live connection."
+  [state]
+  (let [config (:config @state)
+        settings (:settings config)
+        servers (:mcp-servers config)
+        mode (if (string? (:mcp-footer-status settings))
+               (keyword (:mcp-footer-status settings))
+               (or (:mcp-footer-status settings) :full))
+        show-icon? (not= false (:show-status-icon settings))]
+    (cond
+      (empty? servers) nil
+      (= :off mode) nil
+      :else
+      (let [{:keys [enabled disabled connected]}
+            (reduce (fn [acc name]
+                      (let [s (panel-connection-status state name)]
+                        (cond
+                          (= s :disabled) (update acc :disabled inc)
+                          (= s :connected) (update (update acc :enabled inc) :connected inc)
+                          :else (update acc :enabled inc))))
+                    {:enabled 0 :disabled 0 :connected 0}
+                    (keys servers))
+            status (if (= :compact mode)
+                     (str "MCP " connected "/" enabled)
+                     (str enabled
+                          (if (= 1 enabled) " server" " servers")
+                          " enabled"
+                          (when (pos? connected) (str " (" connected " connected)"))
+                          (when (pos? disabled) (str " (" disabled " disabled)"))))]
+        (if (= :compact mode)
+          status
+          (str (if show-icon? "🔌 MCP: " "MCP: ") status))))))
+
+(defn- update-status-bar!
+  "Refresh the footer's MCP status line (pi: init.ts updateStatusBar).
+   Sets the keyed extension status \"mcp\" (footer line 3) to
+   mcp-status-text, accent-colored to match pi
+   (ui.theme.fg(\"accent\", …)). nil clears the key. Inert in
+   headless/print mode — ext/ui-set-status dispatches through the
+   runtime registry and no-ops before the interactive layout exists."
+  [state]
+  (when-let [api (:api @state)]
+    (let [text (mcp-status-text state)]
+      (ext/ui-set-status api "mcp"
+                         (when text
+                           (theme/fg (theme/get-current-theme) :accent text))))))
 
 (defn- apply-direct-tools-changes!
   "Persist the panel's direct-tools CHANGES into the project config and
@@ -810,7 +875,8 @@
     (auth/configure-storage! (:settings config))
     (sync-direct-tools! state)
     (prompts/sync-prompt-commands! state)
-    (register-proxy-tool! state)))
+    (register-proxy-tool! state)
+    (update-status-bar! state)))
 
 (defn- setup-callbacks
   "The setup panel's callbacks over the extension state (pi
@@ -1029,8 +1095,12 @@
                                        (handle-mcp-command state args ctx))})
     ;; 4b. idle reaper (settings :idle-timeout)
     (start-idle-reaper! state)
+    ;; 4c. footer status line (pi: updateStatusBar at init end) — initial
+    ;; baseline; no-op until the interactive layout + UI registry exist.
+    (update-status-bar! state)
     ;; 5. events (§10.7)
     (ext/on-event api :session-start (fn [event ctx]
+                                       (update-status-bar! state)
                                        (on-session-start state event ctx)))
     (ext/on-event api :session-shutdown (fn [event ctx]
                                           (on-session-shutdown state event ctx)))
