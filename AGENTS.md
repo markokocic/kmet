@@ -73,195 +73,24 @@
 ## File layout
 ```
 src/kmet/
-├── core.clj            — CLI entry, arg parsing, mode dispatch (pi: cli.js)
-├── config.clj          — Configuration loading
-├── debug.clj           — Debug/error logging
-├── libs/               — Generic, self-contained code that would be a third-party
-│   │                     library on the JVM (Babashka-compatible reimplementations)
-│   ├── diff.clj        — Myers O(ND) line diff
-│   ├── process.clj     — Process tree management (descendant collection, tree kill, pid registry)
-│   ├── sse.clj         — SSE line parsing + LLM stream processing
-│   ├── terminal.clj    — Terminal protocol knowledge: Kitty keyboard
-│   │                     negotiation, escape sequences, raw-ANSI write log
-│   │                     (pi terminal.ts; writer-fn based)
-│   ├── yaml.clj        — Minimal YAML subset parser + frontmatter extraction
-│   │                     (pi: yaml npm package + utils/frontmatter.js; merged
-│   │                     from yaml_lite + frontmatter)
-│   ├── clipboard.clj   — Clipboard copy via platform tools (Termux/Wayland/
-│   │                     X11/macOS/Windows; OSC52 fallback lives in libs.terminal)
-│   ├── dynamic_value.clj — $ENV/!command config-value resolution (pi:
-│   │                     resolve-config-value.ts; moved from kmet.ai.config-value)
-│   ├── terminal_image.clj — Kitty terminal image protocol + image dimension parsing
-│   │                     (native PNG/JPEG/GIF via f= codes — no conversion)
-│   ├── edn_store.clj   — EDN settings/credential persistence + cross-process
-│   │                     file locking (settings.edn/auth.edn writes; merged
-│   │                     from file_lock + edn_settings + credential_store)
-│   ├── hash.clj        — pi shortHash port (32-bit imul/ushr, byte-exact)
-│   ├── highlight.clj   — Syntax highlighting (pi highlight.ts)
-│   └── markdown.clj    — Markdown rendering for the chat view
-├── modes/              — Entry modes (pi: dist/modes/)
-│   ├── interactive.clj — Interactive TUI: layout, CoreState, submit/cancel,
-│   │                     bash commands, external editor, session browsing
-│   └── print.clj       — Print mode: send message, print response, exit
-├── ai/                 — Provider/auth subsystem (pi: packages/ai — a standalone
-│   │                     library the agent depends on; enforced by the
-│   │                     kmet.ai.test-self-contained guard: only kmet.libs.* deps)
-│   ├── models.clj      — Model/Provider records + registry atom, catalog
-│   │                     loading + manifest, cost (pi: models.ts; Phases 0-5)
-│   ├── model_data/     — committed provider catalogs + manifest (bb generate-models)
-│   ├── model_config.clj   — models.edn loading + validation (pi: model-config.ts)
-│   ├── provider_composer.clj — builtin+models.edn+extension composition
-│   │                     (pi: provider-composer.ts)
-│   ├── auth.clj        — env-var table, auth.edn, credential resolution
-│   │                     (pi: env-api-keys.ts + auth-storage.ts)
-│   ├── oauth.clj       — OAuthAuth record, device-code + PKCE loopback
-│   │                     flows + the callback server (pi: auth/oauth/*.ts)
-│   ├── attribution.clj — provider attribution headers (pi: provider-attribution.ts)
-│   ├── aws_sigv4.clj   — AWS SigV4 request signing for bedrock (no AWS SDK in bb)
-│   ├── google_adc.clj  — Google ADC token fetch for google-vertex
-│   ├── image_models.clj — image-generation registry + :openrouter-images
-│   │                     wire (pi: images*.ts; Deferred B)
-│   ├── image_model_data/ — committed image-model catalog (bb generate-image-models)
-│   ├── usage.clj       — usage-map normalization (pi normalizeUsage; shared by
-│   │                     the wire layer, session store and footer cost display)
-│   ├── llm.clj         — LLM API dispatcher (pi: send-message — auth/model
-│   │                     resolution, effort clamp, dispatch to kmet.ai.api.*)
-│   ├── api/            — Per-wire LLM API builders (pi: packages/ai/src/api/)
-│   │   ├── shared.clj  — URL construction, headers, thinking levels, message
-│   │   │                transformers, tool schemas, cost/event handling
-│   │   │                (pi transform-messages.ts + openai-prompt-cache.ts)
-│   │   ├── openai_completions.clj — OpenAI Completions (pi openai-completions.ts)
-│   │   ├── openai_responses.clj — OpenAI Responses (pi openai-responses.ts)
-│   │   ├── openai_codex_responses.clj — Codex responses (pi openai-codex-responses.ts)
-│   │   ├── azure_openai_responses.clj — Azure responses (pi azure-openai-responses.ts)
-│   │   ├── anthropic_messages.clj — Anthropic Messages (pi anthropic-messages.ts)
-│   │   ├── google_generative_ai.clj — Gemini (pi google-generative-ai.ts)
-│   │   ├── mistral_conversations.clj — Mistral (pi mistral-conversations.ts)
-│   │   ├── google_vertex.clj — Vertex (pi google-vertex.ts)
-│   │   └── bedrock_converse_stream.clj — Bedrock Converse (pi bedrock-converse-stream.ts)
-│   └── proxy.clj      — Proxy env vars (HTTPS_PROXY/ALL_PROXY/NO_PROXY) + transport;
-│                       SOCKS & https-scheme proxies via curl (java.net.http is HTTP-proxy-only)
-├── app/                — App-level business logic (pi: dist/core/)
-│   ├── model_resolver.clj — model pattern/CLI resolution (pi: model-resolver.ts;
-│   │                     resolves against kmet.ai.models)
-│   ├── bash_executor.clj — Bash command execution (raw byte streaming, truncation, temp file)
-│   ├── loop.clj        — Agent conversation loop
-│   ├── compaction.clj  — Conversation compaction (pi: compaction.ts)
-│   ├── context.clj     — Context file discovery (AGENTS.md/CLAUDE.md)
-│   ├── session.clj     — Session persistence
-│   ├── session_export.clj — HTML export for /export and /share (standalone
-│   │                     dark page; JSONL deliberately not built)
-│   ├── skills.clj      — Skills loading + system prompt
-│   ├── prompts.clj     — Prompt template loading + /name expansion (pi: core/prompt-templates.js)
-│   ├── extension.clj   — THE extension contract (root): the namespaces
-│   │                     extensions depend on — kmet.extension plus the
-│   │                     shared kmet.tui.* / kmet.libs.* library layers;
-│   │                     init/shutdown contract, api
-│   │                     wrappers, create-nullable-api test fixture
-│   ├── extensions.clj  — Extension runtime: discover/load/reload/unload
-│   │                     (single .clj or extension.edn manifest dirs),
-│   │                     per-extension deregistration, api construction,
-│   │                     UI registry + dispatchers (pi: ExtensionUIContext)
-│   ├── event_bus.clj   — Event vocabulary + extension event bus
-│   ├── commands.clj    — Slash command registry (builtins, skills, extensions)
-│   ├── keybindings.clj — App keybindings
-│   ├── theme_controller.clj — Theme switching / controller
-│   ├── tools/          — Tool implementations (one file per tool)
-│   │   ├── core.clj    — Tool public API (re-exports from tool.clj/registry.clj)
-│   │   ├── tool.clj    — Tool record, param helpers, schema conversion
-│   │   ├── read.clj    — read tool (+ image detection)
-│   │   ├── write.clj   — write tool
-│   │   ├── edit.clj    — edit tool
-│   │   ├── edit_diff.clj — edit diff application (pi edit-diff)
-│   │   ├── bash.clj    — bash tool
-│   │   ├── grep.clj    — grep tool (disabled)
-│   │   ├── find.clj    — find tool (disabled)
-│   │   ├── ls.clj      — ls tool (disabled)
-│   │   ├── util.clj    — Shared tool utilities (safe file traversal)
-│   │   └── registry.clj — tool registry, registration, execution
-│   ├── ui.clj          — Re-exports for app UI components
-│   └── ui/             — App-specific TUI components (Pi's coding-agent layer)
-│       ├── bash_execution.clj  — BashExecutionComponent (!/!! TUI display)
-│       ├── chat_history.clj
-│       ├── user_message.clj
-│       ├── assistant_message.clj
-│       ├── tool_execution.clj
-│       ├── custom_message.clj
-│       ├── extension_dialogs.clj  — ui.select/input/editor dialogs (DynamicBorder
-│       │                  framing + IME focus propagation)
-│       ├── external_editor.clj — editor-text-* accessors (duck-typed IEditorComponent)
-│       │                  + handle-external-editor ($EDITOR on a temp file; pi external-editor.ts)
-│       ├── fork_selector.clj — fork-from-message picker, on-select callback
-│       │                  (pi UserMessageSelectorComponent; the fork stays in the mode)
-│       ├── model_selector.clj — /model + /scoped-models selectors and model-switch
-│       │                  helpers (pi model-selector.ts + model-search.ts; shared with
-│       │                  Ctrl+P cycling and the footer sync)
-│       ├── model_info.clj — selected model's name + cost info lines (↑/↓/C↑/C↓
-│       │                  rates, "Cost: free" fallback; shared by both selectors)
-│       ├── session_selector.clj — session browsing overlay with streaming
-│       │                  session-info population (pi SessionSelectorComponent;
-│       │                  the restore stays in the mode)
-│       ├── settings_selector.clj — /settings overlay: thinking level, hide-thinking,
-│       │                  retry block + theme row (pi showSettingsSelector, simplified)
-│       ├── tree_selector.clj — /tree overlay: filter modes (ctrl+d/t/u/l/a/o),
-│       │                  label editing, current-leaf marker (pi TreeSelectorComponent;
-│       │                  navigation stays in the mode via on-navigate)
-│       ├── status_indicator.clj
-│       ├── footer.clj
-│       ├── footer_data_provider.clj — footer state (model/thinking/cost/CH%)
-│       ├── loaded_resources.clj — loaded-context display
-│       ├── pending_messages.clj — queued-message indicator
-│       └── scoped_models_selector.clj — /scoped-models selector (pi ScopedModelsSelectorComponent)
-├── tui/                — Generic TUI library (Pi's @earendil-works/pi-tui)
-│   ├── core.clj        — TUI class, render loop, overlays
-│   ├── terminal.clj    — JLine 4.x wrapper: ITerminal protocol + the
-│   │                     record-taking wrappers over kmet.libs.terminal
-│   │                     (negotiation, drain); portable protocol code
-│   │                     lives in the lib
-│   ├── keys.clj        — key parsing/matching
-│   ├── keybindings.clj — TUI keybindings
-│   ├── fuzzy.clj       — fuzzy matching (select-list filter)
-│   ├── autocomplete.clj — editor autocomplete
-│   ├── protocols.clj   — IComponent, IFocusable, IComponentKind
-│   ├── utils.clj       — text width, wrapping, ANSI helpers
-│   ├── theme.clj       — Theme system (fg/bg colors)
-│   ├── terminal_image.clj — Kitty protocol image rendering
-│   ├── macros.clj      — track! reactive cache (deref tracking)
-│   └── components/
-│       ├── container.clj
-│       ├── box.clj
-│       ├── text.clj
-│       ├── spacer.clj
-│       ├── markdown.clj
-│       ├── input.clj
-│       ├── editor.clj
-│       ├── editing.clj
-│       ├── expandable_text.clj
-│       ├── select_list.clj
-│       ├── settings_list.clj
-│       ├── spinner.clj
-│       ├── image.clj
-│       ├── scroll_view.clj — bounded viewport over one child (pi ScrollView:
-│       │                     follow-end, scroll API, scrollbar state machine);
-│       │                     standalone component, not used by the interactive
-│       │                     layout — the main screen scrolls natively
-│       ├── stack.clj    — stack sizing (allocate-stack-sizes) + the render-loop
-│       │                  vertical layout: every component renders at its
-│       │                  natural height, a single flat document (pi Container;
-│       │                  overflow scrolls into the native terminal scrollback)
-│       ├── h_stack.clj  — horizontal flex stack (grow/shrink allocation,
-│       │                  ANSI-aware line compositing; pi HStack)
-│       ├── v_stack.clj  — vertical stack component (children top-to-bottom
-│       │                  with gap; pi VStack — used for the interactive dock)
-│       ├── alt_screen_flash.clj — transient inverse-video messages owned by
-│       │                  the TUI and composited over the screen bottom
-│       │                  (pi AltScreenFlashContainer; tui-flash!)
-│       ├── cancellable_loader.clj — spinner cancellable with Escape + abort
-│       │                  signal (pi CancellableLoader)
-│       ├── dynamic_border.clj — theme-colored border line spanning the
-│       │                  render width (pi DynamicBorder)
-│       └── truncated_text.clj — single-line truncating text (pi TruncatedText;
-│                              used for the chat status line)
+├── libs/     — Generic, self-contained code that would be a third-party library
+│              on the JVM (Babashka-compatible reimplementations)
+├── modes/    — Entry modes (pi: dist/modes/)
+├── ai/       — Provider/auth subsystem (pi: packages/ai — a standalone library
+│              the agent depends on; enforced by the
+│              kmet.ai.test-self-contained guard: only kmet.libs.* deps)
+│   ├── api/               — Per-wire LLM API builders (pi: packages/ai/src/api/)
+│   ├── model_data/        — committed provider catalogs + manifest (bb generate-models)
+│   └── image_model_data/  — committed image-model catalog (bb generate-image-models)
+├── app/      — App-level business logic (pi: dist/core/)
+│   ├── tools/  — Tool implementations (one file per tool)
+│   └── ui/     — App-specific TUI components (Pi's coding-agent layer)
+└── tui/      — Generic TUI library (Pi's @earendil-works/pi-tui)
+    └── components/ — TUI leaf components (Container, Box, Text, ...)
+
+Root-level files: core.clj (CLI entry, arg parsing, mode dispatch), config.clj
+(configuration loading), debug.clj (debug/error logging), extension.clj (the
+extension contract root: namespaces extensions depend on, init/shutdown, api).
 ```
 
 ### Layer boundaries
