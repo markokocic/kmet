@@ -11,7 +11,7 @@
             [kmet.app.model-resolver :as resolver]
             [kmet.app.ui.chat-history :as chat-history]
             [kmet.app.ui.footer-data-provider :as fdp]
-            [kmet.app.ui.model-cost :as model-cost]
+            [kmet.app.ui.model-info :as model-info]
             [kmet.app.ui.scoped-models-selector :as scoped-models-selector]
             [kmet.config :as cfg]
             [kmet.tui.components.container :as container]
@@ -275,13 +275,9 @@
     (when (pos? n)
       (let [selected-model (:model (nth filtered selected))]
         (container/container-add-child rows (spacer/make-spacer 1))
-        (container/container-add-child
-         rows (text/make-text
-               (theme/fg th :muted (str "  Model Name: " (:name selected-model)))
-               1 0))
-        (when-let [cost-str (model-cost/model-cost-str selected-model)]
+        (doseq [line (model-info/model-info-lines selected-model)]
           (container/container-add-child
-           rows (text/make-text (theme/fg th :muted cost-str) 1 0)))))
+           rows (text/make-text line 1 0)))))
     (container/container-set-children! (:list-container this) @(:children rows))
     (when-let [stx (:scope-text this)]
       (text/text-set! stx (scope-text-str st)))

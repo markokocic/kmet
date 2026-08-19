@@ -150,18 +150,21 @@
     (press sel "tab")
     (t/is (str/includes? (row-text sel 0) "x [p2]") "Tab does nothing without scoped models")))
 
-(t/deftest test-cost-line-for-priced-model
-  ;; A priced selected model renders the cost line under the name, marked
-  ;; with the footer's direction marks (↑ in · ↓ out · C↑ cache read ·
-  ;; C↓ cache write); zero-cost models render no line
+(t/deftest test-model-info-lines
+  ;; The selected model's info lines: the name line plus the cost line,
+  ;; the rates marked with the footer's direction marks (↑ in · ↓ out ·
+  ;; C↑ cache read · C↓ cache write); unpriced models render
+  ;; "Cost: free" instead of nothing
   (let [priced (assoc (model :p1 "a")
                       :cost {:input 0.44 :output 1.5 :cache-read 0.11 :cache-write 3.3})
         sel (selector :models [priced (model :p1 "b") (model :p2 "x")]
                       :current priced)]
+    (t/is (str/includes? (row-text sel 4) "Model Name: Model a")
+          "the name line under the rows")
     (t/is (str/includes? (row-text sel 5) "↑$0.44") "input rate marked ↑")
     (t/is (str/includes? (row-text sel 5) "↓$1.5") "output rate marked ↓")
     (t/is (str/includes? (row-text sel 5) "C↑$0.11") "cache read marked C↑")
     (t/is (str/includes? (row-text sel 5) "C↓$3.3") "cache write marked C↓")
     (press sel "down")
-    (t/is (= (count @(:children (:list-container sel))) 5)
-          "zero-cost model renders no cost line")))
+    (t/is (str/includes? (row-text sel 5) "Cost: free")
+          "unpriced model renders the free line")))

@@ -196,6 +196,8 @@ src/kmet/
 │       ├── model_selector.clj — /model + /scoped-models selectors and model-switch
 │       │                  helpers (pi model-selector.ts + model-search.ts; shared with
 │       │                  Ctrl+P cycling and the footer sync)
+│       ├── model_info.clj — selected model's name + cost info lines (↑/↓/C↑/C↓
+│       │                  rates, "Cost: free" fallback; shared by both selectors)
 │       ├── session_selector.clj — session browsing overlay with streaming
 │       │                  session-info population (pi SessionSelectorComponent;
 │       │                  the restore stays in the mode)

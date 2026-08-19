@@ -11,7 +11,7 @@
             [kmet.tui.theme :as theme]
             [kmet.tui.keybindings :as kb]
             [kmet.app.keybindings :as app-kb]
-            [kmet.app.ui.model-cost :as model-cost]
+            [kmet.app.ui.model-info :as model-info]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.spacer :as spacer]
@@ -276,16 +276,6 @@
       (str (theme/dim base) (theme/fg (theme/get-current-theme) :warning " (unsaved)"))
       (theme/dim base))))
 
-(defn- model-name-line
-  "pi updateList — the selected model's name under the rows."
-  [st n]
-  (when (pos? n)
-    (let [item (nth (filtered-items st) (min (:selected-idx st) (dec n)))]
-      (str "  " (theme/fg (theme/get-current-theme) :muted
-                          (if (:model item)
-                            (str "Model Name: " (:name (:model item)))
-                            "Model unavailable"))))))
-
 (defn scoped-models-refresh!
   "Rebuild the list rows and footer from the current state (pi
    ScopedModelsSelectorComponent.refresh/updateList)."
@@ -331,11 +321,9 @@
     (when (pos? n)
       (let [item (nth filtered selected)]
         (container/container-add-child rows (spacer/make-spacer 1))
-        (container/container-add-child
-         rows (text/make-text (model-name-line st n) 1 0))
-        (when-let [cost-str (model-cost/model-cost-str (:model item))]
+        (doseq [line (model-info/model-info-lines (:model item))]
           (container/container-add-child
-           rows (text/make-text (theme/fg th :muted cost-str) 1 0)))))
+           rows (text/make-text line 1 0)))))
     (container/container-set-children! (:rows-container this) @(:children rows))
     (text/text-set! (:footer-text this) (footer-text-str st))))
 
