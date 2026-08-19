@@ -4,6 +4,7 @@
    The tokenizer is kmet.libs.markdown/parse (pure data, no ANSI); this
    component walks the token AST and applies theme, padding, and word-wrap."
   (:require [clojure.string :as str]
+            [kmet.libs.terminal-image :as timg]
             [kmet.tui.utils :as u]
             [kmet.tui.macros :refer [track! defcomponent]]
             [kmet.libs.markdown :as md]))
@@ -27,8 +28,8 @@
   (map->MarkdownTheme
    {:heading (fn [s]
                (str bold-ansi "\u001b[33m" s rst))
-    :link (fn [s] (str ul-ansi "\u001b[36m" s rst))
-    :link-url (fn [s] (str " " dim-ansi "(" s ")" rst))
+    :link (fn [s] (str "\u001b[36m" s rst))
+    :link-url (fn [s] (str dim-ansi s rst))
     :code (fn [s] (str "\u001b[33m" s rst))
     :code-block (fn [s] (str "\u001b[33m" s rst))
     :code-block-border identity
@@ -53,23 +54,112 @@
 
 (declare render-inlines)
 
+(defn- style-prefix
+  "Return the opening style sequence produced by STYLE-FN before its text."
+  [style-fn]
+  (if style-fn
+    (let [sentinel "\u0000"
+          styled (style-fn sentinel)
+          index (str/index-of styled sentinel)]
+      (if (some? index)
+        (subs styled 0 index)
+        ""))
+    ""))
+
+(defn- make-style-context
+  "Build the inline styling context used to preserve a default style across
+   Markdown formatting resets, matching pi's Markdown renderer."
+  [style-fn]
+  (when style-fn
+    {:apply-text style-fn
+     :style-prefix (style-prefix style-fn)}))
+
+(defn- apply-style-context
+  [style-context text]
+  (if-let [style-fn (:apply-text style-context)]
+    (style-fn text)
+    text))
+
+(defn- append-style-prefix
+  [text style-context]
+  (str text (:style-prefix style-context "")))
+
+(defn- hyperlink
+  "Wrap TEXT in an OSC 8 hyperlink targeting URL, matching pi's terminal
+   hyperlink helper."
+  [text url]
+  (str "\u001b]8;;" url "\u001b\\" text "\u001b]8;;\u001b\\"))
+
+(defn- raw-inline-source
+  "Reconstruct the raw Markdown source represented by inline TOKENS."
+  [tokens]
+  (apply str
+         (map (fn [tok]
+                (case (:type tok)
+                  :text (:s tok)
+                  :code (str "`" (:s tok) "`")
+                  :strong (str "**" (raw-inline-source (:content tok)) "**")
+                  :em (str "*" (raw-inline-source (:content tok)) "*")
+                  :del (str "~~" (raw-inline-source (:content tok)) "~~")
+                  :link (str "[" (raw-inline-source (:text tok)) "](" (:url tok) ")")
+                  ""))
+              tokens)))
+
+(defn- link-label-matches-url?
+  [label url]
+  (or (= label url)
+      (= label (if (str/starts-with? url "mailto:")
+                 (subs url (count "mailto:"))
+                 url))))
+
+(defn- trim-style-prefix
+  [text style-context]
+  (let [prefix (:style-prefix style-context "")]
+    (if (seq prefix)
+      (loop [text text]
+        (if (str/ends-with? text prefix)
+          (recur (subs text 0 (- (count text) (count prefix))))
+          text))
+      text)))
+
 (defn- render-inline
-  "Render one inline token to a styled string."
-  [tok theme]
+  "Render one inline token to a styled string while preserving the default
+   text style after Markdown-specific style resets."
+  [tok theme style-context]
   (case (:type tok)
-    :text (:s tok)
-    :strong ((:bold theme) (render-inlines (:content tok) theme))
-    :em ((:italic theme) (render-inlines (:content tok) theme))
-    :del ((:strikethrough theme) (render-inlines (:content tok) theme))
-    :code ((:code theme) (:s tok))
-    :link (str ((:link theme) (render-inlines (:text tok) theme))
-               ((:link-url theme) (:url tok)))
+    :text (apply-style-context style-context (:s tok))
+    :strong (append-style-prefix
+             ((:bold theme) (render-inlines (:content tok) theme style-context))
+             style-context)
+    :em (append-style-prefix
+         ((:italic theme) (render-inlines (:content tok) theme style-context))
+         style-context)
+    :del (append-style-prefix
+          ((:strikethrough theme) (render-inlines (:content tok) theme style-context))
+          style-context)
+    :code (append-style-prefix ((:code theme) (:s tok)) style-context)
+    :link (let [label-tokens (:text tok)
+                label (or (:raw-label (meta tok))
+                          (raw-inline-source label-tokens))
+                link-text ((:link theme)
+                           ((:underline theme) (render-inlines label-tokens theme style-context)))
+                url (:url tok)
+                rendered (if (:hyperlinks (timg/get-capabilities))
+                           (hyperlink link-text url)
+                           (if (link-label-matches-url? label url)
+                             link-text
+                             (str link-text ((:link-url theme) (str " (" url ")")))))]
+            (append-style-prefix rendered style-context))
     ""))
 
 (defn- render-inlines
   "Render a vector of inline tokens to one styled string."
-  [tokens theme]
-  (apply str (map #(render-inline % theme) tokens)))
+  ([tokens theme]
+   (render-inlines tokens theme nil))
+  ([tokens theme style-context]
+   (trim-style-prefix
+    (apply str (map #(render-inline % theme style-context) tokens))
+    style-context)))
 
 (defn- render-code
   "Render a :code token: styled fence lines (with lang), interior lines with
@@ -157,13 +247,13 @@
         border-fn (or (:table-border theme) identity)
         border-overhead (inc (* 3 num-cols))
         available-for-cells (- content-width border-overhead)
+        style-context (make-style-context default-style)
         cell-style (fn [c]
-                     (let [s (render-inlines c theme)]
-                       (if default-style (default-style s) s)))]
+                     (render-inlines c theme style-context))]
     (if (< available-for-cells num-cols)
       ;; Too narrow — fall back to the raw markdown, wrapped
       (doseq [line (u/wrap-text-with-ansi (:raw t) content-width)]
-        (vswap! result conj (pad-right content-width (str left-pad (if default-style (default-style line) line)))))
+        (vswap! result conj (pad-right content-width (str left-pad line))))
       (let [header-styled (mapv cell-style (:header t))
             row-styled (mapv #(mapv cell-style %) (:rows t))
             max-unbroken 30
@@ -235,6 +325,7 @@
       (if (= :blank (:type item))
         (vswap! result conj (str left-pad (apply str (repeat content-width \space))))
         (let [n (vswap! num inc)
+              style-context (make-style-context default-style)
               marker (if (= :ul (:type t)) "• " (str n ". "))
               marker-w (u/visible-width marker)
               bullet ((:list-bullet theme) marker)
@@ -243,8 +334,7 @@
               cont-prefix (str left-pad indent (apply str (repeat marker-w \space)))
               first-line? (volatile! true)]
           (doseq [line (:content item)]
-            (let [styled (render-inlines line theme)
-                  styled (if default-style (default-style styled) styled)
+            (let [styled (render-inlines line theme style-context)
                   segs (if (<= (u/visible-width styled) item-width)
                          [styled]
                          (u/wrap-text-with-ansi styled item-width))]
@@ -315,8 +405,7 @@
     (render-list result t theme 0 content-width left-pad default-style)
 
     :paragraph
-    (let [styled (render-inlines (:content t) theme)
-          styled (if default-style (default-style styled) styled)
+    (let [styled (render-inlines (:content t) theme (make-style-context default-style))
           line-width (u/visible-width styled)]
       (if (<= line-width content-width)
         (vswap! result conj (pad-right content-width (str left-pad styled)))

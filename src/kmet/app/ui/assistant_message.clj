@@ -54,12 +54,11 @@
   (if (not (seq text))
     []
     (if hide?
-      [(str left-pad (theme/fg theme :thinking-text (theme/italic hidden-label)))]
+      [(str left-pad (theme/italic (theme/fg theme :thinking-text hidden-label)))]
       (let [mc (md/make-markdown text
                                  :theme (theme/get-markdown-theme theme)
                                  :default-style (fn [s]
-                                                  (theme/fg theme :thinking-text
-                                                            (theme/italic s)))
+                                                  (theme/italic (theme/fg theme :thinking-text s)))
                                  :transform transform
                                  :padding-x 0)
             md-lines (protocols/render mc cw)]

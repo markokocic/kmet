@@ -22,6 +22,143 @@
 
 ;; ─── Inline tokenizer ──────────────────────────────────────────────────────
 
+(def ^:private angle-url-re
+  #"^<([A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*)>")
+(def ^:private angle-email-re
+  #"^<([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+)>")
+(def ^:private bare-url-re
+  #"(?i)^(?:(?:https?|ftp)://|www\.)(?:[A-Za-z0-9-]+\.?)+[^\s<]*")
+(def ^:private bare-email-re
+  #"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+")
+
+(def ^:private markdown-escape-re
+  #"[!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~]")
+
+(defn- escaped-punctuation?
+  [c]
+  (boolean (re-matches markdown-escape-re (str c))))
+
+(defn- unescape-markdown
+  [s]
+  (loop [i 0, result []]
+    (if (>= i (count s))
+      (apply str result)
+      (if (and (= (char 92) (nth s i))
+               (< (inc i) (count s))
+               (escaped-punctuation? (nth s (inc i))))
+        (recur (+ i 2) (conj result (nth s (inc i))))
+        (recur (inc i) (conj result (nth s i)))))))
+
+(defn- find-unescaped
+  [s start target]
+  (loop [i start]
+    (cond
+      (>= i (count s)) nil
+      (= (char 92) (nth s i)) (recur (min (count s) (+ i 2)))
+      (= target (nth s i)) i
+      :else (recur (inc i)))))
+
+(defn- find-label-end
+  [s start]
+  (loop [i (inc start), depth 1]
+    (cond
+      (>= i (count s)) nil
+      (= (char 92) (nth s i)) (recur (min (count s) (+ i 2)) depth)
+      (= (char 96) (nth s i))
+      (if-let [end (find-unescaped s (inc i) (char 96))]
+        (recur (inc end) depth)
+        nil)
+      (= (char 91) (nth s i)) (recur (inc i) (inc depth))
+      (= (char 93) (nth s i)) (if (= depth 1) i (recur (inc i) (dec depth)))
+      :else (recur (inc i) depth))))
+
+(defn- whitespace?
+  [c]
+  (boolean (and c (re-matches #"\s" (str c)))))
+
+(defn- skip-whitespace
+  [s start]
+  (loop [i start]
+    (if (and (< i (count s)) (whitespace? (nth s i)))
+      (recur (inc i))
+      i)))
+
+(defn- find-title-end
+  [s start]
+  (when (< start (count s))
+    (let [delimiter (nth s start)]
+      (cond
+        (or (= delimiter (char 34)) (= delimiter (char 39)))
+        (some-> (find-unescaped s (inc start) delimiter) inc)
+
+        (= delimiter (char 40))
+        (loop [i (inc start), depth 1]
+          (cond
+            (>= i (count s)) nil
+            (= (char 92) (nth s i)) (recur (min (count s) (+ i 2)) depth)
+            (= (char 40) (nth s i)) (recur (inc i) (inc depth))
+            (= (char 41) (nth s i))
+            (if (= depth 1) (inc i) (recur (inc i) (dec depth)))
+            :else (recur (inc i) depth)))
+
+        :else nil))))
+
+(defn- find-destination-end
+  [s url-end]
+  (let [after-url (skip-whitespace s url-end)]
+    (cond
+      (and (< after-url (count s)) (= (char 41) (nth s after-url)))
+      (inc after-url)
+
+      (= after-url url-end)
+      nil
+
+      :else
+      (when-let [title-end (find-title-end s after-url)]
+        (let [close (skip-whitespace s title-end)]
+          (when (and (< close (count s)) (= (char 41) (nth s close)))
+            (inc close)))))))
+
+(defn- parse-destination
+  [s open-paren]
+  (let [start (skip-whitespace s (inc open-paren))]
+    (if (and (< start (count s)) (= (char 60) (nth s start)))
+      (when-let [close-angle (find-unescaped s (inc start) (char 62))]
+        (when-let [end (find-destination-end s (inc close-angle))]
+          {:url (unescape-markdown (subs s (inc start) close-angle))
+           :end end}))
+      (loop [i start, depth 0]
+        (cond
+          (>= i (count s)) nil
+          (= (char 92) (nth s i)) (recur (min (count s) (+ i 2)) depth)
+          (and (zero? depth) (whitespace? (nth s i)))
+          (when-let [end (find-destination-end s i)]
+            {:url (unescape-markdown (subs s start i)) :end end})
+          (= (char 40) (nth s i)) (recur (inc i) (inc depth))
+          (= (char 41) (nth s i))
+          (if (zero? depth)
+            {:url (unescape-markdown (subs s start i)) :end (inc i)}
+            (recur (inc i) (dec depth)))
+          :else (recur (inc i) depth))))))
+
+(declare parse-inline)
+
+(defn- link-token
+  [label url]
+  {:type :link :url url :text [{:type :text :s label}]})
+
+(defn- explicit-link
+  [line start]
+  (when-let [label-end (find-label-end line start)]
+    (let [open (inc label-end)]
+      (when (and (< open (count line)) (= (char 40) (nth line open)))
+        (when-let [{:keys [url end]} (parse-destination line open)]
+          (let [raw (subs line (inc start) label-end)]
+            {:token (with-meta (assoc (link-token (unescape-markdown raw) url)
+                                      :text (parse-inline raw true))
+                      {:raw-label raw})
+             :end end}))))))
+
 (defn- append-token
   "Conj TOK onto RESULT, merging adjacent :text tokens for a cleaner AST."
   [result tok]
@@ -32,72 +169,115 @@
     (conj result tok)))
 
 (defn parse-inline
-  "Parse inline formatting in LINE into a vector of inline tokens.
-   Token types: :text (with :s), :strong/:em/:del (with nested :content),
-   :code (with :s), :link (with :url and :text inline tokens)."
-  [line]
-  (if (or (empty? line) (nil? line))
-    []
-    (loop [i 0, n (count line), result []]
-      (if (>= i n)
-        result
-        (let [c (subs line i (inc i))
-              remaining (subs line i)]
-          (cond
-            ;; Code span: `code`
-            (= c "`")
-            (let [end (or (str/index-of remaining "`" 1) -1)]
-              (if (>= end 0)
-                (recur (+ i end 1) n
-                       (append-token result {:type :code :s (subs line (inc i) (+ i end))}))
-                (recur (inc i) n (append-token result {:type :text :s c}))))
+  "Parse inline Markdown into pure-data tokens. The one-argument form parses
+   ordinary text; the private second argument disables nested links/autolinks
+   while parsing an explicit link label, matching Marked's inLink state."
+  ([line]
+   (parse-inline line false))
+  ([line in-link?]
+   (if (or (empty? line) (nil? line))
+     []
+     (loop [i 0
+            n (count line)
+            result []]
+       (if (>= i n)
+         result
+         (let [c (subs line i (inc i))
+               remaining (subs line i)]
+           (cond
+             (and (not in-link?) (= c "<"))
+             (if-let [[raw target] (re-find angle-url-re remaining)]
+               (recur (+ i (count raw)) n (append-token result (link-token target target)))
+               (if-let [[raw email] (re-find angle-email-re remaining)]
+                 (recur (+ i (count raw)) n
+                        (append-token result (link-token email (str "mailto:" email))))
+                 (recur (inc i) n (append-token result {:type :text :s c}))))
 
-            ;; Bold: **text** (end > 2: the closing ** must not start at the
-            ;; content position — degenerate runs like **** stay literal)
-            (and (= c "*") (< (inc i) n) (= (nth line (inc i)) \*))
-            (let [end (or (str/index-of remaining "**" 2) -1)]
-              (if (> end 2)
-                (recur (+ i end 2) n
-                       (append-token result {:type :strong
-                                             :content (parse-inline (subs line (+ i 2) (+ i end)))}))
-                (recur (inc i) n (append-token result {:type :text :s c}))))
+             (and (not in-link?) (= c "["))
+             (if-let [{:keys [token end]} (explicit-link line i)]
+               (recur end n (append-token result token))
+               (recur (inc i) n (append-token result {:type :text :s c})))
 
-            ;; Italic: *text* (end > 1: needs content between the markers)
-            (= c "*")
-            (let [end (or (str/index-of remaining "*" 1) -1)]
-              (if (> end 1)
-                (recur (+ i end 1) n
-                       (append-token result {:type :em
-                                             :content (parse-inline (subs line (inc i) (+ i end)))}))
-                (recur (inc i) n (append-token result {:type :text :s c}))))
+             (= c "\\")
+             (if (and (< (inc i) n) (escaped-punctuation? (nth line (inc i))))
+               (recur (+ i 2)
+                      n
+                      (append-token result {:type :text
+                                            :s (str (nth line (inc i)))}))
+               (recur (inc i) n (append-token result {:type :text :s c})))
 
-            ;; Strikethrough: ~~text~~ (GitHub flavored; end > 2: needs content)
-            (and (= c "~") (>= n (+ i 2)) (= (subs line (inc i) (+ i 2)) "~"))
-            (let [end (or (str/index-of remaining "~~" 2) -1)]
-              (if (> end 2)
-                (recur (+ i end 2) n
-                       (append-token result {:type :del
-                                             :content (parse-inline (subs line (+ i 2) (+ i end)))}))
-                (recur (inc i) n (append-token result {:type :text :s c}))))
+             (= c "`")
+             (let [end (or (str/index-of remaining "`" 1) -1)]
+               (if (>= end 0)
+                 (recur (+ i end 1)
+                        n
+                        (append-token result {:type :code
+                                              :s (subs line (inc i) (+ i end))}))
+                 (recur (inc i) n (append-token result {:type :text :s c}))))
 
-            ;; Link: [text](url)
-            (= c "[")
-            (let [close-b (or (str/index-of remaining "]") -1)]
-              (if (>= close-b 0)
-                (let [paren (or (str/index-of remaining "(" close-b) -1)]
-                  (if (and (>= paren 0) (= paren (inc close-b)))
-                    (let [close-p (or (str/index-of remaining ")" paren) -1)]
-                      (if (>= close-p 0)
-                        (let [text (subs line (inc i) (+ i close-b))
-                              url (subs line (+ i paren 1) (+ i close-p))]
-                          (recur (+ i close-p 1) n
-                                 (append-token result {:type :link :url url :text (parse-inline text)})))
-                        (recur (inc i) n (append-token result {:type :text :s c}))))
-                    (recur (inc i) n (append-token result {:type :text :s c}))))
-                (recur (inc i) n (append-token result {:type :text :s c}))))
+             (and (= c "*") (< (inc i) n) (= (nth line (inc i)) \*))
+             (let [end (or (str/index-of remaining "**" 2) -1)]
+               (if (> end 2)
+                 (recur (+ i end 2)
+                        n
+                        (append-token result {:type :strong
+                                              :content (parse-inline
+                                                        (subs line (+ i 2) (+ i end))
+                                                        in-link?)}))
+                 (recur (inc i) n (append-token result {:type :text :s c}))))
 
-            :else
-            (recur (inc i) n (append-token result {:type :text :s c}))))))))
+             (= c "*")
+             (let [end (or (str/index-of remaining "*" 1) -1)]
+               (if (> end 1)
+                 (recur (+ i end 1)
+                        n
+                        (append-token result {:type :em
+                                              :content (parse-inline
+                                                        (subs line (inc i) (+ i end))
+                                                        in-link?)}))
+                 (recur (inc i) n (append-token result {:type :text :s c}))))
+
+             (and (= c "~")
+                  (>= n (+ i 2))
+                  (= (subs line (inc i) (+ i 2)) "~"))
+             (let [end (or (str/index-of remaining "~~" 2) -1)]
+               (if (> end 2)
+                 (recur (+ i end 2)
+                        n
+                        (append-token result {:type :del
+                                              :content (parse-inline
+                                                        (subs line (+ i 2) (+ i end))
+                                                        in-link?)}))
+                 (recur (inc i) n (append-token result {:type :text :s c}))))
+
+             (not in-link?)
+             (if-let [matched (or (re-find bare-email-re remaining)
+                                  (re-find bare-url-re remaining))]
+               (let [raw (loop [s matched]
+                           (if (or (re-find #"[!?.,:;*_~]$" s)
+                                   (and (str/ends-with? s ")")
+                                        (> (count (re-seq #"\)" s))
+                                           (count (re-seq #"\(" s)))))
+                             (recur (subs s 0 (dec (count s))))
+                             s))
+                     lower (str/lower-case raw)
+                     url (if (str/includes? raw "@")
+                           (str "mailto:" raw)
+                           (if (str/starts-with? lower "www.")
+                             (str "http://" raw)
+                             raw))
+                     label (if (str/starts-with? url "mailto:")
+                             (subs url (count "mailto:"))
+                             raw)]
+                 (recur (+ i (count raw))
+                        n
+                        (append-token result
+                                      (with-meta (link-token label url)
+                                        {:raw-label raw}))))
+               (recur (inc i) n (append-token result {:type :text :s c})))
+
+             :else
+             (recur (inc i) n (append-token result {:type :text :s c})))))))))
 
 ;; ─── List nesting state ──────────────────────────────────────────────────────
 ;; Lists are built on an indent-based stack: each entry is {:indent n

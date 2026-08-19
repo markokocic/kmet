@@ -1,6 +1,7 @@
 (ns kmet.tui.components.test-markdown
   (:require [clojure.test :as t]
             [clojure.string :as str]
+            [kmet.libs.terminal-image :as timg]
             [kmet.tui.core :as core]
             [kmet.tui.theme :as theme]
             [kmet.tui.utils :as u]
@@ -192,6 +193,91 @@
     (t/is (some #(.contains % "T[item]") lines))
     (t/is (not-any? #(re-find #"T\[" %) (filter #(re-find #"```|\(x\)|head" %) lines))
           "code blocks and headings are not tinted")))
+
+(t/deftest test-markdown-default-style-restored-after-inline-formatting
+  (doseq [[formatted trailing] [["**bold**" " after-bold"]
+                                ["*italic*" " after-italic"]
+                                ["~~strike~~" " after-strike"]
+                                ["`code`" " after-code"]
+                                ["[link](url)" " after-link"]]]
+    (let [styled-text (atom [])
+          style (fn [s]
+                  (swap! styled-text conj s)
+                  (str "\u001b[38;5;7m" s "\u001b[39m"))]
+      (core/render (md/make-markdown (str formatted trailing)
+                                     :default-style style
+                                     :padding-x 0)
+                   120)
+      ;; pi applies the default style to the plain-text token after each
+      ;; formatted token, rather than styling the complete rendered paragraph
+      ;; once after Markdown formatting.
+      (t/is (some #(= trailing %) @styled-text)
+            (str "default style was not restored before " trailing)))))
+
+(t/deftest test-markdown-default-style-not-applied-to-narrow-table-fallback
+  (let [tint (fn [s] (str "T[" s "]"))
+        source "| a | b |\n|---|---|\n| 1 | 2 |"
+        rendered (str/join "\n"
+                           (core/render (md/make-markdown source
+                                                          :default-style tint
+                                                          :padding-x 0)
+                                        6))]
+    ;; pi's too-narrow table fallback renders token.raw directly, without the
+    ;; Markdown default text style.
+    (t/is (not (str/includes? rendered "T[")))
+    (t/is (str/includes? rendered "|"))))
+
+(t/deftest test-markdown-default-theme-link-url
+  (let [prev (timg/get-capabilities)]
+    (try
+      (timg/set-capabilities! {:images nil :true-color true :hyperlinks false})
+      (let [rendered (str/join "\n"
+                               (map strip-ansi
+                                    (core/render (md/make-markdown "[text](http://example.com)"
+                                                                   :padding-x 0)
+                                                 40)))]
+        (t/is (str/includes? rendered "text (http://example.com)"))
+        (t/is (not (str/includes? rendered "((http://example.com)"))))
+      (finally
+        (timg/set-capabilities! prev)))))
+
+(t/deftest test-markdown-links-match-pi
+  (let [prev (timg/get-capabilities)]
+    (try
+      (timg/set-capabilities! {:images nil :true-color true :hyperlinks false})
+      (let [theme (theme/get-markdown-theme theme/dark-theme)
+            render (fn [source]
+                     (first (core/render (md/make-markdown source
+                                                           :theme theme
+                                                           :padding-x 0)
+                                         80)))
+            same (render "[https://example.com](https://example.com)")
+            mailto (render "[foo](mailto:foo)")
+            different (render "[docs](https://example.com)")
+            formatted (render "[**url**](url)")
+            escaped (render "[a\\*b](a*b)")]
+        ;; Pi underlines every link label. The fallback URL is omitted when the
+        ;; raw label equals the URL or equals a mailto URL without its scheme.
+        (t/is (str/includes? same "\u001b[4m"))
+        (t/is (not (str/includes? (strip-ansi same) "(https://example.com)")))
+        (t/is (not (str/includes? (strip-ansi mailto) "(mailto:foo)")))
+        (t/is (str/includes? (strip-ansi different) "docs (https://example.com)"))
+        ;; Pi compares the raw label, so Markdown delimiters and backslash
+        ;; escapes make these labels different from their URLs.
+        (t/is (str/includes? (strip-ansi formatted) "url (url)"))
+        (t/is (str/includes? (strip-ansi escaped) "a*b (a*b)")))
+      (timg/set-capabilities! {:images nil :true-color true :hyperlinks true})
+      (let [rendered (first (core/render (md/make-markdown "[docs](https://example.com)"
+                                                           :theme (theme/get-markdown-theme theme/dark-theme)
+                                                           :padding-x 0)
+                                         80))]
+        ;; With OSC 8 support pi displays only the clickable label.
+        (t/is (str/includes? rendered "\u001b]8;;https://example.com\u001b\\"))
+        (t/is (str/includes? rendered "\u001b]8;;\u001b\\"))
+        (t/is (str/includes? rendered "docs"))
+        (t/is (not (str/includes? (u/strip-ansi-codes rendered) "https://example.com"))))
+      (finally
+        (timg/set-capabilities! prev)))))
 
 (t/deftest test-markdown-theme-syntax-highlight
   ;; get-markdown-theme wires the lib tokenizer: known lang → syntax colors,
@@ -428,10 +514,15 @@
     (t/is (some #(.contains % "quote") lines))))
 
 (t/deftest test-markdown-link-url-shown
-  (let [m (md/make-markdown "[text](http://example.com)" :padding-x 0)
-        lines (mapv strip-ansi (core/render m 40))]
-    (t/is (some #(.contains % "text") lines))
-    (t/is (some #(.contains % "(http://example.com)") lines))))
+  (let [prev (timg/get-capabilities)]
+    (try
+      (timg/set-capabilities! {:images nil :true-color true :hyperlinks false})
+      (let [m (md/make-markdown "[text](http://example.com)" :padding-x 0)
+            lines (mapv strip-ansi (core/render m 40))]
+        (t/is (some #(.contains % "text") lines))
+        (t/is (some #(.contains % "(http://example.com)") lines)))
+      (finally
+        (timg/set-capabilities! prev)))))
 
 (t/deftest test-markdown-kitchen-sink
   ;; One document exercising every block type end-to-end

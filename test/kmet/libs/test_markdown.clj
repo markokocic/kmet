@@ -34,6 +34,27 @@
              :text [{:type :text :s "text"}]}]
            (md/parse-inline "[text](http://example.com)"))))
 
+(t/deftest test-inline-autolinks
+  (t/is (= [{:type :text :s "Visit "}
+            {:type :link :url "https://example.com"
+             :text [{:type :text :s "https://example.com"}]}
+            {:type :text :s " for more"}]
+           (md/parse-inline "Visit https://example.com for more")))
+  (t/is (= [{:type :text :s "Contact "}
+            {:type :link :url "mailto:user@example.com"
+             :text [{:type :text :s "user@example.com"}]}
+            {:type :text :s " for help"}]
+           (md/parse-inline "Contact user@example.com for help")))
+  (t/is (= [{:type :link :url "http://www.example.com"
+             :text [{:type :text :s "www.example.com"}]}]
+           (md/parse-inline "www.example.com")))
+  (t/is (= [{:type :link :url "https://example.com"
+             :text [{:type :text :s "https://example.com"}]}]
+           (md/parse-inline "<https://example.com>")))
+  (t/is (= [{:type :link :url "mailto:user@example.com"
+             :text [{:type :text :s "user@example.com"}]}]
+           (md/parse-inline "<user@example.com>"))))
+
 (t/deftest test-inline-nested-formatting
   (t/is (= [{:type :strong :content [{:type :text :s "a"}]}
             {:type :text :s " and "}
@@ -247,9 +268,9 @@
                        {:type :text :s " c"}]}]
            (md/parse-inline "**a *b* c**"))))
 
-(t/deftest test-inline-backslash-is-literal
-  ;; No backslash escapes: \* stays literal (pi has preserveBackslashEscapes)
-  (t/is (= [{:type :text :s "\\*x"}] (md/parse-inline "\\*x"))))
+(t/deftest test-inline-backslash-escapes
+  ;; Pi's default Markdown options consume backslash escapes for punctuation.
+  (t/is (= [{:type :text :s "*x"}] (md/parse-inline "\\*x"))))
 
 (t/deftest test-inline-link-with-formatting
   (t/is (= [{:type :link :url "http://x.com"
