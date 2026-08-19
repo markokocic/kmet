@@ -345,9 +345,16 @@ Be precise and concise in your responses."}}]
                               "ENOTFOUND"
                               "EAI_AGAIN"
                               "upstream.?connect"
+                              ;; OpenRouter upstream-routing failures without a status
+                              ;; token in the body ('Upstream request failed: Endpoint
+                              ;; <name> is unavailable.')
+                              "upstream.*unavailable"
                               "reset before headers"
                               "socket hang up"
                               "socket connection was closed"
+                              ;; kmet's SSE wrapper over a mid-stream close (java.net.http
+                              ;; surfaces a dropped connection as a bare "closed")
+                              "stream error: .*closed"
                               "timed? out"
                               "timeout"
                               "terminated"

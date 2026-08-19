@@ -1179,6 +1179,17 @@
   (t/is (loop/retryable-error? "Stream error: Software caused connection abort"))
   (t/is (loop/retryable-error? "An existing connection was forcibly closed by the remote host"))
   (t/is (loop/retryable-error? "Broken pipe"))
+  ;; Mid-stream close on the sse read path — java.net.http surfaces a
+  ;; dropped connection as a bare "closed" IOException, wrapped by kmet's
+  ;; 'Stream error: ' prefix (no other token in the message)
+  (t/is (loop/retryable-error? "Stream error: closed"))
+  (t/is (loop/retryable-error? "Stream error: Connection is closed"))
+  ;; non-close stream errors stay non-retryable
+  (t/is (not (loop/retryable-error? "Stream error: Bedrock stream frame CRC mismatch")))
+  ;; OpenRouter upstream-routing failure — transient even without a status
+  ;; token in the body (with one, the 'HTTP 5xx: ' prefix matches first)
+  (t/is (loop/retryable-error? "Upstream request failed: Endpoint  is unavailable."))
+  (t/is (loop/retryable-error? "HTTP 503: Upstream request failed: Endpoint  is unavailable."))
   (t/is (not (loop/retryable-error? "insufficient_quota")))
   (t/is (not (loop/retryable-error? "Monthly usage limit reached")))
   (t/is (not (loop/retryable-error? "GoUsageLimitError")))

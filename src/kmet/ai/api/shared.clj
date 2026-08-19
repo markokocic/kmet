@@ -568,7 +568,13 @@
    OpenAI-compatible providers send {\"error\": {\"message\": ...}} (Anthropic
    and Gemini use the same shape); the :msg alias covers the rest. A plain
    text body passes through trimmed (capped); nil keeps the caller's fallback
-   when the body is unreadable or unparseable."
+   when the body is unreadable or unparseable.
+
+   429/5xx messages are prefixed with 'HTTP <status>: ' — opaque bodies (a
+   gateway's 500 'ext_proc failed: no more response messages' carries no
+   status token) rely on the retry classifier's '429'/'500'/... patterns to
+   auto-retry transient failures. 4xx stays unprefixed so overflow/quota
+   classification (incl. the anchored '413 (no body)' pattern) is untouched."
   [e]
   (let [d (ex-data e)
         status (:status d)
@@ -583,11 +589,15 @@
                    :else nil)
             parsed (try (json/parse-string text true) (catch Exception _ nil))
             trimmed (some-> text str str/trim)
-            pick (fn [s] (let [t (some-> s str str/trim)] (when (seq t) t)))]
-        (or (pick (some-> parsed :error :message))
-            (pick (some-> parsed :error :msg))
-            (when (seq trimmed)
-              (subs trimmed 0 (min max-error-body-chars (count trimmed)))))))))
+            pick (fn [s] (let [t (some-> s str str/trim)] (when (seq t) t)))
+            msg (or (pick (some-> parsed :error :message))
+                    (pick (some-> parsed :error :msg))
+                    (when (seq trimmed)
+                      (subs trimmed 0 (min max-error-body-chars (count trimmed)))))]
+        (when msg
+          (if (or (= status 429) (>= status 500))
+            (str "HTTP " status ": " msg)
+            msg))))))
 
 (defn transport-error-message
   "Message for a transport-layer exception. Network failures carry a stable
@@ -597,8 +607,10 @@
    auto-retry on connect/DNS failures (pi's undici always reports transport
    failures as 'fetch failed'). HTTP error responses (babashka's
    'Exceptional status code: N') surface the provider's message from the
-   response body so overflow/throttle classifiers see the real error.
-   Non-network exceptions keep their message."
+   response body so overflow/throttle classifiers see the real error —
+   prefixed with 'HTTP <status>: ' on 429/5xx so the classifier's
+   status-code patterns match even opaque bodies. Non-network exceptions
+   keep their message."
   [e]
   (let [msg (ex-message e)
         cls (some-> (class e) .getSimpleName)

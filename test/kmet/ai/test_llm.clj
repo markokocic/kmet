@@ -665,7 +665,31 @@
       (t/is (loop/context-overflow? (te (http-err overflow)))
             "the surfaced body feeds the overflow classifier")
       (t/is (not (loop/context-overflow? (te (http-err pairing))))
-            "other provider errors are not misclassified as overflow"))))
+            "other provider errors are not misclassified as overflow"))
+    ;; 429/5xx get an 'HTTP <status>: ' prefix — the retry classifier's
+    ;; status-code patterns must match even opaque gateway bodies that carry
+    ;; no status token of their own (e.g. agentgateway's 500 'ext_proc
+    ;; failed: no more response messages'); 4xx above stays unprefixed
+    (let [http-status (fn [status body]
+                        (ex-info (str "Exceptional status code: " status)
+                                 {:status status :body body}))]
+      (t/is (= "HTTP 500: ext_proc failed: no more response messages"
+               (te (http-status 500 "ext_proc failed: no more response messages"))))
+      (t/is (loop/retryable-error?
+             (te (http-status 500 "ext_proc failed: no more response messages")))
+            "opaque 500 bodies classify as retryable via the status token")
+      (t/is (= "HTTP 502: Bad Gateway" (te (http-status 502 "Bad Gateway"))))
+      (t/is (= "HTTP 503: upstream unavailable" (te (http-status 503 "upstream unavailable"))))
+      (t/is (= "HTTP 504: Gateway Timeout" (te (http-status 504 "Gateway Timeout"))))
+      (t/is (= "HTTP 429: slow down" (te (http-status 429 "slow down")))
+            "429 is prefixed too — the regex's '429' token now always matches")
+      (t/is (loop/retryable-error? (te (http-status 429 "slow down"))))
+      ;; JSON error bodies keep the provider message, prefixed
+      (t/is (= "HTTP 500: something exploded"
+               (te (http-status 500 "{\"error\":{\"message\":\"something exploded\"}}"))))
+      ;; quota/billing bodies stay non-retryable even on 5xx (the
+      ;; non-retryable quota patterns take precedence over the status token)
+      (t/is (not (loop/retryable-error? (te (http-status 500 "billing suspended"))))))))
 
 ;; ─── Thinking level machinery (pi: clampThinkingLevel) ─────────────────────
 
