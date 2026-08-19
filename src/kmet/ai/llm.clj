@@ -67,10 +67,9 @@
         api-key (or api-key (:api-key auth))
         ;; An oauth credential's to-auth carries a per-credential base-url
         ;; (pi applyAuth: auth.baseUrl overrides the model's — Copilot's
-        ;; proxy-ep endpoint); an explicit agent-level :base-url wins.
-        opts (cond-> opts
-               (and (:base-url auth) (nil? (:base-url opts)))
-               (assoc :base-url (:base-url auth)))
+        ;; proxy-ep endpoint). Keep it on the resolved model so each API
+        ;; builder still appends its endpoint path; an explicit agent-level
+        ;; :base-url remains a complete endpoint override.
         ;; pi: emitContext — the context event fires before each LLM call;
         ;; the hook (installed by the extension bridge) may replace the
         ;; outgoing messages (first non-nil handler result wins)
@@ -86,7 +85,10 @@
                          ". Set the key in ~/.kmet/agent/auth.edn."))))
 
       :else
-      (let [m (models/get-model provider model)]
+      (let [m (models/get-model provider model)
+            m (if (and m (:base-url auth) (nil? (:base-url opts)))
+                (assoc m :base-url (:base-url auth))
+                m)]
         (cond
           ;; Catalog provider with an unknown model id → error
           (and (some? (models/get-provider provider)) (nil? m))

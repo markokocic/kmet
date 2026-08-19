@@ -58,6 +58,30 @@
                           :on-error (fn [e] (swap! errors conj e))})
       (t/is (= ["Unknown provider: nosuch"] @errors)))))
 
+(t/deftest test-llm-auth-base-url-keeps-api-endpoint
+  ;; pi auth.baseUrl replaces the model base URL, not the complete endpoint.
+  ;; The API builder must therefore remain responsible for appending /responses.
+  (m/load-catalogs!)
+  (let [request (atom nil)]
+    (with-redefs [auth/resolve-provider-auth
+                  (fn [_] {:api-key "test-key"
+                           :base-url "https://copilot.example"})
+                  responses/responses-request
+                  (fn [opts]
+                    (reset! request opts)
+                    (future nil))]
+      @(llm/send-message {:provider :openai
+                          :model "gpt-5.4"
+                          :messages []}))
+    (t/is (nil? (:base-url @request))
+          "an explicit endpoint override is not synthesized in the dispatcher")
+    (t/is (= "https://copilot.example"
+             (:base-url (:model-record @request))))
+    (t/is (= "https://copilot.example/responses"
+             (shared/endpoint-url :openai-responses
+                                  (:base-url (:model-record @request))
+                                  "gpt-5.4")))))
+
 ;; ─── Endpoint URL construction (each api owns it) ──────────────────────────
 
 (t/deftest test-endpoint-urls
