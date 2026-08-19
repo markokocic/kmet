@@ -359,11 +359,27 @@
                  :tool-calls [{:id "toolu_01ABC" :name "bash" :arguments {:cmd "ls"}}]}
                 {:role :tool :content [{:type :tool-result :tool_use_id "toolu_01ABC" :content "out"}]}])
         tool-call (nth items 1)]
-    (t/is (= {:type "function_call" :call_id "toolu_01ABC" :id nil
+    (t/is (= {:type "function_call" :call_id "toolu_01ABC"
               :name "bash" :arguments "{\"cmd\":\"ls\"}"}
              tool-call))
     (t/is (= {:type "function_call_output" :call_id "toolu_01ABC" :output "out"}
-             (nth items 2)))))
+             (nth items 2))))
+  (t/testing "foreign Responses item ids are omitted for Copilot"
+    (let [model (responses-model {:provider :github-copilot})
+          items (@#'responses/responses-messages
+                 model
+                 [{:role :assistant :content []
+                   :tool-calls [{:id "call_qwen|V7tZ6kGdR7aeKl14cUq9F_cRTzluuKfD1RULCNcPpxaaOuVPvzVouaxmjWg0G9H"
+                                 :name "bash" :arguments {}}]}])]
+      (t/is (= {:type "function_call" :call_id "call_qwen"
+                :name "bash" :arguments "{}"}
+               (first items)))))
+  (t/testing "non-fc ids are prefixed for Responses-native providers"
+    (let [items (@#'responses/responses-messages
+                 (responses-model)
+                 [{:role :assistant :content []
+                   :tool-calls [{:id "call_openai|opaque-id" :name "bash" :arguments {}}]}])]
+      (t/is (= "fc_opaque-id" (:id (first items)))))))
 
 (t/deftest test-llm-responses-payload
   (t/testing "thinking on → reasoning {effort, summary} + include"

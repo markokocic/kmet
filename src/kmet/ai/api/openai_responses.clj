@@ -18,6 +18,25 @@
       (-> (if (> (count sanitized) 64) (subs sanitized 0 64) sanitized)
           (str/replace #"_+$" "")))))
 
+(def ^:private responses-tool-call-providers
+  "Providers whose Responses API can replay a function-call item id. Other
+   providers omit the id when switching into Responses, matching pi's
+   cross-provider conversion path."
+  #{:openai :openai-codex :opencode})
+
+(defn- responses-function-call-item-id
+  "Normalize a replayed Responses function-call item id. The Responses API
+   requires ids to begin with `fc_`; ids from another wire API are omitted
+   instead of being fabricated for a provider that cannot pair them."
+  [provider item-id]
+  (when (and (contains? responses-tool-call-providers provider)
+             (seq item-id))
+    (let [normalized (normalize-id-part item-id)]
+      (when (seq normalized)
+        (if (str/starts-with? normalized "fc_")
+          normalized
+          (normalize-id-part (str "fc_" normalized)))))))
+
 (defn responses-user-content
   "User content blocks → responses input content (input_text / input_image
    items; pi convertResponsesMessages)."
@@ -81,12 +100,14 @@
                            :status "completed"
                            :id (str "msg_pi_" msg-idx (when (pos? i) (str "_" i)))})
                         (for [tc (:tool-calls m)]
-                          (let [[call-id item-id] (str/split (str (:id tc)) #"\|")]
-                            {:type "function_call"
-                             :call_id (normalize-id-part call-id)
-                             :id (normalize-id-part item-id)
-                             :name (:name tc)
-                             :arguments (cheshire.core/generate-string (:arguments tc))}))))]
+                          (let [[call-id item-id] (str/split (str (:id tc)) #"\|")
+                                item-id (responses-function-call-item-id
+                                         (:provider model) item-id)]
+                            (cond-> {:type "function_call"
+                                     :call_id (normalize-id-part call-id)
+                                     :name (:name tc)
+                                     :arguments (cheshire.core/generate-string (:arguments tc))}
+                              item-id (assoc :id item-id))))))]
       (when (seq blocks) blocks))
 
     ;; custom messages (pi: convertToLlm custom→user)
