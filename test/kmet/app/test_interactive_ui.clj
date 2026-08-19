@@ -15,6 +15,7 @@
             [kmet.app.theme-controller :as theme-ctrl]
             [kmet.app.ui :as ui]
             [kmet.app.ui.chat-history :as chat-history]
+            [kmet.app.ui.model-catalog :as model-catalog]
             [kmet.app.ui.model-selector :as model-selector]
             [kmet.ai.models :as m]
             [kmet.ai.auth :as auth]
@@ -365,7 +366,7 @@
       (with-redefs [auth/configured? (fn [_] true)
                     chat-history/chat-history-add-message! (fn [_ _] nil)
                     cfg/get-enabled-models-live (fn [_] nil)
-                    model-selector/update-available-provider-count! (fn [_] nil)
+                    model-catalog/update-available-provider-count! (fn [_] nil)
                     tui/tui-show-overlay (fn [_ sel & _] (reset! sel-ref sel))
                     tui/tui-request-render (fn [_])]
         (testing "no session scoped models and no patterns → all enabled"
@@ -408,7 +409,7 @@
           sel-ref (atom nil)]
       (with-redefs [auth/configured? (fn [_] true)
                     chat-history/chat-history-add-message! (fn [_ _] nil)
-                    model-selector/update-available-provider-count! (fn [_] nil)
+                    model-catalog/update-available-provider-count! (fn [_] nil)
                     tui/tui-show-overlay (fn [_ sel & _] (reset! sel-ref sel))
                     tui/tui-request-render (fn [_])]
         ((:handler (commands/find-command "scoped-models")) cs "")

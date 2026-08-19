@@ -15,10 +15,11 @@
             [kmet.app.ui.external-editor :refer [editor-text-get editor-text-get-expanded
                                                  editor-text-set! handle-external-editor]]
             [kmet.app.ui.fork-selector :refer [show-fork-selector]]
+            [kmet.app.ui.model-catalog :as model-catalog]
             [kmet.app.ui.model-selector :refer [apply-model-switch!
-                                                resolve-model-ref scoped-or-available-models
-                                                show-model-selector show-scoped-models-selector
+                                                resolve-model-ref show-model-selector
                                                 sync-footer-model!]]
+            [kmet.app.ui.scoped-models-selector :refer [show-scoped-models-selector]]
             [kmet.app.ui.settings-selector :refer [show-settings]]
             [kmet.app.ui.session-selector :refer [show-session-selector]]
             [kmet.app.ui.tree-selector :refer [show-session-tree]]
@@ -2638,7 +2639,7 @@
         ;; model line wraps to its own line when the stats line is too narrow)
         fdp (ui/make-footer-data-provider
              :session session
-             :provider-count (count (distinct (map :provider (scoped-or-available-models ag))))
+             :provider-count (count (distinct (map :provider (model-catalog/scoped-or-available-models ag))))
              ;; Phase 2: context window from the resolved Model record, falling
              ;; back to the settings value when the model is unknown (pi footer
              ;; contextPercentDisplay)

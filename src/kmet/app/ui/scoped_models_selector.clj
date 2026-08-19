@@ -6,21 +6,27 @@
    of \"provider/id\" full ids (may include ids absent from the catalog —
    they render as [unavailable] rows)."
   (:require [clojure.string :as str]
-            [kmet.tui.macros :refer [defcomponent]]
-            [kmet.tui.protocols :as protocols]
-            [kmet.tui.theme :as theme]
-            [kmet.tui.keybindings :as kb]
+            [kmet.ai.models :as models]
             [kmet.app.keybindings :as app-kb]
-            [kmet.app.ui.model-info :as model-info]
+            [kmet.app.loop :as agent]
+            [kmet.app.model-resolver :as resolver]
+            [kmet.app.ui.chat-history :as chat-history]
+            [kmet.app.ui.model-catalog :as model-catalog]
+            [kmet.config :as cfg]
             [kmet.tui.components.container :as container]
-            [kmet.tui.components.text :as text]
-            [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.dynamic-border :as db]
             [kmet.tui.components.input :as input]
-            [kmet.tui.keys :as keys]))
+            [kmet.tui.components.spacer :as spacer]
+            [kmet.tui.components.text :as text]
+            [kmet.tui.core :as tui]
+            [kmet.tui.keybindings :as kb]
+            [kmet.tui.keys :as keys]
+            [kmet.tui.macros :refer [defcomponent]]
+            [kmet.tui.protocols :as protocols]
+            [kmet.tui.theme :as theme]))
 
 (defn- full-id [m]
-  (str (name (:provider m)) "/" (:id m)))
+  (model-catalog/model-full-id m))
 
 (defn- key-or
   "The resolved key text for a keybinding id, or FALLBACK when unbound."
@@ -321,7 +327,7 @@
     (when (pos? n)
       (let [item (nth filtered selected)]
         (container/container-add-child rows (spacer/make-spacer 1))
-        (doseq [line (model-info/model-info-lines (:model item))]
+        (doseq [line (model-catalog/model-info-lines (:model item))]
           (container/container-add-child
            rows (text/make-text line 1 0)))))
     (container/container-set-children! (:rows-container this) @(:children rows))
@@ -381,6 +387,72 @@
       sel)))
 
 ;; ─── Public helpers ────────────────────────────────────────────────────────
+
+(defn show-scoped-models-selector
+  "pi showModelsSelector — /scoped-models opens the enabled-models overlay
+   for Ctrl+P cycling. Initial enabled ids: session scoped models when set,
+   else the settings :enabled-models patterns resolved through
+   resolve-model-scope-models (unresolved patterns survive as [unavailable]
+   rows), else nil (all enabled). Changes are session-only until Ctrl+S
+   writes :enabled-models; the footer provider count updates live."
+  [cs]
+  (let [available (models/get-available)
+        ag @(:agent-state cs)
+        session-scoped (vec (agent/get-scoped-models ag))
+        patterns (cfg/get-enabled-models-live (:config cs))
+        configured-ids (fn []
+                         ;; resolve each pattern; unresolved ones survive as
+                         ;; [unavailable] rows (pi: no-match diagnostics are
+                         ;; appended to the enabled ids)
+                         (loop [ps patterns acc [] warnings []]
+                           (if-let [p (first ps)]
+                             (let [{:keys [model]}
+                                   (resolver/parse-model-pattern p available)]
+                               (if model
+                                 (recur (rest ps) (conj acc (model-catalog/model-full-id model)) warnings)
+                                 (recur (rest ps) (conj acc (str p))
+                                        (conj warnings
+                                              (str "No models match pattern \"" p "\"")))))
+                             (do (doseq [w warnings]
+                                   (chat-history/chat-history-add-message!
+                                    (:chat-history cs) {:role :assistant :content w}))
+                                 (vec acc)))))
+        initial (cond
+                  (seq session-scoped) session-scoped
+                  (seq patterns) (configured-ids)
+                  :else nil)
+        available-ids (set (map model-catalog/model-full-id available))
+        update-session-models (fn [enabled-ids]
+                                ;; pi updateSessionModels: a non-null list with
+                                ;; an enabled available model, not covering all
+                                ;; available models, becomes the session scoped
+                                ;; list; everything else (null = all enabled,
+                                ;; nothing enabled, all enabled) clears it
+                                (if (and enabled-ids
+                                         (some available-ids enabled-ids)
+                                         (not (every? (set enabled-ids)
+                                                      (map model-catalog/model-full-id available))))
+                                  (agent/set-scoped-models! ag enabled-ids)
+                                  (agent/set-scoped-models! ag []))
+                                (model-catalog/update-available-provider-count! cs)
+                                (tui/tui-request-render (:tui cs)))
+        sel (make-scoped-models-selector
+             available initial
+             :on-change update-session-models
+             :on-persist (fn [enabled-ids]
+                           (let [all-enabled? (or (nil? enabled-ids)
+                                                  (and (= (count enabled-ids) (count available))
+                                                       (every? available-ids enabled-ids)))]
+                             (cfg/set-enabled-models! (when-not all-enabled? enabled-ids))
+                             (chat-history/chat-history-add-message!
+                              (:chat-history cs)
+                              {:role :assistant
+                               :content "Model selection saved to settings."})))
+             :on-cancel (fn []
+                          (tui/tui-hide-overlay (:tui cs))
+                          (tui/tui-request-render (:tui cs))))]
+    (tui/tui-show-overlay (:tui cs) sel :width 62 :max-height 24)
+    (tui/tui-request-render (:tui cs))))
 
 (defn scoped-models-get-enabled-ids
   "The selector's current enabled ids (nil = all enabled)."

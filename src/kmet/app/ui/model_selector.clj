@@ -2,8 +2,8 @@
   "Model selection UI (pi: modes/interactive/components/model-selector.ts +
    model-search.ts): the /model overlay selector (pi ModelSelectorComponent —
    visible search filter, wrap-around navigation, current-model ✓, all/scoped
-   Tab toggle), the /scoped-models (Ctrl+P cycling) overlay, and the
-   model-switch helpers shared with cycling and the footer sync."
+   Tab toggle), and the model-switch helpers shared with cycling and the
+   footer sync."
   (:require [clojure.string :as str]
             [kmet.app.keybindings :as app-kb]
             [kmet.app.loop :as agent]
@@ -11,8 +11,7 @@
             [kmet.app.model-resolver :as resolver]
             [kmet.app.ui.chat-history :as chat-history]
             [kmet.app.ui.footer-data-provider :as fdp]
-            [kmet.app.ui.model-info :as model-info]
-            [kmet.app.ui.scoped-models-selector :as scoped-models-selector]
+            [kmet.app.ui.model-catalog :as model-catalog]
             [kmet.config :as cfg]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.dynamic-border :as db]
@@ -50,42 +49,6 @@
     (protocols/invalidate (:footer-comp cs))
     (tui/tui-request-render (:tui cs))
     nil))
-
-(defn model-full-id
-  "Full \"provider/id\" id of a Model record (pi: `${provider}/${id}`)."
-  [m]
-  (str (name (:provider m)) "/" (:id m)))
-
-(defn- scoped-model-snapshot
-  "Models matched against first (pi: session scoped models when set, else
-   the available snapshot) — feeds /model's cached match and the footer
-   provider count. Scoped entries that no longer resolve drop out."
-  [ag]
-  (let [scoped (agent/get-scoped-models ag)]
-    (if (seq scoped)
-      (vec (keep (fn [id]
-                   (let [slash (str/index-of id "/")]
-                     (when slash
-                       (models/get-model (keyword (subs id 0 slash))
-                                         (subs id (inc slash))))))
-                 scoped))
-      (models/get-available))))
-
-(defn scoped-or-available-models
-  "pi: session scoped models when set, else the available snapshot (feeds
-   cycling's fallback, /model, and the footer provider count)."
-  [ag]
-  (if (seq (agent/get-scoped-models ag))
-    (scoped-model-snapshot ag)
-    (models/get-available)))
-
-(defn- update-available-provider-count!
-  "Footer provider count from the scoped models when set, else the available
-   snapshot (pi updateAvailableProviderCount)."
-  [cs]
-  (fdp/fdp-set-provider-count!
-   (:footer-provider cs)
-   (count (distinct (map :provider (scoped-or-available-models @(:agent-state cs)))))))
 
 (defn apply-model-switch!
   "Switch the agent's model (and optional explicit thinking level) with
@@ -275,7 +238,7 @@
     (when (pos? n)
       (let [selected-model (:model (nth filtered selected))]
         (container/container-add-child rows (spacer/make-spacer 1))
-        (doseq [line (model-info/model-info-lines selected-model)]
+        (doseq [line (model-catalog/model-info-lines selected-model)]
           (container/container-add-child
            rows (text/make-text line 1 0)))))
     (container/container-set-children! (:list-container this) @(:children rows))
@@ -392,70 +355,6 @@
   "/model reference resolution against the cached snapshot (pi
    findExactModelMatch — session scoped models when set, else available)."
   [cs term]
-  (resolver/resolve-model-reference term (scoped-or-available-models @(:agent-state cs))))
-
-(defn show-scoped-models-selector
-  "pi showModelsSelector — /scoped-models opens the enabled-models overlay
-   for Ctrl+P cycling. Initial enabled ids: session scoped models when set,
-   else the settings :enabled-models patterns resolved through
-   resolve-model-scope-models (unresolved patterns survive as [unavailable]
-   rows), else nil (all enabled). Changes are session-only until Ctrl+S
-   writes :enabled-models; the footer provider count updates live."
-  [cs]
-  (let [available (models/get-available)
-        ag @(:agent-state cs)
-        session-scoped (vec (agent/get-scoped-models ag))
-        patterns (cfg/get-enabled-models-live (:config cs))
-        configured-ids (fn []
-                         ;; resolve each pattern; unresolved ones survive as
-                         ;; [unavailable] rows (pi: no-match diagnostics are
-                         ;; appended to the enabled ids)
-                         (loop [ps patterns acc [] warnings []]
-                           (if-let [p (first ps)]
-                             (let [{:keys [model]}
-                                   (resolver/parse-model-pattern p available)]
-                               (if model
-                                 (recur (rest ps) (conj acc (model-full-id model)) warnings)
-                                 (recur (rest ps) (conj acc (str p))
-                                        (conj warnings
-                                              (str "No models match pattern \"" p "\"")))))
-                             (do (doseq [w warnings]
-                                   (chat-history/chat-history-add-message!
-                                    (:chat-history cs) {:role :assistant :content w}))
-                                 (vec acc)))))
-        initial (cond
-                  (seq session-scoped) session-scoped
-                  (seq patterns) (configured-ids)
-                  :else nil)
-        available-ids (set (map model-full-id available))
-        update-session-models (fn [enabled-ids]
-                                ;; pi updateSessionModels: a non-null list with
-                                ;; an enabled available model, not covering all
-                                ;; available models, becomes the session scoped
-                                ;; list; everything else (null = all enabled,
-                                ;; nothing enabled, all enabled) clears it
-                                (if (and enabled-ids
-                                         (some available-ids enabled-ids)
-                                         (not (every? (set enabled-ids)
-                                                      (map model-full-id available))))
-                                  (agent/set-scoped-models! ag enabled-ids)
-                                  (agent/set-scoped-models! ag []))
-                                (update-available-provider-count! cs)
-                                (tui/tui-request-render (:tui cs)))
-        sel (scoped-models-selector/make-scoped-models-selector
-             available initial
-             :on-change update-session-models
-             :on-persist (fn [enabled-ids]
-                           (let [all-enabled? (or (nil? enabled-ids)
-                                                  (and (= (count enabled-ids) (count available))
-                                                       (every? available-ids enabled-ids)))]
-                             (cfg/set-enabled-models! (when-not all-enabled? enabled-ids))
-                             (chat-history/chat-history-add-message!
-                              (:chat-history cs)
-                              {:role :assistant
-                               :content "Model selection saved to settings."})))
-             :on-cancel (fn []
-                          (tui/tui-hide-overlay (:tui cs))
-                          (tui/tui-request-render (:tui cs))))]
-    (tui/tui-show-overlay (:tui cs) sel :width 62 :max-height 24)
-    (tui/tui-request-render (:tui cs))))
+  (resolver/resolve-model-reference
+   term
+   (model-catalog/scoped-or-available-models @(:agent-state cs))))
