@@ -27,7 +27,9 @@
 (defn format-diff-lines
   "Generate pi-style numbered diff lines from full old/new line vectors
    (pi: generateDiffString). Context (diff-context-lines) around each change
-   region; ' ...' skip markers for large unchanged gaps. Returns {:diff str}."
+   region; ' ...' skip markers for large unchanged gaps. Returns {:diff str}.
+   Identical vectors (after dropping trailing empty lines) yield {:diff \"\"} —
+   the Myers pass cannot handle two empty changed-regions."
   [old-lines new-lines]
   (let [old-lines (drop-trailing-empty old-lines)
         new-lines (drop-trailing-empty new-lines)
@@ -35,7 +37,9 @@
         width (count (str (max n m)))
         pad (fn [num] (let [s (str num)] (str (apply str (repeat (- width (count s)) \space)) s)))
         skip-marker (str " " (apply str (repeat width \space)) " ...")
-        parts (diff/line-diff old-lines new-lines)
+        parts (if (= old-lines new-lines)
+                []
+                (diff/line-diff old-lines new-lines))
         acc (loop [i 0 old-num 1 new-num 1 last-was-change? false acc []]
               (if (>= i (count parts))
                 acc
@@ -129,13 +133,17 @@
 
 (defn generate-display-diff
   "Generate the standard numbered display diff for two source strings.
-   Returns nil when the normalized contents are identical."
+   Returns nil when the contents are identical — either as raw strings, or
+   at the line level after dropping trailing empty lines (a trailing-newline
+   or trailing-blank-line difference produces no visible +/- lines)."
   [old-content new-content]
   (let [old-text (normalize-to-lf (:text (strip-bom old-content)))
         new-text (normalize-to-lf (:text (strip-bom new-content)))]
     (when (not= old-text new-text)
-      (:diff (format-diff-lines (str/split-lines old-text)
-                                (str/split-lines new-text))))))
+      (let [result (format-diff-lines (str/split-lines old-text)
+                                      (str/split-lines new-text))]
+        (when-not (str/blank? (:diff result))
+          (:diff result))))))
 
 ;; ─── Fuzzy matching (pi: normalizeForFuzzyMatch + fuzzyFindText) ───────────
 

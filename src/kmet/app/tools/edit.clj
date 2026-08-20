@@ -60,12 +60,13 @@
                   final (str bom (edit-diff/restore-line-endings new-content original-ending))
                   {:keys [diff]} (edit-diff/format-diff-lines
                                   (str/split-lines normalized)
-                                  (str/split-lines new-content))]
+                                  (str/split-lines new-content))
+                  diff (when-not (str/blank? diff) diff)]
               (spit f final)
               {:content (str "Successfully replaced " (count edits) " block(s) in " path ".")
                ;; Pi: EditToolDetails.diff — the actually-applied display diff,
                ;; used by the TUI render-result to correct a stale preview
-               :details {:diff diff}})))
+               :details (when diff {:diff diff})})))
         (catch Exception e
           (if (= :edit-error (:type (ex-data e)))
             ;; Pi: edit matching errors surface with their own message

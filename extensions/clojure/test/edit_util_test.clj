@@ -127,6 +127,24 @@
     (is (str/includes? result "-1 line1"))
     (is (str/includes? result "+1 line2"))))
 
+(deftest test-diff-display-trailing-newline
+  (testing "trailing-newline-only difference yields nil (no crash, no empty diff)"
+    (is (nil? (edit-diff/generate-display-diff "(defn foo [] nil)" "(defn foo [] nil)\n")))
+    (is (nil? (edit-diff/generate-display-diff "a\n" "a\n\n")))))
+
+(deftest test-diff-display-pure-add-del
+  (testing "pure line addition/deletion produce proper diffs"
+    (let [add (edit-diff/generate-display-diff "a\n" "a\nb\n")]
+      (is (str/includes? add "+2 b")))
+    (let [del (edit-diff/generate-display-diff "a\nb\n" "a\n")]
+      (is (str/includes? del "-2 b")))))
+
+(deftest test-diff-display-empty-content
+  (testing "empty vs content transitions"
+    (is (str/includes? (edit-diff/generate-display-diff "" "x\n") "+1 x"))
+    (is (str/includes? (edit-diff/generate-display-diff "x\n" "") "-1 x"))
+    (is (nil? (edit-diff/generate-display-diff "" "")))))
+
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Formatting
 ;; ═══════════════════════════════════════════════════════════════════════════════
