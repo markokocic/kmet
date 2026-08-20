@@ -96,6 +96,22 @@
     (let [content (read-test-file path)]
       (is (str/includes? content "(defn foo [x]")))))
 
+(deftest test-repair-honors-project-cljfmt-edn
+  (let [dir (fs/create-dir (fs/path test-dir "fmt-proj"))
+        _   (spit (fs/file dir "cljfmt.edn")
+                  "{:extra-indents {mydef [[:block 3] [:inner 1]]}}")
+        path (str (fs/file dir "sample.clj"))
+        _    (spit path "(mydef Foo nil\n  [container search-input]\n  (render [this w] (str a))\n")
+        result (paren-repair/execute {:file_path path})]
+    (try
+      (is (not (:is-error result)))
+      (let [content (read-test-file path)]
+        ;; with [:block 3], the 4th element (render) is block-indented at
+        ;; col 2; without the config it would align under the first arg
+        (is (str/includes? content "\n  (render [this w] (str a))"))
+        (is (not (str/includes? content "\n       (render"))))
+      (finally (fs/delete-tree dir)))))
+
 (deftest test-returns-diff
   (let [path (write-test-file! "diff.clj" "(defn foo [x] (+ x 1\n")
         result (paren-repair/execute {:file_path path})]

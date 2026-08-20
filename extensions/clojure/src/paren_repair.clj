@@ -18,11 +18,12 @@
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
 (defn repair-string
-  "Repair delimiters in SOURCE and optionally format with cljfmt.
-   Returns {:content str :delimiter-fixed? bool :formatted? bool}."
-  [source format?]
+  "Repair delimiters in SOURCE and optionally format with cljfmt using
+   FMT-OPTS (resolved from the file's directory by the caller, so the
+   project's cljfmt.edn rules apply). Returns {:content str
+   :delimiter-fixed? bool :formatted? bool}."
+  [source format? fmt-opts]
   (let [[repaired delimiter-fixed?] (util/repair-delimiters source)
-        fmt-opts (util/project-fmt-opts ".")
         formatted (if format?
                     (util/format-source-string repaired fmt-opts)
                     repaired)]
@@ -45,7 +46,8 @@
     :else
     (try
       (let [original (util/slurp-utf8 file-path)
-            result (repair-string original format?)
+            fmt-opts (util/project-fmt-opts file-path)
+            result (repair-string original format? fmt-opts)
             final-content (:content result)
             changed? (not= original final-content)]
         (if changed?

@@ -118,9 +118,13 @@
    produces): the project's cljfmt.edn — walked up from the file's directory —
    merged over cljfmt's defaults, so :extra-indents/:indents/:alias-map etc.
    apply to custom macros (defcomponent, defsetter, ...). Falls back to plain
-   defaults when no config file exists."
+   defaults when no config file exists or the file's directory does not exist
+   (load-config cannot search a nonexistent directory)."
   [file-path]
-  (config/load-config (str (or (fs/parent file-path) "."))))
+  (let [parent (when file-path (fs/parent file-path))]
+    (if (and parent (fs/exists? parent))
+      (config/load-config (str parent))
+      (config/load-config "."))))
 
 (defn format-source-string
   "Format a complete Clojure source string.  Returns formatted string,
