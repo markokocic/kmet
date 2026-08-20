@@ -15,7 +15,6 @@
             [clojure.string :as str]
             [edit-util :as util]
             [kmet.app.ui.tool-renderers :as renderers]
-            [kmet.libs.edit-diff :as edit-diff]
             [rewrite-clj.node :as n]
             [rewrite-clj.parser :as p]
             [rewrite-clj.zip :as z]))
@@ -268,48 +267,15 @@
       {:content "Invalid Clojure code in new_form" :is-error true}
 
       :else
-      (try
-        (let [;; 1. Lint-repair both match_form and new_form
-              match' (first (util/lint-repair match_form))
-              new'   (first (util/lint-repair new_form))
+      (let [match' (first (util/lint-repair match_form))
+            new'   (first (util/lint-repair new_form))
+            find-edit (fn [zloc]
+                        (find-and-edit-multi-sexp
+                         zloc match' new'
+                         {:operation op-kw :all? replace-all?}))]
+        (util/edit-pipeline file_path find-edit
+                            [[match_form match'] [new_form new']])))))
 
-              ;; 2. Load + parse
-              original (util/slurp-utf8 file_path)
-              zloc     (z/of-string original {:track-position? true})
-
-              ;; 3. Find + edit
-              result   (find-and-edit-multi-sexp
-                        zloc match' new'
-                        {:operation op-kw :all? replace-all?})]
-          (if-not result
-            (let [repaired? (not= match_form match')
-                  repaired-note (when repaired?
-                                  (str "\nNote: match_form was unbalanced and was auto-repaired to: " match'
-                                       "\nIf the repaired form is not what you meant, pass the complete, balanced expression exactly as it appears in the file."))
-                  fix-note "\nThe match is content-based — whitespace/newlines are ignored, but the structure (parens, brackets, braces, keywords, symbols) must match."]
-              {:content  (str "Could not find s-expression: " match_form
-                              repaired-note fix-note)
-               :is-error true})
-            ;; 4. Format + write + diff
-            (let [new-source (z/root-string (:zloc result))
-                  fmt-opts  (util/project-fmt-opts file_path)
-                  formatted (util/format-source-string new-source fmt-opts)]
-              ;; Normal mode — write file
-              (util/spit-utf8 file_path formatted)
-              (let [diff-str (edit-diff/generate-display-diff original formatted)
-                    repaired? (or (not= match_form match')
-                                  (not= new_form new'))
-                    repaired-note (when repaired?
-                                    "\nNote: unbalanced input was auto-repaired before matching.")]
-                {:content (if repaired-note
-                            (str "Edit applied." repaired-note)
-                            "Edit applied.")
-                 :details (when diff-str {:diff diff-str})}))))
-        (catch Exception e
-          {:content (str "Error editing " file_path ": " (ex-message e))
-           :is-error true})))))
-
-;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Tool registration
 ;; ═══════════════════════════════════════════════════════════════════════════════
 

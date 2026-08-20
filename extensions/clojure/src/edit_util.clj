@@ -9,6 +9,7 @@
             [cljfmt.core :as fmt]
             [clojure.string :as str]
             [edamame.core :as e]
+            [kmet.libs.edit-diff :as edit-diff]
             [parinferish.core :as parinferish]
             [rewrite-clj.node :as n]
             [rewrite-clj.parser :as p]
@@ -209,3 +210,85 @@
         (remove-whitespace-and-comments)
         (z/replace (p/parse-string-all content-str)))
     (z/replace form-zloc (p/parse-string-all content-str))))
+
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; Zipper: insert helpers (shared by clojure_edit and clojure_edit_replace_sexp)
+;; ═══════════════════════════════════════════════════════════════════════════════
+
+(defn insert-before-form
+  "Insert CONTENT-STR as a new form immediately before ZLOC, separated by a
+   blank line, returning the inserted form's zipper location."
+  [zloc content-str]
+  (-> zloc
+      walk-back-to-non-comment z/next*
+      (z/insert-left* (p/parse-string-all "\n\n"))
+      z/left
+      (z/insert-left* (p/parse-string-all content-str))
+      z/left))
+
+(defn insert-after-form
+  "Insert CONTENT-STR as a new form immediately after ZLOC (past the form's
+   own same-line trailing trivia), separated by a blank line, returning the
+   inserted form's zipper location. A comment anchor already ends its line,
+   so it takes a single \"\\n\" before (blank line) and after (line
+   terminator) the content."
+  [zloc content-str]
+  (let [anchor (walk-forward-past-trailing-comments zloc)
+        comment-anchor? (= :comment (n/tag (z/node anchor)))
+        sep (p/parse-string-all (if comment-anchor? "\n" "\n\n"))
+        at-content (-> anchor
+                       (z/insert-right* sep)
+                       z/right
+                       (z/insert-right* (p/parse-string-all content-str))
+                       z/right)]
+    (if comment-anchor?
+      (z/insert-right* at-content (p/parse-string-all "\n"))
+      at-content)))
+
+(defn edit-pipeline
+  "Run the shared edit pipeline: load FILE-PATH, call FIND-EDIT-FN with the
+   parsed zipper (which must return either {:error msg :similar-matches ...}
+   or {:zloc updated-zloc}), format the result with the project's cljfmt
+   config, write it back, and return the tool result map.
+   When REPAIR-INPUTS is a seq of [raw repaired] pairs, the success message
+   notes when any input was auto-repaired, and the not-found message explains
+   the repair. FIND-EDIT-FN may return nil instead of {:error ...} — that
+   becomes the not-found error."
+  [file-path find-edit-fn repair-inputs]
+  (try
+    (let [original (slurp-utf8 file-path)
+          zloc     (z/of-string original {:track-position? true})
+          result   (find-edit-fn zloc)]
+      (if (and result (:error result))
+        (let [similar (:similar-matches result)
+              similar-note (when (seq similar)
+                             (str "\n\nSimilar forms found (check the form name/type and dispatch value):\n"
+                                  (str/join "\n" (map (fn [m]
+                                                        (str "  - (" (:tag m) " " (:qualified-name m) " ...)"))
+                                                      similar))))]
+          {:content  (str (:message result) similar-note)
+           :is-error true})
+        (if-not result
+          {:content  (str "Could not find the target in " file-path
+                          (when-let [repaired (seq (filter #(not= (first %) (second %)) repair-inputs))]
+                            (str "\nNote: input was unbalanced and auto-repaired: "
+                                 (str/join ", " (map (fn [[_ repaired]] (pr-str repaired)) repaired))
+                                 "\nIf the repaired form is not what you meant, pass the complete, balanced expression exactly as it appears in the file."))
+                          "\nThe match is content-based — whitespace/newlines are ignored, but the structure (parens, brackets, braces, keywords, symbols) must match.")
+           :is-error true}
+          (let [new-source (z/root-string (:zloc result))
+                fmt-opts   (project-fmt-opts file-path)
+                formatted  (format-source-string new-source fmt-opts)]
+            (spit-utf8 file-path formatted)
+            (let [diff-str (edit-diff/generate-display-diff original formatted)
+                  repaired (seq (filter (fn [[raw rep]] (not= raw rep)) repair-inputs))
+                  repaired-note (when repaired
+                                  (str "\nNote: unbalanced input was auto-repaired: "
+                                       (str/join ", " (map (fn [[_ rep]] (pr-str rep)) repaired))))]
+              {:content (if repaired-note
+                          (str "Edit applied." repaired-note)
+                          "Edit applied.")
+               :details (when diff-str {:diff diff-str})})))))
+    (catch Exception e
+      {:content (str "Error editing " file-path ": " (ex-message e))
+       :is-error true})))

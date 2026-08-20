@@ -9,9 +9,7 @@
             [clojure.string :as str]
             [edit-util :as util]
             [kmet.app.ui.tool-renderers :as renderers]
-            [kmet.libs.edit-diff :as edit-diff]
             [rewrite-clj.node :as n]
-            [rewrite-clj.parser :as p]
             [rewrite-clj.zip :as z]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
@@ -103,32 +101,6 @@
 ;; Zipper: edit operations
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
-(defn- insert-before-form [zloc content-str]
-  (-> zloc
-      util/walk-back-to-non-comment z/next*
-      (z/insert-left* (p/parse-string-all "\n\n"))
-      z/left
-      (z/insert-left* (p/parse-string-all content-str))
-      z/left))
-
-(defn- insert-after-form [zloc content-str]
-  ;; Anchor past the form's own same-line trailing trivia (whitespace and
-  ;; trailing comments) so the inserted content lands after them — otherwise
-  ;; the comment detaches from its form and sticks to the inserted one.
-  ;; A comment anchor already ends its line, so it takes a single "\n"
-  ;; before (blank line) and after (line terminator) the content.
-  (let [anchor (util/walk-forward-past-trailing-comments zloc)
-        comment-anchor? (= :comment (n/tag (z/node anchor)))
-        sep (p/parse-string-all (if comment-anchor? "\n" "\n\n"))
-        at-content (-> anchor
-                       (z/insert-right* sep)
-                       z/right
-                       (z/insert-right* (p/parse-string-all content-str))
-                       z/right)]
-    (if comment-anchor?
-      (z/insert-right* at-content (p/parse-string-all "\n"))
-      at-content)))
-
 (defn- edit-top-level-form [zloc tag dname content-str edit-type]
   (let [{:keys [zloc similar-matches]} (find-top-level-form zloc tag dname)]
     (if-not zloc
@@ -137,8 +109,8 @@
        :similar-matches similar-matches}
       (let [updated (case edit-type
                       :replace       (util/replace-form zloc content-str)
-                      :insert-before (insert-before-form zloc content-str)
-                      :insert-after  (insert-after-form zloc content-str))]
+                      :insert-before (util/insert-before-form zloc content-str)
+                      :insert-after  (util/insert-after-form zloc content-str))]
         {:zloc updated :similar-matches similar-matches}))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
@@ -168,18 +140,6 @@
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Similar-match formatting
-;; ═══════════════════════════════════════════════════════════════════════════════
-
-(defn- format-similar-matches [matches]
-  (when (seq matches)
-    (->> matches
-         (map (fn [{:keys [tag qualified-name]}]
-                (str "  - (" tag " " qualified-name " ...)")))
-         (str/join "\n")
-         (str "\n\nSimilar forms found (check the form name/type and dispatch value):\n"))))
-
-;; ═══════════════════════════════════════════════════════════════════════════════
-;; Main execute
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
 (defn execute
@@ -219,56 +179,27 @@
        :is-error true}
 
       :else
-      (try
-        (let [;; 1. Lint-repair replacement content
-              content' (first (util/lint-repair content))
-
-              ;; 1b. Project cljfmt config (cljfmt.edn extra-indents etc.)
-              fmt-opts (util/project-fmt-opts file_path)
-
-              ;; 2. Enhance defmethod name
-              enhanced-name (enhance-defmethod-name form_type form_identifier content')
-
-              ;; 3. Load source
-              original (util/slurp-utf8 file_path)
-
-              ;; 4. Parse source into zipper
-              zloc (z/of-string original {:track-position? true})
-
-              ;; 5. Find + edit
-              result (edit-top-level-form zloc form_type enhanced-name content' op-kw)]
-          (if (:error result)
-            (let [msg     (:message result)
-                  similar (:similar-matches result)]
-              {:content  (str msg (format-similar-matches similar))
-               :is-error true})
-            (let [found-zloc (:zloc result)
-                  form-col   (second (z/position found-zloc))
-                  ;; 6. Partial format
-                  content''  (if form-col
-                               (util/format-form-in-isolation content' form-col fmt-opts)
-                               content')
-                  ;; 7. Re-edit with formatted content
-                  zloc-full  (z/of-string original {:track-position? true})
-                  result2    (edit-top-level-form zloc-full form_type enhanced-name
-                                                  content'' op-kw)]
-              (if (:error result2)
-                {:content (str "Internal error: " (:message result2)) :is-error true}
-                ;; 8. Format whole file + write
-                (let [new-source (z/root-string (:zloc result2))
-                      formatted  (util/format-source-string new-source fmt-opts)]
-                  (util/spit-utf8 file_path formatted)
-                  (let [diff-str (edit-diff/generate-display-diff original formatted)
-                        repaired? (not= content content')
-                        repaired-note (when repaired?
-                                        (str "\nNote: content was unbalanced and auto-repaired to: " content'))]
-                    {:content (if repaired-note
-                                (str "Edit applied." repaired-note)
-                                "Edit applied.")
-                     :details (when diff-str {:diff diff-str})}))))))
-        (catch Exception e
-          {:content (str "Error editing " file_path ": " (ex-message e))
-           :is-error true})))))
+      (let [content' (first (util/lint-repair content))
+            enhanced-name (enhance-defmethod-name form_type form_identifier content')
+            find-edit (fn [zloc]
+                        (let [result (edit-top-level-form zloc form_type enhanced-name
+                                                          content' op-kw)]
+                          (if (:error result)
+                            result
+                            (let [found-zloc (:zloc result)
+                                  form-col   (second (z/position found-zloc))
+                                  ;; Re-indent the replacement to the found
+                                  ;; form's column, then re-edit
+                                  content'' (if form-col
+                                              (util/format-form-in-isolation
+                                               content' form-col
+                                               (util/project-fmt-opts file_path))
+                                              content')
+                                  result2 (edit-top-level-form
+                                           zloc form_type enhanced-name
+                                           content'' op-kw)]
+                              result2))))]
+        (util/edit-pipeline file_path find-edit [[content content']])))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Tool registration
