@@ -202,12 +202,50 @@
     (str (long ms) " ms")
     (format "%.1f s" (/ ms 1000.0))))
 
+(defn- test-var-with-capture
+  "Run one test var with stdout/stderr captured, replaying the captured
+   output when the var fails (so diagnostics from the code under test stay
+   visible next to the failure report) and discarding it on success."
+  [v]
+  (let [out-baos (java.io.ByteArrayOutputStream.)
+        err-baos (java.io.ByteArrayOutputStream.)
+        out-writer (java.io.OutputStreamWriter. out-baos "UTF-8")
+        err-writer (java.io.OutputStreamWriter. err-baos "UTF-8")
+        out-stream (java.io.PrintStream. out-baos true "UTF-8")
+        err-stream (java.io.PrintStream. err-baos true "UTF-8")
+        saved-out System/out
+        saved-err System/err
+        counters-before @t/*report-counters*]
+    (try
+      (System/setOut out-stream)
+      (System/setErr err-stream)
+      (binding [*out* out-writer
+                *err* err-writer
+                t/*test-out* out-writer]
+        (t/test-var v))
+      (let [counters-after @t/*report-counters*
+            failed? (or (pos? (- (:fail counters-after) (:fail counters-before)))
+                        (pos? (- (:error counters-after) (:error counters-before))))
+            out (String. (.toByteArray out-baos) "UTF-8")
+            err (String. (.toByteArray err-baos) "UTF-8")]
+        (when failed?
+          (when (seq out) (print out))
+          (when (seq err) (binding [*out* *err*] (print err))))
+        (flush))
+      (finally
+        (System/setOut saved-out)
+        (System/setErr saved-err)))))
+
 (defn- run-ns-vars
   "Run the selected vars of a namespace, applying its fixtures like
    clojure.test/test-ns: :once fixtures wrap the namespace run, :each
    fixtures wrap every test var. Prints a summary line with elapsed time
    for the namespace. (bb's clojure.test/test-vars is broken — it silently
-   drops vars — so we drive test-var directly.)"
+   drops vars — so we drive test-var directly.)
+
+   Each test var runs with stdout/stderr captured: output written by the
+   code under test is discarded when the var passes (no noise on a green
+   run) and replayed before the standard failure report when it fails."
   [ns-sym vars]
   (let [ns-obj (find-ns ns-sym)
         before @t/*report-counters*
@@ -219,7 +257,7 @@
       (once-fx
        (fn []
          (doseq [v vars]
-           (each-fx (fn [] (t/test-var v)))))))
+           (each-fx (fn [] (test-var-with-capture v)))))))
     (let [after @t/*report-counters*
           n-test (- (:test after) (:test before))
           n-pass (- (:pass after) (:pass before))
