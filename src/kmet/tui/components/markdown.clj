@@ -165,26 +165,24 @@
   "Render a :code token: styled fence lines (with lang), interior lines with
    the code-block theme and indent (or a :highlight-code hook when set).
    EXTRA-INDENT prefixes code nested inside list items. Trailing interior
-   blank lines are preserved. Interior lines are truncated to
-   CONTENT-WIDTH — streaming a long unbroken line (or a long token in a
-   narrow terminal) must never overflow the render width (pi crashes on
-   width overflow; kmet clips with ellipsis instead)."
+   blank lines are preserved. Like pi, long lines are wrapped via
+   wrap-text-with-ansi to CONTENT-WIDTH, not truncated with ellipsis."
   [result t theme content-width left-pad extra-indent]
   (let [indent (or (:code-block-indent theme) "  ")
         prefix (str left-pad extra-indent)
         lang (:lang t "")
         text (:text t)
         interior (if (str/blank? text) [] (str/split text #"\n" -1))
-        fit (fn [styled]
-              (pad-right content-width
-                         (u/truncate-to-width styled content-width "...")))]
-    (vswap! result conj (fit (str prefix ((:code-block-border theme) (str "```" lang)))))
+        push-wrapped (fn [styled]
+                       (doseq [wl (u/wrap-text-with-ansi styled content-width)]
+                         (vswap! result conj (pad-right content-width wl))))]
+    (push-wrapped (str prefix ((:code-block-border theme) (str "```" lang))))
     (if-let [hl (:highlight-code theme)]
       (doseq [l (hl text lang)]
-        (vswap! result conj (fit (str prefix indent l))))
+        (push-wrapped (str prefix indent l)))
       (doseq [line interior]
-        (vswap! result conj (fit (str prefix indent ((:code-block theme) line))))))
-    (vswap! result conj (fit (str prefix ((:code-block-border theme) "```"))))))
+        (push-wrapped (str prefix indent ((:code-block theme) line)))))
+    (push-wrapped (str prefix ((:code-block-border theme) "```")))))
 
 (defn- longest-word-width
   "Visible width of TEXT's longest word, capped at LIMIT (0 when empty)."
@@ -368,15 +366,18 @@
     (vswap! result conj (str left-pad ((:hr theme) (apply str (repeat content-width "─")))))
 
     :heading
-    (let [content (render-inlines (:content t) theme)
-          level (:level t)
-          ;; pi: H3+ deliberately keeps the "### " prefix (visible depth)
+    (let [level (:level t)
+          heading-style-fn (if (= level 1)
+                             (fn [s] ((:heading theme) ((:bold theme) ((:underline theme) s))))
+                             (fn [s] ((:heading theme) ((:bold theme) s))))
+          heading-ctx (make-style-context heading-style-fn)
+          content (render-inlines (:content t) theme heading-ctx)
+          ;; pi: H3+ deliberately keeps the "### " prefix (visible depth) and wraps (never truncates)
           styled (if (>= level 3)
-                   (str ((:heading theme) (str (apply str (repeat level "#")) " ")) content)
-                   ((:heading theme) content))]
-      (vswap! result conj (pad-right content-width
-                                     (u/truncate-to-width (str left-pad styled)
-                                                          content-width "...")))
+                   (str (heading-style-fn (str (apply str (repeat level "#")) " ")) content)
+                   content)]
+      (doseq [wl (u/wrap-text-with-ansi styled content-width)]
+        (vswap! result conj (pad-right content-width (str left-pad wl))))
       ;; Add underline for H1/H2
       (when (<= level 2)
         (vswap! result conj (str left-pad ((:hr theme)
@@ -391,12 +392,13 @@
     :quote
     (let [border ((:quote-border theme) "▎")
           border-w (u/visible-width border)
-          budget (max 1 (- content-width (u/visible-width left-pad) border-w))
-          styled (u/truncate-to-width ((:quote theme) (render-inlines (:content t) theme))
-                                      budget "...")]
-      (vswap! result conj
-              (str left-pad border styled
-                   (apply str (repeat (max 0 (- content-width (inc (u/visible-width styled)))) \space)))))
+          content-w (max 1 (- content-width border-w))
+          styled ((:quote theme) (render-inlines (:content t) theme))
+          wrapped (u/wrap-text-with-ansi styled content-w)]
+      (doseq [wl wrapped]
+        (vswap! result conj
+                (str left-pad border wl
+                     (apply str (repeat (max 0 (- content-width border-w (u/visible-width wl))) \space))))))
 
     :ul
     (render-list result t theme 0 content-width left-pad default-style)
