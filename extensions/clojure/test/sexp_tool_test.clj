@@ -361,39 +361,6 @@
         (is (= 1 (count (re-seq #"\(new-x\)" content))))))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
-;; Dry run modes
-;; ═══════════════════════════════════════════════════════════════════════════════
-
-(deftest test-dry-run-new-source
-  (let [path (write-test-file! "dry-new-source"
-                               "(+ x 1)\n")
-        result (sexp-tool/execute
-                {:file_path path
-                 :match_form "(+ x 1)"
-                 :new_form "(+ x 99)"
-                 :operation "replace"
-                 :dry_run "new-source"})]
-    (is (not (:is-error result)))
-    (is (str/includes? (:content result) "(+ x 99)"))
-    ;; File should be unchanged
-    (is (str/includes? (read-test-file path) "(+ x 1)"))))
-
-(deftest test-dry-run-diff
-  (let [path (write-test-file! "dry-diff"
-                               "(+ x 1)\n")
-        result (sexp-tool/execute
-                {:file_path path
-                 :match_form "(+ x 1)"
-                 :new_form "(+ x 99)"
-                 :operation "replace"
-                 :dry_run "diff"})]
-    (is (not (:is-error result)))
-    ;; Diff may be "No changes" on read-only tmpfs
-    (is (string? (:content result)))
-    ;; File should be unchanged
-    (is (str/includes? (read-test-file path) "(+ x 1)"))))
-
-;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Formatting is applied
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
@@ -417,9 +384,10 @@
         result (sexp-tool/execute
                 (sexp-opts path "(foo)" "(bar)"))]
     (is (not (:is-error result)))
-    ;; Diff may be nil on read-only tmpfs (Termux /tmp)
-    (when-let [diff (get-in result [:details :diff])]
-      (is (string? diff)))))
+    (let [diff (get-in result [:details :diff])]
+      (is (string? diff))
+      (is (str/includes? diff "-1 (foo)"))
+      (is (str/includes? diff "+1 (bar)")))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Identical replacement (no-op)

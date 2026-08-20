@@ -4,6 +4,7 @@
             [clojure.string :as str]
             [babashka.fs :as fs]
             [edit-util :as util]
+            [kmet.libs.edit-diff :as edit-diff]
             [rewrite-clj.node :as node]
             [rewrite-clj.parser :as p]
             [rewrite-clj.zip :as z]))
@@ -41,14 +42,14 @@
 ;; Diff
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
-(deftest test-diff-identical
-  (is (nil? (util/generate-unified-diff "hello" "hello"))))
+(deftest test-diff-display-identical
+  (is (nil? (edit-diff/generate-display-diff "hello" "hello"))))
 
-(deftest test-diff-different
-  (let [result (util/generate-unified-diff "line1\n" "line2\n")]
+(deftest test-diff-display-different
+  (let [result (edit-diff/generate-display-diff "line1\n" "line2\n")]
     (is (string? result))
-    (is (str/includes? result "line1"))
-    (is (str/includes? result "line2"))))
+    (is (str/includes? result "-1 line1"))
+    (is (str/includes? result "+1 line2"))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Formatting

@@ -4,7 +4,9 @@
             [kmet.tui.core :as core]
             [kmet.tui.utils :as utils]
             [kmet.libs.terminal-image :as timg]
-            [kmet.app.ui.tool-execution :as te]))
+            [kmet.tui.theme :as theme]
+            [kmet.app.ui.tool-execution :as te]
+            [kmet.app.ui.tool-renderers :as renderers]))
 
 (defn- strip-ansi [s]
   (utils/strip-ansi-codes s))
@@ -158,6 +160,43 @@
       (is (some #(re-find #"1 alpha" %) plain))
       (is (some #(re-find #"-2 beta" %) plain))
       (is (some #(re-find #"\+2 BETA" %) plain)))))
+
+(deftest test-edit-render-custom-name
+  (testing "shared edit renderer uses the supplied tool name"
+    (spit "target/test-tools-edit-render.txt" "alpha")
+    (let [c (te/make-tool-execution
+             :name "clojure_edit"
+             :args {:file_path "target/test-tools-edit-render.txt"
+                    :form_type "defn"}
+             :render-call-fn renderers/render-edit-call
+             :render-result-fn renderers/render-edit-result
+             :render-shell :self)]
+      (te/tool-execution-set-args-complete! c)
+      (is (some #(re-find #"clojure_edit target/test-tools-edit-render.txt" %)
+                (mapv strip-ansi (core/render c 60)))))))
+
+(deftest test-edit-render-final-status-without-preview
+  (testing "self-shell edit renderer uses final result status without a preview"
+    (let [make (fn [is-error]
+                 (te/make-tool-execution
+                  :name "clojure_edit"
+                  :args {}
+                  :is-error is-error
+                  :render-call-fn renderers/render-edit-call
+                  :render-result-fn renderers/render-edit-result
+                  :render-shell :self))
+          success (make false)
+          failure (make true)]
+      (te/tool-execution-set-error! success false)
+      (te/tool-execution-set-error! failure true)
+      (let [success-lines (core/render success 60)
+            failure-lines (core/render failure 60)
+            success-bg (theme/get-bg-ansi theme/dark-theme :tool-success-bg)
+            error-bg (theme/get-bg-ansi theme/dark-theme :tool-error-bg)]
+        (is (some #(str/includes? % success-bg) success-lines))
+        (is (some #(str/includes? % error-bg) failure-lines))
+        (is (not-any? #(str/includes? % error-bg) success-lines))
+        (is (not-any? #(str/includes? % success-bg) failure-lines))))))
 
 (deftest test-edit-render-edits-array
   (testing "edit preview handles camelCase edits array"

@@ -265,7 +265,11 @@ signal+ctx unconditionally). Extension tools may also declare
 they replace the builtin transcript rendering for that tool's calls/results
 and receive the same `ToolRenderContext` map the builtin renderers get
 (args, tool-call-id, invalidate, state/set-state!, cwd, is-partial,
-expanded, is-error). `:streams? true` keeps the 2-arg `(fn [args
+expanded, is-error). `:render-shell :self` lets the renderer own its outer
+box, padding, and status background. The supported reusable built-in
+renderer vars are in `kmet.app.ui.tool-renderers`, including
+`render-edit-call` and `render-edit-result`; the namespace is explicitly
+shared with extensions. `:streams? true` keeps the 2-arg `(fn [args
 on-update])` contract (no signal/ctx).
 
 Other pi tool fields:

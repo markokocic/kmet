@@ -450,9 +450,10 @@
                 (edit-opts path "defn" "old-fn"
                            "(defn new-fn [] 1)"))]
     (is (not (:is-error result)))
-    ;; Diff may be nil on read-only tmpfs (Termux /tmp)
-    (when-let [diff (get-in result [:details :diff])]
-      (is (string? diff)))))
+    (let [diff (get-in result [:details :diff])]
+      (is (string? diff))
+      (is (str/includes? diff "-1 (defn old-fn [] 0)"))
+      (is (str/includes? diff "+1 (defn new-fn [] 1)")))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; No-op replacement (identical content) — still succeeds

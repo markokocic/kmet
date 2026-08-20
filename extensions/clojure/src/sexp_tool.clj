@@ -14,6 +14,8 @@
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
             [edit-util :as util]
+            [kmet.app.ui.tool-renderers :as renderers]
+            [kmet.libs.edit-diff :as edit-diff]
             [rewrite-clj.node :as n]
             [rewrite-clj.parser :as p]
             [rewrite-clj.zip :as z]))
@@ -222,7 +224,7 @@
 
 (defn execute
   "Tool entry point.  Returns {:content str :is-error bool}."
-  [{:keys [file_path match_form new_form replace_all operation dry_run]}]
+  [{:keys [file_path match_form new_form replace_all operation]}]
   (let [op-kw (case operation
                 "replace"       :replace
                 "insert_before" :insert-before
@@ -278,20 +280,11 @@
             (let [new-source (z/root-string (:zloc result))
                   fmt-opts  (util/project-fmt-opts file_path)
                   formatted (util/format-source-string new-source fmt-opts)]
-              (case dry_run
-                "new-source"
-                {:content formatted}
-                "diff"
-                (let [d (util/generate-unified-diff original formatted)]
-                  {:content (or d "No changes.")})
-                ;; Normal mode — write file
-                (do
-                  (util/spit-utf8 file_path formatted)
-                  (let [diff-str (util/generate-unified-diff original formatted)]
-                    {:content  (if diff-str
-                                 (str "Edit applied.\n\n" diff-str)
-                                 "Edit applied — no visible diff.")
-                     :details  (when diff-str {:diff diff-str})}))))))
+              ;; Normal mode — write file
+              (util/spit-utf8 file_path formatted)
+              (let [diff-str (edit-diff/generate-display-diff original formatted)]
+                {:content "Edit applied."
+                 :details (when diff-str {:diff diff-str})}))))
         (catch Exception e
           {:content (str "Error editing " file_path ": " (ex-message e))
            :is-error true})))))
@@ -308,6 +301,9 @@
     :label           "Clojure s-expression edit"
     :description
     "Replaces Clojure expressions in a file.\n\nThis tool provides targeted replacement of Clojure expressions within forms. For complete top-level form operations, use clojure_edit instead.\n\nKEY BENEFITS:\n- Syntax-aware matching that understands Clojure code structure\n- Ignores whitespace differences by default, focusing on actual code meaning\n- Matches expressions regardless of formatting, indentation, or spacing\n- Prevents errors from mismatched text or irrelevant formatting differences\n- Can replace all occurrences with replace_all: true\n\nCONSTRAINTS:\n- match_form must contain one or more complete Clojure expressions\n- new_form must contain zero or more complete Clojure expressions\n- Both must be valid Clojure code that can be parsed\n\nWARNING: Incomplete forms like (defn foo, (try, or (let [x 1] will cause errors. match_form must be a COMPLETE expression (balanced parens) — trailing fragments like \"...x]]\" or \"x])\" are rejected.\n\nFor insert_before/insert_after, pass ONLY the new content (never repeat the matched form). The inserted form lands outside the match's own line: a same-line trailing comment stays with the matched form, and a comment on its own line stays with the next form.\n\nExamples:\n- Replace a calculation: match_form: (+ x 2)  new_form: (* x 2)\n- Rename a symbol everywhere: match_form: old-name  new_form: new-name  replace_all: true\n- Remove debug statements: match_form: (println \"Debug\")  new_form: (empty)\n- Replace multiple expressions: match_form: (validate x) (transform x)  new_form: (-> x validate transform)"
+    :render-call renderers/render-edit-call
+    :render-result renderers/render-edit-result
+    :render-shell :self
     :prompt-snippet "Replace s-expressions in Clojure code (find by content, replace all or one)"
     :prompt-guidelines
     ["Use clojure_edit_replace_sexp to change a specific expression inside a function without touching the surrounding code."

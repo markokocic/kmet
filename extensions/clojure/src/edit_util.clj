@@ -34,51 +34,6 @@
   [code false])
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
-;; Diff (pure in-memory)
-;; ═══════════════════════════════════════════════════════════════════════════════
-
-(defn- ->lines
-  "Split content into lines, preserving the trailing newline as an empty
-   string so join produces the original."
-  [s]
-  (str/split s #"\n" -1))
-
-(defn- unified-diff-lines
-  "Produce unified diff lines between old-lines and new-lines.
-   Returns a seq of formatted strings (no trailing newline)."
-  [old-lines new-lines]
-  (let [n (count old-lines) m (count new-lines)
-        ;; find common prefix
-        pre (loop [i 0]
-              (if (and (< i n) (< i m) (= (nth old-lines i) (nth new-lines i)))
-                (recur (inc i))
-                i))
-        ;; find common suffix (from the end, after the prefix)
-        suf (loop [k 0]
-              (if (and (>= (- n 1 k) pre) (>= (- m 1 k) pre)
-                       (= (nth old-lines (- n 1 k)) (nth new-lines (- m 1 k))))
-                (recur (inc k))
-                k))
-        old-changed (subvec old-lines pre (- n suf))
-        new-changed (subvec new-lines pre (- m suf))
-        start (inc pre)
-        header (str "@@ -" start "," (count old-changed) " +" start "," (count new-changed) " @@")]
-    (concat [header]
-            (map #(str "-" %) old-changed)
-            (map #(str "+" %) new-changed))))
-
-(defn generate-unified-diff
-  "Unified diff of OLD-CONTENT vs NEW-CONTENT.  Returns a unified diff
-   string or nil when contents are identical.  Pure in-memory — no temp
-   files, no shell."
-  [old-content new-content]
-  (when (not= old-content new-content)
-    (let [old-lines (->lines old-content)
-          new-lines (->lines new-content)
-          diff-lines (unified-diff-lines old-lines new-lines)]
-      (str/join "\n" diff-lines))))
-
-;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Formatting (cljfmt, honoring the project's cljfmt.edn)
 ;; ═══════════════════════════════════════════════════════════════════════════════
 

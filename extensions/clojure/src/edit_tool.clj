@@ -8,6 +8,8 @@
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
             [edit-util :as util]
+            [kmet.app.ui.tool-renderers :as renderers]
+            [kmet.libs.edit-diff :as edit-diff]
             [rewrite-clj.node :as n]
             [rewrite-clj.parser :as p]
             [rewrite-clj.zip :as z]))
@@ -252,11 +254,9 @@
                 (let [new-source (z/root-string (:zloc result2))
                       formatted  (util/format-source-string new-source fmt-opts)]
                   (util/spit-utf8 file_path formatted)
-                  (let [diff-str (util/generate-unified-diff original formatted)]
-                    {:content  (if diff-str
-                                 (str "Edit applied.\n\n" diff-str)
-                                 "Edit applied — no visible diff.")
-                     :details  (when diff-str {:diff diff-str})}))))))
+                  (let [diff-str (edit-diff/generate-display-diff original formatted)]
+                    {:content "Edit applied."
+                     :details (when diff-str {:diff diff-str})}))))))
         (catch Exception e
           {:content (str "Error editing " file_path ": " (ex-message e))
            :is-error true})))))
@@ -273,6 +273,9 @@
     :label           "Clojure form edit"
     :description
     "Edits a top-level form (`defn`, `def`, `defmethod`, `ns`, `deftest`) in a Clojure file using the specified operation.\n\nPREFER this tool over generic file editing tools for Clojure files (`.clj` `.cljs` `.cljc` `.bb`).\n\nThis tool MAKES it EASIER to match a definition that exists in the file AS you only have to match the type of definition `form_type` and the complete identifier `form_identifier` of the definition. This prevents the repeated mismatch errors that occur when trying match an entire string of text for replacement.\nThis tool validates the structure of the Clojure code that is being inserted into the file and will provide linting feedback for things such as parenthetical errors.\n\nWARNING: you will receive errors if the syntax is wrong, the most common error is an extra or missing parenthesis in the `content`, so be careful with parenthesis.\n\nOperations:\n- \"replace\": Replaces the form with new content\n- \"insert_before\": Inserts content before the form\n- \"insert_after\": Inserts content after the form\n\nFor insert_before/insert_after, pass ONLY the new content (never repeat the anchor form). The inserted form lands outside the anchor's own line: a same-line trailing comment stays with the anchor form, and a comment on its own line stays with the next form.\n\nThe form is identified by its type (defn, def, deftest, s/def, ns, defmethod etc.) and complete identifier. Alias-qualified macros (t/deftest, s/def) match by their plain keyword (deftest, def).\n\nExample: Replace a function definition:\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"example-fn\"\n- form_type: \"defn\"\n- operation: \"replace\"\n- content: \"(defn example-fn [x] (* x 2))\"\n\nExample: Insert a helper function before a function:\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"example-fn\"\n- form_type: \"defn\"\n- operation: \"insert_before\"\n- content: \"(defn helper-fn [x] (* x 2))\"\n\nExample: Edit a namespace declaration (form_identifier is the namespace name):\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"my.app.core\"\n- form_type: \"ns\"\n- operation: \"replace\"\n- content: \"(ns my.app.core (:require [clojure.string :as str]))\"\n\nFor `defmethod` forms, include the dispatch value (`area :rectangle`) in `form_identifier`.\nMany `defmethod` definitions have qualified names like `shape/area`, so use the complete identifier.\n\nExample: Replace a specific `defmethod` implementation:\n- form_identifier: \"shape/area :square\"\n- form_type: \"defmethod\"\n- operation: \"replace\"\n- content: \"(defmethod shape/area :square [{:keys [w h]}] (* w h))\"\n\nThe tool returns a diff showing the changes made to the file."
+    :render-call renderers/render-edit-call
+    :render-result renderers/render-edit-result
+    :render-shell :self
     :prompt-snippet "Structure-aware Clojure form editing (replace, insert_before, insert_after)"
     :prompt-guidelines
     ["Use clojure_edit instead of the generic edit tool for Clojure files when targeting a specific form by name."

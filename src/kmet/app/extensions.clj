@@ -767,11 +767,9 @@
                         (babashka.classes/all-classes)))))
 
 (def ^:private tui-library-namespaces
-  "The generic TUI layer shared with extension contexts (pi:
-   @earendil-works/pi-tui). kmet.tui.core pulls in the components; the rest
-   are the tui namespaces it does not require. Required once here so they
-   exist when a per-extension context is built — injection is by reference,
-   never re-evaluated, so protocol identity is shared."
+  "The generic TUI layer and the supported app-level tool renderers shared
+   with extension contexts. Required once before per-extension contexts are
+   built; injected by reference so component and protocol identity is shared."
   '[kmet.tui.core
     kmet.tui.theme
     kmet.tui.keybindings
@@ -780,7 +778,8 @@
     kmet.tui.autocomplete
     kmet.tui.components.editing
     kmet.tui.components.expandable-text
-    kmet.tui.components.image])
+    kmet.tui.components.image
+    kmet.app.ui.tool-renderers])
 
 (def ^:private libs-library-namespaces
   "The generic kmet.libs.* layer shared with extension contexts. Every lib
@@ -790,6 +789,7 @@
    re-evaluated, so any protocols they define keep their identity. Keep in
    sync with src/kmet/libs/ when a lib is added or removed."
   '[kmet.libs.diff
+    kmet.libs.edit-diff
     kmet.libs.dynamic-value
     kmet.libs.edn-store
     kmet.libs.hash
@@ -841,6 +841,7 @@
                                  (str/starts-with? n "cheshire.")
                                  (contains? bb-shared-namespaces (ns-name ns-obj))
                                  (str/starts-with? n "kmet.tui.")
+                                 (= n "kmet.app.ui.tool-renderers")
                                  (str/starts-with? n "kmet.libs.")))
                     [(ns-name ns-obj) (ns-interns ns-obj)])))
               (all-ns))))
@@ -938,6 +939,13 @@
                        " — not part of the kmet.tui.* library shared with extensions")
                   {:extension ext-name :ns lib})))
 
+        (= s "kmet.app.ui.tool-renderers")
+        (when-not (contains? tui-namespaces lib)
+          (throw (ex-info
+                  (str "Extension " ext-name " requires " lib
+                       " — not part of the shared renderer library surface")
+                  {:extension ext-name :ns lib})))
+
         (str/starts-with? s "kmet.libs.")
         (when-not (contains? libs-namespaces lib)
           (throw (ex-info
@@ -953,12 +961,13 @@
                 {:extension ext-name :ns lib}))))))
 
 (defn- shared-tui-namespaces
-  "The set of kmet.tui.* namespace symbols currently loaded (what the
-   context injection shares with extensions)."
+  "The set of TUI and supported renderer namespace symbols currently loaded
+   (what the context injection shares with extensions)."
   []
   (set (keep (fn [ns-obj]
                (let [n (str (ns-name ns-obj))]
-                 (when (str/starts-with? n "kmet.tui.")
+                 (when (or (str/starts-with? n "kmet.tui.")
+                           (= n "kmet.app.ui.tool-renderers"))
                    (ns-name ns-obj))))
              (all-ns))))
 
@@ -1085,9 +1094,10 @@
           (resource-source namespace))
         (throw (ex-info
                 (cond
-                  (str/starts-with? (str namespace) "kmet.tui.")
+                  (or (str/starts-with? (str namespace) "kmet.tui.")
+                      (= (str namespace) "kmet.app.ui.tool-renderers"))
                   (str "Extension " ext-name " requires " namespace
-                       " — the kmet.tui.* library is shared by reference and was"
+                       " — the shared TUI/renderer library is shared by reference and was"
                        " not loaded when this context was built")
 
                   (str/starts-with? (str namespace) "kmet.libs.")

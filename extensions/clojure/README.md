@@ -24,6 +24,8 @@ clojure_edit:
 - `content` — replacement Clojure source code
 - `operation` — `replace` (default), `insert_before`, `insert_after`
 
+The tools always apply their edits; preview-only and unified-diff modes are not supported.
+
 **Features:**
 - defmethod dispatch-value matching (`"shape/area :square"`)
 - Delimiter auto-repair (edamame + parinfer)
@@ -49,10 +51,16 @@ clojure_edit_replace_sexp:
 - `replace_all` — replace all occurrences (default false)
 - `operation` — `replace`, `insert_before`, `insert_after` (required)
 
+The tools always apply their edits; preview-only and unified-diff modes are not supported.
+
 **Features:**
 - Whitespace-normalized matching (ignores formatting differences)
 - Multi-expression matching (consecutive expressions)
 - `replace_all` for renaming symbols across a file
+- Standard edit-style file call, full numbered diff, and colored result rendering
+
+Both tools reuse the host's `render-edit-call` and `render-edit-result` renderers.
+Their normal result stores the numbered display diff in `:details :diff`.
 
 ## Skill
 

@@ -3,13 +3,13 @@
    Accepts :edits (vector of maps, pi's oldText/newText or kebab-case),
    a JSON-string edits arg, or the legacy top-level old-text/new-text pair.
    Pi: edit.ts — prepareEditArguments + validateEditInput.
-   Returns the applied diff in :details.diff (pi: EditToolDetails.diff) so the
-   TUI can correct its preview when the file changed between preview and apply."
+   Returns the applied display diff in :details.diff (pi: EditToolDetails.diff)
+   so the TUI can correct its preview when the file changed between preview and apply."
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
             [cheshire.core :as json]
-            [kmet.app.tools.edit-diff :as edit-diff]))
+            [kmet.libs.edit-diff :as edit-diff]))
 
 (defn- normalize-edits
   "Pi: prepareEditArguments — normalize the args into {:edits [...]}.
@@ -63,8 +63,8 @@
                                   (str/split-lines new-content))]
               (spit f final)
               {:content (str "Successfully replaced " (count edits) " block(s) in " path ".")
-               ;; Pi: EditToolDetails.diff — the actually-applied diff, used by
-               ;; the TUI render-result to correct a stale preview
+               ;; Pi: EditToolDetails.diff — the actually-applied display diff,
+               ;; used by the TUI render-result to correct a stale preview
                :details {:diff diff}})))
         (catch Exception e
           (if (= :edit-error (:type (ex-data e)))

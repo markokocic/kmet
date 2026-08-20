@@ -1,9 +1,6 @@
-(ns kmet.app.tools.edit-diff
-  "Pi: edit-diff.ts generateDiffString — display-oriented numbered diff lines.
-   Shared by the edit tool (result :details.diff) and the TUI edit preview
-   renderer so the applied diff and the previewed diff are byte-comparable.
-   Format: \" 123 content\" context, \"-123 content\" removed,
-   \"+123 content\" added, \" ...\" skip markers."
+(ns kmet.libs.edit-diff
+  "Pure edit matching and display-diff helpers shared by the built-in edit tool, its renderer, and extensions.
+   The display diff format is line-numbered and intended for terminal rendering."
   (:require [clojure.string :as str]
             [kmet.libs.diff :as diff]))
 
@@ -95,6 +92,7 @@
                         ;; No adjacent changes — skip entirely (pi)
                         (recur (inc i) (+ old-num rn) (+ new-num rn) false acc)))))))]
     {:diff (str/join "\n" acc)}))
+
 ;; ─── Line-ending / BOM handling (pi: edit-diff.ts) ─────────────────────────
 
 (defn strip-bom
@@ -128,6 +126,16 @@
   (if (= ending "\r\n")
     (str/replace text "\n" "\r\n")
     text))
+
+(defn generate-display-diff
+  "Generate the standard numbered display diff for two source strings.
+   Returns nil when the normalized contents are identical."
+  [old-content new-content]
+  (let [old-text (normalize-to-lf (:text (strip-bom old-content)))
+        new-text (normalize-to-lf (:text (strip-bom new-content)))]
+    (when (not= old-text new-text)
+      (:diff (format-diff-lines (str/split-lines old-text)
+                                (str/split-lines new-text))))))
 
 ;; ─── Fuzzy matching (pi: normalizeForFuzzyMatch + fuzzyFindText) ───────────
 

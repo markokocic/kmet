@@ -499,6 +499,9 @@
         (t/is (nil? (:error result)) (str "loaded: " (:error result)))))
     (testing "valid kmet.libs.* requires load and share the real library"
       (let [result (load "lib" "(ns good-lib\n  (:require [kmet.libs.hash :as hash]\n            [kmet.libs.yaml :as yaml]))\n(defn init [api]\n  (let [s (hash/short-hash \"hi\")]\n    (when-not (string? s)\n      (throw (ex-info \"hash failed\" {})))))\n")]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))))
+    (testing "the whitelisted built-in renderer namespace loads and shares direct vars"
+      (let [result (load "renderer" "(ns good-renderer\n  (:require [kmet.app.ui.tool-renderers :as renderers]))\n(defn init [_api]\n  (when-not (fn? renderers/render-edit-call)\n    (throw (ex-info \"renderer failed\" {}))))\n")]
         (t/is (nil? (:error result)) (str "loaded: " (:error result)))))))
 
 (t/deftest ^:slow test-extension-bad-deps-fails-load
