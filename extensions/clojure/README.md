@@ -62,6 +62,30 @@ The tools always apply their edits; preview-only and unified-diff modes are not 
 Both tools reuse the host's `render-edit-call` and `render-edit-result` renderers.
 Their normal result stores the numbered display diff in `:details :diff`.
 
+### `clojure_paren_repair`
+
+Delimiter repair for Clojure files. Detects unbalanced parens/brackets/braces with
+edamame and repairs them with parinferish (indent mode), then formats with cljfmt.
+
+```
+clojure_paren_repair:
+  file_path: "src/my_app/core.clj"
+  format: true
+```
+
+**Parameters:**
+- `file_path` — path to .clj/.cljs/.cljc/.bb/.edn file to repair
+- `format` — cljfmt after repair (default true)
+
+**Features:**
+- edamame detection of unclosed openers / stray closers
+- parinferish indentation-based repair (closes opens at line ends, drops stray closes)
+- cljfmt formatting honoring the project's cljfmt.edn
+- Unified diff of the changes
+
+All three tools auto-repair unbalanced delimiters in replacement/match content
+via the shared `edit-util` pipeline before editing.
+
 ## Skill
 
 ### `clojure-edit`
@@ -83,6 +107,7 @@ Editing guidelines pulled on demand when working with Clojure files. Covers:
 | Insert a new function before/after another | `clojure_edit` |
 | Rename a symbol everywhere in a file | `clojure_edit_replace_sexp` with `replace_all` |
 | Edit an ns declaration | `clojure_edit` |
+| Fix unbalanced delimiters after an errant edit | `clojure_paren_repair` |
 
 ## Dependencies
 
@@ -91,7 +116,7 @@ Declared in `deps.edn`, resolved per-extension in isolated SCI context:
 - rewrite-clj 1.1.47 — zipper-based Clojure parsing
 - cljfmt 0.13.1 — code formatting
 - edamame 1.5.35 — delimiter error detection
-- parinfer 0.4.0 — delimiter repair
+- parinferish 0.8.0 — delimiter repair (pure Clojure; parinfer is a JVM lib and can't run in SCI contexts)
 
 ## Skills
 

@@ -8,6 +8,8 @@
             [cljfmt.config :as config]
             [cljfmt.core :as fmt]
             [clojure.string :as str]
+            [edamame.core :as e]
+            [parinferish.core :as parinferish]
             [rewrite-clj.node :as n]
             [rewrite-clj.parser :as p]
             [rewrite-clj.zip :as z]))
@@ -26,12 +28,57 @@
 ;; Lint
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
+(defn delimiter-error?
+  "True when S has a delimiter error (unbalanced parens/brackets/braces).
+   Detection via edamame: parse with all reader features enabled; an
+   :edamame/error carrying :edamame/opened-delimiter means an opener was
+   never closed. Non-delimiter parse failures (e.g. bad token) are NOT
+   delimiter errors. Other exceptions (unknown reader, etc.) conservatively
+   return true so a repair attempt is made."
+  [s]
+  (try
+    (e/parse-string-all s {:all true
+                           :features #{:bb :clj :cljs :cljr :default}
+                           :read-cond :allow
+                           :readers (fn [_tag] (fn [data] data))
+                           :auto-resolve name})
+    false
+    (catch clojure.lang.ExceptionInfo ex
+      (let [data (ex-data ex)]
+        (and (= :edamame/error (:type data))
+             (contains? data :edamame/opened-delimiter))))
+    (catch Exception _ true)))
+
+(defn- parinferish-repair
+  "Repair delimiters in S with parinferish indent mode. Returns the
+   repaired string, or nil when repair failed (or produced code that still
+   has delimiter errors)."
+  [s]
+  (try
+    (let [repaired (parinferish/flatten (parinferish/parse s {:mode :indent}))]
+      (when (and (some? repaired) (not (delimiter-error? repaired)))
+        repaired))
+    (catch Exception _ nil)))
+
+(defn repair-delimiters
+  "Fix unbalanced delimiters in S. Returns [text fixed?]:
+   - no delimiter error → [s false]
+   - error repaired → [repaired true]
+   - error but repair failed → [s false] (the error surfaces downstream)"
+  [s]
+  (if (delimiter-error? s)
+    (if-let [repaired (parinferish-repair s)]
+      [repaired true]
+      [s false])
+    [s false]))
+
 (defn lint-repair
-  "Returns [code false]. Delimiter auto-repair is unavailable: it needs the
-   parinfer JVM lib, and kmet extensions can't load third-party classes —
-   broken delimiters surface as an error downstream instead."
+  "Lint-repair CODE: auto-fix unbalanced delimiters via parinferish.
+   Returns [code repaired?]. Broken delimiters are repaired in place —
+   the common agent mistake (an extra or missing paren) — so downstream
+   parse/format steps see balanced code."
   [code]
-  [code false])
+  (repair-delimiters code))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Formatting (cljfmt, honoring the project's cljfmt.edn)

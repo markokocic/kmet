@@ -1,6 +1,6 @@
 ---
 name: clojure-edit
-description: Guidelines for using clojure_edit and clojure_edit_replace_sexp tools. Use when editing Clojure files to ensure structure-aware editing, avoid paren errors, and follow best practices for Clojure code generation.
+description: Guidelines for using the clojure_edit, clojure_edit_replace_sexp and clojure_paren_repair tools. Use when editing Clojure files to ensure structure-aware editing, avoid paren errors, and follow best practices for Clojure code generation.
 ---
 
 # Use Clojure Structure-Aware Editing Tools
@@ -17,6 +17,12 @@ These tools understand Clojure syntax and prevent common errors.
 ## Core Tools to Use
 - `clojure_edit` — Replace entire top-level forms
 - `clojure_edit_replace_sexp` — Modify expressions within top-level forms
+- `clojure_paren_repair` — Fix unbalanced delimiters (parens/brackets/braces) in a file
+
+All three tools auto-repair unbalanced delimiters in the content you pass
+(missing or extra parens are fixed before editing), so a stray paren in
+`content`/`new_form`/`match_form` no longer fails the edit — but it's still
+best to write balanced code yourself.
 
 ## CODE SIZE DIRECTLY IMPACTS EDIT SUCCESS
 - **SMALLER EDITS = HIGHER SUCCESS RATE**
@@ -45,14 +51,16 @@ These tools understand Clojure syntax and prevent common errors.
 
 ## match_form Must Be Complete
 - `clojure_edit_replace_sexp` match_form/new_form need COMPLETE expressions with balanced parens
-- Fragments like `...x]]` or `:else [w j])` are rejected — include the full enclosing form
+- A missing/extra paren is auto-repaired before matching (so `"(+ x 1"` matches `"(+ x 1)"`), but fragments that cannot form a complete expression (`...x]]`, `:else [w j])`) are still rejected — include the full enclosing form
 
 ## Handling Parenthesis Errors
-- Break complex functions into smaller, focused ones
+- Unbalanced parens in tool content are auto-repaired, so a stray paren usually just gets fixed
+- If a repair leaves the code wrong, break complex functions into smaller, focused ones
 - Start with minimal code and add incrementally
 - When facing persistent errors, verify in REPL first
 - Count parentheses in the content you're adding
 - For deep nesting, use threading macros (`->`, `->>`)
+- If a file is badly broken, run `clojure_paren_repair` on it
 
 ## Creating New Files
 1. Start by writing only the namespace declaration using the `write` tool
@@ -73,6 +81,7 @@ Remember to include dispatch values:
 | Insert a new function before/after another | `clojure_edit` |
 | Rename a symbol everywhere in a file | `clojure_edit_replace_sexp` with `replace_all` |
 | Edit an ns declaration | `clojure_edit` |
+| Fix unbalanced delimiters after an errant edit | `clojure_paren_repair` |
 
 **Rule of thumb:** prefer `insert_before`/`insert_after` for ADDING new forms
 (no need to reproduce the anchor's text); use `replace` only to MODIFY an

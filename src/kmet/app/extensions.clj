@@ -84,6 +84,17 @@
 ;; ─── Extension records ────────────────────────────────────────────────────
 (defrecord Extension [name path entry-ns ctx jars api deregister-fns initialized?])
 
+(defn- extension-dir-of
+  "The extension's own directory: for a dir extension :path IS the
+   directory; for a single-file extension it's the file, so the dir is its
+   parent. (Was always the parent — wrong for dir extensions, which broke
+   :extension-dir-relative resource discovery like skills/mcp and
+   skills/clojure-edit.)"
+  [ext]
+  (str (if (fs/directory? (:path ext))
+         (:path ext)
+         (fs/parent (:path ext)))))
+
 ;; ─── Registries (the storage; api capabilities wire into these) ──────────
 (defonce ^:private extensions (atom []))
 (defonce ^:private input-hooks (atom []))
@@ -573,7 +584,9 @@
         name (:name ext)]
     {:extension-name name
      :extension-path (:path ext)
-     :extension-dir (str (fs/parent (:path ext)))
+     ;; the extension's own directory (dir ext = the dir itself, file ext
+     ;; = the file's parent) — resource discovery resolves against it
+     :extension-dir (extension-dir-of ext)
      :register-command! (fn [cmd]
                           ;; the handler is stored under :extension-handler so
                           ;; the runner can pass it the extension context
@@ -1251,10 +1264,12 @@
   nil)
 
 (defn get-loaded-extensions
-  "Loaded extensions as {:name str :path str :entry-ns symbol} maps."
+  "Loaded extensions as {:name str :path str :entry-ns symbol
+   :extension-dir str} maps (extension-dir = the extension's own directory)."
   []
   (mapv (fn [ext] {:name (:name ext) :path (:path ext)
-                   :entry-ns @(:entry-ns ext)})
+                   :entry-ns @(:entry-ns ext)
+                   :extension-dir (extension-dir-of ext)})
         @extensions))
 
 (defn extension-jars

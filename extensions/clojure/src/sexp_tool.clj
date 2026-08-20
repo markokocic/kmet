@@ -244,8 +244,11 @@
       (str/blank? match_form)
       {:content "Missing required parameter: match_form" :is-error true}
 
-      ;; Original: validate match_form is parseable and contains at least one sexpr
-      (let [parsed (try (p/parse-string-all match_form) (catch Exception _ nil))]
+      ;; Auto-repair delimiters first, then validate the repaired content
+      ;; (an unbalanced match_form like "(+ x 1" is repaired to "(+ x 1)"
+      ;; and proceeds — matching how the edit tools handle content)
+      (let [match' (first (util/lint-repair match_form))
+            parsed (try (p/parse-string-all match') (catch Exception _ nil))]
         (or (nil? parsed)
             (zero? (count (n/child-sexprs parsed)))))
       {:content "match_form must contain at least one valid S-expression (not just comments or whitespace)"
@@ -254,9 +257,10 @@
       (str/blank? new_form)
       {:content "Missing required parameter: new_form" :is-error true}
 
-      ;; Original: validate new_form is parseable
-      (try (p/parse-string-all new_form) nil
-           (catch Exception _ true))
+      ;; Validate the repaired new_form (unbalanced input is auto-fixed)
+      (let [new' (first (util/lint-repair new_form))]
+        (try (p/parse-string-all new') nil
+             (catch Exception _ true)))
       {:content "Invalid Clojure code in new_form" :is-error true}
 
       :else
@@ -300,7 +304,7 @@
    {:name            "clojure_edit_replace_sexp"
     :label           "Clojure s-expression edit"
     :description
-    "Replaces Clojure expressions in a file.\n\nThis tool provides targeted replacement of Clojure expressions within forms. For complete top-level form operations, use clojure_edit instead.\n\nKEY BENEFITS:\n- Syntax-aware matching that understands Clojure code structure\n- Ignores whitespace differences by default, focusing on actual code meaning\n- Matches expressions regardless of formatting, indentation, or spacing\n- Prevents errors from mismatched text or irrelevant formatting differences\n- Can replace all occurrences with replace_all: true\n\nCONSTRAINTS:\n- match_form must contain one or more complete Clojure expressions\n- new_form must contain zero or more complete Clojure expressions\n- Both must be valid Clojure code that can be parsed\n\nWARNING: Incomplete forms like (defn foo, (try, or (let [x 1] will cause errors. match_form must be a COMPLETE expression (balanced parens) — trailing fragments like \"...x]]\" or \"x])\" are rejected.\n\nFor insert_before/insert_after, pass ONLY the new content (never repeat the matched form). The inserted form lands outside the match's own line: a same-line trailing comment stays with the matched form, and a comment on its own line stays with the next form.\n\nExamples:\n- Replace a calculation: match_form: (+ x 2)  new_form: (* x 2)\n- Rename a symbol everywhere: match_form: old-name  new_form: new-name  replace_all: true\n- Remove debug statements: match_form: (println \"Debug\")  new_form: (empty)\n- Replace multiple expressions: match_form: (validate x) (transform x)  new_form: (-> x validate transform)"
+    "Replaces Clojure expressions in a file.\n\nThis tool provides targeted replacement of Clojure expressions within forms. For complete top-level form operations, use clojure_edit instead.\n\nKEY BENEFITS:\n- Syntax-aware matching that understands Clojure code structure\n- Ignores whitespace differences by default, focusing on actual code meaning\n- Matches expressions regardless of formatting, indentation, or spacing\n- Prevents errors from mismatched text or irrelevant formatting differences\n- Can replace all occurrences with replace_all: true\n\nCONSTRAINTS:\n- match_form must contain one or more complete Clojure expressions\n- new_form must contain zero or more complete Clojure expressions\n- Both must be valid Clojure code that can be parsed\n\nUnbalanced delimiters in match_form/new_form (e.g. a missing close paren) are auto-repaired before matching, so \"(+ x 1\" matches \"(+ x 1)\". Trailing fragments that cannot form a complete expression (\"...x]]\", \"x])\") are still rejected — include the full enclosing form.\n\nFor insert_before/insert_after, pass ONLY the new content (never repeat the matched form). The inserted form lands outside the match's own line: a same-line trailing comment stays with the matched form, and a comment on its own line stays with the next form.\n\nExamples:\n- Replace a calculation: match_form: (+ x 2)  new_form: (* x 2)\n- Rename a symbol everywhere: match_form: old-name  new_form: new-name  replace_all: true\n- Remove debug statements: match_form: (println \"Debug\")  new_form: (empty)\n- Replace multiple expressions: match_form: (validate x) (transform x)  new_form: (-> x validate transform)"
     :render-call renderers/render-edit-call
     :render-result renderers/render-edit-result
     :render-shell :self

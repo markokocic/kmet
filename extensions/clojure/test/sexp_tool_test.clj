@@ -89,13 +89,43 @@
     (is (str/includes? (:content result) "S-expression"))))
 
 (deftest test-new-form-invalid
+  ;; unrepairable garbage still errors
   (let [path (write-test-file! "invalid-new" "(+ x 1)")
         result (sexp-tool/execute {:file_path path
                                    :match_form "(+ x 1)"
                                    :new_form "(defn foo ["
                                    :operation "replace"})]
-    (is (:is-error result))
-    (is (str/includes? (:content result) "Invalid"))))
+    ;; "(defn foo [" IS repairable (→ (defn foo [])) — so this now succeeds
+    (is (not (:is-error result)))
+    (is (str/includes? (read-test-file path) "(defn foo [])"))))
+
+(deftest test-new-form-unrepairable
+  (let [path (write-test-file! "invalid-new2" "(+ x 1)")
+        result (sexp-tool/execute {:file_path path
+                                   :match_form "(+ x 1)"
+                                   :new_form "#_"
+                                   :operation "replace"})]
+    ;; #_ alone is not a valid expression even after repair
+    (is (:is-error result))))
+
+(deftest test-new-form-auto-repaired
+  (let [path (write-test-file! "auto-repair-new" "(defn foo [] (+ x 1))")
+        result (sexp-tool/execute {:file_path path
+                                   :match_form "(+ x 1)"
+                                   :new_form "(* x 2"
+                                   :operation "replace"})]
+    (is (not (:is-error result)))
+    (is (str/includes? (:content result) "Edit applied"))
+    (is (str/includes? (read-test-file path) "(* x 2)"))))
+
+(deftest test-match-form-auto-repaired
+  (let [path (write-test-file! "auto-repair-match" "(defn foo [] (* x 2))")
+        result (sexp-tool/execute {:file_path path
+                                   :match_form "(* x 2"
+                                   :new_form "(* x 3)"
+                                   :operation "replace"})]
+    (is (not (:is-error result)))
+    (is (str/includes? (read-test-file path) "(* x 3)"))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Basic replace

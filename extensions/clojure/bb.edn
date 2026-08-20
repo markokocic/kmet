@@ -1,10 +1,11 @@
 {:paths ["src" "test" "../../src"]
  :deps {dev.weavejester/cljfmt {:mvn/version "0.16.5"
-                                 :exclusions [rewrite-clj/rewrite-clj]}}
+                                 :exclusions [rewrite-clj/rewrite-clj]}
+        parinferish/parinferish {:mvn/version "0.8.0"}}
  :tasks
  {test {:doc "Run clojure extension tests"
         :task (let [nss (or (seq *command-line-args*)
-                            '[edit-util-test edit-tool-test sexp-tool-test])]
+                            '[edit-util-test edit-tool-test sexp-tool-test paren-repair-test])]
                 (doseq [ns-sym nss]
                   (require ns-sym))
                 (let [summary (apply clojure.test/run-tests nss)]

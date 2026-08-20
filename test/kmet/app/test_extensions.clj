@@ -174,6 +174,31 @@
       (t/is (nil? (tools/get-tool "multi-ext-tool")))
       (t/is (empty? (extensions/get-loaded-extensions))))))
 
+(t/deftest test-extension-dir-is-own-directory
+  ;; :extension-dir must be the extension's OWN directory — for a dir
+  ;; extension :path IS the dir, so the old (fs/parent :path) was wrong and
+  ;; broke :extension-dir-relative resource discovery (skills/...).
+  (extensions/clear-extensions!)
+  (let [result (extensions/load-extension! "test/fixtures/ext-dir")]
+    (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+    (testing "dir extension: :extension-dir is the extension dir itself"
+      (let [loaded (first (extensions/get-loaded-extensions))]
+        (t/is (= (str (fs/canonicalize "test/fixtures/ext-dir"))
+                 (str (fs/canonicalize (:extension-dir loaded))))
+              (str "got: " (:extension-dir loaded)))))
+    (extensions/unload-all-extensions!)))
+
+(t/deftest test-single-file-extension-dir-is-parent
+  (extensions/clear-extensions!)
+  (let [result (extensions/load-extension! "test/fixtures/ext-single/hello_ext.clj")]
+    (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+    (testing "single-file extension: :extension-dir is the file's parent"
+      (let [loaded (first (extensions/get-loaded-extensions))]
+        (t/is (= (str (fs/canonicalize "test/fixtures/ext-single"))
+                 (str (fs/canonicalize (:extension-dir loaded))))
+              (str "got: " (:extension-dir loaded)))))
+    (extensions/unload-all-extensions!)))
+
 (t/deftest test-unload-extension-nil-noop
   (extensions/clear-extensions!)
   ;; the load result map carries :extension (the name), not the Extension

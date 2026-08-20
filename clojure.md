@@ -8,7 +8,7 @@ A kmet extension providing Clojure-aware tools, ported from [clojure-mcp](https:
 
 ```
 extensions/clojure/
-├── deps.edn              — rewrite-clj, cljfmt, edamame, parinfer
+├── deps.edn              — rewrite-clj, cljfmt, edamame, parinferish
 ├── extension.edn         — {:name "clojure" :entry "src/kmet/extensions/clojure/core.clj"}
 ├── README.md             — usage info with examples
 ├── skills/
@@ -44,7 +44,7 @@ Structure-aware Clojure form editing. Full port of clojure-mcp `form_edit/{core,
 - defmethod dispatch extraction from replacement content when not in form_identifier
 - replace / insert_before / insert_after operations
 - Comment-leading replacement (special `;` handling — absorbs preceding comments)
-- Delimiter repair (edamame detect + parinfer fix) on replacement content before editing
+- Delimiter repair (edamame detect + parinferish fix) on replacement content before editing
 - Partial formatting (format replacement in isolation via cljfmt, re-indent to column)
 - Full-file cljfmt formatting after edit
 - Similar-match suggestions when form not found (namespace-qualified alternatives)
@@ -126,6 +126,8 @@ Editing guidelines for the Clojure tools. Port of clojure-mcp `clojure_form_edit
 
 Smart Clojure file reader with collapsed view and pattern-based expansion. Port of clojure-mcp `unified_read_file/pattern_core.clj`.
 
+**Feasibility: HIGH** — pure rewrite-clj + clojure.string, same stack as the existing edit tools. Straight port; the only adaptation is dropping the nREPL write-file-guard timestamp tracking (kmet doesn't track file mtimes).
+
 **Features:**
 - Collapsed view: show only form signatures (e.g., `(defn foo [x] ...)`) for large files
 - Pattern matching: `name_pattern` regex to expand matching forms, `content_pattern` for content search
@@ -140,15 +142,17 @@ Smart Clojure file reader with collapsed view and pattern-based expansion. Port 
 - `name_pattern` — regex to match form names
 - `content_pattern` — regex to match form content
 
-### clj-nrepl-eval (from clojure-mcp-light)
+### clojure-nrepl-eval (from clojure-mcp-light)
 
 nREPL evaluation tool. Port of clojure-mcp-light `nrepl_eval.clj`.
+
+**Feasibility: HIGH** — verified end-to-end in an SCI context: a bencode-based client (using bb's bundled `bencode.core`, injected by reference) talking to a real babashka nREPL server successfully evaluated `(+ 1 2)` → `3`. The official `nrepl.core` Maven client does NOT run: it hard-requires `nrepl.tls`, which needs `java.security.cert.Certificate` — a class missing from bb's `babashka.classes/all-classes` (everything else it needs is present). So the client must be the ~150-line bencode-based one from clojure-mcp-light (`nrepl_client.clj`), which has zero deps beyond bundled `bencode.core` + `java.net.*`. Port that; drop its timbre/stats/tmp session-file bits (kmet has no session persistence) or keep a minimal in-memory session cache.
 
 **Features:**
 - Connect to running nREPL server
 - Auto-discover ports via `.nrepl-port` file and `lsof`
 - Persistent sessions per host:port
-- Auto-repair delimiters before evaluation
+- Auto-repair delimiters before evaluation (parinferish)
 - Environment type detection (clj, bb, shadow-cljs, basilisp)
 - Timeout handling
 
@@ -157,15 +161,30 @@ nREPL evaluation tool. Port of clojure-mcp-light `nrepl_eval.clj`.
 - `code` — Clojure code to evaluate
 - `timeout` — milliseconds
 
-### clj-paren-repair (from clojure-mcp-light)
+### clojure-paren-repair
 
-Standalone delimiter repair. Port of clojure-mcp-light `paren_repair.clj`.
+Delimiter repair tool. Port of clojure-mcp `paren_repair/{core,tool}.clj` (file-based) — the clojure-mcp-light `paren_repair.clj` CLI (stdin mode) is not applicable as a kmet tool, but its `fix-delimiters` algorithm is the model.
 
-**Features:**
-- Fix unbalanced parentheses/brackets/braces
-- Auto-format with cljfmt
-- Works on files or stdin/stdout
-- Statistics tracking
+**Feasibility: HIGH — and the single most valuable addition**: it enables real delimiter auto-repair, replacing the current `lint-repair` stub in edit_util.clj (which returns `[code false]` and lets broken delimiters surface as errors). Verified in an SCI context: `parinferish 0.8.0` (pure Clojure, single `.cljc`, zero deps) evaluates and runs — `(parse s {:mode :indent})` + `flatten` correctly repaired `"(defn foo [x] (+ x 1"` → `"(defn foo [x] (+ x 1))"`. Declared in the extension's deps.edn it resolves via borkdude.deps like cljfmt does. NOT feasible: `parinfer 0.4.0` (com.oakmac/parinfer, the JVM lib clojure-mcp uses) — extension contexts evaluate jar sources under SCI and only expose bb-bundled classes; a Java lib needs real JVM classes. edamame's role stays detection (`:edamame/opened-delimiter` in ex-data).
+
+**IMPLEMENTED (this session):**
+- `edit_util/repair-delimiters` + `delimiter-error?` — real repair pipeline; `lint-repair` now auto-fixes content, so `clojure_edit` and `clojure_edit_replace_sexp` get auto-repair for free
+- `paren_repair.clj` — standalone `clojure_paren_repair` tool (detect → repair → verify → cljfmt → write → diff), registered in core.clj
+- `core.clj` — also contributes `skills/clojure-edit` via the `:resources-discover` event (skill was previously dead content — never wired into discovery)
+- Host fix in `kmet.app.extensions`: `:extension-dir` for a directory extension was computed as the PARENT of the extension dir (wrong), which broke `:extension-dir`-relative resource discovery for ALL dir extensions (clojure + mcp-adapter skills silently never loaded). Now the extension's own directory; `get-loaded-extensions` exposes it; regression tests added
+- deps.edn/bb.edn: + parinferish 0.8.0
+- Tests: edit-util-test (repair/detection), paren-repair-test (tool behavior incl. format toggle, .edn, diffs)
+
+**Pipeline (matches clojure-mcp `repair-file!`):**
+1. edamame `delimiter-error?` on the file content (or on replacement content for lint-repair)
+2. parinferish indent-mode repair → flattened text
+3. verify the result parses (no delimiter error)
+4. cljfmt format (respecting project cljfmt.edn via edit-util)
+5. write file + unified diff
+
+**Tool parameters:**
+- `file_path` — path to .clj/.cljs/.cljc/.bb/.edn file to repair
+- `format` — boolean, cljfmt after repair (default true)
 
 ### Additional skills (from clojure-mcp prompts)
 
@@ -179,7 +198,10 @@ Standalone delimiter repair. Port of clojure-mcp-light `paren_repair.clj`.
 | rewrite-clj | 1.1.47 | Zipper-based Clojure code parsing and transformation |
 | cljfmt | 0.13.1 | Clojure code formatting |
 | edamame | 1.5.35 | Delimiter error detection (parser) |
-| parinfer | 0.4.0 | Delimiter repair (indent-mode) |
+| parinferish | 0.8.0 | Delimiter repair (indent-mode; pure Clojure, SCI-compatible) |
+| bencode | bundled in bb | nREPL wire encoding (clojure-nrepl-eval) |
+
+Note: `parinfer 0.4.0` (com.oakmac/parinfer, the JVM lib clojure-mcp uses) is NOT usable — extension contexts serve jar sources under SCI and only expose bb-bundled classes. parinferish is the drop-in pure-Clojure replacement (same as clojure-mcp-light).
 
 ## Alignment with clojure-mcp
 
@@ -187,7 +209,7 @@ Standalone delimiter repair. Port of clojure-mcp-light `paren_repair.clj`.
 - Tool names, descriptions, prompt-snippet, prompt-guidelines
 - JSON schema format (string keys, required arrays, enum)
 - Core algorithms: BFS form finding, multi-sexp matching, comment handling
-- Delimiter repair pipeline (edamame → parinfer)
+- Delimiter repair pipeline (edamame detect → parinferish fix)
 - Formatting pipeline (cljfmt with community indent style)
 - Validation logic (parseable forms, non-empty sexprs)
 

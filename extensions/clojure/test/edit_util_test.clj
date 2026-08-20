@@ -33,10 +33,58 @@
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
 (deftest test-lint-repair
-  (testing "returns [code false] — passthrough, no repair"
+  (testing "balanced code passes through unchanged, not repaired"
     (let [[code repaired?] (util/lint-repair "(+ x 1)")]
       (is (= "(+ x 1)" code))
-      (is (false? repaired?)))))
+      (is (false? repaired?))))
+  (testing "missing closing paren is repaired"
+    (let [[code repaired?] (util/lint-repair "(defn foo [x] (+ x 1")]
+      (is (= "(defn foo [x] (+ x 1))" code))
+      (is (true? repaired?))))
+  (testing "extra closing paren is repaired"
+    (let [[code repaired?] (util/lint-repair "(defn foo [x] (+ x 1)))")]
+      (is (= "(defn foo [x] (+ x 1))" code))
+      (is (true? repaired?))))
+  (testing "brackets/braces too"
+    (let [[code repaired?] (util/lint-repair "(let [x 1] {:a x")]
+      (is (= "(let [x 1] {:a x})" code))
+      (is (true? repaired?))))
+  (testing "degenerate input is still handled — balanced opens get closed"
+    (let [[code repaired?] (util/lint-repair "(((((")]
+      (is (= "((((()))))" code))
+      (is (true? repaired?)))))
+
+(deftest test-repair-delimiters
+  (testing "nil / empty input is safe"
+    (is (= [nil false] (util/repair-delimiters nil)))
+    (is (= ["" false] (util/repair-delimiters ""))))
+  (testing "already balanced"
+    (is (= ["(a b)" false] (util/repair-delimiters "(a b)"))))
+  (testing "repaired result is balanced"
+    (let [[code fixed?] (util/repair-delimiters "(defn f [x]")]
+      (is fixed?)
+      (is (false? (util/delimiter-error? code))))))
+
+(deftest test-delimiter-error?
+  (testing "balanced code has no delimiter error"
+    (is (false? (util/delimiter-error? "(defn foo [x] (+ x 1))"))))
+  (testing "unbalanced opens are detected"
+    (is (true? (util/delimiter-error? "(defn foo [x] (+ x 1")))
+    (is (true? (util/delimiter-error? "(defn foo [x]"))))
+  (testing "extra closes are detected"
+    (is (true? (util/delimiter-error? "(defn foo [x] (+ x 1)))"))))
+  (testing "strings containing delimiters are not fooled"
+    (is (false? (util/delimiter-error? "(def s \"(unclosed\")"))))
+  (testing "comments containing delimiters are not fooled"
+    (is (false? (util/delimiter-error? "(def x 1) ; (comment"))))
+  (testing "reader conditionals parse"
+    (is (false? (util/delimiter-error? "#?(:clj (def x 1) :cljs (def x 2))"))))
+  (testing "regex literals parse"
+    (is (false? (util/delimiter-error? "(re-find #\"[0-9]+\" \"abc123\")"))))
+  (testing "non-delimiter parse errors are not delimiter errors"
+    ;; a genuinely bad token is not a delimiter error — edamame throws
+    ;; without :opened-delimiter
+    (is (false? (util/delimiter-error? "(def x 1) @")))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Diff
