@@ -185,7 +185,8 @@
    Uses the same BOM/line-ending normalization and exact-then-fuzzy matching
    as the edit tool (kmet.libs.edit-diff) so preview and result are
    byte-comparable and error messages match.
-   Returns {:success? bool :diff str :diff-lines [\"+123 content\" ...] :error str?}"
+   Returns {:success? bool :diff str :diff-lines [\"+123 content\" ...] :error str?}
+   with :diff-lines [] when the edit produces no visible diff (whitespace-only change)."
   [path edits]
   (try
     (let [f (io/file path)]
@@ -316,9 +317,7 @@
         parse (fn [line]
                 (when-let [m (re-find #"^([ +-])(\s*\d*)\s(.*)$" line)]
                   {:prefix (nth m 1) :line-num (nth m 2) :content (nth m 3)}))
-        tabs (fn [s] (str/replace s "\t" "   "))
-        trimmed-equal? (fn [a b] (= (str/replace a #"\s+$" "")
-                                    (str/replace b #"\s+$" "")))]
+        tabs (fn [s] (str/replace s "\t" "   "))]
     (loop [i 0 acc []]
       (if (>= i n)
         acc
@@ -341,8 +340,8 @@
                   ;; single -/+ pair whose visible content is identical
                   ;; (trailing-whitespace-only change) — skip it entirely
                   invisible? (and (= 1 rn) (= 1 (count added))
-                                  (trimmed-equal? (:content (first removed))
-                                                  (:content (first added))))]
+                                  (= (str/trimr (:content (first removed)))
+                                     (str/trimr (:content (first added)))))]
               (if invisible?
                 (recur next-i acc)
                 (let [styled (style-change-pair removed added tabs theme)]

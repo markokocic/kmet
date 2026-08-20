@@ -272,10 +272,7 @@
       (let [head (second (re-find #"^\((defn|defn-|defmacro|defmacro-|def|deftest|deftest-|defmethod|defprotocol|defrecord|ns)([ )])"
                                   (str/trim new_form)))
             shape-error (when head
-                          (util/validate-form-shape (if (str/ends-with? head "-")
-                                                      (subs head 0 (dec (count head)))
-                                                      head)
-                                                    new_form))]
+                          (util/validate-form-shape head new_form))]
         (boolean shape-error))
       {:content "new_form is not a well-formed Clojure form — pass a complete, valid expression"
        :is-error true}
