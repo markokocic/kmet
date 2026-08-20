@@ -17,18 +17,10 @@
 ;; Core repair logic
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
-(defn- clojure-file?
-  "True for Clojure-related extensions (.clj .cljs .cljc .cljd .bb .edn .lpy)."
+(defn clojure-file?
+  "True for Clojure-related file paths (.clj .cljs .cljc .cljd .bb .edn .lpy)."
   [file-path]
-  (when file-path
-    (let [lower (str/lower-case file-path)]
-      (or (str/ends-with? lower ".clj")
-          (str/ends-with? lower ".cljs")
-          (str/ends-with? lower ".cljc")
-          (str/ends-with? lower ".cljd")
-          (str/ends-with? lower ".bb")
-          (str/ends-with? lower ".edn")
-          (str/ends-with? lower ".lpy")))))
+  (util/clojure-file? file-path))
 
 (defn repair-string
   "Repair delimiters in SOURCE and optionally format with cljfmt.
@@ -190,7 +182,7 @@
    {:name            "clojure_paren_repair"
     :label           "Repair delimiters"
     :description
-    "Fix delimiter errors (unbalanced parentheses, brackets, braces) in a Clojure file using parinferish.\n\nUse this tool when:\n- A file has unbalanced delimiters causing parse errors\n- You need to repair a file after an errant edit\n- The file won't compile due to unbalanced parens/brackets\n\nDetection is via edamame (a parse error carrying an unclosed opener); repair is indentation-based: opens at the end of a line are closed, and stray closes are dropped. The file is then formatted with cljfmt (honoring the project's cljfmt.edn) unless format=false.\n\nReturns a status message and diff showing what changed."
+    "Fix delimiter errors (unbalanced parentheses, brackets, braces) in a Clojure file (.clj/.cljs/.cljc/.cljd/.bb/.edn/.lpy; other file types are rejected) using parinferish.\n\nUse this tool when:\n- A file has unbalanced delimiters causing parse errors\n- You need to repair a file after an errant edit\n- The file won't compile due to unbalanced parens/brackets\n\nDetection is via edamame (a parse error carrying an unclosed opener); repair is indentation-based: opens at the end of a line are closed, and stray closes are dropped. The file is then formatted with cljfmt (honoring the project's cljfmt.edn) unless format=false.\n\nReturns a status message and diff showing what changed."
     :render-call renderers/render-edit-call
     :render-result renderers/render-edit-result
     :render-shell :self
@@ -205,7 +197,7 @@
      :required   ["file_path"]
      :properties
      {"file_path" {:type        "string"
-                   :description "Path to the Clojure file to repair (.clj, .cljs, .cljc, .bb, .edn)"}
+                   :description "Path to the Clojure file to repair (.clj, .cljs, .cljc, .cljd, .bb, .edn, .lpy)"}
       "format"    {:type        "boolean"
                    :description "Format the file with cljfmt after repairing delimiters (default: true)"}}}
     :execute execute})

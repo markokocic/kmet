@@ -238,6 +238,10 @@
       (str/blank? file_path)
       {:content "Missing required parameter: file_path" :is-error true}
 
+      (not (util/clojure-file? file_path))
+      {:content (str "Not a Clojure file (clojure_edit_replace_sexp only operates on .clj/.cljs/.cljc/.cljd/.bb/.edn/.lpy): " file_path)
+       :is-error true}
+
       (not (fs/exists? file_path))
       {:content (str "File not found: " file_path) :is-error true}
 
@@ -304,7 +308,7 @@
    {:name            "clojure_edit_replace_sexp"
     :label           "Clojure s-expression edit"
     :description
-    "Replaces Clojure expressions in a file.\n\nThis tool provides targeted replacement of Clojure expressions within forms. For complete top-level form operations, use clojure_edit instead.\n\nKEY BENEFITS:\n- Syntax-aware matching that understands Clojure code structure\n- Ignores whitespace differences by default, focusing on actual code meaning\n- Matches expressions regardless of formatting, indentation, or spacing\n- Prevents errors from mismatched text or irrelevant formatting differences\n- Can replace all occurrences with replace_all: true\n\nCONSTRAINTS:\n- match_form must contain one or more complete Clojure expressions\n- new_form must contain zero or more complete Clojure expressions\n- Both must be valid Clojure code that can be parsed\n\nUnbalanced delimiters in match_form/new_form (e.g. a missing close paren) are auto-repaired before matching, so \"(+ x 1\" matches \"(+ x 1)\". Trailing fragments that cannot form a complete expression (\"...x]]\", \"x])\") are still rejected — include the full enclosing form.\n\nFor insert_before/insert_after, pass ONLY the new content (never repeat the matched form). The inserted form lands outside the match's own line: a same-line trailing comment stays with the matched form, and a comment on its own line stays with the next form.\n\nExamples:\n- Replace a calculation: match_form: (+ x 2)  new_form: (* x 2)\n- Rename a symbol everywhere: match_form: old-name  new_form: new-name  replace_all: true\n- Remove debug statements: match_form: (println \"Debug\")  new_form: (empty)\n- Replace multiple expressions: match_form: (validate x) (transform x)  new_form: (-> x validate transform)"
+    "Replaces Clojure expressions in a file (only .clj/.cljs/.cljc/.cljd/.bb/.edn/.lpy files are accepted; other types are rejected).\n\nThis tool provides targeted replacement of Clojure expressions within forms. For complete top-level form operations, use clojure_edit instead.\n\nKEY BENEFITS:\n- Syntax-aware matching that understands Clojure code structure\n- Ignores whitespace differences by default, focusing on actual code meaning\n- Matches expressions regardless of formatting, indentation, or spacing\n- Prevents errors from mismatched text or irrelevant formatting differences\n- Can replace all occurrences with replace_all: true\n\nCONSTRAINTS:\n- match_form must contain one or more complete Clojure expressions\n- new_form must contain zero or more complete Clojure expressions\n- Both must be valid Clojure code that can be parsed\n\nUnbalanced delimiters in match_form/new_form (e.g. a missing close paren) are auto-repaired before matching, so \"(+ x 1\" matches \"(+ x 1)\". Trailing fragments that cannot form a complete expression (\"...x]]\", \"x])\") are still rejected — include the full enclosing form.\n\nFor insert_before/insert_after, pass ONLY the new content (never repeat the matched form). The inserted form lands outside the match's own line: a same-line trailing comment stays with the matched form, and a comment on its own line stays with the next form.\n\nExamples:\n- Replace a calculation: match_form: (+ x 2)  new_form: (* x 2)\n- Rename a symbol everywhere: match_form: old-name  new_form: new-name  replace_all: true\n- Remove debug statements: match_form: (println \"Debug\")  new_form: (empty)\n- Replace multiple expressions: match_form: (validate x) (transform x)  new_form: (-> x validate transform)"
     :render-call renderers/render-edit-call
     :render-result renderers/render-edit-result
     :render-shell :self
@@ -321,7 +325,7 @@
      :required   ["file_path" "match_form" "new_form" "operation"]
      :properties
      {"file_path"   {:type        "string"
-                     :description "Path to the file to edit"}
+                     :description "Path to a Clojure file (.clj/.cljs/.cljc/.cljd/.bb/.edn/.lpy) to edit"}
       "match_form"  {:type        "string"
                      :description "The s-expression to find (include # for anonymous functions)"}
       "new_form"    {:type        "string"

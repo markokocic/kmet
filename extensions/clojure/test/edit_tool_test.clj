@@ -77,6 +77,17 @@
     (is (:is-error result))
     (is (str/includes? (:content result) "not found"))))
 
+(deftest test-non-clojure-file
+  (let [path (do (ensure-test-dir!)
+                 (str test-dir "/notes.txt"))
+        _    (spit path "(defn foo [])")
+        result (edit-tool/execute {:file_path path
+                                   :form_type "defn"
+                                   :form_identifier "foo"
+                                   :content "(defn foo [] nil)"})]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "Not a Clojure file"))))
+
 (deftest test-comment-form-type-rejected
   (let [path (write-test-file! "comment-reject" "(defn foo [] nil)")
         result (edit-tool/execute {:file_path path

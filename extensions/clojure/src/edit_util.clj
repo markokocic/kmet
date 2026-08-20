@@ -21,6 +21,19 @@
 (defn slurp-utf8 [f]
   (slurp f :encoding "UTF-8"))
 
+(defn clojure-file?
+  "True for Clojure-related file paths (.clj .cljs .cljc .cljd .bb .edn .lpy)."
+  [file-path]
+  (when file-path
+    (let [lower (str/lower-case file-path)]
+      (or (str/ends-with? lower ".clj")
+          (str/ends-with? lower ".cljs")
+          (str/ends-with? lower ".cljc")
+          (str/ends-with? lower ".cljd")
+          (str/ends-with? lower ".bb")
+          (str/ends-with? lower ".edn")
+          (str/ends-with? lower ".lpy")))))
+
 (defn spit-utf8 [f content]
   (spit f content :encoding "UTF-8"))
 

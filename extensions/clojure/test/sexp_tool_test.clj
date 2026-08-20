@@ -53,6 +53,17 @@
     (is (:is-error result))
     (is (str/includes? (:content result) "not found"))))
 
+(deftest test-non-clojure-file
+  (let [path (do (ensure-test-dir!)
+                 (str test-dir "/notes.txt"))
+        _    (spit path "(+ x 1)")
+        result (sexp-tool/execute {:file_path path
+                                   :match_form "(+ x 1)"
+                                   :new_form "(+ x 2)"
+                                   :operation "replace"})]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "Not a Clojure file"))))
+
 (deftest test-missing-match-form
   (let [path (write-test-file! "missing-match" "(+ x 1)")
         result (sexp-tool/execute {:file_path path
