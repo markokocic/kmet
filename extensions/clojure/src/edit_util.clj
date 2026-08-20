@@ -34,6 +34,11 @@
           (str/ends-with? lower ".edn")
           (str/ends-with? lower ".lpy")))))
 
+(defn not-clojure-file-msg
+  "Error message for TOOL-NAME operating on a non-Clojure FILE-PATH."
+  [tool-name file-path]
+  (str tool-name " only operates on .clj/.cljs/.cljc/.cljd/.bb/.edn/.lpy files: " file-path))
+
 (defn spit-utf8 [f content]
   (spit f content :encoding "UTF-8"))
 

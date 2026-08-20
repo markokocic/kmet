@@ -17,11 +17,6 @@
 ;; Core repair logic
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
-(defn clojure-file?
-  "True for Clojure-related file paths (.clj .cljs .cljc .cljd .bb .edn .lpy)."
-  [file-path]
-  (util/clojure-file? file-path))
-
 (defn repair-string
   "Repair delimiters in SOURCE and optionally format with cljfmt.
    Returns {:content str :delimiter-fixed? bool :formatted? bool}."
@@ -44,8 +39,8 @@
     (not (fs/exists? file-path))
     {:success false :message (str "File does not exist: " file-path)}
 
-    (not (clojure-file? file-path))
-    {:success false :message (str "Not a Clojure file (skipping): " file-path)}
+    (not (util/clojure-file? file-path))
+    {:success false :message (str "Not a Clojure file — " (util/not-clojure-file-msg "clojure_paren_repair" file-path))}
 
     :else
     (try
@@ -150,7 +145,7 @@
   (when (= "write" tool-name)
     (let [path    (write-path args)
           content (write-content args)]
-      (when (and (clojure-file? path) (string? content))
+      (when (and (util/clojure-file? path) (string? content))
         (when-let [details (util/delimiter-details content)]
           {:block true
            :reason (str (format-delimiter-report path details)
@@ -161,7 +156,7 @@
   [{:keys [tool-name args result is-error]}]
   (when (and (= "edit" tool-name) (not is-error) (map? result))
     (let [path (write-path args)]
-      (when (clojure-file? path)
+      (when (util/clojure-file? path)
         (try
           (when (fs/exists? path)
             (let [content (util/slurp-utf8 path)]

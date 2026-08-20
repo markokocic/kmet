@@ -28,6 +28,34 @@
   (util/spit-utf8 "target/util-tests/rt.clj" "(def greeting \"Привет\")\n")
   (is (= "(def greeting \"Привет\")\n" (util/slurp-utf8 "target/util-tests/rt.clj"))))
 
+(deftest test-clojure-file-predicate
+  (testing "accepts all Clojure-family extensions, case-insensitively"
+    (is (true? (util/clojure-file? "a.clj")))
+    (is (true? (util/clojure-file? "a.CLJS")))
+    (is (true? (util/clojure-file? "a.cljc")))
+    (is (true? (util/clojure-file? "a.cljd")))
+    (is (true? (util/clojure-file? "a.bb")))
+    (is (true? (util/clojure-file? "a.edn")))
+    (is (true? (util/clojure-file? "a.lpy")))
+    (is (true? (util/clojure-file? "/deep/path/to/a.clj"))))
+  (testing "rejects non-Clojure and extensionless paths"
+    (is (false? (util/clojure-file? "a.txt")))
+    (is (false? (util/clojure-file? "a.md")))
+    (is (false? (util/clojure-file? "a")))
+    (is (false? (util/clojure-file? "a.clj.bak")))
+    (is (false? (util/clojure-file? "a.clj/notes.txt"))))
+  (testing "nil/blank are rejected (nil predicate returns nil, not false)"
+    (is (nil? (util/clojure-file? nil)))
+    (is (false? (util/clojure-file? "")))))
+
+(deftest test-not-clojure-file-msg
+  (is (= "clojure_edit only operates on .clj/.cljs/.cljc/.cljd/.bb/.edn/.lpy files: foo.txt"
+         (util/not-clojure-file-msg "clojure_edit" "foo.txt"))))
+
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; Lint repair
+;; ═══════════════════════════════════════════════════════════════════════════════
+
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Lint repair
 ;; ═══════════════════════════════════════════════════════════════════════════════

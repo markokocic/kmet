@@ -239,7 +239,7 @@
       {:content "Missing required parameter: file_path" :is-error true}
 
       (not (util/clojure-file? file_path))
-      {:content (str "Not a Clojure file (clojure_edit_replace_sexp only operates on .clj/.cljs/.cljc/.cljd/.bb/.edn/.lpy): " file_path)
+      {:content (str "Not a Clojure file — " (util/not-clojure-file-msg "clojure_edit_replace_sexp" file_path))
        :is-error true}
 
       (not (fs/exists? file_path))
