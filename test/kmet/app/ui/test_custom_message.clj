@@ -40,6 +40,26 @@
       ;; Even with empty content, the box padding lines render
       (is (pos? (count (core/render c 40)))))))
 
+(deftest test-label-content-spacer
+  (testing "a blank line separates the label from the content (pi: box.addChild(new Spacer(1)))"
+    (let [c (cm/make-custom-message :label "Reload" :content "Reloaded.")
+          plain (mapv strip-ansi (core/render c 40))
+          label-idx (first (keep-indexed #(when (re-find #"\[Reload\]" %2) %1) plain))
+          content-idx (first (keep-indexed #(when (re-find #"Reloaded\." %2) %1) plain))]
+      (is label-idx)
+      (is content-idx)
+      (is (= content-idx (+ label-idx 2))
+          "label line, one blank bg line, then content — like pi"))))
+
+(deftest test-no-label-no-spacer
+  (testing "no label means no spacer line (pi only adds the Spacer(1) after the label Text)"
+    (let [c (cm/make-custom-message :content "just content")
+          plain (mapv strip-ansi (core/render c 40))
+          content-idx (first (keep-indexed #(when (re-find #"just content" %2) %1) plain))]
+      (is content-idx)
+      (is (= content-idx 2)
+          "box top pad, content line — no blank line between them"))))
+
 (deftest test-set-label
   (testing "set-label! updates label"
     (let [c (cm/make-custom-message :label "old" :content "text")]

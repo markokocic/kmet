@@ -54,7 +54,9 @@
 (defn- rebuild-content!
   "Rebuild the children inside the inner container with current content/theme.
    Label is plain Text (pi: Text), content is Markdown tinted
-   custom-message-text (pi: Markdown with {color: customMessageText})."
+   custom-message-text (pi: Markdown with {color: customMessageText}). A
+   Spacer(1) always separates the label from the content (pi: box.addChild
+   label Text → new Spacer(1) → content Markdown)."
   [comp]
   (let [theme @(:theme-atom comp)
         label @(:label-atom comp)
@@ -64,7 +66,9 @@
     (when (seq label)
       (let [label-str (theme/fg theme :custom-message-label (theme/bold (str "[" label "]")))]
         (container/container-add-child container
-                                       (text/make-text label-str 0 0))))
+                                       (text/make-text label-str 0 0)))
+      ;; pi: box.addChild(new Spacer(1)) — blank line between label and content
+      (container/container-add-child container (spacer/make-spacer 1)))
     (when (seq content)
       (container/container-add-child container
                                      (md/make-markdown content
