@@ -176,7 +176,7 @@
          (map (fn [{:keys [tag qualified-name]}]
                 (str "  - (" tag " " qualified-name " ...)")))
          (str/join "\n")
-         (str "\n\nSimilar forms found:\n"))))
+         (str "\n\nSimilar forms found (check the form name/type and dispatch value):\n"))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Main execute
@@ -258,8 +258,13 @@
                 (let [new-source (z/root-string (:zloc result2))
                       formatted  (util/format-source-string new-source fmt-opts)]
                   (util/spit-utf8 file_path formatted)
-                  (let [diff-str (edit-diff/generate-display-diff original formatted)]
-                    {:content "Edit applied."
+                  (let [diff-str (edit-diff/generate-display-diff original formatted)
+                        repaired? (not= content content')
+                        repaired-note (when repaired?
+                                        (str "\nNote: content was unbalanced and auto-repaired to: " content'))]
+                    {:content (if repaired-note
+                                (str "Edit applied." repaired-note)
+                                "Edit applied.")
                      :details (when diff-str {:diff diff-str})}))))))
         (catch Exception e
           {:content (str "Error editing " file_path ": " (ex-message e))

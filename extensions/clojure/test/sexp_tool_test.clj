@@ -245,6 +245,39 @@
       (is (:is-error result))
       (is (str/includes? (:content result) "Could not find")))))
 
+(deftest test-match-not-found-repair-note
+  (testing "unbalanced match_form that gets auto-repaired reports the repair"
+    (let [path (write-test-file! "not-found-unbalanced"
+                                 "(when (and (a? x) (b? y))\n  (c))\n")
+          result (sexp-tool/execute
+                  (sexp-opts path "(when (and (a? x) (b? y))"
+                             "(when x 1)"))]
+      (is (:is-error result))
+      (is (str/includes? (:content result) "Could not find"))
+      (is (str/includes? (:content result) "auto-repaired"))
+      (is (str/includes? (:content result) "(when (and (a? x) (b? y)))")))))
+
+(deftest test-match-not-found-no-repair-note
+  (testing "balanced match_form that simply isn't there does not claim a repair"
+    (let [path (write-test-file! "not-found-balanced"
+                                 "(+ x 1)\n")
+          result (sexp-tool/execute
+                  (sexp-opts path "(+ x 2)" "(+ x 3)"))]
+      (is (:is-error result))
+      (is (str/includes? (:content result) "Could not find"))
+      (is (not (str/includes? (:content result) "auto-repaired"))))))
+
+(deftest test-edit-success-repair-note
+  (testing "successful edit with unbalanced content reports the repair"
+    (let [path (write-test-file! "edit-repair-note"
+                                 "(defn foo [x] (+ x 1))\n")
+          result (sexp-tool/execute
+                  (sexp-opts path "(defn foo [x] (+ x 1))"
+                             "(defn foo [x] (+ x 1)"))]
+      (is (not (:is-error result)))
+      (is (str/includes? (:content result) "Edit applied"))
+      (is (str/includes? (:content result) "auto-repaired")))))
+
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; replace_all
 ;; ═══════════════════════════════════════════════════════════════════════════════

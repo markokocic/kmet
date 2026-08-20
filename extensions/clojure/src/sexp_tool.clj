@@ -282,16 +282,28 @@
                         zloc match' new'
                         {:operation op-kw :all? replace-all?})]
           (if-not result
-            {:content  (str "Could not find s-expression: " match_form)
-             :is-error true}
+            (let [repaired? (not= match_form match')
+                  repaired-note (when repaired?
+                                  (str "\nNote: match_form was unbalanced and was auto-repaired to: " match'
+                                       "\nIf the repaired form is not what you meant, pass the complete, balanced expression exactly as it appears in the file."))
+                  fix-note "\nThe match is content-based — whitespace/newlines are ignored, but the structure (parens, brackets, braces, keywords, symbols) must match."]
+              {:content  (str "Could not find s-expression: " match_form
+                              repaired-note fix-note)
+               :is-error true})
             ;; 4. Format + write + diff
             (let [new-source (z/root-string (:zloc result))
                   fmt-opts  (util/project-fmt-opts file_path)
                   formatted (util/format-source-string new-source fmt-opts)]
               ;; Normal mode — write file
               (util/spit-utf8 file_path formatted)
-              (let [diff-str (edit-diff/generate-display-diff original formatted)]
-                {:content "Edit applied."
+              (let [diff-str (edit-diff/generate-display-diff original formatted)
+                    repaired? (or (not= match_form match')
+                                  (not= new_form new'))
+                    repaired-note (when repaired?
+                                    "\nNote: unbalanced input was auto-repaired before matching.")]
+                {:content (if repaired-note
+                            (str "Edit applied." repaired-note)
+                            "Edit applied.")
                  :details (when diff-str {:diff diff-str})}))))
         (catch Exception e
           {:content (str "Error editing " file_path ": " (ex-message e))
