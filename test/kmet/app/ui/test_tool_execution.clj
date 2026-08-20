@@ -161,6 +161,39 @@
       (is (some #(re-find #"-2 beta" %) plain))
       (is (some #(re-find #"\+2 BETA" %) plain)))))
 
+(deftest test-edit-render-whitespace-only-no-phantom-diff
+  ;; Regression: an edit whose only effect is a trailing-newline/blank-line
+  ;; change produced :diff-lines [""] — rendered as a blank box line (a
+  ;; "diff with no difference"). It must render without any phantom line.
+  (testing "whitespace-only edit preview has no diff lines"
+    (spit "target/test-tools-edit-wsonly.txt" "alpha\nbeta\ngamma\n")
+    (let [plain (render-tool :name "edit"
+                             :args {:path "target/test-tools-edit-wsonly.txt"
+                                    :old-text "gamma\n" :new-text "gamma"})]
+      ;; the box renders the title but no diff lines
+      (is (some #(re-find #"edit target/test-tools-edit-wsonly.txt" %) plain))
+      ;; no -/+ diff lines and no blank diff area
+      (is (not-any? #(re-find #"^[ +-]\s*\d" %) plain))
+      ;; the only non-title lines are box padding
+      (is (every? #(or (str/includes? % "edit target/test-tools-edit-wsonly.txt")
+                       (str/blank? %))
+                  plain)))))
+
+(deftest test-edit-render-trailing-space-invisible-skipped
+  ;; Regression: a -/+ pair whose only difference is trailing whitespace
+  ;; rendered with identical visible text (a "diff with no difference").
+  ;; It must be skipped entirely — no -/+ lines for invisible changes.
+  (testing "trailing-space-only change renders no -/+ lines"
+    (spit "target/test-tools-edit-tsp.txt" "alpha\nbeta \ngamma\n")
+    (let [plain (render-tool :name "edit"
+                             :args {:path "target/test-tools-edit-tsp.txt"
+                                    :old-text "beta " :new-text "beta"})]
+      ;; no -/+ lines at all
+      (is (not-any? #(re-find #"^[+-]\s*\d" %) plain))
+      ;; context lines still shown
+      (is (some #(re-find #"1 alpha" %) plain))
+      (is (some #(re-find #"3 gamma" %) plain)))))
+
 (deftest test-edit-render-custom-name
   (testing "shared edit renderer uses the supplied tool name"
     (spit "target/test-tools-edit-render.txt" "alpha")

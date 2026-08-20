@@ -199,9 +199,14 @@
               {:keys [diff]} (edit-diff/format-diff-lines
                               (str/split-lines base-content)
                               (str/split-lines new-content))]
-          {:success? true
-           :diff diff
-           :diff-lines (vec (str/split-lines diff))})))
+          (if (str/blank? diff)
+            ;; Only whitespace/trailing-newline changes — no visible diff
+            ;; lines, so don't store a diff-lines vector with one empty line
+            ;; (renders as a blank box line: \"diff with no difference\").
+            {:success? true :diff "" :diff-lines []}
+            {:success? true
+             :diff diff
+             :diff-lines (vec (str/split-lines diff))}))))
     (catch Exception e
       ;; Pi: preview and tool surface the same error so the render-result can
       ;; suppress an execution error already shown by the preview
@@ -301,13 +306,19 @@
 
 (defn- render-diff-lines
   "Style pi-format diff lines; single -/+ pairs get intra-line inverse
-   highlighting. Returns a vector of styled strings (pi: renderDiff)."
+   highlighting. Returns a vector of styled strings (pi: renderDiff).
+   A -/+ pair whose contents are identical after trimming trailing
+   whitespace (e.g. a trailing-space-only change) is not rendered — the
+   difference is invisible, so showing -/+ lines would be a \"diff with
+   no difference\"."
   [diff-lines theme]
   (let [n (count diff-lines)
         parse (fn [line]
                 (when-let [m (re-find #"^([ +-])(\s*\d*)\s(.*)$" line)]
                   {:prefix (nth m 1) :line-num (nth m 2) :content (nth m 3)}))
-        tabs (fn [s] (str/replace s "\t" "   "))]
+        tabs (fn [s] (str/replace s "\t" "   "))
+        trimmed-equal? (fn [a b] (= (str/replace a #"\s+$" "")
+                                    (str/replace b #"\s+$" "")))]
     (loop [i 0 acc []]
       (if (>= i n)
         acc
@@ -327,8 +338,15 @@
                               acc)
                             acc))
                   next-i (+ i rn (count added))
-                  styled (style-change-pair removed added tabs theme)]
-              (recur next-i (into acc styled)))
+                  ;; single -/+ pair whose visible content is identical
+                  ;; (trailing-whitespace-only change) — skip it entirely
+                  invisible? (and (= 1 rn) (= 1 (count added))
+                                  (trimmed-equal? (:content (first removed))
+                                                  (:content (first added))))]
+              (if invisible?
+                (recur next-i acc)
+                (let [styled (style-change-pair removed added tabs theme)]
+                  (recur next-i (into acc styled)))))
             (recur (inc i)
                    (conj acc
                          (theme/fg theme :tool-diff-context
