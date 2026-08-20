@@ -71,6 +71,18 @@
         (t/is (some? s))
         (t/is (= ["alpha.txt"] (mapv :label (:items s))))))))
 
+(t/deftest home-path-completion-no-double-slash
+  ;; ~/sr must complete to ~/src, not ~//src (fs/parent of a bare
+  ;; name is nil and the home-relative branch must not join an empty
+  ;; parent with "/").
+  (with-temp-dir
+    (fn []
+      (with-redefs [ac/expand-home-path (fn [p] (str test-dir (subs p 1)))]
+        (let [p (make-provider)
+              s (ac/get-suggestions p ["~/al"] 0 4 {:force false})]
+          (t/is (some? s))
+          (t/is (= ["~/alpha.txt"] (mapv :value (:items s)))))))))
+
 (t/deftest file-path-completion-with-slash
   (with-temp-dir
     (fn []

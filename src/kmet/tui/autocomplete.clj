@@ -132,7 +132,7 @@
       (str/starts-with? raw-prefix "~/")
       (let [home-rel (subs raw-prefix 2)
             d (or (fs/parent home-rel) "")]
-        (str "~/" (if (or (nil? d) (= d ".")) name (str d "/" name))))
+        (str "~/" (if (or (nil? d) (= d "") (= d ".")) name (str d "/" name))))
 
       (str/starts-with? raw-prefix "/")
       (let [d (or (fs/parent raw-prefix) "/")]
