@@ -100,15 +100,15 @@
     (is (str/includes? (:content result) "S-expression"))))
 
 (deftest test-new-form-invalid
-  ;; unrepairable garbage still errors
+  ;; Unbalanced new_form ("(defn foo [") is rejected — no auto-repair.
   (let [path (write-test-file! "invalid-new" "(+ x 1)")
         result (sexp-tool/execute {:file_path path
                                    :match_form "(+ x 1)"
                                    :new_form "(defn foo ["
                                    :operation "replace"})]
-    ;; "(defn foo [" IS repairable (→ (defn foo [])) — so this now succeeds
-    (is (not (:is-error result)))
-    (is (str/includes? (read-test-file path) "(defn foo [])"))))
+    (is (:is-error result))
+    (is (str/includes? (:content result) "unbalanced"))
+    (is (str/includes? (read-test-file path) "(+ x 1)"))))
 
 (deftest test-new-form-unrepairable
   (let [path (write-test-file! "invalid-new2" "(+ x 1)")
@@ -119,15 +119,64 @@
     ;; #_ alone is not a valid expression even after repair
     (is (:is-error result))))
 
-(deftest test-new-form-auto-repaired
-  (let [path (write-test-file! "auto-repair-new" "(defn foo [] (+ x 1))")
+(deftest test-new-form-unbalanced-rejected
+  ;; Unbalanced new_form is rejected outright — no auto-repair.
+  (let [path (write-test-file! "unbalanced-new" "(+ x 1)")
         result (sexp-tool/execute {:file_path path
                                    :match_form "(+ x 1)"
                                    :new_form "(* x 2"
                                    :operation "replace"})]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "unbalanced"))
+    ;; the file must be untouched
+    (is (str/includes? (read-test-file path) "(+ x 1)"))))
+
+(deftest test-match-form-unbalanced-rejected
+  ;; Unbalanced match_form is rejected outright — no auto-repair.
+  (let [path (write-test-file! "unbalanced-match" "(+ x 1)")
+        result (sexp-tool/execute {:file_path path
+                                   :match_form "(* x 2"
+                                   :new_form "(+ x 1)"
+                                   :operation "replace"})]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "unbalanced"))
+    ;; the file must be untouched
+    (is (str/includes? (read-test-file path) "(+ x 1)"))))
+
+(deftest test-new-form-broken-defn-rejected
+  ;; A broken definition fragment like "(defn- filter-kind" (unbalanced,
+  ;; missing the arg vector) is rejected — it used to be auto-repaired into
+  ;; a bodyless "(defn- filter-kind)" and silently written to the file.
+  (let [path (write-test-file! "broken-defn-new" "(+ x 1)")
+        result (sexp-tool/execute {:file_path path
+                                   :match_form "(+ x 1)"
+                                   :new_form "(defn- filter-kind"
+                                   :operation "replace"})]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "unbalanced"))
+    ;; the file must be untouched
+    (is (str/includes? (read-test-file path) "(+ x 1)"))))
+
+(deftest test-new-form-incomplete-def-rejected
+  ;; A balanced-but-incomplete def ("(def foo)" with no value) is rejected
+  ;; by structural validation.
+  (let [path (write-test-file! "incomplete-def-new" "(+ x 1)")
+        result (sexp-tool/execute {:file_path path
+                                   :match_form "(+ x 1)"
+                                   :new_form "(def foo)"
+                                   :operation "replace"})]
+    (is (:is-error result))
+    (is (str/includes? (read-test-file path) "(+ x 1)"))))
+
+(deftest test-new-form-valid-def-allowed
+  ;; Valid definition forms still work.
+  (let [path (write-test-file! "valid-def-new" "(+ x 1)")
+        result (sexp-tool/execute {:file_path path
+                                   :match_form "(+ x 1)"
+                                   :new_form "(def foo 3)"
+                                   :operation "replace"})]
     (is (not (:is-error result)))
-    (is (str/includes? (:content result) "Edit applied"))
-    (is (str/includes? (read-test-file path) "(* x 2)"))))
+    (is (str/includes? (read-test-file path) "(def foo 3)"))))
 
 (deftest test-match-form-auto-repaired
   (let [path (write-test-file! "auto-repair-match" "(defn foo [] (* x 2))")
@@ -135,8 +184,10 @@
                                    :match_form "(* x 2"
                                    :new_form "(* x 3)"
                                    :operation "replace"})]
-    (is (not (:is-error result)))
-    (is (str/includes? (read-test-file path) "(* x 3)"))))
+    ;; unbalanced match_form is rejected, not repaired
+    (is (:is-error result))
+    (is (str/includes? (:content result) "unbalanced"))
+    (is (str/includes? (read-test-file path) "(* x 2)"))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Basic replace
@@ -246,16 +297,15 @@
       (is (str/includes? (:content result) "Could not find")))))
 
 (deftest test-match-not-found-repair-note
-  (testing "unbalanced match_form that gets auto-repaired reports the repair"
+  (testing "unbalanced match_form is rejected — no repair, no match attempt"
     (let [path (write-test-file! "not-found-unbalanced"
                                  "(when (and (a? x) (b? y))\n  (c))\n")
           result (sexp-tool/execute
                   (sexp-opts path "(when (and (a? x) (b? y))"
                              "(when x 1)"))]
       (is (:is-error result))
-      (is (str/includes? (:content result) "Could not find"))
-      (is (str/includes? (:content result) "auto-repaired"))
-      (is (str/includes? (:content result) "(when (and (a? x) (b? y)))")))))
+      (is (str/includes? (:content result) "unbalanced"))
+      (is (not (str/includes? (:content result) "Could not find"))))))
 
 (deftest test-match-not-found-no-repair-note
   (testing "balanced match_form that simply isn't there does not claim a repair"
@@ -268,15 +318,15 @@
       (is (not (str/includes? (:content result) "auto-repaired"))))))
 
 (deftest test-edit-success-repair-note
-  (testing "successful edit with unbalanced content reports the repair"
+  (testing "unbalanced new_form is rejected — no edit, no repair"
     (let [path (write-test-file! "edit-repair-note"
                                  "(defn foo [x] (+ x 1))\n")
           result (sexp-tool/execute
                   (sexp-opts path "(defn foo [x] (+ x 1))"
                              "(defn foo [x] (+ x 1)"))]
-      (is (not (:is-error result)))
-      (is (str/includes? (:content result) "Edit applied"))
-      (is (str/includes? (:content result) "auto-repaired")))))
+      (is (:is-error result))
+      (is (str/includes? (:content result) "unbalanced"))
+      (is (str/includes? (read-test-file path) "(defn foo [x] (+ x 1))")))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; replace_all

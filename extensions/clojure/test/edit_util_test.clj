@@ -57,30 +57,8 @@
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
-;; Lint repair
+;; Repair (used by clojure_paren_repair only)
 ;; ═══════════════════════════════════════════════════════════════════════════════
-
-(deftest test-lint-repair
-  (testing "balanced code passes through unchanged, not repaired"
-    (let [[code repaired?] (util/lint-repair "(+ x 1)")]
-      (is (= "(+ x 1)" code))
-      (is (false? repaired?))))
-  (testing "missing closing paren is repaired"
-    (let [[code repaired?] (util/lint-repair "(defn foo [x] (+ x 1")]
-      (is (= "(defn foo [x] (+ x 1))" code))
-      (is (true? repaired?))))
-  (testing "extra closing paren is repaired"
-    (let [[code repaired?] (util/lint-repair "(defn foo [x] (+ x 1)))")]
-      (is (= "(defn foo [x] (+ x 1))" code))
-      (is (true? repaired?))))
-  (testing "brackets/braces too"
-    (let [[code repaired?] (util/lint-repair "(let [x 1] {:a x")]
-      (is (= "(let [x 1] {:a x})" code))
-      (is (true? repaired?))))
-  (testing "degenerate input is still handled — balanced opens get closed"
-    (let [[code repaired?] (util/lint-repair "(((((")]
-      (is (= "((((()))))" code))
-      (is (true? repaired?)))))
 
 (deftest test-repair-delimiters
   (testing "nil / empty input is safe"

@@ -59,7 +59,7 @@ Structure-aware Clojure form editing. Full port of clojure-mcp `form_edit/{core,
 - Unified diff output via `/usr/bin/diff -u`
 
 **Pipeline (matches clojure-mcp):**
-1. Lint-repair replacement content → `[repaired, fixed?]`
+1. Reject unbalanced replacement content (edamame `delimiter-error?`) — no auto-repair
 2. Enhance defmethod name from replacement content
 3. Load source file (UTF-8)
 4. Parse source into rewrite-clj zipper
@@ -176,7 +176,7 @@ Delimiter repair tool. Port of clojure-mcp `paren_repair/{core,tool}.clj` (file-
 **Feasibility: HIGH — and the single most valuable addition**: it enables real delimiter auto-repair, replacing the current `lint-repair` stub in edit_util.clj (which returns `[code false]` and lets broken delimiters surface as errors). Verified in an SCI context: `parinferish 0.8.0` (pure Clojure, single `.cljc`, zero deps) evaluates and runs — `(parse s {:mode :indent})` + `flatten` correctly repaired `"(defn foo [x] (+ x 1"` → `"(defn foo [x] (+ x 1))"`. Declared in the extension's deps.edn it resolves via borkdude.deps like cljfmt does. NOT feasible: `parinfer 0.4.0` (com.oakmac/parinfer, the JVM lib clojure-mcp uses) — extension contexts evaluate jar sources under SCI and only expose bb-bundled classes; a Java lib needs real JVM classes. edamame's role stays detection (`:edamame/opened-delimiter` in ex-data).
 
 **IMPLEMENTED (this session):**
-- `edit_util/repair-delimiters` + `delimiter-error?` — real repair pipeline; `lint-repair` now auto-fixes content, so `clojure_edit` and `clojure_edit_replace_sexp` get auto-repair for free
+- `edit_util/delimiter-error?` — detection; `clojure_edit` and `clojure_edit_replace_sexp` REJECT unbalanced content outright (no auto-repair). `repair-delimiters` (parinferish) remains only for the dedicated `clojure_paren_repair` tool.
 - `paren_repair.clj` — standalone `clojure_paren_repair` tool (detect → repair → verify → cljfmt → write → diff), registered in core.clj
 - `core.clj` — also contributes `skills/clojure-edit` via the `:resources-discover` event (skill was previously dead content — never wired into discovery)
 - Host fix in `kmet.app.extensions`: `:extension-dir` for a directory extension was computed as the PARENT of the extension dir (wrong), which broke `:extension-dir`-relative resource discovery for ALL dir extensions (clojure + mcp-adapter skills silently never loaded). Now the extension's own directory; `get-loaded-extensions` exposes it; regression tests added

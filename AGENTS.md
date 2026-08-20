@@ -55,9 +55,9 @@
   `clojure_edit` finds a definition by `form_type` + `form_identifier` and
   `replace`/`insert_before`/`insert_after`s it; `clojure_edit_replace_sexp`
   replaces an s-expression by content match (`replace_all` to rename a symbol
-  file-wide). They validate structure, auto-repair delimiters and format with
-  cljfmt. Keep the generic `edit`/`write` tools for plain textual changes
-  (comments, docstrings, non-form text).
+  file-wide). They validate structure, reject unbalanced delimiters, and
+  format with cljfmt. Keep the generic `edit`/`write` tools for plain textual
+  changes (comments, docstrings, non-form text).
 - For `insert_before`/`insert_after`, pass ONLY the new content — never
   re-include the anchor form. The inserted form lands outside the anchor's
   own line: a same-line trailing comment stays with the anchor, and a

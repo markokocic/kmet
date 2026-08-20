@@ -28,7 +28,7 @@ The tools always apply their edits; preview-only and unified-diff modes are not 
 
 **Features:**
 - defmethod dispatch-value matching (`"shape/area :square"`)
-- Delimiter auto-repair (edamame + parinferish)
+- Unbalanced delimiter rejection (edamame detection — content must be balanced)
 - cljfmt formatting
 - Similar-match suggestions when form not found
 
@@ -79,12 +79,14 @@ clojure_paren_repair:
 
 **Features:**
 - edamame detection of unclosed openers / stray closers
-- parinferish indentation-based repair (closes opens at line ends, drops stray closes)
+- edamame-based rejection of unbalanced content (content must be balanced)
 - cljfmt formatting honoring the project's cljfmt.edn
 - Unified diff of the changes
 
-All three tools auto-repair unbalanced delimiters in replacement/match content
-via the shared `edit-util` pipeline before editing.
+`clojure_edit` and `clojure_edit_replace_sexp` reject unbalanced delimiters
+in replacement/match content via the shared `edit-util` pipeline — pass
+complete, balanced forms. Use `clojure_paren_repair` to fix a file whose
+delimiters are broken.
 
 ## Skill
 

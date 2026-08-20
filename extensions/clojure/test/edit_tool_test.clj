@@ -520,9 +520,71 @@
       (is (str/includes? content "obsolete function removed"))
       (is (str/includes? content "(defn keep [] 1)")))))
 
+(deftest test-fragment-content-rejected
+  ;; A fragment like "(defn- filter-kind" (missing the arg vector) is
+  ;; unbalanced and rejected outright — it used to be auto-repaired into a
+  ;; bodyless "(defn- filter-kind)" and silently written to the file.
+  (let [path (write-test-file! "fragment-reject"
+                               "(defn- filter-kind\n  [f]\n  :ok)\n")
+        result (edit-tool/execute
+                (edit-opts path "defn-" "filter-kind"
+                           "(defn- filter-kind"))]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "unbalanced"))
+    ;; the file must be untouched
+    (is (str/includes? (read-test-file path) "filter-kind\n  [f]"))))
+
+(deftest test-wrong-form-type-rejected
+  ;; Content that parses but is not the requested form type is rejected.
+  (let [path (write-test-file! "wrong-type-reject"
+                               "(defn target [] nil)\n")
+        result (edit-tool/execute
+                (edit-opts path "defn" "target"
+                           "(+ x 1)"))]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "does not start with"))
+    (is (str/includes? (read-test-file path) "(defn target [] nil)"))))
+
+(deftest test-incomplete-def-rejected
+  ;; A complete-but-incomplete "def" form like "(def foo)" (no value) is
+  ;; rejected by structural validation.
+  (let [path (write-test-file! "incomplete-def"
+                               "(def foo 1)\n")
+        result (edit-tool/execute
+                (edit-opts path "def" "foo"
+                           "(def foo)"))]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "expected (def name value)"))
+    (is (str/includes? (read-test-file path) "(def foo 1)"))))
+
+(deftest test-unbalanced-content-rejected
+  ;; Unbalanced content is rejected outright — no auto-repair.
+  (let [path (write-test-file! "unbalanced-reject"
+                               "(defn foo [] nil)\n")
+        result (edit-tool/execute
+                (edit-opts path "defn" "foo"
+                           "(defn foo [x] (* x 2)"))]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "unbalanced"))
+    ;; the file must be untouched
+    (is (str/includes? (read-test-file path) "(defn foo [] nil)"))))
+
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Insert after defmethod with qualified name
 ;; ═══════════════════════════════════════════════════════════════════════════════
+
+(deftest test-empty-ns-rejected
+  ;; "(ns)" (no namespace name) is structurally broken — must be rejected,
+  ;; not silently written over the file's real ns declaration.
+  (let [path (write-test-file! "empty-ns"
+                               "(ns foo.bar (:require [clojure.string :as str]))\n")
+        result (edit-tool/execute
+                (edit-opts path "ns" "foo.bar"
+                           "(ns)"))]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "namespace name"))
+    ;; the file must be untouched
+    (is (str/includes? (read-test-file path) "foo.bar"))))
 
 (deftest test-insert-after-defmethod-qualified
   (let [path (write-test-file! "insert-after-dm"

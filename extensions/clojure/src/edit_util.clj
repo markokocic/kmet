@@ -102,13 +102,95 @@
       [s false])
     [s false]))
 
-(defn lint-repair
-  "Lint-repair CODE: auto-fix unbalanced delimiters via parinferish.
-   Returns [code repaired?]. Broken delimiters are repaired in place —
-   the common agent mistake (an extra or missing paren) — so downstream
-   parse/format steps see balanced code."
-  [code]
-  (repair-delimiters code))
+(defn form-children
+  "The immediate child nodes of the FIRST top-level form in S, as a seq of
+   rewrite-clj nodes, or nil when S does not start with a list form (a
+   bare token, vector, or multiple forms)."
+  [s]
+  (try
+    (let [zl (z/of-string s)
+          root (z/node zl)]
+      (when (= :list (n/tag root))
+        (let [dl (z/down zl)]
+          (loop [c dl acc []]
+            (if c
+              (recur (z/right c) (conj acc (z/node c)))
+              acc)))))
+    (catch Exception _ nil)))
+
+(defn- child-sexpr [node]
+  (try (z/sexpr (z/of-node node)) (catch Exception _ nil)))
+
+(defn- defn-args-present?
+  "True when the defn-form children after the name include an argument
+   vector, either directly ([x] body), as the head of every multi-arity
+   clause ((defn foo ([x] ...) ([x y] ...))), or after an optional
+   docstring."
+  [children]
+  (let [after-name (rest (rest children))
+        after-doc (if (and (seq after-name)
+                           (= :token (n/tag (first after-name)))
+                           (string? (child-sexpr (first after-name))))
+                    (rest after-name)
+                    after-name)]
+    (if (some #(= :vector (n/tag %)) after-doc)
+      true
+      (and (seq after-doc)
+           (every? #(= :list (n/tag %)) after-doc)
+           (every? (fn [node]
+                     (let [first-child (some-> (z/of-node node) z/down z/node)]
+                       (= :vector (n/tag first-child))))
+                   after-doc)))))
+
+(defn validate-form-shape
+  "Validate that S is structurally a well-formed instance of FORM-TYPE
+   (defn, def, deftest, ns, ...). Returns nil when valid, or an error
+   message string when the content parses but is missing required parts —
+   e.g. `(defn- filter-kind)` is a defn without an arg vector, which is
+   what parinferish produces from the fragment `(defn- filter-kind`.
+   Detects the agent mistake of passing an incomplete form."
+  [form-type s]
+  (let [children (form-children s)]
+    (when (seq children)
+      (let [tag (first children)
+            tag-sexpr (child-sexpr tag)
+            tag-str (when (symbol? tag-sexpr) (name tag-sexpr))]
+        (cond
+          ;; the form tag must match the requested type (allow defn-/defmacro- etc.)
+          (not (and tag-str
+                    (or (= tag-str form-type)
+                        (str/starts-with? tag-str (str form-type "-")))))
+          (str "Content does not start with a '" form-type "' form (found '" tag-str "'). "
+               "Pass a complete " form-type " form, e.g. ("
+               (case form-type
+                 "defn" "defn my-fn [args] body"
+                 "def" "def my-var value"
+                 "deftest" "deftest my-test (is ...)"
+                 "ns" "ns my.namespace"
+                 "defmethod" "defmethod my-fn :dispatch [args] body"
+                 (str form-type " ...")) ").")
+
+          ;; ns must have a namespace name
+          (and (= form-type "ns")
+               (< (count children) 2))
+          (str "Incomplete 'ns' form: missing the namespace name. "
+               "An ns needs (ns name ...), e.g. (ns my.namespace).")
+
+          ;; defn/defn-/defmacro must have an arg vector (direct or multi-arity)
+          (and (or (= form-type "defn") (= form-type "defn-")
+                   (= form-type "defmacro") (= form-type "defmacro-"))
+               (not (defn-args-present? children)))
+          (str "Incomplete '" form-type "' form: missing the argument vector. "
+               "A " form-type " needs (name [args] body...), e.g. ("
+               form-type " my-fn [x] (* x 2)).")
+
+          ;; def must have a value (or at least a name + something)
+          (and (= form-type "def")
+               (< (count children) 3))
+          (str "Incomplete 'def' form: expected (def name value), found "
+               (count (rest children)) " element(s) after 'def'.")
+
+          :else nil)))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Formatting (cljfmt, honoring the project's cljfmt.edn)
@@ -250,11 +332,9 @@
    parsed zipper (which must return either {:error msg :similar-matches ...}
    or {:zloc updated-zloc}), format the result with the project's cljfmt
    config, write it back, and return the tool result map.
-   When REPAIR-INPUTS is a seq of [raw repaired] pairs, the success message
-   notes when any input was auto-repaired, and the not-found message explains
-   the repair. FIND-EDIT-FN may return nil instead of {:error ...} — that
-   becomes the not-found error."
-  [file-path find-edit-fn repair-inputs]
+   FIND-EDIT-FN may return nil instead of {:error ...} — that becomes the
+   not-found error."
+  [file-path find-edit-fn]
   (try
     (let [original (slurp-utf8 file-path)
           zloc     (z/of-string original {:track-position? true})
@@ -270,24 +350,14 @@
            :is-error true})
         (if-not result
           {:content  (str "Could not find the target in " file-path
-                          (when-let [repaired (seq (filter #(not= (first %) (second %)) repair-inputs))]
-                            (str "\nNote: input was unbalanced and auto-repaired: "
-                                 (str/join ", " (map (fn [[_ repaired]] (pr-str repaired)) repaired))
-                                 "\nIf the repaired form is not what you meant, pass the complete, balanced expression exactly as it appears in the file."))
                           "\nThe match is content-based — whitespace/newlines are ignored, but the structure (parens, brackets, braces, keywords, symbols) must match.")
            :is-error true}
           (let [new-source (z/root-string (:zloc result))
                 fmt-opts   (project-fmt-opts file-path)
                 formatted  (format-source-string new-source fmt-opts)]
             (spit-utf8 file-path formatted)
-            (let [diff-str (edit-diff/generate-display-diff original formatted)
-                  repaired (seq (filter (fn [[raw rep]] (not= raw rep)) repair-inputs))
-                  repaired-note (when repaired
-                                  (str "\nNote: unbalanced input was auto-repaired: "
-                                       (str/join ", " (map (fn [[_ rep]] (pr-str rep)) repaired))))]
-              {:content (if repaired-note
-                          (str "Edit applied." repaired-note)
-                          "Edit applied.")
+            (let [diff-str (edit-diff/generate-display-diff original formatted)]
+              {:content "Edit applied."
                :details (when diff-str {:diff diff-str})})))))
     (catch Exception e
       {:content (str "Error editing " file-path ": " (ex-message e))

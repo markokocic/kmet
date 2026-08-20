@@ -19,10 +19,10 @@ These tools understand Clojure syntax and prevent common errors.
 - `clojure_edit_replace_sexp` — Modify expressions within top-level forms
 - `clojure_paren_repair` — Fix unbalanced delimiters (parens/brackets/braces) in a file
 
-All three tools auto-repair unbalanced delimiters in the content you pass
-(missing or extra parens are fixed before editing), so a stray paren in
-`content`/`new_form`/`match_form` no longer fails the edit — but it's still
-best to write balanced code yourself.
+`clojure_edit` and `clojure_edit_replace_sexp` REJECT unbalanced delimiters in
+the content you pass (missing or extra parens are NOT auto-fixed) — you must
+pass complete, balanced forms. When a file's delimiters get broken, run
+`clojure_paren_repair` to fix them.
 
 ## CODE SIZE DIRECTLY IMPACTS EDIT SUCCESS
 - **SMALLER EDITS = HIGHER SUCCESS RATE**
@@ -51,10 +51,11 @@ best to write balanced code yourself.
 
 ## match_form Must Be Complete
 - `clojure_edit_replace_sexp` match_form/new_form need COMPLETE expressions with balanced parens
-- A missing/extra paren is auto-repaired before matching (so `"(+ x 1"` matches `"(+ x 1)"`), but fragments that cannot form a complete expression (`...x]]`, `:else [w j])`) are still rejected — include the full enclosing form
+- Unbalanced delimiters (a missing/extra paren, e.g. `"(+ x 1"`) are REJECTED with an error — pass the complete, balanced expression exactly as it appears in the file
+- Fragments that cannot form a complete expression (`...x]]`, `:else [w j])`) are also rejected — include the full enclosing form
 
 ## Handling Parenthesis Errors
-- Unbalanced parens in tool content are auto-repaired, so a stray paren usually just gets fixed
+- Unbalanced parens in tool content are rejected with a clear error — fix the content yourself and retry
 - If a repair leaves the code wrong, break complex functions into smaller, focused ones
 - Start with minimal code and add incrementally
 - When facing persistent errors, verify in REPL first

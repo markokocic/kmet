@@ -179,27 +179,43 @@
        :is-error true}
 
       :else
-      (let [content' (first (util/lint-repair content))
-            enhanced-name (enhance-defmethod-name form_type form_identifier content')
-            find-edit (fn [zloc]
-                        (let [result (edit-top-level-form zloc form_type enhanced-name
-                                                          content' op-kw)]
-                          (if (:error result)
-                            result
-                            (let [found-zloc (:zloc result)
-                                  form-col   (second (z/position found-zloc))
-                                  ;; Re-indent the replacement to the found
-                                  ;; form's column, then re-edit
-                                  content'' (if form-col
-                                              (util/format-form-in-isolation
-                                               content' form-col
-                                               (util/project-fmt-opts file_path))
-                                              content')
-                                  result2 (edit-top-level-form
-                                           zloc form_type enhanced-name
-                                           content'' op-kw)]
-                              result2))))]
-        (util/edit-pipeline file_path find-edit [[content content']])))))
+      (if (util/delimiter-error? content)
+        {:content (str "Invalid " form_type " content: unbalanced delimiters — "
+                       "the content must be complete and balanced. "
+                       "Pass the complete " form_type " form, e.g. ("
+                       (case form_type
+                         "defn" "defn my-fn [args] body"
+                         "def" "def my-var value"
+                         "deftest" "deftest my-test (is ...)"
+                         "ns" "ns my.namespace"
+                         "defmethod" "defmethod my-fn :dispatch [args] body"
+                         (str form_type " ...")) ").")
+         :is-error true}
+        (let [shape-error (util/validate-form-shape form_type content)]
+          (if shape-error
+            {:content (str "Invalid " form_type " content: " shape-error
+                           "\nPass the complete " form_type " form explicitly.")
+             :is-error true}
+            (let [enhanced-name (enhance-defmethod-name form_type form_identifier content)
+                  find-edit (fn [zloc]
+                              (let [result (edit-top-level-form zloc form_type enhanced-name
+                                                                content op-kw)]
+                                (if (:error result)
+                                  result
+                                  (let [found-zloc (:zloc result)
+                                        form-col   (second (z/position found-zloc))
+                                ;; Re-indent the replacement to the found
+                                ;; form's column, then re-edit
+                                        content'' (if form-col
+                                                    (util/format-form-in-isolation
+                                                     content form-col
+                                                     (util/project-fmt-opts file_path))
+                                                    content)
+                                        result2 (edit-top-level-form
+                                                 zloc form_type enhanced-name
+                                                 content'' op-kw)]
+                                    result2))))]
+              (util/edit-pipeline file_path find-edit))))))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Tool registration
@@ -212,7 +228,7 @@
    {:name            "clojure_edit"
     :label           "Clojure form edit"
     :description
-    "Edits a top-level form (`defn`, `def`, `defmethod`, `ns`, `deftest`) in a Clojure file using the specified operation.\n\nPREFER this tool over generic file editing tools for Clojure files (`.clj` `.cljs` `.cljc` `.cljd` `.bb` `.edn` `.lpy`). It rejects other file types.\n\nThis tool MAKES it EASIER to match a definition that exists in the file AS you only have to match the type of definition `form_type` and the complete identifier `form_identifier` of the definition. This prevents the repeated mismatch errors that occur when trying match an entire string of text for replacement.\nThis tool validates the structure of the Clojure code that is being inserted into the file and will provide linting feedback for things such as parenthetical errors.\n\nNOTE: unbalanced delimiters (a missing or extra paren) in `content` are auto-repaired before editing, so a stray paren no longer fails the edit - but writing balanced code is still best.\n\nOperations:\n- \"replace\": Replaces the form with new content\n- \"insert_before\": Inserts content before the form\n- \"insert_after\": Inserts content after the form\n\nFor insert_before/insert_after, pass ONLY the new content (never repeat the anchor form). The inserted form lands outside the anchor's own line: a same-line trailing comment stays with the anchor form, and a comment on its own line stays with the next form.\n\nThe form is identified by its type (defn, def, deftest, s/def, ns, defmethod etc.) and complete identifier. Alias-qualified macros (t/deftest, s/def) match by their plain keyword (deftest, def).\n\nExample: Replace a function definition:\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"example-fn\"\n- form_type: \"defn\"\n- operation: \"replace\"\n- content: \"(defn example-fn [x] (* x 2))\"\n\nExample: Insert a helper function before a function:\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"example-fn\"\n- form_type: \"defn\"\n- operation: \"insert_before\"\n- content: \"(defn helper-fn [x] (* x 2))\"\n\nExample: Edit a namespace declaration (form_identifier is the namespace name):\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"my.app.core\"\n- form_type: \"ns\"\n- operation: \"replace\"\n- content: \"(ns my.app.core (:require [clojure.string :as str]))\"\n\nFor `defmethod` forms, include the dispatch value (`area :rectangle`) in `form_identifier`.\nMany `defmethod` definitions have qualified names like `shape/area`, so use the complete identifier.\n\nExample: Replace a specific `defmethod` implementation:\n- form_identifier: \"shape/area :square\"\n- form_type: \"defmethod\"\n- operation: \"replace\"\n- content: \"(defmethod shape/area :square [{:keys [w h]}] (* w h))\"\n\nThe tool returns a diff showing the changes made to the file."
+    "Edits a top-level form (`defn`, `def`, `defmethod`, `ns`, `deftest`) in a Clojure file using the specified operation.\n\nPREFER this tool over generic file editing tools for Clojure files (`.clj` `.cljs` `.cljc` `.cljd` `.bb` `.edn` `.lpy`). It rejects other file types.\n\nThis tool MAKES it EASIER to match a definition that exists in the file AS you only have to match the type of definition `form_type` and the complete identifier `form_identifier` of the definition. This prevents the repeated mismatch errors that occur when trying match an entire string of text for replacement.\nThis tool validates the structure of the Clojure code that is being inserted into the file and will provide linting feedback for things such as parenthetical errors.\n\nNOTE: `content` must be a complete, balanced Clojure form. Unbalanced delimiters are REJECTED with an error — pass the complete form exactly as it should appear in the file.\n\nOperations:\n- \"replace\": Replaces the form with new content\n- \"insert_before\": Inserts content before the form\n- \"insert_after\": Inserts content after the form\n\nFor insert_before/insert_after, pass ONLY the new content (never repeat the anchor form). The inserted form lands outside the anchor's own line: a same-line trailing comment stays with the anchor form, and a comment on its own line stays with the next form.\n\nThe form is identified by its type (defn, def, deftest, s/def, ns, defmethod etc.) and complete identifier. Alias-qualified macros (t/deftest, s/def) match by their plain keyword (deftest, def).\n\nExample: Replace a function definition:\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"example-fn\"\n- form_type: \"defn\"\n- operation: \"replace\"\n- content: \"(defn example-fn [x] (* x 2))\"\n\nExample: Insert a helper function before a function:\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"example-fn\"\n- form_type: \"defn\"\n- operation: \"insert_before\"\n- content: \"(defn helper-fn [x] (* x 2))\"\n\nExample: Edit a namespace declaration (form_identifier is the namespace name):\n- file_path: \"/path/to/file.clj\"\n- form_identifier: \"my.app.core\"\n- form_type: \"ns\"\n- operation: \"replace\"\n- content: \"(ns my.app.core (:require [clojure.string :as str]))\"\n\nFor `defmethod` forms, include the dispatch value (`area :rectangle`) in `form_identifier`.\nMany `defmethod` definitions have qualified names like `shape/area`, so use the complete identifier.\n\nExample: Replace a specific `defmethod` implementation:\n- form_identifier: \"shape/area :square\"\n- form_type: \"defmethod\"\n- operation: \"replace\"\n- content: \"(defmethod shape/area :square [{:keys [w h]}] (* w h))\"\n\nThe tool returns a diff showing the changes made to the file."
     :render-call renderers/render-edit-call
     :render-result renderers/render-edit-result
     :render-shell :self
@@ -223,7 +239,7 @@
      "form_identifier is the complete identifier; for defmethod use 'method-name dispatch-value' (e.g. 'area :rectangle')."
      "Many defmethod forms use qualified names (e.g. 'shape/area :square') — always use the complete identifier."
      "When replacing a defmethod, the dispatch value is extracted from content if not in form_identifier."
-     "The tool auto-repairs delimiter errors (mismatched parens) in the replacement content - balanced content is best but a stray paren won't fail the edit."
+     "content must be a complete, balanced Clojure form — unbalanced delimiters are rejected with an error."
      "Use the edit tool instead when making multiple small text replacements across a file."
      "Prefer clojure_edit for targeted changes to a known function, macro, or spec definition."]
     :parameters
