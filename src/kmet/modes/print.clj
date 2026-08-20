@@ -8,7 +8,47 @@
             [kmet.app.skills :as skills]
             [kmet.libs.context :as context]
             [kmet.app.prompts :as prompts]
+            [kmet.app.extensions :as extensions]
             [kmet.config :as cfg]))
+
+(defn- extension-before-tool-call
+  "Chain extension tool-call hooks (pi: beforeToolCall) — print mode wires
+   them like interactive mode, so write-reject / edit-warn hooks fire in
+   headless runs too. Returns nil | {:block true :reason} | {:args ...}."
+  [ctx]
+  (loop [hooks (extensions/get-tool-call-hooks)
+         blocked nil
+         args (:args ctx)]
+    (if-let [hook (first hooks)]
+      (let [r (try (hook (assoc ctx :args args))
+                   (catch Exception e
+                     {:block true
+                      :reason (str "tool-call hook error: " (ex-message e))}))]
+        (cond
+          (:block r)
+          (recur (next hooks) (or blocked {:block true :reason (:reason r)}) args)
+          (contains? r :args)
+          (recur (next hooks) blocked (:args r))
+          :else
+          (recur (next hooks) blocked args)))
+      (or blocked (when (not= args (:args ctx)) {:args args})))))
+
+(defn- extension-after-tool-call
+  "Chain extension tool-result hooks (pi: afterToolCall) — print mode wires
+   them like interactive mode. Returns the (possibly rewritten) result."
+  [ctx]
+  (reduce (fn [result hook]
+            (if-let [r (try (hook (assoc ctx :result result
+                                         :is-error (:is-error result false)))
+                            (catch Exception e
+                              {:content (str "tool-result hook error: " (ex-message e))
+                               :is-error true}))]
+              (cond-> result
+                (:content r) (assoc :content (:content r))
+                (contains? r :is-error) (assoc :is-error (:is-error r)))
+              result))
+          (:result ctx)
+          (extensions/get-tool-result-hooks)))
 
 (defn run
   "Run in non-interactive mode: send message, print response, exit.
@@ -31,6 +71,8 @@
             :model resolved-model
             :provider resolved-provider
             :system system-prompt
+            :before-tool-call extension-before-tool-call
+            :after-tool-call extension-after-tool-call
             ;; pi: retry settings (settings.edn :retry block — enabled gates
             ;; max-retries to 0)
             :max-retries (let [retry (cfg/get-retry-settings config)]

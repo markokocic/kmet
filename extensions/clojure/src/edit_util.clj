@@ -28,13 +28,12 @@
 ;; Lint
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
-(defn delimiter-error?
-  "True when S has a delimiter error (unbalanced parens/brackets/braces).
-   Detection via edamame: parse with all reader features enabled; an
-   :edamame/error carrying :edamame/opened-delimiter means an opener was
-   never closed. Non-delimiter parse failures (e.g. bad token) are NOT
-   delimiter errors. Other exceptions (unknown reader, etc.) conservatively
-   return true so a repair attempt is made."
+(defn delimiter-details
+  "Nil when S has no delimiter error; otherwise the edamame ex-data map
+   with :row :col :edamame/expected-delimiter :edamame/opened-delimiter
+   and :edamame/opened-delimiter-loc. Only delimiter errors are returned —
+   other parse failures (bad token etc.) return nil. When available the map
+   carries precise row/col so callers can report actionable locations."
   [s]
   (try
     (e/parse-string-all s {:all true
@@ -42,12 +41,24 @@
                            :read-cond :allow
                            :readers (fn [_tag] (fn [data] data))
                            :auto-resolve name})
-    false
+    nil
     (catch clojure.lang.ExceptionInfo ex
       (let [data (ex-data ex)]
-        (and (= :edamame/error (:type data))
-             (contains? data :edamame/opened-delimiter))))
-    (catch Exception _ true)))
+        (when (= :edamame/error (:type data))
+          (cond
+            (contains? data :edamame/opened-delimiter) data
+            (contains? data :edamame/expected-delimiter) data
+            :else nil))))
+    (catch Exception _ nil)))
+
+(defn delimiter-error?
+  "True when S has a delimiter error (unbalanced parens/brackets/braces).
+   Detection via edamame: parse with all reader features enabled; an
+   :edamame/error carrying an unclosed opener or an unexpected closer is a
+   delimiter error. Non-delimiter parse failures (e.g. bad token) and
+   unknown exceptions are NOT delimiter errors."
+  [s]
+  (boolean (delimiter-details s)))
 
 (defn- parinferish-repair
   "Repair delimiters in S with parinferish indent mode. Returns the

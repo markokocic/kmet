@@ -8,17 +8,25 @@ A kmet extension providing Clojure-aware tools, ported from [clojure-mcp](https:
 
 ```
 extensions/clojure/
-├── deps.edn              — rewrite-clj, cljfmt, edamame, parinferish
+├── deps.edn              — rewrite-clj, cljfmt, edamame, parinferish (SCI-safe, not parinfer JVM)
+├── bb.edn                — mirrors deps.edn + `bb test` task (4 namespaces)
 ├── extension.edn         — {:name "clojure" :entry "src/kmet/extensions/clojure/core.clj"}
 ├── README.md             — usage info with examples
 ├── skills/
 │   └── clojure-edit/
-│       └── SKILL.md      — editing guidelines (port of clojure-mcp clojure_form_edit.md)
-└── src/
-    ├── edit_tool.clj     — ns edit-tool (= tool name clojure_edit)
-    ├── sexp_tool.clj     — ns sexp-tool (= tool name clojure_edit_replace_sexp)
-    └── kmet/extensions/clojure/
-        └── core.clj      — ns kmet.extensions.clojure.core (entry)
+│       └── SKILL.md      — editing guidelines for all 3 tools (port of clojure_form_edit.md)
+├── src/
+│   ├── edit_util.clj     — shared: edamame detect + parinferish repair + cljfmt + zipper helpers
+│   ├── edit_tool.clj     — ns edit-tool (= clojure_edit)
+│   ├── sexp_tool.clj     — ns sexp-tool (= clojure_edit_replace_sexp)
+│   ├── paren_repair.clj  — ns paren-repair (= clojure_paren_repair) + write-reject/edit-warn hooks
+│   └── kmet/extensions/clojure/
+│       └── core.clj      — ns kmet.extensions.clojure.core (registers 3 tools, contributes skill via :resources-discover)
+└── test/
+    ├── edit_util_test.clj — delimiter-error? / repair-delimiters / lint-repair + formatting
+    ├── edit_tool_test.clj — clojure_edit matrix
+    ├── sexp_tool_test.clj — clojure_edit_replace_sexp matrix
+    └── paren_repair_test.clj — repair + hooks (write reject, edit warn)
 ```
 
 Each extension runs in an isolated SCI context. `deps.edn` declares per-extension dependencies resolved by `borkdude.deps` in-process. The shared library layers `kmet.tui.*` and `kmet.libs.*` are injected by reference.

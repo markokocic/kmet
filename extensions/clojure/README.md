@@ -28,7 +28,7 @@ The tools always apply their edits; preview-only and unified-diff modes are not 
 
 **Features:**
 - defmethod dispatch-value matching (`"shape/area :square"`)
-- Delimiter auto-repair (edamame + parinfer)
+- Delimiter auto-repair (edamame + parinferish)
 - cljfmt formatting
 - Similar-match suggestions when form not found
 

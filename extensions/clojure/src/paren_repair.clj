@@ -10,6 +10,7 @@
             [clojure.string :as str]
             [edit-util :as util]
             [kmet.app.ui.tool-renderers :as renderers]
+            [kmet.extension :as ext]
             [kmet.libs.edit-diff :as edit-diff]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
@@ -106,8 +107,84 @@
 ;; Tool registration
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
+;; ── Helpers for precise, actionable reports ───────────────────────────────
+
+(defn- format-delimiter-report
+  "Human-readable report for DETAILS (from util/delimiter-details) in FILE-PATH.
+   Includes expected vs opened delimiters and opened-at location when available,
+   so the agent can pinpoint and fix the unbalanced delimiters."
+  [file-path details]
+  (let [row        (:row details)
+        col        (:col details)
+        expected   (:edamame/expected-delimiter details)
+        opened     (:edamame/opened-delimiter details)
+        opened-loc (:edamame/opened-delimiter-loc details)
+        orow       (:row opened-loc)
+        ocol       (:col opened-loc)]
+    (str "Unbalanced delimiters in " file-path
+         (when (and row col)
+           (str " at line " row ", col " col))
+         (cond
+           (and expected opened) (str ": expected '" expected "' to close '" opened "'")
+           expected              (str ": unexpected '" expected "'")
+           opened                (str ": unclosed '" opened "'")
+           :else                 "")
+         (when (and orow ocol)
+           (str " (opened at line " orow ", col " ocol ")"))
+         ".")))
+
+(defn- hook-arg
+  "Read ARG key from tool args handling both keyword and string keys."
+  [args k]
+  (or (get args k) (get args (name k))))
+
+(defn- write-path [args]
+  (or (hook-arg args :path) (hook-arg args :file_path)))
+
+(defn- write-content [args]
+  (hook-arg args :content))
+
+;; ── Hooks: write (pre, reject) + edit (post, warn) ────────────────────────
+;; write content IS the file — validate directly in the pre-hook and block
+;; with a precise location. edit newText in isolation is NOT the file — an
+;; edit like ")" closing a form opened elsewhere is unbalanced alone but
+;; correct in context — so validate the RESULTING file in the post-hook and
+;; warn (non-blocking) with the same precise report + fix hint. No backup,
+;; no simulation, no duplication of the edit engine.
+
+(defn on-tool-call
+  "Before-tool hook: only intercepts `write` on Clojure files."
+  [{:keys [tool-name args]}]
+  (when (= "write" tool-name)
+    (let [path    (write-path args)
+          content (write-content args)]
+      (when (and (clojure-file? path) (string? content))
+        (when-let [details (util/delimiter-details content)]
+          {:block true
+           :reason (str (format-delimiter-report path details)
+                        "\nWrite blocked — fix the delimiters or use clojure_edit / clojure_paren_repair.")})))))
+
+(defn on-tool-result
+  "After-tool hook: only inspects `edit` on Clojure files after success."
+  [{:keys [tool-name args result is-error]}]
+  (when (and (= "edit" tool-name) (not is-error) (map? result))
+    (let [path (write-path args)]
+      (when (clojure-file? path)
+        (try
+          (when (fs/exists? path)
+            (let [content (util/slurp-utf8 path)]
+              (when-let [details (util/delimiter-details content)]
+                (let [report (format-delimiter-report path details)
+                      hint (str "Run clojure_paren_repair on " path " to auto-fix, or correct the delimiters manually.")
+                      orig (or (:content result) "")]
+                  {:content (str orig "\n\n⚠️ " report "\n" hint)}))))
+          (catch Exception _ nil))))))
+
 (defn register!
-  "Register clojure_paren_repair as a kmet tool."
+  "Register clojure_paren_repair as a kmet tool and wire the paren-check
+   hooks: write (pre, reject) + edit (post, warn). No backup, no
+   simulation — write content IS the file; edit is validated on the
+   resulting file after the engine applied it."
   [api]
   ((:register-tool! api)
    {:name            "clojure_paren_repair"
@@ -131,4 +208,6 @@
                    :description "Path to the Clojure file to repair (.clj, .cljs, .cljc, .bb, .edn)"}
       "format"    {:type        "boolean"
                    :description "Format the file with cljfmt after repairing delimiters (default: true)"}}}
-    :execute execute}))
+    :execute execute})
+  (ext/on-tool-call api on-tool-call)
+  (ext/on-tool-result api on-tool-result))

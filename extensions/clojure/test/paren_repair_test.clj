@@ -118,3 +118,83 @@
       ;; file was balanced already — no changes
       (is (str/includes? (:content result) "No changes needed"))
       (is (= "(defn process [items]\n  (map (fn [x]\n         (* x 2))\n       items))\n" content)))))
+
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; Hooks: write (pre, reject) + edit (post, warn)
+;; ═══════════════════════════════════════════════════════════════════════════════
+
+(deftest test-write-hook-blocks-unbalanced
+  (let [result (paren-repair/on-tool-call
+                {:tool-name "write"
+                 :args {:path "src/foo.clj"
+                        :content "(defn foo [x]"}})]
+    (is (:block result))
+    (is (str/includes? (:reason result) "Unbalanced delimiters in src/foo.clj"))
+    (is (str/includes? (:reason result) "Write blocked"))))
+
+(deftest test-write-hook-allows-balanced
+  (is (nil? (paren-repair/on-tool-call
+             {:tool-name "write"
+              :args {:path "src/foo.clj"
+                     :content "(defn foo [x] (+ x 1))"}}))))
+
+(deftest test-write-hook-ignores-non-clojure
+  (is (nil? (paren-repair/on-tool-call
+             {:tool-name "write"
+              :args {:path "src/foo.txt"
+                     :content "(unbalanced"}}))))
+
+(deftest test-write-hook-ignores-other-tools
+  (is (nil? (paren-repair/on-tool-call
+             {:tool-name "edit"
+              :args {:path "src/foo.clj"
+                     :content "(unbalanced"}}))))
+
+(deftest test-write-hook-reports-expected-vs-opened
+  (let [result (paren-repair/on-tool-call
+                {:tool-name "write"
+                 :args {:path "a.clj"
+                        :content "(defn foo [x]"}})]
+    (is (:block result))
+    ;; precise: expected ')' to close '(' with opened-at location
+    (is (str/includes? (:reason result) "expected ')' to close '('"))
+    (is (str/includes? (:reason result) "opened at line"))))
+
+(deftest test-edit-hook-warns-on-unbalanced-result
+  (let [path (write-test-file! "edit-warn.clj" "(defn foo [x]")
+        result (paren-repair/on-tool-result
+                {:tool-name "edit"
+                 :args {:path path}
+                 :result {:content "edited"}
+                 :is-error false})]
+    (is (some? result))
+    (is (str/includes? (:content result) "⚠️"))
+    (is (str/includes? (:content result) "clojure_paren_repair"))
+    (is (str/includes? (:content result) "edited"))))
+
+(deftest test-edit-hook-silent-on-balanced-result
+  (let [path (write-test-file! "edit-ok.clj" "(defn foo [x] (+ x 1))")
+        result (paren-repair/on-tool-result
+                {:tool-name "edit"
+                 :args {:path path}
+                 :result {:content "edited"}
+                 :is-error false})]
+    (is (nil? result))))
+
+(deftest test-edit-hook-ignores-errors
+  (let [path (write-test-file! "edit-err.clj" "(defn foo [x]")
+        result (paren-repair/on-tool-result
+                {:tool-name "edit"
+                 :args {:path path}
+                 :result {:content "failed"}
+                 :is-error true})]
+    (is (nil? result))))
+
+(deftest test-edit-hook-ignores-non-clojure
+  (let [path (write-test-file! "notes.txt" "(unbalanced")
+        result (paren-repair/on-tool-result
+                {:tool-name "edit"
+                 :args {:path path}
+                 :result {:content "edited"}
+                 :is-error false})]
+    (is (nil? result))))
