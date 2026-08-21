@@ -176,6 +176,31 @@
     (is (str/includes? (:reason result) "expected ')' to close '('"))
     (is (str/includes? (:reason result) "opened at line"))))
 
+(deftest test-write-hook-reports-unexpected-closer
+  ;; Regression: an extra closer makes edamame report BLANK delimiter
+  ;; strings — truthy empty strings that rendered as "expected '' to
+  ;; close ''". The report must name the offending character instead.
+  (let [result (paren-repair/on-tool-call
+                {:tool-name "write"
+                 :args {:path "a.clj"
+                        :content "(defn foo [x] (+ x 1)))"}})]
+    (is (:block result))
+    (is (str/includes? (:reason result) "unexpected ')'"))
+    (is (not (str/includes? (:reason result) "''")))))
+
+(deftest test-edit-hook-reports-unexpected-closer
+  ;; Same blank-delimiter case through the post-edit hook, where the
+  ;; report reads the offending character from the written file.
+  (let [path (write-test-file! "edit-extra-close.clj" "(defn foo [x] (+ x 1)))")
+        result (paren-repair/on-tool-result
+                {:tool-name "edit"
+                 :args {:path path}
+                 :result {:content "edited"}
+                 :is-error false})]
+    (is (some? result))
+    (is (str/includes? (:content result) "unexpected ')'"))
+    (is (not (str/includes? (:content result) "''")))))
+
 (deftest test-edit-hook-warns-on-unbalanced-result
   (let [path (write-test-file! "edit-warn.clj" "(defn foo [x]")
         result (paren-repair/on-tool-result

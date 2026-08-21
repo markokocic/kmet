@@ -308,6 +308,9 @@
 (defn- render-diff-lines
   "Style pi-format diff lines; single -/+ pairs get intra-line inverse
    highlighting. Returns a vector of styled strings (pi: renderDiff).
+   A + run with no preceding - run (pure insertion) is styled as added
+   lines — it must not fall through to the context branch, which would
+   strip the + marker and present new lines as unchanged context.
    A -/+ pair whose contents are identical after trimming trailing
    whitespace (e.g. a trailing-space-only change) is not rendered — the
    difference is invisible, so showing -/+ lines would be a \"diff with
@@ -317,25 +320,25 @@
         parse (fn [line]
                 (when-let [m (re-find #"^([ +-])(\s*\d*)\s(.*)$" line)]
                   {:prefix (nth m 1) :line-num (nth m 2) :content (nth m 3)}))
-        tabs (fn [s] (str/replace s "\t" "   "))]
+        tabs (fn [s] (str/replace s "\t" "   "))
+        collect-run (fn [prefix j]
+                      (loop [j j acc []]
+                        (if-let [q (and (< j n) (parse (nth diff-lines j)))]
+                          (if (= prefix (:prefix q))
+                            (recur (inc j) (conj acc q))
+                            acc)
+                          acc)))]
     (loop [i 0 acc []]
       (if (>= i n)
         acc
         (let [p (parse (nth diff-lines i))]
-          (if (and p (= "-" (:prefix p)))
-            (let [removed (loop [j i acc []]
-                            (if-let [q (and (< j n) (parse (nth diff-lines j)))]
-                              (if (= "-" (:prefix q))
-                                (recur (inc j) (conj acc q))
-                                acc)
-                              acc))
+          (cond
+            ;; removal run (+ optional following addition run) — paired
+            ;; styling, single pairs get word-level intra-line diff
+            (and p (= "-" (:prefix p)))
+            (let [removed (collect-run "-" i)
                   rn (count removed)
-                  added (loop [j (+ i rn) acc []]
-                          (if-let [q (and (< j n) (parse (nth diff-lines j)))]
-                            (if (= "+" (:prefix q))
-                              (recur (inc j) (conj acc q))
-                              acc)
-                            acc))
+                  added (collect-run "+" (+ i rn))
                   next-i (+ i rn (count added))
                   ;; single -/+ pair whose visible content is identical
                   ;; (trailing-whitespace-only change) — skip it entirely
@@ -346,6 +349,15 @@
                 (recur next-i acc)
                 (let [styled (style-change-pair removed added tabs theme)]
                   (recur next-i (into acc styled)))))
+
+            ;; pure insertion run — no removals to pair with; style-change-pair
+            ;; with an empty removed list styles every line as added
+            (and p (= "+" (:prefix p)))
+            (let [added (collect-run "+" i)]
+              (recur (+ i (count added))
+                     (into acc (style-change-pair [] added tabs theme))))
+
+            :else
             (recur (inc i)
                    (conj acc
                          (theme/fg theme :tool-diff-context

@@ -194,6 +194,33 @@
       (is (some #(re-find #"1 alpha" %) plain))
       (is (some #(re-find #"3 gamma" %) plain)))))
 
+(deftest test-edit-render-pure-insertion-shows-plus
+  ;; Regression: a + run with no preceding - run (pure insertion) fell
+  ;; into the context branch — the + marker was stripped and new lines
+  ;; rendered as unchanged context, hiding the edit from the diff.
+  (testing "insertion-only edit renders + lines"
+    (spit "target/test-tools-edit-ins.txt" "alpha\nbeta\ngamma\n")
+    (let [plain (render-tool :name "edit"
+                             :args {:path "target/test-tools-edit-ins.txt"
+                                    :old-text "beta" :new-text "beta\nbeta2\nbeta3"})]
+      (is (some #(re-find #"\+3 beta2" %) plain))
+      (is (some #(re-find #"\+4 beta3" %) plain))
+      ;; context lines keep their space prefix
+      (is (some #(re-find #" 1 alpha" %) plain))
+      ;; trailing context keeps its old-file numbering after an insertion
+      (is (some #(re-find #" 3 gamma" %) plain)))))
+
+(deftest test-edit-render-mixed-and-insertion-regions
+  (testing "mixed -/+ region followed by a standalone insertion run"
+    (spit "target/test-tools-edit-mixins.txt" "keep1\nold-a\nnew-x\nnew-y\nkeep2\n")
+    (let [plain (render-tool :name "edit"
+                             :args {:path "target/test-tools-edit-mixins.txt"
+                                    :edits [{:old-text "old-a" :new-text "new-a"}
+                                            {:old-text "keep2" :new-text "keep2\nadded"}]})]
+      (is (some #(re-find #"-2 old-a" %) plain))
+      (is (some #(re-find #"\+2 new-a" %) plain))
+      (is (some #(re-find #"\+6 added" %) plain)))))
+
 (deftest test-edit-render-custom-name
   (testing "shared edit renderer uses the supplied tool name"
     (spit "target/test-tools-edit-render.txt" "alpha")

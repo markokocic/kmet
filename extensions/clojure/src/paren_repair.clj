@@ -98,26 +98,45 @@
 
 ;; ── Helpers for precise, actionable reports ───────────────────────────────
 
+(defn- char-at-pos
+  "The character at 1-based ROW/COL in SOURCE, or nil when out of range."
+  [source row col]
+  (when (and source row col (pos? row) (pos? col))
+    (let [line (get (vec (str/split-lines source)) (dec row))]
+      (when (and line (<= col (count line)))
+        (subs line (dec col) col)))))
+
 (defn- format-delimiter-report
   "Human-readable report for DETAILS (from util/delimiter-details) in FILE-PATH.
-   Includes expected vs opened delimiters and opened-at location when available,
-   so the agent can pinpoint and fix the unbalanced delimiters."
-  [file-path details]
+   SOURCE (the write content or current file text) supplies the offending
+   character: on an unexpected closer edamame reports BLANK delimiter
+   strings — truthy empty strings that would render as '' — so the report
+   reads the character at the error position instead. Includes expected vs
+   opened delimiters and opened-at location when available, so the agent
+   can pinpoint and fix the unbalanced delimiters."
+  [file-path details source]
   (let [row        (:row details)
         col        (:col details)
         expected   (:edamame/expected-delimiter details)
         opened     (:edamame/opened-delimiter details)
         opened-loc (:edamame/opened-delimiter-loc details)
         orow       (:row opened-loc)
-        ocol       (:col opened-loc)]
+        ocol       (:col opened-loc)
+        ;; blank strings are truthy in Clojure — test blankness, not nil
+        non-blank? #(and (string? %) (not (str/blank? %)))
+        expected?  (non-blank? expected)
+        opened?    (non-blank? opened)
+        found      (when-not (or expected? opened?)
+                     (char-at-pos source row col))]
     (str "Unbalanced delimiters in " file-path
          (when (and row col)
            (str " at line " row ", col " col))
          (cond
-           (and expected opened) (str ": expected '" expected "' to close '" opened "'")
-           expected              (str ": unexpected '" expected "'")
-           opened                (str ": unclosed '" opened "'")
-           :else                 "")
+           (and expected? opened?) (str ": expected '" expected "' to close '" opened "'")
+           expected?               (str ": unexpected '" expected "'")
+           opened?                 (str ": unclosed '" opened "'")
+           found                   (str ": unexpected '" found "'")
+           :else                   ": unexpected closing delimiter")
          (when (and orow ocol)
            (str " (opened at line " orow ", col " ocol ")"))
          ".")))
@@ -150,7 +169,7 @@
       (when (and (util/clojure-file? path) (string? content))
         (when-let [details (util/delimiter-details content)]
           {:block true
-           :reason (str (format-delimiter-report path details)
+           :reason (str (format-delimiter-report path details content)
                         "\nWrite blocked — fix the delimiters or use clojure_edit / clojure_paren_repair.")})))))
 
 (defn on-tool-result
@@ -163,7 +182,7 @@
           (when (fs/exists? path)
             (let [content (util/slurp-utf8 path)]
               (when-let [details (util/delimiter-details content)]
-                (let [report (format-delimiter-report path details)
+                (let [report (format-delimiter-report path details content)
                       hint (str "Run clojure_paren_repair on " path " to auto-fix, or correct the delimiters manually.")
                       orig (or (:content result) "")]
                   {:content (str orig "\n\n⚠️ " report "\n" hint)}))))
