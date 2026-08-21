@@ -674,6 +674,10 @@
                             (str "[custom: " (name (:custom-type entry)) "]")
                             (= (:role entry) :custom-message)
                             (str "[custom: " (name (:custom-type entry)) "]")
+                            ;; pi getEntryDisplayText: an empty assistant entry
+                            ;; (a recorded empty completion) is labeled
+                            ;; "(no content)" — its only trace anywhere
+                            (= (:role entry) :assistant) "(no content)"
                             :else "(empty)"))
                :children (mapv build-node (get by-parent (:id entry)))})]
       (mapv build-node (get by-parent nil)))))

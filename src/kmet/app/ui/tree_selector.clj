@@ -102,8 +102,21 @@
                                                    (mapcat (fn [n]
                                                              (if (passes-tree-filter? n @filter-mode)
                                                                (let [prefix (apply str (repeat depth "  "))
-                                                                     role-str (name (:role n))
-                                                                     label (str prefix role-str ": " (:summary n)
+                                                                     role (:role n)
+                                                                     role-str (name role)
+                                                                     summary (:summary n)
+                                                                     ;; pi getEntryDisplayText: colored role
+                                                                     ;; prefixes; an empty assistant completion
+                                                                     ;; shows as a muted "(no content)" — its
+                                                                     ;; only visual trace
+                                                                     label (str prefix
+                                                                                (case role-str
+                                                                                  "user" (th/fg th-current :accent "user: ")
+                                                                                  "assistant" (th/fg th-current :success "assistant: ")
+                                                                                  (str role-str ": "))
+                                                                                (if (and (= role :assistant) (= summary "(no content)"))
+                                                                                  (th/fg th-current :muted summary)
+                                                                                  summary)
                                                                                 (when (:label n) (str " [" (:label n) "]"))
                                                                                 (when (= (:id n) leaf-id) " ◀"))]
                                                                  (cons {:label label

@@ -45,7 +45,13 @@
                      "assistant"
                      (let [parts (into []
                                        (concat
-                                        (for [b (:content m) :when (= :text (:type b))]
+                                        ;; pi google-shared: empty text parts are dropped
+                                        ;; (Gemini can attach a thought signature to a blank
+                                        ;; part; kmet stores thinking separately and never
+                                        ;; replays signatures, so the drop is unconditional)
+                                        (for [b (:content m)
+                                              :when (and (= :text (:type b))
+                                                         (seq (str/trim (or (:text b) ""))))]
                                           {:text (:text b)})
                                         (for [tc (:tool-calls m)]
                                           {:functionCall (cond-> {:name (:name tc)
@@ -59,8 +65,9 @@
                                        {:inlineData {:mime-type (:mime-type b)
                                                      :data (:data b)}}
                                        {:text (or (:text b) "")}))
-                                   [{:text (content-text (:content m))}])]
-                       {:role "user" :parts parts}))))
+                                   (when (seq (:content m))
+                                     [{:text (content-text (:content m))}]))]
+                       (when (seq parts) {:role "user" :parts parts})))))
            msgs)
      system]))
 

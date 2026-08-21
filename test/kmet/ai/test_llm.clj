@@ -540,6 +540,36 @@
              (:content (first converted)))
           "image blocks convert to Anthropic image blocks")))
 
+(t/deftest test-llm-anthropic-empty-messages-dropped
+  ;; pi convertMessages: blank text blocks are dropped and a message left
+  ;; without sendable content is skipped — Anthropic rejects empty content
+  ;; arrays, so a recorded empty completion (clean stream, zero blocks) must
+  ;; not 400 every later turn of a resumed session.
+  (let [converted (@#'anthropic/anthropic-messages
+                   [;; empty assistant completion (the recorded failure mode)
+                    {:role :assistant :content []}
+                    ;; whitespace-only assistant message
+                    {:role :assistant :content [{:type :text :text "   "}]}
+                    ;; whitespace-only user text is dropped, but the image survives
+                    {:role :user
+                     :content [{:type :text :text "  "}
+                               {:type :image :data "AA" :mime-type "image/png"}]}
+                    ;; real messages pass through untouched
+                    {:role :user :content [{:type :text :text "hi"}]}
+                    {:role :assistant :content []
+                     :tool-calls [{:id "tc1" :name "bash" :arguments {}}]}])]
+    (t/is (= [{:role "user"
+               :content [{:type "image"
+                          :source {:type "base64" :media_type "image/png" :data "AA"}}]}
+              {:role "user" :content "hi"}
+              {:role "assistant"
+               :content [{:type "tool_use"
+                          :id "tc1"
+                          :name "bash"
+                          :input {}}]}]
+             converted)
+          "empty/blank assistant entries are dropped, images survive, tool calls keep the message")))
+
 (t/deftest test-llm-custom-role-maps-to-user
   ;; G10: custom messages (from custom_message entries) are sent as user
   ;; messages (pi: convertToLlm custom→user)
@@ -747,6 +777,9 @@
       (t/is (= "HTTP 429: slow down" (te (http-status 429 "slow down")))
             "429 is prefixed too — the regex's '429' token now always matches")
       (t/is (loop/retryable-error? (te (http-status 429 "slow down"))))
+      (t/is (loop/retryable-error?
+             "Proxy request failed: exceeded request buffer limit while retrying upstream")
+            "OpenRouter buffer-limit wrapper failures retry (pi RETRYABLE pattern)")
       ;; JSON error bodies keep the provider message, prefixed
       (t/is (= "HTTP 500: something exploded"
                (te (http-status 500 "{\"error\":{\"message\":\"something exploded\"}}"))))
@@ -976,6 +1009,29 @@
             "ids are echoed, sanitized to [a-zA-Z0-9_-] (pi)")
       (t/is (= {:functionResponse {:name "read" :response {:output "saw it"} :id "t1_x"}}
                (first (:parts (second contents))))))))
+
+(t/deftest test-google-empty-messages-dropped
+  ;; pi google-shared: empty text parts are dropped and a message whose parts
+  ;; come out empty is skipped ("the model intermittently ends mid-task turns
+  ;; with a thought-only STOP (empty completion, no tool call)") — a recorded
+  ;; empty/blank assistant entry must not reach Gemini as {:text ""}.
+  (let [model {:id "gemini-2.5-pro" :name "Gemini"}
+        [contents _] (@#'google/google-messages
+                      [{:role :assistant :content []}
+                       {:role :assistant :content [{:type :text :text "   "}]}
+                       {:role :user :content []}
+                       {:role :assistant :content []
+                        :tool-calls [{:id "t1" :name "bash" :arguments {}}]}
+                       {:role :assistant :content [{:type :text :text "real"}]}
+                       {:role :user :content [{:type :text :text "  "}]}]
+                      model)]
+    (t/is (= [{:role "model" :parts [{:functionCall {:name "bash" :args {}}}]}]
+             (take 1 contents))
+          "empty and blank-only assistants are dropped; a tool call keeps the message")
+    (t/is (= [{:role "model" :parts [{:text "real"}]}
+              {:role "user" :parts [{:text "  "}]}]
+             (drop 1 contents))
+          "non-blank content passes through; whitespace-only USER text is kept (pi parity)")))
 
 (t/deftest test-google-event-parsing
   (t/is (= [{:type :text :content "Hi"}]

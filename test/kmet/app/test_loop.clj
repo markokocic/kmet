@@ -1429,6 +1429,33 @@
     (t/is (= :error (loop/get-status agent)))
     (t/is (some #(= :error (:type %)) @events) "terminal :error event emitted")))
 
+(t/deftest test-loop-empty-completion-settles-quietly
+  ;; pi parity (agent-loop runLoop): a clean stream with zero content is a
+  ;; normal final response — the run settles without an error. The empty
+  ;; assistant entry is recorded like any other; request builders drop it
+  ;; from outgoing calls so it can't poison later turns (see kmet.ai api
+  ;; converters). No auto-retry for empties — that is kmet-specific behavior
+  ;; pi does not have and we do not want.
+  (let [calls (atom 0)
+        errors (atom [])
+        agent (loop/make-agent-state)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (swap! calls inc)
+                      (when-let [on-done (:on-done opts)]
+                        (on-done :stop))
+                      :done))]
+      @(loop/run-agent-turn agent {:message "hi"
+                                   :on-done (fn [_])
+                                   :on-error (fn [e] (swap! errors conj e))}))
+    (t/is (= 1 @calls) "no auto-retry is scheduled")
+    (t/is (empty? @errors) "no error surfaces")
+    (t/is (= :idle (loop/get-status agent)) "the run settles quietly")
+    (t/is (= [:user :assistant] (mapv :role (loop/get-context agent)))
+          "the empty assistant entry is recorded like any other")))
+
 (t/deftest test-loop-auto-retry-on-network-error
   ;; Regression: a connect-time failure used to surface as "Request failed:
   ;; ConnectException" (nil JVM message), which matched no retryable pattern —

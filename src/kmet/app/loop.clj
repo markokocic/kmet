@@ -331,6 +331,9 @@ Be precise and concise in your responses."}}]
                               "server.?error"
                               "internal.?error"
                               "provider.?returned.?error"
+                              ;; OpenRouter buffer-limit wrapper failures mid-request
+                              ;; (pi RETRYABLE_PROVIDER_ERROR_PATTERN)
+                              "exceeded request buffer limit while retrying upstream"
                               "network.?error"
                               "connection.?error"
                               "connection.?refused"

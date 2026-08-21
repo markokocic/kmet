@@ -484,6 +484,9 @@
     (s/append-entry session {:role :user :content [{:type :text :text "q1"}]})
     (s/append-entry session {:role :assistant :content [{:type :text :text "a1"}]})
     (s/append-entry session {:role :user :content [{:type :text :text "q2"}]})
+    ;; a recorded empty completion (clean stream, zero content) — pi's tree
+    ;; selector labels it "(no content)" (getEntryDisplayText)
+    (s/append-entry session {:role :assistant :content []})
     (let [tree (s/get-tree session)]
       (t/is (vector? tree))
       (t/is (pos? (count tree)))
@@ -492,7 +495,12 @@
       (t/is (= 1 (count (:children (first tree))))
             "Root has one child")
       (t/is (= :assistant (:role (first (:children (first tree)))))
-            "First child is assistant"))))
+            "First child is assistant")
+      ;; linear chain q1 → a1 → q2 → empty assistant
+      (let [empty-node (-> tree first :children first :children first :children first)]
+        (t/is (= :assistant (:role empty-node)))
+        (t/is (= "(no content)" (:summary empty-node))
+              "empty assistant entries are labeled '(no content)' (pi)")))))
 
 (t/deftest test-session-get-tree-large-session
   ;; get-tree builds correct structure at scale: a long chain plus a

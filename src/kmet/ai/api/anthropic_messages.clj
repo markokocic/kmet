@@ -59,6 +59,24 @@
                         :data (:data i)}}))
       text)))
 
+(defn- blank-text-block?
+  "True for an Anthropic text block carrying only whitespace — pi drops such
+   blocks from outgoing requests (they carry nothing and strict endpoints
+   reject them)."
+  [{:keys [type text]}]
+  (and (= type "text") (str/blank? text)))
+
+(defn- blank-content?
+  "True when Anthropic message content carries nothing sendable: an empty or
+   whitespace-only string, or a block vector whose entries are all blank
+   text blocks. An empty vector counts — pi skips empty assistant messages,
+   whose replay would otherwise trip Anthropic's non-empty-content rule on
+   every later turn after one was recorded."
+  [content]
+  (if (string? content)
+    (str/blank? content)
+    (every? blank-text-block? content)))
+
 (defn anthropic-messages [messages]
   (into []
         (keep (fn [m]
@@ -77,18 +95,32 @@
                                    (:is-error m) (assoc :is_error true))]})
                     ;; custom messages (pi: convertToLlm custom→user)
                     "custom"
-                    {:role "user" :content (anthropic-content (:content m))}
                     (let [content (anthropic-content (:content m))]
-                      (cond-> {:role role :content content}
-                        (and (= role "assistant") (:tool-calls m))
-                        (assoc :content
-                               (vec (concat (if (string? (:content m)) [] (:content m))
-                                            (mapv (fn [tc]
-                                                    {:type "tool_use"
-                                                     :id (anthropic-normalize-tool-call-id (:id tc))
-                                                     :name (:name tc)
-                                                     :input (:arguments tc)})
-                                                  (:tool-calls m)))))))))))
+                      (when-not (blank-content? content)
+                        {:role "user" :content content}))
+                    ;; pi convertMessages: blank text blocks are dropped from
+                    ;; outgoing requests and a message left without sendable
+                    ;; content is skipped entirely — Anthropic rejects empty
+                    ;; content arrays, so a recorded empty completion must not
+                    ;; poison every later turn with a 400.
+                    (let [raw (anthropic-content (:content m))
+                          tool-uses (when (and (= role "assistant") (:tool-calls m))
+                                      (mapv (fn [tc]
+                                              {:type "tool_use"
+                                               :id (anthropic-normalize-tool-call-id (:id tc))
+                                               :name (:name tc)
+                                               :input (:arguments tc)})
+                                            (:tool-calls m)))
+                          content (cond
+                                    (seq tool-uses)
+                                    (vec (concat (cond
+                                                   (string? raw) []
+                                                   :else (remove blank-text-block? raw))
+                                                 tool-uses))
+                                    (vector? raw) (vec (remove blank-text-block? raw))
+                                    :else raw)]
+                      (when-not (blank-content? content)
+                        {:role role :content content}))))))
         messages))
 
 (defn anthropic-auth-headers
