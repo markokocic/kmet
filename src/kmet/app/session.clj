@@ -642,13 +642,12 @@
 
 (defn get-tree
   "Build a tree structure from session entries.
-   Returns map of {:id info, :children [...]}"
+   Returns map of {:id info, :children [...]}. O(n): children are grouped
+   by parent in a single pass over entries."
   [session]
   (let [entries @(:entries session)
         labels (resolve-labels entries)
-        children (fn [parent-id]
-                   (filter #(= (:parent-id %) parent-id) entries))
-        root-children (filter #(nil? (:parent-id %)) entries)]
+        by-parent (group-by :parent-id entries)]
     (letfn [(build-node [entry]
               {:id (:id entry)
                :role (:role entry)
@@ -676,8 +675,8 @@
                             (= (:role entry) :custom-message)
                             (str "[custom: " (name (:custom-type entry)) "]")
                             :else "(empty)"))
-               :children (mapv build-node (children (:id entry)))})]
-      (mapv build-node root-children))))
+               :children (mapv build-node (get by-parent (:id entry)))})]
+      (mapv build-node (get by-parent nil)))))
 
 (defn compact-with-summary!
   "Append a compaction entry summarizing everything before first-kept-id (pi:

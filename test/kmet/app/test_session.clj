@@ -494,6 +494,26 @@
       (t/is (= :assistant (:role (first (:children (first tree)))))
             "First child is assistant"))))
 
+(t/deftest test-session-get-tree-large-session
+  ;; get-tree builds correct structure at scale: a long chain plus a
+  ;; fan-out branch (regression guard for the per-parent full scan this
+  ;; replaced — group-by keeps construction linear in entry count)
+  (let [session (s/create-session test-dir)
+        n 2000]
+    (dotimes [i n]
+      (s/append-entry session {:role (if (even? i) :user :assistant)
+                               :content [{:type :text :text (str "m" i)}]}))
+    (s/branch! session (:id (first @(:entries session))))
+    (s/append-entry session {:role :user :content [{:type :text :text "fork"}]})
+    (letfn [(depth [node] (inc (apply max 0 (map depth (:children node)))))]
+      (let [tree (s/get-tree session)
+            root (first tree)]
+        (t/is (= 1 (count tree)) "single root")
+        (t/is (= n (depth root)) "chain covers every appended entry")
+        (t/is (= 2 (count (:children root))) "branched entry fans out to 2 children")
+        (t/is (= "fork" (-> root :children peek :summary str/trim))
+              "branch sibling keeps append order after the chain child")))))
+
 (t/deftest test-session-delete
   (let [session (s/create-session test-dir)
         f (:file session)]

@@ -82,8 +82,7 @@
                 ;; changes by entry id
                 last-selected-id (atom nil)
                 ;; the tree snapshot from open time; label edits patch it in
-                ;; place (get-tree is O(n^2) — rebuilding per refresh would
-                ;; freeze the UI on large sessions)
+                ;; place (one consistent view for the panel's lifetime)
                 tree-vol (volatile! tree)
                 help-text (text/make-text "" 0 0)
                 set-help! (fn []
