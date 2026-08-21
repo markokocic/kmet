@@ -992,12 +992,20 @@
     (core/editor-insert-text-at-cursor! e "y")
     (t/is (= "xy" (core/editor-get-text e)))))
 
-(t/deftest test-autocomplete-enter-slash-args-submits-as-is
+(t/deftest test-autocomplete-enter-applies-arg-completion
+  ;; pi tui.select.confirm with the dropdown open: the selection is applied
+  ;; ("/theme light" → "/theme <selected>") and NOT submitted — a second
+  ;; Enter submits. Only command-name completions fall through to submit.
   (let [e (make-ac-editor)
         submitted (atom nil)]
     (core/editor-set-on-submit! e #(reset! submitted %))
     (doseq [c "/theme light"] (core/handle-input e (str c)))
     (t/is (some? @(:autocomplete-list e)) "arg-completion dropdown open")
     (core/handle-input e K-ENTER)
-    (t/is (= "/theme light" @submitted) "typed args survive, uncorrupted")
-    (t/is (nil? @(:autocomplete-list e)) "dropdown closed after submit")))
+    (t/is (nil? @submitted) "argument completion does not submit (pi)")
+    (t/is (nil? @(:autocomplete-list e)) "dropdown closed after applying")
+    (t/is (str/starts-with? (editor/editor-get-text e) "/theme ")
+          "completion applied over the typed args")
+    ;; a second Enter submits the completed line
+    (core/handle-input e K-ENTER)
+    (t/is (= (editor/editor-get-text e) @submitted))))

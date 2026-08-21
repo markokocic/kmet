@@ -845,6 +845,13 @@
 
 ;; ─── Visual line truncation ────────────────────────────────────────────────
 
+(defn osc-hyperlink
+  "Wrap TEXT in an OSC 8 hyperlink to URL (pi's linkedUrl pattern —
+   `\\x1b]8;;URL\\x07TEXT\\x1b]8;;\\x07`). Terminals without hyperlink
+   support render TEXT unchanged; width calculations strip the sequence."
+  [url text]
+  (str "\u001b]8;;" url "\u0007" text "\u001b]8;;\u0007"))
+
 (defn truncate-to-visual-lines
   "Truncate text to the last max-lines visual lines at the given width.
    Uses wrap-text-with-ansi to resolve word-wrapped lines, then takes

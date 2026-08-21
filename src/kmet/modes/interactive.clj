@@ -12,6 +12,9 @@
             [kmet.tui.components.expandable-text :as expandable-text]
             [kmet.tui.components.container :as container]
             [kmet.app.ui :as ui]
+            [kmet.app.ui.auth-selector :as auth-selector]
+            [kmet.app.ui.dock :as dock]
+            [kmet.app.ui.login-dialog :as login-dialog]
             [kmet.app.ui.external-editor :refer [editor-text-get editor-text-get-expanded
                                                  editor-text-set! handle-external-editor]]
             [kmet.app.ui.fork-selector :refer [show-fork-selector]]
@@ -45,6 +48,7 @@
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
             [kmet.tui.autocomplete :as ac]
+            [kmet.tui.fuzzy :as fuzzy]
             [kmet.debug :as debug]
             [clojure.string :as str]
             [babashka.fs :as fs]
@@ -386,143 +390,106 @@
            :else
            {:role :info :label "Share" :content (str "Share URL: " (:url result))}))))))
 
-;; ─── Login/logout auth-type selection (Phase 10; pi getLoginProviderOptions /
-;;    showLoginAuthTypeSelector / showLoginDialog / showApiKeyLoginDialog) ────
+;; ─── Login/logout (pi getLoginProviderOptions / showLoginAuthTypeSelector /
+;;    showLoginDialog / showApiKeyLoginDialog / OAuthSelectorComponent) ──────
 
 (def ^:private api-key-login-label "Sign in with an API key")
 
-(defn- login-methods
-  "Auth methods a provider offers, oauth first (pi AUTH_TYPE_ORDER + the
-   provider's declared auth): an oauth provider only offers the api-key path
-   when it has one (env vars, models.edn configured key, or :auth-header) —
-   openai-codex is oauth-only (no api-key login)."
-  [p]
-  (if (:oauth p)
-    (cond-> [:oauth]
-      (or (seq (:env-vars p)) (:api-key p) (:auth-header p)) (conj :api-key))
-    [:api-key]))
+(declare show-login-provider-selector!)
 
 (defn- oauth-prompt!
-  "Show a dialog for an OAuth prompt and return the entered string (pi
-   AuthPrompt → LoginDialogComponent; the flow runs on a future, so kmet
-   blocks on the overlay promise). :select shows a select-list; :text/
-   :secret/:manual-code show an input dialog (the prompt's :placeholder
-   becomes the input prefill). Dialog cancel sets SIGNAL and throws
-   \"Login cancelled\". PROMPT-STATE — an atom tracking the active dialog
-   {:promise p :tui tui} — lets a loopback flow's :abort-prompt! close a
-   still-open dialog when the browser callback wins the race."
-  [cs prompt signal prompt-state]
-  (let [p (promise)
-        ;; Resolving (submit or cancel) clears the tracked dialog so the
-        ;; throw-path hide below can never pop an overlay twice (or one the
-        ;; user already dismissed).
-        finish (fn [v] (reset! prompt-state nil) (deliver p v))
-        cancel (fn [] (reset! prompt-state nil) (reset! signal true) (deliver p ::cancelled))
-        track! (fn [] (reset! prompt-state {:promise p :tui (:tui cs)}))]
-    (case (:type prompt)
-      :select
-      (let [options (:options prompt)]
-        (track!)
-        (tui/tui-show-overlay
-         (:tui cs)
-         (dialogs/make-selector-dialog
-          (:message prompt)
-          (mapv :label options)
-          (fn [label]
-            (tui/tui-hide-overlay (:tui cs))
-            (finish (or (:id (first (filter #(= label (:label %)) options)))
-                        label)))
-          (fn []
-            (tui/tui-hide-overlay (:tui cs))
-            (cancel))
-          (th/get-current-theme))
-         :width 60 :height (min (count options) 10)))
-      (do
-        (track!)
-        (tui/tui-show-overlay
-         (:tui cs)
-         (dialogs/make-input-dialog
-          (:message prompt)
-          (fn [value]
-            (tui/tui-hide-overlay (:tui cs))
-            (finish value))
-          (fn []
-            (tui/tui-hide-overlay (:tui cs))
-            (cancel))
-          (th/get-current-theme)
-          (:placeholder prompt))
-         :width 60 :height 9)))
-    (tui/tui-request-render (:tui cs))
-    ;; Block until the dialog resolves; a 10-min safety timeout or any
-    ;; non-string delivery (::cancelled — user cancel or the loopback
-    ;; flow's :abort-prompt!) throws "Login cancelled" like pi's abort
-    ;; signal. A stale dialog from an abort that won the race with the
-    ;; overlay show is hidden here.
-    (let [value (deref p 600000 :timeout)]
-      (if (string? value)
-        value
-        (do (when (and @prompt-state (= p (:promise @prompt-state)))
-              (tui/tui-hide-overlay (:tui @prompt-state))
-              (tui/tui-request-render (:tui @prompt-state)))
-            (throw (ex-info "Login cancelled" {:type :login-cancelled})))))))
+  "Show PROMPT inside the dock-mounted login dialog and block for the
+   entered string (pi showAuthPrompt → LoginDialogComponent.showPrompt /
+   showManualInput / showAuthSelect; the flow runs on a future, so kmet
+   blocks on the promise). :select swaps the dock to a method selector and
+   restores the dialog after; :text/:secret prompts through the dialog's
+   input; :manual-code is the manual-paste variant. The pending promise is
+   registered in PROMPT-STATE so a loopback flow's :abort-prompt! can
+   settle it when the browser callback wins the race. Dialog cancel settles
+   the promise with the cancellation ex-info, which propagates here."
+  [cs dlg prompt prompt-state]
+  (case (:type prompt)
+    :select
+    (let [p (promise)
+          labels (mapv :label (:options prompt))
+          ;; pi showAuthSelect: swap the dock to the selector, restore the
+          ;; login dialog when it resolves (re-mounting IS the restore)
+          restore #(dock/mount! cs dlg)]
+      (reset! prompt-state {:promise p})
+      (dock/mount!
+       cs (auth-selector/make-auth-method-selector
+           (:message prompt) labels
+           (fn [label]
+             (restore)
+             (deliver p (or (:id (first (filter #(= label (:label %)) (:options prompt))))
+                            label)))
+           (fn []
+             (restore)
+             (deliver p (ex-info "Login cancelled" {:type :login-cancelled})))))
+      (login-dialog/await-prompt! p))
+
+    :manual-code
+    (let [p (login-dialog/login-dialog-show-manual-input! dlg (:message prompt))]
+      (reset! prompt-state {:promise p})
+      (login-dialog/await-prompt! p))
+
+    (let [p (login-dialog/login-dialog-show-prompt!
+             dlg (:message prompt) (:placeholder prompt))]
+      (reset! prompt-state {:promise p})
+      (login-dialog/await-prompt! p))))
 
 (defn- oauth-notify!
-  "Map an OAuth AuthEvent onto the chat history (pi notifyAuthDialog):
-   :device-code shows the code + verification URI; :auth-url/:info/:progress
-   post info messages. Renders from the flow future — tui-request-render
-   only sets a flag, safe off the input thread."
-  [cs event]
+  "Map an OAuth AuthEvent onto the dock-mounted login dialog (pi
+   notifyAuthDialog): :device-code shows the verification URI + user code
+   and the waiting line; :auth-url shows the URL (+ instructions) and opens
+   the browser; :info/:progress append dim lines."
+  [dlg event]
   (case (:type event)
     :device-code
-    (ui/chat-history-add-message! (:chat-history cs)
-                                  {:role :info :label "Login"
-                                   :content (str "Open " (:verification-uri event)
-                                                 " and enter the code: " (:user-code event))})
+    (do (login-dialog/login-dialog-show-device-code!
+         dlg (:verification-uri event) (:user-code event))
+        (login-dialog/login-dialog-show-waiting! dlg "Waiting for authentication..."))
     :auth-url
-    (ui/chat-history-add-message! (:chat-history cs)
-                                  {:role :info :label "Login"
-                                   :content (str "Open " (:url event)
-                                                 (when (:instructions event)
-                                                   (str "\n" (:instructions event))))})
+    (login-dialog/login-dialog-show-auth! dlg (:url event) (:instructions event))
     :info
-    (ui/chat-history-add-message! (:chat-history cs)
-                                  {:role :info :label "Login"
-                                   :content (:message event)})
-    :progress
-    (ui/chat-history-add-message! (:chat-history cs)
-                                  {:role :info :label "Login"
-                                   :content (:message event)}))
-  (when-let [tui (:tui cs)]
-    (tui/tui-request-render tui))
+    (login-dialog/login-dialog-show-info! dlg (:message event))
+    (login-dialog/login-dialog-show-progress! dlg (:message event)))
   nil)
 
 (defn- oauth-login!
-  "Run an OAuthAuth login flow on a future (pi showLoginDialog): the
-   interaction prompts via overlays and notifies via the chat history; on
-   success the credential is persisted to auth.edn. Availability refreshes
-   automatically — models/get-available reads the auth atom live, and the
-   oauth credential's :available-model-ids shrink the model list.
-   :abort-prompt! — the loopback flows' race hook — closes the manual-paste
-   dialog when the browser callback wins (pi manualAbort.abort())."
+  "Run an OAuthAuth login flow on a future with a dock-mounted login dialog
+   (pi showLoginDialog): prompts and auth events render inside the dialog;
+   on success the credential is persisted to auth.edn and the editor is
+   restored. Escape cancels the flow through the dialog's on-complete.
+   :abort-prompt! — the loopback flows' race hook — settles the pending
+   manual-paste prompt as cancelled when the browser callback wins (pi
+   manualAbort.abort())."
   [cs provider]
   (let [oauth (:oauth provider)
         signal (atom false)
         prompt-cancelled (atom false)
         prompt-state (atom nil)
-        abort-prompt! (fn []
-                        (reset! prompt-cancelled true)
-                        (when-let [{:keys [promise tui]} @prompt-state]
-                          (deliver promise ::cancelled)
-                          (tui/tui-hide-overlay tui)
-                          (tui/tui-request-render tui)))
+        cancel-pending! (fn []
+                          (reset! prompt-cancelled true)
+                          (when-let [p (:promise @prompt-state)]
+                            (deliver p (ex-info "Login cancelled"
+                                                {:type :login-cancelled}))))
+        dlg (login-dialog/make-login-dialog
+             (:tui cs) (:name provider)
+             (fn [_success _message]
+               ;; escape — abort the flow like pi's AbortController; the
+               ;; future unwinds at the next signal check and restores
+               (reset! signal true)
+               (cancel-pending!)))
         prompt-fn (fn [prompt]
                     (when @prompt-cancelled
                       (throw (ex-info "Login cancelled" {:type :login-cancelled})))
-                    (oauth-prompt! cs prompt signal prompt-state))
+                    (oauth-prompt! cs dlg prompt prompt-state))
         interaction {:signal signal
                      :prompt prompt-fn
-                     :abort-prompt! abort-prompt!
-                     :notify (fn [event] (oauth-notify! cs event))}]
+                     :abort-prompt! cancel-pending!
+                     :notify (fn [event] (oauth-notify! dlg event))}
+        done (dock/mount! cs dlg)]
     (future
       (try
         (let [credential ((:login oauth) interaction)]
@@ -530,74 +497,295 @@
           (ui/chat-history-add-message! (:chat-history cs)
                                         {:role :assistant
                                          :content (str "Logged in to " (:name provider)
-                                                       ". Credentials saved to auth.edn.")})
+                                                       ". Credentials saved to "
+                                                       (auth/auth-file-path) ".")})
           (when (and (:session-atom cs) (:footer-comp cs) (:footer-provider cs))
             (update-footer! cs)))
         (catch Exception e
-          (if (str/includes? (or (ex-message e) "") "Login cancelled")
-            (ui/chat-history-add-message! (:chat-history cs)
-                                          {:role :info :label "Login"
-                                           :content "Login cancelled."})
+          ;; pi: silent on "Login cancelled", an error otherwise
+          (when-not (str/includes? (or (ex-message e) "") "Login cancelled")
             (ui/show-warning! (:chat-history cs)
-                              (str "Failed to login to " (:name provider) ": " (ex-message e)))))
-        (when-let [tui (:tui cs)]
-          (tui/tui-request-render tui))))))
+                              (str "Failed to login to " (:name provider) ": "
+                                   (ex-message e)))))
+        (finally
+          (done)
+          (tui/tui-request-render (:tui cs)))))))
 
 (defn- api-key-login!
-  "The api-key login flow (pi showApiKeyLoginDialog): prompt for the key via
-   the extension-input overlay and save it to auth.edn."
+  "The api-key login flow (pi showApiKeyLoginDialog): the key is prompted
+   inside a dock-mounted \"Login to <provider>\" dialog and saved to
+   auth.edn."
   [cs p]
-  (tui/tui-show-overlay
-   (:tui cs)
-   (dialogs/make-input-dialog
-    (str "API key for " (:name p))
-    (fn [value]
-      (tui/tui-hide-overlay (:tui cs))
-      (let [key (str/trim value)]
-        (if (seq key)
-          (do (auth/set-credential! (:id p) key)
-              (ui/chat-history-add-message! (:chat-history cs)
-                                            {:role :assistant
-                                             :content (str "Saved API key for " (:name p) ".")}))
-          (ui/show-warning! (:chat-history cs)
-                            "No API key entered — nothing saved.")))
-      (tui/tui-request-render (:tui cs)))
-    (fn []
-      (tui/tui-hide-overlay (:tui cs))
-      (tui/tui-request-render (:tui cs)))
-    (th/get-current-theme))
-   :width 60 :height 9)
-  (tui/tui-request-render (:tui cs)))
+  (let [dlg (login-dialog/make-login-dialog
+             (:tui cs) (:name p)
+             ;; escape before submitting — nothing to abort, silently
+             ;; restore like pi (the "Login cancelled" error is suppressed)
+             (fn [_success _message] nil))
+        done (dock/mount! cs dlg)]
+    (future
+      (try
+        (let [key (str/trim (login-dialog/await-prompt!
+                             (login-dialog/login-dialog-show-prompt!
+                              dlg (str "Enter " (:name p) " API key") nil)))]
+          (if (seq key)
+            (do (auth/set-credential! (:id p) key)
+                (ui/chat-history-add-message! (:chat-history cs)
+                                              {:role :assistant
+                                               :content (str "Saved API key for " (:name p)
+                                                             ". Credentials saved to "
+                                                             (auth/auth-file-path) ".")})
+                (when (and (:session-atom cs) (:footer-comp cs) (:footer-provider cs))
+                  (update-footer! cs)))
+            (ui/show-warning! (:chat-history cs)
+                              "No API key entered — nothing saved.")))
+        (catch Exception e
+          (when-not (str/includes? (or (ex-message e) "") "Login cancelled")
+            (ui/show-warning! (:chat-history cs)
+                              (str "Failed to save API key for " (:name p) ": "
+                                   (ex-message e)))))
+        (finally
+          (done)
+          (tui/tui-request-render (:tui cs)))))))
 
-(defn- show-login-method-selector!
-  "Offer a provider's auth methods (pi showLoginAuthTypeSelector): the oauth
-   subscription label (or \"Sign in with an account\") and \"Sign in with an
-   API key\" in a select-list overlay; a single method starts directly."
-  [cs p methods]
-  (let [oauth-label (or (:login-label (:oauth p)) "Sign in with an account")
-        options (vec (concat (when (some #{:oauth} methods) [oauth-label])
-                             (when (some #{:api-key} methods) [api-key-login-label])))
-        choose (fn [label]
-                 (if (= label oauth-label)
-                   (oauth-login! cs p)
-                   (api-key-login! cs p)))]
-    (if (= 1 (count options))
-      (choose (first options))
-      (do
-        (tui/tui-show-overlay
-         (:tui cs)
-         (dialogs/make-selector-dialog
-          (str "Select authentication method for " (:name p) ":")
-          options
-          (fn [label]
-            (tui/tui-hide-overlay (:tui cs))
-            (choose label))
-          (fn []
-            (tui/tui-hide-overlay (:tui cs))
-            (tui/tui-request-render (:tui cs)))
-          (th/get-current-theme))
-         :width 60 :height (min (count options) 10))
-        (tui/tui-request-render (:tui cs))))))
+;; ─── Provider options (pi getLoginProviderOptions / getLogoutProviderOptions
+;;    / findLoginProviderOptions / handleLoginCommand) ────────────────────────
+
+(defn- format-auth-type-label
+  "pi formatAuthSelectorProviderType."
+  [auth-type]
+  (if (= :oauth auth-type) "subscription" "API key"))
+
+(defn- api-key-login-path?
+  "True when the provider offers an api-key login (env vars, models.edn
+   configured key, or :auth-header) — openai-codex is oauth-only."
+  [p]
+  (or (seq (:env-vars p)) (:api-key p) (:auth-header p)))
+
+(defn- login-provider-options
+  "pi getLoginProviderOptions: one entry per offered auth type per provider,
+   sorted by display name. Each entry carries the provider's auth status
+   (auth/provider-auth-status) for the selector's ✓/• indicator."
+  []
+  (->> (models/get-providers)
+       (mapcat (fn [p]
+                 (let [status (auth/provider-auth-status (:id p))]
+                   (concat
+                    (when (:oauth p)
+                      [{:id (name (:id p)) :name (:name p) :auth-type :oauth
+                        :method-name (:name (:oauth p)) :status status
+                        :provider p}])
+                    (when (api-key-login-path? p)
+                      [{:id (name (:id p)) :name (:name p) :auth-type :api-key
+                        :status status :provider p}])))))
+       (sort-by :name)))
+
+(defn- logout-provider-options
+  "pi getLogoutProviderOptions: one entry per stored credential, sorted by
+   display name (the id stands in for providers no longer registered)."
+  []
+  (->> (auth/get-credentials)
+       (mapv (fn [[pid cred]]
+               (let [type (if (= :oauth (:type cred)) :oauth :api-key)
+                     p (models/get-provider pid)]
+                 {:id (name pid)
+                  :name (or (:name p) (name pid))
+                  :auth-type type
+                  :status {:configured? true :type type :source "stored credential"}
+                  :provider p})))
+       (sort-by :name)))
+
+(defn- find-login-provider-options
+  "pi findLoginProviderOptions: exact id or name match on the lowercased
+   reference, empty when nothing matches."
+  [provider-ref]
+  (let [ref (str/lower-case (str/trim (or provider-ref "")))]
+    (when (seq ref)
+      (filterv #(or (= (str/lower-case (:id %)) ref)
+                    (= (str/lower-case (:name %)) ref))
+               (login-provider-options)))))
+
+(defn- start-provider-login!
+  "pi startProviderLogin: oauth entries run the OAuth flow, api-key entries
+   the key prompt."
+  [cs entry]
+  (if (= :oauth (:auth-type entry))
+    (oauth-login! cs (:provider entry))
+    (api-key-login! cs (:provider entry))))
+
+(defn- show-login-auth-type-selector!
+  "Offer a provider's (or the global) auth methods (pi
+   showLoginAuthTypeSelector): the oauth subscription label (the OAuthAuth's
+   :login-label or \"Sign in with an account\") and \"Sign in with an API
+   key\" in a dock-mounted method selector; a single available method starts
+   directly."
+  ([cs] (show-login-auth-type-selector! cs nil))
+  ([cs provider-options]
+   (let [oauth-entry (some #(when (= :oauth (:auth-type %)) %) provider-options)
+         subscription-label (or (when oauth-entry
+                                  (:login-label (:oauth (:provider oauth-entry))))
+                                "Sign in with an account")
+         available-types (if provider-options
+                           (set (map :auth-type provider-options))
+                           #{:oauth :api-key})
+         options (cond-> []
+                   (contains? available-types :oauth) (conj subscription-label)
+                   (contains? available-types :api-key) (conj api-key-login-label))]
+     (cond
+       (empty? options)
+       (ui/chat-history-add-message! (:chat-history cs)
+                                     {:role :assistant
+                                      :content "No login methods available."})
+
+       (and provider-options (= 1 (count options)))
+       (start-provider-login! cs (first provider-options))
+
+       :else
+       (let [title (if (seq provider-options)
+                     (str "Select authentication method for "
+                          (:name (first provider-options)) ":")
+                     "Select authentication method:")
+             sel-atom (atom nil)]
+         (reset! sel-atom
+                 {:done (dock/mount!
+                         cs
+                         (auth-selector/make-auth-method-selector
+                          title options
+                          (fn [label]
+                            ((:done @sel-atom))
+                            (let [auth-type (if (= label subscription-label)
+                                              :oauth :api-key)]
+                              (if provider-options
+                                (when-let [entry (some #(when (= auth-type (:auth-type %)) %)
+                                                       provider-options)]
+                                  (start-provider-login! cs entry))
+                                (show-login-provider-selector! cs auth-type))))
+                          (fn []
+                            ((:done @sel-atom))
+                            (tui/tui-request-render (:tui cs)))))}))))))
+
+(defn- show-login-provider-selector!
+  "pi showLoginProviderSelector: the searchable provider selector over the
+   auth-type-filtered options; SEARCH pre-fills the filter (an unmatched
+   /login argument). Cancel reopens the auth-type selector when one was
+   shown (pi), otherwise just restores the editor."
+  ([cs auth-type] (show-login-provider-selector! cs auth-type nil))
+  ([cs auth-type search]
+   (let [entries (vec (cond->> (login-provider-options)
+                        auth-type (filter #(= auth-type (:auth-type %)))))]
+     (if (empty? entries)
+       (ui/chat-history-add-message! (:chat-history cs)
+                                     {:role :assistant
+                                      :content (case auth-type
+                                                 :oauth "No subscription providers available."
+                                                 :api-key "No API key providers available."
+                                                 "No login providers available.")})
+       (let [sel-atom (atom nil)]
+         (reset! sel-atom
+                 {:done (dock/mount!
+                         cs
+                         (auth-selector/make-auth-selector
+                          :login entries
+                          (fn [provider-id selected-type]
+                            ((:done @sel-atom))
+                            (if-let [entry (some #(when (and (= provider-id (:id %))
+                                                             (= selected-type (:auth-type %)))
+                                                    %)
+                                                 entries)]
+                              (start-provider-login! cs entry)
+                              (tui/tui-request-render (:tui cs))))
+                          (fn []
+                            ((:done @sel-atom))
+                            (if auth-type
+                              (show-login-auth-type-selector! cs)
+                              (tui/tui-request-render (:tui cs))))
+                          search))}))))))
+
+(defn- login-argument-completions
+  "pi getArgumentCompletions for /login (getLoginProviderCompletionOptions +
+   createFuzzyAutocompleteItems): one item per provider id with both auth
+   types merged, sorted by display name, fuzzy-filtered over
+   \"id name auth-types\" — the value completes to the provider id and the
+   description reads \"Name · subscription/API key\"."
+  [prefix]
+  (let [options (->> (login-provider-options)
+                     (group-by :id)
+                     (mapv (fn [[id entries]]
+                             (let [types (->> entries
+                                              (map :auth-type) distinct
+                                              (sort-by {:oauth 0 :api-key 1}))
+                                   pname (:name (first entries))
+                                   labels (map format-auth-type-label types)]
+                               {:id id :name pname
+                                :type-desc (str/join "/" labels)
+                                :search (str/join " "
+                                                  (concat [id pname]
+                                                          (for [[t l] (map vector types labels)
+                                                                part [(clojure.core/name t) l]]
+                                                            part)))})))
+                     (sort-by :name))
+        filtered (fuzzy/fuzzy-filter options prefix :search)]
+    (when (seq filtered)
+      (mapv (fn [{:keys [id name type-desc]}]
+              {:value id :label id
+               :description (if (= name id) type-desc (str name " · " type-desc))})
+            filtered))))
+
+(defn- handle-login-command!
+  "pi handleLoginCommand: bare /login opens the auth-type selector; a
+   reference resolves by exact id/name (case-insensitive) — one hit starts
+   directly, several hits on one provider open its method selector, and no
+   hit opens the provider selector pre-filtered with the typed text."
+  [cs provider-ref]
+  (if (str/blank? provider-ref)
+    (show-login-auth-type-selector! cs)
+    (let [options (find-login-provider-options provider-ref)]
+      (cond
+        (= 1 (count options))
+        (start-provider-login! cs (first options))
+
+        (and (pos? (count options))
+             (= 1 (count (distinct (map :id options)))))
+        (show-login-auth-type-selector! cs options)
+
+        :else
+        (show-login-provider-selector! cs nil provider-ref)))))
+
+(defn- handle-logout-command!
+  "pi showOAuthSelector(\"logout\"): the searchable selector over the stored
+   credentials; selecting removes the credential (pi modelRuntime.logout)."
+  [cs]
+  (let [entries (logout-provider-options)]
+    (if (empty? entries)
+      (ui/chat-history-add-message! (:chat-history cs)
+                                    {:role :assistant
+                                     :content "No stored credentials to remove. /logout only removes credentials saved by /login; environment variables are unchanged."})
+      (let [sel-atom (atom nil)]
+        (reset! sel-atom
+                {:done (dock/mount!
+                        cs
+                        (auth-selector/make-auth-selector
+                         :logout entries
+                         (fn [provider-id _selected-type]
+                           ((:done @sel-atom))
+                           (if-let [entry (some #(when (= provider-id (:id %)) %) entries)]
+                             (try
+                               (auth/remove-credential! (keyword provider-id))
+                               (when (and (:session-atom cs) (:footer-comp cs)
+                                          (:footer-provider cs))
+                                 (update-footer! cs))
+                               (ui/chat-history-add-message! (:chat-history cs)
+                                                             {:role :assistant
+                                                              :content (if (= :oauth (:auth-type entry))
+                                                                         (str "Logged out of " (:name entry))
+                                                                         (str "Removed stored API key for " (:name entry)
+                                                                              ". Environment variables are unchanged."))})
+                               (catch Exception e
+                                 (ui/show-warning! (:chat-history cs)
+                                                   (str "Logout failed: " (ex-message e)))))
+                             (tui/tui-request-render (:tui cs))))
+                         (fn []
+                           ((:done @sel-atom))
+                           (tui/tui-request-render (:tui cs)))))})))))
 
 (defn- register-builtin-command!
   "Register a builtin slash command unless an extension already took the
@@ -938,78 +1126,14 @@
    {:name "login"
     :description "Configure provider authentication"
     :argument-hint "<provider>"
-    :get-argument-completions
-    (fn [_]
-      (mapv (fn [p] {:value (name (:id p)) :label (:name p)})
-            (models/get-providers)))
-    :handler
-    (fn [cs args]
-      (let [provider (some-> (first (str/split args #"\s+")) str/trim not-empty keyword)]
-        (cond
-          (nil? provider)
-          (ui/chat-history-add-message! (:chat-history cs)
-                                        {:role :assistant
-                                         :content (str "Usage: /login <provider>"
-                                                       "\nProviders: "
-                                                       (str/join ", " (map (comp name :id) (models/get-providers))))})
-
-          (nil? (models/get-provider provider))
-          (ui/show-warning! (:chat-history cs) (str "Unknown provider: " (name provider)))
-
-          :else
-          (let [p (models/get-provider provider)
-                methods (login-methods p)]
-            (if (= 1 (count methods))
-              (if (= :oauth (first methods))
-                (oauth-login! cs p)
-                (api-key-login! cs p))
-              (show-login-method-selector! cs p methods))))))})
+    :get-argument-completions login-argument-completions
+    :handler (fn [cs args] (handle-login-command! cs args))})
   (register-builtin-command!
+   ;; pi: no argument hint and no completions — /logout always opens the
+   ;; stored-credential selector
    {:name "logout"
     :description "Remove provider authentication"
-    :argument-hint "<provider>"
-    :get-argument-completions
-    (fn [_]
-      (let [configured (auth/get-credentials)]
-        (mapv (fn [p] {:value (name (:id p)) :label (:name p)})
-              (filter #(contains? configured (:id %)) (models/get-providers)))))
-    :handler
-    (fn [cs args]
-      (let [provider (some-> (first (str/split args #"\s+")) str/trim not-empty keyword)
-            configured (auth/get-credentials)
-            credential-label (fn [cred]
-                               (if (= :oauth (:type cred)) "OAuth credential" "API key"))]
-        (cond
-          (nil? provider)
-          (ui/chat-history-add-message! (:chat-history cs)
-                                        {:role :assistant
-                                         :content (if (seq configured)
-                                                    (str "Usage: /logout <provider>"
-                                                         "\nSaved credentials: "
-                                                         (str/join ", "
-                                                                   (map (fn [[k v]]
-                                                                          (str (name k) " (" (credential-label v) ")"))
-                                                                        configured)))
-                                                    "No stored credentials to remove. /logout only removes credentials saved by /login; environment variables are unchanged.")})
-
-          (nil? (models/get-provider provider))
-          (ui/show-warning! (:chat-history cs) (str "Unknown provider: " (name provider)))
-
-          (not (contains? configured provider))
-          (ui/chat-history-add-message! (:chat-history cs)
-                                        {:role :assistant
-                                         :content (str "No saved credential for " (name provider)
-                                                       " — environment variables are unchanged.")})
-
-          :else
-          (let [kind (credential-label (get configured provider))]
-            (auth/remove-credential! provider)
-            (ui/chat-history-add-message! (:chat-history cs)
-                                          {:role :assistant
-                                           :content (str "Removed stored " kind " for " (name provider)
-                                                         ". Environment variables are unchanged.")})
-            (when (and (:session-atom cs) (:footer-comp cs) (:footer-provider cs))
-              (update-footer! cs))))))}))
+    :handler (fn [cs _] (handle-logout-command! cs))}))
 
 (defn- command-not-implemented
   "In-chat reply for pi slash commands kmet does not implement yet."

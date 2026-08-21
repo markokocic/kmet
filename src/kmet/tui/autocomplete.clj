@@ -303,7 +303,7 @@
           is-quoted-prefix? (or (str/starts-with? prefix "\"")
                                 (str/starts-with? prefix "@\""))
           has-leading-quote-after? (str/starts-with? after-cursor "\"")
-          has-trailing-quote? (str/ends-with? (:value item) "\"")
+          has-trailing-quote? (str/ends-with? (or (:value item) "") "\"")
           adjusted-after (if (and is-quoted-prefix? has-trailing-quote? has-leading-quote-after?)
                            (subs after-cursor 1)
                            after-cursor)
@@ -312,7 +312,7 @@
                                  (str/blank? (str/trim before-prefix))
                                  (not (str/includes? (subs prefix 1) "/")))
           is-at-prefix? (str/starts-with? prefix "@")
-          is-dir? (str/ends-with? (:label item) "/")
+          is-dir? (str/ends-with? (or (:label item) (:value item) "") "/")
           cursor-offset (if (and is-dir? has-trailing-quote?) (dec (count value)) (count value))
           [new-line new-col]
           (cond

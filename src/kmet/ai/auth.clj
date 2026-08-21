@@ -11,6 +11,7 @@
    set-config-key-source! by models/load-models-config!) → env vars in pi
    order."
   (:require [babashka.fs :as fs]
+            [clojure.string :as str]
             [kmet.libs.aws-sigv4 :as aws-sigv4]
             [kmet.libs.edn-store :as cred]
             [kmet.libs.dynamic-value :as dynamic-value]
@@ -355,3 +356,52 @@
                    (dynamic-value/is-config-value-configured? raw))
                  (env-key-present? provider)
                  (ambient-configured? provider))))))
+
+(defn provider-auth-status
+  "Auth status for the /login //logout selectors (pi
+   getProviderAuthStatus): {:configured? true :type :oauth|:api-key
+   :source string :label string?} — :label carries the env-var names for
+   environment-sourced credentials (the selector renders \"✓ env: VARS\").
+   Order: stored credential (\"stored\") → models.edn/extension configured
+   key (!command → \"models_json_command\", $ENV → \"environment\" + var
+   names, literal → \"models_json_key\") → env vars (\"environment\" + the
+   first present var name) → ambient (google-vertex ADC / bedrock AWS,
+   \"ambient\"). {:configured? false} when nothing is configured. Never
+   refreshes or executes commands."
+  [provider]
+  (let [api-key-status (fn [source label]
+                         {:configured? true :type :api-key
+                          :source source :label label})
+        configured (configured-api-key provider)
+        stored (stored-credential provider)]
+    (cond
+      (stored-oauth-credential provider)
+      {:configured? true :type :oauth :source "stored"}
+
+      (and (map? stored) (not= :oauth (:type stored)))
+      (api-key-status "stored" nil)
+
+      (some? configured)
+      (cond
+        (dynamic-value/is-command-config-value? configured)
+        (api-key-status "models_json_command" nil)
+
+        (seq (dynamic-value/get-config-value-env-var-names configured))
+        (if (dynamic-value/is-config-value-configured? configured)
+          (api-key-status "environment"
+                          (str/join ", "
+                                    (dynamic-value/get-config-value-env-var-names configured)))
+          {:configured? false})
+
+        :else (api-key-status "models_json_key" nil))
+
+      ;; env vars in pi order; the label is the first present var (pi
+      ;; resolve's `source: envVar` — a single name, not the whole list)
+      (env-key-present? provider)
+      (api-key-status "environment"
+                      (first (filter #(getenv %) (provider-env-vars provider))))
+
+      (ambient-configured? provider)
+      (api-key-status "ambient" nil)
+
+      :else {:configured? false})))

@@ -11,6 +11,7 @@
             [babashka.http-client :as http]
             [kmet.ai.auth :as auth]
             [kmet.app.commands :as commands]
+            [kmet.app.ui.dock :as dock]
             [kmet.ai.models :as models]
             [kmet.ai.oauth :as oauth]
             [kmet.app.ui :as ui]
@@ -595,59 +596,100 @@
 
 ;; ─── /login auth-type selection (pi showLoginAuthTypeSelector) ─────────────
 
-(t/deftest test-login-methods
+(t/deftest test-login-provider-options
   (models/load-catalogs!)
-  (let [with-oauth (assoc (models/get-provider :deepseek) :oauth (test-oauth-auth))
-        without-oauth (models/get-provider :deepseek)]
-    (t/is (= [:oauth :api-key] ((var inter/login-methods) with-oauth))
-          "oauth first (pi AUTH_TYPE_ORDER)")
-    (t/is (= [:api-key] ((var inter/login-methods) without-oauth)))
-    (t/is (= [:oauth :api-key] ((var inter/login-methods) (models/get-provider :github-copilot)))
-          "github-copilot offers both methods")
-    (t/is (= [:oauth] ((var inter/login-methods) (models/get-provider :openai-codex)))
-          "openai-codex is oauth-only — no api-key login (Phase 12)")
-    (t/is (= [:oauth :api-key] ((var inter/login-methods) (models/get-provider :anthropic)))
-          "anthropic offers oauth + api-key (Phase 16)")
-    (t/is (= [:oauth :api-key] ((var inter/login-methods) (models/get-provider :openrouter)))
-          "openrouter offers oauth + api-key (Phase 16)")))
+  (let [options ((var inter/login-provider-options))]
+    (testing "one entry per offered auth type, sorted by display name"
+      (t/is (= options (sort-by :name options))))
+    (testing "github-copilot offers oauth + api-key entries"
+      (let [entries (filter #(= "github-copilot" (:id %)) options)]
+        (t/is (= #{:oauth :api-key} (set (map :auth-type entries))))))
+    (testing "openai-codex is oauth-only — no api-key login"
+      (let [entries (filter #(= "openai-codex" (:id %)) options)]
+        (t/is (= [:oauth] (mapv :auth-type entries)))))
+    (testing "entries carry the provider's auth status for the ✓/• indicator"
+      (t/is (every? #(contains? % :status) options)))))
+
+(t/deftest test-find-login-provider-options
+  (models/load-catalogs!)
+  (let [find (var inter/find-login-provider-options)]
+    (testing "exact id match"
+      (t/is (= ["deepseek"] (mapv :id (find "deepseek")))))
+    (testing "exact name match, case-insensitive (both auth-type entries)"
+      (t/is (= [:oauth :api-key]
+               (sort-by {:oauth 0 :api-key 1}
+                        (mapv :auth-type (find "GitHub Copilot")))))
+      (t/is (= #{"github-copilot"} (set (mapv :id (find "GITHUB COPILOT"))))))
+    (testing "no match → empty"
+      (t/is (= [] (find "no-such-provider"))))
+    (testing "blank reference → nil (bare /login opens the selector)"
+      (t/is (nil? (find "")))
+      (t/is (nil? (find nil))))))
 
 (t/deftest test-login-command-auth-type-selection
   (commands/clear-commands!)
   (models/load-catalogs!)
   ((var inter/register-builtin-commands!) cfg/default-config)
-  (let [p (assoc (models/get-provider :deepseek) :oauth (test-oauth-auth))
-        api-key-only (models/get-provider :deepseek)
-        started (atom nil)
-        tui {:render-requested? (atom false)}
-        cs {:tui tui
-            :chat-history nil}]
-    (with-redefs [tui/tui-show-overlay (fn [_ _ & _] nil)
-                  tui/tui-hide-overlay (fn [_] nil)
+  (let [started (atom nil)
+        sel-ref (atom nil)
+        cs {:chat-history nil
+            :session-atom nil
+            :footer-comp nil
+            :footer-provider nil
+            :tui nil}]
+    (with-redefs [dock/mount! (fn [_ component & _]
+                                (reset! sel-ref component)
+                                (fn []))
+                  tui/tui-request-render (fn [_] nil)
                   inter/oauth-login! (fn [_ prov] (reset! started [:oauth prov]))
                   inter/api-key-login! (fn [_ prov] (reset! started [:api-key prov]))]
-      (testing "api-key-only provider starts the api-key flow directly"
-        (with-redefs [models/get-provider (fn [_] api-key-only)]
-          ((:handler (commands/find-command "login")) cs "deepseek")
-          (t/is (= :api-key (first @started)))))
-      (testing "ambiguous provider shows the method selector instead of starting"
+      (testing "bare /login opens the auth-type selector (pi)"
         (reset! started nil)
-        (let [captured (atom nil)]
-          (with-redefs [models/get-provider (fn [_] p)
-                        tui/tui-show-overlay (fn [_ comp & _] (reset! captured comp))]
-            ((:handler (commands/find-command "login")) cs "deepseek")
-            (t/is (some? @captured) "selector overlay shown")
-            (t/is (nil? @started) "no flow started yet")
-            (testing "choosing the api-key option starts the api-key flow"
-              (let [sl (:select-list @captured)
-                    on-select @(:on-select sl)]
-                (on-select {:label "Sign in with an API key"}))
-              (t/is (= :api-key (first @started))))
-            (testing "choosing the account option starts the oauth flow"
-              (reset! started nil)
-              (let [sl (:select-list @captured)
-                    on-select @(:on-select sl)]
-                (on-select {:label "Sign in with an account"}))
-              (t/is (= :oauth (first @started))))))))))
+        ((:handler (commands/find-command "login")) cs "")
+        (t/is (some? @sel-ref) "method selector mounted")
+        (t/is (nil? @started) "no flow started yet")
+        (testing "choosing the api-key option opens the provider selector"
+          (let [on-select @(:on-select-atom @sel-ref)]
+            (on-select "Sign in with an API key"))
+          (t/is (nil? @started) "provider selector shown first")
+          (testing "then choosing a provider starts its api-key flow"
+            (let [provider-sel @sel-ref]
+              (t/is (= :login (:mode provider-sel)))
+              (let [on-select @(:on-select-atom provider-sel)]
+                (on-select "deepseek" :api-key))
+              (t/is (= :api-key (first @started))))))))))
+
+(t/deftest test-login-command-reference-resolution
+  (commands/clear-commands!)
+  (models/load-catalogs!)
+  ((var inter/register-builtin-commands!) cfg/default-config)
+  (let [started (atom nil)
+        sel-ref (atom nil)
+        cs {:chat-history nil
+            :session-atom nil
+            :footer-comp nil
+            :footer-provider nil
+            :tui nil}]
+    (with-redefs [dock/mount! (fn [_ component & _]
+                                (reset! sel-ref component)
+                                (fn []))
+                  tui/tui-request-render (fn [_] nil)
+                  inter/oauth-login! (fn [_ prov] (reset! started [:oauth prov]))
+                  inter/api-key-login! (fn [_ prov] (reset! started [:api-key prov]))]
+      (testing "an exact id reference starts directly (pi findLoginProviderOptions)"
+        (reset! started nil)
+        ((:handler (commands/find-command "login")) cs "deepseek")
+        (t/is (= :api-key (first @started))))
+      (testing "a display-name reference matches case-insensitively"
+        (reset! started nil)
+        ((:handler (commands/find-command "login")) cs "DeepSeek")
+        (t/is (= :api-key (first @started))))
+      (testing "a partial reference opens the provider selector pre-filled"
+        (reset! started nil)
+        (reset! sel-ref nil)
+        ((:handler (commands/find-command "login")) cs "git")
+        (t/is (some? @sel-ref) "provider selector mounted")
+        (t/is (nil? @started) "no flow started yet")))))
 
 ;; ─── /logout credential kinds ───────────────────────────────────────────────
 
@@ -658,19 +700,34 @@
   (with-auth-file
     (fn [_]
       (let [msgs (atom [])
+            sel-ref (atom nil)
             cs {:chat-history nil
                 :session-atom nil
                 :footer-comp nil
-                :footer-provider nil}]
+                :footer-provider nil
+                :tui nil}]
         (with-redefs [ui/chat-history-add-message! (fn [_ msg] (swap! msgs conj msg))
-                      ui/show-warning! (fn [_ _] nil)]
+                      ui/show-warning! (fn [_ _] nil)
+                      dock/mount! (fn [_ component & _]
+                                    (reset! sel-ref component)
+                                    (fn []))
+                      tui/tui-request-render (fn [_] nil)]
           (auth/set-oauth-credential! :github-copilot
                                       {:type :oauth :access "a" :refresh "r"
                                        :expires 9999999999999})
-          ((:handler (commands/find-command "logout")) cs "github-copilot")
+          ;; /logout takes no argument — it always opens the selector (pi)
+          ((:handler (commands/find-command "logout")) cs "")
+          (t/is (some? @sel-ref) "logout selector mounted")
+          (t/is (= :logout (:mode @sel-ref)))
+          (let [entry (some #(when (= "github-copilot" (:id %)) %)
+                            (:entries @(:state-atom @sel-ref)))]
+            (t/is (some? entry) "stored credential listed")
+            (t/is (= :oauth (:auth-type entry)))
+            (let [on-select @(:on-select-atom @sel-ref)]
+              (on-select "github-copilot" :oauth)))
           (t/is (= 1 (count @msgs)))
-          (t/is (re-find #"Removed stored OAuth credential" (:content (first @msgs)))
-                "logout names the credential kind")
+          (t/is (re-find #"Logged out of GitHub Copilot" (:content (first @msgs)))
+                "oauth logout names the provider")
           (t/is (nil? (auth/stored-credential :github-copilot))
                 "credential removed"))))))
 

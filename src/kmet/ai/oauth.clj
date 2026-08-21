@@ -158,9 +158,10 @@
 
 (defn- fetch-json
   "HTTP request expecting JSON (pi fetchJson) via proxy/request-json, which
-   throws ex-info on non-2xx and parses the JSON body."
+   throws ex-info on non-2xx; returns the parsed JSON body (pi returns
+   response.json() — callers read payload fields, not the status envelope)."
   [url opts]
-  (proxy/request-json url opts nil))
+  (:body (proxy/request-json url opts nil)))
 
 (defn- start-device-flow
   "Start a device-code flow for a GitHub domain (pi startDeviceFlow):
@@ -239,14 +240,15 @@
 
 (defn- refresh-github-copilot-access-token
   "Exchange a GitHub access/refresh token for a Copilot token (pi
-   refreshGitHubCopilotAccessToken): POST /copilot_internal/v2/token with
-   Authorization: Bearer. Returns the oauth credential map with the 5-min
-   expiry skew applied."
+   refreshGitHubCopilotAccessToken): GET /copilot_internal/v2/token with
+   Authorization: Bearer (pi sends no method — fetch defaults to GET; a
+   POST 404s). Returns the oauth credential map with the 5-min expiry
+   skew applied."
   [refresh-token enterprise-domain]
   (let [domain (or enterprise-domain "github.com")
         {:keys [copilot-token-url]} (get-urls domain)
         raw (fetch-json copilot-token-url
-                        {:method :post
+                        {:method :get
                          :headers (assoc copilot-headers
                                          "Accept" "application/json"
                                          "Authorization" (str "Bearer " refresh-token))

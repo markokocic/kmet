@@ -128,18 +128,30 @@
           "extension command survives builtin registration")
     (t/is (some? (commands/find-command "model")) "unclaimed builtins still register")))
 
-(deftest test-login-logout-unknown-provider
-  (testing "login/logout validate the provider against the registry"
+(deftest test-login-logout-unmatched-reference
+  (testing "an unmatched /login reference opens the provider selector pre-filled;
+           /logout always opens the stored-credential selector (pi)"
     (commands/clear-commands!)
     ((var inter/register-builtin-commands!) cfg/default-config)
-    (let [warned (atom nil)]
-      (with-redefs [ui/show-warning! (fn [_ msg] (reset! warned msg))
-                    ui/chat-history-add-message! (fn [_ _] nil)]
+    (let [sel-ref (atom nil)]
+      (with-redefs [dock/mount! (fn [_ component & _]
+                                  (reset! sel-ref component)
+                                  (fn []))
+                    tui/tui-request-render (fn [_] nil)
+                    ui/chat-history-add-message! (fn [_ _] nil)
+                    ui/show-warning! (fn [_ _] nil)
+                    auth/get-credentials (fn [] {:github-copilot {:type :oauth
+                                                                  :access "a" :refresh "r"
+                                                                  :expires 9e99}})]
         ((:handler (commands/find-command "login")) {} "nonexistent-provider")
-        (t/is (= "Unknown provider: nonexistent-provider" @warned))
-        (reset! warned nil)
-        ((:handler (commands/find-command "logout")) {} "nonexistent-provider")
-        (t/is (= "Unknown provider: nonexistent-provider" @warned))))))
+        (t/is (some? @sel-ref) "provider selector mounted")
+        (t/is (= :login (:mode @sel-ref)))
+        (t/is (= "nonexistent-provider" (:search @(:state-atom @sel-ref)))
+              "the typed reference pre-fills the filter")
+        (reset! sel-ref nil)
+        ((:handler (commands/find-command "logout")) {} "")
+        (t/is (some? @sel-ref) "logout selector mounted")
+        (t/is (= :logout (:mode @sel-ref)))))))
 
 (deftest test-model-command-switches-model
   (testing "/model resolves provider/model patterns and switches the agent"

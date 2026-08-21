@@ -110,6 +110,29 @@
       (t/is (false? (auth/configured? :deepseek)))
       (t/is (false? (auth/configured? :nonexistent))))))
 
+(t/deftest test-provider-auth-status
+  (t/testing "stored oauth credential → oauth/stored"
+    (with-redefs [auth/auth-atom (atom {:github-copilot {:type :oauth
+                                                         :access "a" :refresh "r"
+                                                         :expires 9e9}})]
+      (t/is (= {:configured? true :type :oauth :source "stored"}
+               (auth/provider-auth-status :github-copilot)))))
+  (t/testing "stored api-key → api-key/stored"
+    (with-redefs [auth/auth-atom (atom {:deepseek {:key "k"}})
+                  auth/getenv (fn [_] nil)]
+      (t/is (= {:configured? true :type :api-key :source "stored" :label nil}
+               (auth/provider-auth-status :deepseek)))))
+  (t/testing "present env var → environment with the var name as label"
+    (with-redefs [auth/auth-atom (atom {})
+                  auth/getenv #(when (= % "DEEPSEEK_API_KEY") "v")]
+      (t/is (= {:configured? true :type :api-key :source "environment"
+                :label "DEEPSEEK_API_KEY"}
+               (auth/provider-auth-status :deepseek)))))
+  (t/testing "nothing configured → configured? false"
+    (with-redefs [auth/auth-atom (atom {})
+                  auth/getenv (fn [_] nil)]
+      (t/is (= {:configured? false} (auth/provider-auth-status :deepseek))))))
+
 ;; ─── auth.edn persistence ──────────────────────────────────────────────────
 
 (t/deftest test-set-remove-credential!

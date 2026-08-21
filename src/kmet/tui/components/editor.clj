@@ -1255,28 +1255,17 @@
               (do (apply-selected-completion! this) nil)
 
               (and (keys/matches-key? data "enter") (not @disable-submit))
-              (let [line (clojure.string/join "\n" (:lines @(:state-atom this)))
-                    arg-completion? (and (str/starts-with? line "/")
-                                         (not (str/starts-with? prefix "/")))]
-                (cond
-                  ;; slash command, command-name completion: apply, then submit
-                  (str/starts-with? prefix "/")
-                  (apply-selected-completion! this)
-
-                  ;; slash command, argument completion: the typed args win —
-                  ;; applying the completion over them corrupts the command
-                  ;; (e.g. "/theme light" + Enter). Drop the dropdown and
-                  ;; submit as-is (Tab still completes the command name).
-                  arg-completion?
-                  (cancel-autocomplete this)
-
-                  ;; non-slash line (file/@ completion): apply the selection
-                  :else
-                  (apply-selected-completion! this))
-                (when (or (str/starts-with? prefix "/") arg-completion?)
-                  (when-let [cb @on-submit]
-                    (cb (clojure.string/join "\n" (:lines @(:state-atom this))))))
-                nil)))
+              ;; pi tui.select.confirm with the dropdown open: apply the
+              ;; selected completion; only a command-name completion (prefix
+              ;; starts with "/") falls through to submit — an argument
+              ;; completion (e.g. "/login git" → "/login github-copilot")
+              ;; replaces the typed text and waits for a second Enter.
+              (do (if (str/starts-with? prefix "/")
+                    (do (apply-selected-completion! this)
+                        (when-let [cb @on-submit]
+                          (cb (clojure.string/join "\n" (:lines @(:state-atom this))))))
+                    (apply-selected-completion! this))
+                  nil)))
 
           ;; App actions (pi: CustomEditor.handleInput) — registered action
           ;; handlers take precedence over editor-internal key handling. Paste
