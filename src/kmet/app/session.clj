@@ -825,6 +825,27 @@
             @(:entries session))
       "(no messages)"))
 
+(defn get-prompt-history
+  "User message texts of the session's active branch (root→leaf,
+  compaction-aware — pi: buildContextEntries), matching the editor's
+  prompt-history convention (pi: addToHistory — empty messages skipped,
+  consecutive duplicates collapsed, newest 100 kept). Used to repopulate
+  the editor's Up/Down history when resuming a session; kmet sessions are
+  append-only, so the history is reconstituted from :user entries rather
+  than stored separately."
+  [session]
+  (loop [ts (->> (context-entries (get-branch session))
+                 (filter #(= :user (:role %)))
+                 (keep (fn [e] (let [t (entry-text e)] (when (seq t) t)))))
+         acc []]
+    (if-let [t (first ts)]
+      (recur (rest ts)
+             (if (= t (peek acc))
+               acc
+               (let [acc (conj acc t)]
+                 (if (> (count acc) 100) (subvec acc 1) acc))))
+      acc)))
+
 (defn- message-entry?
   "True for conversation message entries (pi: buildSessionInfo counts
    entry.type === \"message\" — user/assistant/tool, incl. bash results

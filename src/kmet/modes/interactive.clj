@@ -1253,6 +1253,12 @@
     (agent/apply-session-settings! @(:agent-state cs))
     (sync-footer-model! cs))
   (replay-branch! cs sess)
+  ;; Repopulate the editor's prompt history only on the resume paths
+  ;; (startup --continue, /resume — pi: renderInitialMessages with
+  ;; populateHistory). Fork/clone keep the shared editor's existing history
+  ;; (pi: navigateTree/switchSession reuse the same editor instance).
+  (when apply-settings?
+    (editor/editor-set-history! (:editor cs) (session/get-prompt-history sess)))
   (update-footer! cs))
 
 (defn- handle-new-session

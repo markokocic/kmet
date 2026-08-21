@@ -292,6 +292,51 @@
     (s/append-entry session {:role :user :content [{:type :text :text "steered"}]})
     (t/is (= "hello" (s/get-first-message session)) "first user message wins")))
 
+(t/deftest test-session-prompt-history
+  ;; Prompt history (editor Up/Down) is reconstituted from :user entries of
+  ;; the ACTIVE branch on session resume (pi: buildContextEntries — abandoned
+  ;; branches and pre-compaction messages excluded), matching the editor's
+  ;; conventions: empty skipped, consecutive duplicates collapsed, newest 100
+  ;; kept (pi: addToHistory).
+  (let [session (s/create-session test-dir)]
+    (t/is (empty? (s/get-prompt-history session)) "empty session")
+    (s/append-entry session {:role :user :content [{:type :text :text "hello"}]})
+    (s/append-entry session {:role :assistant :content [{:type :text :text "hi"}]})
+    (s/append-entry session {:role :user :content [{:type :text :text "how are you"}]})
+    (s/append-entry session {:role :bash :command "ls" :output "" :exit-code 0})
+    (s/append-entry session {:role :user :content [{:type :text :text ""}]})
+    (t/is (= ["hello" "how are you"] (s/get-prompt-history session))
+          "user messages in order, empty messages skipped")
+    ;; consecutive duplicates are collapsed (editor-push-history! dedupes)
+    (s/append-entry session {:role :user :content [{:type :text :text "how are you"}]})
+    (t/is (= ["hello" "how are you"] (s/get-prompt-history session))
+          "consecutive duplicate collapsed")))
+
+(t/deftest test-session-prompt-history-active-branch-only
+  ;; Prompts from an abandoned branch are never in the restored history —
+  ;; the active branch (root→leaf) is the only source (pi: buildContextEntries).
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content [{:type :text :text "kept"}]})
+    (s/append-entry session {:role :assistant :content [{:type :text :text "a"}]})
+    ;; branch point: "old" prompt + its assistant reply, then branch back
+    (let [branch-at (:id (s/append-entry session {:role :user :content [{:type :text :text "old"}]}))]
+      (s/append-entry session {:role :assistant :content [{:type :text :text "b"}]})
+      (s/branch! session branch-at)
+      (s/append-entry session {:role :user :content [{:type :text :text "new"}]})
+      (s/append-entry session {:role :assistant :content [{:type :text :text "c"}]})
+      (t/is (= ["kept" "old" "new"] (s/get-prompt-history session))
+            "active branch only — 'old' is on the path, abandoned siblings excluded")))
+  ;; compaction: pre-compaction prompts are excluded (pi: buildContextEntries
+  ;; returns [compaction, ...from first-kept-id])
+  (let [session (s/create-session test-dir)]
+    (s/append-entry session {:role :user :content [{:type :text :text "old prompt"}]})
+    (let [kept (:id (s/append-entry session {:role :assistant :content [{:type :text :text "x"}]}))]
+      (s/append-entry session {:role :user :content [{:type :text :text "new prompt"}]})
+      (s/append-entry session {:role :assistant :content [{:type :text :text "y"}]})
+      (s/compact-with-summary! session "summary" kept)
+      (t/is (= ["new prompt"] (s/get-prompt-history session))
+            "pre-compaction prompts excluded"))))
+
 (t/deftest test-session-message-count
   ;; pi: buildSessionInfo messageCount — message entries only. kmet's :bash
   ;; role is the EDN analogue of pi's tool-message entries (bash results are
