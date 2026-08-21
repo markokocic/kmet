@@ -259,14 +259,18 @@
 
         ;; Down/j — clamp at the bottom
         (or (kb/matches-key kmgr data "tui.select.down") (= data "j"))
-        (do (swap! selected-idx-atom #(min (dec n) (inc %)))
-            (refresh-rows! this)
+        (do (when (pos? n)
+              (swap! selected-idx-atom #(min (dec n) (inc %)))
+              (refresh-rows! this))
             nil)
 
-        ;; Enter — select (pi tui.select.confirm / "\n")
+        ;; Enter — select (pi tui.select.confirm / "\n"; pi guards on the
+        ;; selected option's truthiness — nth on an empty/stale index must
+        ;; not throw here)
         (kb/matches-key kmgr data "tui.select.confirm")
-        (do (when-let [cb @on-select-atom]
-              (cb (nth options @selected-idx-atom)))
+        (do (when (and (pos? n) (< @selected-idx-atom n))
+              (when-let [cb @on-select-atom]
+                (cb (nth options @selected-idx-atom))))
             nil)
 
         ;; Escape / Ctrl+C — cancel (pi tui.select.cancel)
