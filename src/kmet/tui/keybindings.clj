@@ -33,6 +33,8 @@
    "tui.input.copy"               {:default-keys ["ctrl+c"]             :description "Copy selection"}
    "tui.select.up"                {:default-keys ["up"]                 :description "Move selection up"}
    "tui.select.down"              {:default-keys ["down"]               :description "Move selection down"}
+   "tui.select.pageUp"            {:default-keys ["pageUp"]             :description "Page up"}
+   "tui.select.pageDown"          {:default-keys ["pageDown"]           :description "Page down"}
    "tui.select.confirm"           {:default-keys ["enter"]              :description "Confirm selection"}
    "tui.select.cancel"            {:default-keys ["escape" "ctrl+c"]    :description "Cancel selection"}})
 

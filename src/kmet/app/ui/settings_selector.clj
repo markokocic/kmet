@@ -1,5 +1,5 @@
 (ns kmet.app.ui.settings-selector
-  "Settings selector overlay (pi: showSettingsSelector +
+  "Settings selector panel (pi: showSettingsSelector +
    settings-selector.ts, simplified) — the thinking-level row (the current
    model's available levels, persisted to settings :thinking), the
    hide-thinking toggle, the retry block (settings.edn :retry —
@@ -10,10 +10,10 @@
             [kmet.ai.api.shared :as shared]
             [kmet.ai.models :as models]
             [kmet.app.ui :as ui]
+            [kmet.app.ui.dock :as dock]
             [kmet.app.ui.model-selector :as model-selector]
             [kmet.config :as cfg]
             [kmet.tui.core :as tui]
-            [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as th]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.dynamic-border :as db]
@@ -27,7 +27,8 @@
    live to the agent); the rest of pi's settings surface stays on the
    not-implemented list."
   [cs]
-  (let [ag @(:agent-state cs)
+  (let [sel-atom (atom nil)
+        ag @(:agent-state cs)
         model (models/get-model @(:provider ag) @(:model ag))
         levels (if model (shared/get-supported-thinking-levels model) [:off])
         current (or (some #{(keyword @(:thinking ag))} levels) (first levels))
@@ -106,25 +107,16 @@
                                (save-retry! [:retry :base-delay-ms] value)))))]
     (settings-list/settings-list-set-on-escape!
      sl (fn []
-          (tui/tui-hide-overlay (:tui cs))
+          ((:done @sel-atom))
           (tui/tui-request-render (:tui cs))))
     ;; Frame the list like pi's SettingsSelectorComponent (DynamicBorder +
-    ;; SettingsList + DynamicBorder) so the overlay reads as a panel instead
-    ;; of floating transparent text; width 60 fits the full hint line and
-    ;; height 12 fits border + 10 content lines without clipping.
+    ;; SettingsList + DynamicBorder); the list is the focus target (pi:
+    ;; showSelector's focus) since the frame container is inert chrome.
     (let [th (th/get-current-theme)
-          frame (container/make-container)
-          _ (container/container-add-child
-             frame (db/make-dynamic-border #(th/fg th :accent %)))
-          _ (container/container-add-child frame sl)
-          _ (container/container-add-child
-             frame (db/make-dynamic-border #(th/fg th :accent %)))
-          comp (reify tui/IComponent
-                 (render [_ width] (protocols/render frame width))
-                 (handle-input [_ data] (protocols/handle-input sl data))
-                 (invalidate [_] (protocols/invalidate frame))
-                 tui/IFocusable
-                 (focused [_] (protocols/focused sl))
-                 (set-focused! [_ val] (protocols/set-focused! sl val)))]
-      (tui/tui-show-overlay (:tui cs) comp :width 60 :height 12)
-      (tui/tui-request-render (:tui cs)))))
+          frame (container/make-container
+                 [(db/make-dynamic-border #(th/fg th :accent %))
+                  sl
+                  (db/make-dynamic-border #(th/fg th :accent %))])]
+      ;; pi: showSelector — mount the framed panel, focus the list
+      ;; (focus: the interactive child)
+      (reset! sel-atom {:done (dock/mount! cs frame sl)}))))

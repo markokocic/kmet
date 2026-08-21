@@ -31,6 +31,16 @@
    "app.models.reorderDown"     {:default-keys ["alt+down"]               :description "Move model down in the cycle"}
    "app.tools.expand"           {:default-keys ["ctrl+o"]                 :description "Toggle tool output"}
    "app.thinking.toggle"        {:default-keys ["ctrl+t"]                 :description "Toggle thinking blocks"}
+   "app.session.toggleNamedFilter" {:default-keys ["ctrl+n"]              :description "Toggle named session filter"}
+   "app.session.new"           {:default-keys []                          :description "Start a new session"}
+   "app.session.tree"          {:default-keys []                          :description "Open session tree"}
+   "app.session.fork"          {:default-keys []                          :description "Fork current session"}
+   "app.session.resume"        {:default-keys []                          :description "Resume a session"}
+   "app.session.togglePath"    {:default-keys ["ctrl+p"]                 :description "Toggle session path display"}
+   "app.session.toggleSort"    {:default-keys ["ctrl+s"]                 :description "Toggle session sort mode"}
+   "app.session.rename"        {:default-keys ["ctrl+r"]                 :description "Rename session"}
+   "app.session.delete"        {:default-keys ["ctrl+d"]                 :description "Delete session"}
+   "app.session.deleteNoninvasive" {:default-keys ["ctrl+backspace"]     :description "Delete session when query is empty"}
    "app.message.copy"           {:default-keys ["ctrl+x"]                 :description "Copy message to clipboard"}
    "app.message.followUp"       {:default-keys ["alt+enter"]              :description "Queue follow-up message"}
    "app.message.dequeue"        {:default-keys ["alt+up"]                 :description "Restore queued messages"}

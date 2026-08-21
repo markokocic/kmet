@@ -1,5 +1,5 @@
 (ns kmet.app.ui.scoped-models-selector
-  "Scoped-models selector overlay — enable/disable/reorder the models Ctrl+P
+  "Scoped-models selector panel — enable/disable/reorder the models Ctrl+P
    cycles through (pi: ScopedModelsSelectorComponent). Changes are session-
    only until Ctrl+S persists them as settings :enabled-models patterns.
    Enabled-ids semantics: nil = all enabled; vector = explicit ordered list
@@ -11,6 +11,7 @@
             [kmet.app.loop :as agent]
             [kmet.app.model-resolver :as resolver]
             [kmet.app.ui.chat-history :as chat-history]
+            [kmet.app.ui.dock :as dock]
             [kmet.app.ui.model-catalog :as model-catalog]
             [kmet.config :as cfg]
             [kmet.tui.components.container :as container]
@@ -336,7 +337,7 @@
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-scoped-models-selector
-  "Create the scoped-models selector overlay component (pi
+  "Create the scoped-models selector component (pi
    ScopedModelsSelectorComponent). MODELS — all available models; ENABLED-IDS
    — the initial enabled list (nil = all enabled). Callbacks:
    :on-change (fn [ids|nil]) — session-only edits; :on-persist
@@ -389,14 +390,15 @@
 ;; ─── Public helpers ────────────────────────────────────────────────────────
 
 (defn show-scoped-models-selector
-  "pi showModelsSelector — /scoped-models opens the enabled-models overlay
+  "pi showModelsSelector — /scoped-models opens the enabled-models panel
    for Ctrl+P cycling. Initial enabled ids: session scoped models when set,
    else the settings :enabled-models patterns resolved through
    resolve-model-scope-models (unresolved patterns survive as [unavailable]
    rows), else nil (all enabled). Changes are session-only until Ctrl+S
    writes :enabled-models; the footer provider count updates live."
   [cs]
-  (let [available (models/get-available)
+  (let [sel-atom (atom nil)
+        available (models/get-available)
         ag @(:agent-state cs)
         session-scoped (vec (agent/get-scoped-models ag))
         patterns (cfg/get-enabled-models-live (:config cs))
@@ -449,10 +451,10 @@
                               {:role :assistant
                                :content "Model selection saved to settings."})))
              :on-cancel (fn []
-                          (tui/tui-hide-overlay (:tui cs))
+                          ((:done @sel-atom))
                           (tui/tui-request-render (:tui cs))))]
-    (tui/tui-show-overlay (:tui cs) sel :width 62 :max-height 24)
-    (tui/tui-request-render (:tui cs))))
+    ;; pi: showSelector — the selector replaces the editor dock
+    (reset! sel-atom {:done (dock/mount! cs sel)})))
 
 (defn scoped-models-get-enabled-ids
   "The selector's current enabled ids (nil = all enabled)."

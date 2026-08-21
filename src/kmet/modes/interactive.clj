@@ -122,6 +122,7 @@
                       bash-signal
                       pending-bash-components
                       pending-messages-container
+                      editor-container
                       theme-controller
                       active-status-kind])
 
@@ -2750,7 +2751,8 @@
           widget-container-above (container/make-container [sp2])
           editor-container (container/make-container [ed])
           widget-container-below (container/make-container)
-          cs (assoc cs :status-container status-container)]
+          cs (assoc cs :status-container status-container
+                    :editor-container editor-container)]
 
       ;; Add components in pi's layout-root order: the transcript document
       ;; first, then the dock children top-to-bottom (pending messages,

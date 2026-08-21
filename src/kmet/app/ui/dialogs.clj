@@ -106,7 +106,10 @@
    PREFILL — optional initial text (default \"\")."
   [title on-submit on-cancel th & [prefill]]
   (let [inp (input/make-input)
-        _ (when (seq prefill) (input/input-set-value! inp prefill))
+        _ (when (seq prefill)
+            (input/input-set-value! inp prefill)
+            ;; pi: LabelInput places the cursor after the prefilled text
+            (reset! (:cursor-atom inp) (count prefill)))
         _ (input/input-set-on-submit! inp on-submit)
         _ (input/input-set-on-escape! inp on-cancel)]
     (map->InputDialog

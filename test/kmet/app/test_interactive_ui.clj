@@ -15,6 +15,7 @@
             [kmet.app.theme-controller :as theme-ctrl]
             [kmet.app.ui :as ui]
             [kmet.app.ui.chat-history :as chat-history]
+            [kmet.app.ui.dock :as dock]
             [kmet.app.ui.model-catalog :as model-catalog]
             [kmet.app.ui.model-selector :as model-selector]
             [kmet.ai.models :as m]
@@ -25,6 +26,16 @@
             [babashka.fs :as fs]
             [kmet.config :as cfg]
             [kmet.tui.keybindings :as tui-kb]))
+
+(defn- capture-mount!
+  "A dock/mount! stand-in for tests: records the component that receives
+  keys (the focus target when given, else COMPONENT) in REF and returns a
+  no-op done (pi: showSelector mounts into the editor dock and focuses the
+  interactive child; the tests don't have a dock)."
+  [ref]
+  (fn [_ component & [focus]]
+    (reset! ref (or focus component))
+    (fn [])))
 
 (defn- transfer-editor! [app-ed custom-ed kb]
   ((var inter/transfer-editor!) app-ed custom-ed kb))
@@ -367,7 +378,8 @@
                     chat-history/chat-history-add-message! (fn [_ _] nil)
                     cfg/get-enabled-models-live (fn [_] nil)
                     model-catalog/update-available-provider-count! (fn [_] nil)
-                    tui/tui-show-overlay (fn [_ sel & _] (reset! sel-ref sel))
+                    dock/mount! (capture-mount! sel-ref)
+                    tui/tui-set-focus (fn [_ _])
                     tui/tui-request-render (fn [_])]
         (testing "no session scoped models and no patterns → all enabled"
           ((:handler (commands/find-command "scoped-models")) cs "")
@@ -410,7 +422,8 @@
       (with-redefs [auth/configured? (fn [_] true)
                     chat-history/chat-history-add-message! (fn [_ _] nil)
                     model-catalog/update-available-provider-count! (fn [_] nil)
-                    tui/tui-show-overlay (fn [_ sel & _] (reset! sel-ref sel))
+                    dock/mount! (capture-mount! sel-ref)
+                    tui/tui-set-focus (fn [_ _])
                     tui/tui-request-render (fn [_])]
         ((:handler (commands/find-command "scoped-models")) cs "")
         (let [sel @sel-ref]
@@ -443,7 +456,8 @@
                     model-selector/sync-footer-model! (fn [_] nil)
                     ui/chat-history-get-thinking-hidden (fn [_] false)
                     cfg/save-setting! (fn [path value] (reset! saved [path value]))
-                    tui/tui-show-overlay (fn [_ comp & _] (reset! sl-ref comp))
+                    dock/mount! (capture-mount! sl-ref)
+                    tui/tui-set-focus (fn [_ _])
                     tui/tui-request-render (fn [_])]
         ((:handler (commands/find-command "settings")) cs "")
         (let [sl @sl-ref]
@@ -474,7 +488,8 @@
                     cfg/get-retry-settings-live
                     (fn [_] {:enabled true :max-retries 3 :base-delay-ms 2000})
                     cfg/save-setting! (fn [path value] (reset! saved [path value]))
-                    tui/tui-show-overlay (fn [_ comp & _] (reset! sl-ref comp))
+                    dock/mount! (capture-mount! sl-ref)
+                    tui/tui-set-focus (fn [_ _])
                     tui/tui-request-render (fn [_])]
         (t/is (= 3 @(:max-retries ag)) "default retry wired at startup")
         ((:handler (commands/find-command "settings")) cs "")

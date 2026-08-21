@@ -342,6 +342,12 @@
   (reset! (:selected-idx-atom sl) 0)
   (reset! (:filter-atom sl) ""))
 
+(defn select-list-set-selected!
+  "Move the selection to IDX, clamped to the current item count."
+  [sl idx]
+  (let [n (count @(:items-atom sl))]
+    (reset! (:selected-idx-atom sl) (max 0 (min (max 0 (dec n)) idx)))))
+
 (defn select-list-set-filter!
   "Set the initial filter text (pi: ModelSelectorComponent initialSearch —
    /model opens the selector with the failed search term pre-filled)."

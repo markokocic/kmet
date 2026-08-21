@@ -1,6 +1,6 @@
 (ns kmet.app.ui.model-selector
   "Model selection UI (pi: modes/interactive/components/model-selector.ts +
-   model-search.ts): the /model overlay selector (pi ModelSelectorComponent —
+   model-search.ts): the /model selector (pi ModelSelectorComponent —
    visible search filter, wrap-around navigation, current-model ✓, all/scoped
    Tab toggle), and the model-switch helpers shared with cycling and the
    footer sync."
@@ -10,6 +10,7 @@
             [kmet.ai.models :as models]
             [kmet.app.model-resolver :as resolver]
             [kmet.app.ui.chat-history :as chat-history]
+            [kmet.app.ui.dock :as dock]
             [kmet.app.ui.footer-data-provider :as fdp]
             [kmet.app.ui.model-catalog :as model-catalog]
             [kmet.config :as cfg]
@@ -248,7 +249,7 @@
       (text/text-set! sh (scope-hint-str)))))
 
 (defn make-model-selector
-  "Create the model selector overlay component (pi ModelSelectorComponent).
+  "Create the model selector component (pi ModelSelectorComponent).
    MODELS — all available models (sorted current-first); SCOPED-MODELS — the
    session scoped models (may be empty); CURRENT-MODEL — the model in use
    (marked with ✓ and selected initially). Options: :search (pre-filled
@@ -318,11 +319,12 @@
     (protocols/set-focused! (:search-input this) val)))
 
 (defn show-model-selector
-  "Model selector overlay (pi ModelSelectorComponent): a visible search
-   filter, wrap-around arrow navigation, the current model marked with ✓ —
-   bound to Ctrl+L, bare /model, and the /model resolution-failure path
-   with SEARCH-TERM pre-filled. When session scoped models are set the
-   selector opens scoped (Tab toggles all/scoped)."
+  "Model selector (pi ModelSelectorComponent, mounted via showSelector —
+   replaces the editor dock): a visible search filter, wrap-around arrow
+   navigation, the current model marked with ✓ — bound to Ctrl+L, bare
+   /model, and the /model resolution-failure path with SEARCH-TERM
+   pre-filled. When session scoped models are set the selector opens
+   scoped (Tab toggles all/scoped)."
   ([cs] (show-model-selector cs nil))
   ([cs search-term]
    (let [ag @(:agent-state cs)
@@ -338,17 +340,20 @@
                                                        (subs id (inc slash))))))
                                (agent/get-scoped-models ag)))
              current (models/get-model @(:provider ag) @(:model ag))
+             ;; late binding: the callbacks reach the mount's done through
+             ;; this atom (pi: done() is created by showSelector)
+             sel-atom (atom nil)
              sel (make-model-selector
                   available scoped current
                   :search search-term
                   :on-select (fn [m]
-                               (tui/tui-hide-overlay (:tui cs))
+                               ((:done @sel-atom))
                                (apply-model-switch! cs m nil)
                                (tui/tui-request-render (:tui cs)))
                   :on-cancel (fn []
-                               (tui/tui-hide-overlay (:tui cs))
+                               ((:done @sel-atom))
                                (tui/tui-request-render (:tui cs))))]
-         (tui/tui-show-overlay (:tui cs) sel :width 55 :max-height 24)
+         (reset! sel-atom {:done (dock/mount! cs sel)})
          (tui/tui-request-render (:tui cs)))))))
 
 (defn resolve-model-ref
