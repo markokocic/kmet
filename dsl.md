@@ -31,15 +31,25 @@ So the architecture is:
   new.
 - **Reconciler** (dsl): compiles trees to records, reconciles by key,
   re-applies props.
-- **Reactivity**: `track!` — already exists; a component fn is re-invoked
-  when the atoms it derefs change.
-- **Lifecycle**: `dispose` — new IComponent method.
+- **Root** (`dsl/root`): the one constructor from a tree to a mounted,
+  disposable record — how trees enter the TUI (§2.6).
+- **Reactivity**: `track!` on host elements (already exists); fn
+  components are frame-batched — dependency changes schedule frames
+  (§3.4), each frame re-derives fn trees from the roots, leaf caches +
+  line diff absorb the cost. Not Reagent's per-component reactions: a
+  bare `@atom` in a deep fn schedules nothing — only subscription/
+  track! invalidation brings frames (§2.4, §3.4).
+- **Lifecycle**: `dispose` — new method on IComponent (no new protocol;
+  §5). `IComponentKind` retires — kind becomes a stamped record field.
+- **Scheduling**: invalidation schedules the next frame (§3.4) — new;
+  without it, pure data updates never reach the screen.
 
 The flow, end to end:
 
 ```
-app atoms → fn (re-derives per pass) → tree → compile+reconcile (keyed, per
-          level) → record tree → lines (each record caches) → frame diff → terminal
+app atoms → (change) → invalidate + schedule frame → fn (re-derives per
+          pass) → tree → compile+reconcile (keyed, per level) → record
+          tree → lines (each record caches) → frame diff → terminal
 ```
 
 ---
@@ -52,26 +62,37 @@ Trees are plain data plus whatever code you want, evaluated once per
 re-render:
 
 ```clojure
-(dsl/component
-  [:box {:padding 1}
-   [:text "hi"]
-   (when-let [s @status] [:status-line s])   ;; nil → skipped
-   existing-component                        ;; records pass through
-   (map #(vector :text (:content %)) msgs)]) ;; seqs get spliced
+[:box {:padding 1}
+ [:text "hi"]
+ (when-let [s @status] [:status-line s])   ;; nil → skipped
+ existing-component                        ;; records pass through
+ ;; seqs get spliced — always key spliced children, or prepending a
+ ;; message rebuilds every unkeyed sibling after it:
+ (map #(vector :text {:key (:id %) :text (:content %)}) msgs)]
 ```
+
+A tree becomes live only through `dsl/root` (§2.6) — there is no other
+public entry point.
 
 Children rules:
 
 | child | result |
 |---|---|
 | `nil` | skipped — this is the `when`/`when-let`/`if` support, free |
-| string | compiled to a Text |
+| string | compiled to a Text (the tag's `:primary` shorthand, §2.2) |
 | record | passed through as-is (identity preserved) |
 | seq | spliced (each element treated as a child) |
 | stack-entry map (VStack) | passed through as-is |
 
-Tags are keyword (registry) or a fn head: `[status-area {:mode :normal}]`
-is valid Reagent-style usage.
+Tags are keyword (tag table, §2.2) or a fn head: `[status-area
+{:mode :normal}]` is valid Reagent-style usage. Two more normalizer
+rules keep call sites terse:
+
+- **Props map optional** — `[:v-stack child…]` compiles with `{}`;
+  the map slot is needed only when props exist (`:key`, `:ref`, options).
+- **A fn component may return a seq of roots** — spliced where the
+  element sits (the fragment/`:<>` equivalent), for wrappers that must
+  not introduce a Box/VStack node into layout.
 
 ### 2.2 Tag table — no registry
 
@@ -83,22 +104,42 @@ per-component bit:
 
 ```clojure
 (def tags
-  {:text    {:ctor map->Text :primary :text
+  {:text    {:ctor map->Text :primary :text :container? false
              :defaults {:padding-x 1 :padding-y 1}}
-   :box     {:ctor map->Box :children? true
+   :box     {:ctor map->Box :container? true
              :defaults {:padding-x 1 :padding-y 1}}
-   :v-stack {:ctor map->VStack :children? true :children-key :entries}})
+   :v-stack {:ctor map->VStack :container? true}})
 ```
 
-Compile is generic from the spec: merge props + defaults, wrap into
-`:props`/`:state`/`:cache` atoms, compile children recursively
-(`:children?`), apply `:ctor`. No field mapping, no `:structural` —
-one-shot values follow the seed-once rule (see §4).
+`:primary` names the positional-shorthand target: `[:text "hi"]` compiles
+to props `{:text "hi"}` merged over `:defaults` — the bare string child
+becomes that one prop.
 
-**Every prop re-applies**: reconcile resets the component's `:props` atom
-wholesale — `(reset! (:props c) props)` — there is no reactive/structural
-distinction in the spec. One-shot/structural values (padding, sizes) are
-copied into `:state` at construction (seed-once rule, see §4).
+Fn heads call `(f props)` — or `(f props children)` when the element
+carries children: the raw child tree, embedded by the fn wherever it
+returns them (Reagent's `props.children`). Either way the result is
+wrapped in the ComponentFn record (§2.4).
+
+Validation fails loudly — under the v1 error contract a silent fallback
+would hide typos until they misrender. An unknown tag throws naming the
+offending element, listing the known tags, and suggesting the nearest
+match (`:tst` → did-you-mean `:text`). Fn heads are fn **values**, never
+symbols: extensions build trees at runtime (SCI), and symbol resolution
+would couple the DSL to caller namespaces. Children on a leaf tag throw
+the same way.
+
+Compile is generic from the spec: merge props + defaults, wrap into
+`:props`/`:state`/`:cache` atoms, apply `:ctor`. **One children
+mechanism**: containers are constructed empty; filling them is
+`reconcile-children!`'s job (`dsl.clj`'s one generic fn, §5) — compile never
+duplicates that via a `:children?`/`:children-key` spec. No field
+mapping, no `:structural`.
+
+**Every prop re-applies, and every prop is live**: reconcile resets the
+component's `:props` atom wholesale — `(reset! (:props c) props)` — there
+is no reactive/structural distinction and no seed-once carve-out (§4).
+A parent passing different padding next frame changes the padding;
+equality no-ops keep unchanged props free.
 
 ### 2.3 Compile + reconcile — `reconcile!`
 
@@ -110,28 +151,71 @@ The wrapper's `reconcile!` is React's render pass, recursive and keyed —
   (let [prev @children-atom
         desired (mapv compile-element (normalize tree))]
     ;; for each desired element:
-    ;;   :key match   → reuse record, reset! its :props atom
-    ;;   no match     → construct (fn tags → ComponentFn wrapper)
-    ;; drop unmatched prev → dispose
+    ;;   :key match   → reuse record, reset! its :props atom,
+    ;;                  fill its :ref atom
+    ;;   no match     → construct (fn tags → ComponentFn wrapper),
+    ;;                  fill :ref; drop unmatched prev → dispose + clear :ref
+    ;;   (:key/:ref pseudo-props stripped before compile)
     (reset! children-atom new-children)))
 ```
 
 Matching: `:key` prop (pseudo-prop, stripped before compile) wins;
 fallback is tag + position. Reorder by key = reuse (like React).
 
+**Duplicate `:key`s throw at reconcile.** Two spliced siblings sharing a
+key makes reuse undefined — which one wins depends on diff order, and
+the loser's subtree silently vanishes or the wrong record gets reused.
+Throwing beats both.
+
+**`:ref` — the imperative escape hatch.** Focus, editor text access, and
+scrolling are imperative calls on concrete records today
+(`tui-set-focus`, editor getters, `IScrollView` methods, custom-editor
+swapping). A tree that declares such an element must still reach its
+instantiated record, so the DSL copies React's answer as a second
+pseudo-prop beside `:key`:
+
+```clojure
+(def editor-ref (dsl/ref))
+
+[:editor-container {:ref editor-ref}]
+
+;; elsewhere — an event handler or effect, never a render body:
+(tui/tui-set-focus t @editor-ref)
+```
+
+Reconcile owns the ref: construct fills it with the record, dispose
+clears it. Like `:key`, `:ref` is stripped before compile — host
+elements never see it. Rules:
+
+- refs are created with `(dsl/ref)`, which returns a tagged wrapper
+  type (derefable like an atom) that only reconcile can write — a user
+  `reset!` throws;
+- deref it only outside render bodies (handlers, `with-let` init,
+  effects): it is nil until the first reconcile constructs the element,
+  and a render-body deref would race construction while adding a
+  meaningless dependency;
+- one ref atom per element instance — sharing one across two elements
+  means last-mount wins.
+
+This is what unblocks Phase B step 7: `hide-dialog` keeps its imperative
+focus call, but the dialog tree declares the editor with a ref instead
+of the app pre-building and stashing the record.
+
 ### 2.4 The ComponentFn wrapper
 
 ```clojure
 (defcomponent ComponentFn nil [f props state children cleanups]
   (render [this width]
-    (binding [*comp* this]
+    (binding [*comp* this *width* width]
       (let [tree (f @props)]        ;; re-derives EVERY render pass
         (reconcile! children tree)
         (render-children @children width))))
   (dispose [this]
+    ;; children first — their cleanups still see intact parent state;
+    ;; then own cleanups, then drop state
+    (doseq [c @children] (dispose c))
     (doseq [f @cleanups] (f))
-    (reset! state {})
-    (doseq [c @children] (dispose c))))
+    (reset! state {})))
 ```
 
 Properties:
@@ -147,30 +231,120 @@ Properties:
 - **Reconciliation is bounded**: per component's direct children, not the
   whole app tree. The transcript stays a record (never a fn component),
   so the rejected per-frame whole-tree rebuild never happens.
+- **Error contract (v1)**: a throwing component fn crashes the render
+  loop — the existing policy (Throwable → render-crash.log → tui-stop).
+  Fn bodies run arbitrary app code every frame, so this is likelier than
+  with records alone; accepted for v1. If it bites: isolate per-child
+  render+reconcile in a catch and render a placeholder
+  (error-boundary-lite) — deferred until a real case exists.
+- **Uncached means allowlisted**: ComponentFn joins the documented
+  uncached-allowlist in test-caching-conventions (transparent-parent
+  category) — that test scans src/kmet/tui/components + src/kmet/app/ui
+  and fails otherwise.
+- **Dynamic `*width*`**: fn bodies receive only props, but status bars
+  and dialog headers genuinely need the current pass width (truncation).
+  The wrapper binds `*width*` beside `*comp*` — read-only, per-pass,
+  same dynamic-scope cost as `*comp*`, no machinery.
+- **Dispose order is contractual**: children first, then own cleanups —
+  a child cleanup may still read intact parent state (React effect
+  semantics). Not incidental; tests rely on it.
+- **Observability**: behind `--debug` the wrapper counts per-frame fn
+  invocations, reconciles, and cache hits. A fn invoked on frames where
+  nothing it derefs changed is the inline-callback trap (§2.5's
+  inline-callbacks bullet) or a broken equality — invisible in output
+  bytes, obvious in counters.
+- **`defc` is just `defn`** — no macro, no deref rewriting: the fn
+  re-derives every pass, so atom reads need no lexical tracking —
+  it runs more often than strictly necessary, and `reconcile!`
+  dedupes the output:
 
-### 2.5 `defc` is just `defn` — no macro
+  ```clojure
+  (defn status-area [props]
+    [:v-stack {:gap 0}
+     (when-let [kind @(:active-status-kind app)]
+       [:status-indicator {:key kind}])])
+  ```
 
-Fn components are plain functions `(fn [props] tree)`. No `defc` macro,
-no deref rewriting: the ComponentFn wrapper is uncached and re-derives
-the fn every render pass (§2.4), so atom reads need no lexical tracking —
-the fn just runs more often than strictly necessary, and `reconcile!`
-dedupes the output:
+  `rewrite-derefs` stays private in `kmet.tui.macros` — used by
+  `track!` (host-element renders) only.
+
+**The three forms — Reagent's taxonomy, mapped.** Reagent has exactly
+three ways to author a component; this design covers all three with the
+same surface, minus Form-2's footguns:
+
+| Reagent | Here | Notes |
+|---|---|---|
+| **Form-1**: pure fn `(defn c [] [:div …])` | `(defn status-area [props] tree)` | Identical ergonomics |
+| **Form-2**: wrapped fn `(defn c [] (fn [props] …))` | deliberately absent; Form-1 + `with-let` covers it | Reagent's own docs pitch `with-let` as the Form-2 replacement — this goes all the way: no inner-fn idiom, so the classic bug (accidentally returning a fresh inner fn per render, silently breaking memoization) can't exist. Component identity is the fn *value* in the tag head; `defn`'s stable var root provides it for free |
+| **Form-3**: `create-class {…}` | `defcomponent` record | Equivalent method map: `render` ↔ `render`, `dispose` ↔ `componentWillUnmount`, `handle-input` is terminal-only (no DOM analog); `did-mount` deferred until a second reconcile-created side effect appears (§5) |
+| — | raw records spliced into trees (`existing-component`, §2.1) | A fourth form Reagent lacks — dropping a live instance into Hiccup; the migration/adapter path, load-bearing for Phase A |
+
+Other Reagent mechanisms land as follows: local state → closure/`with-let`
+in Form-2 becomes `with-let`/`let-state`; lifecycle methods →
+defcomponent methods; `shouldComponentUpdate` → no user-facing knob,
+absorbed by equality no-ops + leaf caches; render props / children
+composition → `(f props children)` (§2.2); HOCs → not needed.
+
+**The honest divergence — scheduling granularity.** Reagent is
+per-component reactive: every Form-1 is wrapped in its own reaction, so
+it re-runs only when atoms *it* derefs change, independent of everything
+else. This design is frame-batched: fn components are uncached wrappers,
+their derefs untracked — any invalidation anywhere schedules a frame
+(§3.4), and each frame re-derives fn trees from the roots downward;
+reconcile dedupes children and leaf caches + line diff absorb the cost.
+Same authoring surface, React-with-memoized-leaves runtime. The idle-UI
+invariant (zero fn bodies when nothing changed) holds in both models;
+what differs is that here a deep fn's new `@atom` read does not create
+local reactivity — it just reads on whatever frames arrive. Don't reach
+for derefs to "optimize" re-render scope; subscriptions are the tool
+for that (§3.1).
+
+**Why not per-component reactions (the full Reagent runtime)?** Because
+Reagent's trick isn't available here. Per-component reactivity requires
+deref tracking inside fn bodies, which needs one of:
+
+1. **Reagent-owned atoms** — users write `@(r/atom …)`, a custom IDeref
+   that records into the enclosing reaction. kmet can't copy this: app
+   state is plain `clojure.lang.Atom`s owned by `kmet.app`, and
+   extension-created atoms can't be forced to switch. Mixed semantics
+   ("reactive if subscribed, batched if raw-deref") would be worse than
+   picking one.
+2. **Compile-time deref rewriting** — the `defc` macro, explicitly
+   rejected (§6).
+
+And the payoff wouldn't justify either. The waste frame-batching leaves
+on the table = live fn bodies × small-vector-building per frame —
+microseconds even at 100 components, against leaves whose real costs
+(markdown parse, wrapping) are already cache-absorbed. A cached fn
+component couldn't prune the child walk anyway: transparent parents sit
+on the uncached allowlist precisely because children change via their
+own deps — so memoization gates body+reconcile only, never rendering
+below. Meanwhile value-based memoization makes inline-callback props a
+correctness-grade trap instead of a CPU footnote, deterministic headless
+tests get harder (async flush windows), and pi's explicit-requestRender
+model — mirrored everywhere else in the codebase — drifts further away.
+The `--debug` counters + idle-UI invariant test exist exactly to detect
+if this trade ever stops being free.
+
+**If a hot fn component ever shows up**: the tool isn't reactions, it's
+an opt-in memo with declared deps, `compute`-style —
 
 ```clojure
-(defn status-area [props]
-  [:v-stack {:gap 0}
-   (when-let [kind @(:active-status-kind app)]
-     [:status-indicator {:key kind}])])
+[:status-bar {:memo [(:mode props) @status-kind]}]
 ```
 
-`rewrite-derefs` stays private in `kmet.tui.macros` — used by `track!`
-(host-element renders) only.
+(or a `(dsl/memo deps f)` wrapper). Sound without any deref tracking —
+a pure fn of declared values — no atom ownership, no macro; still
+re-renders children (only body+reconcile are gated); fails loud rather
+than silently degrading. Explicit deps over discovery again — the same
+philosophy as §3.1. Deferred until the counters demand it.
 
-### 2.6 Lifecycle — `dispose`, not `with-let`-as-macro
+### 2.5 Lifecycle — `dispose`, not `with-let`-as-macro
 
-`IComponent` gains a `dispose` method, default no-op. Containers,
-overlays, and the TUI call it when a child is removed. Component-local
-state is already record fields; `dispose` is the missing cleanup half.
+`IComponent` gains a `dispose` method, default no-op (synthesized by
+`defcomponent`; no new protocol — §5). Containers, overlays, and the
+TUI call it when a child is removed. Component-local state is already
+record fields; `dispose` is the missing cleanup half.
 
 For fn components that need transient state, primitives (SCI-friendly,
 plain fns):
@@ -193,19 +367,95 @@ plain fns):
 ```clojure
 (defmacro with-let [bindings & body]
   (let [cleanup (first (filter #(and (seq? %) (= 'finally (first %))) body))
-        body' (remove #(identical? cleanup %) body)]
-    `(let [~@(mapcat (fn [[s i]] [s `(let-state '~s (fn [] ~i))]) bindings)]
-       ~@(when cleanup [`(on-dispose! (fn [] ~@(rest cleanup)))])
+        body' (remove #(identical? cleanup %) body)
+        ;; gensym'd once per expansion site → stable across render passes,
+        ;; unique per with-let — the let-state guard makes it once-only.
+        ckpt (gensym "with-let-cleanup")]
+    `(let [~@(mapcat (fn [[s i]]
+                       ;; key is the expansion-site gensym, not the symbol:
+                       ;; two sibling with-lets binding the same name cannot
+                       ;; collide — each gets its own state slot by construction
+                       [s `(let-state '~(gensym (str s "-")) (fn [] ~i))])
+                     bindings)]
+       ~@(when cleanup
+           [`(let-state '~ckpt (fn [] (on-dispose! (fn [] ~@(rest cleanup)))))])
        ~@body')))
 ```
+
+The guard matters: the body re-runs every render pass, so a bare
+`(on-dispose! …)` would conj a fresh closure per frame — cleanups grow
+without bound and all fire on dispose. Wrapping the registration itself
+in `let-state` runs it once per instance, exactly like the bindings.
 
 Footguns (documented):
 
 - **Fn bodies must be pure per pass** — they re-run every render pass
   (the wrapper is uncached). Creation-time side effects (timers) go in
   `with-let` init (runs once), cleanup in `on-dispose!`.
-- **Subscriptions are created once** (global registry or `with-let`),
-  never in the render body — or a reaction leaks per re-render.
+- **Subscriptions are created once** (shared registry, or `compute`
+  under `with-let`), never bare in the render body — or the derived
+  atom leaks per re-render.
+- **`let-state`/`on-dispose!` are render-pass-only** — they read the
+  dynamic `*comp*`, bound only while the wrapper renders. Calling them
+  from an async callback gets the wrong instance or none. This is the
+  flip side of having no hooks rules: the constraint exists but is one
+  line of doc, not a lint regime.
+- **State keys are per-component** — raw `let-state` takes explicit keys;
+  don't reuse a key within one component. `with-let` is immune: its keys
+  are per-expansion-site gensyms, so sibling bindings can't collide.
+- **A top-level `(try … (finally …))` in the body is stolen** by the
+  cleanup extractor — same footgun as Reagent's `with-let`. Nest the
+  `try` inside a `let` when you need both.
+- **Inline callbacks defeat props memoization** — a props map rebuilt
+  each frame containing `(fn […] …)` literals is never `=` across
+  passes, so every tracked deref of `@props` invalidates the leaf's
+  cache every frame (a Markdown re-parsing per frame). Hoist handlers
+  to named `defn`s or pass atoms/stable values. Line diffing hides this
+  in the output bytes but not in CPU — the `--debug` per-frame counters
+  (§2.4) surface it.
+
+---
+
+### 2.6 Mounting — `dsl/root`
+
+Trees enter the TUI through one constructor; there is no second path:
+
+```clojure
+(dsl/root f-or-element)
+```
+
+Returns a record implementing IComponent: first render
+compiles/reconciles the tree, later renders re-reconcile like any
+ComponentFn. A bare fn is shorthand for `[f {}]`; a vector compiles as
+an element. The owner mounts it anywhere a record is expected today —
+`tui-add-child`, `container-add-child`, `tui-show-overlay` — and calls
+`dispose` when it leaves (overlay close, suspend/shutdown). Ownership
+follows the container it was handed to; nothing else retains it.
+
+This is the missing endpoint for Phase B: interactive.clj keeps every
+existing mount point and swaps pre-built records for roots —
+`(tui-add-child t (dsl/root dock-component))` instead of constructing
+the widget stack by hand.
+
+### 2.7 Headless rendering — trees are data, tests stay plain
+
+Compilation is pure, so fn components are unit-testable without a
+terminal:
+
+```clojure
+(dsl/tree [:status-area {:mode :normal}])
+;; compiled record tree — structural snapshots, no rendering
+
+(dsl/render-lines [:box {:padding 1} [:text "hi"]] 40)
+;; the exact lines the frame loop would draw
+```
+
+Both are plain functions: no tty, no sleeps — fast-path `bb test`
+material, not `^:slow`. Assert on returned lines, or call
+`render-lines` twice across a state change and assert which subtrees
+kept identity (the keyed-reuse regression net). Most of Phases B/C
+lands against these two functions before anything touches a real
+terminal.
 
 ---
 
@@ -222,36 +472,59 @@ Three homes for state, decided by one question: *how many components read it?*
 ### 3.1 Subscriptions — `kmet.tui.reactions` (B-lite, not re-frame)
 
 A generic subscription mechanism in `kmet.tui` over the atoms the app
-already owns. No mega-store, no app rewrite:
+already owns. No mega-store, no app rewrite. One primitive:
 
 ```clojure
 ;; kmet.tui.reactions — generic, knows nothing about kmet.app
-(defn reg-sub   "Register a named subscription" [k f] ...)
-(defn subscribe "Shared reaction value-atom for k, created lazily" [k] ...)
+(defn compute
+  "Derived atom over DEPS: watches each, recomputes (F) on change,
+   skips the write when the result is equal. Returns a plain atom."
+  [deps f] ...)
 ```
 
-`subscribe` returns a **plain atom** holding the derived value, updated by
-watches (the machinery `track-render` already uses: keyed watches,
-equal-value no-op). So derefs are normal tracked derefs, and when the
-source changes but the derived value doesn't, the equality check no-ops →
-**fine-grained invalidation for free**.
+Deps are listed explicitly — no dep *discovery*, so nothing has to be
+extracted from `track-render` first (the auto-tracking upgrade is
+deferred, see below). The returned atom uses the same watch machinery
+as `track-render`: keyed watches, equal-value no-op. Derefs are normal
+tracked derefs, and when a source changes but the derived value
+doesn't, the equality check no-ops → **fine-grained invalidation for
+free** — and invalidation schedules the next frame automatically
+(§3.4), so subscribing is enough to keep a component live; no manual
+`tui-request-render`.
 
-```clojure
-;; kmet.app.ui — the view layer wires subs to app atoms
-(reactions/reg-sub :agent-status (fn [] (:status @agent-state)))
+Two usage patterns over the one primitive:
 
-(defn status-line [props]
-  (let [status (reactions/subscribe :agent-status)]
-    [:text {:text (str @status)}]))
-```
+- **Per-instance** — `compute` under `with-let`: created once, disposed
+  with the instance. For component-specific slices:
 
-Two subscription patterns:
+  ```clojure
+  (defn message [props]
+    (with-let [content (reactions/compute [(:messages-atom props)]
+                             #(get-in @(:messages-atom props)
+                                      [(:idx props) :content]))]
+      [:text {:text @content}]))
+  ```
 
-- **Global registry** (`reg-sub` + `subscribe`): one shared reaction per
-  key, app-lifetime, N components deref the same value atom. For shared
-  state.
-- **Per-instance** (via `with-let`): created once, disposed with the
-  instance. For component-specific slices (e.g. one message's content).
+  Convention (documented): per-instance computes belong under
+  `with-let` — created in a render body without it, they leak per
+  re-render. Behind `--debug`, `compute` counts instances per component
+  per frame and logs loudly on growth — the leak is visible in counters,
+  not just doc.
+
+- **Shared registry** — thin sugar for app-lifetime instances of the
+  same thing, N components derefing one derived atom:
+
+  ```clojure
+  ;; kmet.app.ui — the view layer wires subs to app atoms
+  (reactions/reg-sub :agent-status [agent-state] (fn [] (:status @agent-state)))
+
+  (defn status-line [props]
+    (let [status (reactions/subscribe :agent-status)]
+      [:text {:text (str @status)}]))
+  ```
+
+  `reg-sub` = lazily create `(compute deps f)` on first `subscribe k`;
+  `subscribe` returns that shared atom.
 
 ### 3.2 The payoff: kill the mirror plumbing
 
@@ -264,9 +537,12 @@ slice:
 ;; app layer: pure data update, no component knowledge
 (swap! messages-atom update-in [idx :content] str text)
 
-;; message component: subscribes to its own slice
+;; message component: computes its slice — under with-let so it is
+;; disposed with the instance (see §3.1)
 (defn message [props]
-  (with-let [content (subscribe #(get-in @(:messages-atom props) [(:idx props) :content]))]
+  (with-let [content (reactions/compute [(:messages-atom props)]
+                         #(get-in @(:messages-atom props)
+                                  [(:idx props) :content]))]
     [:text {:text @content}]))
 ```
 
@@ -274,6 +550,17 @@ No component lookup, no setter, no sync step. **App = pure state + pure
 update fns; view = components subscribing to slices + view-local `:state`.**
 This is the re-frame separation of concerns, and the strongest argument
 for the global half.
+
+Note the shape: a pure `swap!` on a domain atom, watched by `compute`,
+never touches any component API. `kmet.tui.reactions` is fully usable
+headless (plain atoms in → plain atom out) — another §2.7 testing win.
+
+**Theme rides this too.** Today `theme-atom` is threaded through
+constructors; under the DSL it's the textbook shared sub —
+`(reg-sub :theme [theme-atom] identity)` — and components subscribe
+instead of receiving theme as a constructor arg/prop. A palette switch
+invalidates exactly the subscribed subtrees; the recurring constructor
+argument retires gradually, one component at a time.
 
 ### 3.3 Hot path carve-out
 
@@ -286,6 +573,55 @@ Per-message subscriptions mean O(n) watch fan-out per append (999
 recomputes to equal values, one invalidates) — fine at kmet's scale. If it
 ever bites: per-message atoms, or keep the mirror atoms on that one path.
 The design doesn't force it.
+
+### 3.4 Frame scheduling — closing the reactive loop
+
+The render loop renders only when `tui-request-render` has set
+`:render-requested?` (polled at the loop's ~16ms cadence); today every
+mutation site requests its own frame (~90 call sites in interactive.clj
+alone). `invalidate-cache` only clears a component's cache — it does not
+ask for a frame. That works while state changes flow through setters
+that pair `reset!` with an explicit request-render, and it breaks
+exactly when Phase C lands: replace setter-poking with pure `swap!`s
+and **nothing schedules a frame — the UI freezes** until an unrelated
+input event happens to force one. Uncached fn components don't fix
+this; they only guarantee the fn re-derives on whatever frame arrives.
+An atom change must *cause* the frame.
+
+Target model — the other half of Reagent's loop: **a dependency change
+schedules a render.**
+
+- All invalidation funnels through `invalidate-cache` (macros.clj):
+  `track!`'s watches call it on every real value change, the
+  `defcomponent`-generated `invalidate` calls it, and subscription
+  invalidation will too (§3.1). One choke point.
+- `kmet.tui.macros` grows a scheduler hook: a var holding `(fn [])`,
+  default no-op (headless tests, library use). `kmet.tui.core` installs
+  `(fn [] (tui-request-render tui))` on start and clears it on stop.
+  Dependency direction stays clean — macros never require core; core
+  pushes the callback down.
+- Coalescing is free: `tui-request-render` sets an idempotent flag the
+  loop polls; N invalidations between frames collapse into one frame.
+  No debounce machinery.
+- Equal-value no-ops stay no-ops end to end: a subscription recomputing
+  to the same value fires no invalidation and requests no frame.
+  Fine-grained invalidation and frame suppression are one mechanism.
+
+Carve-outs and rules:
+
+- Manual `tui-request-render` stays valid forever (idempotent); Phase C
+  retires call sites gradually and mixed mode is safe.
+- Ordering-sensitive mutations keep their explicit request-render next
+  to them (focus changes, scroll-to-end, overlay show/hide).
+- Time-animated components (spinner/status intervals, flash container)
+  keep their own tick loops — unchanged.
+- The hook runs inside a watch on the mutating thread; it must not
+  throw (wrap + log, mirroring the render loop's crash policy).
+
+With this the §3.2 payoff is genuinely complete: `swap!` → watches
+invalidate subscribers → invalidation schedules the frame → the frame
+re-derives affected fn components → reconcile dedupes children → line
+diff emits the delta. App code stays pure data; the loop closes itself.
 
 ---
 
@@ -314,10 +650,13 @@ Rules:
 - **`:state`** — values the component owns and mutates:
   `(state/get c :k)` / `(state/set! c :k v)`. Read in render (tracked).
 - **`:cache`** — render output, never reactive state.
-- **Seed-once rule**: one-shot/structural values (padding, sizes) are copied
-  from `:props` into `:state` at construction. There is no `:structural`
-  spec set — everything in `:props` re-applies uniformly, equality no-ops
-  when unchanged.
+- **All props are live** (no seed-once): structural values (padding,
+  sizes) stay in `:props` and re-apply like everything else — equality
+  no-ops when unchanged, and a parent passing a different value changes
+  it. No third category, no copy-to-`:state` step: a value is a prop
+  iff the parent's tree determines it, state iff the component mutates
+  it. Components that derive structures from props do it in render
+  (cache-absorbed), never at construction.
 - **Scratch stays out**: `tool_execution`'s last-component atoms, Image's
   id allocation — non-tracked scratch fields, never in `:props`/`:state`.
 
@@ -329,66 +668,119 @@ Payoffs:
 
 - reconcile is one line for every component kind: `(reset! (:props c) props)`
 - fn components have the same shape — ComponentFn is
-  `[f props state children cache cleanups]`; `with-let` writes `:state`,
+  `[f props state children cleanups]` (no `:cache` — the wrapper is
+  uncached/allowlisted); `with-let` writes `:state`,
   reconcile writes `:props` — one local-state concept across styles
 - ~30 bespoke setters + `defsetter`/`defgetter` collapse into
   `state/get`/`state/set!`
 - both maps are snapshotable for tests
+- **migration never blocks DSL adoption**: until a component migrates,
+  its tag entry uses an adapter ctor mapping the uniform props shape
+  onto today's fields — the DSL works either way, and each migration
+  stays a small local diff (Phase A step 2)
 
 Costs (honest): migration covers props *and* internal state (still gradual,
 per component, tied to its DSL registration — no big-bang); coarser
 invalidation than per-field atoms (absorbed by per-width caches + frame
 diff); state keys are looser than fields (destructure + document);
-judgment calls at the props/state line are resolved by the seed-once rule.
+judgment calls at the props/state line follow one question — does the
+parent's tree determine it (prop) or does the component mutate it
+(state)?
 
 ---
 
-## 5. Protocol rework
+## 5. Protocol rework — zero new, one retired
 
 The current protocols: `IComponent` (render/handle-input/invalidate),
 `IFocusable`, `IComponentKind`, `IEditorComponent`.
 
+Usage audit (src/, test/, extensions/): `IComponent` — all ~79
+components, dispatch in stack/containers/history + the render loop, plus
+the extension boundary (`normalize-custom-component` reifies duck-typed
+extension maps into it). `IFocusable` — 4 implementors
+(input/editor/select-list/settings-list), 2 call sites in focus
+routing. `IEditorComponent` — 1 implementor (Editor), 15 `satisfies?`
+checks (10 near-identical wrapper fns in core.clj, 2 in interactive, 3
+in external_editor). `IComponentKind` — 5 implementors, **one
+consumer** (chat_history's private `kind-of`, 5 `case` sites).
+
 Assessment: the composability limits (global focus routing, natural-height
-layout) are architecture choices, not protocol gaps. But the DSL exposes
-three real protocol gaps, addressed with a **targeted rework** — no
-render-contract revolution.
+layout) are architecture choices, not protocol gaps. The DSL adds
+**no new protocols** — both candidates dissolved into mechanisms the
+design already has — and retires **one**: end state is 3 protocols
+(`IComponent` + `dispose`, `IFocusable`, `IEditorComponent`), net −1
+while gaining a component layer.
 
-**1. `IChildrenContainer` — reconcile needs a contract, not duck typing.**
+**`dispose` goes on `IComponent` — not a separate `ILifecycle`.**
+Precedent is in the system already: `handle-input` sits on `IComponent`
+with a synthesized no-op so callers never check `satisfies?` — `dispose`
+is the same shape (meaningful for a few components, no-op for most).
+`defcomponent` synthesizes the no-op (one line in the macro, beside the
+`handle-input` default); reconcile calls it unconditionally on removed
+children. A separate protocol would buy only an `ILifecycle` check that
+the no-op default makes pointless.
 
-The reconciler must ask "can this component accept children, and how?"
-Today that's field-poking (`:children` on Box/Container, `:entries-atom`
-on VStack) — the duck typing `IComponentKind` was created to avoid
-("Safer than key-based duck typing … which silently breaks when record
-fields are renamed"):
-
-```clojure
-(defprotocol IChildrenContainer
-  (reconcile-children! [this tree]
-    "Compile TREE and diff against current children by :key"))
-```
-
-VStack/Box/Container implement it; leaves don't. Reconcile dispatches on
-the protocol, never field names.
-
-**2. `ILifecycle` — `dispose` (mount deferred).** Reconcile-created
-components need cleanup on removal. Today that's manual
-(`status-indicator-stop!` ordered around swaps):
-
-```clojure
-(defprotocol ILifecycle
-  (dispose [this] "Called before removal"))
-```
+Reconcile-created components need cleanup on removal. Today that's
+manual (`status-indicator-stop!` ordered around swaps). Containers
+implement `dispose` as delegation — dispose each child — or removing a
+Box/VStack/Container leaks its subtree's cleanups (the synthesized
+no-op doesn't recurse). The need is visible today: tool_execution
+hand-cancels its elapsed-ticker interval on completion "so a component
+dropped from the chat doesn't keep a zombie interval invalidating
+forever" — dispose generalizes exactly that.
 
 `mount` is deferred: the only reconcile-created timer today (status
-spinner) already has explicit start/stop. Add a mount hook only when a
-second reconcile-created side effect appears. `defcomponent` defaults
-`dispose` to a no-op, so nothing breaks.
+spinner) already has explicit start/stop. Add a hook only when a second
+reconcile-created side effect appears.
 
-**3. Delete redundant no-op bodies.** Box/Container/VStack hand-write
-`(handle-input [_this _data] nil)` — but `defcomponent` already
-synthesizes that exact no-op when omitted
-(`(or (body-method body 'handle-input) '(handle-input [_this _data] nil))`).
-Those lines are pure noise; removing them is free, zero-risk cleanup.
+**Children: the closed tag table answers, not an `IChildrenContainer`.**
+The protocol existed because reconcile couldn't know who takes children.
+It can: the tag table is a hardcoded closed set — container tags carry
+`:container?` (storage is uniform after the props/state convergence, so
+no `:children-key` either). Reconcile consults the table and calls **one
+generic `reconcile-children!` fn in `dsl.clj`** — a plain function, not
+a protocol. Records spliced into trees from outside are opaque at that
+level by definition; nobody dispatches on them. Validation ("children on
+a leaf") comes free from the same table lookup — another loud throw.
+
+**Cleanup only: delete redundant no-op bodies.** Eight components
+hand-write `(handle-input [_this _data] nil)` — box, container,
+v_stack, plus alt_screen_flash, dynamic_border, h_stack, scroll_view,
+spinner — but `defcomponent` already synthesizes that exact no-op when
+omitted. Pure noise; removing them is free, zero-risk cleanup.
+
+**Retire `IComponentKind` — kind-as-data.** Usage audit: implemented by
+the five message components, consumed by exactly one namespace —
+chat_history's private `kind-of`, feeding five `case` sites. It fails
+on three counts:
+
+1. **The data exists one level up.** The messages-atom maps already
+   carry `:role`; `kind-of` re-derives type information the data layer
+   owns (a parallel copy).
+2. **One consumer.** A protocol + extend-type machinery + a
+   `satisfies?` guard for a single namespace's internal dispatch.
+3. **Kind-as-data is strictly simpler and equally reliable.**
+   `defcomponent` already takes the kind argument — stamp it as a plain
+   record field instead of an `extend-type`: `(case (:kind child) :tool
+   … :bash … nil)`. No `satisfies?` (nil for records without it = same
+   semantics as today's guard); works on extension duck-typed adapter
+   maps; serializable, so persistence gets message kinds free. The
+   field name is owned by the macro in one place — a rename breaks the
+   macro call site loudly, not silently, which is all the original
+   "safer than duck typing" argument ever bought.
+
+**The survivors, and why:** `IComponent` is essential (see audit).
+`IFocusable` is genuine per-type dispatch that extension-provided
+editors need without joining any tag table; the field-based alternative
+(`(:focused? c)`) is the duck typing this code already got burned by.
+`IEditorComponent` has one implementor but is *the* extension seam for
+alternative editors (vim/emacs factory mechanism, pi parity) — its
+smell isn't the protocol but the ten near-identical `satisfies?`
+wrapper fns around it in core.clj, which is adapter noise to
+consolidate, not a design flaw. Honest caveat: both survivors rest on
+the extension argument, not internal need — if extensions ever stop
+replacing editors/focusing widgets, they collapse into fields too.
+Today pi parity answers that the other way.
 
 **Explicitly NOT doing** (see also §6):
 
@@ -403,6 +795,18 @@ Those lines are pure noise; removing them is free, zero-risk cleanup.
   protocols) — moves no-op checks to call sites (`satisfies?` in the
   TUI's focus dispatch); `defcomponent` already hides the no-ops. Churn
   without real gain.
+- Declarative input props (`:on-key`/`:on-click` in trees) — see below.
+
+**The input boundary — stated, because it will be asked.** Hiccup for
+the web invites `[:button {:on-click f}]` thinking; that cannot work
+here. Input goes to the **focused leaf only** (pi parity; Kitty release
+events, IME, focus routing are all real machinery the tree never sees).
+So: **no declarative input props, ever; interactivity stays imperative**
+— focus + widget records (Editor/Input/SelectList) + `:ref` +
+keybindings. The DSL owns composition and presentation; input ownership
+is the one axis it deliberately does not touch. A `:on-key` prop in a
+tree is a design error, not a missing feature — this paragraph is the
+answer to give whoever reaches for it.
 
 ---
 
@@ -411,6 +815,8 @@ Those lines are pure noise; removing them is free, zero-risk cleanup.
 | Idea | Why |
 |---|---|
 | Global vdom reconciliation | Per-component reconcilers only; terminal output already diffs at the line level underneath. |
+| Per-component reactions (full Reagent runtime) for fn components | Requires Reagent-owned atoms (kmet.app owns plain Atoms; extensions can't be forced) or the rejected `defc` deref-rewriting macro. Payoff is microseconds: fn bodies build small vectors, real costs are cache-absorbed in leaves; memoization couldn't prune the child walk (transparent-parent rule) anyway. Escape hatch if ever needed: explicit-dep memo (§2.4). |
+| `:children?`/`:children-key` tag-spec fields | Second children mechanism beside the tag table's `:container?` — one answer per question: the table says who takes children, the one generic `reconcile-children!` fills them (§2.2, §5). |
 | Converting primitives to fn components | They're the host elements — that would be reimplementing `[:div]` as a React component. |
 | Full re-frame store (global app-state atom + cursors) | App-layer rewrite; crosses the `kmet.app`/`kmet.tui` boundary; kmet's state graph isn't complex enough. B-lite (domain atoms + subscriptions) gets the value without the rewrite. |
 | Stateless components + top-level connect | Prop-drilling is verbose; the connect still needs per-component re-derivation; Reagent's idiom is "ratoms anywhere". |
@@ -421,6 +827,13 @@ Those lines are pure noise; removing them is free, zero-risk cleanup.
 | Fine capability split (`IRenderable`/`IInputHandler`) | Moves no-op checks to call sites; `defcomponent` already hides the no-ops. Churn without gain. |
 | `defc` macro + deref rewriting for fn components | Unnecessary: the uncached ComponentFn re-derives per pass (small trees), reconcile dedupes children — no lexical tracking needed. |
 | `register!` registry API | Host elements are a closed set — hardcoded tag table in `dsl.clj`; fn heads cover custom components. |
+| Seed-once / `:structural` spec category | Three-way props/state/structural split has no consistent semantic (who re-writes the seeded value when the parent changes it?); all-props-live + equality no-ops covers it with two categories and one rule. |
+| Per-child render isolation (error boundaries) at v1 | No real throwing-component case yet; the loop's crash policy (log + stop) is honest enough until one exists. Revisit when a component fn can plausibly throw per-frame. |
+| Auto-tracking subscriptions (`kmet.tui.tracking`) on the critical path | Explicit-dep `compute` needs no dep discovery — same equality no-op, none of the riskiest-refactor exposure. Deferred upgrade, only if branchy subs appear (§3.1). |
+| Two public entry points (`dsl/component` + `dsl/root`) | `root` is component-plus-mounting; two names for one concept invites a tree that's compiled but never mounted. One entry point. |
+| New lifecycle/children protocols (`ILifecycle`, `IChildrenContainer`) | `dispose` is `handle-input`-shaped: few real implementations, no-op for most — it belongs on `IComponent` with a synthesized default. Children dispatch on the closed tag table (`:container?`) through one generic fn. Zero new protocols (§5). |
+| Keeping `IComponentKind` as a protocol | One consumer (chat_history's `kind-of`), and the messages-atom already carries `:role` — a protocol re-derives data the data layer owns. Kind-as-data stamped by `defcomponent` is simpler, serializable, and fails loudly on rename (§5). |
+| Declarative input props (`:on-key`/`:on-click`) in trees | Input goes to the focused leaf only (pi parity, Kitty/IME); an `:on-key` prop would be a dead handler. Interactivity stays imperative: focus + widget records + `:ref` + keybindings (§5 input boundary). |
 
 ---
 
@@ -432,48 +845,90 @@ Three phases; each ends with the full gate `bb lint` + `bb format-check`
 ### Phase A — Boilerplate (the first goal)
 
 0. **Protocol cleanup (trivial)** — delete redundant `(handle-input
-   [_this _data] nil)` bodies in `box.clj`/`container.clj`/`v_stack.clj`;
-   `defcomponent` already defaults them.
+   [_this _data] nil)` bodies in box/container/v_stack plus
+   alt_screen_flash/dynamic_border/h_stack/scroll_view/spinner;
+   `defcomponent` already defaults them. Retire `IComponentKind`:
+   `defcomponent` stamps `:kind` as a record field instead of the
+   `extend-type`; chat_history's `kind-of` becomes `(case (:kind child)
+   …)`; protocol + `satisfies?` guard deleted (§5).
 1. **`dsl.clj`** — tag table (hardcoded, no registry): `{:ctor :primary
-   :defaults :children?}` per host element; `compile-element` +
-   `dsl/component` (construction-only; `reconcile!` comes with Phase B).
-   Tags for Text, Box, VStack, Container, Spacer.
-2. **Props/state split** — migrate host elements to `:props` + `:state`
-   atoms *one component at a time, only when its call sites are being
-   converted to the DSL anyway* — the two changes merge into one coherent
-   diff per component. No big-bang.
+   :defaults}` per host element; `compile-element` + `dsl/root`
+   (construction-only; `reconcile!` comes with Phase B); loud validation
+   (unknown-tag throw with did-you-mean, fn heads as values, children on
+   a leaf tag). Tags for Text, Box, VStack, Container, Spacer.
+2. **Props/state split — no deadline.** Migrate host elements to
+   `:props` + `:state` atoms *one component at a time, only when its
+   call sites are being converted to the DSL anyway* — the two changes
+   merge into one coherent diff per component. No big-bang. Unmigrated
+   components don't block adoption: their tag entry uses an **adapter
+   ctor** that maps the uniform props shape onto today's fields —
+   `(fn [props] (map->Text {:text-atom (atom (:text props)) …}))` —
+   and is deleted when the component migrates. DSL-first never forces
+   the split; this step is opportunistic forever, nothing downstream
+   waits on it.
 
 ### Phase B — Reagent model (declarative presence)
 
-3. **Protocols** — `IChildrenContainer` (`reconcile-children!`) on
-   VStack/Box/Container; `ILifecycle` (`dispose`, defaulted no-op);
-   reconcile dispatches on the protocols, never field names.
+3. **Dispose + children plumbing** — `dispose` added to `IComponent`
+   (no-op default synthesized by `defcomponent`; containers delegate to
+   children); tag table gains `:container?`; `reconcile-children!` as
+   one generic fn in `dsl.clj` (no new protocols); reconcile dispatches
+   on the tag table, never field names.
 4. **ComponentFn** — uncached wrapper record in `kmet.tui.components`;
    re-derives its fn every render pass (fn components are plain `defn`s —
-   no macro, no deref rewriting); binds `*comp*` for
+   no macro, no deref rewriting); binds `*comp*` and `*width*` for
    `let-state`/`on-dispose!`; `reconcile!`s children; `dispose` runs
-   cleanups, clears `:state`, disposes children.
-5. **`reconcile!`** — keyed child diff, per component.
-6. **`with-let`** in `macros.clj` (expands to `let-state`/`on-dispose!`
+   children first, then cleanups, clears `:state`; optional `--debug`
+   per-frame counters.
+5. **`reconcile!`** — keyed child diff, per component; duplicate keys
+   throw; `:key`/`:ref` pseudo-props stripped before compile, refs
+   filled on construct and cleared on dispose.
+6. **Headless test surface** — `dsl/tree` + `dsl/render-lines` with
+   unit tests for keyed reuse, dispose order, and the footgun list;
+   most of B/C validates here before touching a terminal.
+7. **`with-let`** in `macros.clj` (expands to `let-state`/`on-dispose!`
    runtime fns in `kmet.tui.dsl`).
-7. **Convert composition sites** in `interactive.clj` — dock, status
-   container, dialogs — to fn trees. The status-container swap
-   (clear/add/stop dance) becomes a `when-let` in a tree.
+8. **Convert composition sites** in `interactive.clj` — dock, status
+   container, dialogs — to fn trees mounted via `dsl/root`. The
+   status-container swap (clear/add/stop dance) becomes a `when-let` in
+   a tree.
 
 ### Phase C — Subscriptions (kept)
 
-8. **`kmet.tui.tracking`** — extract the track+watch core from
-   `track-render` (used by `track!` and `subscribe`). Riskiest refactor;
-   dedicated tests first.
-9. **`kmet.tui.reactions`** — `reg-sub`/`subscribe`. Unit-testable
-   (equal-value no-op, dep re-recording on branch).
-10. **Mirror-plumbing removal** — move app updates to pure data;
+9. **`kmet.tui.reactions`** — `compute` (explicit deps, derived atom:
+   keyed watches, equality no-op) + `reg-sub`/`subscribe` sugar.
+   Unit-testable without the tracking extraction: no dep discovery, so
+   `kmet.tui.tracking` is **off the critical path** (step 12).
+10. **Frame scheduling** — scheduler hook var in `kmet.tui.macros`
+    (no-op default), installed by `kmet.tui.core` on start / cleared on
+    stop; `invalidate-cache` triggers it (§3.4). Gate: a bare `swap!` on
+    a subscribed atom produces exactly one frame. Only then retire
+    manual `tui-request-render` call sites, gradually (they stay valid).
+11. **Mirror-plumbing removal** — move app updates to pure data;
     components subscribe to their slices. `assistant-message-append-text!`
-    etc. retire.
+    etc. retire. Theme becomes a shared sub
+    (`(reg-sub :theme [theme-atom] identity)`); the constructor arg
+    retires one component at a time (§3.2).
+12. **Auto-tracking upgrade (deferred)** — only if branchy subs appear
+    (deps that differ per branch, which explicit lists can't express):
+    extract `kmet.tui.tracking` from `track-render` and give `compute`
+    a zero-dep auto-recording form. Needs dedicated tests first. At
+    kmet's scale (`get-in` slices), unlikely to trigger.
 
-Guardrails: tests in `test/kmet/tui/`; clj-kondo hooks for `track!` and
-`with-let` only (no `defc` macro anymore); cljfmt `:extra-indents`; full
-gate at each phase boundary.
+Guardrails: tests in `test/kmet/tui/`, new namespaces registered in
+`kmet.runner/all-namespaces`; clj-kondo hooks for `track!` and
+`with-let` only (no `defc` macro anymore); cljfmt `:extra-indents`;
+ComponentFn added to the uncached-allowlist in
+test-caching-conventions (and the AGENTS.md reactive-cache section
+documenting the uncached-wrapper rule); full gate at each phase
+boundary.
+
+**The perf invariant, as a test**: an idle UI runs zero fn bodies.
+Headless (§2.7): render a tree twice with no state change between — fn
+invocation count must stay 0. This single assertion cements the whole
+memoization contract (uncached wrappers + cached records + equality
+no-ops); if it ever fails, something is invalidating spuriously and the
+failure is caught in `bb test`, not in someone's scrollback.
 
 ---
 
@@ -482,9 +937,11 @@ gate at each phase boundary.
 ```
 kmet.app        : owns atoms, pure data updates (no component knowledge)
 kmet.app.ui     : reg-subs + fn components (subscribe shared, :state local)
-kmet.tui        : reactions (reg-sub/subscribe), tracking, dsl
-                  (compile/reconcile), track!, ComponentFn, protocols
-                  (IChildrenContainer, ILifecycle, IFocusable, IComponentKind)
+                  + dsl/root mount points
+kmet.tui        : reactions (compute, reg-sub/subscribe), dsl
+                  (compile/reconcile/root/tree/render-lines), track!,
+                  ComponentFn, protocols (IComponent + dispose, IFocusable,
+                  IEditorComponent — IComponentKind retired: kind-as-data)
 kmet.libs.*     : self-contained (unchanged)
 ```
 
@@ -497,30 +954,85 @@ in `kmet.app.ui`. `kmet.app` (non-ui) never imports `kmet.tui.*`.
 
 1. **Props/state split** — every component holds `:props` (tree-driven,
    reconcile is the only writer) + `:state` (self-driven,
-   `state/get`/`state/set!`) + `:cache`. Seed-once rule for one-shot
-   values; scratch stays out. Migration gradual, per component.
+   `state/get`/`state/set!`) + `:cache`. All props live — no seed-once
+   carve-out; scratch stays out. Migration gradual, per component;
+   adapter ctors keep unmigrated components DSL-usable (Phase A step 2).
 2. **`defc` is just `defn`** — no macro, no deref rewriting for fn
    components; ComponentFn is an uncached wrapper re-deriving every pass
    (small trees, reconcile dedupes children). `rewrite-derefs` stays
    private (used by `track!` only). `with-let` lives in `macros.clj`,
-   expanding to `let-state`/`on-dispose!` runtime fns in `kmet.tui.dsl`.
+   expanding to `let-state`/`on-dispose!` runtime fns in `kmet.tui.dsl`;
+   its state keys are per-expansion-site gensyms — sibling bindings
+   can't collide (§2.5).
 3. **Primitives + `with-let`** — `let-state` + `on-dispose!` are the
    runtime API; `with-let` is implemented as the ergonomic macro form on
    top of them (expands to a plain runtime call, same philosophy as
    `track!`).
-4. **Global `reg-sub` reactions are app-lifetime** — accepted at kmet's
-   scale; per-instance subscriptions (via `with-let`) for slices. Revisit
+4. **Global reg-sub reactions are app-lifetime** — accepted at kmet's
+   scale; per-instance `compute` (under `with-let`) for slices. Revisit
    only if dynamic sub registration appears.
-5. **Extract `kmet.tui.tracking`** — `track-render`'s track+watch core
-   (dep recording, keyed watches, equality-skip, mid-run invalidation
-   detection) shared by `track!` and `subscribe`; no duplication.
-   Riskiest refactor — needs dedicated tests before anything else uses it.
-6. **Protocol scope confirmed** — `IChildrenContainer` required;
-   `ILifecycle` ships `dispose` only (`mount` deferred); redundant no-op
-   removal trivial; fine capability split and input propagation stay
-   rejected.
+5. **Explicit-dep `compute` is the primitive; tracking extraction
+   deferred** — `reg-sub`/`subscribe` is sugar over `compute` (§3.1);
+   no dep discovery means `kmet.tui.tracking` is off the critical path
+   (Phase C step 12, only if branchy subs appear).
+6. **Zero new protocols, one retired** — `dispose` joins `IComponent`
+   (synthesized no-op, containers delegate); children dispatch on the
+   closed tag table's `:container?` via one generic
+   `reconcile-children!` fn — no `ILifecycle`, no `IChildrenContainer`.
+   `IComponentKind` retires now, not later: one consumer (chat_history),
+   data already carried by messages-atom `:role` — kind-as-data stamped
+   by `defcomponent` (§5). End state: 3 protocols, net −1; redundant
+   no-op removal (eight components) trivial; fine capability split,
+   input propagation, and declarative input props stay rejected.
 7. **Hardcoded tag table** — no `register!`; host elements are a closed
    set in `dsl.clj`; custom composition via fn heads.
-8. **Reactions kept** — `reg-sub`/`subscribe` + the shared
-   `kmet.tui.tracking` extraction stay in the plan (Phase C); mirror
-   plumbing removal is a committed payoff, not optional.
+8. **Reactions kept** — `compute` + `reg-sub`/`subscribe` stay in the
+   plan (Phase C); mirror plumbing removal is a committed payoff, not
+   optional.
+9. **Invalidation schedules the frame** — `invalidate-cache` is the
+   choke point; a scheduler-hook var (no-op default) installed by
+   `kmet.tui.core` turns real value changes into `tui-request-render`.
+   Coalescing rides the existing ~16ms poll; manual request-render stays
+   valid; animated components keep their own ticks (§3.4).
+10. **`:ref` pseudo-prop** — DSL-wrapped atoms bridge declarative trees
+    to imperative records (focus, editor text, scrolling); written only
+    by reconcile (wrapper type makes user writes throw), derefed only
+    outside render bodies (§2.3).
+11. **Error contract v1** — a throwing component fn crashes the render
+    loop (existing Throwable → render-crash.log → tui-stop policy);
+    per-child isolation (error-boundary-lite) deferred until a real
+    case exists (§2.4). Loud validation everywhere: unknown-tag throw
+    with did-you-mean, fn heads as values, duplicate `:key`s throw at
+    reconcile, ref wrapper rejects user writes, `--debug` leak counters —
+    silent fallbacks are the worst outcome under this policy.
+12. **One mount path** — trees enter the TUI only through `dsl/root`,
+    which returns a record for the existing mount points; the owner
+    disposes it on removal. No second construction path (§2.6).
+13. **Headless-first testing + the idle-UI invariant** — `dsl/tree` +
+    `dsl/render-lines` are the primary test surface: plain functions,
+    fast-path tests, keyed reuse and dispose order asserted without a
+    terminal (§2.7). The perf contract is one assertion: an idle UI runs
+    zero fn bodies.
+14. **Dispose order is contractual** — children first, then own
+    cleanups; a child cleanup may still read intact parent state
+    (§2.4).
+15. **Dynamic `*width*`** — bound beside `*comp*` during fn render;
+    the sanctioned way for status bars/dialog headers to see pass width
+    (§2.4).
+16. **The input boundary is imperative** — no declarative input props,
+    ever; interactivity = focus + widget records + `:ref` + keybindings.
+    The DSL owns composition/presentation; input ownership stays with
+    the TUI's focus dispatch (§5).
+17. **Reagent's three forms, Reagent-minus-Form-2** — the authoring
+    surface matches Reagent's taxonomy (pure fn / record class, plus
+    raw-record splicing as a fourth adapter form); Form-2 is replaced
+    by `with-let` so the accidental-inner-fn footgun can't exist.
+    Scheduling is deliberately coarser: frame-batched re-derivation,
+    not per-component reactions — same idle-UI invariant, different
+    granularity (§2.4).
+18. **Frame-batching over per-component reactions; explicit-dep memo
+    as the escape hatch** — full reactive components are blocked on
+    atom ownership (or the rejected macro) and buy microseconds; if a
+    hot fn component ever shows up, `{:memo [deps]}` gates body +
+    reconcile with declared values — no tracking, no macro, loud
+    failure (§2.4).
