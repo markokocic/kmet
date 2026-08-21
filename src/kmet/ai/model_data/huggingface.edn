@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-19T11:18:42Z"
+ :generated-at "2026-08-21T06:00:08Z"
  :provider {:id :huggingface
             :name "Hugging Face"
             :env-vars ["HF_TOKEN"]
@@ -845,6 +845,18 @@
     :cost {:input 0.55 :output 2.2 :cache-read 0 :cache-write 0}
     :context-window 204800
     :max-tokens 131072
+    :compat {:supports-developer-role false}}
+   "zai-org/GLM-4.6V-Flash"
+   {:id "zai-org/GLM-4.6V-Flash"
+    :name "GLM-4.6V-Flash"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.3 :output 0.9 :cache-read 0 :cache-write 0}
+    :context-window 131072
+    :max-tokens 32768
     :compat {:supports-developer-role false}}
    "zai-org/GLM-4.7"
    {:id "zai-org/GLM-4.7"

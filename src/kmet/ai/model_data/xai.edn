@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-19T11:18:42Z"
+ :generated-at "2026-08-21T06:00:08Z"
  :provider {:id :xai
             :name "xAI"
             :env-vars ["XAI_API_KEY"]

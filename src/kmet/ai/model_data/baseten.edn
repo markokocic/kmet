@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-19T11:18:42Z"
+ :generated-at "2026-08-21T06:00:08Z"
  :provider {:id :baseten
             :name "Baseten"
             :env-vars ["BASETEN_API_KEY"]
@@ -8,7 +8,7 @@
  {:openai-completions
   {"deepseek-ai/DeepSeek-V4-Flash-0731"
    {:id "deepseek-ai/DeepSeek-V4-Flash-0731"
-    :name "Deepseek V4 Flash 0731"
+    :name "DeepSeek V4 Flash 0731"
     :provider :baseten
     :api :openai-completions
     :base-url "https://inference.baseten.co/v1"
@@ -33,7 +33,7 @@
              :supports-strict-mode true}}
    "deepseek-ai/DeepSeek-V4-Pro"
    {:id "deepseek-ai/DeepSeek-V4-Pro"
-    :name "Deepseek V4 Pro"
+    :name "DeepSeek V4 Pro"
     :provider :baseten
     :api :openai-completions
     :base-url "https://inference.baseten.co/v1"
@@ -58,7 +58,7 @@
              :supports-strict-mode true}}
    "deepseek-ai/DeepSeek-V4-Pro-0813"
    {:id "deepseek-ai/DeepSeek-V4-Pro-0813"
-    :name "Deepseek V4 Pro 0813"
+    :name "DeepSeek V4 Pro 0813"
     :provider :baseten
     :api :openai-completions
     :base-url "https://inference.baseten.co/v1"
