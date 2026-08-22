@@ -1012,7 +1012,24 @@
 ;; Input buffer (pi: stdin-buffer.ts)
 ;; ═══════════════════════════════════════════════════════════════════════════
 
-(def ^:private INCOMPLETE-FLUSH-MS 10)
+;; pi: DEFAULT_SEQUENCE_TIMEOUT_MS — a partial CSI/OSC/mouse sequence gets
+;; 50ms for its remainder. The earlier flat 10ms fired mid-sequence under
+;; ordinary reader stalls (observed at 11-15ms on Android): the paste-marker
+;; ESC was flushed as a phantom Escape keypress and "[200~" leaked in as
+;; literal text, splitting every bracketed paste whose bytes crossed a stall.
+(def ^:private SEQUENCE-FLUSH-MS 50)
+
+;; pi: DEFAULT_ESCAPE_TIMEOUT_MS — only a lone ESC waits this long before it
+;; is dispatched as the Escape key.
+(def ^:private ESCAPE-FLUSH-MS 10)
+
+;; Serializes input dispatch. pi's StdinBuffer timeouts run on the Node main
+;; thread, so a flush can never interleave with the next key's processing;
+;; here the flush futures are separate threads, and without this lock two
+;; threads could be inside dispatch-input!/handle-input at once (e.g. the
+;; reader inserting a pasted char while a stale timer dispatches Escape —
+;; both racing the editor's read-modify-swap on its state atom).
+(def ^:private dispatch-lock (Object.))
 
 (defn- clear-incomplete-flush!
   "Cancel a pending incomplete-buffer flush timer."
@@ -1049,29 +1066,60 @@
 
       :else false)))
 
+(defn- claim-flush-content!
+  "Atomically claim BUF for a flush: when it still holds exactly CONTENT,
+  empty it and return true; otherwise return false and leave BUF untouched.
+  The swap fn MUST return cur unchanged on mismatch — returning nil would
+  install nil as the buffer value and wipe whatever the reader had appended
+  in the meantime."
+  [buf content]
+  (let [claimed? (volatile! false)]
+    (swap! buf (fn [cur]
+                 (if (= cur content)
+                   (do (vreset! claimed? true) "")
+                   cur)))
+    @claimed?))
+
 (defn- schedule-incomplete-flush!
   "Port of pi's StdinBuffer timeout: when the buffer holds an incomplete
-   ESC-prefixed sequence (e.g. a lone ESC or a partial CSI prefix), wait
-   INCOMPLETE-FLUSH-MS for the rest of the sequence. On expiry a lone ESC is
-   dispatched as the Escape key and a complete sequence is dispatched; a
-   partial CSI/mouse fragment stays buffered (it must not leak as text).
-   Re-armed on every accumulation; guarded by a buffer generation so a char
-   arriving concurrently from the reader thread cancels the stale flush."
+   ESC-prefixed sequence (e.g. a lone ESC or a partial CSI prefix), wait for
+   the rest — ESCAPE-FLUSH-MS for a lone ESC, SEQUENCE-FLUSH-MS otherwise
+   (pi: escapeTimeout/timeout). On expiry a lone ESC is dispatched as the
+   Escape key and a complete sequence is dispatched; a partial CSI/mouse
+   fragment stays buffered (it must not leak as text).
+   Re-armed on every accumulation. The future CLAIMS the buffer atomically
+   via claim-flush-content!: a char arriving concurrently from the reader
+   thread makes the claim a no-op, so neither thread can dispatch a stale
+   fragment twice or wipe freshly appended input — unlike pi this timer runs
+   on a separate thread, so it must never race the reader's own handling."
   [tui buf]
   (clear-incomplete-flush! tui)
   (when (seq @buf)
-    (let [gen @(:input-generation tui)
+    (let [escape? (= @buf "\u001b")
           fut-box (atom nil)
           fut (future
                 (try
-                  (Thread/sleep INCOMPLETE-FLUSH-MS)
-                  (when (and (seq @buf) (= gen @(:input-generation tui)))
-                    (let [content @buf]
-                      (when (dispatch-buffer! tui content)
-                        ;; Re-check the generation: a char arriving during
-                        ;; dispatch must not be wiped by the stale flush.
-                        (when (= gen @(:input-generation tui))
-                          (reset! buf "")))))
+                  (Thread/sleep (if escape? ESCAPE-FLUSH-MS SEQUENCE-FLUSH-MS))
+                  (let [content @buf]
+                    (when (seq content)
+                      ;; Claim-then-dispatch: only when the buffer STILL holds
+                      ;; exactly what was armed does this flush own the input;
+                      ;; anything else means the reader appended in between and
+                      ;; its own pass handles the buffer.
+                      (when (claim-flush-content! buf content)
+                        (let [dispatched?
+                              (locking dispatch-lock
+                                (dispatch-buffer! tui content))]
+                          ;; A declined fragment (partial CSI/mouse prefix)
+                          ;; stays buffered — put it back ahead of any input
+                          ;; that arrived while dispatching (it is older;
+                          ;; dropping it would break completion of the
+                          ;; sequence by the remaining bytes).
+                          (when-not dispatched?
+                            (swap! buf (fn [cur]
+                                         (if (empty? cur)
+                                           content
+                                           (str content cur)))))))))
                   (catch Exception _))
                 (when (identical? @fut-box @(:incomplete-flush-timer tui))
                   (reset! (:incomplete-flush-timer tui) nil)))]
@@ -1082,59 +1130,70 @@
   "Process buffered input. Dispatch is STRUCTURAL (pi: extractCompleteSequences):
    a sequence is dispatched only when complete — parse-key/mouse/focus matched
    AND structurally finished (complete-sequence?). Incomplete ESC-prefixed
-   buffers stay in BUF and are flushed after INCOMPLETE-FLUSH-MS if no further
-   characters arrive, so a lone ESC still fires as the Escape key.
+   buffers stay in BUF and are flushed after SEQUENCE-FLUSH-MS / ESCAPE-FLUSH-MS
+   if no further characters arrive, so a lone ESC still fires as the Escape key.
    READ-FN is accepted for the interception flush timers but never used for
    per-character waiting — the reader thread does all reading (JLine's timed
-   reads race the NonBlockingReader pump and can lose characters)."
+   reads race the NonBlockingReader pump and can lose characters).
+
+   The whole pass runs under dispatch-lock: flush-timer futures re-enter this
+   fn from their own threads (pi: single-threaded Node, no such interleaving),
+   so without the lock a timer could process/dispatch a fragment concurrently
+   with the reader's char — splitting sequences and racing the focused
+   component's state updates."
   [tui read-fn buf]
   ;; Kitty protocol negotiation responses are intercepted first and never
   ;; reach the normal dispatch path (pi: setupStdinBuffer); terminal query
   ;; responses (cell size / OSC 11 / color scheme) are consumed next (pi:
   ;; handleInput consumes them before listeners).
-  (when (nil? (intercept-keyboard-negotiation! tui read-fn buf))
-    (when (nil? (intercept-terminal-response! tui read-fn buf))
-      (let [s @buf]
-        (cond
-          (empty? s) nil
+  (locking dispatch-lock
+    (when (nil? (intercept-keyboard-negotiation! tui read-fn buf))
+      (when (nil? (intercept-terminal-response! tui read-fn buf))
+        (let [s @buf]
+          (cond
+            (empty? s) nil
 
-          ;; Paste markers — dispatch immediately
-          (and (>= (count s) 6)
-               (or (clojure.string/includes? s PASTE-START)
-                   (clojure.string/includes? s PASTE-END)))
-          (let [marker (if (clojure.string/includes? s PASTE-START) PASTE-START PASTE-END)
-                idx (clojure.string/index-of s marker)
-                before (subs s 0 idx)]
-            (reset! buf (or (when (seq before) before) ""))
-            (dispatch-input! tui marker))
+            ;; Paste markers — dispatch immediately. Text around the marker
+            ;; stays buffered in arrival order (pi emits pre-marker sequences,
+            ;; then enters paste mode with everything after the marker).
+            (and (>= (count s) 6)
+                 (or (clojure.string/includes? s PASTE-START)
+                     (clojure.string/includes? s PASTE-END)))
+            (let [marker (if (clojure.string/includes? s PASTE-START) PASTE-START PASTE-END)
+                  idx (clojure.string/index-of s marker)
+                  before (subs s 0 idx)
+                  after (subs s (+ idx (count marker)))]
+              (reset! buf (str before after))
+              (dispatch-input! tui marker))
 
           ;; ESC-prefixed: dispatch only complete sequences (pi: a complete
           ;; CSI/SS3/OSC/mouse sequence, or a meta key). Incomplete prefixes
           ;; ("\u001b", "\u001b[", "\u001b[<...") wait for more characters;
-          ;; the lone-ESC case is flushed after INCOMPLETE-FLUSH-MS. A COMPLETE
-          ;; sequence that nothing recognizes (e.g. a terminal response the
-          ;; interceptors missed — Termux's \u001b[?64;...c DA or a kitty
-          ;; push response in an unparsed format) is garbage: holding it in the
-          ;; buffer would append every subsequent key to it and swallow all
-          ;; input forever ("kmet frozen, keys dead, no crash log"). Drop it.
-          (= (first s) \u001b)
-          (if (and (or (keys/parse-key s)
-                       (keys/mouse-sequence? s)
-                       (keys/focus-sequence? s))
-                   (not= s "\u001b")
-                   (keys/complete-sequence? s))
-            (do (reset! buf "")
-                (dispatch-input! tui s))
-            (if (and (not= s "\u001b") (keys/complete-sequence? s))
-              (reset! buf "")
-              (schedule-incomplete-flush! tui buf)))
+          ;; the lone-ESC case is flushed after ESCAPE-FLUSH-MS, other partial
+          ;; sequences after SEQUENCE-FLUSH-MS. A COMPLETE sequence that
+          ;; nothing recognizes (e.g. a terminal response the interceptors
+          ;; missed — Termux's \u001b[?64;...c DA or a kitty push response in an
+          ;; unparsed format) is garbage: holding it in the buffer would append
+          ;; every subsequent key to it and swallow all input forever ("kmet
+          ;; frozen, keys dead, no crash log"). Drop it.
+            (= (first s) \u001b)
+            (if (and (or (keys/parse-key s)
+                         (keys/mouse-sequence? s)
+                         (keys/focus-sequence? s))
+                     (not= s "\u001b")
+                     (keys/complete-sequence? s))
+              (do (reset! buf "")
+                  (dispatch-input! tui s))
+              (if (and (not= s "\u001b") (keys/complete-sequence? s))
+                (reset! buf "")
+                (schedule-incomplete-flush! tui buf)))
 
           ;; Non-ESC — dispatch immediately (single char)
-          :else
-          (let [first-char (subs s 0 1)
-                rest (subs s 1)]
-            (reset! buf rest)
-            (dispatch-input! tui first-char)))))))
+            :else
+            (let [first-char (subs s 0 1)
+                  rest (subs s 1)]
+              (reset! buf rest)
+              (dispatch-input! tui first-char))))))))
 
 ;; ─── Unbracketed paste detection (paste-like bursts) ────────────────────────
 ;; Bracketed paste (mode 2004) delivers paste content verbatim, but input
@@ -1206,21 +1265,58 @@
                     ;; in-flight read; the FFM pump thread never wakes it).
                     (let [ch (.read reader 100)]
                       (when (>= ch 0)
-                        (let [c (char ch)
-                              now (System/currentTimeMillis)]
-                          (swap! recent-chars
-                                 (fn [ts]
-                                   (-> (conj ts [now c])
-                                       (->> (filter (fn [[t _]]
-                                                      (>= t (- now paste-burst-ms)))))
-                                       vec)))
-                          (let [{:keys [append drop new-swallow-lf]}
-                                (paste-input-decision c now @recent-chars @swallow-lf)]
-                            (reset! swallow-lf new-swallow-lf)
-                            (swap! (:input-generation tui) inc)
-                            (when-not drop
-                              (swap! buf str append)
-                              (process-input-buffer! tui read-fn buf))))))
+                        ;; Drain everything ALREADY QUEUED behind the first
+                        ;; char (pi: stdin 'data' events deliver chunks, not
+                        ;; single bytes). Feeding one byte per pass exposed
+                        ;; every multi-byte sequence to a scheduling stall at
+                        ;; each byte boundary — a >10ms stall between ESC and
+                        ;; "[" of a paste marker flushed a phantom Escape and
+                        ;; leaked the rest as literal text. Draining keeps a
+                        ;; burst (escape sequence, bracketed paste, fast
+                        ;; typing) in ONE process pass; the 1ms drain read only
+                        ;; picks up bytes that are already queued, so idle
+                        ;; latency is unaffected. A multibyte UTF-8 char whose
+                        ;; second half is still in flight yields -2 here and
+                        ;; simply finishes on the next loop iteration.
+                        (let [batch (loop [acc (doto (StringBuilder.)
+                                                 (.append (char ch)))]
+                                      (let [more (.read reader 1)]
+                                        (if (>= more 0)
+                                          (recur (.append acc (char more)))
+                                          (str acc))))]
+                          (doseq [c batch
+                                  :let [now (System/currentTimeMillis)]]
+                            ;; Per-char isolation: an exception from a
+                            ;; component handler must not abort the batch —
+                            ;; the remaining chars were already consumed from
+                            ;; the reader and would be lost with it.
+                            (try
+                              (swap! recent-chars
+                                     (fn [ts]
+                                       (-> (conj ts [now c])
+                                           (->> (filter (fn [[t _]]
+                                                          (>= t (- now paste-burst-ms)))))
+                                           vec)))
+                              (let [{:keys [append drop new-swallow-lf]}
+                                    (paste-input-decision c now @recent-chars @swallow-lf)]
+                                (reset! swallow-lf new-swallow-lf)
+                                (swap! (:input-generation tui) inc)
+                                (when-not drop
+                                  ;; Append atomically: a plain (swap! buf str
+                                  ;; append) is atomic per swap, but the PIB
+                                  ;; reset inside the lock is a separate
+                                  ;; read-modify-write on the SAME string — a
+                                  ;; second reader pass could interleave, and
+                                  ;; appending to a growing string one char at
+                                  ;; a time is O(n^2) for large pastes. The
+                                  ;; append must be a single swap! so the
+                                  ;; lock-holder's view is always the
+                                  ;; complete post-append buffer.
+                                  (swap! buf str append)
+                                  (process-input-buffer! tui read-fn buf)))
+                              (catch Exception e
+                                (binding [*out* *err*]
+                                  (println "input:" (ex-message e)))))))))
                     (catch Exception e
                       (when (and @(:running? tui)
                                  (identical? reader @(:current-reader tui)))

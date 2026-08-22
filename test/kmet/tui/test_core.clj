@@ -305,3 +305,98 @@
           (pasted-editor (paste-chars "\u001b[200~ab\r\ncd\r\u001b[201~" 5 1000))]
       (t/is (= [] @submitted))
       (t/is (= "ab\ncd" (editor/editor-get-text editor))))))
+
+;; ─── Paste-marker buffering (regression: text sharing a buffer pass with
+;;      a marker was dropped) ────────────────────────────────────────────────
+
+(defn- feed-buf!
+  "Run one process-input-buffer! pass over BUF (as the reader/flush timers
+   do), collecting dispatched data through an input listener."
+  [tui buf]
+  (let [dispatched (atom [])]
+    (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+    ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+    @dispatched))
+
+(t/deftest test-paste-marker-preserves-surrounding-text
+  ;; Text can share a buffer pass with a paste marker when a held interceptor
+  ;; fragment flushes back into the buffer ahead of fresh input. Everything
+  ;; around the marker must stay buffered in arrival order — previously any
+  ;; content AFTER the marker was silently discarded.
+  (testing "content after the start marker stays buffered"
+    (let [tui (core/create-tui nil)
+          buf (atom "\u001b[200~abc")]
+      (t/is (= ["\u001b[200~"] (feed-buf! tui buf)) "marker dispatched")
+      (t/is (= "abc" @buf) "trailing text preserved")))
+  (testing "text before the marker stays buffered ahead of post-marker text"
+    (let [tui (core/create-tui nil)
+          buf (atom "q\u001b[200~hi")]
+      (t/is (= ["\u001b[200~"] (feed-buf! tui buf)))
+      (t/is (= "qhi" @buf) "arrival order kept")))
+  (testing "the end marker completes the paste of everything between"
+    (let [tui (core/create-tui nil)
+          ed (editor/make-editor)
+          _ (do (core/tui-add-child tui ed)
+                (core/tui-set-focus tui ed))
+          buf (atom "\u001b[200~hello")]
+      (feed-buf! tui buf)                 ; marker; "hello" stays buffered
+      ;; deliver the buffered chars like the reader would, then the end marker
+      (doseq [c "hello"]
+        (swap! buf str c)
+        ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf))
+      (reset! buf "\u001b[201~")
+      (feed-buf! tui buf)
+      (t/is (= "hello" (editor/editor-get-text ed))))))
+
+(t/deftest test-incomplete-sequence-flush-timeouts
+  ;; pi parity: a lone ESC fires as Escape quickly (10ms), but a partial CSI
+  ;; sequence waits 50ms — the flat 10ms fired MID-SEQUENCE under ordinary
+  ;; reader stalls (observed at 11-15ms on Android), flushing a phantom
+  ;; Escape and leaking the rest of a bracketed paste as literal text.
+  (testing "a lone ESC dispatches as Escape shortly after"
+    (let [tui (core/create-tui nil)
+          buf (atom "")
+          dispatched (atom [])]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      (swap! buf str "\u001b")
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (let [deadline (+ (System/currentTimeMillis) 600)]
+        (while (and (empty? @dispatched) (< (System/currentTimeMillis) deadline))
+          (Thread/sleep 5)))
+      (t/is (= ["\u001b"] @dispatched) "Escape dispatched")
+      (t/is (= "" @buf) "buffer cleared")))
+  (testing "a partial CSI prefix is never flushed as keys"
+    (let [tui (core/create-tui nil)
+          buf (atom "\u001b[2")
+          dispatched (atom [])]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (Thread/sleep 80)
+      (t/is (= [] @dispatched) "incomplete prefix never dispatches")
+      (t/is (= "\u001b[2" @buf) "still buffered, waiting for the remainder")))
+  (testing "a flush-timer fire does not break later sequence completion"
+    ;; The timer claims \u001b[200 after SEQUENCE-FLUSH-MS, dispatch declines
+    ;; (incomplete), and the fragment must go BACK into the buffer — a late ~
+    ;; still completes the paste marker instead of leaking as literal text.
+    (let [tui (core/create-tui nil)
+          buf (atom "\u001b[200")
+          dispatched (atom [])]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (Thread/sleep 80)               ; timer fires, claims, declines, restores
+      (swap! buf str "~")
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (t/is (= ["\u001b[200~"] @dispatched) "marker completed from restored fragment")
+      (t/is (= "" @buf))))
+  (testing "a flush claim that loses the race leaves the buffer untouched"
+    ;; The claim fn must return cur UNCHANGED on mismatch: returning nil used
+    ;; to install nil as the buffer value, wiping whatever the reader had
+    ;; appended in the read->claim window.
+    (let [buf (atom "\u001b[")]
+      (t/is (false? ((var kmet.tui.core/claim-flush-content!) buf "\u001b"))
+            "mismatched content is not claimed")
+      (t/is (= "\u001b[" @buf) "failed claim leaves the buffer intact"))
+    (let [buf (atom "\u001b")]
+      (t/is (true? ((var kmet.tui.core/claim-flush-content!) buf "\u001b"))
+            "matching content is claimed")
+      (t/is (= "" @buf) "claimed content is consumed"))))
