@@ -237,9 +237,9 @@
                                  " " (border-fn "│")))))))
 
 (defn- render-table
-  "Render a :table token: box-drawn borders, bold header, width-aware columns
-   with cell wrapping (pi's renderTable port). Falls back to the raw markdown
-   when the table cannot fit."
+  "Render a :table token: box-drawn borders, bold header, a separator between
+   every data row, width-aware columns with cell wrapping (pi's renderTable
+   port). Falls back to the raw markdown when the table cannot fit."
   [result t theme content-width left-pad default-style]
   (let [num-cols (count (:header t))
         border-fn (or (:table-border theme) identity)
@@ -303,8 +303,10 @@
         (vswap! result conj (str left-pad (border-fn top)))
         (emit-table-row! result header-styled column-widths theme border-fn true left-pad)
         (vswap! result conj (str left-pad (border-fn sep)))
-        (doseq [row row-styled]
-          (emit-table-row! result row column-widths theme border-fn false left-pad))
+        (doseq [[i row] (map-indexed vector row-styled)]
+          (emit-table-row! result row column-widths theme border-fn false left-pad)
+          (when (< i (dec (count row-styled)))
+            (vswap! result conj (str left-pad (border-fn sep)))))
         (vswap! result conj (str left-pad (border-fn bot)))))))
 
 (defn- render-list

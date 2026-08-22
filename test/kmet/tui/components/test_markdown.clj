@@ -319,6 +319,26 @@
     (t/is (some #(.contains % "│ 1") lines))
     (t/is (some #(.contains % "└───") lines))))
 
+(t/deftest test-markdown-table-row-separators
+  ;; pi draws a ┼ separator between every data row (not just after the
+  ;; header): without it, a wrapped cell line is indistinguishable from the
+  ;; first line of the next row
+  (let [m (md/make-markdown "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |" :padding-x 0)
+        lines (mapv strip-ansi (core/render m 30))]
+    (t/is (= 7 (count lines)))
+    (t/is (= "│ a │ b │" (nth lines 1)))
+    (t/is (= "├───┼───┤" (nth lines 2)))
+    (t/is (= "│ 1 │ 2 │" (nth lines 3)))
+    (t/is (= "├───┼───┤" (nth lines 4)))
+    (t/is (= "│ 3 │ 4 │" (nth lines 5)))
+    (t/is (= "└───┴───┘" (nth lines 6)))
+    ;; a single data row keeps the header separator but gets no row separator
+    (let [m1 (md/make-markdown "| a | b |\n|---|---|\n| 1 | 2 |" :padding-x 0)
+          l1 (mapv strip-ansi (core/render m1 30))]
+      (t/is (= 5 (count l1)))
+      (t/is (= "│ 1 │ 2 │" (nth l1 3)))
+      (t/is (= "└───┴───┘" (nth l1 4))))))
+
 (t/deftest test-markdown-table-single-column
   (let [m (md/make-markdown "| x |\n|---|\n| y |" :padding-x 0)
         lines (mapv strip-ansi (core/render m 20))]
