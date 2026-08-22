@@ -43,12 +43,14 @@ So the architecture is:
 - **Scheduling**: invalidation schedules the next frame (§3.4) — new;
   without it, pure data updates never reach the screen.
 
-The flow, end to end:
+The flow, end to end (post-Stage 1):
 
 ```
-app atoms → (change) → invalidate + schedule frame → fn (re-derives per
-          pass) → tree → compile+reconcile (keyed, per level) → record
-          tree → lines (each record caches) → frame diff → terminal
+ratom/atom change → reaction dirty → queued → frame flush runs it →
+          = -changed? notify → invalidate + schedule frame → component
+          bodies re-run inside reactions → tree → compile+reconcile
+          (keyed, per level) → record tree → lines (each record caches)
+          → frame diff → terminal
 ```
 
 ---
@@ -524,11 +526,13 @@ Three homes for state, decided by one question: *how many components read it?*
 | Read by 1 component (+ its children) | **Local**: `:state` map on the record / `with-let` | filter text, expansion, selection, draft, tick |
 | Passed to a child as configuration | **Props**: re-applied by reconcile | labels, callbacks, indices, layout params |
 
-### 3.1 Derived state — `hiccup/compute` (B-lite, not re-frame)
+### 3.1 Derived state — `hiccup/compute` (explicit-dep, B-lite)
 
 A derived-state mechanism over the atoms the app already owns. No
-mega-store, no app rewrite, no separate namespace — `compute` lives in
-the tree layer's namespace because one function doesn't earn its own:
+mega-store, no app rewrite — `compute` lives in the tree layer's
+namespace. Before Stage 1 it is self-contained (keyed watches over
+listed deps); after Stage 1 it is sugar over `(r/reaction …)` with the
+dep list as a hint. Same call shape either way:
 
 ```clojure
 ;; kmet.tui.hiccup — generic, knows nothing about kmet.app
@@ -893,7 +897,6 @@ answer to give whoever reaches for it.
 | `register!` registry API | Host elements are a closed set — hardcoded tag table in `hiccup.clj`; fn heads cover custom components. |
 | Seed-once / `:structural` spec category | Three-way props/state/structural split has no consistent semantic (who re-writes the seeded value when the parent changes it?); all-props-live + equality no-ops covers it with two categories and one rule. |
 | Per-child render isolation (error boundaries) at v1 | No real throwing-component case yet; the loop's crash policy (log + stop) is honest enough until one exists. Revisit when a component fn can plausibly throw per-frame. |
-| Explicit-dep `{:memo [deps]}` / `(hiccup/memo deps f)` | Superseded by reactions (§2.8): automatic deps, branch-conditional reads handled, no listing burden, reuses the Stage-1 port. One reactive story instead of two (§2.4). |
 | Auto-tracking subscriptions (`kmet.tui.tracking`) on the critical path | Explicit-dep `compute` needs no dep discovery — same equality no-op, none of the riskiest-refactor exposure. Deferred upgrade, only if branchy subs appear (§3.1). |
 | Two public entry points (`dsl/component` + `dsl/root`) | `root` is component-plus-mounting; two names for one concept invites a tree that's compiled but never mounted. One entry point. |
 | New lifecycle/children protocols (`ILifecycle`, `IChildrenContainer`) | `dispose` is `handle-input`-shaped: few real implementations, no-op for most — it belongs on `IComponent` with a synthesized default. Children dispatch on the closed tag table (`:container?`) through one generic fn. Zero new protocols (§5). |
@@ -997,10 +1000,33 @@ scheduler comes later, so nothing can freeze.
 ### Stage 6 — state typing + cleanup (optional tail)
 
 16. **Migrate app-owned atom constructors to `RAtom`** — mechanical
-    (`(atom x)` → `(r/ratom x)`) in `kmet.app`; everything downstream
-    (setters, watches, track! hit-checks) already treats them
-    identically. This is what lets *plain* reads anywhere participate
-    in auto-discovery.
+    (`(atom x)` → `(r/ratom x)`; ~120 constructor sites in kmet.app,
+    one namespace at a time). Everything downstream (setters, watches,
+    track! hit-checks) treats them identically, so each swap is
+    behavior-preserving.
+
+    **Why bother? The honest ledger.** What Stage 6 *buys*:
+
+    - **Deref-site freedom**: after migration, a component body can
+      deref any domain atom directly and be tracked — no compute slice,
+      no cursor, no explicit dep list. Without it, un-migrated reads
+      must go through `compute`/`cursor` wrappers.
+    - **Kills the two-worlds split**: one atom type everywhere means no
+      "is this read tracked?" reasoning, which is the exact silent-
+      freeze trap Reagent users hit mixing r/atom with plain atoms.
+    - **Extension parity for free**: internal extensions read app state
+      reactively without wrapping every access.
+
+    What it *costs*: ~120 mechanical edits, zero behavior change, no
+    API churn (RAtom is interface-identical), fully incremental per
+    namespace.
+
+    **And what happens if we skip it**: nothing breaks. Components
+    keep using `compute`/`cursor` slices over plain atoms — the §3.1
+    pattern works indefinitely. Stage 6 is an ergonomic consolidation,
+    not a correctness step: it deletes the wrapper discipline, not a
+    bug class. That's why it's optional tail, not required work.
+
 17. **Retire leftovers** — `assistant-message-append-text!` remnants,
     unused adapter ctors, any remaining manual request-render next to
     converted trees.
@@ -1027,7 +1053,9 @@ Guardrails: tests in `test/kmet/tui/`, new namespaces registered in
 `kmet.runner/all-namespaces`; clj-kondo hooks for `track!`/`with-let`;
 cljfmt `:extra-indents`; ComponentFn on the uncached-allowlist for its
 batched path (AGENTS.md reactive-cache section documents the
-reaction-backed path); full gate at each stage boundary.
+reaction-backed path); RAtom interchangeability test stays green
+forever (it is the rollback guarantee for Stage 6); full gate at each
+stage boundary.
 
 **The perf invariant, as a test**: an idle UI runs zero fn bodies and
 zero reaction re-runs. Headless (§2.7): render a tree twice with no
