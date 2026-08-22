@@ -399,11 +399,16 @@ to:
    re-derivation per frame. Same CPU profile as the batched default,
    none of defc's benefit. The win comes from many small `defc`s
    reacting narrowly (screen shell → region panels → leaves).
-2. **Tracked reads of large collections cost an equality walk per
-   frame** — derefing `messages-atom` in a body means a structural `=`
-   against last frame's value; during streaming the tail changed, so
-   the walk goes deep before failing. Narrow reads or computes sliced
-   near the consumer avoid it.
+2. **Tracked reads of large collections cost an equality check per
+   frame** — the cache hit-check compares each tracked value; untouched
+   atoms short-circuit on `identical?` (O(1) — the derefed object *is*
+   the recorded one), so only atoms actually written in between pay a
+   structural `=` walk. Derefing `messages-atom` in a body means that
+   walk goes deep during streaming (the tail changed). Narrow reads or
+   computes sliced near the consumer avoid it. Reagent pays an analogous
+   cost on the *output* side — its reaction re-runs the body first, then
+   `=`-compares whole hiccup trees; input-side comparison skips the body
+   entirely and also makes equal-value writes free at the watch.
 3. **The transcript stays out regardless** (§3.3): mapping messages
    into elements inside a screen body is the rejected per-token whole-
    tree rebuild, now at frame rate. ChatHistory remains records;

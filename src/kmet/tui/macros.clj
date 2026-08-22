@@ -85,7 +85,17 @@
         cache @cache-atom]
     (if (and cache
              (= (:width cache) width)
-             (every? (fn [[a v]] (= (deref a) v)) (:values cache)))
+             (every? (fn [[a v]]
+                       (let [cur (deref a)]
+                         ;; identical? first: O(1) positive filter — the
+                         ;; common case is an atom untouched since caching,
+                         ;; whose current value IS the recorded object.
+                         ;; Structural = only runs for atoms actually
+                         ;; written in between (persistent collections give
+                         ;; fresh roots on every update).
+                         (or (identical? cur v)
+                             (= cur v))))
+                     (:values cache)))
       (:result cache)
       (let [tracked (atom {})]
         (binding [*tracked* tracked]
@@ -108,8 +118,11 @@
                                ;; change: renders are pure functions of tracked
                                ;; values, so an equal value means the cached result
                                ;; is still valid. (Clojure fires watches even on
-                               ;; equal-value reset!/swap!.)
-                               (when-not (= old new)
+                               ;; equal-value reset!/swap!.) identical? is the
+                               ;; O(1) fast path; structural = catches persistent
+                               ;; copies (fresh object, equal content).
+                               (when-not (or (identical? old new)
+                                             (= old new))
                                  (invalidate-cache component)))))
                 (when-not @invalidated?
                   (reset! cache-atom {:width width

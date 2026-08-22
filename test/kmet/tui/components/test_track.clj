@@ -112,6 +112,26 @@
     (let [lines (core/render c 10)]
       (t/is (.contains (first lines) "bye")))))
 
+(t/deftest test-fresh-but-equal-collection-write-keeps-cache
+  ;; A persistent collection write always yields a fresh root object, so
+  ;; the watch/hit-check identical? fast path misses — structural = must
+  ;; catch it and keep the cache valid. select-list renders @items-atom,
+  ;; so its cached lines must survive a fresh-but-equal vector write and
+  ;; bust on a genuinely different one.
+  (let [sl (sl/make-select-list [{:id :a :label "Alpha"}
+                                 {:id :b :label "Beta"}]
+                                :a)
+        r1 (core/render sl 60)]
+    ;; fresh vector, equal content → identical? misses, = catches → hit
+    (reset! (:items-atom sl) [{:id :a :label "Alpha"} {:id :b :label "Beta"}])
+    (t/is (identical? r1 (core/render sl 60))
+          "cache survives fresh-but-equal collection write"))
+  ;; a genuinely different collection still invalidates
+  (let [sl (sl/make-select-list [{:id :a :label "Alpha"}] :a)]
+    (core/render sl 60)
+    (reset! (:items-atom sl) [{:id :a :label "Changed!"}])
+    (t/is (some #(.contains % "Changed!") (core/render sl 60)))))
+
 (t/deftest test-footer-reactive
   ;; the footer's render cache must invalidate when a tracked atom changes —
   ;; here the extension-statuses atom (provider atoms are read inside helper
