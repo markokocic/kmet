@@ -1167,26 +1167,59 @@
               (dispatch-input! tui marker))
 
           ;; ESC-prefixed: dispatch only complete sequences (pi: a complete
-          ;; CSI/SS3/OSC/mouse sequence, or a meta key). Incomplete prefixes
-          ;; ("\u001b", "\u001b[", "\u001b[<...") wait for more characters;
-          ;; the lone-ESC case is flushed after ESCAPE-FLUSH-MS, other partial
-          ;; sequences after SEQUENCE-FLUSH-MS. A COMPLETE sequence that
-          ;; nothing recognizes (e.g. a terminal response the interceptors
-          ;; missed — Termux's \u001b[?64;...c DA or a kitty push response in an
-          ;; unparsed format) is garbage: holding it in the buffer would append
-          ;; every subsequent key to it and swallow all input forever ("kmet
-          ;; frozen, keys dead, no crash log"). Drop it.
+          ;; CSI/SS3/OSC/mouse sequence, or a meta key). The buffer may hold
+          ;; MORE than one sequence (e.g. a printable run, then an arrow key,
+          ;; then more text) — the LEADING complete sequence dispatches, the
+          ;; remainder re-processes. Incomplete prefixes ("\u001b",
+          ;; "\u001b[", "\u001b[<...") wait for more characters; the lone-ESC
+          ;; case is flushed after ESCAPE-FLUSH-MS, other partial sequences
+          ;; after SEQUENCE-FLUSH-MS. A COMPLETE leading sequence that nothing
+          ;; recognizes (e.g. a terminal response the interceptors missed —
+          ;; Termux's \u001b[?64;...c DA or a kitty push response in an
+          ;; unparsed format) is garbage: dropping it prevents the buffer from
+          ;; growing and swallowing all subsequent input ("kmet frozen, keys
+          ;; dead, no crash log").
             (= (first s) \u001b)
-            (if (and (or (keys/parse-key s)
-                         (keys/mouse-sequence? s)
-                         (keys/focus-sequence? s))
-                     (not= s "\u001b")
-                     (keys/complete-sequence? s))
-              (do (reset! buf "")
-                  (dispatch-input! tui s))
-              (if (and (not= s "\u001b") (keys/complete-sequence? s))
-                (reset! buf "")
-                (schedule-incomplete-flush! tui buf)))
+            ;; Find the longest complete leading escape sequence by scanning
+            ;; prefixes (pi: extractCompleteSequences). The buffer may hold
+            ;; MORE than one thing — a run then an arrow key, or a sequence
+            ;; then text — so only the LEADING complete sequence dispatches
+            ;; and the remainder re-processes. A complete but unrecognized
+            ;; leading sequence is garbage: dropping it prevents the buffer
+            ;; from growing and swallowing all subsequent input ("kmet
+            ;; frozen, keys dead, no crash log").
+            (let [seq-len (loop [n 2]
+                            (if (<= n (count s))
+                              (if (keys/complete-sequence? (subs s 0 n))
+                                n
+                                (recur (inc n)))
+                              nil))]
+              (cond
+                ;; lone ESC — wait for the escape timeout
+                (= s "\u001b")
+                (schedule-incomplete-flush! tui buf)
+
+                ;; no complete leading sequence — hold for more input
+                (nil? seq-len)
+                (schedule-incomplete-flush! tui buf)
+
+                ;; complete leading sequence
+                :else
+                (let [seq-str (subs s 0 seq-len)
+                      rest-s (subs s seq-len)]
+                  (if (or (keys/parse-key seq-str)
+                          (keys/mouse-sequence? seq-str)
+                          (keys/focus-sequence? seq-str))
+                    ;; recognized sequence: dispatch it, re-process the rest
+                    (do (reset! buf rest-s)
+                        (dispatch-input! tui seq-str)
+                        (when (seq rest-s)
+                          (process-input-buffer! tui read-fn buf)))
+                    ;; unrecognized complete sequence: drop the garbage and
+                    ;; re-process any trailing text
+                    (do (reset! buf rest-s)
+                        (when (seq rest-s)
+                          (process-input-buffer! tui read-fn buf)))))))
 
           ;; Non-ESC — dispatch printable runs in bulk.
             :else
@@ -1194,24 +1227,47 @@
             ;; up to the first control char (<= 31): the editor inserts the
             ;; whole run at once, so a large paste is ONE insertion instead of
             ;; n per-char insertions into a growing buffer (O(n^2) for 100K
-            ;; chars — measured ~0.64s per 50K). Control chars (CR/LF/Tab)
-            ;; dispatch ALONE — the editor needs per-char handling for them,
-            ;; and a control left in the buffer would stall the run-finder
-            ;; forever. The buffer keeps only what remains after this pass.
+            ;; chars — measured ~0.64s per 50K). The remainder is re-processed
+            ;; RECURSIVELY — never dispatched raw, or an ESC sequence (arrow
+            ;; key, paste marker) after the run would be split into literal
+            ;; text (the phantom-ESC class this buffer exists to prevent).
             (let [ctrl (loop [i 0]
                          (when (< i (count s))
                            (if (<= (int (.charAt ^String s i)) 31)
                              i
                              (recur (inc i)))))
                   run-len (or ctrl (count s))
-                  run (subs s 0 run-len)]
+                  run (subs s 0 run-len)
+                  rest-s (subs s run-len)]
               (when (seq run)
                 (dispatch-input! tui run))
-              ;; dispatch the control chars one at a time (each ≤ 31)
-              (let [rest-s (subs s run-len)]
-                (doseq [c rest-s]
-                  (dispatch-input! tui (str c))))
-              (reset! buf ""))))))))
+              (cond
+                (empty? rest-s)
+                (reset! buf "")
+
+                ;; a leading control char dispatches alone (CR/LF/Tab need
+                ;; per-char editor handling), then the remainder re-processes.
+                ;; MUST consume the control: a buffer starting with a control
+                ;; and followed by text (e.g. "\nhi") would otherwise recurse
+                ;; with the identical buffer forever (run-len 0, rest-s
+                ;; unchanged).
+                (zero? run-len)
+                (do (reset! buf (subs rest-s 1))
+                    (dispatch-input! tui (subs rest-s 0 1))
+                    (when (seq (subs rest-s 1))
+                      (process-input-buffer! tui read-fn buf)))
+
+                ;; exactly one control char after the run: dispatch it, done
+                (= 1 (count rest-s))
+                (do (reset! buf "")
+                    (dispatch-input! tui rest-s))
+
+                ;; multi-char remainder after the run: keep it buffered and
+                ;; re-process (handles ESC sequences, paste markers, further
+                ;; runs)
+                :else
+                (do (reset! buf rest-s)
+                    (process-input-buffer! tui read-fn buf))))))))))
 
 ;; ─── Unbracketed paste detection (paste-like bursts) ────────────────────────
 ;; Bracketed paste (mode 2004) delivers paste content verbatim, but input

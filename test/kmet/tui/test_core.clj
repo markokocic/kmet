@@ -347,6 +347,36 @@
       (feed-buf! tui buf)
       (t/is (= "hello" (editor/editor-get-text ed))))))
 
+(t/deftest test-run-then-esc-sequence-not-corrupted
+  ;; The bulk-run path (O(n) paste fix) must not split an ESC sequence that
+  ;; follows a printable run in the same buffer — "hi\u001b[A" used to
+  ;; dispatch the arrow key's bytes as literal text ("[A" typed into the
+  ;; editor), the exact split-sequence class the input buffer prevents.
+  (testing "arrow key after a printable run dispatches as a key, not text"
+    (let [tui (core/create-tui nil)
+          ed (editor/make-editor)
+          buf (atom "hi\u001b[A")
+          dispatched (atom [])]
+      (core/tui-add-child tui ed)
+      (core/tui-set-focus tui ed)
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (t/is (= "hi" (editor/editor-get-text ed)) "the run inserted as text")
+      (t/is (= "\u001b[A" (last @dispatched)) "the arrow key dispatched as a sequence")
+      (t/is (= "" @buf) "buffer drained")))
+  (testing "leading control then run then arrow terminates (no infinite recursion)"
+    (let [tui (core/create-tui nil)
+          ed (editor/make-editor)
+          buf (atom "\nhi\u001b[A")
+          dispatched (atom [])]
+      (core/tui-add-child tui ed)
+      (core/tui-set-focus tui ed)
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (t/is (= "\nhi" (editor/editor-get-text ed)) "control + run inserted")
+      (t/is (= "\u001b[A" (last @dispatched)) "arrow key dispatched")
+      (t/is (= "" @buf) "buffer drained"))))
+
 (t/deftest test-incomplete-sequence-flush-timeouts
   ;; pi parity: a lone ESC fires as Escape quickly (10ms), but a partial CSI
   ;; sequence waits 50ms — the flat 10ms fired MID-SEQUENCE under ordinary
