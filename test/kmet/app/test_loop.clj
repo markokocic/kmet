@@ -1450,7 +1450,70 @@
       (t/is (= 1 (:attempt (first ends))))
       (t/is (= "503 service unavailable" (:final-error (first ends)))))
     (t/is (= :error (loop/get-status agent)))
-    (t/is (some #(= :error (:type %)) @events) "terminal :error event emitted")))
+    (t/is (some #(= :error (:type %)) @events) "terminal :error event emitted")
+    ;; Every failed attempt is recorded — one :message-end per LLM call that
+    ;; errored (pi: message_end persists each stopReason-error partial, even
+    ;; when no retry budget remains) — and none enter the live context
+    (let [err-ends (filter #(and (= :message-end (:type %))
+                                 (= :error (:stop-reason (:message %))))
+                           @events)]
+      (t/is (= 2 (count err-ends)) "initial failure + exhausted retry")
+      (t/is (every? #(= "503 service unavailable" (:error-message %))
+                    (map :message err-ends)))
+      (t/is (empty? (filter #(= :assistant (:role %)) (loop/get-context agent)))
+            "no assistant message entered the context"))))
+
+(t/deftest test-loop-retry-records-failed-attempt
+  ;; pi parity: a transient failure's partial is persisted to the session
+  ;; (message_end → appendMessage) but removed from agent state before the
+  ;; retried call (_prepareRetry) — history keeps it, the request doesn't.
+  (let [dir (str "target/test-loop-failed-attempt-" (System/currentTimeMillis))
+        events (atom [])
+        call-count (atom 0)
+        sess (session/create-session dir)
+        agent (loop/make-agent-state
+               :on-event (fn [e] (swap! events conj e))
+               :session sess
+               :max-retries 2
+               :base-delay-ms 1)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (case (swap! call-count inc)
+                        1 (do (when-let [ot (:on-text opts)] (ot "partial answer"))
+                              (when-let [oe (:on-error opts)] (oe "upstream connect error")))
+                        (do (when-let [ot (:on-text opts)] (ot "recovered"))
+                            (when-let [od (:on-done opts)] (od :stop))))
+                      :done))]
+      @(loop/run-agent-turn agent {:message "hi" :on-done (fn [_]) :on-error (fn [_])}))
+    ;; The errored attempt finalizes as :message-end before the backoff starts
+    (let [end-idx (first (keep-indexed (fn [i e]
+                                         (when (and (= :message-end (:type e))
+                                                    (= :error (:stop-reason (:message e))))
+                                           i))
+                                       @events))
+          start-idx (first (keep-indexed (fn [i e]
+                                           (when (= :auto-retry-start (:type e)) i))
+                                         @events))]
+      (t/is (and end-idx start-idx))
+      (t/is (< end-idx start-idx) "failed attempt finalizes before the retry countdown")
+      (let [msg (:message (nth @events end-idx))]
+        (t/is (= "partial answer" (get-in msg [:content 0 :text])))
+        (t/is (= "upstream connect error" (:error-message msg)))))
+    ;; Session history keeps the failed entry…
+    (let [errored (->> (session/get-branch sess)
+                       (filterv #(= :error (:stop-reason %))))]
+      (t/is (= 1 (count errored)))
+      (t/is (= "partial answer" (get-in (first errored) [:content 0 :text])))
+      (t/is (= "upstream connect error" (:error-message (first errored)))))
+    ;; …but the live context only carries the user prompt and the recovery
+    (let [ctx (loop/get-context agent)]
+      (t/is (empty? (filter #(= :error (:stop-reason %)) ctx))
+            "errored attempt excluded from the live context")
+      (t/is (some #(and (= :assistant (:role %))
+                        (= "recovered" (get-in % [:content 0 :text])))
+                  ctx)))))
 
 (t/deftest test-loop-thinking-signature-captured
   ;; pi parity: the assistant message records provider/model provenance plus

@@ -487,6 +487,26 @@ Be precise and concise in your responses."}}]
     (emit agent {:type :message-end :message assistant-msg})
     assistant-msg))
 
+(defn- record-failed-attempt!
+  "Record a failed LLM attempt in the session history without adding it to
+   the live context, emitting :message-end (pi: a stream error finalizes the
+   partial as an AssistantMessage with stopReason \"error\" — message_end
+   persists it to the session file, then _prepareRetry removes it from agent
+   state so the retried request never sees it; on resume it comes back as a
+   plain assistant message carrying its partial text). RESULT is call-llm's
+   delivered map with whatever partials arrived before the failure."
+  [agent {:keys [text thinking tool-calls usage thinking-signature error]}]
+  (let [msg (cond-> (assoc (assistant-message text thinking tool-calls usage)
+                           :provider @(:provider agent)
+                           :model @(:model agent)
+                           :stop-reason :error)
+              (seq thinking-signature) (assoc :thinking-signature thinking-signature)
+              error (assoc :error-message error))]
+    (when (:session agent)
+      (session/append-entry (:session agent) msg))
+    (emit agent {:type :message-end :message msg})
+    msg))
+
 (defn- add-custom-message!
   "Add a before-agent-start injected message to context and session, emitting
    :message-start. Role defaults to :info (display-only — rendered in the UI,
@@ -788,6 +808,10 @@ Be precise and concise in your responses."}}]
 
 (defn- call-llm
   "Send messages to LLM, return a promise that delivers {:text str :tool-calls [...] :stop-reason kw}.
+   On failure delivers {:error ex :text str :thinking str :tool-calls [...] :usage map
+   :thinking-signature str} — whatever partials arrived before the failure
+   (persisted with the errored attempt; pi: a failed stream's partial becomes
+   the final message with stopReason \"error\").
    Calls on-text for text deltas during streaming.
    Applies the transform-context hook (pi: transformContext) to the conversation
    before the system prompt is prepended, and prefers the per-run
@@ -876,7 +900,16 @@ Be precise and concise in your responses."}}]
                   ;; stream error and finish-curl!'s exit-code report can both
                   ;; fire for one failure (e.g. abort-stream! on idle timeout)
                   (when-not (realized? done-promise)
-                    (deliver done-promise {:error e})))})
+                    (deliver done-promise
+                             {:error e
+                              ;; Partials captured before the failure — recorded
+                              ;; on the errored attempt (pi: the failed stream's
+                              ;; partial becomes the final message)
+                              :text @text-buf
+                              :thinking (str/trim @thinking-buf)
+                              :tool-calls (tc-flush)
+                              :usage @usage-buf
+                              :thinking-signature @sig-buf})))})
     done-promise))
 
 ;; ─── Queues ────────────────────────────────────────────────────────────────
@@ -1417,6 +1450,13 @@ Be precise and concise in your responses."}}]
                                                   {:aborted true}))
                                             (if (:error result)
                                               (let [err (:error result)
+                                                    ;; Persist the failed attempt before
+                                                    ;; classifying — session history only,
+                                                    ;; never the live context (pi:
+                                                    ;; _prepareRetry drops the errored
+                                                    ;; message from agent state while
+                                                    ;; keeping it in the file)
+                                                    _ (record-failed-attempt! agent result)
                                                     max-retries @(:max-retries agent)]
                                                 (cond
                                                   ;; Context overflow → compact once, then retry

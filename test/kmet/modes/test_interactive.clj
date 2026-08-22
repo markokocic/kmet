@@ -283,6 +283,34 @@
                 "result content matched to the right call by id")))
         (finally (fs/delete-tree sess-dir))))))
 
+(deftest replay-branch-marks-errored-tool-calls
+  (testing "tool calls inside an errored assistant entry render with the
+            failure text instead of waiting for a result that never came
+            (pi: renderInitialMessages updateResult error for stopReason
+            error/aborted messages)"
+    (let [sess-dir (str "target/test-interactive-replay-errored-" (System/currentTimeMillis))
+          sess (session/create-session sess-dir)]
+      (try
+        (session/append-entry sess {:role :user :content "go"})
+        (session/append-entry sess
+                              {:role :assistant
+                               :content [{:type :text :text "partial answer"}]
+                               :tool-calls [{:id "call_x" :name "bash"
+                                             :arguments {:command "ls"}}]
+                               :stop-reason :error
+                               :error-message "upstream connect error"})
+        (let [loaded (session/load-session (:file sess))
+              ch (ui/make-chat-history)
+              cs (inter/map->CoreState {:chat-history ch})]
+          ((var inter/replay-branch!) cs loaded)
+          (let [msgs @(:messages-atom ch)
+                tools (filterv #(= :tool (:role %)) msgs)]
+            (is (= 1 (count tools)) "one component for the dangling call")
+            (let [lines (protocols/render (:component (first tools)) 100)]
+              (is (some #(str/includes? % "upstream connect error") lines)
+                  "failure text shown as the result"))))
+        (finally (fs/delete-tree sess-dir))))))
+
 (deftest submit-command-line-gate
   (testing "multiline submit text (e.g. pasted blocks) is never a command"
     (let [command-line? @#'inter/command-line?]

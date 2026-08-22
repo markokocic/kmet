@@ -1312,17 +1312,24 @@
             ;; match the following tool-result entries by tool-call id. The
             ;; tool entries themselves only store the pi-faithful
             ;; :tool-name/:content — the call line (args) lives here.
-            (doseq [tc (:tool-calls e)]
-              (when-let [comp (ui/chat-history-add-message!
-                               (:chat-history cs)
-                               {:role :tool
-                                :name (:name tc)
-                                :args (:arguments tc)
-                                :content ""
-                                :is-error false})]
-                (ui/tool-execution-set-tool-call-id! comp (:id tc))
-                (ui/tool-execution-set-args-complete! comp)
-                (swap! pending-tools assoc (:id tc) comp))))
+            ;; Tool calls inside an errored/aborted message get the failure
+            ;; text as their result instead of waiting for a result that
+            ;; never came (pi: renderInitialMessages updateResult error).
+            (let [errored? (contains? #{:error :aborted} (:stop-reason e))]
+              (doseq [tc (:tool-calls e)]
+                (when-let [comp (ui/chat-history-add-message!
+                                 (:chat-history cs)
+                                 {:role :tool
+                                  :name (:name tc)
+                                  :args (:arguments tc)
+                                  :content ""
+                                  :is-error false})]
+                  (ui/tool-execution-set-tool-call-id! comp (:id tc))
+                  (ui/tool-execution-set-args-complete! comp)
+                  (if errored?
+                    (do (ui/tool-execution-set-content! comp (or (:error-message e) "Error"))
+                        (ui/tool-execution-set-error! comp true))
+                    (swap! pending-tools assoc (:id tc) comp))))))
 
           (= role :tool)
           (let [tc-id (some (fn [b] (when (= :tool_result (:type b))

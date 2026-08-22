@@ -38,7 +38,10 @@
     {:type :text | :thinking | :tool-call ...}."
 
    :message-end
-   "Fired when an assistant message is finalized and added to context.
+   "Fired when an assistant message is finalized — added to context on
+    success, or recorded in the session history only when the LLM call
+    failed (:stop-reason :error, :error-message; pi: message_end for a
+    stopReason-error partial that _prepareRetry then drops from state).
     Payload: :message."
 
    :tool-execution-start
