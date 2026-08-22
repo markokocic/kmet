@@ -55,9 +55,10 @@ in one request — loop, filter, chain, or fan out. It runs in a sandboxed
 ```clojure
 ;; discover first (structured, not an {ok data} envelope):
 (emit (tools/search {:query "screenshot"}))      ;; {:items [{:path :name :server :description :score}] :total ...}
+;; describe carries :inputTypeScript — the input schema as a compact TS shape:
 (emit (tools/describe {:path "chrome_devtools_take_screenshot"}))
 
-;; then call — {:ok true :data ...} or {:ok false :error {:code :message}}:
+;; then call — {:ok true :data ...} or {:ok false :error {:code :message :suggestions}}:
 (let [r (tools/call "chrome_devtools_take_screenshot" {:format "png"})]
   (when (:ok r) (emit (:data r))))
 
@@ -68,6 +69,11 @@ in one request — loop, filter, chain, or fan out. It runs in a sandboxed
 - `timeoutMs` param (default 30000) bounds the whole script; on timeout
   the worker is killed and in-flight calls appear in the result details
   as incomplete.
+- Result details carry a `calls` trace: every search/describe/call with
+  its input, outcome, and duration (calls still running at a timeout
+  show `{:error "incomplete"}` with the elapsed time).
+- `tool_not_found` errors include `:suggestions` — similar tool names
+  ranked from the metadata cache (pi `rankSuggestions`).
 - Progress notifications stream into the tool output while calls run.
 - Call paths are the prefixed names (`server_toolname`); search/describe
   resolve from cached metadata — connect a server once (`mcp({connect:

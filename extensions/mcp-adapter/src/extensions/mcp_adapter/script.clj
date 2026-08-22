@@ -98,15 +98,37 @@
        "        :else (try (json/generate-string v {:pretty true})\n"
        "                   (catch Exception _ (pr-str v)))))\n"
        "(defn emit [value] (proto! {:type \"emit\" :value (format-value value)}))\n"
+       ;; rpc: a SINGLE background reader thread consumes stdin and routes
+       ;; result lines to per-id promises (pi mcp-script-worker.mjs: one
+       ;; parentPort message handler dispatching by id). Per-call read-line
+       ;; loops would race: a thread that reads another call's line would
+       ;; discard it, starving the owner forever. Concurrent tools/call
+       ;; (e.g. from futures) is safe here.
+       "(def pending (atom {}))\n"
+       "(defn- reader-thread-fn []\n"
+       "  (doseq [line (line-seq (java.io.BufferedReader. *in*))]\n"
+       "    (let [msg (try (json/parse-string line true) (catch Exception _ nil))\n"
+       "          id (:id msg)\n"
+       "          p (get @pending id)]\n"
+       "      (when (and p (map? msg))\n"
+       "        (swap! pending dissoc id)\n"
+       "        (deliver p (:envelope msg)))))\n"
+       "  ;; EOF: the parent closed the pipe (host died or killed us) — fail\n"
+       "  ;; every still-pending rpc so no script thread hangs forever.\n"
+       "  (doseq [[_id p] @pending]\n"
+       "    (deliver p {:ok false :error {:code \"transport_closed\"\n"
+       "                                 :message \"mcpScript host closed the pipe\"}})))\n"
+       "(def reader-thread (doto (Thread. reader-thread-fn) (.setDaemon true) (.start)))\n"
+       "(def ^:private next-rpc-id (atom 0))\n"
        "(defn rpc [type payload]\n"
-       "  (let [id (swap! (atom 0) inc)]\n"
+       "  (let [id (swap! next-rpc-id inc)\n"
+       "        p (promise)]\n"
+       "    (swap! pending assoc id p)\n"
        "    (proto! (assoc payload :type type :id id))\n"
-       "    (loop []\n"
-       "      (let [line (read-line)]\n"
-       "        (if (nil? line)\n"
-       "          {:ok false :error {:code \"transport_closed\" :message \"mcpScript host closed the pipe\"}}\n"
-       "          (let [msg (try (json/parse-string line true) (catch Exception _ nil))]\n"
-       "            (if (and (map? msg) (= id (:id msg))) (:envelope msg) (recur))))))))\n"
+       "    ;; no per-call timeout: the script-level deadline kills the child,\n"
+       "    ;; and EOF above fails all pending — this deref only blocks while\n"
+       "    ;; the parent is alive and working.\n"
+       "    @p))\n"
        "(load-file tools-ns-path)\n"
        "(load-file console-ns-path)\n"
        "(ns mcp-script-runtime)\n"
@@ -172,15 +194,20 @@
 (defn- call-envelope
   "Execute one tools/call request (path = prefixed name) and build the
    worker envelope (pi callTool): {:ok true :data ...} or {:ok false
-   :error {:code :message}}."
+   :error {:code :message :suggestions}}. Trace recording happens in the
+   reader loop (pre-dispatch for in-flight visibility at timeout); here we
+   return the envelope with a :_duration for the completed trace entry."
   [state-atom path args]
   (let [state @state-atom
         started-at (System/currentTimeMillis)
         match (proxy/find-tool-for-path state path)]
     (if (nil? match)
-      {:ok false
-       :error {:code "tool_not_found"
-               :message (str "Tool \"" path "\" not found. Use (tools/search {:query \"...\"}) inside mcpScript.")}}
+      (let [suggestions (proxy/rank-suggestions state path 5)]
+        {:ok false
+         :error (cond-> {:code "tool_not_found"
+                         :message (str "Tool \"" path "\" not found. Use (tools/search {:query \"...\"}) inside mcpScript.")}
+                  (seq suggestions) (assoc :suggestions suggestions))
+         :_duration (- (System/currentTimeMillis) started-at)})
       (let [result (proxy/call-mcp-tool state (:server match) (:name match)
                                         (or args {})
                                         {})
@@ -215,7 +242,12 @@
 (defn- reader-loop
   "Read the child's stdout protocol lines; answers requests by writing
    result lines to STDIN-WRITER. Emits stream via ON-UPDATE and collects
-   output blocks into OUTPUT-ATOM. Delivers {:ok :return|:error} to DONE."
+   output blocks into OUTPUT-ATOM. Delivers {:ok :return|:error} to DONE.
+   Every search/describe/call is recorded in CALLS-ATOM (pi mcp-code.ts
+   calls trace): calls are marked ok false / \"incomplete\" BEFORE
+   dispatch so in-flight calls appear in the trace at timeout/early
+   return, then completed with their outcome and duration. Failed
+   searches/describes record ok false with the error code."
   [state p stdin-writer on-update output-atom done calls-atom]
   (try
     (with-open [rdr (io/reader (:out p))]
@@ -223,28 +255,62 @@
         (let [msg (parse-line line)]
           (when (map? msg)
             (case (:type msg)
-              "call" (let [envelope (call-envelope state (:path msg) (:args msg))]
+              "call" (let [started-at (System/currentTimeMillis)
+                           idx (count @calls-atom)]
                        (swap! calls-atom conj
                               {:operation "call" :path (:path msg)
-                               :ok (:ok envelope)
-                               :duration-ms (:_duration envelope)
-                               :error (when-not (:ok envelope)
-                                        (get-in envelope [:error :code]))})
-                       (io/copy (str (json/generate-string
-                                      {:type "result" :id (:id msg)
-                                       :envelope (dissoc envelope :_duration)})
-                                     "\n")
-                                stdin-writer))
-              "search" (io/copy (str (json/generate-string
-                                      {:type "result" :id (:id msg)
-                                       :envelope (search-envelope state (:input msg))})
-                                     "\n")
-                                stdin-writer)
-              "describe" (io/copy (str (json/generate-string
+                               :ok false :error "incomplete"
+                               :duration-ms 0 :started-at started-at})
+                       (let [envelope (call-envelope state (:path msg) (:args msg))
+                             duration (- (System/currentTimeMillis) started-at)]
+                         (swap! calls-atom assoc-in [idx]
+                                (cond-> {:operation "call" :path (:path msg)
+                                         :ok (:ok envelope)
+                                         :duration-ms duration}
+                                  (not (:ok envelope)) (assoc :error (get-in envelope [:error :code]))))
+                         (io/copy (str (json/generate-string
                                         {:type "result" :id (:id msg)
-                                         :envelope (describe-envelope state (:input msg))})
+                                         :envelope (dissoc envelope :_duration)})
                                        "\n")
-                                  stdin-writer)
+                                  stdin-writer)))
+              "search" (let [started-at (System/currentTimeMillis)
+                             envelope (try (search-envelope state (:input msg))
+                                           (catch Exception e
+                                             {:items [] :total 0 :has-more false :next-offset nil
+                                              :_error (ex-message e)}))
+                             duration (- (System/currentTimeMillis) started-at)
+                             query (if (and (map? (:input msg)) (string? (:query (:input msg))))
+                                     (:query (:input msg)) "")
+                             error (:_error envelope)]
+                         (swap! calls-atom conj
+                                (cond-> {:operation "search" :query query
+                                         :ok (nil? error) :duration-ms duration}
+                                  error (assoc :error error)))
+                         (io/copy (str (json/generate-string
+                                        {:type "result" :id (:id msg)
+                                         :envelope (dissoc envelope :_error)})
+                                       "\n")
+                                  stdin-writer))
+              "describe" (let [started-at (System/currentTimeMillis)
+                               envelope (try (describe-envelope state (:input msg))
+                                             (catch Exception e
+                                               {:path (if (and (map? (:input msg)) (string? (:path (:input msg))))
+                                                        (:path (:input msg)) "")
+                                                :error {:code "describe_failed"
+                                                        :message (ex-message e)}}))
+                               duration (- (System/currentTimeMillis) started-at)
+                               path (if (and (map? (:input msg)) (string? (:path (:input msg))))
+                                      (:path (:input msg)) "")
+                               err (:error envelope)]
+                           (swap! calls-atom conj
+                                  (cond-> {:operation "describe" :path path
+                                           :ok (nil? err) :duration-ms duration}
+                                    err (assoc :error (or (:code err) "describe_failed"))))
+                           (io/copy (str (json/generate-string
+                                          {:type "result" :id (:id msg)
+                                           :envelope envelope})
+                                         "\n")
+                                    stdin-writer))
               "emit" (let [text (format-value (:value msg))]
                        (swap! output-atom conj text)
                        (when on-update
@@ -273,9 +339,14 @@
   "Run CODE in the bb sandbox. OPTS: {:timeout-ms n (default 30000)
    :on-update (fn [partial])}. Returns the kmet tool result shape with
    details {:mode \"script\" :timeout-ms :error? :calls [...]} and the
-   output guard applied."
+   output guard applied. The child spawn is explicit about its
+   environment (inherits the host env — bb needs PATH/HOME/TMPDIR on
+   Termux; a fully scrubbed env is not viable for a bb subprocess)."
   [state code & [opts]]
-  (let [timeout-ms (or (:timeout-ms opts) default-timeout-ms)
+  (let [timeout-ms (let [t (or (:timeout-ms opts) default-timeout-ms)]
+                     (if (and (number? t) (pos? t) (not (Double/isNaN t)))
+                       (long t)
+                       default-timeout-ms))
         on-update (:on-update opts)
         bb (bb-binary)]
     (if (nil? bb)
@@ -286,7 +357,8 @@
             console-path (write-temp-script "console" console-ns-source)
             code-path (write-temp-script "script" (str code))
             p (proc/process [bb runtime-path tools-path console-path code-path]
-                            {:in :stream :out :stream :err :stream})
+                            {:in :stream :out :stream :err :stream
+                             :env (into {} (System/getenv))})
             pid (process/process-pid p)
             done (promise)
             output (atom [])
@@ -296,6 +368,17 @@
         (spawn #(reader-loop state p (:in p) on-update output done calls))
         (spawn #(drain-stderr (:err p) stderr-tail))
         (let [result (deref done timeout-ms ::timeout)
+              ;; snapshot the trace BEFORE any kill: incomplete durations
+              ;; are elapsed-at-deadline, not inflated by teardown time
+              ;; (pi snapshots before worker.terminate)
+              trace (->> @calls
+                         (mapv (fn [entry]
+                                 (let [started-at (:started-at entry)
+                                       incomplete? (= "incomplete" (:error entry))]
+                                   (cond-> (dissoc entry :started-at)
+                                     incomplete? (assoc :duration-ms
+                                                        (max 0 (- (System/currentTimeMillis)
+                                                                  (or started-at 0)))))))))
               guard-options (guard/resolve-options (:settings (:config @state)))
               finish (fn [text error-code]
                        (let [body (if (seq @output)
@@ -303,13 +386,16 @@
                                          (when (and (seq text) (not (str/blank? text)))
                                            (str "\n" text)))
                                     (or text "(no output)"))
-                             guarded (guard/guard-text body guard-options)]
+                             guarded (guard/guard-text body guard-options)
+                             stderr-tail-text (str/join " — " @stderr-tail)]
                          {:content (:text guarded)
                           :is-error (boolean error-code)
                           :details (cond-> {:mode "script"
                                             :timeout-ms timeout-ms}
                                      error-code (assoc :error error-code)
-                                     (seq @calls) (assoc :calls @calls)
+                                     (seq trace) (assoc :calls trace)
+                                     (and error-code (seq stderr-tail-text))
+                                     (assoc :stderr stderr-tail-text)
                                      (:guard guarded) (assoc :output-guard (:guard guarded)))}))]
           (cond
             (= ::timeout result)

@@ -64,14 +64,23 @@
         (check "describe envelope"
                (and (str/includes? (:content r) "fake_echo")
                     (str/includes? (:content r) "done"))))
+      ;; describe carries the input-schema TS shape
+      (let [r (script-exec tool "(emit (tools/describe {:path \"fake_echo\"})) nil")]
+        (check "describe :inputTypeScript"
+               (str/includes? (:content r) "message: string;")))
       ;; call with args + emit
       (let [r (script-exec tool "(emit ((tools/call \"fake_echo\" {:message \"hi from script\"}) :data))")]
         (check "tools/call envelope"
                (str/includes? (:content r) "echo: hi from script")))
-      ;; call error: unknown tool
+      ;; call error: unknown tool (with suggestions)
       (let [r (script-exec tool "(emit (tools/call \"nope\" {}))")]
         (check "tools/call tool_not_found"
                (str/includes? (:content r) "tool_not_found")))
+      ;; call error: unknown tool carries ranked suggestions
+      (let [r (script-exec tool "(emit (tools/call \"echoo\" {}))")]
+        (check "tool_not_found suggestions"
+               (and (str/includes? (:content r) "suggestions")
+                    (str/includes? (:content r) "echo"))))
       ;; call error: server error result (boom -> isError)
       (let [r (script-exec tool "(emit (tools/call \"fake_boom\" {}))")]
         (check "tools/call error result"
@@ -111,6 +120,37 @@
                                   (= "fake_echo" (:path c))
                                   (true? (:ok c))))
                      (get-in r [:details :calls]))))
+      ;; detail: search + describe operations recorded too
+      (let [r (script-exec tool "(tools/search {:query \"echo\"}) (tools/describe {:path \"fake_echo\"}) nil")
+            ops (get-in r [:details :calls])]
+        (check "trace records search + describe"
+               (and (some #(and (= "search" (:operation %)) (= "echo" (:query %))) ops)
+                    (some #(and (= "describe" (:operation %)) (= "fake_echo" (:path %))) ops))))
+      ;; detail: failed call recorded as ok false with error code
+      (let [r (script-exec tool "(tools/call \"fake_boom\" {}) nil")]
+        (check "trace records failed call"
+               (some (fn [c] (and (= "call" (:operation c))
+                                  (= "fake_boom" (:path c))
+                                  (false? (:ok c))
+                                  (= "call_failed" (:error c))))
+                     (get-in r [:details :calls]))))
+      ;; timeout leaves the in-flight call as "incomplete" in the trace,
+      ;; with a duration bounded by the deadline (not inflated by teardown)
+      (let [r (script-exec tool "(tools/call \"fake_slow\" {:ms 5000}) nil" 1200)
+            entry (first (filter #(and (= "call" (:operation %))
+                                       (= "fake_slow" (:path %)))
+                                 (get-in r [:details :calls])))]
+        (check "incomplete call in timeout trace"
+               (and (false? (:ok entry))
+                    (= "incomplete" (:error entry))
+                    (<= (:duration-ms entry) 2000))))
+      ;; concurrent tools/call from futures: unique rpc ids + the single
+      ;; reader thread must route each result to its promise (a duplicate
+      ;; id bug would hang the script until timeout)
+      (let [r (script-exec tool "(def fs (mapv (fn [ms] (future (tools/call \"fake_slow\" {:ms ms}))) [200 100 300])) (count (filter :ok (mapv deref fs)))")]
+        (check "concurrent calls resolve"
+               (and (str/includes? (:content r) "3")
+                    (false? (:is-error r)))))
       (mcp/shutdown api)
       (check "shutdown after scripts" true))))
 

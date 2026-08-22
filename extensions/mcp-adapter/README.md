@@ -169,8 +169,13 @@ cached metadata so no server spawns at startup. Names are lowercased with
   disables): trusted Clojure in a sandboxed `bb` subprocess (no host
   access) with a `tools` bridge — `(tools/search {...})`,
   `(tools/describe {:path ...})`, `(tools/call path args)` returning
-  `{:ok true :data ...}` / `{:ok false :error {:code :message}}`, plus
-  `emit` and `console.log`. See `skills/mcp/SKILL.md`.
+  `{:ok true :data ...}` / `{:ok false :error {:code :message
+  :suggestions}}`, plus `emit` and `console.log`. `tools/describe`
+  returns `:inputTypeScript` (the tool's input schema as a compact TS
+  shape). Result details carry a `calls` trace of every
+  search/describe/call with outcome and duration; calls still in flight
+  at a timeout appear as `{:ok false :error "incomplete"}` with the
+  elapsed time. See `skills/mcp/SKILL.md`.
 - **include/exclude globs**: server `:include-tools`/`:exclude-tools`
   (`["server_*"]`) filter which tools register as direct tools;
   `:search-keywords {"server_*" ["capture"]}` boost proxy search.
