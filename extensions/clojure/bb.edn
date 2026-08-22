@@ -3,8 +3,8 @@
                                  :exclusions [rewrite-clj/rewrite-clj]}
         parinferish/parinferish {:mvn/version "0.8.0"}}
  :tasks
- {test {:doc "Run clojure extension tests"
-        :task (let [nss (or (seq *command-line-args*)
+ {test {:doc "Run clojure extension tests (args: test namespace names)"
+        :task (let [nss (or (some->> *command-line-args* (map symbol))
                             '[edit-util-test edit-tool-test sexp-tool-test paren-repair-test])]
                 (doseq [ns-sym nss]
                   (require ns-sym))

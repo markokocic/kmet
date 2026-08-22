@@ -86,7 +86,9 @@
                                    :form_identifier "foo"
                                    :content "(defn foo [] nil)"})]
     (is (:is-error result))
-    (is (str/includes? (:content result) "Not a Clojure file"))))
+    ;; the rejection names the actual reason: the file's real extension
+    (is (str/includes? (:content result) "Not a Clojure file"))
+    (is (str/includes? (:content result) "has extension '.txt'"))))
 
 (deftest test-comment-form-type-rejected
   (let [path (write-test-file! "comment-reject" "(defn foo [] nil)")
@@ -558,7 +560,8 @@
     (is (str/includes? (read-test-file path) "(def foo 1)"))))
 
 (deftest test-unbalanced-content-rejected
-  ;; Unbalanced content is rejected outright — no auto-repair.
+  ;; Unbalanced content is rejected outright — no auto-repair. The
+  ;; rejection names the actual error: kind, location, opened-at.
   (let [path (write-test-file! "unbalanced-reject"
                                "(defn foo [] nil)\n")
         result (edit-tool/execute
@@ -566,6 +569,25 @@
                            "(defn foo [x] (* x 2)"))]
     (is (:is-error result))
     (is (str/includes? (:content result) "unbalanced"))
+    (is (str/includes? (:content result) "Unbalanced delimiters in content"))
+    (is (str/includes? (:content result) "at line 1"))
+    (is (str/includes? (:content result) "expected ')' to close '('"))
+    ;; the file must be untouched
+    (is (str/includes? (read-test-file path) "(defn foo [] nil)"))))
+
+(deftest test-syntax-error-content-rejected-explicitly
+  ;; Balanced-but-unparsable content used to slip past the unbalance check
+  ;; and fail later with a confusing pipeline error; it is now rejected up
+  ;; front with the reader's actual message and position.
+  (let [path (write-test-file! "syntax-reject"
+                               "(defn foo [] nil)\n")
+        result (edit-tool/execute
+                (edit-opts path "defn" "foo"
+                           "(def x 1) #"))]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "invalid syntax"))
+    (is (str/includes? (:content result) "Syntax error in content"))
+    (is (str/includes? (:content result) "at line 1"))
     ;; the file must be untouched
     (is (str/includes? (read-test-file path) "(defn foo [] nil)"))))
 

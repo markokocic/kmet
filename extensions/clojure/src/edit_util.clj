@@ -36,9 +36,17 @@
           (str/ends-with? lower ".lpy")))))
 
 (defn not-clojure-file-msg
-  "Error message for TOOL-NAME operating on a non-Clojure FILE-PATH."
+  "Rejection message for TOOL-NAME operating on a non-Clojure FILE-PATH.
+   Names the offending extension so the actual reason is visible ('.txt',
+   '.bak', or 'no extension' for extensionless paths)."
   [tool-name file-path]
-  (str tool-name " only operates on .clj/.cljs/.cljc/.cljd/.bb/.edn/.lpy files: " file-path))
+  (let [ext (when file-path (fs/extension (str file-path)))]
+    (str "Not a Clojure file: " file-path
+         (if (seq ext)
+           (str " has extension '." ext "'")
+           " has no file extension")
+         " — " tool-name
+         " only operates on .clj/.cljs/.cljc/.cljd/.bb/.edn/.lpy files.")))
 
 (defn spit-utf8 [f content]
   (spit f content :encoding "UTF-8"))
@@ -47,12 +55,13 @@
 ;; Lint
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
-(defn delimiter-details
-  "Nil when S has no delimiter error; otherwise the edamame ex-data map
-   with :row :col :edamame/expected-delimiter :edamame/opened-delimiter
-   and :edamame/opened-delimiter-loc. Only delimiter errors are returned —
-   other parse failures (bad token etc.) return nil. When available the map
-   carries precise row/col so callers can report actionable locations."
+(defn parse-error-details
+  "Nil when S parses cleanly; otherwise the edamame ex-data map of the
+   first reader error (:type :edamame/error, carrying :row :col — plus
+   :edamame/expected-delimiter / :edamame/opened-delimiter /
+   :edamame/opened-delimiter-loc and a :message string when the failure is
+   a delimiter imbalance). Failures that are not edamame reader errors
+   (raw exceptions) return nil."
   [s]
   (try
     (e/parse-string-all s {:all true
@@ -62,13 +71,21 @@
                            :auto-resolve name})
     nil
     (catch clojure.lang.ExceptionInfo ex
-      (let [data (ex-data ex)]
-        (when (= :edamame/error (:type data))
-          (cond
-            (contains? data :edamame/opened-delimiter) data
-            (contains? data :edamame/expected-delimiter) data
-            :else nil))))
+      (when (= :edamame/error (:type (ex-data ex)))
+        (assoc (ex-data ex) :message (ex-message ex))))
     (catch Exception _ nil)))
+
+(defn delimiter-details
+  "Nil when S has no DELIMITER error; otherwise the edamame ex-data map
+   with :row :col :edamame/expected-delimiter :edamame/opened-delimiter
+   and :edamame/opened-delimiter-loc. Only delimiter errors are returned —
+   unbalanced parens/brackets/braces and unterminated strings. Other parse
+   failures (bad token) return nil; use parse-error-details to see those."
+  [s]
+  (when-let [data (parse-error-details s)]
+    (when (or (contains? data :edamame/opened-delimiter)
+              (contains? data :edamame/expected-delimiter))
+      data)))
 
 (defn delimiter-error?
   "True when S has a delimiter error (unbalanced parens/brackets/braces).
@@ -78,6 +95,83 @@
    unknown exceptions are NOT delimiter errors."
   [s]
   (boolean (delimiter-details s)))
+
+;; ── Parse problem reports ─────────────────────────────────────────────────
+;; Shared rejection/warning text for every consumer of parse validation:
+;; the three tools (clojure_edit, clojure_edit_replace_sexp,
+;; clojure_paren_repair) and the write/edit hooks. Every report states WHAT
+;; failed (file path or argument label), WHERE (line/col from edamame) and
+;; WHY (expected vs opened delimiter, or the reader's message).
+
+(defn- char-at-pos
+  "The character at 1-based ROW/COL in SOURCE, or nil when out of range."
+  [source row col]
+  (when (and source row col (pos? row) (pos? col))
+    (let [line (get (vec (str/split-lines source)) (dec row))]
+      (when (and line (<= col (count line)))
+        (subs line (dec col) col)))))
+
+(defn delimiter-report
+  "Human-readable report for DETAILS (from delimiter-details) about the
+   text SOURCE, labeled WHAT — a file path or an argument label like
+   \"content\". SOURCE supplies the offending character: on an unexpected
+   closer edamame reports BLANK delimiter strings — truthy empty strings
+   that would render as '' — so the report reads the character at the error
+   position instead. Includes expected vs opened delimiters and opened-at
+   location when available, so the agent can pinpoint the imbalance."
+  [what details source]
+  (let [row        (:row details)
+        col        (:col details)
+        expected   (:edamame/expected-delimiter details)
+        opened     (:edamame/opened-delimiter details)
+        opened-loc (:edamame/opened-delimiter-loc details)
+        orow       (:row opened-loc)
+        ocol       (:col opened-loc)
+        ;; blank strings are truthy in Clojure — test blankness, not nil
+        non-blank? #(and (string? %) (not (str/blank? %)))
+        expected?  (non-blank? expected)
+        opened?    (non-blank? opened)
+        found      (when-not (or expected? opened?)
+                     (char-at-pos source row col))]
+    (str "Unbalanced delimiters in " what
+         (when (and row col)
+           (str " at line " row ", col " col))
+         (cond
+           (and expected? opened?) (str ": expected '" expected "' to close '" opened "'")
+           expected?               (str ": unexpected '" expected "'")
+           opened?                 (str ": unclosed '" opened "'")
+           found                   (str ": unexpected '" found "'")
+           :else                   ": unexpected closing delimiter")
+         (when (and orow ocol)
+           (str " (opened at line " orow ", col " ocol ")"))
+         ".")))
+
+(defn- syntax-report
+  "Human-readable report for a non-delimiter reader error DETAILS,
+   labeled WHAT: \"Syntax error in <what> at line r, col c:
+   <reader message>.\""
+  [what details]
+  (let [loc (when (and (:row details) (:col details))
+              (str " at line " (:row details) ", col " (:col details)))
+        msg (:message details)]
+    (if (str/blank? msg)
+      (str "Syntax error in " what loc ".")
+      ;; the reader's message carries its own punctuation
+      (str "Syntax error in " what loc ": " msg))))
+
+(defn parse-problem
+  "The first parse problem in SOURCE, labeled WHAT (a file path or an
+   argument label like \"content\"): {:kind :delimiter|:syntax :report str},
+   or nil when SOURCE parses cleanly. :kind separates repair strategies —
+   parinferish can fix delimiters, syntax errors need manual edits."
+  [what source]
+  (when-let [details (parse-error-details source)]
+    (if (or (contains? details :edamame/opened-delimiter)
+            (contains? details :edamame/expected-delimiter))
+      {:kind :delimiter
+       :report (delimiter-report what details source)}
+      {:kind :syntax
+       :report (syntax-report what details)})))
 
 (defn- parinferish-repair
   "Repair delimiters in S with parinferish indent mode. Returns the

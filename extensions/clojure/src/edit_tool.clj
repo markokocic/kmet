@@ -156,7 +156,7 @@
       {:content "Missing required parameter: file_path" :is-error true}
 
       (not (util/clojure-file? file_path))
-      {:content (str "Not a Clojure file — " (util/not-clojure-file-msg "clojure_edit" file_path))
+      {:content (util/not-clojure-file-msg "clojure_edit" file_path)
        :is-error true}
 
       (str/blank? form_type)
@@ -179,10 +179,18 @@
        :is-error true}
 
       :else
-      (if (util/delimiter-error? content)
-        {:content (str "Invalid " form_type " content: unbalanced delimiters — "
-                       "the content must be complete and balanced. "
-                       "Pass the complete " form_type " form, e.g. ("
+      ;; Reject any unparsable content up front, stating exactly what is
+      ;; wrong and where — unbalanced delimiters AND other reader errors
+      ;; (which used to surface later as a confusing pipeline failure).
+      (if-let [problem (util/parse-problem "content" content)]
+        {:content (str "Invalid " form_type " content: "
+                       (case (:kind problem)
+                         :delimiter "unbalanced delimiters"
+                         :syntax "invalid syntax")
+                       ".\n"
+                       (:report problem)
+                       "\nThe content must be a complete, balanced " form_type
+                       " form, e.g. ("
                        (case form_type
                          "defn" "defn my-fn [args] body"
                          "def" "def my-var value"

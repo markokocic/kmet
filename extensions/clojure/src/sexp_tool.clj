@@ -232,13 +232,22 @@
         ;; Original: replace_all forced false for insert operations
         replace-all? (and (boolean replace_all)
                           (not= op-kw :insert-before)
-                          (not= op-kw :insert-after))]
+                          (not= op-kw :insert-after))
+        ;; Parse problems are detected once, up front, so every rejection
+        ;; below can state the actual error (kind + line/col report).
+        match-problem (when match_form (util/parse-problem "match_form" match_form))
+        new-problem   (when new_form (util/parse-problem "new_form" new_form))
+        shape-error   (when new_form
+                        (let [head (second (re-find #"^\((defn|defn-|defmacro|defmacro-|def|deftest|deftest-|defmethod|defprotocol|defrecord|ns)([ )])"
+                                                    (str/trim new_form)))]
+                          (when head
+                            (util/validate-form-shape head new_form))))]
     (cond
       (str/blank? file_path)
       {:content "Missing required parameter: file_path" :is-error true}
 
       (not (util/clojure-file? file_path))
-      {:content (str "Not a Clojure file — " (util/not-clojure-file-msg "clojure_edit_replace_sexp" file_path))
+      {:content (util/not-clojure-file-msg "clojure_edit_replace_sexp" file_path)
        :is-error true}
 
       (not (fs/exists? file_path))
@@ -247,9 +256,13 @@
       (str/blank? match_form)
       {:content "Missing required parameter: match_form" :is-error true}
 
-;; Unbalanced match_form is rejected outright — no auto-repair
-      (util/delimiter-error? match_form)
-      {:content "match_form must be complete and balanced (unbalanced delimiters are rejected, not auto-repaired). Pass the complete S-expression, e.g. \"(+ x 1)\"."
+;; Any parse problem in match_form is rejected outright — no auto-repair.
+;; The report states what is wrong and where (kind, line/col).
+      match-problem
+      {:content (str "match_form must be complete and balanced"
+                     " (unbalanced delimiters are rejected, not auto-repaired):\n"
+                     (:report match-problem)
+                     "\nPass the complete S-expression(s), e.g. \"(+ x 1)\".")
        :is-error true}
 
 ;; match_form must be at least one real S-expression (not comments/whitespace)
@@ -262,19 +275,21 @@
       (str/blank? new_form)
       {:content "Missing required parameter: new_form" :is-error true}
 
-;; Unbalanced new_form is rejected outright — no auto-repair
-      (util/delimiter-error? new_form)
-      {:content "new_form must be complete and balanced (unbalanced delimiters are rejected, not auto-repaired). Pass the complete S-expression, e.g. \"(* x 2)\"."
+;; Any parse problem in new_form is rejected outright — no auto-repair.
+      new-problem
+      {:content (str "new_form must be complete and balanced"
+                     " (unbalanced delimiters are rejected, not auto-repaired):\n"
+                     (:report new-problem)
+                     "\nPass the complete S-expression(s), e.g. \"(* x 2)\".")
        :is-error true}
 
 ;; Balanced-but-broken definition forms are also rejected (e.g. "(def foo)"
-;; with no value, or "(defn- f)" with no arg vector)
-      (let [head (second (re-find #"^\((defn|defn-|defmacro|defmacro-|def|deftest|deftest-|defmethod|defprotocol|defrecord|ns)([ )])"
-                                  (str/trim new_form)))
-            shape-error (when head
-                          (util/validate-form-shape head new_form))]
-        (boolean shape-error))
-      {:content "new_form is not a well-formed Clojure form — pass a complete, valid expression"
+;; with no value, or "(defn- f)" with no arg vector) — with the validator's
+;; actual reason spelled out instead of a generic rejection.
+      shape-error
+      {:content (str "Invalid new_form — not a well-formed Clojure definition:\n"
+                     shape-error
+                     "\nPass a complete, valid expression.")
        :is-error true}
 
       :else

@@ -34,14 +34,17 @@
 (defn repair-file!
   "Repair delimiter errors in FILE-PATH and optionally format.
    Returns {:success bool :message str :diff str-or-nil
-            :delimiter-fixed? bool :formatted? bool}."
+            :delimiter-fixed? bool :formatted? bool}.
+   A delimiter error that parinferish cannot repair (or a file that does
+   not parse at all) is an explicit failure carrying the precise report —
+   never a silent \"no changes\" success."
   [file-path format?]
   (cond
     (not (fs/exists? file-path))
     {:success false :message (str "File does not exist: " file-path)}
 
     (not (util/clojure-file? file-path))
-    {:success false :message (str "Not a Clojure file — " (util/not-clojure-file-msg "clojure_paren_repair" file-path))}
+    {:success false :message (util/not-clojure-file-msg "clojure_paren_repair" file-path)}
 
     :else
     (try
@@ -61,11 +64,24 @@
                  :delimiter-fixed? (:delimiter-fixed? result)
                  :formatted? (:formatted? result)
                  :diff diff-str}))
-          {:success true
-           :message "No changes needed (no delimiter errors)"
-           :delimiter-fixed? false
-           :formatted? false
-           :diff nil}))
+          ;; Nothing changed — either the file is clean or the problem is
+          ;; beyond indent-mode repair. Say which, with the actual error.
+          (if-let [problem (util/parse-problem file-path final-content)]
+            {:success false
+             :message (str "Could not fix " file-path " — it still does not parse:\n"
+                           (:report problem)
+                           "\n"
+                           (case (:kind problem)
+                             :delimiter "parinferish only closes end-of-line openers and drops stray closers — fix this one manually (e.g. with the edit tool)."
+                             "Fix the syntax error manually (e.g. with the edit tool)."))
+             :delimiter-fixed? false
+             :formatted? false
+             :diff nil}
+            {:success true
+             :message "No changes needed (parses cleanly; no delimiter errors)"
+             :delimiter-fixed? false
+             :formatted? false
+             :diff nil})))
       (catch Exception e
         {:success false
          :message (str "Error: " (ex-message e))
@@ -96,50 +112,7 @@
 ;; Tool registration
 ;; ═══════════════════════════════════════════════════════════════════════════════
 
-;; ── Helpers for precise, actionable reports ───────────────────────────────
-
-(defn- char-at-pos
-  "The character at 1-based ROW/COL in SOURCE, or nil when out of range."
-  [source row col]
-  (when (and source row col (pos? row) (pos? col))
-    (let [line (get (vec (str/split-lines source)) (dec row))]
-      (when (and line (<= col (count line)))
-        (subs line (dec col) col)))))
-
-(defn- format-delimiter-report
-  "Human-readable report for DETAILS (from util/delimiter-details) in FILE-PATH.
-   SOURCE (the write content or current file text) supplies the offending
-   character: on an unexpected closer edamame reports BLANK delimiter
-   strings — truthy empty strings that would render as '' — so the report
-   reads the character at the error position instead. Includes expected vs
-   opened delimiters and opened-at location when available, so the agent
-   can pinpoint and fix the unbalanced delimiters."
-  [file-path details source]
-  (let [row        (:row details)
-        col        (:col details)
-        expected   (:edamame/expected-delimiter details)
-        opened     (:edamame/opened-delimiter details)
-        opened-loc (:edamame/opened-delimiter-loc details)
-        orow       (:row opened-loc)
-        ocol       (:col opened-loc)
-        ;; blank strings are truthy in Clojure — test blankness, not nil
-        non-blank? #(and (string? %) (not (str/blank? %)))
-        expected?  (non-blank? expected)
-        opened?    (non-blank? opened)
-        found      (when-not (or expected? opened?)
-                     (char-at-pos source row col))]
-    (str "Unbalanced delimiters in " file-path
-         (when (and row col)
-           (str " at line " row ", col " col))
-         (cond
-           (and expected? opened?) (str ": expected '" expected "' to close '" opened "'")
-           expected?               (str ": unexpected '" expected "'")
-           opened?                 (str ": unclosed '" opened "'")
-           found                   (str ": unexpected '" found "'")
-           :else                   ": unexpected closing delimiter")
-         (when (and orow ocol)
-           (str " (opened at line " orow ", col " ocol ")"))
-         ".")))
+;; ── Hook arg helpers ──────────────────────────────────────────────────────
 
 (defn- hook-arg
   "Read ARG key from tool args handling both keyword and string keys."
@@ -154,26 +127,36 @@
 
 ;; ── Hooks: write (pre, reject) + edit (post, warn) ────────────────────────
 ;; write content IS the file — validate directly in the pre-hook and block
-;; with a precise location. edit newText in isolation is NOT the file — an
-;; edit like ")" closing a form opened elsewhere is unbalanced alone but
-;; correct in context — so validate the RESULTING file in the post-hook and
-;; warn (non-blocking) with the same precise report + fix hint. No backup,
-;; no simulation, no duplication of the edit engine.
+;; with a precise report (what failed, where, why). edit newText in
+;; isolation is NOT the file — an edit like ")" closing a form opened
+;; elsewhere is unbalanced alone but correct in context — so validate the
+;; RESULTING file in the post-hook and warn (non-blocking) with the same
+;; report + fix hint. Both cover every edamame-detectable parse problem:
+;; delimiter imbalances AND other reader errors. No backup, no simulation,
+;; no duplication of the edit engine.
 
 (defn on-tool-call
-  "Before-tool hook: only intercepts `write` on Clojure files."
+  "Before-tool hook: only intercepts `write` on Clojure files. Blocks any
+   write whose content does not parse, stating exactly what is wrong and
+   where."
   [{:keys [tool-name args]}]
   (when (= "write" tool-name)
     (let [path    (write-path args)
           content (write-content args)]
       (when (and (util/clojure-file? path) (string? content))
-        (when-let [details (util/delimiter-details content)]
+        (when-let [problem (util/parse-problem path content)]
           {:block true
-           :reason (str (format-delimiter-report path details content)
-                        "\nWrite blocked — fix the delimiters or use clojure_edit / clojure_paren_repair.")})))))
+           :reason (str (:report problem)
+                        "\nWrite blocked — "
+                        (case (:kind problem)
+                          :delimiter "fix the delimiters or use clojure_edit / clojure_paren_repair."
+                          "fix the syntax error before writing."))})))))
 
 (defn on-tool-result
-  "After-tool hook: only inspects `edit` on Clojure files after success."
+  "After-tool hook: only inspects `edit` on Clojure files after success.
+   Warns (non-blocking) when the resulting file no longer parses, naming
+   the actual error; delimiters get a clojure_paren_repair hint, other
+   syntax errors point at manual fixing."
   [{:keys [tool-name args result is-error]}]
   (when (and (= "edit" tool-name) (not is-error) (map? result))
     (let [path (write-path args)]
@@ -181,11 +164,13 @@
         (try
           (when (fs/exists? path)
             (let [content (util/slurp-utf8 path)]
-              (when-let [details (util/delimiter-details content)]
-                (let [report (format-delimiter-report path details content)
-                      hint (str "Run clojure_paren_repair on " path " to auto-fix, or correct the delimiters manually.")
-                      orig (or (:content result) "")]
-                  {:content (str orig "\n\n⚠️ " report "\n" hint)}))))
+              (when-let [problem (util/parse-problem path content)]
+                (let [hint (case (:kind problem)
+                             :delimiter (str "Run clojure_paren_repair on " path " to auto-fix, or correct the delimiters manually.")
+                             (str "Fix the syntax error manually (e.g. with the edit tool) — " path " does not parse."))]
+                  {:content (str (or (:content result) "")
+                                 "\n\n⚠️ " (:report problem)
+                                 "\n" hint)}))))
           (catch Exception _ nil))))))
 
 (defn register!

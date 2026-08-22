@@ -81,6 +81,20 @@
     (is (str/includes? (:content result) "No changes needed"))
     (is (= "(def x 1)\n" (read-test-file path)))))
 
+(deftest test-unrepairable-file-fails-explicitly
+  ;; An unterminated string is a delimiter error parinferish cannot repair.
+  ;; This used to fall through to a false "No changes needed (no delimiter
+  ;; errors)" success; it must fail with the actual remaining error.
+  (let [path (write-test-file! "unterminated.clj" "(def s \"unterminated\n")
+        result (paren-repair/execute {:file_path path})]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "Could not fix"))
+    (is (str/includes? (:content result) "Unbalanced delimiters in"))
+    (is (str/includes? (:content result) "expected '\"' to close '\"'"))
+    (is (str/includes? (:content result) "manually"))
+    ;; the file must be untouched
+    (is (= "(def s \"unterminated\n" (read-test-file path)))))
+
 (deftest test-format-false-keeps-formatting
   (let [path (write-test-file! "noformat.clj" "(defn foo[x](+ x 1\n")
         result (paren-repair/execute {:file_path path :format false})]
@@ -148,6 +162,18 @@
     (is (str/includes? (:reason result) "Unbalanced delimiters in src/foo.clj"))
     (is (str/includes? (:reason result) "Write blocked"))))
 
+(deftest test-write-hook-blocks-syntax-error-explicitly
+  ;; Any parse problem blocks the write — a bad token names the reader's
+  ;; actual error and position instead of letting the broken file through.
+  (let [result (paren-repair/on-tool-call
+                {:tool-name "write"
+                 :args {:path "src/foo.clj"
+                        :content "(def x 1)\n#"}})]
+    (is (:block result))
+    (is (str/includes? (:reason result) "Syntax error in src/foo.clj"))
+    (is (str/includes? (:reason result) "at line 2"))
+    (is (str/includes? (:reason result) "Write blocked"))))
+
 (deftest test-write-hook-allows-balanced
   (is (nil? (paren-repair/on-tool-call
              {:tool-name "write"
@@ -212,6 +238,21 @@
     (is (str/includes? (:content result) "⚠️"))
     (is (str/includes? (:content result) "clojure_paren_repair"))
     (is (str/includes? (:content result) "edited"))))
+
+(deftest test-edit-hook-warns-on-syntax-error-result
+  ;; A non-delimiter syntax error warns too — with a manual-fix hint,
+  ;; since clojure_paren_repair cannot repair reader errors.
+  (let [path (write-test-file! "edit-syntax-warn.clj" "(def x 1) #")
+        result (paren-repair/on-tool-result
+                {:tool-name "edit"
+                 :args {:path path}
+                 :result {:content "edited"}
+                 :is-error false})]
+    (is (some? result))
+    (is (str/includes? (:content result) "⚠️"))
+    (is (str/includes? (:content result) "Syntax error in"))
+    (is (str/includes? (:content result) "Fix the syntax error manually"))
+    (is (not (str/includes? (:content result) "clojure_paren_repair on")))))
 
 (deftest test-edit-hook-silent-on-balanced-result
   (let [path (write-test-file! "edit-ok.clj" "(defn foo [x] (+ x 1))")

@@ -49,8 +49,16 @@
     (is (false? (util/clojure-file? "")))))
 
 (deftest test-not-clojure-file-msg
-  (is (= "clojure_edit only operates on .clj/.cljs/.cljc/.cljd/.bb/.edn/.lpy files: foo.txt"
-         (util/not-clojure-file-msg "clojure_edit" "foo.txt"))))
+  (testing "names the offending extension"
+    (is (= "Not a Clojure file: foo.txt has extension '.txt' — clojure_edit only operates on .clj/.cljs/.cljc/.cljd/.bb/.edn/.lpy files."
+           (util/not-clojure-file-msg "clojure_edit" "foo.txt"))))
+  (testing "extensionless paths say so explicitly"
+    (is (str/includes? (util/not-clojure-file-msg "clojure_edit" "notes") "has no file extension")))
+  (testing "the tool name and accepted list are stated"
+    (let [msg (util/not-clojure-file-msg "clojure_paren_repair" "a.clj.bak")]
+      (is (str/includes? msg ".bak"))
+      (is (str/includes? msg "clojure_paren_repair"))
+      (is (str/includes? msg ".clj/.cljs/.cljc/.cljd/.bb/.edn/.lpy")))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Lint repair
@@ -91,6 +99,34 @@
     ;; a genuinely bad token is not a delimiter error — edamame throws
     ;; without :opened-delimiter
     (is (false? (util/delimiter-error? "(def x 1) @")))))
+
+(deftest test-parse-problem
+  (testing "clean source has no problem"
+    (is (nil? (util/parse-problem "x" "(defn f [x] (+ x 1))"))))
+  (testing "unbalanced opener: delimiter kind + precise report"
+    (let [{:keys [kind report]} (util/parse-problem "content" "(defn foo [x]")]
+      (is (= :delimiter kind))
+      (is (str/includes? report "Unbalanced delimiters in content"))
+      (is (str/includes? report "at line 1, col 14"))
+      (is (str/includes? report "expected ')' to close '('"))
+      (is (str/includes? report "opened at line 1, col 1"))))
+  (testing "stray closer names the offending character, never ''"
+    (let [{:keys [report]} (util/parse-problem "a.clj" "(def x (+ 1 2)))")]
+      (is (str/includes? report "unexpected ')'"))
+      (is (not (str/includes? report "''")))))
+  (testing "non-delimiter reader error: syntax kind + location + message"
+    (let [{:keys [kind report]} (util/parse-problem "match_form" "foo #")]
+      (is (= :syntax kind))
+      (is (str/includes? report "Syntax error in match_form"))
+      (is (str/includes? report "at line 1, col 6"))
+      (is (str/includes? report "Unexpected EOF"))))
+  (testing "unterminated string is a delimiter problem (parinferish-relevant)"
+    (let [{:keys [kind]} (util/parse-problem
+                          "f.clj" "(def s \"unterminated")]
+      (is (= :delimiter kind))))
+  (testing "raw non-edamame failures yield no problem (not classifiable)"
+    ;; #^meta on a literal makes edamame throw a raw ClassCastException
+    (is (nil? (util/parse-problem "f.clj" "(def x #^bad 1)")))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════════
 ;; Diff

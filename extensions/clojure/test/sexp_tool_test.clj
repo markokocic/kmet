@@ -100,7 +100,8 @@
     (is (str/includes? (:content result) "S-expression"))))
 
 (deftest test-new-form-invalid
-  ;; Unbalanced new_form ("(defn foo [") is rejected — no auto-repair.
+  ;; Unbalanced new_form ("(defn foo [") is rejected — no auto-repair —
+  ;; with the actual error: kind, location, opened-at.
   (let [path (write-test-file! "invalid-new" "(+ x 1)")
         result (sexp-tool/execute {:file_path path
                                    :match_form "(+ x 1)"
@@ -108,7 +109,23 @@
                                    :operation "replace"})]
     (is (:is-error result))
     (is (str/includes? (:content result) "unbalanced"))
+    (is (str/includes? (:content result) "Unbalanced delimiters in new_form"))
+    (is (str/includes? (:content result) "at line 1"))
+    (is (str/includes? (:content result) "opened at line 1, col 11"))
     (is (str/includes? (read-test-file path) "(+ x 1)"))))
+
+(deftest test-match-form-syntax-error-reports-location
+  ;; A balanced-looking but unparsable match_form names the reader error
+  ;; and position instead of failing later as a confusing not-found.
+  (let [path (write-test-file! "syntax-match" "(+ x 1)")
+        result (sexp-tool/execute {:file_path path
+                                   :match_form "foo #"
+                                   :new_form "(+ x 2)"
+                                   :operation "replace"})]
+    (is (:is-error result))
+    (is (str/includes? (:content result) "match_form must be complete and balanced"))
+    (is (str/includes? (:content result) "Syntax error in match_form"))
+    (is (str/includes? (:content result) "at line 1, col 6"))))
 
 (deftest test-new-form-unrepairable
   (let [path (write-test-file! "invalid-new2" "(+ x 1)")
@@ -159,13 +176,16 @@
 
 (deftest test-new-form-incomplete-def-rejected
   ;; A balanced-but-incomplete def ("(def foo)" with no value) is rejected
-  ;; by structural validation.
+  ;; by structural validation — and the validator's actual reason is
+  ;; spelled out instead of a generic rejection.
   (let [path (write-test-file! "incomplete-def-new" "(+ x 1)")
         result (sexp-tool/execute {:file_path path
                                    :match_form "(+ x 1)"
                                    :new_form "(def foo)"
                                    :operation "replace"})]
     (is (:is-error result))
+    (is (str/includes? (:content result) "Invalid new_form"))
+    (is (str/includes? (:content result) "expected (def name value)"))
     (is (str/includes? (read-test-file path) "(+ x 1)"))))
 
 (deftest test-new-form-valid-def-allowed
