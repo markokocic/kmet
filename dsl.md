@@ -301,7 +301,11 @@ Properties:
 
   SCI note: expands to plain calls (`tracked-deref`), and
   `kmet.tui.macros` is already injected into extension contexts —
-  extensions can use defc without host changes.
+  extensions can use defc without host changes. This is also what
+  dissolves the atom-ownership problem for extensions: `tracked-deref`
+  records *any* IDeref, so a defc body reacts to plain app atoms — no
+  ratom, no migration (the macro moves tracking from the atom's type
+  to the read site).
 
 **The three forms — Reagent's taxonomy, mapped.** Reagent has exactly
 three ways to author a component; this design covers all three with the
@@ -334,14 +338,27 @@ both paths. For plain fns the old rule stands: don't reach for derefs
 to "optimize" re-render scope; subscriptions are the tool (§3.1).
 
 **Why not full per-component reactions for everything?** The remaining
-gap to Reagent's runtime needs deref tracking inside *every* fn body,
-which needs one of:
+gap to Reagent's runtime needs deref tracking inside *every* fn body.
+Tracking must exist **at the read site**, which needs one of:
 
 1. **Reagent-owned atoms** — users write `@(r/atom …)`, a custom IDeref
-   that records into the enclosing reaction. kmet can't copy this: app
-   state is plain `clojure.lang.Atom`s owned by `kmet.app`, and
-   extension-created atoms can't be forced to switch. Mixed semantics
-   across all components would be worse than two explicit stories.
+   whose deref records into the enclosing reaction. Mechanically kmet
+   *could* ship such a type (bb/sci support custom IDeref; namespaces
+   are injected into extension contexts by reference), but it fails on
+   coverage and mixing:
+   - **Coverage**: tracking lives in the atom type, and the atoms worth
+     reading are `kmet.app`'s — plain `clojure.lang.Atom`s created long
+     before the DSL. On the JVM you cannot retro-fit deref behavior
+     onto existing instances, so reactive-over-app-data requires
+     migrating every app-owned atom. A ratom only ever makes an
+     extension reactive to its own local state.
+   - **Mixing**: partial adoption produces silent freezes, not errors —
+     a component reading its own ratom plus `messages-atom` re-renders
+     on the former and never on the latter. Reagent has this exact two-
+     worlds split (`r/atom` vs plain cljs atom) and handles it socially
+     (greenfield app, one team, "always use r/atom"); a plugin API
+     can't rely on convention for correctness, and nothing stops an
+     author writing `(def s (atom …))` anyway.
 2. **Compile-time rewriting everywhere** — making `defc` mandatory. That
    forfeits plain-`defn` authoring (Reagent's Form-1), and forces the
    macro on every extension component. Opt-in defc gets the benefit
