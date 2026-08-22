@@ -176,12 +176,13 @@
 (defn- make-component-for-msg
   "Create the appropriate component for a message map.
    For tool messages, looks up render functions from the tool registry.
-   Assistant messages inherit the current thinking-hidden flag/label and
-   tool components the current expansion flag (pi: hideThinkingBlock /
-   toolOutputExpanded / hiddenThinkingLabel). A message carrying a pre-built
-   :component (extension renderers returning a component directly, and
-   replayed :bash executions) uses it as-is."
-  [msg theme output-pad tools-expanded? thinking-hidden? hidden-label]
+   Assistant messages SHARE the chat history's thinking-hidden/hidden-label
+   atoms (pi: hideThinkingBlock / hiddenThinkingLabel) — a toggle is one
+   reset! that invalidates every message at once; tool components get a copy
+   of the current expansion flag. A message carrying a pre-built :component
+   (extension renderers returning a component directly, and replayed :bash
+   executions) uses it as-is."
+  [msg theme output-pad tools-expanded? thinking-hidden-atom hidden-label-atom]
   (cond
     ;; Pre-built component — extension entry/message renderers may return a
     ;; bare component (pi: renderers produce components); the interactive
@@ -198,8 +199,8 @@
                   :thinking (:thinking msg "")
                   :theme theme
                   :output-pad output-pad
-                  :hide-thinking? thinking-hidden?
-                  :hidden-label hidden-label)
+                  :thinking-hidden-atom thinking-hidden-atom
+                  :hidden-label-atom hidden-label-atom)
       :tool (let [tool (tools/get-tool (:name msg ""))
                   comp (te/make-tool-execution
                         :name (:name msg "")
@@ -247,8 +248,8 @@
    Auto-scrolls to bottom."
   [ch msg]
   (let [comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch)
-                                     @(:tools-expanded-atom ch) @(:thinking-hidden-atom ch)
-                                     @(:hidden-label-atom ch))]
+                                     @(:tools-expanded-atom ch) (:thinking-hidden-atom ch)
+                                     (:hidden-label-atom ch))]
     (when comp
       (swap! (:messages-atom ch) conj (assoc msg :component comp)))
     comp))
@@ -266,8 +267,8 @@
    no streaming message exists. Returns the created component (or nil)."
   [ch msg]
   (let [comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch)
-                                     @(:tools-expanded-atom ch) @(:thinking-hidden-atom ch)
-                                     @(:hidden-label-atom ch))
+                                     @(:tools-expanded-atom ch) (:thinking-hidden-atom ch)
+                                     (:hidden-label-atom ch))
         streaming @(:streaming-atom ch)]
     (when comp
       (let [entry (assoc msg :component comp)]
@@ -318,14 +319,15 @@
   "Start a new streaming assistant message.
    Creates the component, appends the message map to messages-atom, and
    returns the message map (callers can use chat-history-append-* to feed it).
-   Inherits the current thinking-hidden flag (pi: hideThinkingBlock)."
+   Shares the thinking-hidden/hidden-label atoms with the new message
+   (pi: hideThinkingBlock)."
   [ch]
   (let [comp (am/make-assistant-message
               :text "" :thinking ""
               :theme @(:theme-atom ch)
               :output-pad @(:output-pad-atom ch)
-              :hide-thinking? @(:thinking-hidden-atom ch)
-              :hidden-label @(:hidden-label-atom ch))
+              :thinking-hidden-atom (:thinking-hidden-atom ch)
+              :hidden-label-atom (:hidden-label-atom ch))
         msg {:role :assistant :content "" :component comp :streaming? true}]
     (am/assistant-message-set-streaming! comp true)
     (swap! (:messages-atom ch) conj msg)
@@ -444,21 +446,18 @@
   @(:tools-expanded-atom ch))
 
 (defn chat-history-set-thinking-hidden!
-  "Set thinking block visibility on all assistant messages (pi:
-   setHideThinkingBlock — applied to existing children; new assistant
-   messages inherit the flag). Returns the value set."
+  "Set thinking block visibility on all assistant messages — one reset! on
+   the shared atom: every AssistantMessageComponent references it, so track!
+   invalidates all caches at once and the next frame reflows lazily (pi:
+   setHideThinkingBlock; new messages share the same atom at construction).
+   Returns the value set."
   [ch hidden?]
   (let [hidden? (boolean hidden?)]
     (reset! (:thinking-hidden-atom ch) hidden?)
-    (doseq [m @(:messages-atom ch)]
-      (when (= (kind-of (:component m)) :assistant)
-        (am/assistant-message-set-hide-thinking! (:component m) hidden?)))
     hidden?))
 
 (defn chat-history-toggle-thinking-hidden!
-  "Toggle thinking block visibility on all AssistantMessageComponent children.
-   Tracks a single flag (pi: hideThinkingBlock) applied to existing messages;
-   new assistant messages inherit it. Returns the new hidden state."
+  "Toggle thinking-block visibility. Returns the new hidden state."
   [ch]
   (chat-history-set-thinking-hidden! ch (not @(:thinking-hidden-atom ch))))
 
@@ -469,14 +468,10 @@
 
 (defn chat-history-set-hidden-thinking-label!
   "Set the label shown in place of hidden thinking blocks (pi:
-   setHiddenThinkingLabel). Applies to all existing assistant messages;
-   new messages inherit it. Pass nil to restore the default."
+   setHiddenThinkingLabel) — one reset! on the shared label atom; all
+   assistant messages reference it. Pass nil to restore the default."
   [ch label]
-  (let [label (or label "Thinking...")]
-    (reset! (:hidden-label-atom ch) label)
-    (doseq [m @(:messages-atom ch)]
-      (when (= (kind-of (:component m)) :assistant)
-        (am/assistant-message-set-hidden-label! (:component m) label))))
+  (reset! (:hidden-label-atom ch) (or label "Thinking..."))
   nil)
 
 ;; ─── Status message (pi: showStatus) ────────────────────────────────────────

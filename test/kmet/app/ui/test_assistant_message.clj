@@ -117,3 +117,28 @@
       (is (some #(re-find #"hello world" %) lines))
       (is (not-any? #(re-find #"^ {2}hello" %) lines)
           "no leading spaces survive"))))
+
+(deftest test-shared-thinking-hidden-atom
+  (testing "messages sharing the chat history's hide-thinking atom flip together —
+            one reset! is enough, reflow happens lazily on the next render"
+    (let [shared (atom true)
+          label-shared (atom "Thinking...")
+          a (am/make-assistant-message :text "response a" :thinking "secret alpha"
+                                       :thinking-hidden-atom shared
+                                       :hidden-label-atom label-shared)
+          b (am/make-assistant-message :text "response b" :thinking "secret beta"
+                                       :thinking-hidden-atom shared
+                                       :hidden-label-atom label-shared)
+          plain-a #(mapv strip-ansi (core/render a 40))
+          plain-b #(mapv strip-ansi (core/render b 40))]
+      ;; hidden initially — both show the label, neither leaks content
+      (is (some #(re-find #"Thinking" %) (plain-a)))
+      (is (not-any? #(re-find #"secret alpha" %) (plain-a)))
+      ;; flip the SHARED atom once — both messages pick it up on next render
+      (reset! shared false)
+      (is (some #(re-find #"secret alpha" %) (plain-a)) "message a expanded")
+      (is (some #(re-find #"secret beta" %) (plain-b)) "message b expanded too")
+      ;; and the per-message setter still works (writes the same shared atom)
+      (am/assistant-message-set-hide-thinking! b true)
+      (is (true? @shared) "setter hits the shared atom")
+      (is (not-any? #(re-find #"secret beta" %) (plain-b)) "b hides again"))))

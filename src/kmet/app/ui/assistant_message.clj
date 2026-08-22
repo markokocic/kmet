@@ -77,6 +77,8 @@
                rendered-text-atom        ;; text source of the cached lines (stale check)
                rendered-thinking-atom    ;; thinking source of the cached lines (stale check)
                rendered-streaming-atom   ;; streaming flag of the cached lines (stale check)
+               rendered-hide?-atom       ;; hide flag the cached lines were built with
+               rendered-hidden-label-atom ;; label the cached lines were built with
                last-render-width-atom
                cache-atom]
   (render [this width]
@@ -87,6 +89,10 @@
             text (let [t (str/trim (or @text-atom ""))] (when (seq t) t))
             thinking (let [t (str/trim (or @thinking-text-atom ""))] (when (seq t) t))
             streaming? (boolean @streaming-atom)
+            ;; Read in the track! body so a flip of the (possibly SHARED)
+            ;; flag/label atoms invalidates this cache like any other input.
+            hide? (boolean @hide-thinking-atom)
+            hidden-label @hidden-label-atom
             text-empty? (nil? text)
             thinking-empty? (nil? thinking)
             ;; Reflow lazily on the render thread: appends only swap the text
@@ -97,7 +103,9 @@
             stale? (or (and prev-width (not= prev-width width))
                        (not= text @rendered-text-atom)
                        (not= thinking @rendered-thinking-atom)
-                       (not= streaming? @rendered-streaming-atom))
+                       (not= streaming? @rendered-streaming-atom)
+                       (not= hide? @rendered-hide?-atom)
+                       (not= hidden-label @rendered-hidden-label-atom))
             _ (when stale? (reflow-all! this width))
             text-lines @rendered-text-lines-atom
             thinking-lines @rendered-thinking-lines-atom]
@@ -142,28 +150,39 @@
     (reset! (:rendered-text-atom comp) text)
     (reset! (:rendered-thinking-atom comp) thinking)
     (reset! (:rendered-streaming-atom comp) streaming?)
+    (reset! (:rendered-hide?-atom comp) hide?)
+    (reset! (:rendered-hidden-label-atom comp) hidden-label)
     (reset! (:last-render-width-atom comp) width)))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-assistant-message
-  [& {:keys [text thinking theme output-pad hide-thinking? hidden-label]
+  [& {:keys [text thinking theme output-pad hide-thinking? hidden-label
+             thinking-hidden-atom hidden-label-atom]
       :or {text "" thinking "" theme theme/dark-theme
            output-pad 1 hide-thinking? false}}]
-  ;; explicit nil (callers pass a tracked label) falls back to the default
+  ;; Optional SHARED flag atoms: when the chat history passes its own
+  ;; thinking-hidden/hidden-label atoms, every message built from it reads
+  ;; the same state — a toggle is a single reset! that track! watches on all
+  ;; messages invalidate at once (pi: hideThinkingBlock). Callers passing a
+  ;; nil label fall back to the default.
   (let [hidden-label (or hidden-label "Thinking...")
         comp (map->AssistantMessageComponent {:text-atom (atom text)
                                               :thinking-text-atom (atom thinking)
                                               :theme-atom (atom theme)
                                               :output-pad-atom (atom output-pad)
-                                              :hide-thinking-atom (atom hide-thinking?)
-                                              :hidden-label-atom (atom hidden-label)
+                                              :hide-thinking-atom (or thinking-hidden-atom
+                                                                      (atom hide-thinking?))
+                                              :hidden-label-atom (or hidden-label-atom
+                                                                     (atom hidden-label))
                                               :streaming-atom (atom false)
                                               :rendered-text-lines-atom (atom [])
                                               :rendered-thinking-lines-atom (atom [])
                                               :rendered-text-atom (atom nil)
                                               :rendered-thinking-atom (atom nil)
                                               :rendered-streaming-atom (atom nil)
+                                              :rendered-hide?-atom (atom nil)
+                                              :rendered-hidden-label-atom (atom nil)
                                               :last-render-width-atom (atom nil)
                                               :cache-atom (atom nil)})]
     ;; Do initial render so lines are ready immediately
