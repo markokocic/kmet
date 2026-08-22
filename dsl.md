@@ -359,10 +359,14 @@ Tracking must exist **at the read site**, which needs one of:
      (greenfield app, one team, "always use r/atom"); a plugin API
      can't rely on convention for correctness, and nothing stops an
      author writing `(def s (atom …))` anyway.
-2. **Compile-time rewriting everywhere** — making `defc` mandatory. That
-   forfeits plain-`defn` authoring (Reagent's Form-1), and forces the
-   macro on every extension component. Opt-in defc gets the benefit
-   where wanted without the tax.
+2. **Compile-time rewriting everywhere** — making `defc` mandatory. All
+   kmet extensions are internal (first-party, updated in lockstep), so
+   the classic objection — taxing third-party plugin authors — doesn't
+   apply here. What remains: mandatory defc forfeits plain-`defn`
+   Form-1 authoring for the 90% of widgets whose per-frame
+   re-derivation is already free, and buys nothing over opt-in (the
+   tracking machinery is identical; only the default differs). Opt-in
+   keeps the low-friction path and stays evidence-gated.
 
 And the payoff wouldn't justify either. The waste batching leaves on
 the table = live fn bodies × small-vector-building per frame —
@@ -384,6 +388,29 @@ deps over discovery — but defc supersedes it: automatic deps, no listing,
 branch-conditional reads handled, same no-scheduler/no-atom-ownership
 properties, and it reuses machinery that already exists. One reactive
 story instead of two.
+
+**Granularity guidance (the monolith trap).** A tempting shortcut:
+"make the whole main screen one big `defc` that reads all app state" —
+covered and correct, since any change re-derives it. Three reasons not
+to:
+
+1. **Coarsest legal granularity**: one reaction means *any* change
+   re-runs the *entire* body — during streaming, that's a full-screen
+   re-derivation per frame. Same CPU profile as the batched default,
+   none of defc's benefit. The win comes from many small `defc`s
+   reacting narrowly (screen shell → region panels → leaves).
+2. **Tracked reads of large collections cost an equality walk per
+   frame** — derefing `messages-atom` in a body means a structural `=`
+   against last frame's value; during streaming the tail changed, so
+   the walk goes deep before failing. Narrow reads or computes sliced
+   near the consumer avoid it.
+3. **The transcript stays out regardless** (§3.3): mapping messages
+   into elements inside a screen body is the rejected per-token whole-
+   tree rebuild, now at frame rate. ChatHistory remains records;
+   screens reference it as a splice/tag.
+
+Phase B step 8's shape follows: `defc` root shell + region-level
+`defc`s (dock/status/dialogs) + transcript as records.
 
 ### 2.5 Lifecycle — `dispose`, not `with-let`-as-macro
 
@@ -868,7 +895,7 @@ answer to give whoever reaches for it.
 | Idea | Why |
 |---|---|
 | Global vdom reconciliation | Per-component reconcilers only; terminal output already diffs at the line level underneath. |
-| Per-component reactions (full Reagent runtime) for *every* fn component | Requires Reagent-owned atoms (kmet.app owns plain Atoms; extensions can't be forced) or making the macro mandatory — forfeiting plain-`defn` authoring and taxing every extension component. The waste it removes is microseconds (small-vector building; real costs are cache-absorbed in leaves; caching can't prune the child walk — transparent-parent rule). Opt-in `defc` gets the benefit where wanted (§2.4); `{:memo [deps]}` rejected in its favor. |
+| Per-component reactions (full Reagent runtime) for *every* fn component | Requires Reagent-owned atoms (coverage/mixing — §2.4) or making the macro mandatory. All extensions are internal, so enforcement isn't the objection — the objection is zero benefit: fn bodies build small vectors (real costs cache-absorbed in leaves), caching can't prune the child walk (transparent-parent rule), and opt-in `defc` already delivers reactivity where wanted. `{:memo [deps]}` rejected in its favor. |
 | `:children?`/`:children-key` tag-spec fields | Second children mechanism beside the tag table's `:container?` — one answer per question: the table says who takes children, the one generic `reconcile-children!` fills them (§2.2, §5). |
 | Converting primitives to fn components | They're the host elements — that would be reimplementing `[:div]` as a React component. |
 | Full re-frame store (global app-state atom + cursors) | App-layer rewrite; crosses the `kmet.app`/`kmet.tui` boundary; kmet's state graph isn't complex enough. B-lite (domain atoms + subscriptions) gets the value without the rewrite. |
@@ -878,7 +905,8 @@ answer to give whoever reaches for it.
 | `render` → tree in the protocol | Forces every render through compile+reconcile — the hot-path cost. The tree level belongs above the protocol, in the DSL. |
 | Input propagation through ancestors | Would make dialogs trap keys declaratively, but breaks pi parity, complicates the input path (Kitty release events, IME); dialogs already trap manually. |
 | Fine capability split (`IRenderable`/`IInputHandler`) | Moves no-op checks to call sites; `defcomponent` already hides the no-ops. Churn without gain. |
-| `defc` as the default/only fn form | The original blanket rejection over-estimated cost (assumed a reaction scheduler; `track-render` already provides the semantics) — but making it mandatory forfeits plain-`defn` Form-1 authoring and taxes every extension. Resolution: opt-in, Phase D, gated on `--debug` counters (§2.4). |
+| `defc` as the default/only fn form | The original blanket rejection over-estimated cost (assumed a reaction scheduler; `track-render` already provides the semantics). With internal-only extensions the enforcement objection is gone too — what remains: mandatory defc forfeits plain-`defn` Form-1 for widgets whose per-frame re-derivation is free, and buys nothing over opt-in (same machinery, different default). Resolution: opt-in, Phase D, gated on `--debug` counters (§2.4). |
+| Monolithic screen component (`defc` reading all app state) | Covered and correct — any change re-derives it — but coarsest legal granularity: full-screen body re-run per frame during streaming, structural `=` walks on large tracked collections, and mapping messages into elements inside it resurrects the rejected transcript rebuild at frame rate. Shape: small region-level `defc`s + records for the transcript (§2.4, §3.3). |
 | `register!` registry API | Host elements are a closed set — hardcoded tag table in `hiccup.clj`; fn heads cover custom components. |
 | Seed-once / `:structural` spec category | Three-way props/state/structural split has no consistent semantic (who re-writes the seeded value when the parent changes it?); all-props-live + equality no-ops covers it with two categories and one rule. |
 | Per-child render isolation (error boundaries) at v1 | No real throwing-component case yet; the loop's crash policy (log + stop) is honest enough until one exists. Revisit when a component fn can plausibly throw per-frame. |
@@ -1057,5 +1085,6 @@ One line each — the sections carry the reasoning.
     `defc` = Form-2's reactivity, `defcomponent` = Form-3; raw-record
     splicing as fourth adapter form (§2.4).
 18. **Frame-batching default; `defc` escape hatch** — full reactions
-    blocked on atom ownership / mandatory macro; supersedes the memo
-    sketch (§2.4).
+    blocked on coverage/mixing (owned atoms) or a mandatory macro;
+    supersedes the memo sketch. Internal-only extensions remove the
+    enforcement objection, not the zero-benefit one (§2.4).
