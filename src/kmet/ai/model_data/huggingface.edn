@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-21T06:00:08Z"
+ :generated-at "2026-08-22T07:16:35Z"
  :provider {:id :huggingface
             :name "Hugging Face"
             :env-vars ["HF_TOKEN"]

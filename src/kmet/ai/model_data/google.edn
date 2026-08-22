@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-21T06:00:08Z"
+ :generated-at "2026-08-22T07:16:35Z"
  :provider {:id :google
             :name "Google"
             :env-vars ["GEMINI_API_KEY"]
@@ -221,7 +221,7 @@
     :reasoning true
     :thinking-level-map {:off nil}
     :input [:text :image]
-    :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 0}
+    :cost {:input 0.75 :output 3.75 :cache-read 0.075 :cache-write 0}
     :context-window 1048576
     :max-tokens 65536}
    "gemini-3.7-flash"

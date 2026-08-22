@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-21T06:00:08Z"
+ :generated-at "2026-08-22T07:16:35Z"
  :provider {:id :github-copilot
             :name "GitHub Copilot"
             :env-vars ["COPILOT_GITHUB_TOKEN"]
@@ -565,11 +565,11 @@
                          :off nil
                          :xhigh "xhigh"}
     :input [:text :image]
-    :cost {:input 5
-           :tiers [{:input 10 :input-tokens-above 272000 :output 45 :cache-read 1 :cache-write 12.5}]
-           :output 30
-           :cache-read 0.5
-           :cache-write 6.25}
+    :cost {:input 2.5
+           :tiers [{:input 5 :input-tokens-above 272000 :output 22.5 :cache-read 0.5 :cache-write 6.25}]
+           :output 15
+           :cache-read 0.25
+           :cache-write 3.125}
     :context-window 1050000
     :max-tokens 128000
     :headers {"Copilot-Integration-Id" "vscode-chat"

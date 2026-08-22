@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-21T06:00:08Z"
+ :generated-at "2026-08-22T07:16:35Z"
  :provider {:id :opencode
             :name "OpenCode (Zen)"
             :env-vars ["OPENCODE_API_KEY"]
@@ -532,7 +532,7 @@
              :max-tokens-field :max-tokens}}
    "x-preview-f-free"
    {:id "x-preview-f-free"
-    :name "Ox Alpha Free"
+    :name "Ox Alpha Free (Unlimited)"
     :provider :opencode
     :api :openai-completions
     :base-url "https://opencode.ai/zen/v1"
@@ -919,11 +919,11 @@
                          :off nil
                          :xhigh "xhigh"}
     :input [:text :image]
-    :cost {:input 2.5
-           :tiers [{:input 5 :input-tokens-above 272000 :output 22.5 :cache-read 0.5 :cache-write 6.25}]
-           :output 15
-           :cache-read 0.25
-           :cache-write 3.125}
+    :cost {:input 2
+           :tiers [{:input 4 :input-tokens-above 272000 :output 15 :cache-read 0.4 :cache-write 5}]
+           :output 10
+           :cache-read 0.2
+           :cache-write 2.5}
     :context-window 1050000
     :max-tokens 128000
     :compat {:session-affinity-format :openai-nosession
