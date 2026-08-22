@@ -2669,7 +2669,8 @@
         ;; Components (define before agent state so on-event can reference them)
         sp1 (spacer/make-spacer 1)
         ch (ui/make-chat-history :theme (cfg/get-theme config)
-                                 :thinking-hidden (cfg/get-hide-thinking-block config))
+                                 :thinking-hidden (cfg/get-hide-thinking-block config)
+                                 :output-pad (cfg/get-output-pad config))
         pending-tool-comps (atom {})  ;; Pi: pendingTools Map (tool-call-id → comp)
         cs-ref (atom nil)             ;; CoreState, filled after layout (for :status events)
 
@@ -2687,6 +2688,11 @@
             :context-window ctx-window
             :compact-reserve-tokens (or (:compact-reserve-tokens config) 16384)
             :compact-token-threshold (:compact-token-threshold config)
+            ;; get (not :kw) — an absent key must hit make-agent-state's
+            ;; :or default, not be overridden with nil
+            :auto-compact (get config :auto-compact true)
+            :steering-mode (or (:steering-mode config) :all)
+            :follow-up-mode (or (:follow-up-mode config) :all)
             :keep-recent-tokens (or (:keep-recent-tokens config) 20000)
             :http-idle-timeout-ms (:http-idle-timeout-ms config)
             :thinking (let [model-rec (models/get-model provider model)
@@ -2761,7 +2767,8 @@
         ;; B.5: editor dynamic height — max(5, rows*0.3) via :terminal-rows;
         ;; the fixed :height fallback stays at the default 12;
         ;; border color reflects the current thinking level (pi: updateEditorBorderColor)
-        ed (tui/make-editor :padding-x 0
+        ed (tui/make-editor :padding-x (cfg/get-editor-padding-x config)
+                            :autocomplete-max-visible (cfg/get-autocomplete-max-visible config)
                             :terminal-rows (fn [] (term/rows @(:terminal t)))
                             :border-fn (th/get-thinking-border-color
                                         (cfg/get-theme config)
@@ -2780,8 +2787,9 @@
              :reasoning (boolean (:reasoning (models/get-model provider model))))
         ftr (ui/make-footer :theme (cfg/get-theme config)
                             :provider fdp
-                            :auto-compact (boolean (or ctx-window
-                                                       (:compact-token-threshold config))))
+                            ;; pi: the "(auto)" badge reflects the autoCompact
+                            ;; setting; overflow-only recovery doesn't count
+                            :auto-compact (get config :auto-compact true))
 
         ;; Core state (status-indicator/status-container filled in after layout)
         cs (map->CoreState {:tui t
@@ -2812,6 +2820,10 @@
 
     ;; Focus editor
     (tui/tui-set-focus t ed)
+
+    ;; Hardware cursor: the setting wins over the KMET_HARDWARE_CURSOR env
+    ;; default (pi: showHardwareCursor)
+    (tui/tui-set-show-hardware-cursor! t (cfg/get-show-hardware-cursor config))
 
     ;; Register builtin slash commands (autocomplete dropdown + dispatch)
     (register-builtin-commands! config)

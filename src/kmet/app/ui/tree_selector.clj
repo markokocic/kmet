@@ -8,6 +8,7 @@
    interactive-mode navigates)."
   (:require [clojure.string :as str]
             [kmet.app.session :as session]
+            [kmet.config :as cfg]
             [kmet.app.ui :as ui]
             [kmet.app.ui.dialogs :as dialogs]
             [kmet.app.ui.dock :as dock]
@@ -73,7 +74,9 @@
         (if (empty? tree)
           (ui/chat-history-add-message! (:chat-history cs)
                                         {:role :assistant :content "Session is empty."})
-          (let [filter-mode (atom :default)
+          (let [;; pi: TreeSelectorComponent opens on the persisted
+                ;; treeFilterMode default
+                filter-mode (atom (cfg/get-tree-filter-mode (:config cs)))
                 sl-ref (atom nil)
                 ;; late binding: select callbacks reach the dock's done via
                 ;; this atom (pi: done() from showSelector)

@@ -231,6 +231,50 @@
           (t/is (= ["stale"] (cfg/get-enabled-models-live {:enabled-models ["stale"]})))))
       (finally (fs/delete-tree tmp)))))
 
+(t/deftest test-get-setting-live
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-setting-live-" (System/currentTimeMillis)))))
+        settings-file (str tmp "/settings.edn")]
+    (fs/create-dirs tmp)
+    (try
+      (with-redefs [cfg/global-settings-path (fn [] settings-file)]
+        (t/testing "reads the persisted key"
+          (spit settings-file "{:http-idle-timeout-ms 60000}\n")
+          (t/is (= 60000 (cfg/get-setting-live {:http-idle-timeout-ms 300000}
+                                               :http-idle-timeout-ms 300000))))
+        (t/testing "missing file/key falls back to config, then default"
+          (fs/delete-tree tmp)
+          (t/is (= 120000 (cfg/get-setting-live {:http-idle-timeout-ms 120000}
+                                                :http-idle-timeout-ms 0)))
+          (t/is (true? (cfg/get-setting-live {} :auto-compact true)))))
+      (finally (when (fs/exists? tmp) (fs/delete-tree tmp))))))
+
+(t/deftest test-get-show-cache-miss-notices
+  (t/testing "config-snapshot fallback (default off)"
+    (t/is (false? (cfg/get-show-cache-miss-notices {})))
+    (t/is (true? (cfg/get-show-cache-miss-notices {:show-cache-miss-notices true})))))
+
+(t/deftest test-ui-padding-getters
+  (t/testing "editor padding clamps to pi's 0..3"
+    (t/is (= 0 (cfg/get-editor-padding-x {})))
+    (t/is (= 2 (cfg/get-editor-padding-x {:editor-padding-x 2})))
+    (t/is (= 3 (cfg/get-editor-padding-x {:editor-padding-x 9})))
+    (t/is (= 0 (cfg/get-editor-padding-x {:editor-padding-x -1}))))
+  (t/testing "autocomplete max items clamps to pi's 3..20"
+    (t/is (= 5 (cfg/get-autocomplete-max-visible {})))
+    (t/is (= 3 (cfg/get-autocomplete-max-visible {:autocomplete-max-visible 1})))
+    (t/is (= 20 (cfg/get-autocomplete-max-visible {:autocomplete-max-visible 50}))))
+  (t/testing "output pad is 0 or 1"
+    (t/is (= 1 (cfg/get-output-pad {})))
+    (t/is (= 0 (cfg/get-output-pad {:output-pad 0})))
+    (t/is (= 1 (cfg/get-output-pad {:output-pad 7})))))
+
+(t/deftest test-get-tree-filter-mode
+  (t/is (= :default (cfg/get-tree-filter-mode {})))
+  (t/is (= :no-tools (cfg/get-tree-filter-mode {:tree-filter-mode :no-tools})))
+  (t/is (= :all (cfg/get-tree-filter-mode {:tree-filter-mode :all})))
+  (t/is (= :default (cfg/get-tree-filter-mode {:tree-filter-mode :bogus}))
+        "invalid values fall back to :default"))
+
 (t/deftest test-get-retry-settings
   (t/testing "defaults when :retry is absent"
     (t/is (= {:enabled true :max-retries 3 :base-delay-ms 2000}

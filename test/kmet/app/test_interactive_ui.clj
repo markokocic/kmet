@@ -474,6 +474,10 @@
         ((:handler (commands/find-command "settings")) cs "")
         (let [sl @sl-ref]
           (t/is (some? sl) "settings list shown")
+          ;; row order: auto-compact steering follow-up http-idle cache-miss
+          ;; tree-filter thinking ... — navigate to the thinking row
+          (dotimes [_ 6]
+            (protocols/handle-input sl "\u001b[B"))
           ;; Enter (pi: activateItem) cycles the selected row
           (protocols/handle-input sl "\r")
           (t/is (not= :off @(:thinking ag)) "thinking row cycles the session level")
@@ -506,10 +510,11 @@
         (t/is (= 3 @(:max-retries ag)) "default retry wired at startup")
         ((:handler (commands/find-command "settings")) cs "")
         (let [sl @sl-ref]
-          ;; rows: thinking(0) hide-thinking(1) auto-retry(2) max-retries(3)
-          ;; base-delay(4)
-          (protocols/handle-input sl "\u001b[B") ;; down → hide-thinking
-          (protocols/handle-input sl "\u001b[B") ;; down → auto-retry
+          ;; rows 0..13: auto-compact steering follow-up http-idle cache-miss
+          ;; tree-filter thinking hide-thinking editor-pad output-pad
+          ;; autocomplete auto-retry max-retries base-delay
+          (dotimes [_ 11]
+            (protocols/handle-input sl "\u001b[B")) ;; down → auto-retry
           (protocols/handle-input sl "\r") ;; enter — auto-retry true -> false
           (t/is (= 0 @(:max-retries ag)) "disabled retry gates max-retries to 0")
           (t/is (= [[:retry :enabled] false] @saved) "auto-retry persisted")

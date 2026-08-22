@@ -1018,8 +1018,31 @@
 
 (t/deftest test-loop-queue-modes-default
   (let [agent (loop/make-agent-state)]
-    (t/is (= :all (:steering-mode agent)))
-    (t/is (= :all (:follow-up-mode agent)))))
+    (t/is (= :all @(:steering-mode agent)))
+    (t/is (= :all @(:follow-up-mode agent)))))
+
+(t/deftest test-loop-queue-mode-setters
+  ;; /settings applies queue modes + idle timeout live (pi: setSteeringMode /
+  ;; setFollowUpMode / setHttpIdleTimeoutMs)
+  (let [agent (loop/make-agent-state)]
+    (loop/set-steering-mode! agent :one-at-a-time)
+    (loop/set-follow-up-mode! agent :one-at-a-time)
+    (t/is (= :one-at-a-time @(:steering-mode agent)))
+    (t/is (= :one-at-a-time @(:follow-up-mode agent)))
+    (loop/set-http-idle-timeout-ms! agent 60000)
+    (t/is (= 60000 @(:http-idle-timeout-ms agent)))))
+
+(t/deftest test-loop-auto-compact-flag
+  ;; pi: autoCompact — the flag gates proactive compaction, defaults on,
+  ;; and is settable live (/settings row)
+  (let [agent (loop/make-agent-state)]
+    (t/is (true? @(:auto-compact agent)))
+    (loop/set-auto-compact! agent false)
+    (t/is (false? @(:auto-compact agent)))
+    (t/is (false? (loop/maybe-compact! agent))
+          "no session → no proactive compaction regardless"))
+  (let [agent (loop/make-agent-state :auto-compact false)]
+    (t/is (false? @(:auto-compact agent)))))
 
 (t/deftest test-loop-followup-one-at-a-time
   (let [calls (atom 0)

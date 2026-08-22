@@ -19,6 +19,8 @@
    :session-dir "~/.kmet/sessions"
    ;; pi: auto-compaction is token-based against the context window
    :compact-token-threshold nil
+   ;; pi: autoCompact — gates proactive compaction (overflow recovery stays on)
+   :auto-compact true
    ;; pi: reserveTokens — tokens reserved for prompt + response
    :compact-reserve-tokens 16384
    :keep-recent-tokens 20000
@@ -26,6 +28,15 @@
    :models []
    :http-idle-timeout-ms 300000
    :show-cache-miss-notices false
+   ;; pi: queue drain modes (:all | :one-at-a-time)
+   :steering-mode :all
+   :follow-up-mode :all
+   ;; pi: outputPad | editorPaddingX | autocompleteMaxVisible
+   :output-pad 1
+   :editor-padding-x 0
+   :autocomplete-max-visible 5
+   ;; pi: treeFilterMode — default filter when opening /tree
+   :tree-filter-mode :default
    :system-prompt nil
    :append-system-prompt nil
    :thinking :off
@@ -93,11 +104,33 @@
 
 ;; ─── Config loading continued ──────────────────────────────────────────────
 
-(defn get-show-cache-miss-notices
-  "Whether to show transcript notices for significant prompt-cache misses
-   (pi: showCacheMissNotices — default false)."
+(def ^:private valid-tree-filter-modes
+  #{:default :no-tools :user-only :labeled-only :all})
+
+(defn get-tree-filter-mode
+  "Default /tree filter mode (pi: treeFilterMode). Invalid values fall back
+   to :default."
   [config]
-  (boolean (:show-cache-miss-notices config)))
+  (let [v (get config :tree-filter-mode :default)]
+    (if (contains? valid-tree-filter-modes v) v :default)))
+
+(defn get-editor-padding-x
+  "Horizontal input-editor padding clamped to pi's 0..3 range
+   (pi: editorPaddingX — default 0)."
+  [config]
+  (-> (get config :editor-padding-x 0) long (max 0) (min 3)))
+
+(defn get-autocomplete-max-visible
+  "Max visible autocomplete items clamped to pi's documented 3..20 range
+   (pi: autocompleteMaxVisible — default 5)."
+  [config]
+  (-> (get config :autocomplete-max-visible 5) long (max 3) (min 20)))
+
+(defn get-output-pad
+  "Horizontal padding for boxed messages: 0 or 1 (pi: outputPad —
+   default 1)."
+  [config]
+  (if (zero? (long (get config :output-pad 1))) 0 1))
 
 (defn load-config
   "Load and merge configuration from user and project directories.
@@ -185,6 +218,40 @@
       (try (let [parsed (edn/read-string (slurp file))]
              (when (map? parsed) parsed))
            (catch Exception _ nil)))))
+
+(defn get-setting-live
+  "Live top-level KEY from the global settings file, falling back to the
+   CONFIG value (then DEFAULT) when absent — the in-memory config is a
+   startup snapshot, so /settings rows re-read what they persisted
+   (pi: the SettingsManager holds mutable settings)."
+  ([config key] (get-setting-live config key nil))
+  ([config key default]
+   (let [fallback (get config key default)]
+     (if-let [settings (read-global-settings)]
+       (if (contains? settings key) (get settings key) fallback)
+       fallback))))
+
+(defn get-show-cache-miss-notices
+  "Whether to show transcript notices for significant prompt-cache misses
+   (pi: showCacheMissNotices — default false). Read live from the global
+   settings file so a /settings toggle takes effect immediately; falls back
+   to the CONFIG snapshot (project overrides) when the key is absent."
+  [config]
+  (boolean (get-setting-live config :show-cache-miss-notices)))
+
+(defn get-show-hardware-cursor
+  "Whether the hardware terminal cursor is visible (pi: showHardwareCursor).
+   An unset setting falls back to the KMET_HARDWARE_CURSOR=1 env default."
+  [config]
+  (if (nil? (:show-hardware-cursor config))
+    (= (System/getenv "KMET_HARDWARE_CURSOR") "1")
+    (boolean (:show-hardware-cursor config))))
+
+(defn set-show-hardware-cursor!
+  "Persist the hardware-cursor flag (pi: settingsManager
+   setShowHardwareCursor)."
+  [enabled?]
+  (save-setting! [:show-hardware-cursor] (boolean enabled?)))
 
 (defn get-enabled-models-live
   "Live :enabled-models patterns from the global settings file (pi: the
