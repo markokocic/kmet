@@ -916,47 +916,42 @@
               (when (seq t) t))))
         (reverse (get-branch session))))
 
+(defn- provider-model-key
+  "\"provider/model\" attribution key for an entry carrying :provider/:model
+   (the model id may itself contain slashes — pi keys the same way)."
+  [entry]
+  (str (name (:provider entry)) "/" (:model entry)))
+
 (defn usage-breakdown
   "Per-model cost/token attribution for /session (pi: getUsageCostBreakdown).
-   Assistant usage is attributed to the provider/model active at that point
-   (derived from :model-change entries — kmet entries, unlike pi messages,
-   don't carry provider/model); tool-result and compaction/branch-summary
-   usage groups under \"Tools/summaries\". Returns [{:key str :cost double
-   :tokens long} ...] sorted by cost desc, filtered to buckets with cost or
-   tokens."
+   An assistant entry is attributed to its own :provider/:model stamp
+   (add-assistant-message! records provenance — pi messages carry the same);
+   entries without a stamp (legacy files) fall back to the latest preceding
+   :model-change entry, then \"unknown\" — old sessions never recorded their
+   initial model. Tool-result and compaction/branch-summary usage groups
+   under \"Tools/summaries\". Returns [{:key str :cost double :tokens long}
+   ...] sorted by cost desc, filtered to buckets with cost or tokens."
   [session]
-  (let [;; Walk entries in order; the latest :model-change before an
-        ;; assistant entry is its attribution key.
+  (let [;; Walk entries in order: an assistant entry uses its own stamp when
+        ;; present, else the latest preceding :model-change, else "unknown".
         {buckets :buckets}
         (reduce (fn [{:keys [model] :as acc} e]
                   (case (:role e)
                     :model-change
-                    (assoc acc :model (str (name (:provider e)) "/" (:model e)))
+                    (assoc acc :model (provider-model-key e))
 
                     :assistant
                     (if-let [u (usage/entry-usage (:usage e))]
-                      (update-in acc [:buckets (or model "unknown")]
-                                 (fnil (fn [totals]
-                                         (-> totals
-                                             (update :input + (:input u))
-                                             (update :output + (:output u))
-                                             (update :cache-read + (:cache-read u))
-                                             (update :cache-write + (:cache-write u))
-                                             (update :cost + (:cost u))))
-                                       {:input 0 :output 0 :cache-read 0 :cache-write 0 :cost 0.0}))
+                      (let [key (cond
+                                  (and (:provider e) (:model e)) (provider-model-key e)
+                                  model model
+                                  :else "unknown")]
+                        (update-in acc [:buckets key] #(merge-with + % u)))
                       acc)
 
                     (:tool :bash :compaction :branch-summary)
                     (if-let [u (usage/entry-usage (:usage e))]
-                      (update-in acc [:buckets "Tools/summaries"]
-                                 (fnil (fn [totals]
-                                         (-> totals
-                                             (update :input + (:input u))
-                                             (update :output + (:output u))
-                                             (update :cache-read + (:cache-read u))
-                                             (update :cache-write + (:cache-write u))
-                                             (update :cost + (:cost u))))
-                                       {:input 0 :output 0 :cache-read 0 :cache-write 0 :cost 0.0}))
+                      (update-in acc [:buckets "Tools/summaries"] #(merge-with + % u))
                       acc)
 
                     acc))

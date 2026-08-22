@@ -1426,6 +1426,37 @@
             "no usage -> no buckets")
       (finally (fs/delete-tree dir)))))
 
+(t/deftest test-usage-breakdown-model-stamps
+  ;; pi parity: assistant entries carry their own :provider/:model provenance
+  ;; (add-assistant-message!) and are attributed by it directly; the
+  ;; :model-change walk is only the fallback for legacy unstamped entries.
+  (let [dir (str "target/test-sess-breakdown-stamps-" (System/currentTimeMillis))
+        sess (s/create-session dir)]
+    (try
+      ;; no :model-change at all — initial-model usage must not be unknown
+      (s/append-entry sess {:role :assistant :content "a"
+                            :provider :anthropic :model "claude-3"
+                            :usage {:prompt_tokens 100 :completion_tokens 10 :cost {:total 0.01}}})
+      ;; mid-session switch: the walk says openai/gpt-4o, the stamp wins
+      (s/append-model-change! sess :openai "gpt-4o")
+      (s/append-entry sess {:role :assistant :content "b"
+                            :provider :anthropic :model "claude-3"
+                            :usage {:prompt_tokens 50 :completion_tokens 5 :cost {:total 0.02}}})
+      (let [b (s/usage-breakdown sess)]
+        (t/is (= ["anthropic/claude-3"] (mapv :key b))
+              "stamped entries attribute by their own provider/model, stamp beats walk")
+        (t/is (= 165 (:tokens (first b))))
+        (t/is (== 0.03 (:cost (first b))) "usage and cost sum across both segments"))
+      (finally (fs/delete-tree dir))))
+  (t/testing "legacy files: no stamp and no switch yet lands under the unknown bucket"
+    (let [dir (str "target/test-sess-breakdown-unknown-" (System/currentTimeMillis))
+          sess (s/create-session dir)]
+      (try
+        (s/append-entry sess {:role :assistant :content "a"
+                              :usage {:prompt_tokens 10 :completion_tokens 1}})
+        (t/is (= ["unknown"] (mapv :key (s/usage-breakdown sess))))
+        (finally (fs/delete-tree dir))))))
+
 ;; ─── Cache-miss detection (pi: cache-stats.ts detectMiss) ─────────────────
 
 (t/deftest test-detect-cache-miss
