@@ -340,10 +340,9 @@
                 (core/tui-set-focus tui ed))
           buf (atom "\u001b[200~hello")]
       (feed-buf! tui buf)                 ; marker; "hello" stays buffered
-      ;; deliver the buffered chars like the reader would, then the end marker
-      (doseq [c "hello"]
-        (swap! buf str c)
-        ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf))
+      ;; deliver the preserved text as one printable run (the reader now
+      ;; drains whole bursts), then the end marker
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
       (reset! buf "\u001b[201~")
       (feed-buf! tui buf)
       (t/is (= "hello" (editor/editor-get-text ed))))))

@@ -1188,12 +1188,30 @@
                 (reset! buf "")
                 (schedule-incomplete-flush! tui buf)))
 
-          ;; Non-ESC — dispatch immediately (single char)
+          ;; Non-ESC — dispatch printable runs in bulk.
             :else
-            (let [first-char (subs s 0 1)
-                  rest (subs s 1)]
-              (reset! buf rest)
-              (dispatch-input! tui first-char))))))))
+            ;; Non-ESC — dispatch printable runs in bulk. A run is everything
+            ;; up to the first control char (<= 31): the editor inserts the
+            ;; whole run at once, so a large paste is ONE insertion instead of
+            ;; n per-char insertions into a growing buffer (O(n^2) for 100K
+            ;; chars — measured ~0.64s per 50K). Control chars (CR/LF/Tab)
+            ;; dispatch ALONE — the editor needs per-char handling for them,
+            ;; and a control left in the buffer would stall the run-finder
+            ;; forever. The buffer keeps only what remains after this pass.
+            (let [ctrl (loop [i 0]
+                         (when (< i (count s))
+                           (if (<= (int (.charAt ^String s i)) 31)
+                             i
+                             (recur (inc i)))))
+                  run-len (or ctrl (count s))
+                  run (subs s 0 run-len)]
+              (when (seq run)
+                (dispatch-input! tui run))
+              ;; dispatch the control chars one at a time (each ≤ 31)
+              (let [rest-s (subs s run-len)]
+                (doseq [c rest-s]
+                  (dispatch-input! tui (str c))))
+              (reset! buf ""))))))))
 
 ;; ─── Unbracketed paste detection (paste-like bursts) ────────────────────────
 ;; Bracketed paste (mode 2004) delivers paste content verbatim, but input
@@ -1238,6 +1256,29 @@
 
     :else
     {:append (str c) :new-swallow-lf nil}))
+
+(defn- normalize-input-batch!
+  "Apply the paste-burst decision to a whole drained BATCH at once: returns
+   the string to append to the input buffer (CRs that end a paste-like burst
+   rewritten to \n; the LF half of a rewritten CRLF dropped). RECENT-CHARS
+   and SWALLOW-LF are updated as a side effect, mirroring the per-char loop
+   they replaced. Doing this once per batch instead of per char keeps large
+   pastes O(n) — the per-char path appended to a growing string (O(n^2))."
+  [batch recent-chars swallow-lf]
+  (let [out (StringBuilder.)
+        now (System/currentTimeMillis)]
+    (doseq [c batch]
+      (let [{:keys [append drop new-swallow-lf]}
+            (paste-input-decision c now @recent-chars @swallow-lf)]
+        (reset! swallow-lf new-swallow-lf)
+        (swap! recent-chars
+               (fn [ts]
+                 (-> (conj ts [now c])
+                     (->> (filter (fn [[t _]] (>= t (- now paste-burst-ms)))))
+                     vec)))
+        (when-not drop
+          (.append out append))))
+    (str out)))
 
 (defn- start-input-reader [tui]
   (let [jline (.terminal @(:terminal tui))
@@ -1284,39 +1325,27 @@
                                         (if (>= more 0)
                                           (recur (.append acc (char more)))
                                           (str acc))))]
-                          (doseq [c batch
-                                  :let [now (System/currentTimeMillis)]]
-                            ;; Per-char isolation: an exception from a
-                            ;; component handler must not abort the batch —
-                            ;; the remaining chars were already consumed from
-                            ;; the reader and would be lost with it.
-                            (try
-                              (swap! recent-chars
-                                     (fn [ts]
-                                       (-> (conj ts [now c])
-                                           (->> (filter (fn [[t _]]
-                                                          (>= t (- now paste-burst-ms)))))
-                                           vec)))
-                              (let [{:keys [append drop new-swallow-lf]}
-                                    (paste-input-decision c now @recent-chars @swallow-lf)]
-                                (reset! swallow-lf new-swallow-lf)
+                          ;; Normalize the whole batch once (paste-burst CR
+                          ;; rewriting / LF swallowing), then a SINGLE append
+                          ;; + process pass. Per-char processing made large
+                          ;; pastes O(n^2): n appends to a growing buffer, n
+                          ;; process passes each copying the remainder. An
+                          ;; exception during processing still loses the
+                          ;; remaining chars of the batch (they were already
+                          ;; consumed from the reader) — the per-char try
+                          ;; guard from the drain fix is kept around the
+                          ;; process call.
+                          (try
+                            (let [append (normalize-input-batch! batch
+                                                                 recent-chars
+                                                                 swallow-lf)]
+                              (when (seq append)
                                 (swap! (:input-generation tui) inc)
-                                (when-not drop
-                                  ;; Append atomically: a plain (swap! buf str
-                                  ;; append) is atomic per swap, but the PIB
-                                  ;; reset inside the lock is a separate
-                                  ;; read-modify-write on the SAME string — a
-                                  ;; second reader pass could interleave, and
-                                  ;; appending to a growing string one char at
-                                  ;; a time is O(n^2) for large pastes. The
-                                  ;; append must be a single swap! so the
-                                  ;; lock-holder's view is always the
-                                  ;; complete post-append buffer.
-                                  (swap! buf str append)
-                                  (process-input-buffer! tui read-fn buf)))
-                              (catch Exception e
-                                (binding [*out* *err*]
-                                  (println "input:" (ex-message e)))))))))
+                                (swap! buf str append)
+                                (process-input-buffer! tui read-fn buf)))
+                            (catch Exception e
+                              (binding [*out* *err*]
+                                (println "input:" (ex-message e))))))))
                     (catch Exception e
                       (when (and @(:running? tui)
                                  (identical? reader @(:current-reader tui)))
