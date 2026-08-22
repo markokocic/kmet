@@ -29,9 +29,9 @@ So the architecture is:
   the terminal's primitives.
 - **Components** (functions): `(fn [props] tree)` — the composition layer,
   new.
-- **Reconciler** (dsl): compiles trees to records, reconciles by key,
+- **Reconciler** (hiccup ns): compiles trees to records, reconciles by key,
   re-applies props.
-- **Root** (`dsl/root`): the one constructor from a tree to a mounted,
+- **Root** (`hiccup/root`): the one constructor from a tree to a mounted,
   disposable record — how trees enter the TUI (§2.6).
 - **Reactivity**: `track!` on host elements (already exists); fn
   components are frame-batched — dependency changes schedule frames
@@ -72,7 +72,7 @@ re-render:
  (map #(vector :text {:key (:id %) :text (:content %)}) msgs)]
 ```
 
-A tree becomes live only through `dsl/root` (§2.6) — there is no other
+A tree becomes live only through `hiccup/root` (§2.6) — there is no other
 public entry point.
 
 Children rules:
@@ -97,7 +97,7 @@ rules keep call sites terse:
 
 ### 2.2 Tag table — no registry
 
-Host elements are a **closed set** — `dsl.clj` hardcodes the tag → ctor
+Host elements are a **closed set** — `hiccup.clj` hardcodes the tag → ctor
 table (no `register!`, no registry atom). Custom composition uses fn
 heads `[my-fn props]`; extensions never add host elements (they go
 through the ui API). With the props/state split, the ctor is the only
@@ -132,7 +132,7 @@ the same way.
 Compile is generic from the spec: merge props + defaults, wrap into
 `:props`/`:state`/`:cache` atoms, apply `:ctor`. **One children
 mechanism**: containers are constructed empty; filling them is
-`reconcile-children!`'s job (`dsl.clj`'s one generic fn, §5) — compile never
+`reconcile-children!`'s job (`hiccup.clj`'s one generic fn, §5) — compile never
 duplicates that via a `:children?`/`:children-key` spec. No field
 mapping, no `:structural`.
 
@@ -176,7 +176,7 @@ instantiated record, so the DSL copies React's answer as a second
 pseudo-prop beside `:key`:
 
 ```clojure
-(def editor-ref (dsl/ref))
+(def editor-ref (hiccup/ref))
 
 [:editor-container {:ref editor-ref}]
 
@@ -188,7 +188,7 @@ Reconcile owns the ref: construct fills it with the record, dispose
 clears it. Like `:key`, `:ref` is stripped before compile — host
 elements never see it. Rules:
 
-- refs are created with `(dsl/ref)`, which returns a tagged wrapper
+- refs are created with `(hiccup/ref)`, which returns a tagged wrapper
   type (derefable like an atom) that only reconcile can write — a user
   `reset!` throws;
 - deref it only outside render bodies (handlers, `with-let` init,
@@ -362,7 +362,7 @@ further away. The `--debug` counters + idle-UI invariant test exist
 exactly to detect if this trade ever stops being free.
 
 The escape hatch is `defc` (above), not a separate memo mechanism: an
-earlier draft sketched `{:memo [deps]}` / `(dsl/memo deps f)` — explicit
+earlier draft sketched `{:memo [deps]}` / `(hiccup/memo deps f)` — explicit
 deps over discovery — but defc supersedes it: automatic deps, no listing,
 branch-conditional reads handled, same no-scheduler/no-atom-ownership
 properties, and it reuses machinery that already exists. One reactive
@@ -376,7 +376,9 @@ TUI call it when a child is removed. Component-local state is already
 record fields; `dispose` is the missing cleanup half.
 
 For fn components that need transient state, primitives (SCI-friendly,
-plain fns):
+plain fns — living in `kmet.tui.macros` beside `track-render`/
+`invalidate-cache`, so macro and runtime companions share one home,
+same pattern as `track!`):
 
 ```clojure
 (defn let-state
@@ -445,12 +447,12 @@ Footguns (documented):
 
 ---
 
-### 2.6 Mounting — `dsl/root`
+### 2.6 Mounting — `hiccup/root`
 
 Trees enter the TUI through one constructor; there is no second path:
 
 ```clojure
-(dsl/root f-or-element)
+(hiccup/root f-or-element)
 ```
 
 Returns a record implementing IComponent: first render
@@ -463,7 +465,7 @@ follows the container it was handed to; nothing else retains it.
 
 This is the missing endpoint for Phase B: interactive.clj keeps every
 existing mount point and swaps pre-built records for roots —
-`(tui-add-child t (dsl/root dock-component))` instead of constructing
+`(tui-add-child t (hiccup/root dock-component))` instead of constructing
 the widget stack by hand.
 
 ### 2.7 Headless rendering — trees are data, tests stay plain
@@ -472,18 +474,15 @@ Compilation is pure, so fn components are unit-testable without a
 terminal:
 
 ```clojure
-(dsl/tree [:status-area {:mode :normal}])
-;; compiled record tree — structural snapshots, no rendering
-
-(dsl/render-lines [:box {:padding 1} [:text "hi"]] 40)
+(hiccup/render-lines [:box {:padding 1} [:text "hi"]] 40)
 ;; the exact lines the frame loop would draw
 ```
 
-Both are plain functions: no tty, no sleeps — fast-path `bb test`
-material, not `^:slow`. Assert on returned lines, or call
-`render-lines` twice across a state change and assert which subtrees
-kept identity (the keyed-reuse regression net). Most of Phases B/C
-lands against these two functions before anything touches a real
+A plain function: no tty, no sleeps — fast-path `bb test` material,
+not `^:slow`. Assert on returned lines directly, or call it twice
+across a state change and diff — identical lines prove keyed reuse and
+cache hits held (the invalidation regression net). Most of Phases B/C
+lands against this one function before anything touches a real
 terminal.
 
 ---
@@ -498,13 +497,14 @@ Three homes for state, decided by one question: *how many components read it?*
 | Read by 1 component (+ its children) | **Local**: `:state` map on the record / `with-let` | filter text, expansion, selection, draft, tick |
 | Passed to a child as configuration | **Props**: re-applied by reconcile | labels, callbacks, indices, layout params |
 
-### 3.1 Subscriptions — `kmet.tui.reactions` (B-lite, not re-frame)
+### 3.1 Derived state — `hiccup/compute` (B-lite, not re-frame)
 
-A generic subscription mechanism in `kmet.tui` over the atoms the app
-already owns. No mega-store, no app rewrite. One primitive:
+A derived-state mechanism over the atoms the app already owns. No
+mega-store, no app rewrite, no separate namespace — `compute` lives in
+the tree layer's namespace because one function doesn't earn its own:
 
 ```clojure
-;; kmet.tui.reactions — generic, knows nothing about kmet.app
+;; kmet.tui.hiccup — generic, knows nothing about kmet.app
 (defn compute
   "Derived atom over DEPS: watches each, recomputes (F) on change,
    skips the write when the result is equal. Returns a plain atom."
@@ -528,17 +528,20 @@ Two usage patterns over the one primitive:
 
   ```clojure
   (defn message [props]
-    (with-let [content (reactions/compute [(:messages-atom props)]
+    (with-let [content (hiccup/compute [(:messages-atom props)]
                              #(get-in @(:messages-atom props)
                                       [(:idx props) :content]))]
       [:text {:text @content}]))
   ```
 
-  Convention (documented): per-instance computes belong under
-  `with-let` — created in a render body without it, they leak per
-  re-render. Behind `--debug`, `compute` counts instances per component
-  per frame and logs loudly on growth — the leak is visible in counters,
-  not just doc.
+  Disposal is automatic: when `compute` runs during a render pass
+  (`*comp*` bound), it registers its unwinder (remove-watch on each
+  dep) with the component via `on-dispose!` — mirrors Reagent's
+  dispose-on-unmount, no manual cleanup. Top-level shared computes have
+  no enclosing instance and live forever, which is the point. Behind
+  `--debug`, `compute` counts instances per component per frame and
+  logs loudly on growth — a leak (bare compute in a render body) is
+  visible in counters, not just doc.
 
 - **Shared** — a def'd compute: one atom, defined once, N components
   derefing it. No registry, no keys, no lazy creation — `(def …)` *is*
@@ -546,8 +549,8 @@ Two usage patterns over the one primitive:
 
   ```clojure
   ;; kmet.app.ui — shared subs are plain top-level computes
-  (def theme-sub (reactions/compute [theme-atom] identity))
-  (def agent-status-sub (reactions/compute [agent-state] #(:status @agent-state)))
+  (def theme-sub (hiccup/compute [theme-atom] identity))
+  (def agent-status-sub (hiccup/compute [agent-state] #(:status @agent-state)))
 
   (defn status-line [props]
     [:text {:text (str @agent-status-sub)}])
@@ -572,7 +575,7 @@ slice:
 ;; message component: computes its slice — under with-let so it is
 ;; disposed with the instance (see §3.1)
 (defn message [props]
-  (with-let [content (reactions/compute [(:messages-atom props)]
+  (with-let [content (hiccup/compute [(:messages-atom props)]
                          #(get-in @(:messages-atom props)
                                   [(:idx props) :content]))]
     [:text {:text @content}]))
@@ -584,12 +587,12 @@ This is the re-frame separation of concerns, and the strongest argument
 for the global half.
 
 Note the shape: a pure `swap!` on a domain atom, watched by `compute`,
-never touches any component API. `kmet.tui.reactions` is fully usable
+never touches any component API. `kmet.tui.hiccup` is fully usable
 headless (plain atoms in → plain atom out) — another §2.7 testing win.
 
 **Theme rides this too.** Today `theme-atom` is threaded through
 constructors; under the DSL it's the textbook shared compute —
-`(def theme-sub (reactions/compute [theme-atom] identity))` — and
+`(def theme-sub (hiccup/compute [theme-atom] identity))` — and
 components deref it instead of receiving theme as a constructor
 arg/prop. A palette switch invalidates exactly the subscribed subtrees;
 the recurring constructor argument retires gradually, one component at
@@ -771,7 +774,7 @@ The protocol existed because reconcile couldn't know who takes children.
 It can: the tag table is a hardcoded closed set — container tags carry
 `:container?` (storage is uniform after the props/state convergence, so
 no `:children-key` either). Reconcile consults the table and calls **one
-generic `reconcile-children!` fn in `dsl.clj`** — a plain function, not
+generic `reconcile-children!` fn in `hiccup.clj`** — a plain function, not
 a protocol. Records spliced into trees from outside are opaque at that
 level by definition; nobody dispatches on them. Validation ("children on
 a leaf") comes free from the same table lookup — another loud throw.
@@ -854,15 +857,15 @@ answer to give whoever reaches for it.
 | Full re-frame store (global app-state atom + cursors) | App-layer rewrite; crosses the `kmet.app`/`kmet.tui` boundary; kmet's state graph isn't complex enough. B-lite (domain atoms + subscriptions) gets the value without the rewrite. |
 | Stateless components + top-level connect | Prop-drilling is verbose; the connect still needs per-component re-derivation; Reagent's idiom is "ratoms anywhere". |
 | `dsl/update!` (imperative child swapping) | Subsumed: a `when-let` in a tree + track!-driven re-derivation + reconcile handles it. |
-| Render-fn Hiccup re-invoked per frame | That's per-frame whole-tree rebuilds — the expensive part in SCI. `track!` already bounds re-invocation to atom changes. |
+| Re-invoking *expensive* work per frame with no caching | Plain fn bodies ARE batched-re-invoked by design — cheap by construction. What's rejected is uncached expensive work at frame rate: the transcript stays records (§3.3), defc caches hot bodies (§2.4). |
 | `render` → tree in the protocol | Forces every render through compile+reconcile — the hot-path cost. The tree level belongs above the protocol, in the DSL. |
 | Input propagation through ancestors | Would make dialogs trap keys declaratively, but breaks pi parity, complicates the input path (Kitty release events, IME); dialogs already trap manually. |
 | Fine capability split (`IRenderable`/`IInputHandler`) | Moves no-op checks to call sites; `defcomponent` already hides the no-ops. Churn without gain. |
 | `defc` as the default/only fn form | The original blanket rejection over-estimated cost (assumed a reaction scheduler; `track-render` already provides the semantics) — but making it mandatory forfeits plain-`defn` Form-1 authoring and taxes every extension. Resolution: opt-in, Phase D, gated on `--debug` counters (§2.4). |
-| `register!` registry API | Host elements are a closed set — hardcoded tag table in `dsl.clj`; fn heads cover custom components. |
+| `register!` registry API | Host elements are a closed set — hardcoded tag table in `hiccup.clj`; fn heads cover custom components. |
 | Seed-once / `:structural` spec category | Three-way props/state/structural split has no consistent semantic (who re-writes the seeded value when the parent changes it?); all-props-live + equality no-ops covers it with two categories and one rule. |
 | Per-child render isolation (error boundaries) at v1 | No real throwing-component case yet; the loop's crash policy (log + stop) is honest enough until one exists. Revisit when a component fn can plausibly throw per-frame. |
-| Explicit-dep `{:memo [deps]}` / `(dsl/memo deps f)` | Superseded by `defc`: automatic deps, branch-conditional reads handled, no listing burden, same no-scheduler/no-atom-ownership properties, reuses existing machinery. One reactive story instead of two (§2.4). |
+| Explicit-dep `{:memo [deps]}` / `(hiccup/memo deps f)` | Superseded by `defc`: automatic deps, branch-conditional reads handled, no listing burden, same no-scheduler/no-atom-ownership properties, reuses existing machinery. One reactive story instead of two (§2.4). |
 | Auto-tracking subscriptions (`kmet.tui.tracking`) on the critical path | Explicit-dep `compute` needs no dep discovery — same equality no-op, none of the riskiest-refactor exposure. Deferred upgrade, only if branchy subs appear (§3.1). |
 | Two public entry points (`dsl/component` + `dsl/root`) | `root` is component-plus-mounting; two names for one concept invites a tree that's compiled but never mounted. One entry point. |
 | New lifecycle/children protocols (`ILifecycle`, `IChildrenContainer`) | `dispose` is `handle-input`-shaped: few real implementations, no-op for most — it belongs on `IComponent` with a synthesized default. Children dispatch on the closed tag table (`:container?`) through one generic fn. Zero new protocols (§5). |
@@ -885,8 +888,8 @@ lint` + `bb format-check` + `bb test` + `bb test-ext`.
    `defcomponent` stamps `:kind` as a record field instead of the
    `extend-type`; chat_history's `kind-of` becomes `(case (:kind child)
    …)`; protocol + `satisfies?` guard deleted (§5).
-1. **`dsl.clj`** — tag table (hardcoded, no registry): `{:ctor :primary
-   :defaults}` per host element; `compile-element` + `dsl/root`
+1. **`hiccup.clj`** — tag table (hardcoded, no registry): `{:ctor :primary
+   :defaults}` per host element; `compile-element` + `hiccup/root`
    (construction-only; `reconcile!` comes with Phase B); loud validation
    (unknown-tag throw with did-you-mean, fn heads as values, children on
    a leaf tag). Tags for Text, Box, VStack, Container, Spacer.
@@ -906,7 +909,7 @@ lint` + `bb format-check` + `bb test` + `bb test-ext`.
 3. **Dispose + children plumbing** — `dispose` added to `IComponent`
    (no-op default synthesized by `defcomponent`; containers delegate to
    children); tag table gains `:container?`; `reconcile-children!` as
-   one generic fn in `dsl.clj` (no new protocols); reconcile dispatches
+   one generic fn in `hiccup.clj` (no new protocols); reconcile dispatches
    on the tag table, never field names.
 4. **ComponentFn** — wrapper record in `kmet.tui.components`; two paths:
    plain fn heads batched (re-derive every pass), `defc` heads cached
@@ -917,21 +920,21 @@ lint` + `bb format-check` + `bb test` + `bb test-ext`.
 5. **`reconcile!`** — keyed child diff, per component; duplicate keys
    throw; `:key`/`:ref` pseudo-props stripped before compile, refs
    filled on construct and cleared on dispose.
-6. **Headless test surface** — `dsl/tree` + `dsl/render-lines` with
-   unit tests for keyed reuse, dispose order, and the footgun list;
-   most of B/C validates here before touching a terminal.
-7. **`with-let`** in `macros.clj` (expands to `let-state`/`on-dispose!`
-   runtime fns in `kmet.tui.dsl`).
+6. **Headless test surface** — `hiccup/render-lines` with unit tests
+   for keyed reuse, dispose order, and the footgun list; most of B/C
+   validates here before touching a terminal.
+7. **`with-let`** in `macros.clj`, expanding to the `let-state`/
+   `on-dispose!` runtime fns in the same namespace.
 8. **Convert composition sites** in `interactive.clj` — dock, status
-   container, dialogs — to fn trees mounted via `dsl/root`. The
+   container, dialogs — to fn trees mounted via `hiccup/root`. The
    status-container swap (clear/add/stop dance) becomes a `when-let` in
    a tree.
 
 ### Phase C — Subscriptions (kept)
 
-9. **`kmet.tui.reactions`** — `compute` (explicit deps, derived atom:
-   keyed watches, equality no-op). Unit-testable without the tracking
-   extraction: no dep discovery, so
+9. **`compute`** in `kmet.tui.hiccup` — derived atom over explicit
+   deps: keyed watches, equality no-op, auto-disposal under `with-let`.
+   Unit-testable without the tracking extraction: no dep discovery, so
    `kmet.tui.tracking` is **off the critical path** (step 12).
 10. **Frame scheduling** — scheduler hook var in `kmet.tui.macros`
     (no-op default), installed by `kmet.tui.core` on start / cleared on
@@ -941,7 +944,7 @@ lint` + `bb format-check` + `bb test` + `bb test-ext`.
 11. **Mirror-plumbing removal** — move app updates to pure data;
     components compute their slices. `assistant-message-append-text!`
     etc. retire. Theme becomes a shared def'd compute
-    (`(def theme-sub (reactions/compute [theme-atom] identity))`); the
+    (`(def theme-sub (hiccup/compute [theme-atom] identity))`); the
     constructor arg retires one component at a time (§3.2).
 12. **Auto-tracking upgrade (deferred)** — only if branchy subs appear
     (deps that differ per branch, which explicit lists can't express):
@@ -980,105 +983,62 @@ failure is caught in `bb test`, not in someone's scrollback.
 ```
 kmet.app        : owns atoms, pure data updates (no component knowledge)
 kmet.app.ui     : fn components (shared def'd computes, :state local)
-                  + dsl/root mount points
-kmet.tui        : reactions (compute), dsl
-                  (compile/reconcile/root/tree/render-lines), track!,
+                  + hiccup/root mount points
+kmet.tui        : hiccup (tags/compile/reconcile, root, ref,
+                  render-lines, compute), macros (track!, with-let,
+                  let-state, on-dispose!, invalidate-cache),
                   ComponentFn (plain batched / defc reactive), protocols
                   (IComponent + dispose, IFocusable,
                   IEditorComponent — IComponentKind retired: kind-as-data)
 kmet.libs.*     : self-contained (unchanged)
 ```
 
-`kmet.tui.reactions` is generic — no app concepts. Shared computes are
+`hiccup/compute` is generic — no app concepts. Shared computes are
 def'd in `kmet.app.ui`. `kmet.app` (non-ui) never imports `kmet.tui.*`.
 
 ---
 
-## 9. Decisions (all resolved)
+## 9. Decisions
 
-1. **Props/state split** — every component holds `:props` (tree-driven,
-   reconcile is the only writer) + `:state` (self-driven,
-   `state/get`/`state/set!`) + `:cache`. All props live — no seed-once
-   carve-out; scratch stays out. Migration gradual, per component;
-   adapter ctors keep unmigrated components DSL-usable (Phase A step 2).
-2. **Batched by default, `defc` opt-in** — plain fn heads are batched
-   (uncached, re-derive every pass; small trees, reconcile dedupes
-   children); `defc` opts into the track! path with automatic deps —
-   Phase D, gated on counters (§2.4). The macro is the only door to
-   reactive reads: unrewritten derefs + caching = stale lines, so
-   there is no implicit upgrade. `with-let` lives in `macros.clj`,
-   expanding to `let-state`/`on-dispose!` runtime fns in
-   `kmet.tui.dsl`; its state keys are per-expansion-site gensyms —
-   sibling bindings can't collide (§2.5).
-3. **Primitives + `with-let`** — `let-state` + `on-dispose!` are the
-   runtime API; `with-let` is implemented as the ergonomic macro form on
-   top of them (expands to a plain runtime call, same philosophy as
-   `track!`).
-4. **Shared computes are def'd, app-lifetime** — accepted at kmet's
-   scale; per-instance `compute` (under `with-let`) for slices; no
-   reg-sub/subscribe registry (a `def` is the registry — §3.1).
-   Revisit only if dynamic sub registration appears.
-5. **Explicit-dep `compute` is the primitive; tracking extraction
-   deferred** — no dep discovery means `kmet.tui.tracking` is off the
-   critical path (Phase C step 12, only if branchy subs appear).
-6. **Zero new protocols, one retired** — `dispose` joins `IComponent`
-   (synthesized no-op, containers delegate); children dispatch on the
-   closed tag table's `:container?` via one generic
-   `reconcile-children!` fn — no `ILifecycle`, no `IChildrenContainer`.
-   `IComponentKind` retires now, not later: one consumer (chat_history),
-   data already carried by messages-atom `:role` — kind-as-data stamped
-   by `defcomponent` (§5). End state: 3 protocols, net −1; redundant
-   no-op removal (eight components) trivial; fine capability split,
-   input propagation, and declarative input props stay rejected.
-7. **Hardcoded tag table** — no `register!`; host elements are a closed
-   set in `dsl.clj`; custom composition via fn heads.
-8. **Reactions kept** — `compute` stays in the plan (Phase C); mirror
-   plumbing removal is a committed payoff, not optional.
-9. **Invalidation schedules the frame** — `invalidate-cache` is the
-   choke point; a scheduler-hook var (no-op default) installed by
-   `kmet.tui.core` turns real value changes into `tui-request-render`.
-   Coalescing rides the existing ~16ms poll; manual request-render stays
-   valid; animated components keep their own ticks (§3.4).
-10. **`:ref` pseudo-prop** — DSL-wrapped atoms bridge declarative trees
-    to imperative records (focus, editor text, scrolling); written only
-    by reconcile (wrapper type makes user writes throw), derefed only
-    outside render bodies (§2.3).
-11. **Error contract v1** — a throwing component fn crashes the render
-    loop (existing Throwable → render-crash.log → tui-stop policy);
-    per-child isolation (error-boundary-lite) deferred until a real
-    case exists (§2.4). Loud validation everywhere: unknown-tag throw
-    with did-you-mean, fn heads as values, duplicate `:key`s throw at
-    reconcile, ref wrapper rejects user writes, `--debug` leak counters —
-    silent fallbacks are the worst outcome under this policy.
-12. **One mount path** — trees enter the TUI only through `dsl/root`,
-    which returns a record for the existing mount points; the owner
-    disposes it on removal. No second construction path (§2.6).
-13. **Headless-first testing + the idle-UI invariant** — `dsl/tree` +
-    `dsl/render-lines` are the primary test surface: plain functions,
-    fast-path tests, keyed reuse and dispose order asserted without a
-    terminal (§2.7). The perf contract is one assertion: an idle UI runs
-    zero fn bodies.
-14. **Dispose order is contractual** — children first, then own
-    cleanups; a child cleanup may still read intact parent state
+One line each — the sections carry the reasoning.
+
+1. **Props/state split** — `:props` + `:state` + `:cache`; all props
+   live; adapter ctors decouple migration (§4).
+2. **Batched default, `defc` opt-in** — macro is the only door to
+   reactive reads; Phase D, gated on counters (§2.4).
+3. **`with-let` day one** — sugar over `let-state`/`on-dispose!`; all
+   three live in `kmet.tui.macros` (§2.5).
+4. **Shared computes are def'd, per-instance under `with-let`;**
+   auto-disposal when created in a render pass; registry only if
+   dynamic registration ever appears (§3.1).
+5. **Explicit-dep `compute`, in `kmet.tui.hiccup`** — no dep
+   discovery; tracking extraction off the critical path (§3.1).
+6. **Zero new protocols, one retired** — dispose joins `IComponent`;
+   children via tag table fn; `IComponentKind` → kind-as-data field;
+   end state 3 protocols, net −1 (§5).
+7. **Hardcoded tag table** — closed set in `hiccup.clj`; fn heads cover
+   custom composition (§2.2).
+8. **Mirror-plumbing removal is committed payoff**, not optional
+   (§3.2).
+9. **Invalidation schedules the frame** — scheduler-hook var, coalesced
+   by the existing ~16ms poll; manual request-render stays valid
+   (§3.4).
+10. **`:ref` pseudo-prop** — reconcile-owned wrapper type, imperative
+    escape hatch: focus/text/scroll only (§2.3).
+11. **Error contract v1: crash loud** + loud validation everywhere;
+    error boundaries deferred (§2.4).
+12. **One mount path** — `hiccup/root`; owner disposes (§2.6).
+13. **Headless-first testing** — `render-lines`; idle-UI invariant:
+    zero fn bodies when nothing changed (§2.7).
+14. **Dispose order contractual** — children first, then own cleanups
     (§2.4).
-15. **Dynamic `*width*`** — bound beside `*comp*` during fn render;
-    the sanctioned way for status bars/dialog headers to see pass width
+15. **Dynamic `*width*`** — bound beside `*comp*` during fn render
     (§2.4).
-16. **The input boundary is imperative** — no declarative input props,
-    ever; interactivity = focus + widget records + `:ref` + keybindings.
-    The DSL owns composition/presentation; input ownership stays with
-    the TUI's focus dispatch (§5).
-17. **Reagent's three forms, with a twist on Form-2** — the authoring
-    surface matches Reagent's taxonomy: plain fn = Form-1 (batched),
-    `defc` = Form-2's reactivity (opt-in macro + track! cache, no
-    inner-fn idiom so the accidental-inner-fn bug can't exist),
-    defcomponent = Form-3; raw-record splicing is a fourth adapter
-    form. Default stays batched — same idle-UI invariant, opt-in
-    granularity (§2.4).
-18. **Frame-batching as default; `defc` as the reactive escape hatch**
-    — full per-component reactions for every component are blocked on
-    atom ownership or a mandatory macro and buy microseconds. The old
-    `{:memo [deps]}` sketch is superseded: `defc` gives automatic deps
-    via existing machinery (`rewrite-derefs` + `track-render`), no
-    scheduler, no atom ownership — Phase D, gated on `--debug` counters
-    showing real body-churn waste (§2.4).
+16. **Input stays imperative** — no declarative input props, ever
+    (§5).
+17. **Reagent's forms with a twist on Form-2** — plain fn = Form-1,
+    `defc` = Form-2's reactivity, `defcomponent` = Form-3; raw-record
+    splicing as fourth adapter form (§2.4).
+18. **Frame-batching default; `defc` escape hatch** — full reactions
+    blocked on atom ownership / mandatory macro; supersedes the memo
+    sketch (§2.4).
