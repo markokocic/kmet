@@ -34,12 +34,10 @@ So the architecture is:
 - **Root** (`hiccup/root`): the one constructor from a tree to a mounted,
   disposable record — how trees enter the TUI (§2.6).
 - **Reactivity**: `track!` on host elements (already exists); fn
-  components are frame-batched — dependency changes schedule frames
-  (§3.4), each frame re-derives fn trees from the roots, leaf caches +
-  line diff absorb the cost. Not Reagent's per-component reactions: a
-  bare `@atom` in a plain fn schedules nothing — only subscription/
-  track! invalidation brings frames; `defc` opts a fn into cached,
-  reactive reads (§2.4, §3.4).
+  components run inside reactions once `kmet.tui.reagent` lands (§2.8,
+  Stage 1 of the plan) — Reagent's own model: deps auto-discovered at
+  deref time, batched at the frame flush. Until then fn components are
+  frame-batched (§3.4).
 - **Lifecycle**: `dispose` — new method on IComponent (no new protocol;
   §5). `IComponentKind` retires — kind becomes a stamped record field.
 - **Scheduling**: invalidation schedules the next frame (§3.4) — new;
@@ -198,7 +196,7 @@ elements never see it. Rules:
 - one ref atom per element instance — sharing one across two elements
   means last-mount wins.
 
-This is what unblocks Phase B step 7: `hide-dialog` keeps its imperative
+This is what unblocks Stage 4's dialog conversion: `hide-dialog` keeps its imperative
 focus call, but the dialog tree declares the editor with a ref instead
 of the app pre-building and stashing the record.
 
@@ -208,14 +206,14 @@ of the app pre-building and stashing the record.
 (defcomponent ComponentFn nil [f props state children cleanups cache-atom]
   (render [this width]
     (binding [*comp* this *width* width]
-      (if (:reactive? this)
-        ;; defc path — host-element semantics: cached, tracked derefs
-        (track! this width
-          (reconcile! children (f @props))
-          (render-children @children width))
-        ;; plain path — batched: re-derives EVERY render pass
-        (reconcile! children (f @props))
-        (render-children @children width))))
+      ;; body runs inside a reagent/reaction (§2.8 Stage 1): deps
+      ;; auto-discovered at deref time, re-runs queued to the frame
+      ;; flush, = -gated notification. Batched fallback for opt-outs:
+      ;; skip the reaction, re-derive every pass.
+      (r/run-in-reaction*
+        #(do (reconcile! children (f @props))
+             (render-children @children width))
+        this)))
   (dispose [this]
     ;; children first — their cleanups still see intact parent state;
     ;; then own cleanups, then drop state
@@ -226,24 +224,21 @@ of the app pre-building and stashing the record.
 
 Properties:
 
-- **Two paths by authoring choice**: fn heads written as plain `defn`s
-  are batched (the wrapper is uncached for them, like the
-  transparent-parent allowlist) — trees are small and `reconcile!`
-  dedupes children, so unchanged subtrees cost nothing. `defc` fns get
-  the track! path: same machinery host elements use (`rewrite-derefs` +
-  `track-render`, both already in production), so the body re-runs only
-  when `@props` or any deref inside it changed value. No reaction
-  scheduler, no atom ownership, no tracking extraction — the frame
-  still fires per §3.4; the cache just makes the fine-grained part of
-  it free.
-- **The reactive door is the macro** — a correctness rule, not style.
-  A plain fn's internal derefs are never rewritten to `tracked-deref`,
-  so caching its output would serve stale lines when only an untracked
-  atom changed. Plain = batched, `defc` = reactive; there is no third
-  way and no implicit upgrade.
+- **One path, Reagent semantics**: the wrapper runs the body inside a
+  reaction — deps auto-discovered at deref time, re-runs queued to the
+  frame flush, notification only on `=` change. Before Stage 1 lands
+  (or via opt-out), the same body runs batched: re-derived every pass,
+  reconcile dedupes children, leaf caches absorb rendering. Both paths
+  share one correctness story because the fallback is *uncached*, so
+  untracked reads can't go stale.
+- **No deref-rewriting macro**: reactions capture at deref time, so
+  tracking doesn't depend on compile-time rewriting of the body. Plain
+  atoms participate once app constructors migrate to tracked types
+  (Stage 6, mechanical); until then compute/cursor slices cover them
+  explicitly.
 - **Props re-applied on reuse** via `reset!`; equal-value resets no-op →
-  memoized children for free (and on the defc path, the `@props` deref
-  inside the tracked scope makes prop changes invalidate correctly).
+  memoized children for free (the `@props` deref inside the reaction
+  scope makes prop changes invalidate correctly).
 - **Reconciliation is bounded**: per component's direct children, not the
   whole app tree. The transcript stays a record (never a fn component),
   so the rejected per-frame whole-tree rebuild never happens.
@@ -269,43 +264,15 @@ Properties:
   nothing it derefs changed is the inline-callback trap (§2.5's
   inline-callbacks bullet) or a broken equality — invisible in output
   bytes, obvious in counters.
-- **`defc` — the reactive fn form, opt-in**. Plain `defn` heads stay
-  batched and are the default:
-
-  ```clojure
-  (defn status-area [props]      ; plain: batched, re-runs every frame
-    [:v-stack {:gap 0}
-     (when-let [kind @(:active-status-kind app)]
-       [:status-indicator {:key kind}])])
-  ```
-
-  `defc` opts a component into the track! path:
-
-  ```clojure
-  (defc hot-widget [props] ...)  ; macro: defn + rewrite-derefs on body
-                                 ; + :reactive? flag on the wrapper instance
-  ```
-
-  The macro is ~10 lines (expand to `defn`, wrap body in the existing
-  deref rewriting, mark the var) — no new runtime machinery: it reuses
-  `track-render` verbatim, which is what host elements already run.
-  Deps are automatic (branch-conditional reads handled like Reagent);
-  this supersedes the previously sketched `{:memo [deps]}` hatch — one
-  mechanism, automatic, more faithful. Phase D, gated on the `--debug`
-  counters showing real body-churn waste; until then everything ships
-  batched and the invariant tests pass either way.
-
-  Lexical boundary (same as Reagent's): reads that don't appear as
-  `@x`/`(deref x)` forms at compile time — dynamically built derefs,
-  eval'd code — aren't tracked. Documented, not detected.
-
-  SCI note: expands to plain calls (`tracked-deref`), and
-  `kmet.tui.macros` is already injected into extension contexts —
-  extensions can use defc without host changes. This is also what
-  dissolves the atom-ownership problem for extensions: `tracked-deref`
-  records *any* IDeref, so a defc body reacts to plain app atoms — no
-  ratom, no migration (the macro moves tracking from the atom's type
-  to the read site).
+- **`defc` dropped from the plan** (superseded by Stage 1): it existed
+  to deliver dependency tracking through compile-time deref rewriting —
+  a workaround for not owning the atom type. The `kmet.tui.reagent`
+  port removes that premise: reactions discover deps at deref time, and
+  migrating app atom constructors to tracked types is mechanical in an
+  internal-only codebase. Fn components are Form-1-reactive with no
+  macro; un-migrated plain-atom reads are covered explicitly via
+  `compute`/`cursor` slices. If a hot spot ever needs input-side
+  caching without reactions, that's a different, smaller tool.
 
 **The three forms — Reagent's taxonomy, mapped.** Reagent has exactly
 three ways to author a component; this design covers all three with the
@@ -314,9 +281,9 @@ same surface, minus Form-2's footguns:
 | Reagent | Here | Notes |
 |---|---|---|
 | **Form-1**: pure fn `(defn c [] [:div …])` | `(defn status-area [props] tree)` | Identical ergonomics; batched scheduling |
-| **Form-2** (reactivity): reaction-wrapped Form-1 | `(defc hot-widget [props] …)` — opt-in macro: defn + deref rewriting + track! cache (§2.4) | Same role, different mechanism: Reagent wraps every fn in a reaction; here the wrapper caches on tracked values. No inner-fn idiom → the accidental-inner-fn bug can't exist; `with-let` covers its state half |
+| **Form-2** (reactivity): reaction-wrapped Form-1 | every ComponentFn body runs inside a `reagent/reaction` (Stage 1 port, §2.8) | Same semantics as Reagent: deps discovered at deref time. No inner-fn idiom → the accidental-inner-fn bug can't exist; `with-let` covers its state half |
 | **Form-3**: `create-class {…}` | `defcomponent` record | Equivalent method map: `render` ↔ `render`, `dispose` ↔ `componentWillUnmount`, `handle-input` is terminal-only (no DOM analog); `did-mount` deferred until a second reconcile-created side effect appears (§5) |
-| — | raw records spliced into trees (`existing-component`, §2.1) | A fourth form Reagent lacks — dropping a live instance into Hiccup; the migration/adapter path, load-bearing for Phase A |
+| — | raw records spliced into trees (`existing-component`, §2.1) | A fourth form Reagent lacks — dropping a live instance into Hiccup; the migration/adapter path, load-bearing for Stage 2 |
 
 Other Reagent mechanisms land as follows: local state → closure/`with-let`
 in Form-2 becomes `with-let`/`let-state`; lifecycle methods →
@@ -330,74 +297,33 @@ so it re-runs only when atoms *it* derefs change, independent of
 everything else. Here, *plain* fn heads are frame-batched: their derefs
 untracked — any invalidation anywhere schedules a frame (§3.4), and
 each frame re-derives the tree from the roots downward; reconcile
-dedupes children and leaf caches + line diff absorb the cost. `defc`
-fns close most of that gap (above) without a reaction scheduler: same
-frame fires, but the track! cache skips bodies whose deps didn't change.
-The idle-UI invariant (zero fn bodies when nothing changed) holds for
-both paths. For plain fns the old rule stands: don't reach for derefs
-to "optimize" re-render scope; subscriptions are the tool (§3.1).
+dedupes children and leaf caches + line diff absorb the cost. After
+Stage 1 the gap closes entirely: bodies run inside reactions with
+auto-discovered deps, so a body whose deps didn't change isn't even
+queued. The idle-UI invariant (zero fn bodies when nothing changed)
+holds in both eras. Pre-Stage-1 rule for plain fns: don't reach for
+derefs to "optimize" re-render scope; subscriptions are the tool
+(§3.1).
 
-**Why not full per-component reactions for everything?** The remaining
-gap to Reagent's runtime needs deref tracking inside *every* fn body.
-Tracking must exist **at the read site**, which needs one of:
-
-1. **Reagent-owned atoms** — users write `@(r/atom …)`, a custom IDeref
-   whose deref records into the enclosing reaction. Mechanically kmet
-   *could* ship such a type (bb/sci support custom IDeref; namespaces
-   are injected into extension contexts by reference), but it fails on
-   coverage and mixing:
-   - **Coverage**: tracking lives in the atom type, and the atoms worth
-     reading are `kmet.app`'s — plain `clojure.lang.Atom`s created long
-     before the DSL. On the JVM you cannot retro-fit deref behavior
-     onto existing instances, so reactive-over-app-data requires
-     migrating every app-owned atom. A ratom only ever makes an
-     extension reactive to its own local state.
-   - **Mixing**: partial adoption produces silent freezes, not errors —
-     a component reading its own ratom plus `messages-atom` re-renders
-     on the former and never on the latter. Reagent has this exact two-
-     worlds split (`r/atom` vs plain cljs atom) and handles it socially
-     (greenfield app, one team, "always use r/atom"); a plugin API
-     can't rely on convention for correctness, and nothing stops an
-     author writing `(def s (atom …))` anyway.
-2. **Compile-time rewriting everywhere** — making `defc` mandatory. All
-   kmet extensions are internal (first-party, updated in lockstep), so
-   the classic objection — taxing third-party plugin authors — doesn't
-   apply here. What remains: mandatory defc forfeits plain-`defn`
-   Form-1 authoring for the 90% of widgets whose per-frame
-   re-derivation is already free, and buys nothing over opt-in (the
-   tracking machinery is identical; only the default differs). Opt-in
-   keeps the low-friction path and stays evidence-gated.
-
-And the payoff wouldn't justify either. The waste batching leaves on
-the table = live fn bodies × small-vector-building per frame —
-microseconds even at 100 components, against leaves whose real costs
-(markdown parse, wrapping) are already cache-absorbed. A cached fn
-component couldn't prune the child walk anyway: transparent parents sit
-on the uncached allowlist precisely because children change via their
-own deps — so caching gates body+reconcile only, never rendering below.
-Value-based memoization would also make inline-callback props a
-correctness-grade trap instead of a CPU footnote, deterministic headless
-tests get harder with async flush windows, and pi's explicit-
-requestRender model — mirrored everywhere else in the codebase — drifts
-further away. The `--debug` counters + idle-UI invariant test exist
-exactly to detect if this trade ever stops being free.
-
-The escape hatch is `defc` (above), not a separate memo mechanism: an
-earlier draft sketched `{:memo [deps]}` / `(hiccup/memo deps f)` — explicit
-deps over discovery — but defc supersedes it: automatic deps, no listing,
-branch-conditional reads handled, same no-scheduler/no-atom-ownership
-properties, and it reuses machinery that already exists. One reactive
-story instead of two.
+**Why not port reactions from the start / why Stages at all?** The
+port (§2.8) is the destination; the staging exists so the app never
+breaks: pure additions first, conversions leaf-first and one-commit
+revertible, scheduler gated behind a working subscription story. The
+old blocker paragraph ("extensions can't use ratoms", "macro needed")
+dissolved on inspection: extensions are internal, the macro was only
+ever a delivery mechanism for tracking, and owning tracked atom types
+(Stage 6) is mechanical here.
 
 **Granularity guidance (the monolith trap).** A tempting shortcut:
-"make the whole main screen one big `defc` that reads all app state" —
+"make the whole main screen one big component reading all app state" —
 covered and correct, since any change re-derives it. Three reasons not
 to:
 
 1. **Coarsest legal granularity**: one reaction means *any* change
    re-runs the *entire* body — during streaming, that's a full-screen
    re-derivation per frame. Same CPU profile as the batched default,
-   none of defc's benefit. The win comes from many small `defc`s
+   none of the reactivity benefit. The win comes from many small
+   components
    reacting narrowly (screen shell → region panels → leaves).
 2. **Tracked reads of large collections cost an equality check per
    frame** — the cache hit-check compares each tracked value; untouched
@@ -414,8 +340,8 @@ to:
    tree rebuild, now at frame rate. ChatHistory remains records;
    screens reference it as a splice/tag.
 
-Phase B step 8's shape follows: `defc` root shell + region-level
-`defc`s (dock/status/dialogs) + transcript as records.
+Stage 4's shape follows: a root shell + region-level components
+(dock/status/dialogs) + transcript as records.
 
 ### 2.5 Lifecycle — `dispose`, not `with-let`-as-macro
 
@@ -512,7 +438,7 @@ an element. The owner mounts it anywhere a record is expected today —
 `dispose` when it leaves (overlay close, suspend/shutdown). Ownership
 follows the container it was handed to; nothing else retains it.
 
-This is the missing endpoint for Phase B: interactive.clj keeps every
+This is the missing endpoint for Stage 4: interactive.clj keeps every
 existing mount point and swaps pre-built records for roots —
 `(tui-add-child t (hiccup/root dock-component))` instead of constructing
 the widget stack by hand.
@@ -565,17 +491,18 @@ What this flips:
 
 - **Auto-tracking becomes the primitive** — decision #5's "deferred,
   unlikely" tracking extraction is superseded: reactions discover deps
-  at deref time, no per-body macro rewriting needed.
+  at deref time, no per-body macro rewriting needed. The port is now
+  **Stage 1** of the migration plan (§7) rather than a tail phase.
 - **Every fn component can be Form-1-reactive** like Reagent — the
   ComponentFn body runs inside a reaction instead of relying on batched
-  re-derivation or defc's lexical rewriting. The defc-vs-plain split
-  (§2.4) dissolves into one story for reaction-backed components;
-  track!/batched remain as the non-reactive fast path.
+  re-derivation. Batched remains as the opt-out fast path; no
+  deref-rewriting macro ever ships.
 - **`compute` becomes sugar** over `(r/reaction …)` + frame flush.
 
 Unchanged: §3.3 transcript carve-out (records stay records), keyed
 reconcile, line diffing, protocols, layer boundaries. This track is
-additive — Phase E, after C, gated on the same counters as D.
+additive — it is now **Stage 1** of the plan (§7): the port
+lands first because nothing consumes it yet.
 
 Rejected alternatives (see §6): vendoring reagent's `.clj` macro files
 (they expand into CLJS/JS runtime internals — load but detonate on the
@@ -719,7 +646,7 @@ mutation site requests its own frame (~90 call sites in interactive.clj
 alone). `invalidate-cache` only clears a component's cache — it does not
 ask for a frame. That works while state changes flow through setters
 that pair `reset!` with an explicit request-render, and it breaks
-exactly when Phase C lands: replace setter-poking with pure `swap!`s
+exactly when Stage 5 lands: replace setter-poking with pure `swap!`s
 and **nothing schedules a frame — the UI freezes** until an unrelated
 input event happens to force one. Uncached fn components don't fix
 this; they only guarantee the fn re-derives on whatever frame arrives.
@@ -746,7 +673,7 @@ schedules a render.**
 
 Carve-outs and rules:
 
-- Manual `tui-request-render` stays valid forever (idempotent); Phase C
+- Manual `tui-request-render` stays valid forever (idempotent); Stage 5
   retires call sites gradually and mixed mode is safe.
 - Ordering-sensitive mutations keep their explicit request-render next
   to them (focus changes, scroll-to-end, overlay show/hide).
@@ -814,7 +741,7 @@ Payoffs:
 - **migration never blocks DSL adoption**: until a component migrates,
   its tag entry uses an adapter ctor mapping the uniform props shape
   onto today's fields — the DSL works either way, and each migration
-  stays a small local diff (Phase A step 2)
+  stays a small local diff (Stage 2, opportunistic)
 
 Costs (honest): migration covers props *and* internal state (still gradual,
 per component, tied to its DSL registration — no big-bang); coarser
@@ -952,22 +879,21 @@ answer to give whoever reaches for it.
 | Idea | Why |
 |---|---|
 | Global vdom reconciliation | Per-component reconcilers only; terminal output already diffs at the line level underneath. |
-| Per-component reactions (full Reagent runtime) for *every* fn component | Requires Reagent-owned atoms (coverage/mixing — §2.4) or making the macro mandatory. All extensions are internal, so enforcement isn't the objection — the objection is zero benefit: fn bodies build small vectors (real costs cache-absorbed in leaves), caching can't prune the child walk (transparent-parent rule), and opt-in `defc` already delivers reactivity where wanted. `{:memo [deps]}` rejected in its favor. |
+| Growing reactivity via compile-time deref rewriting (`defc`) | The macro was only ever a delivery mechanism for tracking while atom types weren't owned. Stage 1 + Stage 6 remove that premise: reactions capture at deref time, constructors migrate mechanically in an internal-only codebase. Two tracking mechanisms would be one too many (§2.4, §2.8). |
 | `:children?`/`:children-key` tag-spec fields | Second children mechanism beside the tag table's `:container?` — one answer per question: the table says who takes children, the one generic `reconcile-children!` fills them (§2.2, §5). |
 | Converting primitives to fn components | They're the host elements — that would be reimplementing `[:div]` as a React component. |
 | Full re-frame store (global app-state atom + cursors) | App-layer rewrite; crosses the `kmet.app`/`kmet.tui` boundary; kmet's state graph isn't complex enough. B-lite (domain atoms + subscriptions) gets the value without the rewrite. |
 | Stateless components + top-level connect | Prop-drilling is verbose; the connect still needs per-component re-derivation; Reagent's idiom is "ratoms anywhere". |
 | `dsl/update!` (imperative child swapping) | Subsumed: a `when-let` in a tree + track!-driven re-derivation + reconcile handles it. |
-| Re-invoking *expensive* work per frame with no caching | Plain fn bodies ARE batched-re-invoked by design — cheap by construction. What's rejected is uncached expensive work at frame rate: the transcript stays records (§3.3), defc caches hot bodies (§2.4). |
+| Re-invoking *expensive* work per frame with no caching | Pre-Stage-1 fn bodies are batched-re-invoked by design — cheap by construction. What's rejected is uncached expensive work at frame rate: the transcript stays records (§3.3); after Stage 1, reactions skip unchanged bodies entirely. |
 | `render` → tree in the protocol | Forces every render through compile+reconcile — the hot-path cost. The tree level belongs above the protocol, in the DSL. |
 | Input propagation through ancestors | Would make dialogs trap keys declaratively, but breaks pi parity, complicates the input path (Kitty release events, IME); dialogs already trap manually. |
 | Fine capability split (`IRenderable`/`IInputHandler`) | Moves no-op checks to call sites; `defcomponent` already hides the no-ops. Churn without gain. |
-| `defc` as the default/only fn form | The original blanket rejection over-estimated cost (assumed a reaction scheduler; `track-render` already provides the semantics). With internal-only extensions the enforcement objection is gone too — what remains: mandatory defc forfeits plain-`defn` Form-1 for widgets whose per-frame re-derivation is free, and buys nothing over opt-in (same machinery, different default). Resolution: opt-in, Phase D, gated on `--debug` counters (§2.4). |
-| Monolithic screen component (`defc` reading all app state) | Covered and correct — any change re-derives it — but coarsest legal granularity: full-screen body re-run per frame during streaming, structural `=` walks on large tracked collections, and mapping messages into elements inside it resurrects the rejected transcript rebuild at frame rate. Shape: small region-level `defc`s + records for the transcript (§2.4, §3.3). |
+| Monolithic screen component (one reaction reading all app state) | Covered and correct — any change re-derives it — but coarsest legal granularity: full-screen body re-run per frame during streaming, structural `=` walks on large tracked collections, and mapping messages into elements inside it resurrects the rejected transcript rebuild at frame rate. Shape: small region-level components + records for the transcript (§2.4, §3.3). |
 | `register!` registry API | Host elements are a closed set — hardcoded tag table in `hiccup.clj`; fn heads cover custom components. |
 | Seed-once / `:structural` spec category | Three-way props/state/structural split has no consistent semantic (who re-writes the seeded value when the parent changes it?); all-props-live + equality no-ops covers it with two categories and one rule. |
 | Per-child render isolation (error boundaries) at v1 | No real throwing-component case yet; the loop's crash policy (log + stop) is honest enough until one exists. Revisit when a component fn can plausibly throw per-frame. |
-| Explicit-dep `{:memo [deps]}` / `(hiccup/memo deps f)` | Superseded by `defc`: automatic deps, branch-conditional reads handled, no listing burden, same no-scheduler/no-atom-ownership properties, reuses existing machinery. One reactive story instead of two (§2.4). |
+| Explicit-dep `{:memo [deps]}` / `(hiccup/memo deps f)` | Superseded by reactions (§2.8): automatic deps, branch-conditional reads handled, no listing burden, reuses the Stage-1 port. One reactive story instead of two (§2.4). |
 | Auto-tracking subscriptions (`kmet.tui.tracking`) on the critical path | Explicit-dep `compute` needs no dep discovery — same equality no-op, none of the riskiest-refactor exposure. Deferred upgrade, only if branchy subs appear (§3.1). |
 | Two public entry points (`dsl/component` + `dsl/root`) | `root` is component-plus-mounting; two names for one concept invites a tree that's compiled but never mounted. One entry point. |
 | New lifecycle/children protocols (`ILifecycle`, `IChildrenContainer`) | `dispose` is `handle-input`-shaped: few real implementations, no-op for most — it belongs on `IComponent` with a synthesized default. Children dispatch on the closed tag table (`:container?`) through one generic fn. Zero new protocols (§5). |
@@ -981,120 +907,133 @@ answer to give whoever reaches for it.
 
 ## 7. Migration plan
 
-Four phases (A–C required, D gated); each ends with the full gate `bb
-lint` + `bb format-check` + `bb test` + `bb test-ext`.
+Ordered so the app keeps working at every step: **pure additions land
+before anything consumes them**, conversions are one-commit revertible,
+and the transcript is never touched. Each stage ends with the full gate
+`bb lint` + `bb format-check` + `bb test` + `bb test-ext`.
 
-### Phase A — Boilerplate (the first goal)
+### Stage 1 — `kmet.tui.reagent`: the full port, first
 
-0. **Protocol cleanup (trivial)** — delete redundant `(handle-input
-   [_this _data] nil)` bodies in box/container/v_stack plus
-   alt_screen_flash/dynamic_border/h_stack/scroll_view/spinner;
-   `defcomponent` already defaults them. Retire `IComponentKind`:
-   `defcomponent` stamps `:kind` as a record field instead of the
-   `extend-type`; chat_history's `kind-of` becomes `(case (:kind child)
-   …)`; protocol + `satisfies?` guard deleted (§5).
-1. **`hiccup.clj`** — tag table (hardcoded, no registry): `{:ctor :primary
-   :defaults}` per host element; `compile-element` + `hiccup/root`
-   (construction-only; `reconcile!` comes with Phase B); loud validation
-   (unknown-tag throw with did-you-mean, fn heads as values, children on
-   a leaf tag). Tags for Text, Box, VStack, Container, Spacer.
-2. **Props/state split — no deadline.** Migrate host elements to
-   `:props` + `:state` atoms *one component at a time, only when its
-   call sites are being converted to the DSL anyway* — the two changes
-   merge into one coherent diff per component. No big-bang. Unmigrated
-   components don't block adoption: their tag entry uses an **adapter
-   ctor** that maps the uniform props shape onto today's fields —
-   `(fn [props] (map->Text {:text-atom (atom (:text props)) …}))` —
-   and is deleted when the component migrates. DSL-first never forces
-   the split; this step is opportunistic forever, nothing downstream
-   waits on it.
+Pure addition — a new namespace nobody imports yet, so breakage risk is
+zero by construction.
 
-### Phase B — Reagent model (declarative presence)
+1. **Port `reagent.ratom`** — `RAtom` (drop-in: implements
+   IDeref/IWatchable/IReset/ISwap exactly like `clojure.lang.Atom`, so
+   `reset!`/`swap!`/`deref`/`add-watch` work unchanged),
+   `*ratom-context*`/`in-context?`, `make-reaction` with auto-dep
+   discovery (capture → `_update-watching` set-diff → dirty flag →
+   queued run → notify on `=` change), `track`, `cursor`, batching
+   queue, generation-keyed `with-let` store.
+2. **Headless tests first**: dep discovery across branches, watch
+   set-diff on branch change, `=`-no-op notification, queue draining,
+   RAtom interchangeability with plain atoms (existing setter fns work
+   on both). Register the test ns in `kmet.runner/all-namespaces`.
+3. **Frame flush install** — batching drained from the render loop's
+   existing 16ms tick (one hook install in `tui.core`; default no-op
+   when no queue exists). Gate: a queued reaction runs exactly once per
+   frame.
 
-3. **Dispose + children plumbing** — `dispose` added to `IComponent`
-   (no-op default synthesized by `defcomponent`; containers delegate to
-   children); tag table gains `:container?`; `reconcile-children!` as
-   one generic fn in `hiccup.clj` (no new protocols); reconcile dispatches
-   on the tag table, never field names.
-4. **ComponentFn** — wrapper record in `kmet.tui.components`; two paths:
-   plain fn heads batched (re-derive every pass), `defc` heads cached
-   via track! (§2.4); binds `*comp*` and `*width*` for
-   `let-state`/`on-dispose!`; `reconcile!`s children; `dispose` runs
-   children first, then cleanups, clears `:state`; optional `--debug`
-   per-frame counters.
-5. **`reconcile!`** — keyed child diff, per component; duplicate keys
-   throw; `:key`/`:ref` pseudo-props stripped before compile, refs
-   filled on construct and cleared on dispose.
-6. **Headless test surface** — `hiccup/render-lines` with unit tests
-   for keyed reuse, dispose order, and the footgun list; most of B/C
-   validates here before touching a terminal.
-7. **`with-let`** in `macros.clj`, expanding to the `let-state`/
-   `on-dispose!` runtime fns in the same namespace.
-8. **Convert composition sites** in `interactive.clj` — dock, status
-   container, dialogs — to fn trees mounted via `hiccup/root`. The
-   status-container swap (clear/add/stop dance) becomes a `when-let` in
-   a tree.
+Nothing else changes. The app doesn't know this namespace exists.
 
-### Phase C — Subscriptions (kept)
+### Stage 2 — `hiccup.clj` construction layer + protocol cleanup
 
-9. **`compute`** in `kmet.tui.hiccup` — derived atom over explicit
-   deps: keyed watches, equality no-op, auto-disposal under `with-let`.
-   Unit-testable without the tracking extraction: no dep discovery, so
-   `kmet.tui.tracking` is **off the critical path** (step 12).
-10. **Frame scheduling** — scheduler hook var in `kmet.tui.macros`
-    (no-op default), installed by `kmet.tui.core` on start / cleared on
-    stop; `invalidate-cache` triggers it (§3.4). Gate: a bare `swap!` on
-    a subscribed atom produces exactly one frame. Only then retire
-    manual `tui-request-render` call sites, gradually (they stay valid).
-11. **Mirror-plumbing removal** — move app updates to pure data;
-    components compute their slices. `assistant-message-append-text!`
-    etc. retire. Theme becomes a shared def'd compute
-    (`(def theme-sub (hiccup/compute [theme-atom] identity))`); the
-    constructor arg retires one component at a time (§3.2).
-12. **Auto-tracking upgrade (deferred)** — only if branchy subs appear
-    (deps that differ per branch, which explicit lists can't express):
-    extract `kmet.tui.tracking` from `track-render` and give `compute`
-    a zero-dep auto-recording form. Needs dedicated tests first. At
-    kmet's scale (`get-in` slices), unlikely to trigger.
-### Phase D — `defc`, the reactive fn form (gated)
+Still pure addition (plus the A0/A1 cleanups, which are behavior-
+preserving):
 
-13. **`defc`** — opt-in reactive fn form; macro in
-    `macros.clj` expanding to defn + deref rewriting + `:reactive?`
-    flag; ComponentFn's track! path reuses `track-render` verbatim.
-    **Gate**: Phase C's `--debug` counters must show real body-churn
-    waste first (live fn bodies re-running with unchanged deps at
-    streaming cadence). Supersedes the `{:memo [deps]}` sketch (never
-    built). Everything ships batched-by-default regardless — defc is
-    an upgrade for hot components, never a migration.
+4. **Protocol cleanup** — delete redundant `handle-input` no-op bodies;
+   retire `IComponentKind` (kind stamped as field by `defcomponent`;
+   chat_history dispatches on `(:kind …)`).
+5. **Tag table + `compile-element` + `hiccup/root`** — construction
+   only; loud validation (unknown-tag throw with did-you-mean, fn heads
+   as values, children on a leaf tag); adapter ctors keep unmigrated
+   host elements usable. `render-lines` headless surface.
+6. **Dispose plumbing** — `dispose` on `IComponent` (synthesized no-op);
+   tag table `:container?`; generic `reconcile-children!`.
 
-### Phase E — `kmet.tui.reagent`, the reactive core (independent track)
+Still nothing mounted — the app renders exactly as before.
 
-14. **Port `reagent.ratom`** — `ratom`/context/capture, `make-reaction`
-    with auto-dep discovery (watching set-diff), `track`/`cursor`,
-    batching drained at the frame flush, `=`-gated notification.
-    Faithful to ratom.cljs semantics; dedicated headless tests first
-    (dep discovery across branches, `=`-no-op, queue draining).
-15. **Re-wire fn components** — ComponentFn body runs inside a
-    reaction; batched/track! paths remain for host elements and
-    opt-outs. `compute` becomes sugar; defc's lexical rewriting is
-    retired if E lands (reactions capture at deref time — no rewriting
-    needed).
+### Stage 3 — reconcile + ComponentFn (additive machinery)
+
+7. **`reconcile!`** — keyed child diff, duplicate keys throw,
+   `:key`/`:ref` pseudo-props stripped, refs filled/cleared.
+8. **ComponentFn** — wrapper record; binds `*comp*`/`*width*`; body
+   runs inside a `reagent/reaction` (auto-discovered deps — the §2.8
+   story from day one; there is no defc, see below); `dispose` runs
+   children first, then cleanups. Batched fallback path retained for
+   opt-outs and non-ratom reads. `--debug` counters.
+9. **`with-let`** lands in `macros.clj` over the Stage-1 store.
+
+Still zero app usage.
+
+### Stage 4 — first mounts, leaf-first (the only stage touching live UI)
+
+Each conversion is one commit: convert, eyeball in a real session, full
+gate. Rollback = revert that commit. Order chosen bottom-up — smallest
+blast radius first:
+
+10. **Status container** — the clear/add/stop dance becomes a
+    `when-let` tree mounted via `hiccup/root`. Smallest, most isolated,
+    already churn-heavy today.
+11. **Dock / widget areas** — static-ish composition, exercises keyed
+    reconcile against real input handlers.
+12. **Dialogs** — exercises `:ref` (focus) and imperative interop; do
+    these after the simple trees have soaked.
+
+Manual `tui-request-render` stays everywhere during this stage — the
+scheduler comes later, so nothing can freeze.
+
+### Stage 5 — subscriptions + scheduling
+
+13. **`compute` = sugar** over Stage-1 reactions (explicit deps remain
+    available; auto-discovery is the default under it).
+14. **Scheduler gate** — invalidate-cache triggers the hook (§3.4).
+    Gate: bare `swap!`/`reset!` on a subscribed source produces exactly
+    one frame. Only after the gate passes, retire manual request-render
+    call sites gradually (they stay valid forever).
+15. **Mirror-plumbing removal** — per message kind, one commit each:
+    components compute their slices; `assistant-message-append-text!`
+    et al. retire. Theme becomes a shared def'd reaction.
+
+### Stage 6 — state typing + cleanup (optional tail)
+
+16. **Migrate app-owned atom constructors to `RAtom`** — mechanical
+    (`(atom x)` → `(r/ratom x)`) in `kmet.app`; everything downstream
+    (setters, watches, track! hit-checks) already treats them
+    identically. This is what lets *plain* reads anywhere participate
+    in auto-discovery.
+17. **Retire leftovers** — `assistant-message-append-text!` remnants,
+    unused adapter ctors, any remaining manual request-render next to
+    converted trees.
+
+### The transcript, explicitly
+
+Never a fn tree, at no stage (§3.3). ChatHistory remains records with
+instance storage; screens reference it as a splice/tag. Its internals
+can adopt `compute` slices later, opportunistically.
+
+### Do we need `defc`? No — dropped from the plan
+
+`defc` existed to deliver dependency tracking through compile-time deref
+rewriting — a workaround for *not owning the atom type*. Stage 1 removes
+that premise twice over: reactions discover deps at deref time (no
+rewriting needed for tracked reads), and Stage 6 makes the app's own
+atoms tracked types (internal-only codebase, mechanical constructor
+swap). Every fn component is Form-1-reactive like Reagent, no macro. If
+Stage 6 stalls, `compute`/`cursor` slices cover un-migrated plain-atom
+reads explicitly. The macro is never written; if a hot spot ever needs
+input-side caching without reactions, that's a different, smaller tool.
 
 Guardrails: tests in `test/kmet/tui/`, new namespaces registered in
-`kmet.runner/all-namespaces`; clj-kondo hooks for `track!`, `with-let`,
-and `defc`; cljfmt `:extra-indents`; ComponentFn on the
-uncached-allowlist in test-caching-conventions for its plain path (and
-the AGENTS.md reactive-cache section documenting both wrapper paths);
-full gate at each phase boundary.
+`kmet.runner/all-namespaces`; clj-kondo hooks for `track!`/`with-let`;
+cljfmt `:extra-indents`; ComponentFn on the uncached-allowlist for its
+batched path (AGENTS.md reactive-cache section documents the
+reaction-backed path); full gate at each stage boundary.
 
-**The perf invariant, as a test**: an idle UI runs zero fn bodies.
-Headless (§2.7): render a tree twice with no state change between — fn
-invocation count must stay 0. This single assertion cements the whole
-memoization contract (batched wrappers + defc caches + cached records +
-equality no-ops); if it ever fails, something is invalidating spuriously and the
-failure is caught in `bb test`, not in someone's scrollback.
-
----
+**The perf invariant, as a test**: an idle UI runs zero fn bodies and
+zero reaction re-runs. Headless (§2.7): render a tree twice with no
+state change between — invocation counts stay 0. This single assertion
+cements the memoization contract (reactions + caches + equality
+no-ops); failures land in `bb test`, not someone's scrollback.
 
 ## 8. Layer boundaries (unchanged)
 
@@ -1102,10 +1041,11 @@ failure is caught in `bb test`, not in someone's scrollback.
 kmet.app        : owns atoms, pure data updates (no component knowledge)
 kmet.app.ui     : fn components (shared def'd computes, :state local)
                   + hiccup/root mount points
-kmet.tui        : hiccup (tags/compile/reconcile, root, ref,
-                  render-lines, compute), macros (track!, with-let,
-                  let-state, on-dispose!, invalidate-cache),
-                  ComponentFn (plain batched / defc reactive), protocols
+kmet.tui        : reagent (RAtom/reactions/track/cursor/batching),
+                  hiccup (tags/compile/reconcile, root, ref,
+                  render-lines, compute-as-sugar), macros (track!,
+                  with-let, let-state, on-dispose!, invalidate-cache),
+                  ComponentFn (reaction-backed / batched opt-out), protocols
                   (IComponent + dispose, IFocusable,
                   IEditorComponent — IComponentKind retired: kind-as-data)
 kmet.libs.*     : self-contained (unchanged)
@@ -1122,14 +1062,15 @@ One line each — the sections carry the reasoning.
 
 1. **Props/state split** — `:props` + `:state` + `:cache`; all props
    live; adapter ctors decouple migration (§4).
-2. **Batched default, `defc` opt-in** — macro is the only door to
-   reactive reads; Phase D, gated on counters (§2.4).
+2. **No `defc`** — reactions (Stage 1 port) deliver tracking at deref
+   time; no deref-rewriting macro ever ships. Un-migrated plain-atom
+   reads covered by compute/cursor slices (§2.4, Stage 6).
 3. **`with-let` day one** — sugar over `let-state`/`on-dispose!`; all
    three live in `kmet.tui.macros` (§2.5).
 4. **Shared computes are def'd, per-instance under `with-let`;**
    auto-disposal when created in a render pass; registry only if
    dynamic registration ever appears (§3.1).
-5. **Explicit-dep `compute` first, auto-tracking as Phase E** —
+5. **Explicit-dep `compute` first, auto-tracking as Stage 1** —
    compute ships without dep discovery; `kmet.tui.reagent` (§2.8) is
    the upgrade path that makes compute sugar over real reactions.
 6. **Zero new protocols, one retired** — dispose joins `IComponent`;
@@ -1155,13 +1096,14 @@ One line each — the sections carry the reasoning.
     (§2.4).
 16. **Input stays imperative** — no declarative input props, ever
     (§5).
-17. **Reagent's forms with a twist on Form-2** — plain fn = Form-1,
-    `defc` = Form-2's reactivity, `defcomponent` = Form-3; raw-record
-    splicing as fourth adapter form (§2.4).
-18. **Frame-batching default; `defc` escape hatch** — full reactions
-    blocked on coverage/mixing (owned atoms) or a mandatory macro;
-    supersedes the memo sketch. Internal-only extensions remove the
-    enforcement objection, not the zero-benefit one (§2.4).
+17. **Reagent's three forms, faithfully** — plain fn = Form-1
+    (reaction-backed after Stage 1), `with-let` = Form-2's state half,
+    `defcomponent` = Form-3; raw-record splicing as fourth adapter form
+    (§2.4, §2.8).
+18. **No `defc`, ever** — the deref-rewriting macro was a workaround
+    for not owning atom types; Stage 1 (deref-time capture) + Stage 6
+    (mechanical constructor migration, internal-only codebase) remove
+    the premise. Batched path remains as opt-out (§2.4).
 19. **Port the ratom, not React** — `kmet.tui.reagent` is a faithful
     JVM port of `reagent.ratom` (~700 LOC, zero deps): auto-dep
     reactions, batching at the frame flush, Reagent-compatible API.
