@@ -137,7 +137,7 @@ extensions/mcp-adapter/
     src/extensions/mcp_adapter/client.clj   transports + JSON-RPC + prompts/resources calls
     src/extensions/mcp_adapter/auth.clj     OAuth: discovery, DCR, PKCE/device flows, token store + keyring
     src/extensions/mcp_adapter/metadata.clj cache (tools + prompts + resources)
-    src/extensions/mcp_adapter/proxy.clj    proxy tool executor + search ranking
+    src/extensions/mcp_adapter/tool_proxy.clj    proxy tool executor + search ranking
     src/extensions/mcp_adapter/output_guard.clj  result bounding (pi mcp-output-guard.ts)
     src/extensions/mcp_adapter/prompts.clj  prompt slash-commands (pi prompts.ts)
     src/extensions/mcp_adapter/script.clj   mcpScript bb port (pi mcp-code.ts + worker)

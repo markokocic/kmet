@@ -31,7 +31,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [extensions.mcp-adapter.output-guard :as guard]
-            [extensions.mcp-adapter.proxy :as proxy]
+            [extensions.mcp-adapter.tool-proxy :as proxy]
             [kmet.libs.process :as process]))
 
 (def default-timeout-ms 30000)

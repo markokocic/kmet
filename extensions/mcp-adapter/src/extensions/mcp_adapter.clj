@@ -15,7 +15,7 @@
             [extensions.mcp-adapter.metadata :as metadata]
             [extensions.mcp-adapter.panel :as panel]
             [extensions.mcp-adapter.prompts :as prompts]
-            [extensions.mcp-adapter.proxy :as proxy]
+            [extensions.mcp-adapter.tool-proxy :as proxy]
             [extensions.mcp-adapter.script :as script]
             [extensions.mcp-adapter.setup :as setup]
             [kmet.extension :as ext]

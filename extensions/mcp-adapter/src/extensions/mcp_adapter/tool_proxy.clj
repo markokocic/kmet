@@ -1,4 +1,4 @@
-(ns extensions.mcp-adapter.proxy
+(ns extensions.mcp-adapter.tool-proxy
   "The mcp proxy tool executor (§9 of the design contract — pi:
    proxy-modes.ts, Phase-1 subset: status/search/describe/call/connect/
    disconnect/list; no instructions/ui-messages/auth actions).

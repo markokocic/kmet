@@ -14,7 +14,7 @@
   (:require [clojure.string :as str]
             [extensions.mcp-adapter.client :as client]
             [extensions.mcp-adapter.metadata :as metadata]
-            [extensions.mcp-adapter.proxy :as proxy]
+            [extensions.mcp-adapter.tool-proxy :as proxy]
             [kmet.extension :as ext]))
 
 ;; ─── Naming (pi sanitizePromptName / formatPromptCommandName) ─────────────
