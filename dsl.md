@@ -534,7 +534,58 @@ cache hits held (the invalidation regression net). Most of Phases B/C
 lands against this one function before anything touches a real
 terminal.
 
+### 2.8 `kmet.tui.reagent` — the reactive core (Reagent-compatible)
+
+An alternative track, independent of Phases A–D: a **faithful JVM port
+of `reagent.ratom`** — the ~700 LOC of Reagent that is pure Clojure
+semantics with no DOM and no React. Motivated by the React-renderers
+tutorial ("nothing in Reagent's implementation is tied to the DOM") and
+by re-examining what React actually provides: its reconciler exists to
+serve imperative DOM mutation — kmet already has both halves it would
+replace (per-level keyed reconcile = the renderer contract; lines+diff =
+the commit). What React has that kmet lacks is only **L0–L2**: the atom,
+the auto-discovering reaction, the batching queue. Port those; keep our
+L3–L6.
+
+Scope (one namespace, zero deps):
+
+- `ratom` / `*ratom-context*` / `in-context?` — capture-aware deref;
+  plain `clojure.lang.Atom`s stay first-class (ratom adds context
+  recording, doesn't replace the box)
+- `make-reaction` / `reaction` / `track` / `cursor` — **auto-dependency
+  discovery**: capture derefs during run, `_update-watching` set-diff to
+  add/remove watches, dirty flag, queued asynchronous re-run, notify
+  watchers only when the new result differs by `=` (Reagent ≥0.6
+  semantics, verified against ratom.cljs source)
+- batching queue drained at the frame flush — the existing 16ms render
+  loop *is* requestAnimationFrame
+- `with-let` generation-keyed value store matching Reagent's
+
+What this flips:
+
+- **Auto-tracking becomes the primitive** — decision #5's "deferred,
+  unlikely" tracking extraction is superseded: reactions discover deps
+  at deref time, no per-body macro rewriting needed.
+- **Every fn component can be Form-1-reactive** like Reagent — the
+  ComponentFn body runs inside a reaction instead of relying on batched
+  re-derivation or defc's lexical rewriting. The defc-vs-plain split
+  (§2.4) dissolves into one story for reaction-backed components;
+  track!/batched remain as the non-reactive fast path.
+- **`compute` becomes sugar** over `(r/reaction …)` + frame flush.
+
+Unchanged: §3.3 transcript carve-out (records stay records), keyed
+reconcile, line diffing, protocols, layer boundaries. This track is
+additive — Phase E, after C, gated on the same counters as D.
+
+Rejected alternatives (see §6): vendoring reagent's `.clj` macro files
+(they expand into CLJS/JS runtime internals — load but detonate on the
+JVM); embedding react-reconciler via GraalJS (~23-item host contract +
+custom JVM scheduler to serve an easier commit than ours); rum as base
+(its gem, reactive.cljs's deferred-scheduler, is exactly the ~200 LOC
+this port absorbs — rewritten without js/Promise/js/Map).
+
 ---
+
 
 ## 3. State handling — the combined model
 
@@ -561,9 +612,10 @@ the tree layer's namespace because one function doesn't earn its own:
 ```
 
 Deps are listed explicitly — no dep *discovery*, so nothing has to be
-extracted from `track-render` first (the auto-tracking upgrade is
-deferred, see below). The returned atom uses the same watch machinery
-as `track-render`: keyed watches, equal-value no-op. Derefs are normal
+extracted from `track-render` first. (The auto-discovering upgrade is
+the `kmet.tui.reagent` track, §2.8: real reactions make `compute` sugar
+over `(r/reaction …)` + frame flush.) The returned atom uses the same
+watch machinery as `track-render`: keyed watches, equal-value no-op. Derefs are normal
 tracked derefs, and when a source changes but the derived value
 doesn't, the equality check no-ops → **fine-grained invalidation for
 free** — and invalidation schedules the next frame automatically
@@ -921,6 +973,9 @@ answer to give whoever reaches for it.
 | New lifecycle/children protocols (`ILifecycle`, `IChildrenContainer`) | `dispose` is `handle-input`-shaped: few real implementations, no-op for most — it belongs on `IComponent` with a synthesized default. Children dispatch on the closed tag table (`:container?`) through one generic fn. Zero new protocols (§5). |
 | Keeping `IComponentKind` as a protocol | One consumer (chat_history's `kind-of`), and the messages-atom already carries `:role` — a protocol re-derives data the data layer owns. Kind-as-data stamped by `defcomponent` is simpler, serializable, and fails loudly on rename (§5). |
 | Declarative input props (`:on-key`/`:on-click`) in trees | Input goes to the focused leaf only (pi parity, Kitty/IME); an `:on-key` prop would be a dead handler. Interactivity stays imperative: focus + widget records + `:ref` + keybindings (§5 input boundary). |
+| Vendoring reagent's `.clj` macro files (`core.clj`, `ratom.clj`) | They are macro shadows expanding into CLJS/JS internals (`cljs.core/js-obj`, `unchecked-aset`, `reagent.impl.component/functional-render`) — they load on the JVM and detonate at runtime. The portable content is the API surface, absorbed by `kmet.tui.reagent` (§2.8). |
+| Embedding React (react-reconciler + GraalJS) as the renderer | ~23-item host contract (13 host-config fns, custom JVM scheduler — no MessageChannel, hook runtime, fiber trees) to serve imperative DOM mutation our architecture never does: keyed reconcile is the renderer contract, lines+diff is the commit. GraalJS is a heavy new dep on Termux. Port the ratom layer instead (§2.8). |
+| Rum as the base | Its portable gem is `reactive.cljs`'s deferred-scheduler (~200 LOC: capture derefs, watch set-diff, queued re-runs) — sitting on `js/Promise`/`js/Map` + React mixins. Keeping the idea means rewriting those lines anyway; that rewrite *is* `kmet.tui.reagent` (§2.8). |
 
 ---
 
@@ -1012,6 +1067,19 @@ lint` + `bb format-check` + `bb test` + `bb test-ext`.
     built). Everything ships batched-by-default regardless — defc is
     an upgrade for hot components, never a migration.
 
+### Phase E — `kmet.tui.reagent`, the reactive core (independent track)
+
+14. **Port `reagent.ratom`** — `ratom`/context/capture, `make-reaction`
+    with auto-dep discovery (watching set-diff), `track`/`cursor`,
+    batching drained at the frame flush, `=`-gated notification.
+    Faithful to ratom.cljs semantics; dedicated headless tests first
+    (dep discovery across branches, `=`-no-op, queue draining).
+15. **Re-wire fn components** — ComponentFn body runs inside a
+    reaction; batched/track! paths remain for host elements and
+    opt-outs. `compute` becomes sugar; defc's lexical rewriting is
+    retired if E lands (reactions capture at deref time — no rewriting
+    needed).
+
 Guardrails: tests in `test/kmet/tui/`, new namespaces registered in
 `kmet.runner/all-namespaces`; clj-kondo hooks for `track!`, `with-let`,
 and `defc`; cljfmt `:extra-indents`; ComponentFn on the
@@ -1061,8 +1129,9 @@ One line each — the sections carry the reasoning.
 4. **Shared computes are def'd, per-instance under `with-let`;**
    auto-disposal when created in a render pass; registry only if
    dynamic registration ever appears (§3.1).
-5. **Explicit-dep `compute`, in `kmet.tui.hiccup`** — no dep
-   discovery; tracking extraction off the critical path (§3.1).
+5. **Explicit-dep `compute` first, auto-tracking as Phase E** —
+   compute ships without dep discovery; `kmet.tui.reagent` (§2.8) is
+   the upgrade path that makes compute sugar over real reactions.
 6. **Zero new protocols, one retired** — dispose joins `IComponent`;
    children via tag table fn; `IComponentKind` → kind-as-data field;
    end state 3 protocols, net −1 (§5).
@@ -1093,3 +1162,9 @@ One line each — the sections carry the reasoning.
     blocked on coverage/mixing (owned atoms) or a mandatory macro;
     supersedes the memo sketch. Internal-only extensions remove the
     enforcement objection, not the zero-benefit one (§2.4).
+19. **Port the ratom, not React** — `kmet.tui.reagent` is a faithful
+    JVM port of `reagent.ratom` (~700 LOC, zero deps): auto-dep
+    reactions, batching at the frame flush, Reagent-compatible API.
+    React/rum rejected as bases — their value is L0–L2, which the port
+    covers; their reconcilers serve a DOM contract kmet doesn't have
+    (§2.8).
