@@ -309,6 +309,29 @@
     (t/is (= [{:type :done :stop-reason :stop}] @events))
     (.close in)))
 
+(t/deftest test-parse-anthropic-thinking-signature-deltas
+  ;; thinking replay capture: reasoning and its opaque signature arrive as
+  ;; content_block_delta variants (pi: iterateAnthropicEvents)
+  (t/is (= {:type :thinking :content "hmm"}
+           (sse/parse-anthropic-event
+            "content_block_delta"
+            "{\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hmm\"}}")))
+  (t/is (= {:type :signature :content "SIG"}
+           (sse/parse-anthropic-event
+            "content_block_delta"
+            "{\"delta\":{\"type\":\"signature_delta\",\"signature\":\"SIG\"}}"))))
+
+(t/deftest test-parse-google-thought-signature
+  ;; pi google-shared: thoughtSignature rides on thought parts and is
+  ;; captured for same-model replay
+  (t/is (= [{:type :thinking :content "t" :signature "G"}]
+           (sse/parse-google-event
+            "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"t\",\"thought\":true,\"thoughtSignature\":\"G\"}]}}]}")))
+  (t/is (= [{:type :thinking :content "plain"}]
+           (sse/parse-google-event
+            "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"plain\",\"thought\":true}]}}]}"))
+        "no signature — no key"))
+
 (t/deftest ^:slow test-anthropic-stream-idle-timeout
   (let [[in out] (make-pipe)
         events (atom [])

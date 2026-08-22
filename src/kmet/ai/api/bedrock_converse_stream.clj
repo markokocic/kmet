@@ -107,86 +107,96 @@
 
    Returns [messages system-blocks] — the system prompt (pi
    buildSystemPrompt) carries its own cache point."
-  [messages model cache-retention]
-  (let [system (first (for [m messages
-                            :when (= :system (:role m))]
-                        (content-text (:content m))))
-        caching? (and (not= :none cache-retention)
-                      (bedrock-supports-prompt-caching? model))
-        cache-block {:cachePoint (cond-> {:type "default"}
-                                   (= :long cache-retention) (assoc :ttl "1h"))}
-        system-blocks (when (seq system)
-                        (cond-> [{:text system}]
-                          caching? (conj cache-block)))
-        result (loop [msgs (remove #(= :system (:role %)) messages)
-                      out []]
-                 (if-let [m (first msgs)]
-                   (let [role (name (:role m))]
-                     (cond
-                       (= role "bash")
-                       (if (:exclude-from-context? m)
-                         (recur (rest msgs) out)
-                         (recur (rest msgs)
-                                (conj out {:role "user"
-                                           :content [{:text (bash-execution-text m)}]})))
-                       (= role "tool")
+  ([messages model cache-retention]
+   (bedrock-messages messages model cache-retention nil))
+  ([messages model cache-retention {:keys [provider]}]
+   (let [system (first (for [m messages
+                             :when (= :system (:role m))]
+                         (content-text (:content m))))
+         caching? (and (not= :none cache-retention)
+                       (bedrock-supports-prompt-caching? model))
+         cache-block {:cachePoint (cond-> {:type "default"}
+                                    (= :long cache-retention) (assoc :ttl "1h"))}
+         system-blocks (when (seq system)
+                         (cond-> [{:text system}]
+                           caching? (conj cache-block)))
+         result (loop [msgs (remove #(= :system (:role %)) messages)
+                       out []]
+                  (if-let [m (first msgs)]
+                    (let [role (name (:role m))]
+                      (cond
+                        (= role "bash")
+                        (if (:exclude-from-context? m)
+                          (recur (rest msgs) out)
+                          (recur (rest msgs)
+                                 (conj out {:role "user"
+                                            :content [{:text (bash-execution-text m)}]})))
+                        (= role "tool")
                        ;; merge consecutive tool results into one user message
-                       (let [tool-results (take-while #(= :tool (:role %)) msgs)
-                             blocks (mapv (fn [tr]
-                                            {:toolResult {:toolUseId (bedrock-normalize-tool-call-id
-                                                                      (-> tr :content first :tool_use_id))
-                                                          :content (bedrock-tool-result-content
-                                                                    (or (-> tr :content first :content) "")
-                                                                    (:images tr))
-                                                          :status (if (:is-error tr) "error" "success")}})
-                                          tool-results)]
-                         (recur (drop (count tool-results) msgs)
-                                (conj out {:role "user" :content blocks})))
-                       (= role "assistant")
-                       (let [content-blocks (into []
-                                                  (concat
-                                                   (keep (fn [b]
-                                                           (when (= :text (:type b))
-                                                             (bedrock-text-block (:text b))))
-                                                         (:content m))
-                                                   (for [tc (:tool-calls m)]
-                                                     {:toolUse {:toolUseId (bedrock-normalize-tool-call-id (:id tc))
-                                                                :name (:name tc)
-                                                                :input (:arguments tc {})}})
-                                                   ;; kmet stores thinking as text only — no
-                                                   ;; reasoning signatures — so Claude's replayed
-                                                   ;; reasoning falls back to plain text (pi's
-                                                   ;; no-signature path: Bedrock rejects a
-                                                   ;; reasoningContent block without a signature);
-                                                   ;; non-Claude models take reasoningContent
-                                                   ;; without a signature (pi)
-                                                   (when-let [th (not-empty (str/trim (or (:thinking m) "")))]
-                                                     (if (bedrock-is-claude? model)
-                                                       [{:text th}]
-                                                       [{:reasoningContent {:reasoningText {:text th}}}]))))]
-                         (if (seq content-blocks)
-                           (recur (rest msgs) (conj out {:role "assistant" :content content-blocks}))
-                           (recur (rest msgs) out)))
-                       :else
+                        (let [tool-results (take-while #(= :tool (:role %)) msgs)
+                              blocks (mapv (fn [tr]
+                                             {:toolResult {:toolUseId (bedrock-normalize-tool-call-id
+                                                                       (-> tr :content first :tool_use_id))
+                                                           :content (bedrock-tool-result-content
+                                                                     (or (-> tr :content first :content) "")
+                                                                     (:images tr))
+                                                           :status (if (:is-error tr) "error" "success")}})
+                                           tool-results)]
+                          (recur (drop (count tool-results) msgs)
+                                 (conj out {:role "user" :content blocks})))
+                        (= role "assistant")
+                        (let [content-blocks (into []
+                                                   (concat
+                                                    (keep (fn [b]
+                                                            (when (= :text (:type b))
+                                                              (bedrock-text-block (:text b))))
+                                                          (:content m))
+                                                    (for [tc (:tool-calls m)]
+                                                      {:toolUse {:toolUseId (bedrock-normalize-tool-call-id (:id tc))
+                                                                 :name (:name tc)
+                                                                 :input (:arguments tc {})}})
+                                                   ;; pi supportsThinkingSignature: only Claude
+                                                   ;; accepts the signature field. Signed
+                                                   ;; same-model reasoning replays inside
+                                                   ;; reasoningContent with the signature;
+                                                   ;; unsigned or cross-provider reasoning falls
+                                                   ;; back to plain text for Claude (Bedrock
+                                                   ;; rejects a reasoningContent block without a
+                                                   ;; signature); non-Claude models take
+                                                   ;; reasoningContent without a signature (pi)
+                                                    (when-let [th (not-empty (str/trim (or (:thinking m) "")))]
+                                                      (let [same-model? (and (= (:provider m) provider)
+                                                                             (= (:model m) (:id model)))
+                                                            sig (:thinking-signature m)]
+                                                        (if (bedrock-is-claude? model)
+                                                          (if (and same-model? (seq sig))
+                                                            [{:reasoningContent {:reasoningText {:text th
+                                                                                                 :signature sig}}}]
+                                                            [{:text th}])
+                                                          [{:reasoningContent {:reasoningText {:text th}}}])))))]
+                          (if (seq content-blocks)
+                            (recur (rest msgs) (conj out {:role "assistant" :content content-blocks}))
+                            (recur (rest msgs) out)))
+                        :else
                        ;; user
-                       (let [content (:content m)
-                             blocks (if (string? content)
-                                      [{:text content}]
-                                      (let [blocks (into []
-                                                         (keep (fn [b]
-                                                                 (cond
-                                                                   (= :text (:type b)) (bedrock-text-block (:text b))
-                                                                   (image-block? b) (bedrock-image-block (:mime-type b) (:data b))
-                                                                   :else nil)))
-                                                         content)]
-                                        (if (seq blocks) blocks [{:text bedrock-empty-text-placeholder}])))]
-                         (recur (rest msgs) (conj out {:role "user" :content blocks})))))
-                   out))]
-    [(cond-> result
-       (and caching? (seq result)
-            (= "user" (get-in result [(dec (count result)) :role])))
-       (update (dec (count result)) update :content conj cache-block))
-     system-blocks]))
+                        (let [content (:content m)
+                              blocks (if (string? content)
+                                       [{:text content}]
+                                       (let [blocks (into []
+                                                          (keep (fn [b]
+                                                                  (cond
+                                                                    (= :text (:type b)) (bedrock-text-block (:text b))
+                                                                    (image-block? b) (bedrock-image-block (:mime-type b) (:data b))
+                                                                    :else nil)))
+                                                          content)]
+                                         (if (seq blocks) blocks [{:text bedrock-empty-text-placeholder}])))]
+                          (recur (rest msgs) (conj out {:role "user" :content blocks})))))
+                    out))]
+     [(cond-> result
+        (and caching? (seq result)
+             (= "user" (get-in result [(dec (count result)) :role])))
+        (update (dec (count result)) update :content conj cache-block))
+      system-blocks])))
 
 (defn bedrock-tool-config
   "ConverseStream toolConfig (pi convertToolConfig): toolSpec blocks with
@@ -262,7 +272,8 @@
                            "AWS_SECRET_ACCESS_KEY, AWS_PROFILE, AWS_BEARER_TOKEN_BEDROCK, "
                            "or configure AWS credentials.")))
           (let [additional (bedrock-additional-fields model-record effort)
-                [msgs system-blocks] (bedrock-messages messages model-record retention)
+                [msgs system-blocks] (bedrock-messages messages model-record retention
+                                                       {:provider (:id provider-record)})
                 payload (json/generate-string
                          (apply-before-provider-request-hook
                           (cond-> {:modelId model-id

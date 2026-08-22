@@ -42,7 +42,8 @@
     :as opts}]
   (future
     (let [model-id (or (:model opts) (:id model-record))
-          [contents system] (google-messages messages model-record)
+          [contents system] (google-messages messages model-record
+                                             {:provider (:id provider-record)})
           thinking-config (google-thinking-config model-record effort)
           payload (apply-before-provider-request-hook
                    (cond-> {:contents contents

@@ -83,8 +83,8 @@
 
 (defn parse-anthropic-event
   "Parse an Anthropic messages SSE (event-name, data) pair into a kmet event
-   map: :text, :tool-call, :tool-call-args, :message-delta, :done, :ping,
-   :content-block-start, or :unknown."
+   map: :text, :thinking, :signature, :tool-call, :tool-call-args,
+   :message-delta, :done, :ping, :content-block-start, or :unknown."
   [event data]
   (case event
     "message_start"
@@ -106,6 +106,10 @@
         (case (get-in delta [:delta :type])
           "text_delta"
           {:type :text :content (get-in delta [:delta :text])}
+          "thinking_delta"
+          {:type :thinking :content (get-in delta [:delta :thinking])}
+          "signature_delta"
+          {:type :signature :content (get-in delta [:delta :signature])}
           "input_json_delta"
           {:type :tool-call-args
            :arguments (get-in delta [:delta :partial_json])}
@@ -362,7 +366,12 @@
                                      :name (:name fc)
                                      :arguments (:args fc {})
                                      :index i})
-                                  (:thought p) {:type :thinking :content (:text p)}
+                                  (:thought p) (cond-> {:type :thinking :content (:text p)}
+                                                 ;; pi google-shared: thoughtSignature rides on
+                                                 ;; thought parts and is echoed back for same-model
+                                                 ;; replay
+                                                 (:thoughtSignature p)
+                                                 (assoc :signature (:thoughtSignature p)))
                                   (contains? p :text) {:type :text :content (:text p)}))
                               (map-indexed vector parts))
             events (concat (when usage [{:type :usage :usage (google-usage usage)}])

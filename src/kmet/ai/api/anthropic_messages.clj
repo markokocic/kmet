@@ -77,51 +77,89 @@
     (str/blank? content)
     (every? blank-text-block? content)))
 
-(defn anthropic-messages [messages]
-  (into []
-        (keep (fn [m]
-                (let [role (name (:role m))]
-                  (case role
-                    "bash"
-                    (when-not (:exclude-from-context? m)
-                      {:role "user" :content (bash-execution-text m)})
-                    "tool"
-                    (let [tool-use-id (anthropic-normalize-tool-call-id
-                                       (-> m :content first :tool_use_id))]
-                      {:role "user"
-                       :content [(cond-> {:type "tool_result"
-                                          :tool_use_id tool-use-id
-                                          :content (anthropic-tool-result-content m)}
-                                   (:is-error m) (assoc :is_error true))]})
-                    ;; custom messages (pi: convertToLlm custom→user)
-                    "custom"
-                    (let [content (anthropic-content (:content m))]
-                      (when-not (blank-content? content)
-                        {:role "user" :content content}))
-                    ;; pi convertMessages: blank text blocks are dropped from
-                    ;; outgoing requests and a message left without sendable
-                    ;; content is skipped entirely — Anthropic rejects empty
-                    ;; content arrays, so a recorded empty completion must not
-                    ;; poison every later turn with a 400.
-                    (let [raw (anthropic-content (:content m))
-                          tool-uses (when (and (= role "assistant") (:tool-calls m))
-                                      (mapv (fn [tc]
-                                              {:type "tool_use"
-                                               :id (anthropic-normalize-tool-call-id (:id tc))
-                                               :name (:name tc)
-                                               :input (:arguments tc)})
-                                            (:tool-calls m)))
-                          content (cond
-                                    (seq tool-uses)
-                                    (vec (concat (cond
-                                                   (string? raw) []
-                                                   :else (remove blank-text-block? raw))
-                                                 tool-uses))
-                                    (vector? raw) (vec (remove blank-text-block? raw))
-                                    :else raw)]
-                      (when-not (blank-content? content)
-                        {:role role :content content}))))))
-        messages))
+(defn anthropic-messages
+  "Map agent messages to Anthropic API messages.
+
+   OPTS (optional map) carries the replay context: :provider/:model — the
+   current request's provider id and model id — and :allow-empty-signature
+   (pi compat.allowEmptySignature). An assistant message whose provenance
+   matches replays its reasoning as a leading thinking block carrying the
+   captured signature; without a signature the reasoning degrades to plain
+   text (or an empty-signature thinking block on allow-listed compat models),
+   mirroring pi convertMessages. Messages without provenance (legacy
+   sessions) degrade like unsigned ones."
+  ([messages]
+   (anthropic-messages messages nil))
+  ([messages {:keys [provider model allow-empty-signature]}]
+   (into []
+         (keep (fn [m]
+                 (let [role (name (:role m))]
+                   (case role
+                     "bash"
+                     (when-not (:exclude-from-context? m)
+                       {:role "user" :content (bash-execution-text m)})
+                     "tool"
+                     (let [tool-use-id (anthropic-normalize-tool-call-id
+                                        (-> m :content first :tool_use_id))]
+                       {:role "user"
+                        :content [(cond-> {:type "tool_result"
+                                           :tool_use_id tool-use-id
+                                           :content (anthropic-tool-result-content m)}
+                                    (:is-error m) (assoc :is_error true))]})
+                     ;; custom messages (pi: convertToLlm custom→user)
+                     "custom"
+                     (let [content (anthropic-content (:content m))]
+                       (when-not (blank-content? content)
+                         {:role "user" :content content}))
+                     ;; pi convertMessages: blank text blocks are dropped from
+                     ;; outgoing requests and a message left without sendable
+                     ;; content is skipped entirely — Anthropic rejects empty
+                     ;; content arrays, so a recorded empty completion must not
+                     ;; poison every later turn with a 400.
+                     (let [raw (anthropic-content (:content m))
+                           same-model? (and (= (:provider m) provider)
+                                            (= (:model m) model))
+                           sig (:thinking-signature m)
+                           ;; pi: signed same-model reasoning replays as a
+                           ;; leading thinking block (required before tool_use
+                           ;; when thinking is on); unsigned or cross-provider
+                           ;; reasoning degrades to plain text — unless the
+                           ;; model is allow-listed for empty signatures
+                           thinking-blocks (when-let [th (not-empty (str/trim (or (:thinking m) "")))]
+                                             [(cond
+                                                (and same-model? (seq sig))
+                                                {:type "thinking" :thinking th :signature sig}
+                                                allow-empty-signature
+                                                {:type "thinking" :thinking th :signature ""}
+                                                :else
+                                                {:type "text" :text th})])
+                           tool-uses (when (and (= role "assistant") (:tool-calls m))
+                                       (mapv (fn [tc]
+                                               {:type "tool_use"
+                                                :id (anthropic-normalize-tool-call-id (:id tc))
+                                                :name (:name tc)
+                                                :input (:arguments tc)})
+                                             (:tool-calls m)))
+                           content (cond
+                                     (seq tool-uses)
+                                     (vec (concat thinking-blocks
+                                                  (cond
+                                                    (string? raw) []
+                                                    :else (remove blank-text-block? raw))
+                                                  tool-uses))
+                                     (vector? raw)
+                                     (vec (concat thinking-blocks
+                                                  (remove blank-text-block? raw)))
+                                     ;; string content keeps its wire shape unless
+                                     ;; reasoning blocks precede it
+                                     (seq thinking-blocks)
+                                     (vec (concat thinking-blocks
+                                                  (when (seq raw)
+                                                    [{:type "text" :text raw}])))
+                                     :else raw)]
+                       (when-not (blank-content? content)
+                         {:role role :content content})))))
+               messages))))
 
 (defn anthropic-auth-headers
   "Base auth headers for an anthropic-messages request (pi anthropic provider
@@ -136,7 +174,7 @@
 (defn anthropic-request
   [{:keys [model-record provider-record effort api-key messages tools signal base-url
            idle-timeout-ms session-id
-           on-text on-tool-call on-done on-error on-usage]
+           on-text on-thinking on-signature on-tool-call on-done on-error on-usage]
     :as opts}]
   (future
     (let [model-id (or (:model opts) (:id model-record))
@@ -144,7 +182,13 @@
           payload (apply-before-provider-request-hook
                    (cond-> {:model model-id
                             :max_tokens (:max-tokens thinking (or (:max-tokens model-record) 4096))
-                            :messages (anthropic-messages messages)
+                            ;; replay context: signatures echo only when message provenance matches
+                            :messages (anthropic-messages
+                                       messages
+                                       {:provider (:id provider-record)
+                                        :model model-id
+                                        :allow-empty-signature
+                                        (-> model-record :compat :allow-empty-signature)})
                             :stream true}
                      (seq tools) (assoc :tools (mapv #(tool->anthropic-schema %
                                                                               (:supports-strict-tools (:compat model-record)))
@@ -175,6 +219,8 @@
                                         (fn [event]
                                           (case (:type event)
                                             :text (when on-text (on-text (:content event)))
+                                            :thinking (when on-thinking (on-thinking (:content event)))
+                                            :signature (when on-signature (on-signature (:content event)))
                                             :tool-call (when on-tool-call
                                                          (on-tool-call {:id (:id event)
                                                                         :name (:name event)

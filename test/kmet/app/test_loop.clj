@@ -1429,6 +1429,30 @@
     (t/is (= :error (loop/get-status agent)))
     (t/is (some #(= :error (:type %)) @events) "terminal :error event emitted")))
 
+(t/deftest test-loop-thinking-signature-captured
+  ;; pi parity: the assistant message records provider/model provenance plus
+  ;; the opaque reasoning signature (anthropic signature_delta / gemini
+  ;; thoughtSignature) — converters replay it only for same-provider-same-model
+  ;; messages and degrade everything else to plain text.
+  (let [agent (loop/make-agent-state :provider :anthropic :model "claude-test")]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (when-let [ot (:on-thinking opts)] (ot "reasoning"))
+                      (when-let [os (:on-signature opts)] (os "SIG123"))
+                      (when-let [od (:on-done opts)] (od :end-turn))
+                      :done))]
+      @(loop/run-agent-turn agent {:message "hi"
+                                   :on-done (fn [_])
+                                   :on-error (fn [_])}))
+    (let [a (last (loop/get-context agent))]
+      (t/is (= :assistant (:role a)))
+      (t/is (= "reasoning" (:thinking a)))
+      (t/is (= "SIG123" (:thinking-signature a)))
+      (t/is (= :anthropic (:provider a)))
+      (t/is (= "claude-test" (:model a))))))
+
 (t/deftest test-loop-empty-completion-settles-quietly
   ;; pi parity (agent-loop runLoop): a clean stream with zero content is a
   ;; normal final response — the run settles without an error. The empty

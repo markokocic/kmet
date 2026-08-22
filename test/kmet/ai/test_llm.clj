@@ -1033,6 +1033,91 @@
              (drop 1 contents))
           "non-blank content passes through; whitespace-only USER text is kept (pi parity)")))
 
+(t/deftest test-anthropic-thinking-replay
+  ;; pi convertMessages thinking matrix: signed same-model reasoning replays
+  ;; as a leading thinking block (required before tool_use with thinking on);
+  ;; unsigned or cross-provider reasoning degrades to plain text; legacy
+  ;; entries without provenance degrade like unsigned ones.
+  (let [msg {:role :assistant :content []
+             :thinking "r" :thinking-signature "SIG"
+             :provider :anthropic :model "claude"
+             :tool-calls [{:id "t" :name "bash" :arguments {}}]}
+        ctx {:provider :anthropic :model "claude"}]
+    (let [blocks (:content (first (anthropic/anthropic-messages [msg] ctx)))]
+      (t/is (= [{:type "thinking" :thinking "r" :signature "SIG"}
+                {:type "tool_use" :id "t" :name "bash" :input {}}]
+               blocks)
+            "signed same-model replay: thinking block precedes tool_use"))
+    (let [blocks (:content (first (anthropic/anthropic-messages
+                                   [(dissoc msg :thinking-signature)] ctx)))]
+      (t/is (= [{:type "text" :text "r"}
+                {:type "tool_use" :id "t" :name "bash" :input {}}] blocks)
+            "unsigned same-model reasoning degrades to plain text before tool_use"))
+    (let [blocks (:content (first (anthropic/anthropic-messages
+                                   [(assoc msg :provider :opencode :model "other")] ctx)))]
+      (t/is (= [{:type "text" :text "r"}
+                {:type "tool_use" :id "t" :name "bash" :input {}}] blocks)
+            "cross-provider reasoning degrades to plain text"))
+    (let [blocks (:content (first (anthropic/anthropic-messages
+                                   [(assoc msg :model "other")]
+                                   {:provider :anthropic :model "claude"
+                                    :allow-empty-signature true})))]
+      (t/is (= [{:type "thinking" :thinking "r" :signature ""}
+                {:type "tool_use" :id "t" :name "bash" :input {}}] blocks)
+            "allow-empty-signature compat keeps unsigned reasoning as a block"))
+    (let [blocks (:content (first (anthropic/anthropic-messages
+                                   [(dissoc msg :thinking-signature :provider :model)] ctx)))]
+      (t/is (= [{:type "text" :text "r"}
+                {:type "tool_use" :id "t" :name "bash" :input {}}] blocks)
+            "legacy entries without provenance degrade like unsigned"))))
+
+(t/deftest test-google-thinking-replay
+  ;; pi google-shared: same-provider-same-model reasoning replays as a
+  ;; thought part (thoughtSignature echoed when captured); cross-provider
+  ;; reasoning degrades to a plain text part; empty assistants stay dropped.
+  (let [model {:id "gemini-2.5-pro" :name "Gemini"}
+        convert #(@#'google/google-messages % model {:provider :google})
+        [contents _] (convert
+                      [{:role :assistant :content []}
+                       {:role :assistant :content []
+                        :thinking "h" :thinking-signature "GSIG"
+                        :provider :google :model "gemini-2.5-pro"}
+                       {:role :assistant :content []
+                        :thinking "h" :provider :google :model "gemini-2.5-pro"}
+                       {:role :assistant :content []
+                        :thinking "x" :provider :other :model "m"}
+                       {:role :user :content [{:type :text :text "q"}]}])]
+    (t/is (= [{:role "model" :parts [{:text "h" :thought true :thoughtSignature "GSIG"}]}
+              {:role "model" :parts [{:text "h" :thought true}]}
+              {:role "model" :parts [{:text "x"}]}
+              {:role "user" :parts [{:text "q"}]}]
+             contents)
+          "thought parts carry the signature only for same-model messages")))
+
+(t/deftest test-bedrock-thinking-signature-replay
+  ;; pi supportsThinkingSignature: only Claude accepts the signature field —
+  ;; signed same-model reasoning carries it, unsigned Claude reasoning falls
+  ;; back to plain text, non-Claude models keep signature-less reasoningContent.
+  (let [model {:id "anthropic.claude-sonnet-4-5-20250929-v1:0"
+               :name "Claude Sonnet 4.5" :provider :amazon-bedrock
+               :api :bedrock-converse-stream}
+        convert (fn [m] (first (@#'bedrock/bedrock-messages [m] model :short
+                                                            {:provider :amazon-bedrock})))
+        msg {:role :assistant :content []
+             :thinking "r" :thinking-signature "BSIG"
+             :provider :amazon-bedrock :model (:id model)}
+        signed (:content (first (convert msg)))
+        unsigned (:content (first (convert (dissoc msg :thinking-signature))))
+        nc-model {:id "amazon.nova-pro-v1" :name "Nova" :provider :amazon-bedrock}]
+    (t/is (= [{:reasoningContent {:reasoningText {:text "r" :signature "BSIG"}}}] signed))
+    (t/is (= [{:text "r"}] unsigned) "unsigned Claude reasoning degrades to text")
+    (let [nc-msg (assoc msg :thinking-signature "X")
+          nc-result (@#'bedrock/bedrock-messages
+                     [nc-msg] nc-model :short {:provider :amazon-bedrock})
+          nc-block (-> nc-result ffirst :content first)]
+      (t/is (= {:reasoningContent {:reasoningText {:text "r"}}} nc-block)
+            "non-Claude models reject signatures — omitted (pi)"))))
+
 (t/deftest test-google-event-parsing
   (t/is (= [{:type :text :content "Hi"}]
            (sse/parse-google-event

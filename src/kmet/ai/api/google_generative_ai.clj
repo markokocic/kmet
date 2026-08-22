@@ -21,55 +21,73 @@
     (if (> (count sanitized) 64) (subs sanitized 0 64) sanitized)))
 
 (defn google-messages
-  [messages model]
-  (let [requires-id? (google-requires-tool-call-id? (:id model))
-        system (first (for [m messages
-                            :when (= :system (:role m))]
-                        (content-text (:content m))))
-        msgs (remove #(= :system (:role %)) messages)]
-    [(into []
-           (keep (fn [m]
-                   (case (name (:role m))
-                     "bash"
-                     (when-not (:exclude-from-context? m)
-                       {:role "user" :parts [{:text (bash-execution-text m)}]})
-                     "tool"
-                     (let [r (first (:content m))
-                           text (or (:content r) "")
-                           resp (if (:is-error m) {:error text} {:output text})
-                           fc (cond-> {:name (:tool-name m)
-                                       :response resp}
-                                requires-id? (assoc :id (google-normalize-tool-call-id
-                                                         (-> m :content first :tool_use_id))))]
-                       {:role "user" :parts [{:functionResponse fc}]})
-                     "assistant"
-                     (let [parts (into []
-                                       (concat
+  ([messages model]
+   (google-messages messages model nil))
+  ([messages model {:keys [provider]}]
+
+   (let [requires-id? (google-requires-tool-call-id? (:id model))
+         system (first (for [m messages
+                             :when (= :system (:role m))]
+                         (content-text (:content m))))
+         msgs (remove #(= :system (:role %)) messages)]
+     [(into []
+            (keep (fn [m]
+                    (case (name (:role m))
+                      "bash"
+                      (when-not (:exclude-from-context? m)
+                        {:role "user" :parts [{:text (bash-execution-text m)}]})
+                      "tool"
+                      (let [r (first (:content m))
+                            text (or (:content r) "")
+                            resp (if (:is-error m) {:error text} {:output text})
+                            fc (cond-> {:name (:tool-name m)
+                                        :response resp}
+                                 requires-id? (assoc :id (google-normalize-tool-call-id
+                                                          (-> m :content first :tool_use_id))))]
+                        {:role "user" :parts [{:functionResponse fc}]})
+                      "assistant"
+                      (let [;; pi google-shared: reasoning replays as a thought
+                           ;; part for same-provider-same-model messages
+                           ;; (signature echoed when captured); cross-provider
+                           ;; reasoning degrades to a plain text part
+                            same-model? (and (= (:provider m) provider)
+                                             (= (:model m) (:id model)))
+                            thinking-part (when-let [th (not-empty (str/trim (or (:thinking m) "")))]
+                                            (cond
+                                              (and same-model? (:thinking-signature m))
+                                              {:text th :thought true
+                                               :thoughtSignature (:thinking-signature m)}
+                                              same-model?
+                                              {:text th :thought true}
+                                              :else {:text th}))
+                            parts (into []
+                                        (concat
+                                         (when thinking-part [thinking-part])
                                         ;; pi google-shared: empty text parts are dropped
                                         ;; (Gemini can attach a thought signature to a blank
-                                        ;; part; kmet stores thinking separately and never
-                                        ;; replays signatures, so the drop is unconditional)
-                                        (for [b (:content m)
-                                              :when (and (= :text (:type b))
-                                                         (seq (str/trim (or (:text b) ""))))]
-                                          {:text (:text b)})
-                                        (for [tc (:tool-calls m)]
-                                          {:functionCall (cond-> {:name (:name tc)
-                                                                  :args (:arguments tc)}
-                                                           requires-id? (assoc :id (google-normalize-tool-call-id (:id tc))))})))]
-                       (when (seq parts) {:role "model" :parts parts}))
+                                        ;; part; kmet stores thinking separately, so the drop
+                                        ;; is unconditional here)
+                                         (for [b (:content m)
+                                               :when (and (= :text (:type b))
+                                                          (seq (str/trim (or (:text b) ""))))]
+                                           {:text (:text b)})
+                                         (for [tc (:tool-calls m)]
+                                           {:functionCall (cond-> {:name (:name tc)
+                                                                   :args (:arguments tc)}
+                                                            requires-id? (assoc :id (google-normalize-tool-call-id (:id tc))))})))]
+                        (when (seq parts) {:role "model" :parts parts}))
                      ;; user
-                     (let [parts (if (some image-block? (:content m))
-                                   (for [b (:content m)]
-                                     (if (image-block? b)
-                                       {:inlineData {:mime-type (:mime-type b)
-                                                     :data (:data b)}}
-                                       {:text (or (:text b) "")}))
-                                   (when (seq (:content m))
-                                     [{:text (content-text (:content m))}]))]
-                       (when (seq parts) {:role "user" :parts parts})))))
-           msgs)
-     system]))
+                      (let [parts (if (some image-block? (:content m))
+                                    (for [b (:content m)]
+                                      (if (image-block? b)
+                                        {:inlineData {:mime-type (:mime-type b)
+                                                      :data (:data b)}}
+                                        {:text (or (:text b) "")}))
+                                    (when (seq (:content m))
+                                      [{:text (content-text (:content m))}]))]
+                        (when (seq parts) {:role "user" :parts parts})))))
+            msgs)
+      system])))
 
 (defn google-thinking-level
   "pi getThinkingLevel: gemini-3 pro collapses to LOW/HIGH; gemma4 to
@@ -128,12 +146,13 @@
 (defn google-request
   [{:keys [model-record provider-record effort api-key messages tools signal base-url
            idle-timeout-ms session-id
-           on-text on-thinking on-tool-call on-done on-error
+           on-text on-thinking on-signature on-tool-call on-done on-error
            on-usage]
     :as opts}]
   (future
     (let [model-id (or (:model opts) (:id model-record))
-          [contents system] (google-messages messages model-record)
+          [contents system] (google-messages messages model-record
+                                             {:provider (:id provider-record)})
           thinking-config (google-thinking-config model-record effort)
           payload (apply-before-provider-request-hook
                    (cond-> {:contents contents
@@ -169,6 +188,7 @@
                                        (case (:type event)
                                          :text (when on-text (on-text (:content event)))
                                          :thinking (when on-thinking (on-thinking (:content event)))
+                                         :signature (when on-signature (on-signature (:content event)))
                                          :tool-call (when on-tool-call
                                                       (on-tool-call {:id (:id event)
                                                                      :name (:name event)

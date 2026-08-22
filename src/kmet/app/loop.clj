@@ -467,9 +467,16 @@ Be precise and concise in your responses."}}]
 
 (defn- add-assistant-message!
   "Add a final assistant message to context and session, emitting
-   :message-end. Returns the message."
-  [agent text thinking tool-calls usage]
-  (let [assistant-msg (assistant-message text thinking tool-calls usage)]
+   :message-end. RESULT is call-llm's delivered map. Stamps provider/model
+   provenance and the captured thinking signature (pi: AssistantMessage
+   carries provider/model/api plus per-block signatures — converters replay
+   signatures only for same-provider-same-model messages and degrade
+   everything else to plain text). Returns the message."
+  [agent {:keys [text thinking tool-calls usage thinking-signature]}]
+  (let [assistant-msg (cond-> (assoc (assistant-message text thinking tool-calls usage)
+                                     :provider @(:provider agent)
+                                     :model @(:model agent))
+                        (seq thinking-signature) (assoc :thinking-signature thinking-signature))]
     (swap! (:messages agent) conj assistant-msg)
     (when (:session agent)
       (session/append-entry (:session agent) assistant-msg))
@@ -784,6 +791,10 @@ Be precise and concise in your responses."}}]
   [agent api-key text-buf on-text on-thinking]
   (let [done-promise (promise)
         thinking-buf (atom "")
+        ;; opaque provider signature over the reasoning block (anthropic
+        ;; signature_delta / gemini thoughtSignature) — captured for same-model
+        ;; replay; pi keeps it on the message's thinking content block
+        sig-buf (atom nil)
         usage-buf (atom nil)
         [tc-add tc-flush] (make-tc-accumulator)
         provider @(:provider agent)
@@ -833,6 +844,10 @@ Be precise and concise in your responses."}}]
                                             :content []
                                             :thinking @thinking-buf}
                                   :delta {:type :thinking :content t}}))
+      ;; signatures arrive as whole blobs (possibly repeated across deltas) —
+      ;; last-wins, never concatenated
+      :on-signature (fn [sig]
+                      (when sig (reset! sig-buf sig)))
       :on-tool-call (fn [tc]
                       (tc-add tc)
                       (emit agent {:type :message-update
@@ -850,6 +865,7 @@ Be precise and concise in your responses."}}]
                              :thinking (str/trim @thinking-buf)
                              :tool-calls tool-calls
                              :usage @usage-buf
+                             :thinking-signature @sig-buf
                              :stop-reason reason})))
       :on-error (fn [e]
                   ;; Guard against double delivery: on the curl path the
@@ -1457,13 +1473,10 @@ Be precise and concise in your responses."}}]
                                                 (when @(:overflow-recovered agent)
                                                   ;; A non-error message ends overflow recovery (pi resets on success)
                                                   (reset! (:overflow-recovered agent) false))
-                                                (let [text (:text result)
-                                                      thinking (:thinking result)
-                                                      tool-calls (:tool-calls result)
-                                                      usage (:usage result)]
+                                                (let [tool-calls (:tool-calls result)]
                                                   (if (seq tool-calls)
                                                     ;; Execute tool calls
-                                                    (let [assistant-msg (add-assistant-message! agent text thinking tool-calls usage)]
+                                                    (let [assistant-msg (add-assistant-message! agent result)]
                                                       (reset! (:status agent) :executing)
                                                       (emit agent {:type :status :status :executing
                                                                    :tool-calls tool-calls})
@@ -1484,7 +1497,7 @@ Be precise and concise in your responses."}}]
                                                             {:settled (inc t)}
                                                             (recur (inc t) tool-calls false)))))
                                                     ;; Final response
-                                                    (let [assistant-msg (add-assistant-message! agent text thinking nil (:usage result))
+                                                    (let [assistant-msg (add-assistant-message! agent result)
                                                           tool-results []]
                                                       (emit agent {:type :turn-end
                                                                    :message assistant-msg
