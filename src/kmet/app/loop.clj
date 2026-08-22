@@ -96,7 +96,7 @@
                        follow-up     ;; atom of vector of queued follow-up messages
                        steering-mode ;; atom of :all | :one-at-a-time (drain mode)
                        follow-up-mode ;; atom of :all | :one-at-a-time (drain mode)
-                       active-call      ;; atom of in-flight LLM promise (for cancel)
+                       active-call      ;; atom of {:promise p :partials f} while an LLM call is in flight (for cancel)
                        max-retries      ;; atom of int: max auto-retry attempts on transient LLM errors (pi default 3)
                        base-delay-ms    ;; atom of int: exponential backoff base in ms (pi default 2000)
                        retry-count      ;; atom of int: retries performed for the in-flight LLM call
@@ -487,19 +487,22 @@ Be precise and concise in your responses."}}]
     (emit agent {:type :message-end :message assistant-msg})
     assistant-msg))
 
-(defn- record-failed-attempt!
-  "Record a failed LLM attempt in the session history without adding it to
-   the live context, emitting :message-end (pi: a stream error finalizes the
-   partial as an AssistantMessage with stopReason \"error\" — message_end
-   persists it to the session file, then _prepareRetry removes it from agent
-   state so the retried request never sees it; on resume it comes back as a
-   plain assistant message carrying its partial text). RESULT is call-llm's
-   delivered map with whatever partials arrived before the failure."
-  [agent {:keys [text thinking tool-calls usage thinking-signature error]}]
+(defn- record-abandoned-attempt!
+  "Record an LLM attempt that never completed — stream error or user abort —
+   in the session history without adding it to the live context, emitting
+   :message-end (pi: a failed stream finalizes the partial as an
+   AssistantMessage with stopReason \"error\"/\"aborted\" — message_end
+   persists it to the session file; for errors _prepareRetry then removes it
+   from agent state so the retried request never sees it; on resume it comes
+   back as a plain assistant message carrying its partial text). RESULT is
+   call-llm's delivered map with whatever partials arrived before the
+   abandonment."
+  [agent {:keys [text thinking tool-calls usage thinking-signature error]}
+   stop-reason]
   (let [msg (cond-> (assoc (assistant-message text thinking tool-calls usage)
                            :provider @(:provider agent)
                            :model @(:model agent)
-                           :stop-reason :error)
+                           :stop-reason stop-reason)
               (seq thinking-signature) (assoc :thinking-signature thinking-signature)
               error (assoc :error-message error))]
     (when (:session agent)
@@ -812,6 +815,9 @@ Be precise and concise in your responses."}}]
    :thinking-signature str} — whatever partials arrived before the failure
    (persisted with the errored attempt; pi: a failed stream's partial becomes
    the final message with stopReason \"error\").
+   Returns {:promise p :partials f}: P resolves with the delivered map;
+   PARTIALS snapshots the buffers for cancel-turn so an aborted stream keeps
+   what arrived before the abort.
    Calls on-text for text deltas during streaming.
    Applies the transform-context hook (pi: transformContext) to the conversation
    before the system prompt is prepended, and prefers the per-run
@@ -910,7 +916,14 @@ Be precise and concise in your responses."}}]
                               :tool-calls (tc-flush)
                               :usage @usage-buf
                               :thinking-signature @sig-buf})))})
-    done-promise))
+    ;; Snapshot closure — evaluated by cancel-turn at abort time
+    {:promise done-promise
+     :partials (fn []
+                 {:text @text-buf
+                  :thinking (str/trim @thinking-buf)
+                  :tool-calls (tc-flush)
+                  :usage @usage-buf
+                  :thinking-signature @sig-buf})}))
 
 ;; ─── Queues ────────────────────────────────────────────────────────────────
 
@@ -1432,13 +1445,15 @@ Be precise and concise in your responses."}}]
                                                    :steering @(:steering agent)
                                                    :follow-up @(:follow-up agent)}))
                                     (emit agent {:type :turn-start :turn-index t})
-                                    (let [promise (do (reset! text-buf "")
-                                                      (call-llm agent (resolve-api-key agent) text-buf on-text on-thinking))]
-                                      (reset! (:active-call agent) promise)
+                                    (let [{:keys [promise] :as call}
+                                          (do (reset! text-buf "")
+                                              (call-llm agent (resolve-api-key agent) text-buf on-text on-thinking))]
+                                      (reset! (:active-call agent) call)
                                       (let [result (deref promise (llm-total-timeout-ms agent) :timeout)]
                                         (reset! (:active-call agent) nil)
                                         (if (:cancelled result)
-                                          (do (agent-end)
+                                          (do (record-abandoned-attempt! agent result :aborted)
+                                              (agent-end)
                                               {:aborted true})
                                           (if (= :timeout result)
                                             (do (reset! (:signal agent) true)
@@ -1456,7 +1471,7 @@ Be precise and concise in your responses."}}]
                                                     ;; _prepareRetry drops the errored
                                                     ;; message from agent state while
                                                     ;; keeping it in the file)
-                                                    _ (record-failed-attempt! agent result)
+                                                    _ (record-abandoned-attempt! agent result :error)
                                                     max-retries @(:max-retries agent)]
                                                 (cond
                                                   ;; Context overflow → compact once, then retry
@@ -1594,13 +1609,15 @@ Be precise and concise in your responses."}}]
 
 (defn cancel-turn
   "Cancel the current agent run: signal the LLM stream, drop queued messages,
-   release the in-flight LLM call, return status to :idle."
+   deliver the in-flight LLM call ({:cancelled true} plus the partials
+   snapshot so the abandoned attempt keeps what arrived), return status to
+   :idle."
   [agent]
   (reset! (:signal agent) true)
   (clear-queues! agent)
-  (when-let [p @(:active-call agent)]
-    (when-not (realized? p)
-      (deliver p {:cancelled true})))
+  (when-let [{:keys [promise partials]} @(:active-call agent)]
+    (when-not (realized? promise)
+      (deliver promise (merge {:cancelled true} (partials)))))
   (reset! (:status agent) :idle)
   (emit agent {:type :status :status :idle})
   nil)

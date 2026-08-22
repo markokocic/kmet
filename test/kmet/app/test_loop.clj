@@ -1104,6 +1104,12 @@
           (t/is (empty? @errors) "no error callback on cancel")
           (t/is (zero? @dones) "no done callback on cancel")
           (t/is (= :idle @(:status agent)) "status idle after cancel")
+          ;; The cancelled call settles as a stopReason-aborted attempt
+          ;; (pi: an aborted partial persists to the session history)
+          (t/is (some #(and (= :message-end (:type %))
+                            (= :aborted (:stop-reason (:message %))))
+                      @events)
+                "cancel delivers an aborted :message-end")
           (let [ae-idx (first (keep-indexed #(when (= :agent-end (:type %2)) %1) @events))
                 as-idx (first (keep-indexed #(when (= :agent-settled (:type %2)) %1) @events))]
             (t/is (some? ae-idx) ":agent-end emitted on cancel")
@@ -1514,6 +1520,52 @@
       (t/is (some #(and (= :assistant (:role %))
                         (= "recovered" (get-in % [:content 0 :text])))
                   ctx)))))
+
+(t/deftest ^:slow test-loop-cancel-records-aborted-attempt
+  ;; pi parity: an abort mid-stream finalizes the partial as a
+  ;; stopReason-aborted assistant message persisted to the session (never
+  ;; the live context) — history keeps what the model managed to say.
+  (let [dir (str "target/test-loop-aborted-attempt-" (System/currentTimeMillis))
+        events (atom [])
+        sess (session/create-session dir)
+        agent (loop/make-agent-state
+               :on-event (fn [e] (swap! events conj e))
+               :session sess)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  ;; Streams a little, then hangs forever: on-done/on-error
+                  ;; never fire — cancel-turn must settle the call
+                  (fn [opts]
+                    (future
+                      (when-let [ot (:on-text opts)] (ot "half a thought"))
+                      (Thread/sleep 10000)
+                      :never))]
+      (let [fut (loop/run-agent-turn agent
+                                     {:message "hi"
+                                      :on-done (fn [_])
+                                      :on-error (fn [_])})]
+        ;; Wait until the LLM call is in flight and the partial landed
+        (loop []
+          (when (nil? @(:active-call agent))
+            (Thread/sleep 20)
+            (recur)))
+        (Thread/sleep 100)
+        (loop/cancel-turn agent)
+        (deref fut 15000 :timeout)
+        (let [ends (filter #(and (= :message-end (:type %))
+                                 (= :aborted (:stop-reason (:message %))))
+                           @events)]
+          (t/is (= 1 (count ends)) "aborted attempt finalizes as :message-end")
+          (t/is (= "half a thought" (get-in (:message (first ends)) [:content 0 :text]))))
+        (let [aborted (->> (session/get-branch sess)
+                           (filterv #(= :aborted (:stop-reason %))))]
+          (t/is (= 1 (count aborted)))
+          (t/is (= :assistant (:role (first aborted))))
+          (t/is (= "half a thought" (get-in (first aborted) [:content 0 :text]))))
+        (t/is (empty? (filterv #(= :assistant (:role %)) (loop/get-context agent)))
+              "aborted attempt excluded from the live context")
+        (t/is (= :idle (loop/get-status agent)))
+        (try (fs/delete-tree dir) (catch Exception _ nil))))))
 
 (t/deftest test-loop-thinking-signature-captured
   ;; pi parity: the assistant message records provider/model provenance plus

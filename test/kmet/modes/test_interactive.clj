@@ -311,6 +311,31 @@
                   "failure text shown as the result"))))
         (finally (fs/delete-tree sess-dir))))))
 
+(deftest replay-branch-marks-aborted-tool-calls
+  (testing "an aborted assistant entry's dangling tool calls render as
+            aborted rather than pending (pi: \"Operation aborted\" on
+            restore of stopReason-aborted messages)"
+    (let [sess-dir (str "target/test-interactive-replay-aborted-" (System/currentTimeMillis))
+          sess (session/create-session sess-dir)]
+      (try
+        (session/append-entry sess {:role :user :content "go"})
+        (session/append-entry sess
+                              {:role :assistant
+                               :content [{:type :text :text "partial answer"}]
+                               :tool-calls [{:id "call_a" :name "bash"
+                                             :arguments {:command "ls"}}]
+                               :stop-reason :aborted})
+        (let [loaded (session/load-session (:file sess))
+              ch (ui/make-chat-history)
+              cs (inter/map->CoreState {:chat-history ch})]
+          ((var inter/replay-branch!) cs loaded)
+          (let [tools (filterv #(= :tool (:role %)) @(:messages-atom ch))]
+            (is (= 1 (count tools)))
+            (is (some #(str/includes? % "Aborted")
+                      (protocols/render (:component (first tools)) 100))
+                "aborted wording shown as the result")))
+        (finally (fs/delete-tree sess-dir))))))
+
 (deftest submit-command-line-gate
   (testing "multiline submit text (e.g. pasted blocks) is never a command"
     (let [command-line? @#'inter/command-line?]

@@ -1327,7 +1327,11 @@
                   (ui/tool-execution-set-tool-call-id! comp (:id tc))
                   (ui/tool-execution-set-args-complete! comp)
                   (if errored?
-                    (do (ui/tool-execution-set-content! comp (or (:error-message e) "Error"))
+                    (do (ui/tool-execution-set-content!
+                         comp (or (:error-message e)
+                                  (if (= :aborted (:stop-reason e))
+                                    "Aborted"
+                                    "Error")))
                         (ui/tool-execution-set-error! comp true))
                     (swap! pending-tools assoc (:id tc) comp))))))
 
