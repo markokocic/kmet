@@ -116,7 +116,6 @@
 (def chat-history-finalize-streaming! chat-history/chat-history-finalize-streaming!)
 (def chat-history-finalize-thinking! chat-history/chat-history-finalize-thinking!)
 (def chat-history-get-streaming-text chat-history/chat-history-get-streaming-text)
-(def chat-history-clear-streaming! chat-history/chat-history-clear-streaming!)
 (def chat-history-clear! chat-history/chat-history-clear!)
 (def chat-history-rebuild! chat-history/chat-history-rebuild!)
 (def chat-history-get-messages chat-history/chat-history-get-messages)

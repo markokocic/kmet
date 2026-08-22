@@ -387,14 +387,6 @@
     (am/assistant-message-get-text (:component msg))
     ""))
 
-(defn chat-history-clear-streaming!
-  "Clear text and thinking from the current streaming component.
-   Used on auto-retry so a retried stream starts from a blank slate."
-  [ch]
-  (when-let [msg @(:streaming-atom ch)]
-    (am/assistant-message-set-text! (:component msg) "")
-    (am/assistant-message-set-thinking! (:component msg) "")))
-
 ;; ─── Info message ─────────────────────────────────────────────────────────
 
 (defn chat-history-set-info-msg!

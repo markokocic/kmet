@@ -2494,11 +2494,11 @@
               (activate-working-indicator! cs)))
           (tui/tui-request-render tui))
       :auto-retry-start
-      ;; Clear partial streaming text so the retried stream
-      ;; starts fresh, and show the retry countdown (pi:
-      ;; auto_retry_start → RetryStatusIndicator)
-      (do (ui/chat-history-clear-streaming! chat-history)
-          (when-let [cs @cs-ref]
+      ;; Show the retry countdown; the failed attempt's partial
+      ;; text stays visible (pi: auto_retry_start only swaps in a
+      ;; RetryStatusIndicator — the errored block remains in the
+      ;; chat and the retried stream opens a fresh message below it)
+      (do (when-let [cs @cs-ref]
             (show-status-indicator!
              cs :retry
              (ui/make-retry-status-indicator
