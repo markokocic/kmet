@@ -7,7 +7,7 @@
 (defcomponent Text nil [text-atom padding-x padding-y bg-fn cache]
   (render [this width]
     (track! this width
-      (let [text @text-atom
+      (let [text (or @text-atom "")
             normalized (clojure.string/replace text "\t" "   ")
             cw (max 1 (- width (* 2 padding-x)))
             wrapped (if (clojure.string/blank? text)

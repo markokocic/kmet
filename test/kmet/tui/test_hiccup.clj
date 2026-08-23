@@ -102,7 +102,49 @@
     (t/is (= ["" " hi" ""]
              (mapv str/trimr (h/render-lines (tree {:key 1}) 20))))))
 
-;; ── loud validation (hiccup drops void-tag content silently; we throw) ──
+;; ── contents are concatenated / lazy & eager seqs (hiccup core_test) ────
+
+(t/deftest multiple-string-children-concatenate
+  ;; hiccup: [:body "foo" "bar"] — two bare strings become two Texts
+  (t/is (= ["foo" "bar"]
+           (mapv str/trimr (h/render-lines [:container "foo" "bar"] 20)))))
+
+(t/deftest lists-of-strings-splice-inside-containers
+  ;; hiccup: [:body (list "foo" "bar")]
+  (t/is (= ["foo" "bar"]
+           (mapv str/trimr
+                 (h/render-lines [:container (list "foo" "bar")] 20)))))
+
+(t/deftest lazy-seq-children-expand
+  ;; hiccup: [:ul (for ...)] — lazy seqs from map/for work as children
+  (t/is (= ["a" "b"]
+           (mapv str/trimr
+                 (h/render-lines
+                  [:v-stack (map #(vector :text {:padding-x 0 :padding-y 0} %)
+                                 ["a" "b"])]
+                  20)))))
+
+;; ── documented divergences from hiccup ──────────────────────────────────
+
+(t/deftest keyword-children-throw-unlike-hiccup
+  ;; hiccup renders [:div :foo] as "foo"; here a bare keyword child is
+  ;; almost always a bug (forgotten props / wrong value) — stay loud.
+  (t/is (thrown? Exception (h/render-lines [:container :foo] 10))))
+
+(t/deftest vector-without-tag-head-as-child-throws-like-hiccup
+  ;; hiccup: "vecs don't expand - error if vec doesn't have tag name"
+  (t/is (thrown? Exception
+                 (h/render-lines [:container [[:text {:padding-x 0
+                                                      :padding-y 0} "a"]]]
+                                 10))))
+
+(t/deftest nil-and-missing-text-content-render-empty
+  ;; hiccup coerces nil content to nothing; Text.render treats nil like
+  ;; blank, and BLANK TEXT RENDERS ZERO LINES — an invisible placeholder
+  ;; (padding included), not a stack of blanks.
+  (t/is (= [] (h/render-lines [:text nil] 20)))
+  (t/is (= [] (h/render-lines [:text {}] 20)))
+  (t/is (= [] (h/render-lines [:text {} nil] 20))))
 
 (t/deftest unknown-tags-throw-loudly
   (let [e (try (h/render-lines [:tst "x"] 20) nil
@@ -136,6 +178,17 @@
     (reset! state "v2")
     (t/is (str/includes? (str/join "\n" (core/render r 20)) "v2")
           "bare fn roots re-derive on the next pass")))
+
+(t/deftest root-body-evaluates-once-per-render-pass
+  ;; hiccup: "values are evaluated only once" — at root level this means
+  ;; one tree-fn call and one body execution per core/render call
+  (let [calls (atom 0)
+        r (h/root (fn [_]
+                    (swap! calls inc)
+                    [:text {:padding-x 0 :padding-y 0} "x"]))]
+    (core/render r 20)
+    (core/render r 20)
+    (t/is (= 2 @calls) "two passes, two derivations — no double-eval within one")))
 
 (t/deftest root-of-seq-tree-renders-all-roots
   (let [r (h/root [[:text {:padding-x 0 :padding-y 0} "one"]
