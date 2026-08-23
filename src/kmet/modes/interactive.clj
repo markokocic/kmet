@@ -213,6 +213,19 @@
   (tui/tui-request-render (:tui cs))
   nil)
 
+(defn- update-terminal-title!
+  "Set the terminal window title to \"kmet - <session name> - <cwd basename>\"
+   (pi: updateTerminalTitle). The session display name is included when set
+   (/name); an explicit empty name clears it, falling back to just app + cwd.
+   No-ops when the TUI/terminal isn't live (e.g. tests with a stub tui)."
+  [cs]
+  (let [title (str "kmet"
+                   (when-let [name (session/get-session-name @(:session-atom cs))]
+                     (str " - " name))
+                   " - " (fs/file-name (str (fs/cwd))))]
+    (when-let [term (:terminal (:tui cs))]
+      (term/set-title! @term title))))
+
 ;; ─── Command handling ──────────────────────────────────────────────────────
 
 (defn- help-text
@@ -948,6 +961,7 @@
                         {:type :session-info-changed
                          :session-file (:file sess)
                          :name sanitized})
+                       (update-terminal-title! cs)
                        (when-not (= args sanitized)
                          ;; pi: warn when normalization changed the input
                          (ui/show-warning!
@@ -1415,7 +1429,8 @@
   ;; (pi: navigateTree/switchSession reuse the same editor instance).
   (when apply-settings?
     (editor/editor-set-history! (:editor cs) (session/get-prompt-history sess)))
-  (update-footer! cs))
+  (update-footer! cs)
+  (update-terminal-title! cs))
 
 (defn- handle-new-session
   "Pi: handleClearCommand → runtimeHost.newSession. Fully reset the
@@ -1508,6 +1523,7 @@
               (extensions/discover-resources! :startup)
               (catch Exception e (debug/log "session-start: " e))))
           (update-footer! cs)
+          (update-terminal-title! cs)
           (tui/tui-request-render (:tui cs))
           (ui/chat-history-add-message! (:chat-history cs)
                                         {:role :assistant :content "Started a new session."}))))))
@@ -3829,6 +3845,28 @@
               (theme-ctrl/apply-from-settings! (:theme-controller cs)))
             (catch Exception e
               (debug/log "theme detection: " e))))
+        ;; Set the initial terminal title (pi: updateTerminalTitle in init —
+        ;; after ui.start). Waits for the render loop so the JLine writer is
+        ;; live (the unstarted terminal record's writer is nil and writes are
+        ;; silently dropped); --continue/--resume sessions restored in
+        ;; build-layout get their display name reflected here.
+        (future
+          (try
+            (loop []
+              (when-not (or @(:running? (:tui cs))
+                            @(:stopped? (:tui cs)))
+                (Thread/sleep 20)
+                (recur)))
+            (when @(:running? (:tui cs))
+              (loop []
+                (when (and @(:running? (:tui cs))
+                           (nil? (:writer @(:terminal (:tui cs)))))
+                  (Thread/sleep 20)
+                  (recur)))
+              (when @(:running? (:tui cs))
+                (update-terminal-title! cs)))
+            (catch Exception e
+              (debug/log "terminal title: " e))))
         (tui/tui-start (:tui cs))
         (process/kill-tracked-children!)
         (println "kmet session ended.")
