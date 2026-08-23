@@ -13,12 +13,15 @@
 
 (def ^:private DEFAULT-DURATION-MS 1000)
 
+(declare alt-screen-flash-dispose!)
+
 (defcomponent AltScreenFlashContainer nil [request-render-fn entries-atom next-id-atom]
   (render [_this width]
     (mapv (fn [entry]
             (let [message (u/truncate-to-width (str " " (:message entry) " ") width "")]
               (theme/inverse message)))
-          @entries-atom)))
+          @entries-atom))
+  (dispose [this] (alt-screen-flash-dispose! this)))
 
 (defn- request-render!
   "Call the host's re-render callback when present."

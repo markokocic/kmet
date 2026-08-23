@@ -41,8 +41,15 @@
     (protocols/render child (get-content-width this width)))
   (invalidate [_this]
     (protocols/invalidate child))
-  (dispose [_this]
-    (when child (protocols/dispose child))))
+  (dispose [this]
+    ;; cancel our own transient-scrollbar timer BEFORE delegating — a
+    ;; disposed scroll-view must not fire a zombie render-request when the
+    ;; pending hide-timer wakes (the §5 zombie-interval pattern)
+    (when-let [t @(:scrollbar-hide-timer-atom this)]
+      (future-cancel t)
+      (reset! (:scrollbar-hide-timer-atom this) nil))
+    (when child
+      (protocols/dispose child))))
 
 ;; ─── Scrollbar state (pi: markScrollbarActivity / hideTransientScrollbar) ──
 

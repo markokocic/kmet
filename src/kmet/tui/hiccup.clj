@@ -157,16 +157,18 @@
     [spec (dissoc props :key :ref) (vec children)]))
 
 (defn- compile-host [tag content]
-  (let [[spec props children] (normalize-element tag content)
-        component ((:ctor spec) props)]
+  ;; Validate BEFORE constructing: ctors are side-effect-free today, but
+  ;; throwing after building would still be throwing-after-side-effect.
+  (let [[spec props children] (normalize-element tag content)]
     (when (and (seq children) (nil? (:add-child spec)))
       (throw (ex-info
               (str "kmet.tui.hiccup: children given to leaf tag " tag
                    " — leaves take only props")
               {:tag tag :children children})))
-    (when (seq children)
-      (reconcile-children! spec component children))
-    component))
+    (let [component ((:ctor spec) props)]
+      (when (seq children)
+        (reconcile-children! spec component children))
+      component)))
 
 (defn compile-element
   "Compile one tree node into a live host component. Returns nil for nil.
@@ -196,7 +198,8 @@
                 {:head tag}))))
     :else (throw
            (ex-info (str "kmet.tui.hiccup: cannot compile tree node "
-                         (pr-str el))
+                         (pr-str el)
+                         " — for function roots use hiccup/root")
                     {:node el}))))
 
 (defn compile-tree
