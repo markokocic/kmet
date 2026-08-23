@@ -3094,8 +3094,10 @@
    splice as foreign records (owned by the extension flow)."
   [widgets-atom]
   (fn [_props]
-    (into [:spacer {:lines 1}]
-          (vals (r/tracked-deref widgets-atom)))))
+    ;; SEQ of sibling roots — widgets must be SIBLINGS of the spacer, not
+    ;; its children (:spacer is a leaf tag; children on a leaf throws)
+    (concat [[:spacer {:lines 1}]]
+            (vals (r/tracked-deref widgets-atom)))))
 
 (defn- make-widget-area-below
   "Below-editor widget area (pi: renderWidgets) — the registered widgets

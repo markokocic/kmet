@@ -2,7 +2,8 @@
   "Tests for the interactive-mode extension UI helpers: the autocomplete
    factory wrapper chain (pi: setupAutocompleteProvider) and the custom
    editor duck-typed transfer (pi: setCustomEditorComponent)."
-  (:require [clojure.test :as t :refer [deftest testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :as t :refer [deftest testing]]
             [kmet.tui.autocomplete :as ac]
             [kmet.tui.components.editor :as editor]
             [kmet.tui.hiccup :as hiccup]
@@ -603,3 +604,66 @@
       ;; the registry install is a side effect — don't leak the fake cs
       ;; registry into later tests (build-extension-context would merge it)
     (extensions/clear-ui-registry!)))
+
+;; ─── DSL stage 4 review: dock generation gate + widget-area reactivity ────
+
+(deftest test-dock-generation-gate
+  (testing "a stale done() from a replaced selector must not yank the newer
+            one out of the dock (pi: activeSelectorToken); done() is
+            idempotent and restores the CURRENT active editor"
+    (with-redefs [tui/tui-set-focus (fn [_ _] nil)
+                  tui/tui-request-render (fn [_] nil)]
+      (let [ed (editor/make-editor)
+            cs {:tui {}
+                :dock-current (atom nil)
+                :current-editor-atom (atom ed)}
+            panel-a (ui/make-status-indicator)
+            panel-b (editor/make-editor)
+            ;; A mounts, then B replaces it
+            done-a (dock/mount! cs panel-a)]
+        (dock/mount! cs panel-b)
+        (t/is (= panel-b (:component @(:dock-current cs))) "B recorded")
+        (done-a)
+        (t/is (= panel-b (:component @(:dock-current cs)))
+              "stale done() is inert")
+          ;; B's done restores the editor; a second call is harmless
+        (let [done-b (dock/mount! cs panel-b)]
+          (done-b)
+          (t/is (nil? @(:dock-current cs)) "editor restored")
+          (done-b)
+          (t/is (nil? @(:dock-current cs)) "double done() stays nil"))))))
+
+(defn- strip-ansi-lines [lines]
+  (mapv #(str/replace % #"\u001b\[[0-9;]*[a-zA-Z]" "") lines))
+
+(deftest test-widget-area-tracked-reactivity
+  (testing "the widget strips re-derive from pure map swaps: registered
+            widgets appear, removals disappear, the below strip renders
+            nothing while empty, dispose unwinds cleanly"
+    (let [above (atom {})
+          below (atom {})
+          mk (fn [label] ((var inter/make-extension-widget-component) nil [label]))
+          above-root (hiccup/root ((var inter/make-widget-area-above) above))
+          below-root (hiccup/root ((var inter/make-widget-area-below) below))]
+      (try
+        (swap! above assoc :w1 (mk "widget one"))
+        (let [lines (strip-ansi-lines (protocols/render above-root 40))]
+          (t/is (some #(re-find #"widget one" %) lines) "widget rendered"))
+        ;; a pure map swap re-derives on next render (tracked read)
+        (swap! above assoc :w2 (mk "widget two"))
+        (let [lines (strip-ansi-lines (protocols/render above-root 40))]
+          (t/is (some #(re-find #"widget two" %) lines) "second widget shown")
+          (t/is (some #(re-find #"widget one" %) lines) "first still shown"))
+        ;; below strip renders nothing while empty, widgets once added
+        (t/is (empty? (protocols/render below-root 40)) "empty below strip")
+        (reset! below {:wb (mk "below widget")})
+        (let [lines (strip-ansi-lines (protocols/render below-root 40))]
+          (t/is (some #(re-find #"below widget" %) lines) "below widget shown"))
+        ;; removal disappears on next render
+        (swap! above dissoc :w1)
+        (let [lines (strip-ansi-lines (protocols/render above-root 40))]
+          (t/is (not-any? #(re-find #"widget one" %) lines) "removed widget gone"))
+        (finally
+          (protocols/dispose above-root)
+          (protocols/dispose below-root))))))
+
