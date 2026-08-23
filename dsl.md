@@ -22,9 +22,13 @@ that shipped noted inline. Implemented so far:
   (default no-op; call-site retirement stays Stage 5).
 - **Stage 4–5**: items 10–12 done — status container, dock + widget
   areas, login-dialog content all mount through `hiccup/root`; Stage 4
-  complete. Stage 5 in progress: item 13 done (`compute` = reaction sugar;
-  `track!` watches reactive refs via macros/RXRef, so record components
-  subscribe to computes); items 14–15 pending.
+  complete. **Stage 5 complete**: `compute` = reaction sugar with the
+  track!/RXRef bridge (records subscribe to computes); invalidate-cache
+  fires the frame hook and redundant request-render sites are retired;
+  assistant content lives on the message map (`assistant-message-append-text!`
+  retired), tool/bash injected request-render-fns retired, theme is a
+  shared def'd reaction (`kmet.app.ui.subs/theme-sub`) and the per-kind
+  set-theme walks are gone.
 
 ---
 
@@ -1199,21 +1203,35 @@ scheduler comes later, so nothing can freeze.
 ### Stage 5 — subscriptions + scheduling
 
 13. **`compute` = sugar** over Stage-1 reactions — DONE: the body reads the
-    listed deps tracked (seeding) plus everything F reads through tracked
-    channels (auto-discovery); returns a reaction (watchable via
-    `reagent/watch-ref`), disposed with its instance under `with-let`.
-    Supporting change: `RXRef` moved to `kmet.tui.macros` and `track!`
-    now watches reactive refs beside plain atoms — record components can
-    subscribe to computes (branch-switch pruning included). Headless
-    frames drain the batch queue first (`core/render`, like the loop's
-    tick).
-14. **Scheduler gate** — invalidate-cache triggers the hook (§3.4).
-    Gate: bare `swap!`/`reset!` on a subscribed source produces exactly
-    one frame. Only after the gate passes, retire manual request-render
-    call sites gradually (they stay valid forever).
-15. **Mirror-plumbing removal** — per message kind, one commit each:
-    components compute their slices; `assistant-message-append-text!`
-    et al. retire. Theme becomes a shared def'd reaction.
+    listed deps tracked (seeding) and calls F with their CURRENT VALUES —
+    `(compute [theme-atom] identity)` and zero-arg closure bodies both work;
+    everything F reads through tracked channels joins the dep set
+    (auto-discovery). Returns a reaction (watchable via `reagent/watch-ref`),
+    disposed with its instance under `with-let`. Supporting changes:
+    `RXRef` moved to `kmet.tui.macros` and `track!` now watches reactive
+    refs beside plain atoms — record components can subscribe to computes
+    (branch-switch pruning included); headless frames drain the batch queue
+    first (`core/render`, like the loop's tick).
+14. **Scheduler gate** — DONE: invalidate-cache fires the frame hook
+    (installed/cleared by tui.core start/stop); the "exactly one frame per
+    real change" gate is pinned headless. Retired the safe call sites:
+    footer sync, pending-messages, status-indicator swaps, streaming
+    tool/bash updates, queue/status/turn-start/retry events — everything
+    driven by a track!-watched atom or a mounted root's tracked read now
+    schedules its own frame. Kept (per §3.4 carve-outs): focus changes,
+    scroll-to-end, overlay show/hide, mount-time pokes for new children in
+    the still-untracked messages-atom, spinner/timer loops.
+15. **Mirror-plumbing removal** — DONE: assistant content atoms live on
+    the message map (`with-assistant-data`); appends are pure swaps and
+    finalize materializes + strips them; `assistant-message-append-text!`
+    /set-text!/get-text retire. Tool/bash components lost their injected
+    request-render-fns (watched atoms self-schedule). Theme: exposed
+    `kmet.tui.theme/theme-atom`, def'd `ui.subs/theme-sub`; user,
+    assistant, tool, custom and bash message components subscribe in their
+    render bodies (apply-once pattern for derived structures), so
+    `chat-history-set-theme!`'s walk and the callback's chat-history leg
+    retired. Remaining setters (`user-message-set-text!` et al.) have no
+    live callers — Stage 6 cleanup.
 
 ### Stage 6 — state typing + cleanup (optional tail)
 
