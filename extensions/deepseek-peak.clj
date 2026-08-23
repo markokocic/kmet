@@ -11,9 +11,12 @@
    The window table lives in `peak-windows-utc`; update it there if
    DeepSeek ever changes its schedule.
 
-   In TUI mode the command opens a small overlay dialog (built from
-   kmet.tui.*, mounted via ui-custom like extensions/tools.clj); any key
-   dismisses it. Headless/print mode falls back to a one-line flash.
+   Display follows /session: the panel is appended to the chat history as
+   an :info message via kmet.extension/ui-chat-info — part of the live
+   transcript, no overlay and nothing to dismiss, never sent to the LLM,
+   not persisted across restarts. Headless/print mode falls back to a
+   one-line flash — as does a host whose running instance predates the
+   bridge (/reload refreshes extension files, not host code).
 
    The local time zone is detected explicitly: on Termux/Android the JVM
    falls back to GMT (no /etc/localtime) while Android keeps the real zone
@@ -26,10 +29,6 @@
             [babashka.process :as proc]
             [clojure.string :as str]
             [kmet.extension :as ext]
-            [kmet.tui.components.container :as container]
-            [kmet.tui.components.text :as text]
-            [kmet.tui.keys :as keys]
-            [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]))
 
 ;; ─── The schedule (api-docs.deepseek.com/quick_start/pricing) ──────────────
@@ -164,51 +163,41 @@
       (format "DeepSeek: OFF-PEAK (half rate) — peak at %s (in %s)"
               (fmt-local next-change zone true) remaining))))
 
-;; ─── The dialog (pi: the ctx.ui.custom factory) ────────────────────────────
+;; ─── The panel (/session-style chat info message) ─────────────────────────
 
-(defn- peak-dialog
-  "Build the static info panel. TUI/TH/KB/CLOSE are what ui-custom passes
-   to factories (pi: (tui, theme, kb, done)); any key dismisses the overlay,
-   mouse/focus sequences are ignored so stray terminal events don't close it."
-  [_tui th _kb close]
+(defn- peak-panel-text
+  "The panel as styled plain text for the chat :info message (dim labels,
+   bracketed [DeepSeek Peak Hours] label above — the /session look).
+   Rendered through the chat's markdown view, which passes ANSI through
+   with ANSI-aware wrapping, so no theme instance is needed: only the
+   global theme/dim."
+  []
   (let [now (now-local)
         zone (.getZone now)
         {:keys [phase next-change]} (peak-status now)
         remaining (format-duration (java.time.Duration/between now next-change))
         peak? (= :peak phase)
-        status-color (if peak? :error :success)
-        window-rows (windows-on-utc-date now 0)
-        lines [(theme/fg th :accent (theme/bold "DeepSeek API Peak Hours"))
-               ;; the schedule block is static reference — all dim
-               (theme/dim "Peak (full rate):")
-               (theme/dim (str (fmt-windows-compact window-rows utc) " UTC"))
-               (theme/dim (str (fmt-windows-compact window-rows zone) " " zone))
-               (theme/dim "Off-peak: half rate")
-               ""
-               (str (theme/fg th status-color
-                              (theme/bold (if peak? "● PEAK" "● OFF-PEAK")))
-                    (format " — %s at %s (in %s)"
-                            (if peak? "off-peak" "peak")
-                            (fmt-local next-change zone true)
-                            remaining))]
-        c (container/make-container
-           (mapv #(text/make-text % 0 0) lines))]
-    ;; duck-typed component like extensions/tools.clj's wrapper
-    {:render (fn [width] (protocols/render c width))
-     :handle-input (fn [data]
-                     (when-not (or (keys/mouse-sequence? data)
-                                   (keys/focus-sequence? data))
-                       (close nil)))
-     :invalidate (fn [] (protocols/invalidate c))}))
+        window-rows (windows-on-utc-date now 0)]
+    (str (theme/dim "Peak (full rate): ") (fmt-windows-compact window-rows utc) " UTC\n"
+         "                  " (fmt-windows-compact window-rows zone) " " zone "\n"
+         (theme/dim "Off-peak:") " half rate\n\n"
+         (if peak?
+           (format "● PEAK — full rate now, off-peak at %s (in %s)"
+                   (fmt-local next-change zone true) remaining)
+           (format "● OFF-PEAK — half rate now, peak at %s (in %s)"
+                   (fmt-local next-change zone true) remaining)))))
 
 (defn- show-peak-info!
-  "Open the dialog in TUI mode; flash a one-line summary otherwise
-   (headless/print has no UI registry — pi: ctx.mode !== 'tui')."
+  "Append the panel as an :info chat message (the /session display style —
+   stays in the transcript, nothing to dismiss); flash a one-line summary
+   otherwise. Feature-detects the :chat-info capability: a kmet instance
+   started before the bridge existed (host code only changes on restart,
+   not on /reload) has no such key, and referencing the missing var would
+   fail the whole extension load — degrade to the flash instead."
   [api ctx]
-  (when (or (not= :interactive (:mode ctx))
-            (not (ext/ui-custom api peak-dialog
-                                {:overlay true
-                                 :overlay-options {:anchor :center :width 72}})))
+  (if-let [chat-info (and (= :interactive (:mode ctx))
+                          (get-in api [:ui :chat-info]))]
+    (chat-info "DeepSeek Peak Hours" (peak-panel-text))
     (ext/ui-notify api (summary-line (now-local)))))
 
 (defn init

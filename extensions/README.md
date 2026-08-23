@@ -66,7 +66,10 @@ extensions/mcp-adapter/src/extensions/mcp_adapter/panel.clj):
 ```
 
 Only host-owned bridges remain api capabilities: `:custom`, `:notify`
-(the flash — the TUI instance is host-owned), and integrations with the
+(the flash — the TUI instance is host-owned), `:chat-info` (append an
+`:info` message to the chat history — the `/session` display style: part
+of the live transcript, nothing to dismiss, never sent to the LLM and
+not persisted across restarts), and integrations with the
 host layout/editor/status/theme-controller state. Theme lookups come from
 `kmet.tui.theme` directly (`get-theme` / `get-all-themes` /
 `get-theme-by-name` / `get-current-theme`). `ui-custom` forwards its opts

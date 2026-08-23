@@ -1165,8 +1165,10 @@
               _ (event-bus/emit-event! {:type :session-shutdown :reason :reload})
               _ (extensions/ui-reset!)
               _ (extensions/clear-extensions!)
-              _ (doseq [d (cfg/resource-dirs config :extensions-dir ".kmet/extensions")]
-                  (extensions/load-extensions-from-dir d))
+              ;; per-extension load results — the loaders only warn on
+              ;; stderr, so failures must be collected for the transcript
+              ext-results (mapcat #(extensions/load-extensions-from-dir %)
+                                  (cfg/resource-dirs config :extensions-dir ".kmet/extensions"))
               ;; pi: model-runtime.refresh — recompose providers from models.edn
               _ (models/load-models-config!)
               ;; pi: resourceLoader.reload (skills, prompts)
@@ -1205,7 +1207,15 @@
                                         {:role :info :label "Reload"
                                          :content (str "Reloaded keybindings, extensions, skills, prompts, themes, context files, and models.edn."
                                                        (when-let [err (models/get-model-config-error)]
-                                                         (str " [models.edn: " err "]")))}))
+                                                         (str " [models.edn: " err "]"))
+                                                       (when-let [failures (seq (filter :error ext-results))]
+                                                         (str "\n\nFailed to load extension"
+                                                              (when (< 1 (count failures)) "s")
+                                                              ":\n"
+                                                              (str/join "\n"
+                                                                        (map (fn [{:keys [extension path error]}]
+                                                                               (str "- " (or extension path) ": " error))
+                                                                             failures)))))}))
         (catch Exception e
           (debug/log "reload failed: " e)
           (ui/chat-history-add-message! chat-history
@@ -3222,6 +3232,15 @@
         {:notify (fn [message _type]
                    (tui/tui-flash! t message)
                    nil)
+         ;; /session-style output for extension commands: append an :info
+         ;; message to the chat history — part of the live transcript, no
+         ;; overlay and nothing to dismiss (never sent to the LLM, never
+         ;; persisted to the session; pi has no equivalent — kmet-specific).
+         :chat-info (fn [label content]
+                      (ui/chat-history-add-message!
+                       ch {:role :info :label label :content (str content)})
+                      (tui/tui-request-render t)
+                      nil)
          ;; pi: ctx.ui.custom — mount an extension-built component (built
          ;; with kmet.tui.*) as an overlay or in the editor dock; the
          ;; factory gets (tui theme keybindings close) and close resolves

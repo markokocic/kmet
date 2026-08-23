@@ -134,6 +134,16 @@
 
 (defn ui-notify [api message & [type]] ((:notify (ui api)) message type))
 (defn ui-custom [api factory & [opts]] ((:custom (ui api)) factory opts))
+
+(defn ui-chat-info
+  "Append a persistent :info message to the TUI chat history — the
+   /session display style: LABEL renders bracketed above CONTENT, the
+   message stays in the live transcript with nothing to dismiss, and it is
+   never sent to the LLM nor persisted across restarts. No-op before the
+   layout exists / headless (check ctx :mode for a fallback). Returns nil."
+  [api label & [content]]
+  ((:chat-info (ui api)) label (or content ""))
+  nil)
 (defn ui-set-status [api key text] ((:set-status (ui api)) key text))
 (defn ui-set-widget [api key content & [{:keys [placement]}]]
   ((:set-widget (ui api)) key content {:placement placement}))

@@ -382,6 +382,7 @@
 (defn ui-notify [message & [type]] (ui-call :notify message type))
 (defn ui-custom [factory & [opts]]
   (ui-call :custom factory opts))
+(defn ui-chat-info [label content] (ui-call :chat-info label content))
 (defn ui-on-terminal-input [handler] (ui-call :on-terminal-input handler))
 (defn ui-set-status [key text] (ui-call :set-status key text))
 (defn ui-set-widget [key content & [{:keys [placement]}]] (ui-call :set-widget key content {:placement placement}))
@@ -522,14 +523,16 @@
   "The :ui capability map — dispatches through the runtime registry, so it
    is inert before the layout exists and in headless mode. Only host-owned
    bridges live here: mounting extension-built components (:custom), the
-   flash (:notify), and integrations with host layout/editor/status state.
-   Extensions build their own components with the shared kmet.tui.* layer
+   flash (:notify), chat-history info messages (:chat-info), and
+   integrations with host layout/editor/status state. Extensions build
+   their own components with the shared kmet.tui.* layer
    (pi: ctx.ui.custom hosting extension-built pi-tui components) — the api
    carries no host-built dialogs or theme lookups (kmet.tui.theme is
    shared directly)."
   []
   {:notify ui-notify
    :custom ui-custom
+   :chat-info ui-chat-info
    :on-terminal-input ui-on-terminal-input
    :set-status ui-set-status
    :set-widget ui-set-widget
@@ -1179,8 +1182,9 @@
    Each extension evaluates in its own isolated context; deps.edn jars are
    served only to that context, so different extensions may pin different
    versions of the same library. Calls the extension's init with its api.
-   On failure everything is rolled back and {:extension nil :error msg} is
-   returned."
+   On failure everything is rolled back and {:extension nil :path PATH
+   :error MSG} is returned (PATH names what failed — the result map has no
+   extension name to report)."
   [path]
   (let [f (io/file path)
         {:keys [name entry]} (resolve-extension path)
@@ -1231,6 +1235,7 @@
       (catch Exception e
         (unload-extension! ext)
         {:extension nil
+         :path path
          :error (or (ex-message e)
                     (str "load failed: " (.getName (class e))))}))))
 
