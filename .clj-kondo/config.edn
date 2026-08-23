@@ -6,4 +6,5 @@
  :linters {:namespace-name-mismatch {:level :off}}
  :hooks {:analyze-call {kmet.tui.macros/defcomponent hooks.kmet-macros/defcomponent
                         kmet.tui.macros/defsetter    hooks.kmet-macros/defsetter
-                        kmet.tui.macros/defgetter    hooks.kmet-macros/defgetter}}}
+                        kmet.tui.macros/defgetter    hooks.kmet-macros/defgetter
+                        kmet.tui.macros/with-let     hooks.kmet-macros/with-let}}}

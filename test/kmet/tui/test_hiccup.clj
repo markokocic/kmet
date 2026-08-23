@@ -1,15 +1,20 @@
 (ns kmet.tui.test-hiccup
-  "Headless tests for the hiccup construction layer (dsl.md §2, stage 2).
+  "Headless tests for the hiccup construction layer (dsl.md §2, stages 2–3).
    Cases adapted from hiccup's own compiler tests where they transfer
    (normalization, nil/seq handling, loud head validation) plus the kmet-
    specific contracts: closed tag table with did-you-mean, leaf-tag throw,
-   :primary shorthand, :key/:ref stripping, record/map passthrough, and
-   root re-derivation."
+   :primary shorthand, :key/:ref pseudo-props, record/map passthrough,
+   fn components (ComponentFn), keyed reconcile/reuse, refs, and the
+   memoization/idle invariant."
   (:require [clojure.string :as str]
             [clojure.test :as t]
             [kmet.tui.components.text :as text]
             [kmet.tui.core :as core]
-            [kmet.tui.hiccup :as h]))
+            [kmet.tui.hiccup :as h]
+            [kmet.tui.macros :as macros :refer [with-let defcomponent]]
+            [kmet.tui.protocols :as protocols]
+            [kmet.tui.components.stack :as stack]
+            [kmet.tui.reagent :as rag]))
 
 (defn- joined [tree width]
   (str/join "\n" (h/render-lines tree width)))
@@ -81,26 +86,35 @@
     (let [lines (h/render-lines [:container c] 20)]
       (t/is (= ["live"] (mapv str/trimr lines))))))
 
-(t/deftest stack-entry-maps-pass-through
+(t/deftest stack-entry-maps-pass-through-inside-stacks
   ;; VStack/HStack accept entry maps alongside components — compile must
-  ;; not touch them
+  ;; not touch them INSIDE a stack tag; entries arrive spliced (a map right
+  ;; after the tag would be the props slot); anywhere outside a stack they
+  ;; throw — a bare {:component c} has no render meaning there.
   (let [entry {:component (text/make-text "e" 0 0) :height 1}]
-    (t/is (identical? entry (h/compile-element entry)))))
+    (t/is (= ["e"] (mapv str/trimr
+                         (h/render-lines [:v-stack (list entry)] 20))))
+    (t/is (thrown-with-msg?
+           Exception #"outside a stack tag"
+           (h/render-lines [:container (list entry)] 10)))))
 
 ;; ── pseudo-props ─────────────────────────────────────────────────────────
 
 (t/deftest key-and-ref-pseudo-props-are-stripped
   ;; ctors never see them; no unknown-key crash, no behavior change vs the
-  ;; same tree without them
+  ;; same tree without them. :ref must be a real (hiccup/ref) handle.
   (let [tree (fn [extra]
                [:box extra
                 [:text (merge {:padding-x 0 :padding-y 0} extra) "hi"]])]
     (t/is (= (h/render-lines (tree {}) 20)
-             (h/render-lines (tree {:key 7 :ref :fake}) 20)))
+             (h/render-lines (tree {:key 7}) 20)))
     ;; box: padding-y 1 puts the child at line index 1; box's own blank
     ;; lines trim to empty strings
     (t/is (= ["" " hi" ""]
-             (mapv str/trimr (h/render-lines (tree {:key 1}) 20))))))
+             (mapv str/trimr (h/render-lines (tree {:key 1}) 20))))
+    ;; non-ref :ref values are rejected loudly at parse
+    (t/is (thrown-with-msg? Exception #"hiccup/ref"
+                            (h/render-lines [:text {:ref :fake} "x"] 10)))))
 
 ;; ── contents are concatenated / lazy & eager seqs (hiccup core_test) ────
 
@@ -168,8 +182,18 @@
   (t/is (thrown? Exception (h/render-lines ['sym 1] 10)))
   (t/is (thrown? Exception (h/render-lines 42 10))))
 
-(t/deftest fn-heads-throw-until-component-fn
-  (t/is (thrown? Exception (h/render-lines [(fn [_] [:text "x"]) {}] 10))))
+(t/deftest fn-heads-are-function-components
+  ;; stage 3: fn heads compile to ComponentFn wrappers — reactive bodies,
+  ;; props passed through. Bare @plain-atom reads are untracked; the batched
+  ;; fallback keeps them live by re-deriving every pass (never stale, just
+  ;; not narrow)
+  (let [state (atom "live")
+        status (fn [{:keys [label]}]
+                 [:text {:padding-x 0} (str label ": " @state)])
+        r (h/root (fn [_] [status {:label "s"}]))]
+    (t/is (str/includes? (str/join "\n" (core/render r 30)) "s: live"))
+    (reset! state "changed")
+    (t/is (str/includes? (str/join "\n" (core/render r 30)) "changed"))))
 
 (t/deftest children-on-leaf-tags-throw
   (t/is (thrown? Exception (h/render-lines [:text "a" "b"] 10)))
@@ -189,19 +213,279 @@
     (t/is (str/includes? (str/join "\n" (core/render r 20)) "v2")
           "bare fn roots re-derive on the next pass")))
 
-(t/deftest root-body-evaluates-once-per-render-pass
-  ;; hiccup: "values are evaluated only once" — at root level this means
-  ;; one tree-fn call and one body execution per core/render call
+(t/deftest tracked-bodies-memoize-until-deps-change
+  ;; stage-3 semantics: a body reading reactive inputs through tracked-deref
+  ;; runs ONCE while deps hold, re-runs exactly when one changes. The idle-UI
+  ;; invariant: zero fn bodies when nothing changed.
   (let [calls (atom 0)
+        s (atom "a")
         r (h/root (fn [_]
                     (swap! calls inc)
-                    [:text {:padding-x 0 :padding-y 0} "x"]))]
+                    [:text {:padding-x 0} (rag/tracked-deref s)]))]
     (core/render r 20)
     (core/render r 20)
-    (t/is (= 2 @calls) "two passes, two derivations — no double-eval within one")))
+    (t/is (= 1 @calls) "two identical passes, one body run")
+    (reset! s "b")
+    (core/render r 20)
+    (t/is (= 2 @calls) "dep change re-runs the body")
+    (core/render r 20)
+    (t/is (= 2 @calls) "still clean — no extra runs")))
 
 (t/deftest root-of-seq-tree-renders-all-roots
   (let [r (h/root [[:text {:padding-x 0 :padding-y 0} "one"]
                    [:text {:padding-x 0 :padding-y 0} "two"]])]
     (t/is (= ["one" "two"]
              (mapv str/trimr (core/render r 10))))))
+;; ═══════════════════════════════════════════════════════════════════════
+;; Stage 3 — keyed reconcile, refs, disposal, scheduling (dsl.md §2.3–§2.5)
+;; ═══════════════════════════════════════════════════════════════════════
+
+;; A FOREIGN component: constructed outside the DSL (no :dsl/meta stamp),
+;; so reconcile must reuse it by identity and NEVER dispose it.
+(defcomponent ForeignText nil [text-atom cache disposed?]
+  (render [_this _width] [(str/trimr @text-atom)])
+  (dispose [_this] (reset! disposed? true)))
+
+(t/deftest keyed-reuse-survives-prepending
+  ;; the motivating case: prepending must not rebuild the other keyed
+  ;; siblings — identity rides the key (dsl.md §2.3). Refs are STABLE
+  ;; handles created once, outside the body.
+  (let [ref0 (h/ref) ref1 (h/ref) ref2 (h/ref)
+        refs {0 ref0 1 ref1 2 ref2}
+        msgs (atom [{:id 1 :text "one"} {:id 2 :text "two"}])
+        r (h/root (fn [_]
+                    [:container
+                     (map (fn [{:keys [id text]}]
+                            [:text {:key id :padding-x 0 :padding-y 0
+                                    :ref (refs id)} text])
+                          @msgs)]))]
+    (core/render r 20)
+    (let [one (deref ref1)]
+      (t/is (instance? kmet.tui.components.text.Text one) "ref filled on mount")
+      ;; prepend id 0 — id 1 keeps its instance
+      (swap! msgs (fn [m] (vec (cons {:id 0 :text "zero"} m))))
+      (core/render r 20)
+      (t/is (identical? one (deref ref1))
+            "same key → same record across prepend")
+      ;; remove id 1 entirely → its ref clears, others survive
+      (swap! msgs (fn [m] (vec (remove #(= 1 (:id %)) m))))
+      (core/render r 20)
+      (t/is (nil? (deref ref1)) "removed element cleared its ref")
+      (t/is (some? (deref ref0)) "survivor's ref still filled"))))
+
+(t/deftest removed-keyed-children-are-disposed-root-teardown-cascades
+  (let [log (atom [])
+        ids (atom [1 2])
+        kid (fn [i]
+              (fn [_props]
+                (with-let [_ (swap! log conj [:init i])]
+                  [:text {:padding-x 0 :padding-y 0} (str "k" i)]
+                  (finally (swap! log conj [:dispose i])))))
+        r (h/root (fn [_]
+                    [:container
+                     (map (fn [i] [(kid i) {:key i}]) @ids)]))]
+    (core/render r 20)
+    (t/is (= [[:init 1] [:init 2]] @log) "inits only, no cleanups yet")
+    ;; remove id 1: its cleanup fires, id 2 untouched
+    (reset! ids [2])
+    (core/render r 20)
+    (t/is (= [[:init 1] [:init 2] [:dispose 1]] @log))
+    ;; root teardown disposes the rest through the container cascade
+    (protocols/dispose r)
+    (t/is (contains? (set @log) [:dispose 2]))))
+
+(t/deftest foreign-records-reused-never-disposed
+  (let [disposed (atom false)
+        foreign (map->ForeignText {:text-atom (atom "f")
+                                   :cache (atom nil)
+                                   :disposed? disposed})
+        shown (atom true)
+        r (h/root (fn [_]
+                    [:container (when @shown foreign)]))]
+    (t/is (str/includes? (str/join "\n" (core/render r 20)) "f"))
+    (t/is (false? @disposed) "still mounted")
+    ;; same instance reused while present
+    (t/is (str/includes? (str/join "\n" (core/render r 20)) "f"))
+    ;; removal takes it out of the tree but must NOT dispose it
+    (reset! shown false)
+    (core/render r 20)
+    (t/is (false? @disposed) "foreign record left to its owner")
+    ;; teardown of the root doesn't reach it either
+    (protocols/dispose r)
+    (t/is (false? @disposed))))
+
+(t/deftest duplicate-keys-throw
+  (t/is (thrown-with-msg? Exception #"duplicate :key"
+                          (h/render-lines
+                           [:container
+                            [:text {:key :a :padding-x 0 :padding-y 0} "1"]
+                            [:text {:key :a :padding-x 0 :padding-y 0} "2"]]
+                           10))))
+
+(t/deftest leaf-prop-change-rebuilds-equal-props-reuse
+  ;; display leaves rebuild when props change (identity-free); equal props
+  ;; keep the instance for free
+  (let [txt (atom "a")
+        ref (h/ref)
+        r (h/root (fn [_]
+                    [:container
+                     [:text {:key :t :padding-x 0 :padding-y 0 :ref ref}
+                      @txt]]))]
+    (core/render r 10)
+    (let [i1 (deref ref)]
+      (reset! txt "b")
+      (core/render r 10)
+      (let [i2 (deref ref)]
+        (t/is (not (identical? i1 i2)) "changed content → new instance")
+        (core/render r 10)
+        (t/is (identical? i2 (deref ref))
+              "unchanged pass reuses the instance")))))
+
+(t/deftest body-sees-width-dynamic
+  (let [r (h/root (fn [_] [:text {:padding-x 0} (str "w" h/*width*)]))]
+    (t/is (str/includes? (str/join "\n" (core/render r 30)) "w30"))))
+
+(t/deftest dep-change-schedules-a-frame-through-the-hook
+  ;; §3.4 pulled forward with ComponentFn: the dep-handler invokes the
+  ;; :auto-run? callback ON THE MUTATOR'S THREAD the moment a dependency
+  ;; changes by = (Reagent's component path), so idle UIs wake up without
+  ;; any other frame source. Default no-op keeps headless use pure.
+  (let [s (atom 0)
+        fired (atom 0)
+        r (h/root (fn [_] [:text {:padding-x 0} (str (rag/tracked-deref s))]))]
+    (core/render r 20)
+    (macros/set-frame-hook! #(swap! fired inc))
+    (try
+      (reset! s 1)
+      (t/is (= 1 @fired) "dep change fires the hook immediately")
+      ;; callback scheduling never enqueues — the body reruns at the next
+      ;; render's deref, and no further dep changes means no more pokes
+      (rag/flush!)
+      (t/is (= 1 @fired) "flush adds nothing (nothing was queued)")
+      (t/is (str/includes? (str/join "\n" (core/render r 20)) "1")
+            "next render brought the reaction current")
+      (t/is (= 1 @fired) "rendering itself does not poke the hook")
+      (finally
+        (macros/set-frame-hook! nil)))))
+
+(t/deftest counters-track-bodies-and-cache-hits
+  (h/reset-counters!)
+  (let [s (atom "x")
+        r (h/root (fn [_] [:text {:padding-x 0} (rag/tracked-deref s)]))]
+    (core/render r 20)
+    (t/is (= 1 (:bodies-run (h/counters))))
+    (core/render r 20)
+    (t/is (= 1 (:bodies-run (h/counters))) "clean pass skipped the body")
+    (t/is (= 1 (:bodies-skipped (h/counters))) "counted as cache hit")))
+
+;; ═══════════════════════════════════════════════════════════════════════
+;; Stage-3 review pass — edge-case pins (dsl.md review notes)
+;; ═══════════════════════════════════════════════════════════════════════
+
+(t/deftest stack-entry-opts-update-inner-identity-preserved
+  ;; entry maps are rebuilt per pass (fresh opts), the INNER component is
+  ;; matched by identity and reused — grow/shrink changes land without
+  ;; tearing the widget down
+  (let [inner (text/make-text "row" 0 0)
+        grow (atom 1)
+        r (h/root (fn [_]
+                    [:v-stack (list {:component inner :grow @grow})]))]
+    (core/render r 20)
+    (let [vs (:c (first @(:kids r)))
+          e1 (first @(:entries-atom vs))]
+      (t/is (= 1 (:grow e1)) "initial opts installed")
+      (reset! grow 4)
+      (core/render r 20)
+      (let [e2 (first @(:entries-atom vs))]
+        (t/is (= 4 (:grow e2)) "updated opts installed")
+        (t/is (identical? (stack/entry-component e1)
+                          (stack/entry-component e2))
+              "inner survived the opts change")))))
+
+(t/deftest same-fn-twice-with-keys-independent-state
+  ;; two instances of one fn element, keyed apart, keep SEPARATE with-let
+  ;; state slots (each wrapper has its own store). The bodies are UNTRACKED
+  ;; (no reactive reads) so the valve re-runs them every pass — three
+  ;; renders, three increments EACH, independently: a shared slot would
+  ;; show interleaved counts instead.
+  (let [r (h/root (fn [_]
+                    [:container
+                     [(fn [{:keys [n]}]
+                        (with-let [hits (atom 0)]
+                          (swap! hits inc)
+                          [:text {:padding-x 0} (str n "=" @hits)]))
+                      {:key :a :n "a"}]
+                     [(fn [{:keys [n]}]
+                        (with-let [hits (atom 0)]
+                          (swap! hits inc)
+                          [:text {:padding-x 0} (str n "=" @hits)]))
+                      {:key :b :n "b"}]]))]
+    (core/render r 20)
+    (core/render r 20)
+    (let [out (str/join "\n" (core/render r 20))]
+      (t/is (str/includes? out "a=3") "first instance counted its own passes")
+      (t/is (str/includes? out "b=3") "second instance counted its own passes"))))
+
+(t/deftest mid-run-invalidation-convergence-survives-with-let
+  ;; a dep written DURING the body makes run-sync! loop; each iteration
+  ;; begins a new pass over the store — the double-use guard must not
+  ;; fire for the SAME expansion site across convergence iterations
+  (let [log (atom [])
+        src (atom 0)
+        widget (fn [_props]
+                 (with-let [_ (swap! log conj :init)]
+                   (rag/tracked-deref src)
+                   ;; write a tracked dep while the body runs:
+                   ;; forces exactly one convergence re-run
+                   (when (zero? @src) (reset! src 1))
+                   [:text {:padding-x 0} "x"]))
+        r (h/root (fn [_] [:container [widget {}]]))]
+    (core/render r 20)
+    (t/is (= [:init] @log) "one init despite the convergence re-run")
+    (t/is (str/includes? (str/join "\n" (core/render r 20)) "x"))))
+
+(t/deftest container-structural-props-are-create-time-for-now
+  ;; documented stage-3 contract (dsl.md §4 pending): padding/gap changes
+  ;; keeps the container INSTANCE — children survive, layout stays as
+  ;; constructed. The §4 props/state migration makes these live.
+  (let [pad (atom 1)
+        ref (h/ref)
+        r2 (h/root (fn [_]
+                     [:box {:key :b :padding-x @pad}
+                      [:text {:padding-x 0 :padding-y 0 :ref ref} "hi"]]))]
+    (core/render r2 20)
+    (let [box1 (deref ref)]
+      (reset! pad 3)
+      (core/render r2 20)
+      (t/is (identical? box1 (deref ref))
+            "structural prop change keeps the container instance"))))
+
+(t/deftest bare-ref-as-primary-value-throws
+  ;; [:widget (h/ref)] missing the props map — every other child position
+  ;; rejects refs; the primary slot must not swallow one either
+  (t/is (thrown-with-msg? Exception #"missing|did you mean \[text"
+                          (h/render-lines [:text (h/ref)] 10)))
+  (t/is (thrown? Exception (h/render-lines [:container [(h/ref)]] 10))))
+
+(t/deftest props-only-bodies-rederive-tracked-bodies-memoize
+  ;; the valve contract, both sides: framework reads (props/ctree) are
+  ;; EXEMPT from dependency counting, so a body whose ONLY inputs are
+  ;; props has zero real deps and re-derives every pass (correctness
+  ;; first — an untracked read anywhere must never poison the cache;
+  ;; per-frame re-derivation is the documented batched fallback). A body
+  ;; reading app state through tracked-deref/cursors/slices HAS a real
+  ;; dep and memoizes until it changes.
+  (h/reset-counters!)
+  (let [r (h/root (fn [{:keys [label]}]
+                    [:text {:padding-x 0} label]))]
+    (core/render r 20)
+    (core/render r 20)
+    (t/is (= 2 (:bodies-run (h/counters))) "props-only: rederived")
+    (t/is (zero? (:bodies-skipped (h/counters))) "nothing cached"))
+  (h/reset-counters!)
+  (let [s (atom "x")
+        r (h/root (fn [_] [:text {:padding-x 0} (rag/tracked-deref s)]))]
+    (core/render r 20)
+    (core/render r 20)
+    (t/is (= 1 (:bodies-run (h/counters))) "tracked: ran once")
+    (t/is (= 1 (:bodies-skipped (h/counters))) "tracked: cached")))

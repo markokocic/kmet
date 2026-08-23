@@ -214,17 +214,30 @@
    dependency; when a dependency changes by =, F is marked dirty and brought
    current at the next flush!. Watchers registered through watch-ref fire
    only when F's OUTPUT changes by =.
-   Options: :auto-run? controls scheduling (Reagent's :auto-run):
-     true  (default) — dep changes enqueue F for the next flush!
-     false — manual track: also enqueued on change (like Reagent), but
-             caches its value between runs, runs lazily on first deref,
-             and disposes itself when its last watcher is removed
-     ifn   — callback scheduling (reagent.impl.component's shape): the fn
-             receives the reaction instead of any queueing — the ComponentFn
-             hook, where the callback invalidates the component and requests
-             a frame"
+   Options:
+     :auto-run? controls scheduling (Reagent's :auto-run):
+       true  (default) — dep changes enqueue F for the next flush!
+       false — manual track: also enqueued on change (like Reagent), but
+               caches its value between runs, runs lazily on first deref,
+               and disposes itself when its last watcher is removed
+       ifn   — callback scheduling (reagent.impl.component's shape): the fn
+               receives the reaction instead of any queueing — the ComponentFn
+               hook, where the callback invalidates the component and requests
+               a frame
+     :rerun-without-deps? (default false) — when a run collects NO tracked
+       dependencies beyond :implicit-deps, leave the reaction :unrun so the
+       next deref re-runs it (batched-mode fallback). This keeps bodies that
+       read only UNTRACKED values (bare @plain-atom in a hand-written fn,
+       static trees) never stale: they re-derive every pass exactly as
+       pre-reaction code did, instead of caching once forever. A body with
+       at least one real tracked dep is cached normally — mixed bodies must
+       read their reactive inputs through tracked-deref/cursors/slices
+       (coverage contract, dsl.md §2.8-bb).
+     :implicit-deps — collection of refs to ignore in the emptiness check
+       (the framework's own seeded reads, e.g. ComponentFn's props/ctree)"
   ([f] (make-reaction f nil))
-  ([f {:keys [auto-run?] :or {auto-run? true} :as _opts}]
+  ([f {:keys [auto-run? rerun-without-deps? implicit-deps]
+       :or {auto-run? true} :as _opts}]
    ;; The closures below need the reaction VALUE they collectively
    ;; constitute, but r is only complete once the reify form evaluates;
    ;; every closure runs strictly later (watch callbacks, body runs), so
@@ -234,6 +247,8 @@
                      :on-dispose (if-some [od (:on-dispose _opts)]
                                    [od]
                                    [])})
+         ;; set of the framework's own reads to ignore; (set nil) = #{}
+         exempt? (set implicit-deps)
          self (atom nil)
          watch-key (RxKey. (gensym "rx"))
          dep-handler
@@ -314,7 +329,16 @@
                            (swap! cell assoc :value result :caught nil
                                   ;; A dep written while the body ran left :dirty
                                   ;; behind — loop to re-run against fresh state.
-                                  :state (if (= :dirty (:state @cell)) :dirty :idle))
+                                  :state (cond
+                                           (= :dirty (:state @cell)) :dirty
+                                           ;; Batched fallback: nothing tracked was
+                                           ;; read beyond the framework's own seeded
+                                           ;; deps, so this cached value could never
+                                           ;; be invalidated — re-run on next deref
+                                           ;; instead of caching stale output.
+                                           (and rerun-without-deps?
+                                                (empty? (remove exempt? collected))) :unrun
+                                           :else :idle))
                            (when (changed? result value)
                              ;; Watcher isolation: a throwing watcher must
                              ;; not abort its siblings nor propagate into

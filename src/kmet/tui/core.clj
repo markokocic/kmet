@@ -4,6 +4,7 @@
    from this namespace for convenience."
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
+            [kmet.tui.macros :as macros]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.reagent :as reagent]
             [kmet.tui.terminal :as terminal]
@@ -1434,6 +1435,9 @@
 (defn tui-stop [tui]
   (reset! (:stopped? tui) true)
   (reset! (:running? tui) false)
+  ;; Detach the §3.4 scheduler hook before anything else unwinds: disposed
+  ;; components' reactions may still fire watches during teardown.
+  (macros/set-frame-hook! nil)
   ;; pi: TuiAltScreen.dispose() clears pending flashes on close
   (tui-flash-dispose! tui))
 
@@ -1919,6 +1923,10 @@
   [tui]
   (reset! (:running? tui) true)
   (reset! (:stopped? tui) false)
+  ;; §3.4 scheduler hook: dependency changes request a frame through here
+  ;; (ComponentFn's auto-run callback); cleared on stop so late watchers
+  ;; can't poke a dead loop.
+  (macros/set-frame-hook! #(tui-request-render tui))
   (start-input-reader tui)
   (reset! (:render-loop tui) (future
                                (try (run-render-loop! tui)

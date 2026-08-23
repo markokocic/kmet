@@ -34,6 +34,17 @@
                                         value))
                    body))}))
 
+(defn with-let
+  "Teach clj-kondo that (with-let [x init ...] body... (finally cleanup))
+   binds the names like let (init/cleanup run under the store at runtime)."
+  [{:keys [node]}]
+  (let [[_ bindings & body] (:children node)
+        body' (remove (fn [f] (and (api/list-node? f)
+                                   (= 'finally (api/sexpr (first (:children f))))))
+                      body)]
+    {:node (api/list-node
+            (list* (api/token-node 'let) bindings body'))}))
+
 (defn defgetter
   "Teach clj-kondo that (defgetter name field comp) defines
    (defn name [comp] @(field comp)) so comp counts as used."

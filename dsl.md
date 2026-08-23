@@ -1,8 +1,27 @@
 # kmet TUI DSL — Reagent-style component layer (proposal)
 
-Status: design proposal. Nothing here is implemented yet. This document
-captures the agreed architecture for adding a Reagent/Hiccup-like
-composition layer to the existing kmet TUI, and how state is held.
+Status: design + implementation record. The migration plan (§7) is being
+worked top-down; each section describes the target design, with deviations
+that shipped noted inline. Implemented so far:
+
+- **Stage 1 — `kmet.tui.reagent`**: done. Full ratom port (`make-reaction`,
+  `track`, `cursor`, batch queue drained from the render-loop tick,
+  `watch-ref`/`unwatch-ref`, sticky errors, callback scheduling), plain
+  atoms as tracked inputs via the `tracked-deref` capture point.
+- **Stage 2 — construction layer + protocol cleanup**: done. Tag table,
+  compile/validation, `hiccup/root` (batched mode), headless
+  `render-lines`, `dispose` on IComponent, `IComponentKind` retired,
+  redundant no-op bodies deleted.
+- **Stage 3 — reconcile + ComponentFn**: done. Keyed `reconcile!` diff
+  (one mechanism for wrapper children AND host-container fill — the
+  append-only stage-2 path is gone), `ComponentFn` wrapper running bodies
+  inside reactions (auto-discovered deps, memoized: unchanged deps skip
+  the body entirely), fn heads valid everywhere, `:ref` pseudo-prop with
+  the `(hiccup/ref)` wrapper type, `with-let` macro over the store
+  primitives, and the §3.4 scheduler hook installed beside the flush
+  (default no-op; call-site retirement stays Stage 5).
+- **Stage 4–5**: not started — nothing mounted in app code yet;
+  `compute` and mirror-plumbing removal are pending.
 
 ---
 
@@ -358,45 +377,24 @@ record fields; `dispose` is the missing cleanup half.
 For fn components that need transient state, primitives (SCI-friendly,
 plain fns — living in `kmet.tui.macros` beside `track-render`/
 `invalidate-cache`, so macro and runtime companions share one home,
-same pattern as `track!`):
-
-```clojure
-(defn let-state
-  "Per-instance value for KEY, initialized once."
-  [key init]
-  (let [ls (:state *comp*)]
-    (if (contains? @ls key) (get @ls key)
-        (let [v (init)] (swap! ls assoc key v) v))))
-
-(defn on-dispose! [f] (swap! (:cleanups *comp*) conj f))
-```
-
-`with-let` is sugar over these two — **implemented**, not deferred
-(decision #3) — expanding to a plain runtime call (same philosophy as
-`track!`):
+same pattern as `track!`). Shipped as the generation-keyed STORE rather
+than `*comp*` readers — the ComponentFn binds one store per instance
+around the body; the raw fns are `fetch-local`/`register-cleanup!`
+(throw loudly outside a store binding), and `with-let` is sugar over
+them:
 
 ```clojure
 (defmacro with-let [bindings & body]
-  (let [cleanup (first (filter #(and (seq? %) (= 'finally (first %))) body))
-        body' (remove #(identical? cleanup %) body)
-        ;; gensym'd once per expansion site → stable across render passes,
-        ;; unique per with-let — the let-state guard makes it once-only.
-        ckpt (gensym "with-let-cleanup")]
-    `(let [~@(mapcat (fn [[s i]]
-                       ;; key is the expansion-site gensym, not the symbol:
-                       ;; two sibling with-lets binding the same name cannot
-                       ;; collide — each gets its own state slot by construction
-                       [s `(let-state '~(gensym (str s "-")) (fn [] ~i))])
-                     bindings)]
-       ~@(when cleanup
-           [`(let-state '~ckpt (fn [] (on-dispose! (fn [] ~@(rest cleanup)))))])
-       ~@body')))
+  ;; each binding becomes (fetch-local '<per-site gensym> (fn [] init));
+  ;; a top-level (finally ...) becomes a once-per-site register-cleanup!
+  ;; (the guard stops per-frame re-registration). Cleanups run LIFO in
+  ;; destroy-store!, which ComponentFn.dispose calls after children.
+  ...)
 ```
 
-The guard matters: the body re-runs every render pass, so a bare
-`(on-dispose! …)` would conj a fresh closure per frame — cleanups grow
-without bound and all fire on dispose. Wrapping the registration itself
-in `let-state` runs it once per instance, exactly like the bindings.
+The guard matters: the body re-runs only when deps change now (Stage 3
+reactions), but registration must still be once-per-instance — wrapping
+it in the site-keyed guard keeps that true regardless of scheduling.
 
 Footguns (documented):
 
@@ -406,9 +404,9 @@ Footguns (documented):
 - **Subscriptions are created once** (shared registry, or `compute`
   under `with-let`), never bare in the render body — or the derived
   atom leaks per re-render.
-- **`let-state`/`on-dispose!` are render-pass-only** — they read the
-  dynamic `*comp*`, bound only while the wrapper renders. Calling them
-  from an async callback gets the wrong instance or none. This is the
+- **let-state/on-dispose! are render-pass-only** — they read the dynamic
+  store bound by the wrapper (`*store*`, via fetch-local/register-cleanup!).
+  Calling them from an async callback throws loudly (no store bound) — the
   flip side of having no hooks rules: the constraint exists but is one
   line of doc, not a lint regime.
 - **State keys are per-component** — raw `let-state` takes explicit keys;
@@ -987,7 +985,7 @@ before anything consumes them**, conversions are one-commit revertible,
 and the transcript is never touched. Each stage ends with the full gate
 `bb lint` + `bb format-check` + `bb test` + `bb test-ext`.
 
-### Stage 1 — `kmet.tui.reagent`: the full port, first
+### Stage 1 — `kmet.tui.reagent`: the full port, first — DONE
 
 Pure addition — a new namespace nobody imports yet, so breakage risk is
 zero by construction.
@@ -1014,7 +1012,7 @@ zero by construction.
 
 Nothing else changes. The app doesn't know this namespace exists.
 
-### Stage 2 — `hiccup.clj` construction layer + protocol cleanup
+### Stage 2 — `hiccup.clj` construction layer + protocol cleanup — DONE
 
 Still pure addition (plus the A0/A1 cleanups, which are behavior-
 preserving):
@@ -1031,7 +1029,7 @@ preserving):
 
 Still nothing mounted — the app renders exactly as before.
 
-### Stage 3 — reconcile + ComponentFn (additive machinery)
+### Stage 3 — reconcile + ComponentFn (additive machinery) — DONE
 
 7. **`reconcile!`** — keyed child diff, duplicate keys throw,
    `:key`/`:ref` pseudo-props stripped, refs filled/cleared.
@@ -1041,6 +1039,48 @@ Still nothing mounted — the app renders exactly as before.
    children first, then cleanups. Batched fallback path retained for
    opt-outs and non-ratom reads. `--debug` counters.
 9. **`with-let`** lands in `macros.clj` over the Stage-1 store.
+
+Shipped deviations: one diff mechanism replaces both the stage-2
+append-only fill and the wrapper-level reconcile (host containers get
+their children through the same keyed diff via per-tag children lenses);
+reused host LEAVES with changed props are rebuilt rather than mutated
+(identity-free display records; content setters unnecessary), while
+containers and fn components keep identity across passes. Ownership and
+keyed-match recovery ride a `:dsl/meta` stamp — an ATOM on every DSL-
+constructed record (record identity never changes, yet reconcile must
+remember per-instance facts across passes: the applied props for the
+leaf fast-path, the explicit :key so keyed matching survives into the
+next pass, and the last ref handle so removal clears it). Foreign
+spliced records never carry the stamp and are never disposed.
+
+The frame scheduler hook (`kmet.tui.macros/schedule-frame!`, no-op
+default) landed with ComponentFn's `:auto-run?` callback — which fires
+synchronously in the dep-handler on the MUTATOR's thread (Reagent's own
+component path), not at flush time; install/uninstall lives beside
+flush! in tui.core.
+
+One correctness gap surfaced during review and closed there:
+reaction-cached bodies reading only UNTRACKED values (bare `@plain-atom`
+closures, static trees) would cache once and go STALE forever, where the
+pre-stage-3 batched fallback re-derived every pass. ComponentFn
+reactions therefore run with `:rerun-without-deps? true` (+ an
+`:implicit-deps` exemption for the framework's own props/ctree reads): a
+body collecting no real dependencies re-runs on every deref — batched
+semantics restored — while bodies with ≥1 tracked dep stay narrow.
+Mixed bodies must read their reactive inputs through tracked-deref,
+cursors, or reaction slices (the §2.8-bb coverage contract). One
+corollary, pinned by test: PROPS-ONLY bodies (no other reactive input)
+also re-derive each frame — correct (the props watch still dirties on
+real changes) and identical to the batched cost model; the §4 migration
+shrinks that class by moving pure display into host leaves.
+
+`with-let` shipped over the store primitives (`fetch-local`
+/`register-cleanup!`) with both reagent behaviors verified by test: a
+throwing init retries next pass per binding and holds the body out
+until it succeeds (reagent issue #525), and using one expansion site
+twice in one render pass throws loudly (reagent's generation warning,
+promoted to a throw per the v1 contract — give each instance its own
+element/component).
 
 Still zero app usage.
 

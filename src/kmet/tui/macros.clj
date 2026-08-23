@@ -219,21 +219,46 @@
   nil)
 
 (defn new-store
-  "A fresh with-let store: holds once-initialized locals and LIFO cleanups."
+  "A fresh with-let store: holds once-initialized locals and LIFO cleanups.
+   :pass-sites tracks which expansion sites ran in the CURRENT render pass,
+   for the double-use guard (see fetch-local)."
   []
-  (atom {:locals {} :cleanups () :cleanup-sites #{}}))
+  (atom {:locals {} :cleanups () :cleanup-sites #{} :pass-sites #{}}))
+
+(defn begin-pass!
+  "Mark the start of a render pass over STORE: expansion sites consumed in
+   the previous pass become usable again. Called by ComponentFn before the
+   body runs; hand-written with-store users call it at the top of each
+   simulated pass."
+  [store]
+  (swap! store assoc :pass-sites #{})
+  nil)
 
 (defn fetch-local
   "Value for SITE in the bound store, initialized by INIT-FN exactly once
-   per store (per component instance — the body re-runs every pass, the
-   init does not)."
+   per store (per component instance — the body may re-run every pass, the
+   init does not). A THROWING init stores nothing, so the next pass retries
+   it and the body stays out until every binding is set (reagent issue 525).
+   Using the SAME expansion site twice in one render pass throws — two
+   instances silently sharing one state slot is always a bug; give each
+   instance its own element instead."
   [site init-fn]
   (when (nil? *store*)
     (throw (ex-info "kmet.tui.macros/fetch-local called outside a with-let store" {:site site})))
+  (when (contains? (:pass-sites @*store*) site)
+    (throw (ex-info
+            (str "kmet.tui.macros: the same with-let is being used more "
+                 "than once in the same render pass (site " site ") — each "
+                 "instance needs its own element/component")
+            {:site site})))
   (if (contains? (:locals @*store*) site)
-    (get (:locals @*store*) site)
+    (do (swap! *store* update :pass-sites conj site)
+        (get (:locals @*store*) site))
     (let [v (init-fn)]
-      (swap! *store* assoc-in [:locals site] v)
+      (swap! *store* (fn [s]
+                       (-> s
+                           (assoc-in [:locals site] v)
+                           (update :pass-sites conj site))))
       v)))
 
 (defn register-cleanup!
@@ -269,6 +294,78 @@
   `(binding [*store* ~store]
      ~@body))
 
+(defmacro with-let
+  "Form-2 local state for fn components (Reagent's with-let, dsl.md §2.5).
+
+     (with-let [x (init) y (other-init)]
+       body...
+       (finally (cleanup x)))
+
+   BINDINGS initialize exactly once per component instance; BODY re-runs
+   on every render pass with the same bound values. A top-level
+   (finally ...) form is stolen as the cleanup — it runs once when the
+   component is disposed (LIFO across nested with-lets), never per pass.
+
+   Only valid inside a component body (the wrapper binds the store;
+   elsewhere fetch-local throws loudly). State keys are per-expansion-site
+   gensyms, so sibling with-lets binding the same names cannot collide.
+   Same footgun as Reagent's: a TOP-LEVEL (try ... (finally ...)) in the
+   body will be captured by the finally extractor — nest the try inside
+   a let when you need both."
+  [bindings & body]
+  (when-not (vector? bindings)
+    (throw (ex-info "with-let requires a binding vector" {:bindings bindings})))
+  (when (odd? (count bindings))
+    (throw (ex-info "with-let bindings must be name/init pairs" {:bindings bindings})))
+  (let [cleanup (first (filter #(and (seq? %) (= 'finally (first %))) body))
+        body-forms (remove #(identical? cleanup %) body)
+        ;; One gensym per expansion site: stable across render passes (the
+        ;; symbol is baked into the compiled fn), unique per with-let —
+        ;; sibling bindings of the same name get separate state slots.
+        pairs (partition 2 bindings)
+        binding-sites (map (fn [[s _]] (gensym (str "with-let-" s "-")))
+                           pairs)
+        cleanup-site (gensym "with-let-cleanup-")]
+    `(let [~@(mapcat (fn [[s init] site]
+                       [s `(kmet.tui.macros/fetch-local '~site (fn [] ~init))])
+                     pairs binding-sites)]
+       ~@(when cleanup
+           [`(kmet.tui.macros/register-cleanup! '~cleanup-site
+                                                (fn [] ~@(rest cleanup)))])
+       ~@body-forms)))
+
+;; ═════════════════════════════════════════════════════════════════
+;; Frame scheduler hook — dependency changes schedule the render (dsl.md §3.4)
+;; ═════════════════════════════════════════════════════════════════
+
+;; kmet.tui.core installs #(tui-request-render tui) on start and clears it
+;; on stop; default nil keeps headless tests and library use pure. macros
+;; never requires core — core pushes the callback down.
+(defonce ^:private frame-hook (atom nil))
+
+(defn set-frame-hook!
+  "Install F as the frame scheduler (called when a reactive dep changes);
+   nil restores the no-op default. Called from tui start/stop."
+  [f]
+  (reset! frame-hook f)
+  nil)
+
+(defn schedule-frame!
+  "Request a render because a reactive dependency changed. Runs inside a
+  watch on the MUTATING thread — must never throw: a failure is logged to
+  stderr and swallowed, mirroring the render loop's crash policy.
+  Coalescing is the caller's job (tui-request-render sets an idempotent
+  flag the loop polls)."
+  []
+  (when-some [f @frame-hook]
+    (try
+      (f)
+      (catch Throwable e
+        (binding [*out* *err*]
+          (println "kmet.tui.macros schedule-frame! error:" (.getMessage e))))))
+  nil)
+
+;; ═════════════════════════════════════════════════════════════════
 ;; defcomponent — record + IComponent + IComponentKind boilerplate
 ;; ═══════════════════════════════════════════════════════════════════════════
 
