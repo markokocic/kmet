@@ -223,11 +223,17 @@
    remaining children stay children. Pseudo-props :key/:ref are extracted
    separately — they belong to reconciliation, never to constructors.
    NB: defcomponent records ARE maps — a spliced component must never be
-   mistaken for the props map."
+   mistaken for the props map; neither may a stack-entry map ({:component
+   c} is never a legal prop shape)."
   [tag content]
   (let [spec (or (get tags tag) (unknown-tag! tag))
         props-map? (let [first-content (first content)]
-                     (and (map? first-content) (not (record? first-content))))
+                     (and (map? first-content)
+                          (not (record? first-content))
+                          ;; {:component c} is the stack-entry shape —
+                          ;; always a CHILD; consuming it as props would
+                          ;; silently drop the element it wraps
+                          (not (contains? first-content :component))))
         base-props (if props-map? (first content) {})
         children (if props-map? (rest content) content)
         primary? (:primary spec)
@@ -265,7 +271,7 @@
                    " — leaves take only props")
               {:tag tag :children children})))
     (check-ref! tag (:ref meta))
-    {:kind ::host :mkey (if-some [k (:key meta)] {::user-key k} tag)
+    {:kind ::host :mkey (if-some [k (:key meta)] {::user-key k ::kind ::host} tag)
      :key (:key meta) :ref (:ref meta)
      :tag tag :spec spec :props props :nodes children}))
 
@@ -299,7 +305,7 @@
               children (vec (if props-map? (rest content) content))
               {:keys [key ref]} base-props]
           (check-ref! tag ref)
-          {:kind ::fncomp :mkey (if-some [k key] {::user-key k} tag) :key key :ref ref
+          {:kind ::fncomp :mkey (if-some [k key] {::user-key k ::kind ::fncomp} tag) :key key :ref ref
            :f tag :props (dissoc base-props :key :ref)
            :ctree (when (seq children) children)})
         :else (throw
@@ -376,13 +382,8 @@
 ;; ComponentFn — the fn-component wrapper (dsl.md §2.4)
 ;; ═══════════════════════════════════════════════════════════════════════════
 
-(defcomponent ComponentFn nil [f props kids store rx ctree]
+(defcomponent ComponentFn nil [f props kids store rx ctree last-width]
   (render [_this width]
-    ;; One width per pass: if the same wrapper is rendered at two widths in
-    ;; one frame (base + overlay composite), the second deref finds :idle —
-    ;; kids reconciled under the FIRST width are reused. kmet composites
-    ;; overlays at the frame's width, so this never fires today; a future
-    ;; per-width tree cache would lift the limit.
     (binding [*width* width *comp* _this]
       ;; Uncached by design (transparent-parent allowlist): the memoization
       ;; boundary is the REACTION — deps auto-discovered at deref time, and
@@ -417,6 +418,14 @@
                               :implicit-deps [props ctree]})]
                      (reset! rx nr)
                      nr))]
+        ;; Width participates in memoization: it shapes body output (*width*
+        ;; is read inside bodies) but is a dynamic var, not a tracked dep —
+        ;; so a width change forces one re-derive of an idle reaction, which
+        ;; then re-caches: track!'s per-width cache contract, one level up.
+        (when (and (not= width @last-width)
+                   (= :idle (:state (r/reaction-state rx))))
+          (r/invalidate! rx))
+        (reset! last-width width)
         (when (= :idle (:state (r/reaction-state rx)))
           (bump! :bodies-skipped))
         ;; Bring current: unrun/dirty → the body reconciles synchronously;
@@ -449,7 +458,8 @@
                       :kids (atom [])
                       :store (macros/new-store)
                       :rx (atom nil)
-                      :ctree (atom ctree)})))
+                      :ctree (atom ctree)
+                      :last-width (atom nil)})))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 (declare stamped-meta remember-ref! reconcile-into)
@@ -464,7 +474,8 @@
    hosts, ComponentFn instances are always ours, foreign records/entries
    are never owned (and so never disposed by reconcile)."
   [raw]
-  (letfn [(mk [fallback key] (if-some [k key] {::user-key k} fallback))]
+  (letfn [(mk [fallback kind key]
+            (if-some [k key] {::user-key k ::kind kind} fallback))]
     (cond
       (and (map? raw) (contains? raw :component))
       {:kind ::entry :mkey (stack/entry-component raw)
@@ -475,9 +486,9 @@
       (and (record? raw) (some? (:dsl/meta raw)))
       (let [{:keys [tag key ref]} (stamped-meta raw)]
         (if (= tag ::fncomponent)
-          {:kind ::fncomp :mkey (mk (:f raw) key) :key key :ref ref
+          {:kind ::fncomp :mkey (mk (:f raw) ::fncomp key) :key key :ref ref
            :c raw :item raw :owned true}
-          {:kind ::host :mkey (mk tag key) :key key :ref ref
+          {:kind ::host :mkey (mk tag ::host key) :key key :ref ref
            :c raw :item raw :owned true}))
       (instance? ComponentFn raw)
       {:kind ::fncomp :mkey (:f raw) :c raw :item raw :owned true}
@@ -740,7 +751,8 @@
    when it leaves."
   [tree-or-fn]
   (if (fn? tree-or-fn)
-    (make-component-fn (fn [props] (tree-or-fn props)))
+    ;; bare fn: shorthand for [f {}] — mounted directly, no extra wrapper
+    (make-component-fn tree-or-fn)
     (let [tree (if (and (vector? tree-or-fn)
                         (vector? (first tree-or-fn)))
                  ;; vector of element vectors = spliced roots

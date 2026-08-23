@@ -84,6 +84,14 @@
   [component]
   (keyword (str "track!" (System/identityHashCode component))))
 
+;; Watch key → {:component c :atoms #{...}} for every live track! scope.
+;; track-render keeps it current per pass (dropping watches for atoms a
+;; branch switch stopped reading); remove-track-watches! tears down from
+;; it on dispose. Without it, watches would outlive their component —
+;; zombie watchers pinning the component and firing invalidate-cache on
+;; every write forever.
+(defonce ^:private watch-registry (atom {}))
+
 (declare invalidate-cache)
 
 (defn- component-cache-atom
@@ -132,20 +140,31 @@
                              (fn [_ _ _ _] (reset! invalidated? true)))]
             (try
               (let [result (render-fn)
-                    tracked-map @tracked]
-                (doseq [a (keys tracked-map)]
-                  (add-watch a (tracker-key component)
-                             (fn [_ _ old new]
-                               ;; Skip invalidation when the value didn't actually
-                               ;; change: renders are pure functions of tracked
-                               ;; values, so an equal value means the cached result
-                               ;; is still valid. (Clojure fires watches even on
-                               ;; equal-value reset!/swap!.) identical? is the
-                               ;; O(1) fast path; structural = catches persistent
-                               ;; copies (fresh object, equal content).
-                               (when-not (or (identical? old new)
-                                             (= old new))
-                                 (invalidate-cache component)))))
+                    tracked-map @tracked
+                    watch-key (tracker-key component)
+                    handler (fn [_ _ old new]
+                              ;; Skip invalidation when the value didn't actually
+                              ;; change: renders are pure functions of tracked
+                              ;; values, so an equal value means the cached result
+                              ;; is still valid. (Clojure fires watches even on
+                              ;; equal-value reset!/swap!.) identical? is the
+                              ;; O(1) fast path; structural = catches persistent
+                              ;; copies (fresh object, equal content).
+                              (when-not (or (identical? old new)
+                                            (= old new))
+                                (invalidate-cache component)))
+                    atoms (set (keys tracked-map))
+                    prev-atoms (:atoms (get @watch-registry watch-key))]
+                (doseq [a atoms]
+                  (add-watch a watch-key handler))
+                ;; A previous pass's atoms this pass no longer reads (branch
+                ;; switch) lose their watches here — otherwise they fire
+                ;; invalidate-cache forever on writes nobody consumes.
+                (doseq [a prev-atoms]
+                  (when-not (contains? atoms a)
+                    (remove-watch a watch-key)))
+                (swap! watch-registry assoc watch-key
+                       {:component component :atoms atoms})
                 (when-not @invalidated?
                   (reset! cache-atom {:width width
                                       :values tracked-map
@@ -177,6 +196,20 @@
   [component]
   (when-let [cache (component-cache-atom component)]
     (reset! cache nil)))
+
+(defn remove-track-watches!
+  "Remove every watch track-render installed on COMPONENT's behalf (its
+   last pass's tracked atoms). Called from the dispose defcomponent
+   generates — without it the watches outlive the component and keep
+   firing invalidate-cache on each source write. Idempotent; a no-op for
+   components that never ran a track! body."
+  [component]
+  (let [k (tracker-key component)]
+    (when-some [{:keys [atoms]} (get @watch-registry k)]
+      (doseq [a atoms]
+        (remove-watch a k))
+      (swap! watch-registry dissoc k)))
+  nil)
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; defsetter / defgetter — component state accessor boilerplate
@@ -416,6 +449,16 @@
   [body sym]
   (first (filter #(and (seq? %) (= sym (first %))) body)))
 
+(defn- prepend-dispose-cleanup
+  "Prepend track-watch removal to a custom dispose method body, using the
+   method's own component binding."
+  [dispose-form]
+  (let [[_ args & body] dispose-form
+        this-arg (first args)]
+    (list* 'dispose args
+           (list 'kmet.tui.macros/remove-track-watches! this-arg)
+           body)))
+
 (defmacro defcomponent
   "Define a TUI component: a defrecord implementing protocols/IComponent.
 
@@ -423,7 +466,7 @@
        (render [this width] ...)          ; required
        (handle-input [this data] ...)     ; optional — defaults to no-op
        (invalidate [this] ...))           ; optional — cache clear prepended
-       (dispose [this] ...))              ; optional — defaults to no-op
+       (dispose [this] ...))              ; optional — watch teardown prepended
 
    When the render body calls track!, an invalidate method is generated
    (or the cache clear prepended to a custom one) so explicit invalidation
@@ -448,11 +491,15 @@
     (let [track? (render-uses-track? render)
           handle-input (or (body-method body 'handle-input)
                            '(handle-input [_this _data] nil))
-          ;; dispose: synthesized no-op like handle-input (dsl.md §5) —
-          ;; meaningful for a few components, nothing for most; containers
-          ;; override it to delegate to their children.
-          dispose (or (body-method body 'dispose)
-                      '(dispose [_this] nil))
+          ;; dispose: track-watch teardown prepended (custom bodies) or
+          ;; synthesized around it — track! watches must never outlive the
+          ;; component; containers override dispose to delegate to children,
+          ;; and each child strips its own watches.
+          custom-dispose (body-method body 'dispose)
+          dispose (if custom-dispose
+                    (prepend-dispose-cleanup custom-dispose)
+                    '(dispose [_this]
+                              (kmet.tui.macros/remove-track-watches! _this)))
           custom-invalidate (body-method body 'invalidate)
           invalidate (cond
                        custom-invalidate (if track?

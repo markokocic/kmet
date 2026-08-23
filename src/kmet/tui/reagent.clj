@@ -21,8 +21,11 @@
 
    Scheduling: a reaction whose deps change (by =) is marked dirty and
    ENQUEUED; flush! drains the queue and runs each dirty reaction exactly
-   once per pass. kmet.tui.core calls flush! from the render loop's ~16ms
-   tick — Reagent's animation-frame batching.
+   once per pass. Deref OUTSIDE any reaction settles the queue first and
+   always answers with the CURRENT value (Reagent's non-reactive deref:
+   flush, then inline-run when dirty) — the queued path exists purely for
+   dep-change re-runs between frames. kmet.tui.core calls flush! from the
+   render loop's ~16ms tick — Reagent's animation-frame batching.
 
    Examined against reagent.ratom (2.0.1) and rum's derived-atom/cursor
    (battle-tested references, ~/src/cvstree/). Adopted from them: sticky
@@ -143,8 +146,9 @@
    settle within one flush). Throws when the queue does not settle within
    max-rounds passes (cyclic reactions). A throwing reaction surfaces its
    error AFTER the batch finished draining — the rest of the batch still
-   runs, so no reaction is left dirty but dequeued. Reentrant calls are
-   no-ops; the outer drain wins."
+   runs, so no reaction is left dirty but dequeued. Reactions dirtied by
+   batch entries running later stay queued and settle at the next flush.
+   Reentrant calls are no-ops; the outer drain wins."
   []
   (when (compare-and-set! flushing? false true)
     (try
@@ -216,7 +220,9 @@
    only when F's OUTPUT changes by =.
    Options:
      :auto-run? controls scheduling (Reagent's :auto-run):
-       true  (default) — dep changes enqueue F for the next flush!
+       true  (default) — dep changes enqueue F for the next flush!;
+               derefs outside a reaction always answer CURRENT (they
+               settle the queue and sync-run unrun/dirty bodies)
        false — manual track: also enqueued on change (like Reagent), but
                caches its value between runs, runs lazily on first deref,
                and disposes itself when its last watcher is removed
@@ -363,20 +369,31 @@
                ;; never re-run side effects. run! is the explicit retry.
                (some? caught) (throw caught)
                (= :busy state) value
-               ;; Cached-valid — plain reactions AND manual tracks hand back
-               ;; without running (Reagent's Track caches its inner reaction);
-               ;; an in-context parent reading a clean child must not force a
-               ;; redundant sync run.
-               (= :idle state) value
-               ;; Outside any context: first deref of a plain reaction queues
-               ;; the initial run (async, like Reagent — nil until the flush).
-               (and (true? auto-run?)
-                    (nil? macros/*ratom-context*)
-                    (= :unrun state)) (do (enqueue! @self) value)
-               ;; Everything else runs synchronously: first read inside a
-               ;; parent body (it needs the fresh value to capture), manual
-               ;; tracks' first read, dirty reactions.
-               :else (run-sync!))))
+               :else (do
+                       ;; Non-reactive reads settle the queue FIRST (Reagent
+                       ;; flushes on every non-reactive deref): upstream
+                       ;; reactions dirtied since the last frame must be
+                       ;; current before this ref answers, or chained reads
+                       ;; see a stale slice. The flush may run THIS reaction
+                       ;; too (it can sit queued), so re-read after.
+                       (when (nil? macros/*ratom-context*)
+                         (flush!))
+                       (let [{:keys [state value caught]} @cell]
+                         (cond
+                           (= :disposed state) nil
+                           (some? caught) (throw caught)
+                           (= :busy state) value
+                           ;; Cached-valid — plain reactions AND manual tracks
+                           ;; hand back without running (Reagent's Track caches
+                           ;; its inner reaction); an in-context parent reading
+                           ;; a clean child must not force a redundant run.
+                           (= :idle state) value
+                           ;; Everything else runs synchronously: first reads
+                           ;; anywhere (unrun — Reagent births reactions dirty),
+                           ;; manual tracks' first read, dirty reactions. An
+                           ;; in-context parent captured SELF just before (reify
+                           ;; deref → capture-deref!), so it tracks this ref.
+                           :else (run-sync!)))))))
          r (reify
              RXRef
              (-add-watch [_ key fl] (swap! cell assoc-in [:watches key] fl) _)
@@ -384,12 +401,15 @@
                ;; Reagent's GC hygiene: when a MANUAL reaction's last watcher
                ;; leaves, it disposes itself — its dep watches would otherwise
                ;; pin it (and them) forever. Plain/callback reactions keep
-               ;; running; they are disposed explicitly.
+               ;; running; they are disposed explicitly. (Unlike Reagent,
+               ;; kmet's dispose is TERMINAL — a dead reaction never
+               ;; resurrects on deref — so anything driven by derefs or the
+               ;; auto-run callback must not self-dispose here.)
                (let [was (:watches @cell)]
                  (swap! cell update :watches dissoc key)
                  (when (and (seq was)
                             (empty? (:watches @cell))
-                            (not (true? auto-run?)))
+                            (false? auto-run?))
                    (-dispose @self)))
                _)
              (-cell [_] cell)
@@ -443,6 +463,22 @@
   [r]
   (flush!)
   (-force-run r))
+
+(defn invalidate!
+  "Force R's next deref to re-run its body even though no dependency changed
+   (normal caching hands back the value while every dep is unchanged).
+   For inputs that shape output without being tracked deps — ComponentFn
+   calls this when the render-pass width changes, because *width* is a
+   dynamic var, not an atom. Marks R :dirty, so the next deref (or a flush,
+   should one land in between) brings it current. Disposed refs are ignored."
+  [r]
+  (when (reactive-ref? r)
+    (swap! (-cell r)
+           (fn [{:keys [state] :as c}]
+             (if (= :disposed state)
+               c
+               (assoc c :state :dirty :caught nil)))))
+  nil)
 
 (defn dispose!
   "Kill R: unwatch every dependency, drop watchers, leave the queue.

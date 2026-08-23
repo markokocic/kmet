@@ -277,7 +277,12 @@ Properties:
 - **Dynamic `*width*`**: fn bodies receive only props, but status bars
   and dialog headers genuinely need the current pass width (truncation).
   The wrapper binds `*width*` beside `*comp*` — read-only, per-pass,
-  same dynamic-scope cost as `*comp*`, no machinery.
+  same dynamic-scope cost as `*comp*`. Width participates in
+  memoization: since it shapes output without being a tracked dep, a
+  pass at a NEW width forces one body re-derive of an idle reaction
+  (`reagent/invalidate!`, then re-cache) — track!'s per-width cache
+  contract, one level up. Without this, resize leaves cached trees
+  stale in any body that both derefs real state and reads `*width*`.
 - **Dispose order is contractual**: children first, then own cleanups —
   a child cleanup may still read intact parent state (React effect
   semantics). Not incidental; tests rely on it.
@@ -865,7 +870,11 @@ Box/VStack/Container leaks its subtree's cleanups (the synthesized
 no-op doesn't recurse). The need is visible today: tool_execution
 hand-cancels its elapsed-ticker interval on completion "so a component
 dropped from the chat doesn't keep a zombie interval invalidating
-forever" — dispose generalizes exactly that.
+forever" — dispose generalizes exactly that. The same audit applies to
+track! itself: its render watches used to outlive disposed components
+(zombie watchers firing invalidate-cache forever); `defcomponent`
+now prepends `remove-track-watches!` to every generated/custom dispose,
+and track-render drops watches for atoms a branch switch stopped reading.
 
 `mount` is deferred: the only reconcile-created timer today (status
 spinner) already has explicit start/stop. Add a hook only when a second
@@ -1081,6 +1090,45 @@ until it succeeds (reagent issue #525), and using one expansion site
 twice in one render pass throws loudly (reagent's generation warning,
 promoted to a throw per the v1 contract — give each instance its own
 element/component).
+
+Stage-3 review fixes (all pinned by test):
+
+- **Keyed buckets carry the kind**: `{::user-key k ::kind kind}` on
+  both the desired and previous sides — an element switching host↔fn
+  under one stable key remounts (React semantics) instead of crashing
+  on a cross-kind reuse (the old shared bucket NPE'd one direction and
+  accidentally worked in the other).
+- **Entry maps are never props**: `[:v-stack {:component c}]` mounts
+  the entry as a child; consuming it as the props map silently dropped
+  it. Outside stack tags it still throws loudly.
+- **Width invalidation**: see the §2.4 `*width*` bullet — resize alone
+  re-derives affected bodies exactly once, then re-caches.
+- **track! watch lifecycle**: watches no longer outlive components
+  (see §5); branch-switched atoms lose their watches at re-render.
+
+Second review round (cross-checked line-by-line against
+reagent.ratom.cljs and hiccup's compiler):
+
+- **Non-reactive deref settles then answers CURRENT** — Reagent's
+  `-deref` flushes the queue before every read outside a reaction and
+  inline-runs dirty bodies; the port had enqueued fresh reactions and
+  returned nil until the next frame (a stale-read trap for Stage 5
+  computes read from handlers). Aligned: flush first, always current.
+  The deliberate deviation stands UNCHANGED for dep-change re-runs:
+  those stay queued at the frame tick instead of running in the watch
+  handler.
+- **Self-dispose scoped to manual tracks** — only `:auto-run? false`
+  reactions die with their last watcher. Callback-driven ComponentFn
+  reactions must not (kmet dispose is terminal; Reagent survives the
+  equivalent because plain reactions resurrect on deref).
+- Hiccup parity notes confirmed: attrs-map-in-first-position matches;
+  kmet's record/entry-map guards close holes real hiccup has (records
+  are maps there too); keyword children throw instead of rendering an
+  empty element (deliberate, tested).
+- Accepted divergences (documented, not bugs): cursors are read-only
+  (no reset!/swap-through); input-side dep gating is stricter than
+  Reagent's identical?-only fast path; flush! throws on non-settling
+  cycles where Reagent would spin.
 
 Still zero app usage.
 

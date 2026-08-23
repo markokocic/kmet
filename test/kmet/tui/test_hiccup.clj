@@ -489,3 +489,57 @@
     (core/render r 20)
     (t/is (= 1 (:bodies-run (h/counters))) "tracked: ran once")
     (t/is (= 1 (:bodies-skipped (h/counters))) "tracked: cached")))
+
+;; ── stage-3 review fixes ──────────────────────────────────────────────────
+
+(t/deftest keyed-element-switching-kind-remounts
+  ;; same :key, different element kind: remount (React semantics), not a
+  ;; crash — the keyed bucket carries the kind, so a host↔fn switch under
+  ;; one key retires + constructs instead of reusing across kinds
+  (let [sw (atom false)
+        disposed (atom false)
+        myfn (fn [_]
+               (with-let [] (finally (reset! disposed true)))
+               [:text {:padding-x 0} "FN"])
+        r (h/root (fn [_]
+                    [:container {}
+                     (if @sw
+                       [:box {:key "k"} [:text {:padding-x 0} "BOX"]]
+                       [myfn {:key "k"}])]))]
+    (t/is (str/includes? (str/join "\n" (core/render r 40)) "FN"))
+    (reset! sw true)
+    (let [out (str/join "\n" (core/render r 40))]
+      (t/is (str/includes? out "BOX") "kind switch renders the new element")
+      (t/is @disposed "the retired fn instance was disposed"))
+    (reset! sw false)
+    (t/is (str/includes? (str/join "\n" (core/render r 40)) "FN")
+          "switching back remounts instead of crashing")))
+
+(t/deftest entry-map-first-child-is-child-not-props
+  ;; {:component c} in the first slot is a stack ENTRY, not a props map —
+  ;; consuming it as props silently dropped the child it wraps
+  (let [inner (text/make-text "INNER" 0 0)]
+    (t/is (str/includes? (joined [:v-stack {:component inner}] 20) "INNER")
+          "entry map without a props map still mounts its component")
+    (t/is (thrown? Throwable
+                   (joined [:box {:component (text/make-text "X" 0 0)}] 20))
+          "entry map outside a stack tag still throws loudly")))
+
+(t/deftest width-change-invalidates-idle-wrappers
+  ;; *width* shapes output but is not a tracked dep — a resize must force
+  ;; one re-derive of an idle reaction, which then re-caches (track!'s
+  ;; per-width cache contract, one level up)
+  (let [st (atom "S")
+        r (h/root (fn [_]
+                    [:text {:padding-x 0}
+                     (str (rag/tracked-deref st) "/w" h/*width*)]))]
+    (core/render r 20)
+    (h/reset-counters!)
+    (t/is (str/includes? (str/join "\n" (core/render r 60)) "S/w60")
+          "resize alone re-derives the body at the new width")
+    (t/is (= 1 (:bodies-run (h/counters))) "exactly one forced run")
+    (core/render r 60)
+    (t/is (= 1 (:bodies-run (h/counters))) "same width stays memoized")
+    (reset! st "T")
+    (t/is (str/includes? (str/join "\n" (core/render r 60)) "T/w60"))
+    (t/is (= 2 (:bodies-run (h/counters))) "dep change still re-derives")))

@@ -112,22 +112,29 @@
 ;; Queue / scheduling
 ;; ═══════════════════════════════════════════════════════════════════════════
 
-(t/deftest test-async-first-deref-and-exactly-once-drain
-  ;; Reagent's classic shape: first deref outside a context queues the run
-  ;; and returns nil; one flush runs the body exactly once; further flushes
-  ;; are no-ops.
-  (let [runs (atom 0)
-        rx (r/make-reaction (fn []
-                              (swap! runs inc)
-                              :v))]
-    (t/is (nil? @rx))
-    (t/is (= 1 (r/queued-count)))
-    (t/is (zero? @runs))
-    (r/flush!)
-    (t/is (= :v @rx))
-    (t/is (= 1 @runs))
-    (r/flush!)
-    (t/is (= 1 @runs) "clean reaction is skipped by later flushes")))
+(t/deftest test-nonreactive-deref-settles-queue-and-answers-current
+  ;; Reagent's non-reactive deref contract (ratom.cljs -deref): flush! the
+  ;; queue FIRST, then answer — a fresh reaction runs synchronously on its
+  ;; first read (Reagent births reactions dirty), and chained reactions
+  ;; settled by that same flush are current before the read returns.
+  ;; Dep-change re-runs still queue between frames; only READS force
+  ;; settlement, so mutator-side coalescing is untouched.
+  (let [src (atom 0)
+        up-runs (atom 0)
+        down-runs (atom 0)
+        up (r/make-reaction (fn [] (swap! up-runs inc) (inc (rd src))))
+        down (r/make-reaction (fn [] (swap! down-runs inc) (inc (rd up))))]
+    (t/is (= 2 @down) "first deref runs the chain synchronously")
+    (t/is (= 1 @up-runs))
+    (t/is (= 1 @down-runs))
+    (reset! src 10)
+    (t/is (= 11 @up) "non-reactive deref settles queued work first")
+    (t/is (= 12 @down) "...and the whole chain is current in the same read")
+    (t/is (= 2 @up-runs) "each body ran exactly once more")
+    (t/is (= 2 @down-runs))
+    (t/is (zero? (r/queued-count)))
+    (t/is (= 12 @down))
+    (t/is (= 2 @down-runs) "clean re-read is a pure cache hit")))
 
 (t/deftest test-chained-reactions-settle-within-one-flush
   ;; out ← mid ← src: one write fans out through both levels inside a single
@@ -777,3 +784,21 @@
       (macros/register-cleanup! 'bad #(throw (ex-info "cleanup boom" {}))))
     (macros/destroy-store! store)
     (t/is (= [:good] @log) "throwing cleanup doesn't block the rest")))
+
+(t/deftest invalidate-forces-next-deref-past-equal-deps
+  (let [a (atom 1)
+        runs (atom 0)
+        rx (r/make-reaction (fn []
+                              (swap! runs inc)
+                              (str (rd a))))]
+    (r/run! rx)
+    (t/is (= "1" @rx))
+    (t/is (= 1 @runs) "idle deref hands back the cached value")
+    (r/invalidate! rx)
+    (t/is (= "1" @rx))
+    (t/is (= 2 @runs) "invalidate! forced exactly one recompute despite unchanged deps")
+    (t/is (= "1" @rx))
+    (t/is (= 2 @runs) "re-cached after the forced run")
+    (r/dispose! rx)
+    (t/is (nil? (r/invalidate! rx)) "disposed refs ignore invalidation")
+    (t/is (= 2 @runs) "and never re-run afterwards")))

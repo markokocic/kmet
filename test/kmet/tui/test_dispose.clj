@@ -79,3 +79,25 @@
     (core/tui-clear tui)
     (t/is (= [:probe :probe] @flag))
     (t/is (empty? @(:components tui)))))
+
+(t/deftest track-watches-are-removed-on-dispose
+  (let [c (text/make-text "hello" 0 0)
+        ta (:text-atom c)
+        cache (:cache c)]
+    (protocols/render c 20)
+    (protocols/render c 20)
+    (t/is (some? @cache) "render populated the reactive cache")
+    (protocols/dispose c)
+    (reset! ta "goodbye")
+    (t/is (some? @cache)
+          "no zombie watch: post-dispose writes leave the dead cache alone")
+    (protocols/dispose c)
+    (reset! ta "x")
+    (t/is (some? @cache) "dispose stays idempotent")))
+
+(t/deftest custom-dispose-still-fires-with-watch-teardown-prepended
+  (let [flag (atom [])
+        p (map->DisposalProbe {:kind nil :flag-atom flag})]
+    (protocols/dispose p)
+    (t/is (= [:probe] @flag)
+          "the prepended cleanup did not displace the custom body")))
