@@ -1243,9 +1243,11 @@ scheduler comes later, so nothing can freeze.
     implementable again, a tracked atom type could return — as sugar,
     not as a premise.)
 
-17. **Retire leftovers** — `assistant-message-append-text!` remnants,
-    unused adapter ctors, any remaining manual request-render next to
-    converted trees.
+17. **Retire leftovers** — dormant setters with no live callers
+    (`user-message-set-text!`, `custom-message-set-content!`/
+    `set-label!`), unused adapter ctors, any remaining manual
+    request-render next to converted trees (follow-up/dequeue/cancel
+    paths still carry conservative pokes).
 
 ### The transcript, explicitly
 

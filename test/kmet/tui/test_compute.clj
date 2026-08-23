@@ -188,6 +188,50 @@
     (t/is (= 2 (:computes (h/counters))) "two creations counted")
     (h/reset-counters!)))
 
+(t/deftest compute-dirty-at-dispose
+  ;; swap the dep (compute enqueued) then dispose BEFORE any flush: dispose
+  ;; must purge the queue so the flush neither resurrects nor re-runs it,
+  ;; and the with-let cleanup still runs exactly once
+  (let [a (atom 1)
+        log (atom [])
+        r (h/root (fn [_]
+                    (with-let [c (h/compute [a] #(+ % 10))]
+                      [:text {:padding-x 0 :padding-y 0} (str "v" @c)]
+                      (finally (swap! log conj :cleanup)))))]
+    (core/render r 20)
+    (reset! a 99)
+    (protocols/dispose r)
+    (rag/flush!)
+    (t/is (= [:cleanup] @log) "single cleanup, no resurrection")))
+
+(t/deftest record-branch-switches-between-atom-and-compute
+  ;; mixed tracked deps: a body alternating between a plain atom read and a
+  ;; compute read must prune the dropped kind each switch — watches stay
+  ;; exactly one-per-dep-per-kind per pass, no stale invalidation either way
+  (let [a (atom 0)
+        mode (atom :atom)
+        c (h/compute [a] (fn [x] (str "compute-" x)))
+        renders (atom 0)
+        probe (map->Probe {:cache-atom (atom nil)
+                           :render-count-atom renders
+                           :body (fn []
+                                   (if (= :compute (macros/tracked-deref mode))
+                                     [(str @c)]
+                                     [(str "raw-" (macros/tracked-deref a))]))})]
+    (protocols/render probe 40)
+    (t/is (= ["raw-0"] (protocols/render probe 40)) "atom branch cached")
+    (reset! a 5)
+    (t/is (= ["raw-5"] (protocols/render probe 40)) "atom watch fires")
+    (reset! mode :compute)
+    (t/is (= ["compute-5"] (protocols/render probe 40))
+          "switch to compute branch picks up current value")
+    (reset! a 6)
+    (t/is (= ["compute-6"] (protocols/render probe 40))
+          "compute flows through while watched")
+    (reset! mode :atom)
+    (t/is (= ["raw-6"] (protocols/render probe 40)) "back on atom branch")
+    (protocols/dispose probe)))
+
 (t/deftest compute-top-level-lives-forever
   ;; no enclosing store → the reaction keeps its dep watches (the shared
   ;; def'd compute pattern)
