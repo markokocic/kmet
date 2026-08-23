@@ -173,14 +173,22 @@
 (defn compile-element
   "Compile one tree node into a live host component. Returns nil for nil.
    Records pass through untouched (identity preserved); stack-entry maps
-   pass through (only meaningful under stacks); strings become bare zero-
-   padding Text."
+   ({:component c ...}) pass through — ONLY those: a bare data map is
+   almost certainly a mistake and would detonate later at render time, so
+   it throws here. Strings become bare zero-padding Text."
   [el]
   (cond
     (nil? el) nil
     (string? el) (text/make-text el 0 0)
     (record? el) el
-    (map? el) el
+    (map? el) (if (contains? el :component)
+                el
+                (throw
+                 (ex-info
+                  (str "kmet.tui.hiccup: bare map child — maps pass through "
+                       "only as stack entries {:component c}; got "
+                       (pr-str (keys el)))
+                  {:map el})))
     (vector? el)
     (let [tag (first el)]
       (cond

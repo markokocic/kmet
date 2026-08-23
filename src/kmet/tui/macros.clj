@@ -42,13 +42,16 @@
   "Deref wrapper used by track!. Records A in the active tracking map (when
    one is bound) with the value just read, then returns it. Only IRef
    instances (atoms, vars) are tracked — volatiles and delays can't take
-   watches and are skipped. Also records A in the running reaction (when
-   one is bound), so component render bodies are reactive under the DSL."
+   watches and are skipped (read but never registered as dependencies,
+   here or in a running reaction). Also records A in the running reaction
+   (when one is bound), so component render bodies are reactive under the
+   DSL."
   [a]
   (let [v (deref a)]
     (when (and *tracked* (instance? clojure.lang.IRef a))
       (swap! *tracked* assoc a v))
-    (capture-deref! a)
+    (when (instance? clojure.lang.IRef a)
+      (capture-deref! a))
     v))
 
 (defn- deref-form? [f]

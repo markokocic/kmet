@@ -146,6 +146,16 @@
   (t/is (= [] (h/render-lines [:text {}] 20)))
   (t/is (= [] (h/render-lines [:text {} nil] 20))))
 
+(t/deftest bare-map-children-throw
+  ;; stack-entry maps ({:component c}) pass through as CHILDREN; a BARE
+  ;; data map child is a mistake that would detonate at render time —
+  ;; throw at compile instead. (A map directly after the tag is the props
+  ;; slot, by design.)
+  (t/is (thrown? Exception
+                 (h/render-lines [:container "x" {:not-a-component true}]
+                                 10)))
+  (t/is (thrown? Exception (h/render-lines [:container {} {}] 10))))
+
 (t/deftest unknown-tags-throw-loudly
   (let [e (try (h/render-lines [:tst "x"] 20) nil
                (catch Exception ex ex))]

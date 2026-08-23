@@ -241,17 +241,21 @@
            ;; Reagent's _handle-change gate: identical fast path, structural
            ;; =, skip if already dirty or dead. A disposed reaction stays
            ;; dead: watches can still fire once after dispose (watch-fire
-           ;; order vs the unwatch), and must not resurrect it.
-           (when (and (changed? old new)
-                      (not= :dirty (:state @cell))
-                      (not= :disposed (:state @cell)))
-             (swap! cell assoc :state :dirty :caught nil)
-             (if (fn? auto-run?)
-               (auto-run? @self)
-               ;; Plain reactions AND manual tracks join the queue (Reagent
-               ;; enqueues both — the queue is how an unread intermediate
-               ;; reaction propagates to its watchers).
-               (enqueue! @self))))
+           ;; order vs the unwatch), and must not resurrect it. The body is
+           ;; isolated — it runs on the MUTATOR's thread (any background
+           ;; thread swapping app state), so a failure here must never
+           ;; propagate into whoever wrote the dep.
+           (try
+             (when (and (changed? old new)
+                        (not= :dirty (:state @cell))
+                        (not= :disposed (:state @cell)))
+               (swap! cell assoc :state :dirty :caught nil)
+               (if (fn? auto-run?)
+                 (auto-run? @self)
+                 (enqueue! @self)))
+             (catch Throwable e
+               (binding [*out* *err*]
+                 (println "kmet.tui.reagent dep-handler error:" (.getMessage e))))))
          update-watching!
          (fn [collected]
            ;; Set-diff (Reagent's _update-watching), identity-flavored:
@@ -312,8 +316,16 @@
                                   ;; behind — loop to re-run against fresh state.
                                   :state (if (= :dirty (:state @cell)) :dirty :idle))
                            (when (changed? result value)
+                             ;; Watcher isolation: a throwing watcher must
+                             ;; not abort its siblings nor propagate into
+                             ;; whatever thread triggered the change.
                              (doseq [[key fl] (:watches @cell)]
-                               (fl key @self value result)))
+                               (try
+                                 (fl key @self value result)
+                                 (catch Throwable e
+                                   (binding [*out* *err*]
+                                     (println "kmet.tui.reagent watcher error:"
+                                              (.getMessage e)))))))
                            (if (= :dirty (:state @cell))
                              (recur (inc guard))
                              result)))))))))

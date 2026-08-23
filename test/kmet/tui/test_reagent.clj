@@ -326,6 +326,47 @@
     (t/is (= 11 @tr) "flush refreshed the unread track")
     (t/is (= 2 @runs))))
 
+(t/deftest volatile-reads-are-skipped-not-fatal
+  ;; Volatiles can't take watches: reading one through tracked-deref must
+  ;; neither crash watch-registration nor become a dependency (read is
+  ;; correct under the batched fallback; just not narrow).
+  (let [v (volatile! 42)
+        runs (atom 0)
+        rx (r/make-reaction (fn [] (swap! runs inc) [(rd v) @v]))]
+    (t/is (= [42 42] (r/run! rx)))
+    (t/is (= [] (:watching (r/reaction-state rx))) "volatile captured nothing")
+    (vreset! v 43)
+    (t/is (zero? (r/queued-count)))
+    (t/is (= [43 43] (r/run! rx)) "untracked read still yields current value")))
+
+(t/deftest throwing-watcher-isolated-from-siblings-and-mutator
+  ;; Watchers fire on the MUTATOR's thread (any background thread swapping
+  ;; app state): a throwing watcher must neither block its siblings nor
+  ;; blow up whoever wrote the dep.
+  (let [a (atom 0)
+        good (atom [])
+        rx (r/make-reaction #(rd a))]
+    (r/run! rx)
+    (r/watch-ref rx :bad (fn [_ _ _ _] (throw (ex-info "watcher boom" {}))))
+    (r/watch-ref rx :good (fn [_ _ o n] (swap! good conj n)))
+    (t/is (= 1 (reset! a 1))
+          "mutator never sees the watcher failure")
+    (r/flush!)
+    (t/is (= [1] @good) "sibling watcher still fired")))
+
+(t/deftest cursor-of-cursor-composes
+  (let [state (atom {:a {:b {:c 7}}})
+        outer (r/cursor state [:a])
+        inner (r/cursor outer [:b :c])]
+    (r/run! inner)
+    (t/is (= 7 (r/run! inner)))
+    (swap! state assoc-in [:a :b :c] 8)
+    (r/flush!)
+    (t/is (= 8 (r/run! inner)) "chained through both cursors"))
+  (let [state (atom {:whole 5})
+        cur (r/cursor state [])]
+    (t/is (= {:whole 5} (r/run! cur)) "empty path = whole value")))
+
 (t/deftest test-cursor-follows-source-and-composes
   (let [state (atom {:profile {:name "ada"}})
         name-cur (r/cursor state [:profile :name])
