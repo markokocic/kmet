@@ -255,6 +255,39 @@ bb check-model-data      # Offline catalog validation
 bb help            # Show task help
 ```
 
+## Building
+
+kmet ships as self-contained executables: an official babashka release binary
+with the kmet uberjar appended (babashka detects the appended zip at startup
+and runs `kmet.core/-main` — see babashka's "Self-contained executable" wiki
+page). Cross-builds work from any host because packaging is download + concat
+only.
+
+```sh
+bb uberjar              # Build target/kmet.jar (also runnable: bb target/kmet.jar)
+bb build                # Executable for the current platform -> dist/
+bb build --all          # Every published babashka platform
+bb build macos-aarch64  # Explicit targets; --force re-downloads, --no-smoke skips the post-build run
+```
+
+Targets mirror babashka's release assets: `linux-aarch64-static`,
+`linux-amd64`, `linux-amd64-static`, `macos-aarch64`, `macos-amd64`,
+`windows-amd64`. Babashka binaries are cached in `target/build-cache/`
+(sha256-verified on download); artifacts land in `dist/` as
+`kmet-<version>-<slug>`. Downloads use `curl` (preinstalled on Termux, macOS,
+Linux and Windows 10+).
+
+Versioning: the artifact version is the git tag pointing at HEAD (`v` prefix
+stripped), falling back to the short commit hash, then `dev` outside a repo.
+
+**Termux/Android**: the glibc babashka binary must be exec'd through Termux's
+glibc dynamic linker — which also disables babashka's own appended-jar auto-
+detection. Building on a termux host therefore additionally emits a companion
+`kmet-<version>-<slug>.sh` launcher that unsets `LD_PRELOAD`, execs via
+`$PREFIX/glibc/lib/ld-linux-*.so.1`, and passes `--jar <self>` explicitly.
+It requires the termux glibc package (`pkg install glibc-repo && pkg install
+glibc`).
+
 ## Status
 
 - ✅ Phase 1 — TUI Foundation

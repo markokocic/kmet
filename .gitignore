@@ -16,6 +16,9 @@ pom.xml.asc
 # Babashka
 /.bb
 
+# Build artifacts
+dist/
+
 # REPL
 /.nrepl-port
 

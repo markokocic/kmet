@@ -9,6 +9,13 @@
            :requires ([kmet.core :as core])
            :task (apply core/-main *command-line-args*)
            :override-builtin true}
+  uberjar {:doc "Build target/kmet.jar (run with: bb target/kmet.jar)"
+           :requires ([kmet.build :as build])
+           :task (build/uberjar*)
+           :override-builtin true}
+  build   {:doc "Build self-contained executable(s) in dist/ (babashka binary + appended uberjar). Usage: bb build [target ...|--all] [--force] [--no-smoke]. Targets: linux-aarch64-static, linux-amd64[-static], macos-aarch64, macos-amd64, windows-amd64; default: current platform."
+           :requires ([kmet.build :as build])
+           :task (apply build/-main *command-line-args*)}
   test    {:doc "Run fast test suites (excludes ^:slow tests). Args: test var names (plain name or ns/var) to run only those, e.g. `bb test test-tool-bash`."
            :requires ([kmet.runner :as runner])
            :task (apply runner/-main false *command-line-args*)

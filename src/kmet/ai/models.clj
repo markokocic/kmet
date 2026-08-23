@@ -9,6 +9,7 @@
    registerProvider trivial (pi: MutableModels.setProvider)."
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
+            [babashka.classpath :as bcp]
             [babashka.fs :as fs]
             [kmet.config :as cfg]
             [kmet.ai.auth :as auth]
@@ -301,6 +302,31 @@
                           :api-types api-types
                           :models model-records))))
 
+(defn jar-resources
+  "Parsed EDN resources under classpath dir (e.g. \"kmet/ai/model_data\") as
+   [{:name base-name :data value}] sorted by name. Reads from zip-shaped
+   classpath entries — the packaged uberjar, or a catted babashka binary whose
+   appended jar IS its classpath. Returns [] when nothing matches, which is
+   the normal case in a dev checkout: there the catalogs load from disk."
+  [dir ext]
+  (->> (str/split (bcp/get-classpath) #"::?")
+       (remove fs/directory?)
+       (mapcat (fn [cp]
+                 (try
+                   (with-open [zf (java.util.zip.ZipFile. (fs/file cp))]
+                     (->> (enumeration-seq (.entries zf))
+                          (filter (fn [e]
+                                    (let [n (.getName e)]
+                                      (and (str/starts-with? n (str dir "/"))
+                                           (not (.isDirectory e))
+                                           (str/ends-with? n ext)))))
+                          (mapv (fn [e]
+                                  {:name (fs/file-name (.getName e))
+                                   :data (with-open [in (.getInputStream zf e)]
+                                           (edn/read-string (slurp in)))}))))
+                   (catch Exception _ nil))))
+       (sort-by :name)))
+
 (defn load-catalogs!
   "Load all committed provider catalogs from model_data/ into the registry,
    replacing whatever was registered before. Also snapshots the pristine
@@ -312,20 +338,25 @@
   []
   (auth/set-config-key-source! (fn [provider-id] (:api-key (get-provider provider-id))))
   (auth/set-oauth-source! (fn [provider-id] (:oauth (get-provider provider-id))))
-  (if (fs/exists? model-data-dir)
-    (let [providers (into {}
-                          (for [f (catalog-files)
-                                :let [data (load-catalog-file f)]]
-                            [(:id (:provider data)) (catalog->provider data)]))
-          providers (into {}
-                          (for [[pid p] providers]
-                            [pid (assoc p :oauth (builtin-oauth p))]))]
-      (reset! builtins-atom providers)
-      (reset! providers-atom providers)
-      providers)
-    (do (reset! builtins-atom {})
-        (reset! providers-atom {})
-        {})))
+  (let [providers
+        ;; dev checkout: catalogs on disk; packaged binary: inside the
+        ;; uberjar / catted binary, loaded from the classpath instead
+        (if (fs/exists? model-data-dir)
+          (into {}
+                (for [f (catalog-files)
+                      :let [data (load-catalog-file f)]]
+                  [(:id (:provider data)) (catalog->provider data)]))
+          (into {}
+                (for [{:keys [name data]} (jar-resources "kmet/ai/model_data" ".edn")
+                      :when (not= "manifest.edn" name)]
+                  (do (validate-catalog! name data)
+                      [(:id (:provider data)) (catalog->provider data)]))))
+        providers (into {}
+                        (for [[pid p] providers]
+                          [pid (assoc p :oauth (builtin-oauth p))]))]
+    (reset! builtins-atom providers)
+    (reset! providers-atom providers)
+    providers))
 
 ;; ─── Manifest (pi: scripts/model-data.ts createModelDataManifest) ─────────
 

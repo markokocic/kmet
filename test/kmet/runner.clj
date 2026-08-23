@@ -40,6 +40,7 @@
     kmet.ai.test-api-tools
     kmet.app.test-loop
     kmet.test-theme kmet.test-config
+    kmet.build-test
     kmet.app.test-skills
 
     kmet.app.test-prompts

@@ -241,16 +241,19 @@
   []
   (register-images-api-provider! :openrouter-images generate-openrouter-images)
   (clear-providers!)
-  (let [path (fs/file catalog-dir "image-models.edn")]
-    (when (fs/exists? path)
-      (let [data (try (edn/read-string (slurp path))
-                      (catch Exception _ nil))
-            provider-info (:provider data)]
-        (when-not (and (map? data) (map? provider-info) (map? (:models data)))
-          (throw (ex-info "Invalid image-model catalog" {:type :images-invalid-catalog})))
-        (register-provider!
-         (map->ImagesProvider {:id (:id provider-info)
-                               :name (:name provider-info)
-                               :models (mapv (fn [[id m]] (validate-model-entry id m))
-                                             (:models data))})))))
+  (let [path (fs/file catalog-dir "image-models.edn")
+        ;; dev checkout: file on disk; packaged binary: inside the uberjar
+        data (if (fs/exists? path)
+               (try (edn/read-string (slurp path))
+                    (catch Exception _ nil))
+               (:data (first (models/jar-resources "kmet/ai/image_model_data" ".edn"))))
+        provider-info (:provider data)]
+    (when data
+      (when-not (and (map? data) (map? provider-info) (map? (:models data)))
+        (throw (ex-info "Invalid image-model catalog" {:type :images-invalid-catalog})))
+      (register-provider!
+       (map->ImagesProvider {:id (:id provider-info)
+                             :name (:name provider-info)
+                             :models (mapv (fn [[id m]] (validate-model-entry id m))
+                                           (:models data))}))))
   nil)

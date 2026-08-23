@@ -34,6 +34,14 @@
 - **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`;
   tooling deps (`cljfmt`) in `bb.edn` `:deps`; JLine **4.3.1** bundled with Babashka (see
   babashka `deps.edn`: `org.jline/jline-terminal`, `org.jline/jline-reader`).
+- **Packaging** (`kmet.build`): `bb uberjar` → `target/kmet.jar` (src + resolved dep jars,
+  only `borkdude/deps.clj` isn't bb-builtin); `bb build [targets|--all] [--force] [--no-smoke]`
+  → self-contained executables in `dist/` (official bb release binary + appended uberjar,
+  version = git tag else short hash else "dev"). On a termux host a `.sh` launcher is emitted
+  next to the binary: glibc linker exec + `--jar <self>` (auto-detection breaks because
+  `/proc/self/exe` resolves to `ld-linux`). Downloads cached + sha256-checked in
+  `target/build-cache/`; builds are sequential — no parallel heavy steps (lmkd kills the
+  main kmet process under memory pressure).
 
 ### API Preferences (avoid Java interop)
 - **`babashka.fs`** over `java.io.File` for all file operations
