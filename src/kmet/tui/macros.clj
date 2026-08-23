@@ -322,7 +322,8 @@
      (defcomponent Name kind [field...]
        (render [this width] ...)          ; required
        (handle-input [this data] ...)     ; optional — defaults to no-op
-       (invalidate [this] ...))           ; optional
+       (invalidate [this] ...))           ; optional — cache clear prepended
+       (dispose [this] ...))              ; optional — defaults to no-op
 
    When the render body calls track!, an invalidate method is generated
    (or the cache clear prepended to a custom one) so explicit invalidation
@@ -347,6 +348,11 @@
     (let [track? (render-uses-track? render)
           handle-input (or (body-method body 'handle-input)
                            '(handle-input [_this _data] nil))
+          ;; dispose: synthesized no-op like handle-input (dsl.md §5) —
+          ;; meaningful for a few components, nothing for most; containers
+          ;; override it to delegate to their children.
+          dispose (or (body-method body 'dispose)
+                      '(dispose [_this] nil))
           custom-invalidate (body-method body 'invalidate)
           invalidate (cond
                        custom-invalidate (if track?
@@ -360,4 +366,5 @@
            kmet.tui.protocols/IComponent
            ~render
            ~handle-input
-           ~invalidate)))))
+           ~invalidate
+           ~dispose)))))

@@ -58,6 +58,7 @@
     kmet.tui.test-core
     kmet.tui.test-reagent
     kmet.tui.test-hiccup
+    kmet.tui.test-dispose
     kmet.tui.components.test-text
     kmet.tui.components.test-spacer
     kmet.tui.components.test-container

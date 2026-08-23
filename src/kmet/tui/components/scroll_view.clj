@@ -40,7 +40,9 @@
     ;; update-layout! + render-window (render itself never clips).
     (protocols/render child (get-content-width this width)))
   (invalidate [_this]
-    (protocols/invalidate child)))
+    (protocols/invalidate child))
+  (dispose [_this]
+    (when child (protocols/dispose child))))
 
 ;; ─── Scrollbar state (pi: markScrollbarActivity / hideTransientScrollbar) ──
 

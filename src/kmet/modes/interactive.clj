@@ -3109,7 +3109,8 @@
         (reify tui/IComponent
           (render [_ width] ((:render m) width))
           (handle-input [_ data] (when-let [f (:handle-input m)] (f data)))
-          (invalidate [_] (when-let [f (:invalidate m)] (f))))))))
+          (invalidate [_] (when-let [f (:invalidate m)] (f)))
+          (dispose [_] (when-let [f (:dispose m)] (f))))))))
 
 (defn- transfer-editor!
   "Copy the app editor's wiring onto a custom editor component (pi:

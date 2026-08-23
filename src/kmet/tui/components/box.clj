@@ -43,7 +43,9 @@
             result)))))
   (invalidate [this]
     (reset! (:cache this) nil)
-    (doseq [c @children] (protocols/invalidate c))))
+    (doseq [c @children] (protocols/invalidate c)))
+  (dispose [_this]
+    (doseq [c @children] (protocols/dispose c))))
 
 ;; ─── Constructors & helpers ─────────────────────────────────────────────────
 

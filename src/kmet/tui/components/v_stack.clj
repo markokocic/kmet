@@ -31,7 +31,9 @@
   (render [_this width]
     (render-entries @entries-atom width @gap-atom))
   (invalidate [_this]
-    (doseq [e @entries-atom] (protocols/invalidate (stack/entry-component e)))))
+    (doseq [e @entries-atom] (protocols/invalidate (stack/entry-component e))))
+  (dispose [_this]
+    (doseq [e @entries-atom] (protocols/dispose (stack/entry-component e)))))
 
 ;; ─── Construction & API ────────────────────────────────────────────────────
 

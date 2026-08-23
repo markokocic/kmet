@@ -12,6 +12,7 @@
              core/IFocusable
              (render [_ _] [""])
              (handle-input [_ _] nil)
+             (dispose [_] nil)
              (invalidate [_])
              (focused [_] @focused?)
              (set-focused! [_ v] (reset! focused? v)))

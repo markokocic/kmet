@@ -54,7 +54,9 @@
                                                                (nth lines row)
                                                                x child-width safe-width)))))))))))))))
   (invalidate [_this]
-    (doseq [e @entries-atom] (protocols/invalidate (stack/entry-component e)))))
+    (doseq [e @entries-atom] (protocols/invalidate (stack/entry-component e))))
+  (dispose [_this]
+    (doseq [e @entries-atom] (protocols/dispose (stack/entry-component e)))))
 
 ;; ─── Construction & API ────────────────────────────────────────────────────
 

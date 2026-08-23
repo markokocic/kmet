@@ -4,12 +4,17 @@
 
 (defprotocol IComponent
   "Component interface (pi: Component). Implement render/handle-input/
-   invalidate. Records may optionally carry a :wants-key-release? field
-   (pi: Component.wantsKeyRelease) — when true, Kitty protocol key release
-   events are delivered to handle-input (filtered otherwise)."
+   invalidate/dispose. Records may optionally carry a :wants-key-release?
+   field (pi: Component.wantsKeyRelease) — when true, Kitty protocol key
+   release events are delivered to handle-input (filtered otherwise)."
   (render [this width] "Render component to lines (seq of strings)")
   (handle-input [this data] "Handle keyboard input")
-  (invalidate [this] "Clear cached render state"))
+  (invalidate [this] "Clear cached render state")
+  (dispose [this] "Release resources (timers, watches); must be idempotent.
+                   Containers delegate to their children.
+                   HAND-ROLLED implementors (reify/defrecord outside
+                   defcomponent) MUST include this method — there is no
+                   universal default under SCI."))
 
 (defprotocol IFocusable
   (focused [this])

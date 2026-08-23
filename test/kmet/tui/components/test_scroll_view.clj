@@ -13,7 +13,8 @@
     protocols/IComponent
     (render [_this _width] lines)
     (handle-input [_this _data] nil)
-    (invalidate [_this] nil)))
+    (invalidate [_this] nil)
+    (dispose [_this] nil)))
 
 (defn- make-sv
   [lines & {:keys [follow-end viewport]}]

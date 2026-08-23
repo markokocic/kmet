@@ -9,7 +9,8 @@
 (defcomponent Container nil [children]
   (render [_this width] (into [] (mapcat #(protocols/render % width)) @children))
   ;; pi: no handleInput on containers — input routes via TUI focus
-  (invalidate [_this] (doseq [c @children] (protocols/invalidate c))))
+  (invalidate [_this] (doseq [c @children] (protocols/invalidate c)))
+  (dispose [_this] (doseq [c @children] (protocols/dispose c))))
 
 (defn make-container
   ([] (map->Container {:children (atom [])}))

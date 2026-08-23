@@ -142,8 +142,13 @@
 
 (defn tui-add-child [tui c] (swap! (:components tui) conj c))
 (defn tui-remove-child [tui c]
-  (swap! (:components tui) (fn [v] (vec (remove #(identical? % c) v)))))
-(defn tui-clear [tui] (reset! (:components tui) []))
+  (swap! (:components tui) (fn [v] (vec (remove #(identical? % c) v))))
+  ;; a removed component is leaving the tree — release its resources
+  ;; (dispose is idempotent, dsl.md §5)
+  (protocols/dispose c))
+(defn tui-clear [tui]
+  (doseq [c @(:components tui)] (protocols/dispose c))
+  (reset! (:components tui) []))
 
 (defn tui-set-focus [tui component]
   ;; pi: public setFocus — clears any pending overlay restore state
