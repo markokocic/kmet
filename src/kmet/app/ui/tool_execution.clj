@@ -11,25 +11,13 @@
             [kmet.app.ui.tool-renderers :as renderers]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.image :as ic]
-            [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]
-            [kmet.debug :as debug]))
+            [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]))
 
 ;; ─── Renderer dispatch ─────────────────────────────────────────────────────
 ;; Built-in renderer functions live in kmet.app.ui.tool-renderers so supported
 ;; extensions can reuse them directly.
 
 ;; ─── Render context helper ─────────────────────────────────────────────────
-
-(defn- request-render!
-  "Invoke the component's request-render-fn, containing exceptions: the cb
-   runs on the agent-loop thread (via setters) and inside the TUI render
-   pass (via :invalidate), where an uncaught throw would hang the run or
-   kill the render loop. Logs instead (pi's callbacks are fire-and-forget)."
-  [comp]
-  (when-let [cb @(:request-render-fn-atom comp)]
-    (try (cb)
-         (catch Exception e
-           (debug/log "request-render-fn error: " e)))))
 
 (defn- last-call-component
   "Read the previous render-call component WITHOUT tracking (the render body
@@ -49,9 +37,9 @@
   [comp last-comp]
   {:args @(:args-atom comp)
    :tool-call-id @(:tool-call-id-atom comp)
-   :invalidate (fn []
-                 (protocols/invalidate comp)
-                 (request-render! comp))
+   ;; invalidation schedules the frame itself (§3.4 hook) — extension
+                 ;; renderers need no injected render callback
+   :invalidate (fn [] (protocols/invalidate comp))
    :last-component last-comp
    :state @(:renderer-state-atom comp)
    :set-state! (fn [new-state]
@@ -83,7 +71,6 @@
                last-call-component-atom   ;; component from previous render-call
                last-result-component-atom ;; component from previous render-result
                renderer-state-atom        ;; persistent state for custom renderers
-               request-render-fn-atom  ;; nil or (fn) to trigger TUI re-render
                cwd-atom                ;; current working directory
                box             ;; outer Box (padding + bg)
                inner-container ;; Container for call/result children
@@ -162,13 +149,8 @@
                 (if (seq box-lines)
                   (into [""] box-lines)
                   []))))))))
-  (invalidate [this]
-    (protocols/invalidate @box)
-    ;; Pi: invalidate also triggers TUI re-render; a throwing callback must
-    ;; not propagate (setters run on the agent-loop thread, renderers inside
-    ;; the TUI render pass — an exception would hang the run or kill the
-    ;; render loop)
-    (request-render! this)))
+  (invalidate [_this]
+    (protocols/invalidate @box)))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 ;; Pi: component manages timing internally — no started-at/ended-at passed in.
@@ -203,7 +185,6 @@
                                   :last-call-component-atom (atom nil)
                                   :last-result-component-atom (atom nil)
                                   :renderer-state-atom (atom {})
-                                  :request-render-fn-atom (atom nil)
                                   :cwd-atom (atom cwd)
                                   :box (atom b)
                                   :inner-container (atom inner-container)
@@ -283,7 +264,6 @@
     (reset! (:image-data-atom comp) image-data)
     (protocols/invalidate comp)))
 
-(defsetter tool-execution-set-request-render-fn! :request-render-fn-atom comp f)
 (defsetter tool-execution-set-render-call-fn! :custom-render-call-atom comp f
   (protocols/invalidate comp))
 (defsetter tool-execution-set-render-result-fn! :custom-render-result-atom comp f

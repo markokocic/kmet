@@ -41,7 +41,6 @@
 (def tool-execution-get-tool-call-id tool-execution/tool-execution-get-tool-call-id)
 (def tool-execution-set-args-complete! tool-execution/tool-execution-set-args-complete!)
 (def tool-execution-mark-execution-started! tool-execution/tool-execution-mark-execution-started!)
-(def tool-execution-set-request-render-fn! tool-execution/tool-execution-set-request-render-fn!)
 
 ;; CustomMessageComponent
 (def make-custom-message custom-message/make-custom-message)

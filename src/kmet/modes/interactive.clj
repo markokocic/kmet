@@ -2047,10 +2047,6 @@
                        :command command
                        :exclude-from-context? exclude-from-context?
                        :theme (th/get-current-theme))
-            ;; Wire invalidate → TUI re-render (elapsed ticker + spinner)
-            _ (be/bash-execution-set-request-render-fn!
-               bash-comp #(tui/tui-request-render (:tui cs)))
-
             ;; ── Build session env (pi: resolveSpawnContext) ─────────────
             ag @(:agent-state cs)
             session-env
@@ -2094,8 +2090,12 @@
                            :cwd (System/getProperty "user.dir")
                            :env session-env
                            :on-chunk (fn [chunk]
-                                       (be/bash-execution-append-output! bash-comp chunk)
-                                       (tui/tui-request-render (:tui cs)))
+                                       ;; pure data append: the component's
+                                       ;; track! watch schedules the frame
+                                       ;; (§3.4); the mount frame above has
+                                       ;; installed the watches
+                                       (be/bash-execution-append-output!
+                                        bash-comp chunk))
                            :signal (:bash-signal cs)
                            :spawn-hook spawn-hook
                            :timeout 300})
@@ -2470,9 +2470,6 @@
                  :is-error false}]
         (ui/chat-history-finalize-streaming! chat-history)
         (let [comp (ui/chat-history-add-message! chat-history msg)]
-          ;; Wire invalidate → TUI re-render
-          (ui/tool-execution-set-request-render-fn! comp
-                                                    #(tui/tui-request-render tui))
           ;; Store tool call ID for correlation
           (ui/tool-execution-set-tool-call-id! comp (:tool-call-id evt))
           ;; Args are complete when received (kmet: no streaming args)
@@ -2482,6 +2479,8 @@
           ;; Pi: pendingTools.set(toolCallId, component) — parallel tool
           ;; calls each own a component; updates/ends correlate by id
           (swap! pending-tool-comps assoc (:tool-call-id evt) comp))
+        ;; mount poke stays: the new message lands in the untracked
+        ;; messages-atom, so no watch exists for it yet
         (tui/tui-request-render tui))
       :tool-execution-update
       ;; Pi: live partial content from streaming tools (bash). The
@@ -2489,12 +2488,14 @@
       ;; 1s interval (pi: setInterval → context.invalidate), so a
       ;; silent long-running tool still updates Elapsed steadily — this
       ;; event only pushes the new output chunks.
-      (do (when-let [comp (get @pending-tool-comps (:tool-call-id evt))]
-            (when-let [content (:content evt)]
-              (ui/tool-execution-set-content! comp content)))
-          (tui/tui-request-render tui))
+      ;; No manual render request: set-content! swaps a track!-watched
+      ;; atom, which schedules the frame itself (§3.4).
+      (when-let [comp (get @pending-tool-comps (:tool-call-id evt))]
+        (when-let [content (:content evt)]
+          (ui/tool-execution-set-content! comp content)))
       :tool-execution-end
       ;; Pi: update the component by id and remove it from pendingTools
+      ;; (watched atoms schedule their own frame — §3.4)
       (when-let [comp (get @pending-tool-comps (:tool-call-id evt))]
         (let [result (:result evt)]
           (ui/tool-execution-set-content! comp (:content result))
@@ -2505,14 +2506,13 @@
             (ui/tool-execution-set-details! comp details))
           (when-let [images (:images result)]
             (ui/tool-execution-set-images! comp images))
-          (swap! pending-tool-comps dissoc (:tool-call-id evt))
-          (tui/tui-request-render tui)))
+          (swap! pending-tool-comps dissoc (:tool-call-id evt))))
       :status
       ;; Pi: agent status changes keep the footer/status
-      ;; layer in sync via the :status event
-      (do (when-let [cs @cs-ref]
-            (update-footer! cs))
-          (tui/tui-request-render tui))
+      ;; layer in sync via the :status event (update-footer!'s invalidate
+      ;; schedules the frame)
+      (when-let [cs @cs-ref]
+        (update-footer! cs))
       :agent-end
       ;; Pi: maybeShowCacheMissNotice — a significant
       ;; prompt-cache miss on the completed turn (only
@@ -2524,10 +2524,10 @@
           (tui/tui-request-render tui))
       :queue-update
       ;; Queued steering/follow-up messages changed (pi:
-      ;; queue_update → updatePendingMessagesDisplay)
-      (do (when-let [cs @cs-ref]
-            (update-pending-messages! cs))
-          (tui/tui-request-render tui))
+      ;; queue_update → updatePendingMessagesDisplay; the tracked-atom
+      ;; swap schedules the frame)
+      (when-let [cs @cs-ref]
+        (update-pending-messages! cs))
       :turn-start
       ;; A new LLM call is starting. After a retry backoff
       ;; or compaction the status container holds a
@@ -2538,33 +2538,34 @@
       ;; via agent.continue(), re-showing the
       ;; WorkingStatusIndicator — kmet's loop recurs
       ;; in-turn, so turn-start is the equivalent signal).
-      (do (when-let [cs @cs-ref]
-            (when (and @(:running-turn? cs)
-                       (not= :working (:kind @(:status-current cs))))
-              (activate-working-indicator! cs)))
-          (tui/tui-request-render tui))
+      ;; The guarded nil-swap inside activate-working-indicator!
+      ;; schedules the frame when a real change happens.
+      (when-let [cs @cs-ref]
+        (when (and @(:running-turn? cs)
+                   (not= :working (:kind @(:status-current cs))))
+          (activate-working-indicator! cs)))
       :auto-retry-start
       ;; Show the retry countdown; the failed attempt's partial
       ;; text stays visible (pi: auto_retry_start only swaps in a
       ;; RetryStatusIndicator — the errored block remains in the
       ;; chat and the retried stream opens a fresh message below it)
-      (do (when-let [cs @cs-ref]
-            (show-status-indicator!
-             cs :retry
-             (ui/make-retry-status-indicator
-              (:attempt evt) (:max-attempts evt) (:delay-ms evt)
-              :cancel-hint (fmt-key-display
-                            (app-kb/key-text "app.interrupt")))))
-          (tui/tui-request-render tui))
+      ;; (the :status-current swap schedules its own frame)
+      (when-let [cs @cs-ref]
+        (show-status-indicator!
+         cs :retry
+         (ui/make-retry-status-indicator
+          (:attempt evt) (:max-attempts evt) (:delay-ms evt)
+          :cancel-hint (fmt-key-display
+                        (app-kb/key-text "app.interrupt")))))
       :auto-retry-end
       ;; Retry finished (pi: auto_retry_end →
       ;; clearStatusIndicator("retry")). Kind-gated: when
       ;; the retried call already started (turn-start
       ;; revived the working indicator) this no-ops and
-      ;; the working spinner keeps spinning.
-      (do (when-let [cs @cs-ref]
-            (clear-status-indicator! cs :retry))
-          (tui/tui-request-render tui))
+      ;; the working spinner keeps spinning.) The kind-gated nil-swap
+      ;; schedules its own frame.
+      (when-let [cs @cs-ref]
+        (clear-status-indicator! cs :retry))
       :compaction-start
       ;; Session compaction in progress (pi:
       ;; compaction_start → CompactionStatusIndicator);

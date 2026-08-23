@@ -43,7 +43,6 @@
                cache-atom        ;; render cache
                exclude-from-context-atom ;; boolean (!! vs !)
                theme-atom        ;; Theme record (default dark-theme)
-               request-render-fn-atom ;; nil or (fn) to trigger TUI re-render
                ticker-atom]      ;; 1s elapsed-tick future while running
   (render [this width]
     (track! this width
@@ -193,7 +192,6 @@
                :cache-atom (atom nil)
                :exclude-from-context-atom (atom exclude-from-context?)
                :theme-atom (atom theme)
-               :request-render-fn-atom (atom nil)
                :ticker-atom (atom nil)})]
     ;; Pi: the loader's setInterval drives re-renders while running —
     ;; kmet's spinner is passive, so a 1s ticker invalidates the
@@ -212,8 +210,6 @@
                       ;; ticker (pi's setInterval survives callback throws)
                       (try
                         (protocols/invalidate comp)
-                        (when-let [cb @(:request-render-fn-atom comp)]
-                          (cb))
                         (catch Exception _))
                       (recur))
                     nil))
@@ -281,8 +277,6 @@
   (when-let [t @(:ticker-atom comp)]
     (future-cancel t)
     (reset! (:ticker-atom comp) nil)))
-
-(defsetter bash-execution-set-request-render-fn! :request-render-fn-atom comp f)
 
 (defn bash-execution-get-output
   "Get the raw accumulated output string."

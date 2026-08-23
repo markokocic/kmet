@@ -310,26 +310,6 @@
       (is (nil? (:interval @(:renderer-state-atom c)))
           "no ticker after completion"))))
 
-(deftest test-throwing-request-render-fn-contained
-  (testing "a throwing request-render-fn must not propagate through setters
-            (agent-loop thread) or the render pass (render-loop thread)"
-    (let [c (te/make-tool-execution :name "bash" :args {:command "ls"})]
-      (te/tool-execution-set-request-render-fn! c (fn [] (throw (ex-info "boom" {}))))
-      (is (= :ok (try (te/tool-execution-mark-execution-started! c) :ok
-                      (catch Exception _ :threw)))
-          "mark-execution-started! does not throw")
-      (is (= :ok (try (te/tool-execution-set-content! c "out") :ok
-                      (catch Exception _ :threw)))
-          "set-content! does not throw")
-      (is (= :ok (try (te/tool-execution-set-error! c false) :ok
-                      (catch Exception _ :threw)))
-          "set-error! does not throw")
-      (is (= :ok (try (core/render c 60) :ok
-                      (catch Exception _ :threw)))
-          "render pass does not throw")
-      ;; the component still works normally afterwards
-      (is (some #(re-find #"Took" %) (mapv strip-ansi (core/render c 60)))))))
-
 ;; ─── Pi parity: cached edit preview, compact read, tabs, expanded ─────────
 
 (deftest test-edit-result-diff-corrects-preview
