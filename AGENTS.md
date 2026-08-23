@@ -40,8 +40,7 @@
   version = git tag else short hash else "dev"). On a termux host a `.sh` launcher is emitted
   next to the binary: glibc linker exec + `--jar <self>` (auto-detection breaks because
   `/proc/self/exe` resolves to `ld-linux`). Downloads cached + sha256-checked in
-  `target/build-cache/`; builds are sequential — no parallel heavy steps (lmkd kills the
-  main kmet process under memory pressure).
+  `target/build-cache/`.
 
 ### API Preferences (avoid Java interop)
 - **`babashka.fs`** over `java.io.File` for all file operations
