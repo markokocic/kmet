@@ -12,6 +12,14 @@
   instead of yanking the newer one out of the dock."
   (atom 0))
 
+(defn invalidate-pending!
+  "Invalidate every pending done() without touching the current dock
+   contents (pi: disposeActiveSelector clears activeSelectorToken). Call
+   when something else takes over the dock wholesale — a selector restored
+   afterwards must not yank the new occupant out."
+  []
+  (swap! dock-generation inc))
+
 (defn make-dock-area
   "The editor dock as a fn component (dsl.md stage 4, pi: the editorDock
    container): renders whichever panel is recorded in DOCK-CURRENT

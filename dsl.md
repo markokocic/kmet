@@ -1170,13 +1170,22 @@ blast radius first:
     shell stays for IFocusable/handle-input — focus/key routing are
     imperative (§5); dispose unwinds the reaction, called by the flows'
     finally blocks after dock restore.
-    Review fixes: appended lines (waiting/progress/info) insert ABOVE a
-    trailing input row — pi's content area sits above the input, and a
-    plain conj rendered them below it; static chrome (borders/title) is
-    built once outside the body so reconcile identity-matches it instead
-    of retire/reconstruct churn per swap; `:set-editor-component` clears
-    `:dock-current` first, restoring the old container-clear displacement
-    semantics when a selector is mounted.
+    Review fixes (two rounds — the second checked pi's source directly):
+    static chrome (borders/title) is built once outside the body so
+    reconcile identity-matches it instead of retire/reconstruct churn per
+    swap; `:set-editor-component` clears `:dock-current` AND invalidates
+    pending done()s (dock/invalidate-pending!), matching pi's
+    setCustomEditorComponent → disposeActiveSelector + clear ordering.
+    Pi-fidelity corrections found by re-reading login-dialog.ts and
+    pi-tui's Container: pi NEVER mounts the Input at construction — it
+    enters only during showPrompt/showManualInput and leaves on submit
+    (replaceInputWithSubmittedText); kmet-old kept a permanent input line,
+    an upstream divergence the first conversion had inherited, now dropped
+    (rows start empty; auth/device-code states show no input line).
+    Container.addChild in pi-tui is a plain push with NO move semantics —
+    kmet-old's detach-input! comment had it backwards; the hack existed
+    only because of that permanent child. Appends (show-info/waiting/
+    progress) are plain content-end conj, exactly pi.
     Shipped deviation: §2.3 predicted the dialog conversion would need
     `:ref`; it didn't materialize — the app already holds the records it
     must reach imperatively, and the dock swap became an atom-driven tree

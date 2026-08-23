@@ -25,7 +25,8 @@
         (let [lines (render-plain d 50)]
           (is (some #(re-find #"Login to TestProv" %) lines) "title shown")
           (is (= 2 (count (filter #(re-find #"─+" %) lines))) "two borders")
-          (is (= [{:row :input}] @(:rows-atom d)) "initial rows"))
+          (is (empty? @(:rows-atom d))
+              "pi: the Input is not in the tree at construction"))
         (finally (protocols/dispose d))))))
 
 (deftest test-show-auth-replaces-content
@@ -37,7 +38,6 @@
         (let [lines (render-plain d 60)]
           (is (some #(re-find #"example\.com/auth" %) lines) "url shown")
           (is (some #(re-find #"Click it" %) lines) "instructions shown"))
-        (is (= :input (:row (last @(:rows-atom d)))) "input row last")
         (finally (protocols/dispose d))))))
 
 (deftest test-prompt-transcript-accumulates
@@ -71,10 +71,10 @@
           (is (= :text (:row (peek rows))) "hint line last"))
         (finally (protocols/dispose d))))))
 
-(deftest test-appends-stay-above-the-input
-  (testing "info/waiting/progress appends land ABOVE the live input row —
-            pi's content area sits above the input (regression: conj put them
-            below it)"
+(deftest test-appends-follow-pi-content-order
+  (testing "show-waiting/progress/info append at the content end — pi keeps
+            the Input out of the tree outside an active prompt, so appended
+            rows never interact with an input line"
     (let [d (make-dialog)]
       (try
         (ld/login-dialog-show-device-code! d "https://example.dev" "ABC-123")
@@ -83,14 +83,18 @@
         (ld/login-dialog-show-info! d "Provider says hi")
         (let [rows @(:rows-atom d)
               texts (mapv :text rows)
-              input-pos (first (keep-indexed (fn [i r] (when (= :input (:row r)) i)) rows))
               waiting-pos (first (keep-indexed (fn [i t] (when (str/includes? (str t) "Waiting") i)) texts))
               polling-pos (first (keep-indexed (fn [i t] (when (str/includes? (str t) "Polling") i)) texts))
               info-pos (first (keep-indexed (fn [i t] (when (str/includes? (str t) "says hi") i)) texts))]
-          (is (= 1 (count (filter #(= :input (:row %)) rows))) "single input row")
-          (is (< waiting-pos input-pos) "waiting line above input")
-          (is (< polling-pos input-pos) "progress line above input")
-          (is (< info-pos input-pos) "info line above input"))
+          (is (not-any? #(= :input (:row %)) rows)
+              "no input row: pi only mounts it during prompts")
+          (is (< waiting-pos polling-pos info-pos) "appended in call order"))
+        ;; a prompt then mounts exactly one input at the end
+        (ld/login-dialog-show-manual-input! d "Paste the code")
+        (let [rows @(:rows-atom d)]
+          (is (= 1 (count (filter #(= :input (:row %)) rows)))
+              "single input row while prompting")
+          (is (= :input (:row (peek (pop rows)))) "input second to last"))
         (finally (protocols/dispose d))))))
 
 (deftest test-cancel-settles-pending-prompt

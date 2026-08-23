@@ -85,9 +85,8 @@
 
 (defn login-dialog-show-auth!
   "Show an OAuth authorize URL (+ optional instructions) and open it in the
-   platform browser (pi showAuth). The input row stays at the bottom — it
-   remains the focus target while the flow runs (parity with the old
-   container layout)."
+   platform browser (pi showAuth). The Input is NOT part of the tree here —
+   pi only mounts it while a prompt is active."
   [d url instructions]
   (let [th (theme/get-current-theme)]
     (reset! (:rows-atom d)
@@ -97,8 +96,7 @@
                           (text-row (click-hint-line th url))
                           (when instructions spacer-row)
                           (when instructions
-                            (text-row (theme/fg th :warning instructions)))
-                          {:row :input}]))))
+                            (text-row (theme/fg th :warning instructions)))]))))
   (open-browser url)
   (repaint! d))
 
@@ -111,21 +109,15 @@
              (text-row (linked-url-line th verification-uri))
              (text-row (click-hint-line th verification-uri))
              spacer-row
-             (text-row (theme/fg th :warning (str "Enter code: " user-code)))
-             {:row :input}]))
+             (text-row (theme/fg th :warning (str "Enter code: " user-code)))]))
   (repaint! d))
 
 (defn- append-rows!
-  "Append ROWS to the content, keeping a trailing live input row LAST —
-   pi's layout puts the content area ABOVE the input, so appended lines
-   (waiting/progress/info) render above it, never below."
+  "Append ROWS at the content end — exactly pi's contentContainer.addChild
+   appends (the Input is not in the tree outside an active prompt, so
+   there is no ordering interaction)."
   [d new-rows]
-  (swap! (:rows-atom d)
-         (fn [rows]
-           (let [input-last? (and (seq rows) (= :input (:row (peek rows))))
-                 base (cond-> rows input-last? pop)
-                 tail (cond-> [] input-last? (conj (peek rows)))]
-             (into (into base new-rows) tail)))))
+  (swap! (:rows-atom d) into new-rows))
 
 (defn login-dialog-show-info!
   "Append provider-owned informational text (pi showInfo)."
@@ -264,7 +256,7 @@
   [tui provider-name on-complete]
   (let [th (theme/get-current-theme)
         d (map->LoginDialog
-           {:rows-atom (atom [{:row :input}])
+           {:rows-atom (atom [])
             :input-comp (input/make-input)
             :tui tui
             :input-resolver-atom (atom nil)
