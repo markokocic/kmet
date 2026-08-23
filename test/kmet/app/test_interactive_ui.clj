@@ -7,6 +7,7 @@
             [kmet.tui.autocomplete :as ac]
             [kmet.tui.components.editor :as editor]
             [kmet.tui.hiccup :as hiccup]
+            [kmet.tui.theme :as theme]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.core :as tui]
             [kmet.modes.interactive :as inter]
@@ -553,7 +554,11 @@
             ((:handler (commands/find-command "theme")) cs "light")
             (t/is (= "light" (get-in @saved [1])) "theme persisted as the full name")
             (t/is (= "light" (theme-ctrl/get-active-theme-name @tc-ctrl))
-                  "theme switched to the full name")))))))
+                  "theme switched to the full name")
+            ;; restore: components subscribe to the shared theme atom
+            ;; (Stage 5) — a leaked light theme re-themes later tests
+            ((:handler (commands/find-command "theme")) cs "dark")
+            (t/is (= "dark" (:name (theme/get-current-theme))))))))))
 
 (deftest test-build-context-capability
   (testing "the interactive ui registry's :build-context captures live state"

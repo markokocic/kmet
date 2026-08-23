@@ -178,6 +178,16 @@
       (finally
         (macros/set-frame-hook! nil)))))
 
+(t/deftest compute-creation-counted
+  ;; leak observability (dsl.md §3.1): every creation bumps :computes —
+  ;; per-instance computes create once, bare-in-body computes climb per pass
+  (h/reset-counters!)
+  (let [a (atom 1)
+        _ (h/compute [a] inc)
+        _ (h/compute [a] (fn [x] (* x 2)))]
+    (t/is (= 2 (:computes (h/counters))) "two creations counted")
+    (h/reset-counters!)))
+
 (t/deftest compute-top-level-lives-forever
   ;; no enclosing store → the reaction keeps its dep watches (the shared
   ;; def'd compute pattern)

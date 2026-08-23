@@ -612,28 +612,27 @@ Three homes for state, decided by one question: *how many components read it?*
 
 A derived-state mechanism over the atoms the app already owns. No
 mega-store, no app rewrite — `compute` lives in the tree layer's
-namespace. Before Stage 1 it is self-contained (keyed watches over
-listed deps); after Stage 1 it is sugar over `(r/reaction …)` with the
-dep list as a hint. Same call shape either way:
+namespace. Before Stage 1 it was self-contained (keyed watches over
+listed deps); since Stage 5 it is sugar over a reaction whose body reads
+each listed dep tracked and calls (F dep-value …) with their CURRENT
+values:
 
 ```clojure
 ;; kmet.tui.hiccup — generic, knows nothing about kmet.app
 (defn compute
-  "Derived atom over DEPS: watches each, recomputes (F) on change,
-   skips the write when the result is equal. Returns a plain atom."
+  "Derived ref over DEPS: re-derives when any dep changes by =, applying
+   F to the deps' current values; equal results notify nobody. Returns a
+   reaction."
   [deps f] ...)
 ```
 
-Deps are listed explicitly — no dep *discovery*, so nothing has to be
-extracted from `track-render` first. (The auto-discovering upgrade is
-the `kmet.tui.reagent` track, §2.8: real reactions make `compute` sugar
-over `(r/reaction …)` + frame flush.) The returned atom uses the same
-watch machinery as `track-render`: keyed watches, equal-value no-op. Derefs are normal
-tracked derefs, and when a source changes but the derived value
-doesn't, the equality check no-ops → **fine-grained invalidation for
-free** — and invalidation schedules the next frame automatically
-(§3.4), so subscribing is enough to keep a component live; no manual
-`tui-request-render`.
+The dep list seeds tracking; anything else F reads through tracked
+channels joins the discovered set automatically (§2.8). Equal-value
+recomputation notifies nobody → **fine-grained invalidation for free** —
+and invalidation schedules the next frame automatically (§3.4), so
+subscribing is enough to keep a component live; no manual
+`tui-request-render`. Records subscribe through the same funnel: `track!`
+watches reactive refs beside plain atoms (Stage 5).
 
 Two usage patterns over the one primitive:
 
@@ -643,28 +642,25 @@ Two usage patterns over the one primitive:
   ```clojure
   (defn message [props]
     (with-let [content (hiccup/compute [(:messages-atom props)]
-                             #(get-in @(:messages-atom props)
-                                      [(:idx props) :content]))]
+                             #(get-in % [(:idx props) :content]))]
       [:text {:text @content}]))
   ```
 
-  Disposal is automatic: when `compute` runs during a render pass
-  (`*comp*` bound), it registers its unwinder (remove-watch on each
-  dep) with the component via `on-dispose!` — mirrors Reagent's
+  Disposal is automatic: when `compute` runs during a render pass, it
+  registers its disposal with the component store — mirrors Reagent's
   dispose-on-unmount, no manual cleanup. Top-level shared computes have
-  no enclosing instance and live forever, which is the point. Behind
-  `--debug`, `compute` counts instances per component per frame and
-  logs loudly on growth — a leak (bare compute in a render body) is
-  visible in counters, not just doc.
+  no enclosing instance and live forever, which is the point. A compute
+  created BARE in a render body leaks a reaction per pass — under
+  `--debug`, hiccup's counters expose the growth.
 
 - **Shared** — a def'd compute: one atom, defined once, N components
   derefing it. No registry, no keys, no lazy creation — `(def …)` *is*
   the registry:
 
   ```clojure
-  ;; kmet.app.ui — shared subs are plain top-level computes
-  (def theme-sub (hiccup/compute [theme-atom] identity))
-  (def agent-status-sub (hiccup/compute [agent-state] #(:status @agent-state)))
+  ;; kmet.app.ui.subs — shared subs are plain top-level computes
+  (def theme-sub (hiccup/compute [theme/theme-atom] identity))
+  (def agent-status-sub (hiccup/compute [agent-state] :status))
 
   (defn status-line [props]
     [:text {:text (str @agent-status-sub)}])
@@ -690,8 +686,7 @@ slice:
 ;; disposed with the instance (see §3.1)
 (defn message [props]
   (with-let [content (hiccup/compute [(:messages-atom props)]
-                         #(get-in @(:messages-atom props)
-                                  [(:idx props) :content]))]
+                         #(get-in % [(:idx props) :content]))]
     [:text {:text @content}]))
 ```
 

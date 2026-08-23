@@ -88,13 +88,15 @@
 ;; invoked on frames where nothing it derefs changed shows up as
 ;; bodies-run climbing while bodies-skipped stays flat.
 (def ^:private zero-counters
-  {:bodies-run 0 :bodies-skipped 0 :constructs 0 :reuses 0 :disposals 0})
+  {:bodies-run 0 :bodies-skipped 0 :constructs 0 :reuses 0 :disposals 0
+   :computes 0})
 
 (defonce ^:private counters-atom (atom zero-counters))
 
 (defn counters
   "Per-frame fn-invocation/reconcile counters ({:bodies-run :bodies-skipped
-   :constructs :reuses :disposals}). Process-wide; reset-counters! in tests."
+   :constructs :reuses :disposals :computes}). Process-wide;
+   reset-counters! in tests."
   [] @counters-atom)
 
 (defn reset-counters!
@@ -738,8 +740,9 @@
 
 (defn compute
   "A derived reactive ref over DEPS (dsl.md §3.1, Stage 5): sugar over
-   kmet.tui.reaction whose body reads every dep through a tracked deref and
-   then calls (F). The reaction re-derives when any dependency changes by =
+   kmet.tui.reaction whose body reads every dep through a tracked deref
+   and applies F to their current values. The reaction re-derives when any
+   dependency changes by =
    — the explicit DEPS list seeds tracking, and everything F itself reads
    through tracked channels (tracked-deref, other computes/reactions,
    cursors) joins the discovered set automatically. A recomputation to an
@@ -747,9 +750,10 @@
    output changes, component caches stay valid, no frame is requested
    (fine-grained invalidation for free).
 
-   F is applied to the CURRENT VALUES of the deps as arguments —
-   (compute [theme-atom] identity), (compute [a b] +), and zero-arg bodies
-   closing over their own slices all work.
+   F is applied to the CURRENT VALUES of the deps as arguments:
+   (compute [theme-atom] identity) and (compute [a b] +) work directly;
+   with an empty dep list F takes no arguments and may close over its own
+   slices.
 
    Returns a reaction: derefable everywhere (@c), watchable via
    kmet.tui.reagent/watch-ref, never reset!. Derefs outside a reaction
@@ -761,11 +765,16 @@
    When created during a component render pass (macros/*store* bound —
    under with-let), the reaction is disposed with the component: per-instance
    computes need no manual cleanup. Top-level shared computes (no enclosing
-   store) live forever, which is the point. Detects the enclosing store via
-   macros/*store* — bound around every component body; a top-level compute
-   keeps its watches for the process lifetime."
+   store) live forever, which is the point. Create computes ONCE per
+   instance — one built bare inside a component body leaks a reaction per
+   pass, visible as :computes climbing in hiccup's --debug counters."
   [deps f]
-  (let [rx (r/make-reaction
+  ;; Count creations: computes are created ONCE per instance (top-level def
+  ;; or with-let init). A compute built bare inside a component body leaks a
+  ;; reaction per render pass — the counter climbing frame over frame makes
+  ;; that visible (dsl.md §3.1).
+  (let [_ (bump! :computes)
+        rx (r/make-reaction
             (fn []
               ;; Read the listed deps TRACKED and hand their values to F:
               ;; they are watched even where F ignores them. Anything else

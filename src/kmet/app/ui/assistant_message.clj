@@ -3,9 +3,10 @@
    Top pad-y=1 only (Pi-style Spacer(1) at top when content present).
    No bottom padding — next component provides its own top spacing.
    Spacer between thinking and text blocks when text follows thinking.
-   Optimized for streaming: text/thinking wrapping/parsing happens eagerly
-   in append calls (on the LLM thread) so the render function returns
-   pre-rendered lines instantly.
+   Content lives in the message map's data atoms (shared into this
+   record); appends are pure swaps on the LLM thread and re-wrapping
+   happens lazily in render (the stale check), so streaming deltas never
+   block (dsl.md §3.2 Stage 5). Styling subscribes to ui.subs/theme-sub.
    Does NOT include a working spinner — the working indicator is a separate
    StatusIndicator in a dedicated layout layer between chat and editor (Pi-style)."
   (:require [clojure.string :as str]

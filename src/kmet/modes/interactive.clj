@@ -2043,10 +2043,10 @@
       (reset! (:bash-running? cs) true)
 
       ;; Create the UI component
+      ;; no :theme — the component subscribes to ui.subs/theme-sub (Stage 5)
       (let [bash-comp (be/make-bash-execution
                        :command command
-                       :exclude-from-context? exclude-from-context?
-                       :theme (th/get-current-theme))
+                       :exclude-from-context? exclude-from-context?)
             ;; ── Build session env (pi: resolveSpawnContext) ─────────────
             ag @(:agent-state cs)
             session-env
@@ -2719,9 +2719,11 @@
 
         ;; Components (define before agent state so on-event can reference them)
         sp1 (spacer/make-spacer 1)
-        ch (ui/make-chat-history :theme (cfg/get-theme config)
-                                 :thinking-hidden (cfg/get-hide-thinking-block config)
-                                 :output-pad (cfg/get-output-pad config))
+        ;; no :theme — message components subscribe to ui.subs/theme-sub
+        ;; themselves (Stage 5)
+        ch (ui/make-chat-history
+            :thinking-hidden (cfg/get-hide-thinking-block config)
+            :output-pad (cfg/get-output-pad config))
         pending-tool-comps (atom {})  ;; Pi: pendingTools Map (tool-call-id → comp)
         cs-ref (atom nil)             ;; CoreState, filled after layout (for :status events)
 

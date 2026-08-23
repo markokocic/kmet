@@ -494,6 +494,7 @@ inert before the interactive layout exists and in headless/print mode.
 (ext/ui-set-status api "my-ext" "loaded")   ; footer status; nil clears
 (ext/ui-notify api "Done" :info)            ; :info | :warning | :error
 (ext/ui-set-widget api "my-widget" ["line 1" "line 2"] {:placement :above-editor})
+(ext/ui-set-widget api "my-widget" nil)          ; removes the widget (disposes it)
 
 ;; dialogs return a promise — deref on a worker thread
 (ext/ui-select api "Pick" [{:value "a" :label "A"}])
