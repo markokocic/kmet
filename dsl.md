@@ -22,8 +22,9 @@ that shipped noted inline. Implemented so far:
   (default no-op; call-site retirement stays Stage 5).
 - **Stage 4–5**: items 10–12 done — status container, dock + widget
   areas, login-dialog content all mount through `hiccup/root`; Stage 4
-  complete. `compute` and mirror-plumbing removal (Stage 5) are
-  pending.
+  complete. Stage 5 in progress: item 13 done (`compute` = reaction sugar;
+  `track!` watches reactive refs via macros/RXRef, so record components
+  subscribe to computes); items 14–15 pending.
 
 ---
 
@@ -1197,8 +1198,15 @@ scheduler comes later, so nothing can freeze.
 
 ### Stage 5 — subscriptions + scheduling
 
-13. **`compute` = sugar** over Stage-1 reactions (explicit deps remain
-    available; auto-discovery is the default under it).
+13. **`compute` = sugar** over Stage-1 reactions — DONE: the body reads the
+    listed deps tracked (seeding) plus everything F reads through tracked
+    channels (auto-discovery); returns a reaction (watchable via
+    `reagent/watch-ref`), disposed with its instance under `with-let`.
+    Supporting change: `RXRef` moved to `kmet.tui.macros` and `track!`
+    now watches reactive refs beside plain atoms — record components can
+    subscribe to computes (branch-switch pruning included). Headless
+    frames drain the batch queue first (`core/render`, like the loop's
+    tick).
 14. **Scheduler gate** — invalidate-cache triggers the hook (§3.4).
     Gate: bare `swap!`/`reset!` on a subscribed source produces exactly
     one frame. Only after the gate passes, retire manual request-render

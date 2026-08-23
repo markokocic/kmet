@@ -38,7 +38,8 @@
    watch handler — coalescing matters at streaming write rates, and
    Reagent's own component path (the one Stage 3 mirrors) is callback-based
    either way."
-  (:require [kmet.tui.macros :as macros])
+  (:require [kmet.tui.macros :as macros :refer [-add-watch -remove-watch
+                                                -cell -dispose -force-run]])
   (:refer-clojure :exclude [run!]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
@@ -64,14 +65,10 @@
 ;; internal registry (SCI exposes no IWatchable implementation to hook)
 ;; ═══════════════════════════════════════════════════════════════════════════
 
-(defprotocol RXRef
-  "Internal surface of the library's reactive refs (reactions, cursors).
-   Not for external use — go through watch-ref/unwatch-ref/run!/dispose!."
-  (-add-watch [this key f] "Register watcher F under KEY.")
-  (-remove-watch [this key] "Drop the watcher under KEY.")
-  (-cell [this] "The internal state atom.")
-  (-dispose [this] "Kill the ref: unwatch deps, purge from the queue.")
-  (-force-run [this] "Bring the ref current without going through deref."))
+;; The internal ref surface (RXRef) lives in kmet.tui.macros — beside the
+;; track! machinery that watches these refs, so record-component renders
+;; can subscribe to computes without a require cycle. One name kept here:
+(def RXRef macros/RXRef)
 
 (defn reactive-ref?
   "True for the library's own refs (reactions, cursors)."

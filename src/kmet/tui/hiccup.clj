@@ -736,6 +736,44 @@
                 :when (owned? c)]
           (protocols/dispose c))))))
 
+(defn compute
+  "A derived reactive ref over DEPS (dsl.md §3.1, Stage 5): sugar over
+   kmet.tui.reaction whose body reads every dep through a tracked deref and
+   then calls (F). The reaction re-derives when any dependency changes by =
+   — the explicit DEPS list seeds tracking, and everything F itself reads
+   through tracked channels (tracked-deref, other computes/reactions,
+   cursors) joins the discovered set automatically. A recomputation to an
+   equal value notifies nobody: watchers of the ref fire only on real
+   output changes, component caches stay valid, no frame is requested
+   (fine-grained invalidation for free).
+
+   Returns a reaction: derefable everywhere (@c), watchable via
+   kmet.tui.reagent/watch-ref, never reset!. Derefs outside a reaction
+   settle the batch queue first and always answer the CURRENT value;
+   inside a running reaction the deref records this ref as a dependency —
+   the component-body pattern. First deref runs F lazily; dep changes
+   re-run queued at the frame flush.
+
+   When created during a component render pass (macros/*store* bound —
+   under with-let), the reaction is disposed with the component: per-instance
+   computes need no manual cleanup. Top-level shared computes (no enclosing
+   store) live forever, which is the point. Detects the enclosing store via
+   macros/*store* — bound around every component body; a top-level compute
+   keeps its watches for the process lifetime."
+  [deps f]
+  (let [rx (r/make-reaction
+            (fn []
+              ;; Seed with the listed deps (read TRACKED): they are watched
+              ;; even where F reads them bare. Anything else F reads through
+              ;; tracked channels is discovered during the body run.
+              (doseq [d deps] (macros/tracked-deref d))
+              (f)))]
+    (when macros/*store*
+      (macros/register-cleanup!
+       (gensym "compute-")
+       #(r/dispose! rx)))
+    rx))
+
 ;; root — the one mount path (dsl.md §2.6)
 ;; ═══════════════════════════════════════════════════════════════════════════
 

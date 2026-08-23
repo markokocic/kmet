@@ -38,7 +38,15 @@
 (def IComponent protocols/IComponent)
 (def IFocusable protocols/IFocusable)
 (def IEditorComponent protocols/IEditorComponent)
-(def render protocols/render)
+(defn render
+  "One headless frame: drain the reaction batch queue, then render C at
+   WIDTH. Mirrors the live loop (flush! runs at the tick before the render
+   gate reads the caches), so queued recomputes — computes and reactions
+   dirtied since the last frame — are always current in what gets drawn.
+   The flush is a no-op while nothing is queued."
+  [c width]
+  (reagent/flush!)
+  (protocols/render c width))
 (def handle-input protocols/handle-input)
 (def invalidate protocols/invalidate)
 (def focused protocols/focused)

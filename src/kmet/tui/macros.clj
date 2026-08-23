@@ -38,19 +38,56 @@
       (swap! pending conj ref)))
   nil)
 
+;; ─── Reactive refs ──────────────────────────────────────────────────────
+
+(defprotocol RXRef
+  "Internal surface of kmet.tui.reagent's refs (reactions, cursors).
+   Defined HERE — not in reagent.clj — so the track! machinery can watch
+   them without a require cycle: record-component render bodies subscribe
+   to computes/reactions through the same tracked-deref funnel as plain
+   atoms (Stage 5: a message record computing its slice). Not for external
+   use — go through kmet.tui.reagent/watch-ref, run!, dispose!."
+  (-add-watch [this key f] "Register watcher F under KEY.")
+  (-remove-watch [this key] "Drop the watcher under KEY.")
+  (-cell [this] "The internal state atom.")
+  (-dispose [this] "Kill the ref: unwatch deps, purge from the queue.")
+  (-force-run [this] "Bring the ref current without going through deref."))
+
+(defn trackable-ref?
+  "True when REF can be a tracked dependency: IRef instances (plain atoms,
+   vars — core add-watch works) or library reactive refs (reactions,
+   cursors — watched through RXRef). Volatiles and delays can't take
+   watches and are never tracked."
+  [ref]
+  (or (instance? clojure.lang.IRef ref) (satisfies? RXRef ref)))
+
+(defn- watch-dep!
+  "Register HANDLER on DEP under KEY, through the right machinery."
+  [dep key handler]
+  (if (instance? clojure.lang.IRef dep)
+    (add-watch dep key handler)
+    (-add-watch dep key handler)))
+
+(defn- unwatch-dep!
+  "Drop DEP's watcher under KEY, through the right machinery."
+  [dep key]
+  (if (instance? clojure.lang.IRef dep)
+    (remove-watch dep key)
+    (-remove-watch dep key)))
+
 (defn tracked-deref
   "Deref wrapper used by track!. Records A in the active tracking map (when
-   one is bound) with the value just read, then returns it. Only IRef
-   instances (atoms, vars) are tracked — volatiles and delays can't take
-   watches and are skipped (read but never registered as dependencies,
-   here or in a running reaction). Also records A in the running reaction
-   (when one is bound), so component render bodies are reactive under the
-   DSL."
+   one is bound) with the value just read, then returns it. Trackable refs
+   (plain atoms/vars and library reactions/cursors, see trackable-ref?) are
+   registered as dependencies; volatiles and delays can't take watches and
+   are skipped (read but never registered, here or in a running reaction).
+   Also records A in the running reaction (when one is bound), so component
+   render bodies are reactive under the DSL."
   [a]
   (let [v (deref a)]
-    (when (and *tracked* (instance? clojure.lang.IRef a))
+    (when (and *tracked* (trackable-ref? a))
       (swap! *tracked* assoc a v))
-    (when (instance? clojure.lang.IRef a)
+    (when (trackable-ref? a)
       (capture-deref! a))
     v))
 
@@ -84,15 +121,16 @@
   [component]
   (keyword (str "track!" (System/identityHashCode component))))
 
-;; Watch key → {:component c :atoms #{...}} for every live track! scope.
-;; track-render keeps it current per pass (dropping watches for atoms a
+;; Watch key → {:component c :atoms #{...}} for every live track! scope
+;; (the set mixes plain atoms and reactive refs — both watched per pass).
+;; track-render keeps it current per pass (dropping watches for refs a
 ;; branch switch stopped reading); remove-track-watches! tears down from
 ;; it on dispose. Without it, watches would outlive their component —
 ;; zombie watchers pinning the component and firing invalidate-cache on
 ;; every write forever.
 (defonce ^:private watch-registry (atom {}))
 
-(declare invalidate-cache)
+(declare invalidate-cache schedule-frame!)
 
 (defn- component-cache-atom
   "The render cache field: :cache-atom (current) or legacy :cache (Text/Box)."
@@ -147,22 +185,24 @@
                               ;; change: renders are pure functions of tracked
                               ;; values, so an equal value means the cached result
                               ;; is still valid. (Clojure fires watches even on
-                              ;; equal-value reset!/swap!.) identical? is the
-                              ;; O(1) fast path; structural = catches persistent
-                              ;; copies (fresh object, equal content).
+                              ;; equal-value reset!/swap!; reactions already gate
+                              ;; their notifications on = — the check is shared
+                              ;; anyway.) identical? is the O(1) fast path;
+                              ;; structural = catches persistent copies (fresh
+                              ;; object, equal content).
                               (when-not (or (identical? old new)
                                             (= old new))
                                 (invalidate-cache component)))
                     atoms (set (keys tracked-map))
                     prev-atoms (:atoms (get @watch-registry watch-key))]
                 (doseq [a atoms]
-                  (add-watch a watch-key handler))
-                ;; A previous pass's atoms this pass no longer reads (branch
+                  (watch-dep! a watch-key handler))
+                ;; A previous pass's refs this pass no longer reads (branch
                 ;; switch) lose their watches here — otherwise they fire
                 ;; invalidate-cache forever on writes nobody consumes.
                 (doseq [a prev-atoms]
                   (when-not (contains? atoms a)
-                    (remove-watch a watch-key)))
+                    (unwatch-dep! a watch-key)))
                 (swap! watch-registry assoc watch-key
                        {:component component :atoms atoms})
                 (when-not @invalidated?
@@ -192,22 +232,28 @@
 
 (defn invalidate-cache
   "Invalidate a component's cache. Call from your invalidate method.
-   Equivalent to (reset! (:cache-atom component) nil)."
+   Equivalent to (reset! (:cache-atom component) nil). Also requests a frame
+   through the scheduler hook (dsl.md §3.4) — the gate that closes the
+   reactive loop: every invalidation funnels through here, and an atom
+   change that invalidates a subscriber schedules the next render. The hook
+   is a no-op by default (headless tests, library use); kmet.tui.core
+   installs tui-request-render on start and clears it on stop."
   [component]
   (when-let [cache (component-cache-atom component)]
-    (reset! cache nil)))
+    (reset! cache nil))
+  (schedule-frame!))
 
 (defn remove-track-watches!
   "Remove every watch track-render installed on COMPONENT's behalf (its
-   last pass's tracked atoms). Called from the dispose defcomponent
-   generates — without it the watches outlive the component and keep
-   firing invalidate-cache on each source write. Idempotent; a no-op for
-   components that never ran a track! body."
+   last pass's tracked refs — plain atoms and reactive refs alike). Called
+   from the dispose defcomponent generates — without it the watches outlive
+   the component and keep firing invalidate-cache on each source write.
+   Idempotent; a no-op for components that never ran a track! body."
   [component]
   (let [k (tracker-key component)]
     (when-some [{:keys [atoms]} (get @watch-registry k)]
       (doseq [a atoms]
-        (remove-watch a k))
+        (unwatch-dep! a k))
       (swap! watch-registry dissoc k)))
   nil)
 
