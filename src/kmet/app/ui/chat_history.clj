@@ -195,8 +195,10 @@
              :text (content->display-text (:content msg ""))
              :theme theme :output-pad output-pad)
       :assistant (am/make-assistant-message
-                  :text (content->display-text (:content msg ""))
-                  :thinking (:thinking msg "")
+                  ;; content atoms come from the message map (with-assistant-data
+                  ;; created them) — one home, owned by the data layer (§3.2)
+                  :text-atom (:text-atom msg)
+                  :thinking-atom (:thinking-atom msg)
                   :theme theme
                   :output-pad output-pad
                   :thinking-hidden-atom thinking-hidden-atom
@@ -241,13 +243,27 @@
       (make-plain-md-msg (content->display-text (:content msg "")) theme
                          (fn [s] (theme/fg theme :text s))))))
 
+(defn- with-assistant-data
+  "Attach the data-layer content atoms to an assistant message map
+   (dsl.md §3.2 Stage 5): ONE home for text/thinking. The component shares
+   them at construction; appends and reads go through the map — no
+   component-facing mutation API. Non-assistant messages pass through.
+   Caller-supplied atom keys win (merge order)."
+  [msg]
+  (if (= :assistant (:role msg))
+    (merge {:text-atom (atom (content->display-text (:content msg "")))
+            :thinking-atom (atom (:thinking msg ""))}
+           msg)
+    msg))
+
 (defn chat-history-add-message!
   "Add a message to the chat history.
    Creates the appropriate component and appends the message map (with its
-   :component) to messages-atom. Returns the created component (or nil).
-   Auto-scrolls to bottom."
+   :component, plus assistant content atoms) to messages-atom. Returns the
+   created component (or nil)."
   [ch msg]
-  (let [comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch)
+  (let [msg (with-assistant-data msg)
+        comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch)
                                      @(:tools-expanded-atom ch) (:thinking-hidden-atom ch)
                                      (:hidden-label-atom ch))]
     (when comp
@@ -266,7 +282,8 @@
    that belongs above the assistant response. Falls back to appending when
    no streaming message exists. Returns the created component (or nil)."
   [ch msg]
-  (let [comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch)
+  (let [msg (with-assistant-data msg)
+        comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch)
                                      @(:tools-expanded-atom ch) (:thinking-hidden-atom ch)
                                      (:hidden-label-atom ch))
         streaming @(:streaming-atom ch)]
@@ -317,56 +334,63 @@
 
 (defn chat-history-start-streaming!
   "Start a new streaming assistant message.
-   Creates the component, appends the message map to messages-atom, and
-   returns the message map (callers can use chat-history-append-* to feed it).
+   Creates the data atoms (on the message map) and the component sharing
+   them, appends the message map to messages-atom, and returns the message
+   map (callers can use chat-history-append-* to feed it — pure swaps).
    Shares the thinking-hidden/hidden-label atoms with the new message
    (pi: hideThinkingBlock)."
   [ch]
-  (let [comp (am/make-assistant-message
-              :text "" :thinking ""
+  (let [msg (with-assistant-data {:role :assistant :content ""})
+        comp (am/make-assistant-message
+              :text-atom (:text-atom msg)
+              :thinking-atom (:thinking-atom msg)
               :theme @(:theme-atom ch)
               :output-pad @(:output-pad-atom ch)
               :thinking-hidden-atom (:thinking-hidden-atom ch)
-              :hidden-label-atom (:hidden-label-atom ch))
-        msg {:role :assistant :content "" :component comp :streaming? true}]
+              :hidden-label-atom (:hidden-label-atom ch))]
     (am/assistant-message-set-streaming! comp true)
-    (swap! (:messages-atom ch) conj msg)
-    (reset! (:streaming-atom ch) msg)
-    msg))
+    (let [entry (assoc msg :component comp :streaming? true)]
+      (swap! (:messages-atom ch) conj entry)
+      (reset! (:streaming-atom ch) entry)
+      entry)))
 
 (defn chat-history-append-streaming-text!
-  "Append text to the current streaming response.
-   If there's no streaming message, creates one."
+  "Append text to the current streaming response — a pure swap on the
+   message map's text atom; the component's track! watch invalidates its
+   cache and schedules the frame (§3.4). If there's no streaming message,
+   creates one."
   [ch text]
   (let [msg (or @(:streaming-atom ch)
                 (chat-history-start-streaming! ch))]
-    (am/assistant-message-append-text! (:component msg) text)))
+    (swap! (:text-atom msg) str text)))
 
 (defn chat-history-append-thinking-text!
-  "Append text to the current thinking display.
-   If there's no streaming message, creates one."
+  "Append text to the current thinking display — a pure swap on the message
+   map's thinking atom. If there's no streaming message, creates one."
   [ch text]
   (let [msg (or @(:streaming-atom ch)
                 (chat-history-start-streaming! ch))]
-    (am/assistant-message-append-thinking! (:component msg) text)))
+    (swap! (:thinking-atom msg) str text)))
 
 (defn chat-history-finalize-streaming!
-  "Finalize the current streaming message.
-   Captures the final text/thinking from the component into the message map
-   and marks it non-streaming. Returns the component (or nil if no streaming)."
+  "Finalize the current streaming message: materialize the live content
+   atoms into the map's plain :content/:thinking values and strip the atoms
+   (post-finalize shape = replayed shape), marking it non-streaming.
+   Returns the component (or nil if no streaming)."
   [ch]
   (when-let [msg @(:streaming-atom ch)]
     (let [comp (:component msg)
-          text (am/assistant-message-get-text comp)
-          thinking (am/assistant-message-get-thinking comp)]
+          text @(:text-atom msg)
+          thinking @(:thinking-atom msg)]
       ;; mark non-streaming so transformers re-run with is-streaming false
       (am/assistant-message-set-streaming! comp false)
       (swap! (:messages-atom ch)
              (fn [msgs]
                (mapv (fn [m]
                        (if (identical? m msg)
-                         (cond-> (assoc m :content text :streaming? false)
-                           (seq thinking) (assoc :thinking thinking))
+                         (-> (assoc m :content text :streaming? false)
+                             (dissoc :text-atom :thinking-atom)
+                             (cond-> (seq thinking) (assoc :thinking thinking)))
                          m))
                      msgs)))
       (reset! (:streaming-atom ch) nil)
@@ -381,11 +405,19 @@
   nil)
 
 (defn chat-history-get-streaming-text
-  "Get the current streaming text."
+  "Get the current streaming text (read from the message map's data atom)."
   [ch]
   (if-let [msg @(:streaming-atom ch)]
-    (am/assistant-message-get-text (:component msg))
+    (deref (:text-atom msg))
     ""))
+
+(defn chat-history-streaming-empty?
+  "True when the current streaming placeholder carries neither text nor
+   thinking content (the drop-the-placeholder check in error paths)."
+  [ch]
+  (when-let [msg @(:streaming-atom ch)]
+    (and (empty? (deref (:text-atom msg)))
+         (empty? (deref (:thinking-atom msg))))))
 
 ;; ─── Info message ─────────────────────────────────────────────────────────
 
@@ -516,7 +548,8 @@
    read directly from messages-atom (no component reverse-engineering).
    Includes the info banner first; excludes bash executions (!! / !) and
    status lines, which are UI-only, and strips the :component/:streaming?
-   keys."
+   keys plus live assistant content atoms (dereferenced into plain
+   :content/:thinking values)."
   [ch]
   (->> (concat
         (when-let [info @(:info-comp-atom ch)]
@@ -525,7 +558,12 @@
             :content @(:content-atom info)}])
         @(:messages-atom ch))
        (remove #(#{:bash :status} (:role %)))
-       (mapv #(dissoc % :component :streaming?))))
+       ;; deref live assistant content atoms (mid-stream reads); finalized
+       ;; and replayed messages carry plain strings already
+       (mapv (fn [{:keys [text-atom thinking-atom] :as m}]
+               (cond-> (dissoc m :component :streaming? :text-atom :thinking-atom)
+                 text-atom (assoc :content @text-atom)
+                 thinking-atom (assoc :thinking @thinking-atom))))))
 
 (defn chat-history-set-max-lines!
   "No-op: Pi architecture doesn't use max-lines (terminal handles viewport)."

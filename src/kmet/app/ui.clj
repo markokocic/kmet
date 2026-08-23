@@ -22,15 +22,10 @@
 (def user-message-set-theme! user-message/user-message-set-theme!)
 (def user-message-set-output-pad! user-message/user-message-set-output-pad!)
 
-;; AssistantMessageComponent
+;; AssistantMessageComponent — content lives in the message map's data
+;; atoms (Stage 5): no component-facing text/thinking setters or getters
 (def make-assistant-message assistant-message/make-assistant-message)
-(def assistant-message-set-text! assistant-message/assistant-message-set-text!)
-(def assistant-message-append-text! assistant-message/assistant-message-append-text!)
-(def assistant-message-set-thinking! assistant-message/assistant-message-set-thinking!)
-(def assistant-message-append-thinking! assistant-message/assistant-message-append-thinking!)
 (def assistant-message-set-hide-thinking! assistant-message/assistant-message-set-hide-thinking!)
-(def assistant-message-get-text assistant-message/assistant-message-get-text)
-(def assistant-message-get-thinking assistant-message/assistant-message-get-thinking)
 
 ;; ToolExecutionComponent
 (def make-tool-execution tool-execution/make-tool-execution)
@@ -117,6 +112,7 @@
 (def chat-history-finalize-streaming! chat-history/chat-history-finalize-streaming!)
 (def chat-history-finalize-thinking! chat-history/chat-history-finalize-thinking!)
 (def chat-history-get-streaming-text chat-history/chat-history-get-streaming-text)
+(def chat-history-streaming-empty? chat-history/chat-history-streaming-empty?)
 (def chat-history-clear! chat-history/chat-history-clear!)
 (def chat-history-rebuild! chat-history/chat-history-rebuild!)
 (def chat-history-get-messages chat-history/chat-history-get-messages)

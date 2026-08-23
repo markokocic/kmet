@@ -58,31 +58,29 @@
       (is (not-any? #(re-find #"Thinking\.\.\." %) plain)
           "default label replaced"))))
 
-(deftest test-append-text
-  (testing "append-text! updates content during streaming"
-    (let [c (am/make-assistant-message)]
-      (am/assistant-message-append-text! c "Hello ")
-      (am/assistant-message-append-text! c "world")
-      (is (= "Hello world" (am/assistant-message-get-text c))))))
+(deftest test-data-atom-append
+  ;; Stage 5: content lives in a data-layer atom shared into the record —
+  ;; the app swaps it, the component's track! watch picks up the change and
+  ;; the next render shows it (no setter, no manual invalidate)
+  (testing "swapping the data text atom updates the render"
+    (let [ta (atom "Hello ")
+          c (am/make-assistant-message :text-atom ta)]
+      (swap! ta str "world")
+      (let [plain (mapv strip-ansi (core/render c 40))]
+        (is (some #(re-find #"Hello world" %) plain)
+            "external swap visible on next render"))
+      (swap! ta str "!")
+      (is (some #(re-find #"Hello world!" %)
+                (mapv strip-ansi (core/render c 40)))
+          "streaming appends keep flowing through"))))
 
-(deftest test-append-thinking
-  (testing "append-thinking! updates thinking during streaming"
-    (let [c (am/make-assistant-message)]
-      (am/assistant-message-append-thinking! c "step1 ")
-      (am/assistant-message-append-thinking! c "step2")
-      (is (= "step1 step2" (am/assistant-message-get-thinking c))))))
-
-(deftest test-set-text
-  (testing "set-text! replaces content"
-    (let [c (am/make-assistant-message :text "old")]
-      (am/assistant-message-set-text! c "new")
-      (is (= "new" (am/assistant-message-get-text c))))))
-
-(deftest test-set-thinking
-  (testing "set-thinking! replaces thinking"
-    (let [c (am/make-assistant-message :thinking "old")]
-      (am/assistant-message-set-thinking! c "new")
-      (is (= "new" (am/assistant-message-get-thinking c))))))
+(deftest test-data-atom-thinking
+  (testing "swapping the data thinking atom updates the render"
+    (let [tha (atom "step1 ")
+          c (am/make-assistant-message :thinking-atom tha)]
+      (swap! tha str "step2")
+      (let [plain (mapv strip-ansi (core/render c 40))]
+        (is (some #(re-find #"step1 step2" %) plain))))))
 
 (deftest test-set-hide-thinking
   (testing "set-hide-thinking! toggles the label"

@@ -1954,21 +1954,25 @@
 ;; ─── Agent response handler ────────────────────────────────────────────────
 
 (defn- on-agent-text
-  "Called for each text delta from the LLM during streaming."
+  "Called for each text delta from the LLM during streaming. A pure data
+   append: the swap hits the message map's text atom (shared with the
+   assistant component), whose track! watch invalidates the cache and
+   schedules the frame (§3.4). Before the placeholder's first render the
+   anim timer (started at turn start) provides frames — no manual poke
+   needed here."
   [cs text]
   (try
     (ui/chat-history-append-streaming-text! (:chat-history cs) text)
-    (tui/tui-request-render (:tui cs))
     (catch Exception e
       (debug/log "on-agent-text callback: " e)
       (binding [*out* *err*] (println "on-agent-text error:" (ex-message e) (.getClass e))))))
 
 (defn- on-agent-thinking
-  "Called for each thinking/reasoning delta from the LLM during streaming."
+  "Called for each thinking/reasoning delta from the LLM during streaming
+   (pure data append — see on-agent-text)."
   [cs text]
   (try
     (ui/chat-history-append-thinking-text! (:chat-history cs) text)
-    (tui/tui-request-render (:tui cs))
     (catch Exception e
       (debug/log "on-agent-thinking callback: " e)
       (binding [*out* *err*] (println "on-agent-thinking error:" (ex-message e) (.getClass e))))))
@@ -2003,11 +2007,9 @@
     ;; tool execution can sit after the placeholder, and popping the last
     ;; entry would delete that message instead (pi: agent_end removes the
     ;; streamingComponent by reference).
-    (let [ch (:chat-history cs)
-          streaming @(:streaming-atom ch)]
-      (if (and streaming
-               (empty? @(:text-atom (:component streaming)))
-               (empty? @(:thinking-text-atom (:component streaming))))
+    (let [ch (:chat-history cs)]
+      (if (and @(:streaming-atom ch)
+               (ui/chat-history-streaming-empty? ch))
         (ui/chat-history-remove-streaming-placeholder! ch)
         (do (ui/chat-history-finalize-streaming! ch)
             (ui/chat-history-finalize-thinking! ch))))

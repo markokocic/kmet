@@ -12,7 +12,7 @@
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.markdown :as md]
-            [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]
+            [kmet.tui.macros :refer [track! defsetter defcomponent]]
             [kmet.app.extensions :as extensions]))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
@@ -157,8 +157,8 @@
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-assistant-message
-  [& {:keys [text thinking theme output-pad hide-thinking? hidden-label
-             thinking-hidden-atom hidden-label-atom]
+  [& {:keys [text thinking text-atom thinking-atom theme output-pad
+             hide-thinking? hidden-label thinking-hidden-atom hidden-label-atom]
       :or {text "" thinking "" theme theme/dark-theme
            output-pad 1 hide-thinking? false}}]
   ;; Optional SHARED flag atoms: when the chat history passes its own
@@ -166,10 +166,14 @@
   ;; the same state — a toggle is a single reset! that track! watches on all
   ;; messages invalidate at once (pi: hideThinkingBlock). Callers passing a
   ;; nil label fall back to the default.
+  ;; TEXT-ATOM/THINKING-ATOM are the data-layer content homes (Stage 5,
+  ;; dsl.md §3.2): the chat history owns them on the message map and appends
+  ;; swap them directly — no component-facing mutation API. When absent the
+  ;; component creates its own (standalone constructors).
   (let [hidden-label (or hidden-label "Thinking...")
         comp (map->AssistantMessageComponent {:kind :assistant
-                                              :text-atom (atom text)
-                                              :thinking-text-atom (atom thinking)
+                                              :text-atom (or text-atom (atom text))
+                                              :thinking-text-atom (or thinking-atom (atom thinking))
                                               :theme-atom (atom theme)
                                               :output-pad-atom (atom output-pad)
                                               :hide-thinking-atom (or thinking-hidden-atom
@@ -190,20 +194,12 @@
     (reflow-all! comp 80)
     comp))
 
-;; ─── Public API ────────────────────────────────────────────────────────────
-
-(defsetter assistant-message-set-text! :text-atom comp text)
-
-(defn assistant-message-append-text! [comp text]
-  ;; Appends only swap the text atom — reflow happens lazily in render, so
-  ;; streaming deltas never block the LLM thread (pi rebuilds content on
-  ;; every message_update; kmet defers the wrap to the render thread).
-  (swap! (:text-atom comp) str text))
-
-(defsetter assistant-message-set-thinking! :thinking-text-atom comp text)
-
-(defn assistant-message-append-thinking! [comp text]
-  (swap! (:thinking-text-atom comp) str text))
+;; ─── Public API ────────────────────────────────────────────────────────
+;; Content lives in the data-layer atoms (the message map's :text-atom/
+;; :thinking-atom, shared into this record) — there is deliberately NO
+;; component-facing text/thinking setter, appender or getter: the app swaps
+;; and reads the atoms directly; track!'s watches invalidate the cache and
+;; schedule the frame on every real change (dsl.md §3.2 Stage 5).
 
 (defn assistant-message-set-streaming!
   "Set the streaming flag (pi: this.isStreaming) — true while the response
@@ -227,6 +223,3 @@
 (defsetter assistant-message-set-output-pad! :output-pad-atom comp n
   (when-let [w @(:last-render-width-atom comp)]
     (reflow-all! comp w)))
-
-(defgetter assistant-message-get-text :text-atom comp)
-(defgetter assistant-message-get-thinking :thinking-text-atom comp)
