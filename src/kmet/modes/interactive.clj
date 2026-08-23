@@ -3347,15 +3347,18 @@
                            (tui/tui-flash! t (str "Extension UI error: " (ex-message e)))
                            (deliver p nil))))
                      p))
+         ;; footer-set-extension-status! swaps a track!-watched atom —
+         ;; the watch schedules the frame (§3.4), no manual poke
          :set-status (fn [key text]
-                       (ui/footer-set-extension-status! ftr key text)
-                       (tui/tui-request-render t))
+                       (ui/footer-set-extension-status! ftr key text))
          :set-widget (fn [key content options]
                        (let [placement (or (:placement options) :above-editor)
                              m (if (= :below-editor placement) widgets-below-atom widgets-above-atom)
                              existing (get @m key)]
-                         ;; pi: replacing a widget disposes the old one
-                         (when (and existing (not= content :remove))
+                         ;; pi: removeExisting disposes the old widget on
+                         ;; replace AND remove — skipping :remove would leak
+                         ;; its cleanups
+                         (when existing
                            (when-let [dispose (:dispose existing)]
                              (try (dispose) (catch Exception _))))
                          (swap! m dissoc key)
@@ -3363,8 +3366,10 @@
                            (swap! m assoc key
                                   (make-extension-widget-component t content)))
                          ;; the area roots track the widget maps — the swap
-                         ;; alone re-derives them
-                         (tui/tui-request-render t)))
+                         ;; alone re-derives them and schedules the frame
+                         ;; (§3.4); pre-first-frame registrations land in the
+                         ;; roots' first render anyway
+                         nil))
          :set-footer (fn [factory]
                        (when-let [cf @custom-footer-atom]
                          (when-let [dispose (:dispose cf)]
@@ -3418,14 +3423,17 @@
                                 ;; when hiding (kind-gated: a transient retry/
                                 ;; compaction indicator stays), re-show the working
                                 ;; indicator when showing (only while the turn runs).
+                                ;; both branches schedule through the
+                                ;; guarded :status-current swap when real
                                 (if visible?
                                   (when @(:running-turn? cs)
                                     (activate-working-indicator! cs))
-                                  (clear-status-indicator! cs :working))
-                                (tui/tui-request-render t))
+                                  (clear-status-indicator! cs :working)))
          :set-hidden-thinking-label (fn [label]
-                                      (ui/chat-history-set-hidden-thinking-label! ch label)
-                                      (tui/tui-request-render t))
+                                      ;; one reset! on the shared label atom;
+                                      ;; assistant messages' watches schedule
+                                      (ui/chat-history-set-hidden-thinking-label!
+                                       ch label))
          :set-editor-component (fn [factory]
                                  (let [current-text (editor-text-get @current-editor-atom)]
                                    ;; pi parity: setCustomEditorComponent runs
@@ -3459,10 +3467,11 @@
                         (theme-ctrl/set-theme-name! theme-controller theme-or-name true)))
          :get-tools-expanded (fn [] (ui/chat-history-get-tool-expanded ch))
          :set-tools-expanded (fn [expanded?]
+                               ;; the flag swap invalidates every tool
+                               ;; component's watch, which schedules the frame
                                (let [current? (ui/chat-history-get-tool-expanded ch)]
                                  (when (not= current? expanded?)
-                                   (ui/chat-history-toggle-tool-expanded! ch)))
-                               (tui/tui-request-render t))
+                                   (ui/chat-history-toggle-tool-expanded! ch))))
          ;; pi: registerShortcut — a raw key-id bound as a priority editor
          ;; action, checked before every builtin app binding (escape
          ;; included). The keybinding definition is registered on the global
@@ -3532,9 +3541,9 @@
                                     (if (= :steer deliver-as)
                                       (agent/steer! ag text)
                                       (agent/follow-up! ag text))))
+                                ;; both updates schedule their own frames
                                 (update-pending-messages! cs)
                                 (update-footer! cs)
-                                (tui/tui-request-render (:tui cs))
                                 nil))
          ;; pi: sendMessage — a custom message: persisted as a custom_message
          ;; session entry, injected into the agent context (sent to the LLM
@@ -3565,9 +3574,9 @@
                                   ;; sees it (pi: steer into the current run)
                                   nil
                                   (agent/follow-up! ag msg))))
+                            ;; both updates schedule their own frames
                             (update-pending-messages! cs)
                             (update-footer! cs)
-                            (tui/tui-request-render (:tui cs))
                             true))
          :get-active-tools (fn []
                              (agent/get-active-tools @(:agent-state cs)))
