@@ -12,6 +12,7 @@
             [kmet.tui.components.expandable-text :as expandable-text]
             [kmet.tui.components.container :as container]
             [kmet.tui.hiccup :as hiccup]
+            [kmet.tui.reagent :as r]
             [kmet.app.ui :as ui]
             [kmet.app.ui.auth-selector :as auth-selector]
             [kmet.app.ui.dock :as dock]
@@ -66,7 +67,8 @@
          build-extension-ui-registry ask-branch-summary
          build-loaded-resource-sections start-agent-run!
          show-status-indicator! clear-status-indicator! stop-anim-timer!
-         maybe-show-cache-miss-notice!)
+         maybe-show-cache-miss-notice!
+         make-widget-area-above make-widget-area-below)
 
 ;; ─── Global config ref ────────────────────────────────────────────────────
 
@@ -128,7 +130,8 @@
                       bash-signal
                       pending-bash-components
                       pending-messages-container
-                      editor-container
+                      dock-root
+                      dock-current
                       theme-controller])
 
 ;; ─── Formatting helpers ────────────────────────────────────────────────────
@@ -2770,7 +2773,6 @@
             ;; enabledModels, full "provider/id" refs so cycling can switch
             ;; providers)
         _ (agent/init-scoped-models! ag config)
-        sp2 (spacer/make-spacer 1)
         ;; B.1: welcome header — ExpandableText with compact/full variants
         ;; (pi: builtInHeader), toggled by app.tools.expand
         hdr (expandable-text/make-expandable-text
@@ -2830,7 +2832,8 @@
                             :bash-running? (atom false)
                             :bash-signal (atom false)
                             :pending-bash-components (atom [])
-                            :pending-messages-container (container/make-container [pm])})]
+                            :pending-messages-container (container/make-container [pm])
+                            :dock-current (atom nil)})]
 
     ;; Initial loaded-resources sections (rebuilt on /reload)
     (ui/loaded-resources-set-sections! lr (build-loaded-resource-sections))
@@ -2898,17 +2901,30 @@
                                                         loaded-resources-container
                                                         chat-container])
           pending-messages-container (:pending-messages-container cs)
+          ;; extension widget registries (pi: renderWidgets' maps) — read
+          ;; tracked by the widget-area roots below, mutated by :set-widget
+          widgets-above-atom (atom {})
+          widgets-below-atom (atom {})
           ;; The status layer as a mounted DSL tree (dsl.md stage 4): the
           ;; root's reaction re-derives when :status-current swaps, and
           ;; reconcile swaps the child record — no clear/add dance.
           status-root (hiccup/root (ui/make-status-area (:status-current cs) si))
-          ;; pi: renderWidgets initializes the above-editor container with a
-          ;; default spacer when no extension widgets are registered
-          widget-container-above (container/make-container [sp2])
-          editor-container (container/make-container [ed])
-          widget-container-below (container/make-container)
+          ;; Widget areas as mounted DSL trees (dsl.md stage 4, pi:
+          ;; renderWidgets): the widget maps are read tracked, so a
+          ;; :set-widget swap re-derives exactly once; the leading spacer is
+          ;; a tree element reused across passes via the equal-props
+          ;; fast-path (the hand-built default Spacer retires).
+          widgets-above-root (hiccup/root
+                              (make-widget-area-above widgets-above-atom))
+          widgets-below-root (hiccup/root
+                              (make-widget-area-below widgets-below-atom))
+          ;; The editor dock as a mounted DSL tree (dsl.md stage 4): the
+          ;; root re-derives when :dock-current or the active editor swaps —
+          ;; selectors mount/unmount through pure atom writes.
+          dock-root (hiccup/root (dock/make-dock-area (:dock-current cs)
+                                                      (:current-editor-atom cs)))
           cs (assoc cs :status-root status-root
-                    :editor-container editor-container)]
+                    :dock-root dock-root)]
 
       ;; Add components in pi's layout-root order: the transcript document
       ;; first, then the dock children top-to-bottom (pending messages,
@@ -2916,9 +2932,9 @@
       (tui/tui-add-child t document-container)
       (tui/tui-add-child t pending-messages-container)
       (tui/tui-add-child t status-root)
-      (tui/tui-add-child t widget-container-above)
-      (tui/tui-add-child t editor-container)
-      (tui/tui-add-child t widget-container-below)
+      (tui/tui-add-child t widgets-above-root)
+      (tui/tui-add-child t dock-root)
+      (tui/tui-add-child t widgets-below-root)
       (tui/tui-add-child t ftr)
 
       ;; Wire editor submit
@@ -3038,9 +3054,8 @@
                                    {:ed ed :ftr ftr :hdr hdr :ch ch
                                     :sp1 sp1 :fdp fdp
                                     :header-container header-container
-                                    :editor-container editor-container
-                                    :widget-container-above widget-container-above
-                                    :widget-container-below widget-container-below}
+                                    :widgets-above-atom widgets-above-atom
+                                    :widgets-below-atom widgets-below-atom}
                                    tc)
 
       ;; Expose the fully-built CoreState to the agent on-event handler (for
@@ -3065,19 +3080,23 @@
 
 (def ^:private MAX-WIDGET-LINES 10)
 
-(defn- render-extension-widgets!
-  "Rebuild the widget containers (pi: renderWidgets): the above-editor
-   container gets a leading Spacer + widgets (bare Spacer when empty); the
-   below-editor container gets widgets only."
-  [t widget-above widget-below widgets-above widgets-below]
-  (container/container-clear widget-above)
-  (container/container-clear widget-below)
-  (container/container-add-child widget-above (spacer/make-spacer 1))
-  (doseq [w (vals @widgets-above)]
-    (container/container-add-child widget-above w))
-  (doseq [w (vals @widgets-below)]
-    (container/container-add-child widget-below w))
-  (tui/tui-request-render t))
+(defn- make-widget-area-above
+  "The above-editor widget strip as a fn component (dsl.md stage 4, pi:
+   renderWidgets): a leading spacer plus the registered widgets. The widget
+   map is read tracked — a :set-widget swap re-derives exactly once; the
+   spacer is a tree element reused via the equal-props fast-path, widgets
+   splice as foreign records (owned by the extension flow)."
+  [widgets-atom]
+  (fn [_props]
+    (into [:spacer {:lines 1}]
+          (vals (r/tracked-deref widgets-atom)))))
+
+(defn- make-widget-area-below
+  "Below-editor widget area (pi: renderWidgets) — the registered widgets
+   only, no leading spacer."
+  [widgets-atom]
+  (fn [_props]
+    (vals (r/tracked-deref widgets-atom))))
 
 (defn- make-extension-widget-component
   "pi: string arrays wrap in a Container of Text lines truncated to
@@ -3181,12 +3200,10 @@
    (pi: createExtensionUIContext). Returns the capability map installed via
    extensions/set-ui-registry!."
   [{:keys [tui cs]}
-   {:keys [ed ftr hdr ch sp1 fdp header-container editor-container
-           widget-container-above widget-container-below]}
+   {:keys [ed ftr hdr ch sp1 fdp header-container
+           widgets-above-atom widgets-below-atom]}
    theme-controller]
   (let [t tui
-        widgets-above (atom {})
-        widgets-below (atom {})
         custom-footer-atom (atom nil)
         custom-header-atom (atom nil)
         custom-dialog-comp (atom nil)
@@ -3199,8 +3216,7 @@
         extension-autocomplete-factories (atom [])
         terminal-input-unsubscribers (atom [])
         hide-dialog (fn []
-                      (container/container-clear editor-container)
-                      (container/container-add-child editor-container @current-editor-atom)
+                      (reset! (:dock-current cs) nil)
                       (tui/tui-set-focus t @current-editor-atom)
                       (tui/tui-request-render t))
         rebuild-autocomplete-provider! (fn []
@@ -3286,8 +3302,7 @@
                                           overlay-options)
                                    handle (tui/tui-show-overlay t component opts)]
                                (when on-handle (on-handle handle)))
-                             (do (container/container-clear editor-container)
-                                 (container/container-add-child editor-container component)
+                             (do (reset! (:dock-current cs) {:component component})
                                  (tui/tui-set-focus t component)
                                  (tui/tui-request-render t)))))
                        (catch Exception e
@@ -3302,7 +3317,7 @@
                        (tui/tui-request-render t))
          :set-widget (fn [key content options]
                        (let [placement (or (:placement options) :above-editor)
-                             m (if (= :below-editor placement) widgets-below widgets-above)
+                             m (if (= :below-editor placement) widgets-below-atom widgets-above-atom)
                              existing (get @m key)]
                          ;; pi: replacing a widget disposes the old one
                          (when (and existing (not= content :remove))
@@ -3312,9 +3327,9 @@
                          (when content
                            (swap! m assoc key
                                   (make-extension-widget-component t content)))
-                         (render-extension-widgets! t widget-container-above
-                                                    widget-container-below
-                                                    widgets-above widgets-below)))
+                         ;; the area roots track the widget maps — the swap
+                         ;; alone re-derives them
+                         (tui/tui-request-render t)))
          :set-footer (fn [factory]
                        (when-let [cf @custom-footer-atom]
                          (when-let [dispose (:dispose cf)]
@@ -3378,16 +3393,14 @@
                                       (tui/tui-request-render t))
          :set-editor-component (fn [factory]
                                  (let [current-text (editor-text-get @current-editor-atom)]
-                                   (container/container-clear editor-container)
                                    (if factory
                                      (let [new-ed (factory t (th/get-current-theme) (tui-kb/get-global-keybindings))]
                                        (transfer-editor! ed new-ed (tui-kb/get-global-keybindings))
                                        (editor-text-set! new-ed current-text)
-                                       (container/container-add-child editor-container new-ed)
                                        (tui/tui-set-focus t new-ed)
+                                       ;; tracked by the dock area: the swap alone re-derives
                                        (reset! current-editor-atom new-ed))
                                      (do (editor-text-set! ed current-text)
-                                         (container/container-add-child editor-container ed)
                                          (tui/tui-set-focus t ed)
                                          (reset! current-editor-atom ed)))
                                    (reset! editor-factory-atom factory)
@@ -3632,15 +3645,12 @@
                   ;; pi: resetExtensionUI — dispose widgets, restore
                   ;; footer/header/editor, clear statuses + working
                   ;; customization, drop terminal input listeners
-                  (doseq [m [widgets-above widgets-below]]
+                  (doseq [m [widgets-above-atom widgets-below-atom]]
                     (doseq [w (vals @m)]
                       (when-let [dispose (:dispose w)]
                         (try (dispose) (catch Exception _)))))
-                  (reset! widgets-above {})
-                  (reset! widgets-below {})
-                  (render-extension-widgets! t widget-container-above
-                                             widget-container-below
-                                             widgets-above widgets-below)
+                  (reset! widgets-above-atom {})
+                  (reset! widgets-below-atom {})
                   (when @custom-footer-atom
                     (when-let [dispose (:dispose @custom-footer-atom)]
                       (try (dispose) (catch Exception _)))
@@ -3672,15 +3682,12 @@
                   (rebuild-autocomplete-provider!)
                   (when @editor-factory-atom
                     (let [current-text (editor-text-get @current-editor-atom)]
-                      (container/container-clear editor-container)
                       (editor-text-set! ed current-text)
-                      (container/container-add-child editor-container ed)
                       (tui/tui-set-focus t ed)
                       (reset! current-editor-atom ed))
                     (reset! editor-factory-atom nil))
                   ;; restore any open dialog
-                  (container/container-clear editor-container)
-                  (container/container-add-child editor-container ed)
+                  (reset! (:dock-current cs) nil)
                   (tui/tui-set-focus t ed)
                   (reset! current-editor-atom ed)
                   (when (tui/tui-has-overlay? t) (tui/tui-hide-overlay t))

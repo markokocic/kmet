@@ -20,9 +20,9 @@ that shipped noted inline. Implemented so far:
   the `(hiccup/ref)` wrapper type, `with-let` macro over the store
   primitives, and the §3.4 scheduler hook installed beside the flush
   (default no-op; call-site retirement stays Stage 5).
-- **Stage 4–5**: item 10 (status container) done — first app mount;
-  dock/widget areas and dialogs pending; `compute` and mirror-plumbing
-  removal are pending.
+- **Stage 4–5**: items 10–11 (status container, dock + widget areas)
+  done; dialogs pending; `compute` and mirror-plumbing removal are
+  pending.
 
 ---
 
@@ -1150,8 +1150,16 @@ blast radius first:
     at the swap sites (dsl.md §5), manual request-render kept per stage
     rules. Transient indicators splice as foreign records — never disposed
     by reconcile; their lifecycle stays with the swapper.
-11. **Dock / widget areas** — static-ish composition, exercises keyed
-    reconcile against real input handlers.
+11. **Dock / widget areas — DONE** — the editor dock became
+    `dock/make-dock-area` (`kmet.app.ui.dock`): tracked reads of a
+    `:dock-current` atom ({`:component c}` or nil) over the active-editor
+    atom (`current-editor-atom`, so custom-editor swaps re-derive too);
+    `mount!`/`done()` are pure resets plus the unchanged imperative focus
+    calls, generation-gated as before. Extension widget strips became two
+    roots over the widget-map atoms (leading spacer as an equal-props tree
+    element; widgets splice foreign). `CoreState` lost `:editor-container`
+    to `:dock-root` + `:dock-current`; the hand-filled widget containers
+    and `render-extension-widgets!` retired.
 12. **Dialogs** — exercises `:ref` (focus) and imperative interop; do
     these after the simple trees have soaked.
 

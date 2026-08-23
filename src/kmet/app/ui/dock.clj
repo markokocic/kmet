@@ -3,8 +3,8 @@
    All full-panel selectors mount the way pi's do: the component replaces
    the editor in the editor dock and takes focus; the returned done fn
    restores the previously active editor and focus (pi: done())."
-  (:require [kmet.tui.components.container :as container]
-            [kmet.tui.core :as tui]))
+  (:require [kmet.tui.core :as tui]
+            [kmet.tui.reagent :as r]))
 
 (def ^:private dock-generation
   "pi: activeSelectorToken — only the most recently mounted selector may
@@ -12,32 +12,42 @@
   instead of yanking the newer one out of the dock."
   (atom 0))
 
+(defn make-dock-area
+  "The editor dock as a fn component (dsl.md stage 4, pi: the editorDock
+   container): renders whichever panel is recorded in DOCK-CURRENT
+   ({:component c} or nil), else the active editor from CURRENT-EDITOR-ATOM
+   (the default or a swapped-in custom editor). Both reads are tracked, so
+   mount/unmount and custom-editor swaps re-derive the tree exactly once;
+   records splice foreign — reconcile swaps identity, disposes nothing
+   (component lifecycles stay with their owners)."
+  [dock-current current-editor-atom]
+  (fn [_props]
+    (or (:component (r/tracked-deref dock-current))
+        (r/tracked-deref current-editor-atom))))
+
 (defn mount!
-  "Swap COMPONENT into CS's editor dock. FOCUS-TARGET (pi: showSelector's
-  `focus`) is the component that receives keys — the interactive child of
-  the panel when COMPONENT itself is inert chrome (pi:
-  `focus: selector.getMessageList()`); defaults to COMPONENT. Returns DONE
-  — a zero-arg fn restoring the active editor (current-editor-atom, so
-  custom editors survive) and focus; re-adding the same instance is
-  idempotent, so an accidental double call is harmless."
+  "Swap COMPONENT into CS's editor dock: record it on the :dock-current atom
+   and take focus. FOCUS-TARGET (pi: showSelector's `focus`) is the component
+   that receives keys — the interactive child of the panel when COMPONENT
+   itself is inert chrome (pi: `focus: selector.getMessageList()`); defaults
+   to COMPONENT. Returns DONE — a zero-arg fn restoring the active editor
+   (current-editor-atom, so custom editors survive) and focus; re-running it
+   is idempotent (equal-value reset no-op), so an accidental double call is
+   harmless."
   ([cs component]
    (mount! cs component nil))
   ([cs component focus-target]
    (let [gen (swap! dock-generation inc)
          tui* (:tui cs)
-         editor-container (:editor-container cs)
          done (fn []
                 ;; stale done() (a newer selector was mounted meanwhile)
                 ;; must not restore the editor over it (pi:
                 ;; activeSelectorToken check in done())
                 (when (= gen @dock-generation)
-                  (container/container-clear editor-container)
-                  (container/container-add-child editor-container
-                                                 @(:current-editor-atom cs))
+                  (reset! (:dock-current cs) nil)
                   (tui/tui-set-focus tui* @(:current-editor-atom cs))
                   (tui/tui-request-render tui*)))]
-     (container/container-clear editor-container)
-     (container/container-add-child editor-container component)
+     (reset! (:dock-current cs) {:component component})
      (tui/tui-set-focus tui* (or focus-target component))
      (tui/tui-request-render tui*)
      done)))
