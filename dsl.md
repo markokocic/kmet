@@ -1170,6 +1170,13 @@ blast radius first:
     shell stays for IFocusable/handle-input — focus/key routing are
     imperative (§5); dispose unwinds the reaction, called by the flows'
     finally blocks after dock restore.
+    Review fixes: appended lines (waiting/progress/info) insert ABOVE a
+    trailing input row — pi's content area sits above the input, and a
+    plain conj rendered them below it; static chrome (borders/title) is
+    built once outside the body so reconcile identity-matches it instead
+    of retire/reconstruct churn per swap; `:set-editor-component` clears
+    `:dock-current` first, restoring the old container-clear displacement
+    semantics when a selector is mounted.
     Shipped deviation: §2.3 predicted the dialog conversion would need
     `:ref`; it didn't materialize — the app already holds the records it
     must reach imperatively, and the dock swap became an atom-driven tree

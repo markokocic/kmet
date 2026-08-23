@@ -71,6 +71,28 @@
           (is (= :text (:row (peek rows))) "hint line last"))
         (finally (protocols/dispose d))))))
 
+(deftest test-appends-stay-above-the-input
+  (testing "info/waiting/progress appends land ABOVE the live input row —
+            pi's content area sits above the input (regression: conj put them
+            below it)"
+    (let [d (make-dialog)]
+      (try
+        (ld/login-dialog-show-device-code! d "https://example.dev" "ABC-123")
+        (ld/login-dialog-show-waiting! d "Waiting for authentication...")
+        (ld/login-dialog-show-progress! d "Polling...")
+        (ld/login-dialog-show-info! d "Provider says hi")
+        (let [rows @(:rows-atom d)
+              texts (mapv :text rows)
+              input-pos (first (keep-indexed (fn [i r] (when (= :input (:row r)) i)) rows))
+              waiting-pos (first (keep-indexed (fn [i t] (when (str/includes? (str t) "Waiting") i)) texts))
+              polling-pos (first (keep-indexed (fn [i t] (when (str/includes? (str t) "Polling") i)) texts))
+              info-pos (first (keep-indexed (fn [i t] (when (str/includes? (str t) "says hi") i)) texts))]
+          (is (= 1 (count (filter #(= :input (:row %)) rows))) "single input row")
+          (is (< waiting-pos input-pos) "waiting line above input")
+          (is (< polling-pos input-pos) "progress line above input")
+          (is (< info-pos input-pos) "info line above input"))
+        (finally (protocols/dispose d))))))
+
 (deftest test-cancel-settles-pending-prompt
   (testing "escape settles the pending promise with the cancellation ex-info
             and fires on-complete (pi cancel)"

@@ -115,29 +115,38 @@
              {:row :input}]))
   (repaint! d))
 
+(defn- append-rows!
+  "Append ROWS to the content, keeping a trailing live input row LAST —
+   pi's layout puts the content area ABOVE the input, so appended lines
+   (waiting/progress/info) render above it, never below."
+  [d new-rows]
+  (swap! (:rows-atom d)
+         (fn [rows]
+           (let [input-last? (and (seq rows) (= :input (:row (peek rows))))
+                 base (cond-> rows input-last? pop)
+                 tail (cond-> [] input-last? (conj (peek rows)))]
+             (into (into base new-rows) tail)))))
+
 (defn login-dialog-show-info!
   "Append provider-owned informational text (pi showInfo)."
   [d message]
-  (swap! (:rows-atom d) conj
-         spacer-row
-         (text-row (theme/fg (theme/get-current-theme) :text message)))
+  (append-rows! d [spacer-row
+                   (text-row (theme/fg (theme/get-current-theme) :text message))])
   (repaint! d))
 
 (defn login-dialog-show-waiting!
   "Append a dim waiting message + cancel hint (pi showWaiting — polling
    flows like GitHub Copilot)."
   [d message]
-  (swap! (:rows-atom d) conj
-         spacer-row
-         (text-row (theme/fg (theme/get-current-theme) :dim message))
-         (text-row (cancel-hint-line)))
+  (append-rows! d [spacer-row
+                   (text-row (theme/fg (theme/get-current-theme) :dim message))
+                   (text-row (cancel-hint-line))])
   (repaint! d))
 
 (defn login-dialog-show-progress!
   "Append a dim progress line (pi showProgress)."
   [d message]
-  (swap! (:rows-atom d) conj
-         (text-row (theme/fg (theme/get-current-theme) :dim message)))
+  (append-rows! d [(text-row (theme/fg (theme/get-current-theme) :dim message))])
   (repaint! d))
 
 ;; ─── Prompt plumbing ───────────────────────────────────────────────────────
@@ -153,7 +162,10 @@
                    (map-indexed (fn [i row] (when (= :input (:row row)) i)))
                    (remove nil?)
                    last)]
-      (swap! (:rows-atom d) assoc idx {:row :submitted :text (str "> " value)}))
+      ;; idx is always present while a prompt is pending; guard anyway —
+      ;; assoc with nil index would throw inside a watch-adjacent path
+      (when idx
+        (swap! (:rows-atom d) assoc idx {:row :submitted :text (str "> " value)})))
     (resolve value)))
 
 (defn login-dialog-cancel!
@@ -261,24 +273,27 @@
             :focused? (atom false)
             :cache-atom (atom nil)})
         ;; the whole dialog as one reactive tree: static chrome elements +
-        ;; the row descriptors spliced as a seq (dsl.md §2.1); borders splice
-        ;; foreign (stateless records), the title is a tag element reused by
-        ;; equal props across passes. The body returns a SEQ of sibling
+        ;; the row descriptors spliced as a seq (dsl.md §2.1); the chrome is
+        ;; built ONCE outside the body so reconcile identity-matches the
+        ;; border records across passes (a body-built record changes identity
+        ;; every re-run → retire+reconstruct churn). The title is a tag
+        ;; element reused by equal props. The body returns a SEQ of sibling
         ;; roots — a vector would parse its head as a tag.
         accent-fn #(theme/fg th :accent %)
+        border (db/make-dynamic-border accent-fn)
+        title [:text {:text (theme/fg th :accent
+                                      (theme/bold (str "Login to " provider-name)))
+                      :padding-x 1 :padding-y 0}]
         root (hiccup/root
               (fn [_props]
-                (concat [(db/make-dynamic-border accent-fn)
-                         [:text {:text (theme/fg th :accent
-                                                 (theme/bold (str "Login to " provider-name)))
-                                 :padding-x 1 :padding-y 0}]]
+                (concat [border title]
                         (mapv #(case (:row %)
                                  :spacer [:spacer {:lines 1}]
                                  :text [:text {:text (:text %) :padding-x 1 :padding-y 0}]
                                  :submitted [:text {:text (:text %) :padding-x 0 :padding-y 0}]
                                  :input (:input-comp d))
                               (r/tracked-deref (:rows-atom d)))
-                        [(db/make-dynamic-border accent-fn)])))]
+                        [border])))]
     (input/input-set-on-submit! (:input-comp d) #(resolve-input! d %))
     (input/input-set-on-escape! (:input-comp d) #(login-dialog-cancel! d))
     (assoc d :root root)))

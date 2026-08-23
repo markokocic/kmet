@@ -3399,6 +3399,10 @@
                                       (tui/tui-request-render t))
          :set-editor-component (fn [factory]
                                  (let [current-text (editor-text-get @current-editor-atom)]
+                                   ;; pi parity: the swap displaces whatever the
+                                   ;; dock held (old code cleared the container) —
+                                   ;; the editor is visible again afterwards
+                                   (reset! (:dock-current cs) nil)
                                    (if factory
                                      (let [new-ed (factory t (th/get-current-theme) (tui-kb/get-global-keybindings))]
                                        (transfer-editor! ed new-ed (tui-kb/get-global-keybindings))
