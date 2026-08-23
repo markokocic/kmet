@@ -513,6 +513,9 @@
                                    (ex-message e)))))
         (finally
           (done)
+          ;; release the dialog's content-tree reaction (rows watches) —
+          ;; the dialog leaves the dock for good here
+          (protocols/dispose dlg)
           (tui/tui-request-render (:tui cs)))))))
 
 (defn- api-key-login!
@@ -549,6 +552,9 @@
                                    (ex-message e)))))
         (finally
           (done)
+          ;; release the dialog's content-tree reaction (rows watches) —
+          ;; the dialog leaves the dock for good here
+          (protocols/dispose dlg)
           (tui/tui-request-render (:tui cs)))))))
 
 ;; ─── Provider options (pi getLoginProviderOptions / getLogoutProviderOptions

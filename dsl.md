@@ -20,8 +20,9 @@ that shipped noted inline. Implemented so far:
   the `(hiccup/ref)` wrapper type, `with-let` macro over the store
   primitives, and the §3.4 scheduler hook installed beside the flush
   (default no-op; call-site retirement stays Stage 5).
-- **Stage 4–5**: items 10–11 (status container, dock + widget areas)
-  done; dialogs pending; `compute` and mirror-plumbing removal are
+- **Stage 4–5**: items 10–12 done — status container, dock + widget
+  areas, login-dialog content all mount through `hiccup/root`; Stage 4
+  complete. `compute` and mirror-plumbing removal (Stage 5) are
   pending.
 
 ---
@@ -1160,8 +1161,20 @@ blast radius first:
     element; widgets splice foreign). `CoreState` lost `:editor-container`
     to `:dock-root` + `:dock-current`; the hand-filled widget containers
     and `render-extension-widgets!` retired.
-12. **Dialogs** — exercises `:ref` (focus) and imperative interop; do
-    these after the simple trees have soaked.
+12. **Dialogs — DONE** — the login dialog's content area became a
+    mounted tree: show-* mutations are pure swaps on a row-descriptor
+    atom (`{:row :spacer/:text/:input/:submitted}`), the root's reaction
+    re-derives on change, reconcile reuses unchanged rows by equal props
+    and moves the Input record by identity (exactly one `:input` row at a
+    time replaces the detach-input!/child-scan juggling). The defcomponent
+    shell stays for IFocusable/handle-input — focus/key routing are
+    imperative (§5); dispose unwinds the reaction, called by the flows'
+    finally blocks after dock restore.
+    Shipped deviation: §2.3 predicted the dialog conversion would need
+    `:ref`; it didn't materialize — the app already holds the records it
+    must reach imperatively, and the dock swap became an atom-driven tree
+    instead. Refs remain for trees that declare elements nobody else
+    owns.
 
 Manual `tui-request-render` stays everywhere during this stage — the
 scheduler comes later, so nothing can freeze.

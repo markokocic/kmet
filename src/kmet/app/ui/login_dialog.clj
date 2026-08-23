@@ -3,19 +3,25 @@
    LoginDialogComponent): dock-mounted dialog that replaces the editor
    during an OAuth/API-key login — bold accent \"Login to <provider>\" title,
    a dynamic content area (auth URL, device code, progress, waiting), and a
-   one-line input the flows prompt through. Escape aborts the flow."
+   one-line input the flows prompt through. Escape aborts the flow.
+
+   The dynamic content is a mounted hiccup tree (dsl.md stage 4): show-*
+   mutations are pure swaps on a row-descriptor atom, the root's reaction
+   re-derives on change, and reconcile reuses unchanged rows (equal props)
+   plus the input record (identity splice). The defcomponent shell stays for
+   IFocusable/handle-input — focus and key routing are imperative (dsl.md
+   §5 input boundary)."
   (:require [babashka.process :as p]
             [clojure.string :as str]
             [kmet.app.keybindings :as app-kb]
-            [kmet.tui.components.container :as container]
             [kmet.tui.components.dynamic-border :as db]
             [kmet.tui.components.input :as input]
-            [kmet.tui.components.spacer :as spacer]
-            [kmet.tui.components.text :as text]
             [kmet.tui.core :as tui]
+            [kmet.tui.hiccup :as hiccup]
             [kmet.tui.keybindings :as kb]
             [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
+            [kmet.tui.reagent :as r]
             [kmet.tui.theme :as theme]
             [kmet.tui.utils :as u]))
 
@@ -37,12 +43,14 @@
       (p/shell {:out :ignore :err :ignore :continue true} cmd)
       (catch Exception _ nil))))
 
-;; ─── Content helpers ───────────────────────────────────────────────────────
+;; ─── Content rows ──────────────────────────────────────────────────────────
+;; Row descriptors: {:row :spacer} | {:row :text :text s} (padding 1 0) |
+;; {:row :input} (the live Input record) | {:row :submitted :text s}
+;; (`> answer`, padding 0 0).
 
-(defn- add-content!
-  "Append CHILD to the dialog's content area."
-  [d child]
-  (container/container-add-child (:content-container d) child))
+(def ^:private spacer-row {:row :spacer})
+
+(defn- text-row [s] {:row :text :text s})
 
 (defn- repaint!
   "Request a TUI render after mutating the dialog off the input thread (pi:
@@ -53,98 +61,99 @@
   nil)
 
 (defn- linked-url-line
-  "Accent OSC 8-hyperlinked URL (pi showAuth/showDeviceCode first line)."
+  "Accent OSC 8-hyperlinked URL text (pi showAuth/showDeviceCode first line)."
   [th url]
-  (text/make-text (theme/fg th :accent (u/osc-hyperlink url url)) 1 0))
+  (theme/fg th :accent (u/osc-hyperlink url url)))
 
 (defn- click-hint-line
   "Dim hyperlink carrying the platform click hint (pi clickHint)."
   [th url]
-  (text/make-text
-   (theme/fg th :dim (u/osc-hyperlink url "Ctrl+click to open")) 1 0))
+  (theme/fg th :dim (u/osc-hyperlink url "Ctrl+click to open")))
 
 (defn- cancel-hint-line
   "(escape to cancel) hint line, pi keyHint styling."
   []
-  (text/make-text
-   (str "(" (app-kb/key-hint "tui.select.cancel" "to cancel") ")") 1 0))
+  (str "(" (app-kb/key-hint "tui.select.cancel" "to cancel") ")"))
 
 (defn- submit-hint-line
   "(escape to cancel, enter to submit) hint line."
   []
-  (text/make-text
-   (str "(" (app-kb/key-hint "tui.select.cancel" "to cancel,") " "
-        (app-kb/key-hint "tui.select.confirm" "to submit") ")") 1 0))
+  (str "(" (app-kb/key-hint "tui.select.cancel" "to cancel,") " "
+       (app-kb/key-hint "tui.select.confirm" "to submit") ")"))
 
 ;; ─── Flow states (pi showAuth / showDeviceCode / showPrompt / ...) ─────────
 
 (defn login-dialog-show-auth!
   "Show an OAuth authorize URL (+ optional instructions) and open it in the
-   platform browser (pi showAuth)."
+   platform browser (pi showAuth). The input row stays at the bottom — it
+   remains the focus target while the flow runs (parity with the old
+   container layout)."
   [d url instructions]
-  (container/container-clear (:content-container d))
   (let [th (theme/get-current-theme)]
-    (add-content! d (spacer/make-spacer 1))
-    (add-content! d (linked-url-line th url))
-    (add-content! d (click-hint-line th url))
-    (when instructions
-      (add-content! d (spacer/make-spacer 1))
-      (add-content! d (text/make-text (theme/fg th :warning instructions) 1 0))))
+    (reset! (:rows-atom d)
+            (vec (remove nil?
+                         [spacer-row
+                          (text-row (linked-url-line th url))
+                          (text-row (click-hint-line th url))
+                          (when instructions spacer-row)
+                          (when instructions
+                            (text-row (theme/fg th :warning instructions)))
+                          {:row :input}]))))
   (open-browser url)
   (repaint! d))
 
 (defn login-dialog-show-device-code!
   "Show the device-flow verification URI + user code (pi showDeviceCode)."
   [d verification-uri user-code]
-  (container/container-clear (:content-container d))
   (let [th (theme/get-current-theme)]
-    (add-content! d (spacer/make-spacer 1))
-    (add-content! d (linked-url-line th verification-uri))
-    (add-content! d (click-hint-line th verification-uri))
-    (add-content! d (spacer/make-spacer 1))
-    (add-content! d (text/make-text (theme/fg th :warning (str "Enter code: " user-code)) 1 0)))
+    (reset! (:rows-atom d)
+            [spacer-row
+             (text-row (linked-url-line th verification-uri))
+             (text-row (click-hint-line th verification-uri))
+             spacer-row
+             (text-row (theme/fg th :warning (str "Enter code: " user-code)))
+             {:row :input}]))
   (repaint! d))
 
 (defn login-dialog-show-info!
   "Append provider-owned informational text (pi showInfo)."
   [d message]
-  (let [th (theme/get-current-theme)]
-    (add-content! d (spacer/make-spacer 1))
-    (add-content! d (text/make-text (theme/fg th :text message) 1 0)))
+  (swap! (:rows-atom d) conj
+         spacer-row
+         (text-row (theme/fg (theme/get-current-theme) :text message)))
   (repaint! d))
 
 (defn login-dialog-show-waiting!
   "Append a dim waiting message + cancel hint (pi showWaiting — polling
    flows like GitHub Copilot)."
   [d message]
-  (let [th (theme/get-current-theme)]
-    (add-content! d (spacer/make-spacer 1))
-    (add-content! d (text/make-text (theme/fg th :dim message) 1 0))
-    (add-content! d (cancel-hint-line)))
+  (swap! (:rows-atom d) conj
+         spacer-row
+         (text-row (theme/fg (theme/get-current-theme) :dim message))
+         (text-row (cancel-hint-line)))
   (repaint! d))
 
 (defn login-dialog-show-progress!
   "Append a dim progress line (pi showProgress)."
   [d message]
-  (add-content! d (text/make-text (theme/fg (theme/get-current-theme) :dim message) 1 0))
+  (swap! (:rows-atom d) conj
+         (text-row (theme/fg (theme/get-current-theme) :dim message)))
   (repaint! d))
 
-(defn- replace-input-with-submitted-text!
-  "Swap the input row for a `> value` transcript line after submission (pi
-   replaceInputWithSubmittedText)."
-  [d value]
-  (let [cc (:content-container d)
-        input-comp (:input-comp d)
-        submitted (text/make-text (str "> " value) 0 0)]
-    (container/container-set-children!
-     cc (mapv #(if (identical? % input-comp) submitted %) @(:children cc)))))
+;; ─── Prompt plumbing ───────────────────────────────────────────────────────
 
 (defn- resolve-input!
-  "Deliver VALUE to the pending prompt promise, if any (pi input.onSubmit)."
+  "Deliver VALUE to the pending prompt promise and turn the prompt's input
+   row into a `> value` transcript line (pi replaceInputWithSubmittedText)."
   [d value]
   (when-let [resolve @(:input-resolver-atom d)]
     (reset! (:input-resolver-atom d) nil)
-    (replace-input-with-submitted-text! d value)
+    (let [rows @(:rows-atom d)
+          idx (->> rows
+                   (map-indexed (fn [i row] (when (= :input (:row row)) i)))
+                   (remove nil?)
+                   last)]
+      (swap! (:rows-atom d) assoc idx {:row :submitted :text (str "> " value)}))
     (resolve value)))
 
 (defn login-dialog-cancel!
@@ -159,27 +168,17 @@
     (cb false "Login cancelled"))
   nil)
 
-(defn- detach-input!
-  "pi Container.addChild MOVES a component out of its previous parent;
-   kmet containers allow one child in several parents, so remove the input
-   from the top-level children explicitly before appending it to the
-   content area."
-  [d]
-  (let [c (:container d)
-        inp (:input-comp d)]
-    (when (some #(identical? inp %) @(:children c))
-      (container/container-set-children!
-       c (vec (remove #(identical? inp %) @(:children c)))))))
-
 (defn- show-input-prompt!
   "Common tail of show-prompt!/show-manual-input!: append MESSAGE rows + the
-   input + hint, clear the input, return a promise delivering the submitted
-   string (or the cancellation ex-info)."
+   input row + hint, clear the input, return a promise delivering the
+   submitted string (or the cancellation ex-info). Exactly one :input row
+   exists at a time — a previous one (e.g. the initial bare input) MOVES to
+   the new position (pi: Container.addChild moves the component), so the
+   same Input instance never renders twice."
   [d rows hint-line]
-  (detach-input! d)
-  (doseq [r rows] (add-content! d r))
-  (add-content! d (:input-comp d))
-  (add-content! d hint-line)
+  (reset! (:rows-atom d)
+          (into (vec (remove #(= :input (:row %)) @(:rows-atom d)))
+                (concat rows [{:row :input} (text-row hint-line)])))
   (input/input-set-value! (:input-comp d) "")
   (reset! (:cursor-atom (:input-comp d)) 0)
   (let [p (promise)]
@@ -205,9 +204,10 @@
    auth URL shown earlier stays visible."
   [d message placeholder]
   (let [th (theme/get-current-theme)
-        rows (cond-> [(spacer/make-spacer 1)
-                      (text/make-text (theme/fg th :text message) 1 0)]
-               (seq placeholder) (conj (text/make-text (theme/fg th :dim (str "e.g., " placeholder)) 1 0)))]
+        rows (into [spacer-row
+                    (text-row (theme/fg th :text message))]
+                   (when (seq placeholder)
+                     [(text-row (theme/fg th :dim (str "e.g., " placeholder)))]))]
     (show-input-prompt! d rows (submit-hint-line))))
 
 (defn login-dialog-show-manual-input!
@@ -216,22 +216,27 @@
   [d prompt]
   (let [th (theme/get-current-theme)]
     (show-input-prompt! d
-                        [(spacer/make-spacer 1)
-                         (text/make-text (theme/fg th :dim prompt) 1 0)]
+                        [spacer-row
+                         (text-row (theme/fg th :dim prompt))]
                         (cancel-hint-line))))
 
 ;; ─── Component ─────────────────────────────────────────────────────────────
 
 (defcomponent LoginDialog nil
-              [container content-container input-comp tui input-resolver-atom
+              [root rows-atom input-comp tui input-resolver-atom
                input-rejecter-atom on-complete-atom focused? cache-atom]
 
-  (render [this width] (protocols/render (:container this) width))
+  (render [this width] (protocols/render (:root this) width))
 
   (handle-input [this data]
     (if (kb/matches-key (kb/get-global-keybindings) data "tui.select.cancel")
       (login-dialog-cancel! this)
-      (protocols/handle-input (:input-comp this) data))))
+      (protocols/handle-input (:input-comp this) data)))
+
+  (dispose [this]
+    ;; unwind the content tree's reaction (watches on the rows atom) with
+    ;; the dialog — the flow owners call this after dock restore
+    (protocols/dispose (:root this))))
 
 (extend-type LoginDialog
   protocols/IFocusable
@@ -246,25 +251,34 @@
    the tui instance (request-render after prompt resolution)."
   [tui provider-name on-complete]
   (let [th (theme/get-current-theme)
-        c (container/make-container)
-        cc (container/make-container)
-        inp (input/make-input)
-        add (fn [child] (container/container-add-child c child))
         d (map->LoginDialog
-           {:container c
-            :content-container cc
-            :input-comp inp
+           {:rows-atom (atom [{:row :input}])
+            :input-comp (input/make-input)
             :tui tui
             :input-resolver-atom (atom nil)
             :input-rejecter-atom (atom nil)
             :on-complete-atom (atom on-complete)
             :focused? (atom false)
-            :cache-atom (atom nil)})]
-    (add (db/make-dynamic-border #(theme/fg th :accent %)))
-    (add (text/make-text (theme/fg th :accent (theme/bold (str "Login to " provider-name))) 1 0))
-    (add cc)
-    (add inp)
-    (add (db/make-dynamic-border #(theme/fg th :accent %)))
-    (input/input-set-on-submit! inp #(resolve-input! d %))
-    (input/input-set-on-escape! inp #(login-dialog-cancel! d))
-    d))
+            :cache-atom (atom nil)})
+        ;; the whole dialog as one reactive tree: static chrome elements +
+        ;; the row descriptors spliced as a seq (dsl.md §2.1); borders splice
+        ;; foreign (stateless records), the title is a tag element reused by
+        ;; equal props across passes. The body returns a SEQ of sibling
+        ;; roots — a vector would parse its head as a tag.
+        accent-fn #(theme/fg th :accent %)
+        root (hiccup/root
+              (fn [_props]
+                (concat [(db/make-dynamic-border accent-fn)
+                         [:text {:text (theme/fg th :accent
+                                                 (theme/bold (str "Login to " provider-name)))
+                                 :padding-x 1 :padding-y 0}]]
+                        (mapv #(case (:row %)
+                                 :spacer [:spacer {:lines 1}]
+                                 :text [:text {:text (:text %) :padding-x 1 :padding-y 0}]
+                                 :submitted [:text {:text (:text %) :padding-x 0 :padding-y 0}]
+                                 :input (:input-comp d))
+                              (r/tracked-deref (:rows-atom d)))
+                        [(db/make-dynamic-border accent-fn)])))]
+    (input/input-set-on-submit! (:input-comp d) #(resolve-input! d %))
+    (input/input-set-on-escape! (:input-comp d) #(login-dialog-cancel! d))
+    (assoc d :root root)))
