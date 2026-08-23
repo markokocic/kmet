@@ -235,9 +235,10 @@ Properties:
   untracked reads can't go stale.
 - **No deref-rewriting macro**: reactions capture at deref time, so
   tracking doesn't depend on compile-time rewriting of the body. Plain
-  atoms participate once app constructors migrate to tracked types
-  (Stage 6, mechanical); until then compute/cursor slices cover them
-  explicitly.
+  atoms participate through the shared capture point (`tracked-deref`,
+  §2.8-bb): component render bodies already route their `@reads`
+  through it, so they are reactive with zero migration; hand-written
+  reaction bodies read atoms via `tracked-deref` explicitly.
 - **Props re-applied on reuse** via `reset!`; equal-value resets no-op →
   memoized children for free (the `@props` deref inside the reaction
   scope makes prop changes invalidate correctly).
@@ -269,10 +270,11 @@ Properties:
 - **`defc` dropped from the plan** (superseded by Stage 1): it existed
   to deliver dependency tracking through compile-time deref rewriting —
   a workaround for not owning the atom type. The `kmet.tui.reagent`
-  port removes that premise: reactions discover deps at deref time, and
-  migrating app atom constructors to tracked types is mechanical in an
-  internal-only codebase. Fn components are Form-1-reactive with no
-  macro; un-migrated plain-atom reads are covered explicitly via
+  port removes that premise twice over: reactions discover deps at
+  deref time, and the §2.8-bb pivot makes existing plain atoms the
+  tracked inputs through the shared capture point — no constructor
+  swap ever. Fn components are Form-1-reactive with no macro; reads
+  outside the tracking contract are covered explicitly via
   `compute`/`cursor` slices. If a hot spot ever needs input-side
   caching without reactions, that's a different, smaller tool.
 
@@ -313,8 +315,9 @@ breaks: pure additions first, conversions leaf-first and one-commit
 revertible, scheduler gated behind a working subscription story. The
 old blocker paragraph ("extensions can't use ratoms", "macro needed")
 dissolved on inspection: extensions are internal, the macro was only
-ever a delivery mechanism for tracking, and owning tracked atom types
-(Stage 6) is mechanical here.
+ever a delivery mechanism for tracking, and the §2.8-bb capture point
+makes existing plain atoms first-class reactive inputs with no
+migration at all.
 
 **Granularity guidance (the monolith trap).** A tempting shortcut:
 "make the whole main screen one big component reading all app state" —
@@ -475,11 +478,12 @@ the commit). What React has that kmet lacks is only **L0–L2**: the atom,
 the auto-discovering reaction, the batching queue. Port those; keep our
 L3–L6.
 
-Scope (one namespace, zero deps):
+Scope (engine in one namespace, `kmet.tui.reagent`; capture/store
+primitives live beside their consumers in `kmet.tui.macros`):
 
-- `ratom` / `*ratom-context*` / `in-context?` — capture-aware deref;
-  plain `clojure.lang.Atom`s stay first-class (ratom adds context
-  recording, doesn't replace the box)
+- `*ratom-context*` / `in-context?` / `tracked-deref` — capture-aware
+  deref; plain `clojure.lang.Atom`s ARE the tracked inputs (no custom
+  atom type ships — see §2.8-bb)
 - `make-reaction` / `reaction` / `track` / `cursor` — **auto-dependency
   discovery**: capture derefs during run, `_update-watching` set-diff to
   add/remove watches, dirty flag, queued asynchronous re-run, notify
@@ -488,6 +492,74 @@ Scope (one namespace, zero deps):
 - batching queue drained at the frame flush — the existing 16ms render
   loop *is* requestAnimationFrame
 - `with-let` generation-keyed value store matching Reagent's
+
+**§2.8-bb — Babashka reality check: no RAtom; capture at
+`tracked-deref`** (pivoted during implementation). The port as first
+proposed assumed a drop-in `RAtom` implementing IDeref/IWatchable/
+IReset/ISwap like `clojure.lang.Atom`. Babashka forbids that in pure
+source — verified against the running binary:
+
+- `defrecord`/`deftype` support protocol implementations only;
+  implementing any Java interface throws ("only support protocol
+  implementations").
+- `reify` resolves only IDeref/IAtom/IAtom2 of the interfaces needed;
+  `IWatchable`/`IReset`/`IRef`/`IPending`/`IMeta`/`IObj` don't resolve,
+  and importing them is blocked by bb's class allowlist.
+- Delegating through raw interop (`.add-watch`/`.reset`/`.swap` onto an
+  inner real Atom) is reflection-blocked in the native image.
+- Even with methods present, `clojure.core/add-watch` casts its target
+  to `IRef` (ClassCastException), and core `reset!` on an unknown ref
+  type returns nil silently — a silent no-op setter, worse than throwing.
+- `proxy`, `definterface`, base classes (`ARef`/`AFn`), `gen-class`: all
+  unavailable. hashCode/equals on SCI-generated classes are sealed too,
+  so reactions must never sit in hash collections (dep vectors scanned
+  by identity; watch keys on plain atoms go through record wrappers —
+  transcript-scale per-message subscriptions would otherwise hit the
+  array-map→hash-map transition and detonate).
+
+So there is no drop-in RAtom, and none is needed. The pivot: kmet
+already owns a deref-time capture point — `macros/tracked-deref`, the
+runtime under `track!`, through which every component render body
+routes its `@reads` today. That fn now also records into
+`*ratom-context*`, so reactions discover dependencies from component
+bodies with zero constructor migration. Concretely:
+
+- **Plain atoms are the reactive inputs**, watched with ordinary
+  `add-watch` (fully supported) — "plain atoms stay first-class" holds
+  literally, not as an interim concession.
+- **Reactions and cursors are `reify`'d `IDeref` refs** carrying their
+  own watcher registries; nested reaction/cursor derefs record
+  themselves into the enclosing context from inside their own `deref`.
+  They are watched/disposed via `watch-ref`/`unwatch-ref` (core
+  `add-watch` can't take them — they aren't IRefs).
+- **Coverage contract**: tracked reads are (a) component render bodies,
+  automatic via the `track!` rewrite; (b) explicit `tracked-deref`
+  calls in hand-written reaction/compute bodies; (c) nested
+  reaction/cursor derefs, automatic. A bare `@plain-atom` inside a
+  hand-written body is an UNTRACKED read — correct under the batched
+  fallback (uncached, never stale), just not narrow. This replaces
+  Reagent's "everything derefable is trackable" with an explicit
+  contract: the price of bb's sealed interfaces, paid once, here.
+- **`(r/atom x)` returns a plain atom**, so re-frame-shaped call sites
+  port mechanically; there is simply nothing to swap out underneath.
+
+Consequences downstream: the Stage-1 "RAtom interchangeability" test
+becomes the stronger plain-atom interop story (existing setters work on
+tracked inputs because tracked inputs ARE existing atoms), and Stage 6
+(constructor migration) dissolves entirely — see §7.
+
+**Post-source-review refinements** (after diffing the port against
+reagent.ratom 2.0.1 and rum's derived-atom/cursor, sources cloned to
+`~/src/cvstree/`): adopted sticky caught errors (a failed body's
+exception rethrows from derefs without re-execution; `run!` retries;
+the next dep change clears it), callback scheduling (`:auto-run? fn`
+— the ComponentFn hook, Reagent's `run-in-reaction` shape), manual-track
+value caching, last-watcher auto-dispose for manual reactions,
+`add-on-dispose!`, and `run!` = flush-then-force. One deliberate
+deviation from current Reagent: plain reactions re-run QUEUED at the
+frame tick rather than synchronously in the watch handler — coalescing
+matters at streaming write rates, and Reagent's own component path is
+callback-based anyway.
 
 What this flips:
 
@@ -883,7 +955,7 @@ answer to give whoever reaches for it.
 | Idea | Why |
 |---|---|
 | Global vdom reconciliation | Per-component reconcilers only; terminal output already diffs at the line level underneath. |
-| Growing reactivity via compile-time deref rewriting (`defc`) | The macro was only ever a delivery mechanism for tracking while atom types weren't owned. Stage 1 + Stage 6 remove that premise: reactions capture at deref time, constructors migrate mechanically in an internal-only codebase. Two tracking mechanisms would be one too many (§2.4, §2.8). |
+| Growing reactivity via compile-time deref rewriting (`defc`) | The macro was only ever a delivery mechanism for tracking while atom types weren't owned. Deref-time capture (Stage 1) plus the §2.8-bb capture point remove that premise: reactions track existing plain atoms directly, no constructors migrate. Two tracking mechanisms would be one too many (§2.4, §2.8). |
 | `:children?`/`:children-key` tag-spec fields | Second children mechanism beside the tag table's `:container?` — one answer per question: the table says who takes children, the one generic `reconcile-children!` fills them (§2.2, §5). |
 | Converting primitives to fn components | They're the host elements — that would be reimplementing `[:div]` as a React component. |
 | Full re-frame store (global app-state atom + cursors) | App-layer rewrite; crosses the `kmet.app`/`kmet.tui` boundary; kmet's state graph isn't complex enough. B-lite (domain atoms + subscriptions) gets the value without the rewrite. |
@@ -920,17 +992,21 @@ and the transcript is never touched. Each stage ends with the full gate
 Pure addition — a new namespace nobody imports yet, so breakage risk is
 zero by construction.
 
-1. **Port `reagent.ratom`** — `RAtom` (drop-in: implements
-   IDeref/IWatchable/IReset/ISwap exactly like `clojure.lang.Atom`, so
-   `reset!`/`swap!`/`deref`/`add-watch` work unchanged),
-   `*ratom-context*`/`in-context?`, `make-reaction` with auto-dep
-   discovery (capture → `_update-watching` set-diff → dirty flag →
-   queued run → notify on `=` change), `track`, `cursor`, batching
-   queue, generation-keyed `with-let` store.
+1. **Port `reagent.ratom`'s engine** — per §2.8-bb: no RAtom type;
+   capture feeds `*ratom-context*` from `tracked-deref` (macros.clj);
+   reactions/cursors are reify'd IDeref refs with internal watcher
+   registries behind `watch-ref`/`unwatch-ref`; `make-reaction` with
+   auto-dep discovery (capture → `_update-watching` set-diff → dirty
+   flag → queued run → notify on `=` change), `track`, `cursor`,
+   batching queue, generation-keyed `with-let` store.
 2. **Headless tests first**: dep discovery across branches, watch
    set-diff on branch change, `=`-no-op notification, queue draining,
-   RAtom interchangeability with plain atoms (existing setter fns work
-   on both). Register the test ns in `kmet.runner/all-namespaces`.
+   plain-atom interop (deps are existing atoms — existing setter fns
+   work unchanged), component-body capture (a Text render inside a
+   reaction tracks `text-set!`), plus ports of reagent's own test
+   cases: branch-switch disposal, reset-in-reaction convergence,
+   indirect exception recovery, sticky caught errors. Register the
+   test ns in `kmet.runner/all-namespaces`.
 3. **Frame flush install** — batching drained from the render loop's
    existing 16ms tick (one hook install in `tui.core`; default no-op
    when no queue exists). Gate: a queued reaction runs exactly once per
@@ -999,33 +1075,18 @@ scheduler comes later, so nothing can freeze.
 
 ### Stage 6 — state typing + cleanup (optional tail)
 
-16. **Migrate app-owned atom constructors to `RAtom`** — mechanical
-    (`(atom x)` → `(r/ratom x)`; ~120 constructor sites in kmet.app,
-    one namespace at a time). Everything downstream (setters, watches,
-    track! hit-checks) treats them identically, so each swap is
-    behavior-preserving.
-
-    **Why bother? The honest ledger.** What Stage 6 *buys*:
-
-    - **Deref-site freedom**: after migration, a component body can
-      deref any domain atom directly and be tracked — no compute slice,
-      no cursor, no explicit dep list. Without it, un-migrated reads
-      must go through `compute`/`cursor` wrappers.
-    - **Kills the two-worlds split**: one atom type everywhere means no
-      "is this read tracked?" reasoning, which is the exact silent-
-      freeze trap Reagent users hit mixing r/atom with plain atoms.
-    - **Extension parity for free**: internal extensions read app state
-      reactively without wrapping every access.
-
-    What it *costs*: ~120 mechanical edits, zero behavior change, no
-    API churn (RAtom is interface-identical), fully incremental per
-    namespace.
-
-    **And what happens if we skip it**: nothing breaks. Components
-    keep using `compute`/`cursor` slices over plain atoms — the §3.1
-    pattern works indefinitely. Stage 6 is an ergonomic consolidation,
-    not a correctness step: it deletes the wrapper discipline, not a
-    bug class. That's why it's optional tail, not required work.
+16. ~~**Migrate app-owned atom constructors to `RAtom`**~~ — dissolved
+    by the §2.8-bb pivot: there is no RAtom type, and none is needed.
+    Plain atoms already ARE the tracked inputs — component bodies get
+    that for free via `tracked-deref`; hand-written reaction bodies use
+    `compute`/`cursor` slices or explicit `tracked-deref`. The two-
+    worlds split Stage 6 existed to close ("is this read tracked?") is
+    closed by the shared capture point instead of by owning the atom
+    type: every `@read` in a component render body is tracked today,
+    before any migration. What remains of this stage is item 17's
+    cleanup only. (On a non-bb target where interfaces are
+    implementable again, a tracked atom type could return — as sugar,
+    not as a premise.)
 
 17. **Retire leftovers** — `assistant-message-append-text!` remnants,
     unused adapter ctors, any remaining manual request-render next to
@@ -1042,19 +1103,22 @@ can adopt `compute` slices later, opportunistically.
 `defc` existed to deliver dependency tracking through compile-time deref
 rewriting — a workaround for *not owning the atom type*. Stage 1 removes
 that premise twice over: reactions discover deps at deref time (no
-rewriting needed for tracked reads), and Stage 6 makes the app's own
-atoms tracked types (internal-only codebase, mechanical constructor
-swap). Every fn component is Form-1-reactive like Reagent, no macro. If
-Stage 6 stalls, `compute`/`cursor` slices cover un-migrated plain-atom
-reads explicitly. The macro is never written; if a hot spot ever needs
-input-side caching without reactions, that's a different, smaller tool.
+rewriting needed for tracked reads), and the §2.8-bb pivot makes the
+app's EXISTING plain atoms the tracked inputs through the shared capture
+point — no constructor swap ever. Every fn component is Form-1-reactive
+like Reagent, no macro. Reads outside the contract (bare `@plain-atom`
+in a hand-written body) are covered explicitly via `compute`/`cursor`
+slices or `tracked-deref`. The macro is never written; if a hot spot
+ever needs input-side caching without reactions, that's a different,
+smaller tool.
 
 Guardrails: tests in `test/kmet/tui/`, new namespaces registered in
 `kmet.runner/all-namespaces`; clj-kondo hooks for `track!`/`with-let`;
 cljfmt `:extra-indents`; ComponentFn on the uncached-allowlist for its
 batched path (AGENTS.md reactive-cache section documents the
-reaction-backed path); RAtom interchangeability test stays green
-forever (it is the rollback guarantee for Stage 6); full gate at each
+reaction-backed path); plain-atom interop stays green forever (existing
+setter fns keep working on tracked inputs — they are the same objects;
+the rollback guarantee for every conversion stage); full gate at each
 stage boundary.
 
 **The perf invariant, as a test**: an idle UI runs zero fn bodies and
@@ -1069,7 +1133,8 @@ no-ops); failures land in `bb test`, not someone's scrollback.
 kmet.app        : owns atoms, pure data updates (no component knowledge)
 kmet.app.ui     : fn components (shared def'd computes, :state local)
                   + hiccup/root mount points
-kmet.tui        : reagent (RAtom/reactions/track/cursor/batching),
+kmet.tui        : reagent (reactions/track/cursor/batching over plain
+                  atoms — no RAtom type, §2.8-bb),
                   hiccup (tags/compile/reconcile, root, ref,
                   render-lines, compute-as-sugar), macros (track!,
                   with-let, let-state, on-dispose!, invalidate-cache),
@@ -1091,8 +1156,9 @@ One line each — the sections carry the reasoning.
 1. **Props/state split** — `:props` + `:state` + `:cache`; all props
    live; adapter ctors decouple migration (§4).
 2. **No `defc`** — reactions (Stage 1 port) deliver tracking at deref
-   time; no deref-rewriting macro ever ships. Un-migrated plain-atom
-   reads covered by compute/cursor slices (§2.4, Stage 6).
+   time; no deref-rewriting macro ever ships. Reads outside the
+   tracking contract covered by compute/cursor slices or explicit
+   `tracked-deref` (§2.4, §2.8-bb).
 3. **`with-let` day one** — sugar over `let-state`/`on-dispose!`; all
    three live in `kmet.tui.macros` (§2.5).
 4. **Shared computes are def'd, per-instance under `with-let`;**
@@ -1129,12 +1195,19 @@ One line each — the sections carry the reasoning.
     `defcomponent` = Form-3; raw-record splicing as fourth adapter form
     (§2.4, §2.8).
 18. **No `defc`, ever** — the deref-rewriting macro was a workaround
-    for not owning atom types; Stage 1 (deref-time capture) + Stage 6
-    (mechanical constructor migration, internal-only codebase) remove
-    the premise. Batched path remains as opt-out (§2.4).
+    for not owning atom types; deref-time capture (Stage 1) removes the
+    premise outright, and the §2.8-bb capture point makes existing
+    atoms first-class inputs with no migration. Batched path remains as
+    opt-out (§2.4).
 19. **Port the ratom, not React** — `kmet.tui.reagent` is a faithful
-    JVM port of `reagent.ratom` (~700 LOC, zero deps): auto-dep
-    reactions, batching at the frame flush, Reagent-compatible API.
-    React/rum rejected as bases — their value is L0–L2, which the port
-    covers; their reconcilers serve a DOM contract kmet doesn't have
-    (§2.8).
+    port of `reagent.ratom`'s semantics: auto-dep reactions, batching
+    at the frame flush, Reagent-compatible API. React/rum rejected as
+    bases — their value is L0–L2, which the port covers; their
+    reconcilers serve a DOM contract kmet doesn't have (§2.8).
+20. **No RAtom type — capture at `tracked-deref`** (amendment forced
+    by Babashka): bb seals IWatchable/IReset/IRef away from pure-source
+    implementations (verified against the binary), so a drop-in atom
+    type cannot exist. Capture rides the `tracked-deref` funnel every
+    component body already uses; plain atoms are the tracked inputs;
+    reactions/cursors are reify'd IDeref refs behind
+    `watch-ref`/`unwatch-ref`; Stage 6 dissolves (§2.8-bb).

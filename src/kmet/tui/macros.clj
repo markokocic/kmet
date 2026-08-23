@@ -21,15 +21,34 @@
    a tracking scope."
   nil)
 
+(def ^:dynamic *ratom-context*
+  "The running reaction's capture frame ({:pending (atom #{}) :self ref}),
+   bound by kmet.tui.reagent around reaction bodies. nil outside one.
+   Lives here (not in reagent.clj) so tracked-deref can feed it without a
+   require cycle — reagent sits above macros."
+  nil)
+
+(defn capture-deref!
+  "Record REF in the active reaction's pending-dependency set, if a reaction
+   is running. Called from tracked-deref; reactions and cursors additionally
+   record themselves from their own deref implementations."
+  [ref]
+  (when-some [{:keys [pending self]} *ratom-context*]
+    (when-not (identical? self ref)
+      (swap! pending conj ref)))
+  nil)
+
 (defn tracked-deref
   "Deref wrapper used by track!. Records A in the active tracking map (when
    one is bound) with the value just read, then returns it. Only IRef
    instances (atoms, vars) are tracked — volatiles and delays can't take
-   watches and are skipped."
+   watches and are skipped. Also records A in the running reaction (when
+   one is bound), so component render bodies are reactive under the DSL."
   [a]
   (let [v (deref a)]
     (when (and *tracked* (instance? clojure.lang.IRef a))
       (swap! *tracked* assoc a v))
+    (capture-deref! a)
     v))
 
 (defn- deref-form? [f]
@@ -186,6 +205,67 @@
      @(~field ~comp)))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
+;; ═════════════════════════════════════════════════════════════════════
+;; with-let store — generation-keyed locals + LIFO cleanups (Stage-1
+;; primitive; the with-let macro lands here over this in Stage 3)
+;; ═════════════════════════════════════════════════════════════════════
+
+(def ^:dynamic *store*
+  "The per-instance with-let store bound around a component body. Nil
+   outside one (fetch-local/register-cleanup! throw)."
+  nil)
+
+(defn new-store
+  "A fresh with-let store: holds once-initialized locals and LIFO cleanups."
+  []
+  (atom {:locals {} :cleanups () :cleanup-sites #{}}))
+
+(defn fetch-local
+  "Value for SITE in the bound store, initialized by INIT-FN exactly once
+   per store (per component instance — the body re-runs every pass, the
+   init does not)."
+  [site init-fn]
+  (when (nil? *store*)
+    (throw (ex-info "kmet.tui.macros/fetch-local called outside a with-let store" {:site site})))
+  (if (contains? (:locals @*store*) site)
+    (get (:locals @*store*) site)
+    (let [v (init-fn)]
+      (swap! *store* assoc-in [:locals site] v)
+      v)))
+
+(defn register-cleanup!
+  "Register F to run when the bound store is destroyed. Registration is
+   once-per-SITE: the body re-runs every render pass, and a bare conj would
+   grow the cleanup list per frame. Cleanups run LIFO at destroy-store!."
+  [site f]
+  (when (nil? *store*)
+    (throw (ex-info "kmet.tui.macros/register-cleanup! called outside a with-let store" {:site site})))
+  (when-not (contains? (:cleanup-sites @*store*) site)
+    (swap! *store* (fn [s]
+                     (-> s
+                         (update :cleanups conj f)
+                         (update :cleanup-sites conj site)))))
+  nil)
+
+(defn destroy-store!
+  "Run STORE's cleanups in reverse registration order (each isolated — a
+   throwing cleanup logs to stderr and lets the rest run), then empty it."
+  [store]
+  (doseq [f (:cleanups @store)]
+    (try
+      (f)
+      (catch Throwable e
+        (binding [*out* *err*]
+          (println "kmet.tui.macros with-let cleanup error:" (ex-message e))))))
+  (swap! store assoc :cleanups () :cleanup-sites #{} :locals {})
+  nil)
+
+(defmacro with-store
+  "Bind STORE as the ambient with-let store for BODY (dynamic *store*)."
+  [store & body]
+  `(binding [*store* ~store]
+     ~@body))
+
 ;; defcomponent — record + IComponent + IComponentKind boilerplate
 ;; ═══════════════════════════════════════════════════════════════════════════
 

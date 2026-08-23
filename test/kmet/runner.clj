@@ -56,6 +56,7 @@
     kmet.tui.test-fuzzy
     kmet.tui.test-autocomplete
     kmet.tui.test-core
+    kmet.tui.test-reagent
     kmet.tui.components.test-text
     kmet.tui.components.test-spacer
     kmet.tui.components.test-container
