@@ -89,9 +89,9 @@
         _ (.append sb " :provider {:id :openrouter\n")
         _ (.append sb "            :name \"OpenRouter\"}\n")
         _ (.append sb " :models\n")
-        _ (.append sb " {")]
+        _ (.append sb "{")]   ; cljfmt-canonical: no space after the brace
     (doseq [m (sort-by :id models)]
-      (.append sb (format "  \"%s\"\n" (:id m)))
+      (.append sb (format "\"%s\"\n" (:id m)))
       (.append sb (format "  {:id \"%s\"\n" (:id m)))
       (.append sb (format "   :name \"%s\"\n" (str/replace (:name m) "\"" "\\\"")))
       (.append sb (format "   :api :%s\n" (name (:api m))))
@@ -102,7 +102,8 @@
       (.append sb (format "   :cost {:input %g :output %g :cache-read %g :cache-write %g}}\n"
                           (:input (:cost m)) (:output (:cost m))
                           (:cache-read (:cost m)) (:cache-write (:cost m)))))
-    (.append sb "  }\n}\n")
+    ;; cljfmt-canonical tail: models map and top-level map close inline
+    (.append sb "}}\n")
     (spit catalog-path (str sb)))
   (println (str "Generated " catalog-path " (" (count models) " models)")))
 

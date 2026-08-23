@@ -3,7 +3,7 @@
  :provider {:id :openrouter
             :name "OpenRouter"}
  :models
- {  "black-forest-labs/flux.2-flex"
+ {"black-forest-labs/flux.2-flex"
   {:id "black-forest-labs/flux.2-flex"
    :name "Black Forest Labs: FLUX.2 Flex"
    :api :openrouter-images
@@ -407,6 +407,4 @@
    :base-url "https://openrouter.ai/api/v1"
    :input [:text :image]
    :output [:image]
-   :cost {:input 0.00000 :output 0.00000 :cache-read 0.00000 :cache-write 0.00000}}
-  }
-}
+   :cost {:input 0.00000 :output 0.00000 :cache-read 0.00000 :cache-write 0.00000}}}}

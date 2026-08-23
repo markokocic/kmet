@@ -3,6 +3,6 @@
                         ;; rewrite-clj is bb-bundled (adapted port) — use the
                         ;; bundled copy, never the Maven lib (which requires
                         ;; clojure.tools.reader.impl.* that bb does not ship)
-                        :exclusions [rewrite-clj/rewrite-clj]}
+                                :exclusions [rewrite-clj/rewrite-clj]}
         ;; pure-Clojure delimiter repair (SCI-compatible; parinfer is a JVM lib)
         parinferish/parinferish {:mvn/version "0.8.0"}}}

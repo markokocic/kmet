@@ -1,6 +1,6 @@
 {:paths ["src" "test" "../../src"]
  :deps {dev.weavejester/cljfmt {:mvn/version "0.16.5"
-                                 :exclusions [rewrite-clj/rewrite-clj]}
+                                :exclusions [rewrite-clj/rewrite-clj]}
         parinferish/parinferish {:mvn/version "0.8.0"}}
  :tasks
  {test {:doc "Run clojure extension tests (args: test namespace names)"
