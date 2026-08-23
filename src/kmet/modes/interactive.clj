@@ -208,9 +208,9 @@
   [cs]
   (ui/fdp-set-session! (:footer-provider cs) @(:session-atom cs))
   ;; The fdp atoms are read inside helper fns — not lexically tracked by
-  ;; track! — so invalidate explicitly on every sync.
+  ;; track! — so invalidate explicitly on every sync. The invalidation
+  ;; schedules the frame itself (invalidate-cache fires the §3.4 hook).
   (protocols/invalidate (:footer-comp cs))
-  (tui/tui-request-render (:tui cs))
   nil)
 
 (defn- update-terminal-title!
@@ -1886,11 +1886,12 @@
 (defn- show-status-indicator!
   "Record INDICATOR as the active status child (pi: showStatusIndicator —
    disposes the active indicator). KIND records which indicator is active
-   for kind-gated clears."
+   for kind-gated clears. No manual render request: the swap on
+   :status-current is a tracked dep of the status-area root reaction, whose
+   auto-run hook schedules the frame (§3.4)."
   [cs kind indicator]
   (ui/status-indicator-stop! (:status-indicator cs))
-  (reset! (:status-current cs) {:kind kind :indicator indicator})
-  (tui/tui-request-render (:tui cs)))
+  (reset! (:status-current cs) {:kind kind :indicator indicator}))
 
 (defn- activate-working-indicator!
   "Restore the default working StatusIndicator as the status layer's child
@@ -1898,9 +1899,12 @@
    WorkingStatusIndicator)). Used when a new LLM call starts after a retry
    backoff or compaction, which swapped in a transient indicator."
   [cs]
+  ;; The nil swap schedules the frame through the status-area root's
+  ;; reaction when a transient indicator was shown; start-agent-run! (the
+  ;; one cold-start path where current is already nil) requests its own
+  ;; frame right after, covering the spinner activation.
   (reset! (:status-current cs) nil)
-  (ui/status-indicator-start! (:status-indicator cs))
-  (tui/tui-request-render (:tui cs)))
+  (ui/status-indicator-start! (:status-indicator cs)))
 
 (defn- clear-status-indicator!
   "Restore the idle two-row status (pi: clearStatusIndicator → idleStatus).
@@ -1909,9 +1913,10 @@
    revived) then no-ops instead of stopping the working spinner."
   [cs & [kind]]
   (when (or (nil? kind) (= kind (:kind @(:status-current cs))))
+    ;; A real swap (transient → idle) schedules its own frame through the
+    ;; status-area root reaction; an already-idle clear needs no frame.
     (reset! (:status-current cs) nil)
-    (ui/status-indicator-stop! (:status-indicator cs))
-    (tui/tui-request-render (:tui cs))))
+    (ui/status-indicator-stop! (:status-indicator cs))))
 
 ;; ─── Pending messages display (pi: updatePendingMessagesDisplay) ──────────
 
@@ -1930,9 +1935,10 @@
    updatePendingMessagesDisplay)."
   [cs]
   (let [{:keys [steering follow-up]} (agent/queued-messages @(:agent-state cs))]
+    ;; set-queues! swaps track!-watched atoms — the watch invalidates the
+    ;; component and schedules the frame (§3.4); no manual poke.
     (ui/pending-messages-set-queues! (:pending-messages-comp cs)
-                                     steering follow-up))
-  (tui/tui-request-render (:tui cs)))
+                                     steering follow-up)))
 
 (defn- compaction-status-message
   "Pi: CompactionStatusIndicator label — reason-specific, with the cancel
