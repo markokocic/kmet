@@ -1186,6 +1186,70 @@
   (t/is (= :max_completion_tokens (@#'shared/max-tokens-key (tmodel :compat nil)))
         "default → :max_completion_tokens"))
 
+;; ─── Compat auto-detection (pi detectCompat/getCompat) ─────────────────────
+
+(defn- cmodel
+  "Model map for compat-detection tests: a models.edn-style custom entry
+   (provider id + base-url) with optional explicit compat."
+  [& {:keys [provider id base-url compat]
+      :or {provider :custom id "vendor/model-x" base-url "https://api.example.com/v1"}}]
+  {:id id :name "M" :provider provider :base-url base-url
+   :reasoning true :compat compat})
+
+(t/deftest test-detect-openai-compat
+  (t/testing "generic custom provider → plain OpenAI defaults"
+    (let [d (shared/detect-openai-compat (cmodel))]
+      (t/is (= :openai (:thinking-format d)))
+      (t/is (= :max-completion-tokens (:max-tokens-field d)))
+      (t/is (false? (:requires-reasoning-content-on-assistant-messages d)))
+      (t/is (true? (:supports-strict-mode d)))
+      (t/is (true? (:supports-store d)))
+      (t/is (true? (:supports-reasoning-effort d)))
+      (t/is (= :openai (:session-affinity-format d)))))
+  (t/testing "deepseek detected by base URL or provider id"
+    (doseq [m [(cmodel :base-url "https://api.DEEPSEEK.com")
+               (cmodel :provider :deepseek)]]
+      (let [d (shared/detect-openai-compat m)]
+        (t/is (= :deepseek (:thinking-format d)))
+        (t/is (true? (:requires-reasoning-content-on-assistant-messages d)))
+        (t/is (= :max-tokens (:max-tokens-field d)))
+        (t/is (false? (:supports-store d))))))
+  (t/testing "openrouter: nested reasoning format + affinity; anthropic/* keeps developer role"
+    (let [d (shared/detect-openai-compat
+             (cmodel :provider :openrouter :id "anthropic/claude-x"
+                     :base-url "https://openrouter.ai/api/v1"))]
+      (t/is (= :openrouter (:thinking-format d)))
+      (t/is (true? (:supports-developer-role d)))
+      (t/is (= :openrouter (:session-affinity-format d)))
+      (t/is (= :anthropic (:cache-control-format d)))))
+  (t/testing "zai/moonshot: effort unsupported, max_tokens; moonshot drops strict mode"
+    (let [zai (shared/detect-openai-compat
+               (cmodel :provider :zai :base-url "https://api.z.ai/api/paas/v4"))]
+      (t/is (= :zai (:thinking-format zai)))
+      (t/is (false? (:supports-reasoning-effort zai)))
+      (t/is (= :max-tokens (:max-tokens-field zai))))
+    (let [moonshot (shared/detect-openai-compat
+                    (cmodel :provider :moonshotai :base-url "https://api.moonshot.cn/v1"))]
+      (t/is (false? (:supports-reasoning-effort moonshot)))
+      (t/is (false? (:supports-strict-mode moonshot)))
+      (t/is (= :max-tokens (:max-tokens-field moonshot))))))
+
+(t/deftest test-resolved-openai-compat
+  (t/testing "explicit compat wins key-wise over detection (models.edn partial entries)"
+    (let [r (shared/resolved-openai-compat
+             (cmodel :base-url "https://api.commandcode.ai/provider/v1"
+                     :compat {:thinking-format :deepseek}))]
+      (t/is (= :deepseek (:thinking-format r)) "explicit format kept")
+      (t/is (false? (:requires-reasoning-content-on-assistant-messages r))
+            "unset keys fall back to the detected default")
+      (t/is (= :max-completion-tokens (:max-tokens-field r)))))
+  (t/testing "explicit false beats a detected true (pi ?? merge semantics)"
+    (t/is (false? (:supports-store
+                   (shared/resolved-openai-compat
+                    (cmodel :compat {:supports-store false}))))))
+  (t/testing "no compat at all → pure detection"
+    (t/is (= :openai (:thinking-format (shared/resolved-openai-compat (cmodel)))))))
+
 (t/deftest test-openai-payload-sampling-params
   (t/testing "sampling-params merged verbatim into the payload, keys win (pi: Object.assign last)"
     (let [model (assoc (tmodel) :sampling-params {:temperature 1.0 :min_p 0.0})
@@ -1202,6 +1266,32 @@
     (let [payload (@#'completions/openai-payload (tmodel) nil [] [] "m1")]
       (t/is (= 32000 (:max_completion_tokens payload)))
       (t/is (nil? (:temperature payload))))))
+
+(t/deftest test-openai-payload-detected-compat
+  ;; pi getCompat: a model whose :compat is unset gets detectCompat defaults —
+  ;; pointing a custom provider at api.deepseek.com yields deepseek thinking
+  ;; params, max_tokens and reasoning_content round-trip without any config.
+  (let [model {:id "deepseek-v4-flash" :name "DS" :provider :custom
+               :base-url "https://api.deepseek.com" :reasoning true
+               :thinking-level-map {:high "high"} :max-tokens 32768
+               :compat nil}
+        msgs [{:role :user :content [{:type :text :text "hi"}]}
+              {:role :assistant :content [{:type :text :text "done"}]
+               :thinking "prior CoT"
+               :tool-calls [{:id "c1" :name "bash" :arguments {}}]}]
+        payload (@#'completions/openai-payload model :high msgs [] "deepseek-v4-flash")]
+    (t/is (= {:thinking {:type "enabled"} :reasoning_effort "high"}
+             (select-keys payload [:thinking :reasoning_effort])))
+    (t/is (= 32768 (:max_tokens payload)))
+    (t/is (= "prior CoT" (:reasoning_content (second (:messages payload)))))
+    ;; the gate itself: detection selected openai-messages-with-reasoning —
+    ;; a thinking-less assistant message gets an empty reasoning_content fill
+    ;; (plain openai-messages would omit the key entirely)
+    (let [payload (@#'completions/openai-payload model nil
+                                                 [{:role :assistant
+                                                   :content [{:type :text :text "hi"}]}]
+                                                 [] "deepseek-v4-flash")]
+      (t/is (= "" (:reasoning_content (first (:messages payload))))))))
 
 (t/deftest test-reasoning-content-gating-data
   ;; pi: requiresReasoningContentOnAssistantMessages gates reasoning_content

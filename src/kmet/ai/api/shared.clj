@@ -367,15 +367,120 @@
                        values)]
     (when (seq resolved) resolved)))
 
+(defn detect-openai-compat
+  "pi detectCompat (packages/ai/src/api/openai-completions.ts): auto-detected
+   openai-completions compatibility defaults for a model from its provider id
+   and base URL — the base layer wherever the model's explicit :compat leaves
+   a key unset (resolved-openai-compat applies it). Explicit compat entries
+   always override these values.
+
+   Carries pi's full detected key set for parity; keys without a kmet
+   consumer yet (:supports-store, :supports-developer-role,
+   :requires-tool-result-name, ...) are inert data. Routing maps
+   (openRouterRouting/vercelGatewayRouting) and feature keys with no kmet
+   implementation (zaiToolStream, deferredToolsMode,
+   supportsOpenAIGrammarTools) are not ported. Unlike pi, URL matching is
+   case-insensitive across all providers."
+  [{:keys [provider id base-url]}]
+  (let [provider (some-> provider name)
+        url (str/lower-case (or base-url ""))
+        id-str (or id "")
+        in-url? (fn [s] (str/includes? url s))
+        zai? (or (contains? #{"zai" "zai-coding-cn"} provider)
+                 (in-url? "api.z.ai")
+                 (in-url? "open.bigmodel.cn"))
+        together? (or (= provider "together")
+                      (in-url? "api.together.ai")
+                      (in-url? "api.together.xyz"))
+        moonshot? (or (contains? #{"moonshotai" "moonshotai-cn"} provider)
+                      (in-url? "api.moonshot."))
+        openrouter? (or (= provider "openrouter") (in-url? "openrouter.ai"))
+        cf-workers? (or (= provider "cloudflare-workers-ai") (in-url? "api.cloudflare.com"))
+        cf-gateway? (or (= provider "cloudflare-ai-gateway") (in-url? "gateway.ai.cloudflare.com"))
+        nvidia? (or (= provider "nvidia") (in-url? "integrate.api.nvidia.com"))
+        ant-ling? (or (= provider "ant-ling") (in-url? "api.ant-ling.com"))
+        deepseek? (or (= provider "deepseek") (in-url? "deepseek.com"))
+        non-standard? (or nvidia?
+                          (= provider "cerebras")
+                          (in-url? "cerebras.ai")
+                          (= provider "xai")
+                          (in-url? "api.x.ai")
+                          together?
+                          (in-url? "chutes.ai")
+                          deepseek?
+                          zai?
+                          moonshot?
+                          (= provider "opencode")
+                          (in-url? "opencode.ai")
+                          cf-workers?
+                          cf-gateway?
+                          ant-ling?)
+        use-max-tokens? (or (in-url? "chutes.ai")
+                            deepseek?
+                            moonshot?
+                            cf-gateway?
+                            together?
+                            nvidia?
+                            ant-ling?
+                            zai?)
+        grok? (or (= provider "xai") (in-url? "api.x.ai"))
+        openrouter-dev-role? (and openrouter?
+                                  (some #(str/starts-with? id-str %)
+                                        ["anthropic/" "openai/"]))]
+    {:supports-store (not non-standard?)
+     :supports-developer-role (or openrouter-dev-role?
+                                  (and (not non-standard?) (not openrouter?)))
+     :supports-reasoning-effort (and (not grok?) (not zai?) (not moonshot?)
+                                     (not together?) (not cf-gateway?) (not nvidia?)
+                                     (not ant-ling?))
+     :supports-usage-in-streaming true
+     :supports-finish-reason true
+     :max-tokens-field (if use-max-tokens? :max-tokens :max-completion-tokens)
+     :requires-tool-result-name false
+     :requires-assistant-after-tool-result false
+     :requires-thinking-as-text false
+     :requires-reasoning-content-on-assistant-messages deepseek?
+     :thinking-format (cond
+                        deepseek? :deepseek
+                        zai? :zai
+                        together? :together
+                        ant-ling? :ant-ling
+                        openrouter? :openrouter
+                        :else :openai)
+     :chat-template-kwargs {}
+     :chat-template-args {}
+     :supports-thinking-token-budget false
+     :supports-strict-mode (and (not moonshot?) (not together?) (not cf-gateway?) (not nvidia?))
+     :cache-control-format (when (and openrouter? (str/starts-with? id-str "anthropic/"))
+                             :anthropic)
+     :send-session-affinity-headers false
+     :session-affinity-format (if openrouter? :openrouter :openai)
+     :supports-long-cache-retention (not (or together? cf-workers? cf-gateway? nvidia? ant-ling?))}))
+
+(defn resolved-openai-compat
+  "pi getCompat: the model's explicit :compat overlaid key-wise on
+   detect-openai-compat — an explicit non-nil value wins, nil/absent falls
+   back to the detected default (pi's ?? merge). The single source of compat
+   truth for the openai-completions request builders."
+  [model]
+  (let [explicit (:compat model)]
+    (into {}
+          (map (fn [[k detected]]
+                 [k (let [v (get explicit k)] (if (nil? v) detected v))]))
+          (detect-openai-compat model))))
+
 (defn openai-thinking-params
   "Thinking params for an openai-completions payload (pi buildParams thinking
    section; kmet's formats: default/openai, deepseek, qwen, openrouter,
    zai, together, baseten, ant-ling, string-thinking, chat-template,
-   qwen-chat-template). EFFORT is the clamped level, nil when off."
+   qwen-chat-template). EFFORT is the clamped level, nil when off. Compat is
+   resolved against URL detection (resolved-openai-compat), so a model whose
+   explicit :compat omits a key still gets its provider's format."
   [model effort]
   (let [reasoning? (:reasoning model)
-        fmt (:thinking-format (:compat model))
-        effort? (not= false (:supports-reasoning-effort (:compat model)))]
+        compat (resolved-openai-compat model)
+        fmt (:thinking-format compat)
+        effort? (not= false (:supports-reasoning-effort compat))]
     (cond
       (and reasoning? (= fmt :openrouter))
       ;; OpenRouter normalizes reasoning across providers via a nested
@@ -422,20 +527,20 @@
 
       (and reasoning? (= fmt :chat-template))
       (cond-> {}
-        (seq (:chat-template-kwargs (:compat model)))
+        (seq (:chat-template-kwargs compat))
         (assoc :chat_template_kwargs
                (resolve-template-values model effort
-                                        (:chat-template-kwargs (:compat model)))))
+                                        (:chat-template-kwargs compat))))
 
       (and reasoning? (= fmt :baseten))
       ;; pi thinkingFormat "baseten": chat_template_args from the compat
       ;; spec ($var thinking.enabled) + reasoning_effort when supported
       ;; (the off value from the thinking-level-map).
       (cond-> {}
-        (seq (:chat-template-args (:compat model)))
+        (seq (:chat-template-args compat))
         (assoc :chat_template_args
                (resolve-template-values model effort
-                                        (:chat-template-args (:compat model))))
+                                        (:chat-template-args compat)))
         (and effort effort?)
         (assoc :reasoning_effort (effort-value model effort))
         (and (nil? effort) (string? (get-in model [:thinking-level-map :off])))
@@ -506,9 +611,11 @@
 
 (defn max-tokens-key
   "Payload key for the model's max tokens (pi: compat.maxTokensField —
-   :max_tokens when set, :max_completion_tokens by default)."
+   :max_tokens when set or detected for a max-tokens provider like
+   deepseek/moonshot/together/zai, :max_completion_tokens by default).
+   Reads the URL-resolved compat (resolved-openai-compat)."
   [model]
-  (if (= :max-tokens (:max-tokens-field (:compat model)))
+  (if (= :max-tokens (:max-tokens-field (resolved-openai-compat model)))
     :max_tokens
     :max_completion_tokens))
 

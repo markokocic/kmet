@@ -4,7 +4,7 @@
    [cheshire.core :as json]
    [kmet.ai.proxy :as proxy]
    [kmet.libs.sse :as sse]
-   [kmet.ai.api.shared :refer [endpoint-url max-tokens-key openai-messages openai-messages-with-reasoning openai-thinking-params apply-before-provider-request-hook request-headers tool->openai-schema transport-error-message usage-with-cost]]))
+   [kmet.ai.api.shared :refer [endpoint-url max-tokens-key openai-messages openai-messages-with-reasoning openai-thinking-params resolved-openai-compat apply-before-provider-request-hook request-headers tool->openai-schema transport-error-message usage-with-cost]]))
 
 (defn openai-payload
   "Request body for an openai-completions request (pi buildParams):
@@ -12,14 +12,16 @@
    max-tokens field, then the model's :sampling-params merged last so their
    keys win over the named request fields (pi: Object.assign(params,
    samplingParams) after everything else — samplingParams is the single
-   source of sampling truth for a model)."
+   source of sampling truth for a model). Compat is URL-resolved
+   (resolved-openai-compat, pi getCompat)."
   [model-record effort messages tools model-id]
-  (let [thinking-params (openai-thinking-params model-record effort)
+  (let [compat (resolved-openai-compat model-record)
+        thinking-params (openai-thinking-params model-record effort)
         max-tokens-field (max-tokens-key model-record)
         ;; pi: requiresReasoningContentOnAssistantMessages gates the
         ;; reasoning_content field (deepseek/opencode-go only)
         messages-fn (if (:requires-reasoning-content-on-assistant-messages
-                         (:compat model-record))
+                         compat)
                       openai-messages-with-reasoning
                       openai-messages)]
     (cond-> {:model model-id
@@ -27,7 +29,7 @@
              :stream true
              :stream_options {:include_usage true}}
       (seq tools) (assoc :tools (mapv #(tool->openai-schema %
-                                                            (not= false (:supports-strict-mode (:compat model-record))))
+                                                            (not= false (:supports-strict-mode compat)))
                                       tools))
       (seq thinking-params) (merge thinking-params)
       (:max-tokens model-record) (assoc max-tokens-field (:max-tokens model-record))

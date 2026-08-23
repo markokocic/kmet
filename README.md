@@ -188,7 +188,10 @@ google-vertex, amazon-bedrock, ...; generated from models.dev + live
 catalogs — `bb generate-models`). The image-model catalog lives in
 `src/kmet/ai/image_model_data/image-models.edn` (`bb generate-image-models`).
 Models, base URLs and defaults are registry data; custom providers, API keys
-and model overrides go in `~/.kmet/agent/models.edn` (see `models.md`).
+and model overrides go in `~/.kmet/agent/models.edn`. OpenAI-completions
+wire compatibility (thinking format, max-tokens field, reasoning
+round-trip) auto-detects from the provider id and base URL; explicit
+`:compat` entries in models.edn override the detected defaults.
 
 The system prompt (pi-compatible) is built from: the default (or `:system-prompt`)
 base, the active tools with one-line snippets, guidelines, `:append-system-prompt`,
