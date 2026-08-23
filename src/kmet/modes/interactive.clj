@@ -201,10 +201,11 @@
             (th/get-thinking-border-color theme level))))
 
 (defn- update-footer!
-  "Sync the footer's session data source and request a re-render. The
-   footer's model/provider/thinking live in the fdp atoms (set once at
-   startup; sync-footer-model! refreshes them on model changes), so only
-   session changes need wiring here."
+  "Sync the footer's session data source. The explicit invalidation
+   schedules the re-render itself (invalidate-cache fires the §3.4 hook).
+   The footer's model/provider/thinking live in the fdp atoms (set once
+   at startup; sync-footer-model! refreshes them on model changes), so
+   only session changes need wiring here."
   [cs]
   (ui/fdp-set-session! (:footer-provider cs) @(:session-atom cs))
   ;; The fdp atoms are read inside helper fns — not lexically tracked by

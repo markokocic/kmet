@@ -203,11 +203,11 @@
                :exclude-from-context-atom (atom exclude-from-context?)
                :ticker-atom (atom nil)})]
     ;; Pi: the loader's setInterval drives re-renders while running —
-    ;; kmet's spinner is passive, so a 1s ticker invalidates the
-    ;; component and requests a TUI render while :running, keeping the
-    ;; Elapsed counter (and the spinner frame) updating even when no
-    ;; output chunks arrive. Self-exits on completion; set-complete!
-    ;; cancels it promptly.
+    ;; kmet's spinner is passive, so a 1s ticker invalidates the component
+    ;; while :running (the invalidation schedules the render itself, §3.4),
+    ;; keeping the Elapsed counter (and the spinner frame) updating even
+    ;; when no output chunks arrive. Self-exits on completion;
+    ;; set-complete! cancels it promptly.
     (reset! (:ticker-atom comp)
             (future
               (try

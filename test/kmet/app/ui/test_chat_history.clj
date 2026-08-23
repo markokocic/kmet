@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
+            [kmet.tui.macros :as macros]
             [kmet.app.ui :as ui]
             [kmet.app.ui.chat-history :as ch]))
 
@@ -97,6 +98,25 @@
       (ch/chat-history-append-streaming-text! ch "Hello ")
       (ch/chat-history-append-streaming-text! ch "world")
       (is (= "Hello world" (ch/chat-history-get-streaming-text ch))))))
+
+(deftest test-append-streaming-schedules-frame
+  ;; Stage 5 (§3.4): on-agent-text retired its manual request-render — the
+  ;; append swap must reach the assistant component's track! watch, whose
+  ;; invalidate-cache schedules EXACTLY ONE frame per real change. Requires a
+  ;; rendered-once placeholder so the watches are installed.
+  (let [ch (ch/make-chat-history)
+        fired (atom 0)]
+    (ch/chat-history-start-streaming! ch)
+    (core/render ch 40)
+    (macros/set-frame-hook! #(swap! fired inc))
+    (try
+      (ch/chat-history-append-streaming-text! ch "Hello")
+      (t/is (= 1 @fired) "first append scheduled exactly one frame")
+      (ch/chat-history-append-streaming-text! ch " world")
+      (t/is (= 2 @fired) "second append scheduled another frame")
+      (is (= "Hello world" (ch/chat-history-get-streaming-text ch)))
+      (finally
+        (macros/set-frame-hook! nil)))))
 
 (deftest test-finalize-streaming
   (testing "finalize streaming text into a message"
