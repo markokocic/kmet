@@ -96,6 +96,7 @@
 
 ;; StatusIndicator
 (def make-status-indicator status-indicator/make-status-indicator)
+(def make-status-area status-indicator/make-status-area)
 (def status-indicator-start! status-indicator/status-indicator-start!)
 (def status-indicator-stop! status-indicator/status-indicator-stop!)
 (def status-indicator-set-text! status-indicator/status-indicator-set-text!)

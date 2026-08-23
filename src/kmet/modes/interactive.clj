@@ -11,6 +11,7 @@
             [kmet.tui.components.editor :as editor]
             [kmet.tui.components.expandable-text :as expandable-text]
             [kmet.tui.components.container :as container]
+            [kmet.tui.hiccup :as hiccup]
             [kmet.app.ui :as ui]
             [kmet.app.ui.auth-selector :as auth-selector]
             [kmet.app.ui.dock :as dock]
@@ -116,7 +117,8 @@
                       footer-comp
                       footer-provider
                       status-indicator
-                      status-container
+                      status-root
+                      status-current
                       pending-messages-comp
                       session-atom
                       running-turn?
@@ -127,8 +129,7 @@
                       pending-bash-components
                       pending-messages-container
                       editor-container
-                      theme-controller
-                      active-status-kind])
+                      theme-controller])
 
 ;; ─── Formatting helpers ────────────────────────────────────────────────────
 
@@ -1847,36 +1848,33 @@
     (reset! (:anim-timer cs) nil)))
 
 ;; ─── Status indicator swap model (pi: showStatusIndicator/clearStatusIndicator) ──
-;; The status container holds one indicator at a time. The default child is
-;; the working StatusIndicator (renders the idle two rows when inactive);
-;; retry/compaction indicators are transient swaps. All indicators render
-;; the same two-row shape so the editor and footer never jump.
-;; :active-status-kind records which indicator is in the container (:working /
-;; :retry / :compaction / nil when idle) so a stale end event can't stop an
-;; indicator that was already replaced (pi: clearStatusIndicator(kind) checks
-;; the active kind and no-ops on mismatch).
+;; The status layer is a fn component (ui/make-status-area) mounted via
+;; hiccup/root: it renders whichever indicator the :status-current atom
+;; records ({:kind k :indicator c}), or the default working StatusIndicator
+;; when nil. A swap is a pure reset! on that atom — reconcile diffs the tree
+;; and swaps the child record; no container clear/add dance. The working
+;; indicator's start/stop stays imperative (spinner lifecycle, dsl.md §5).
+;; The kind rides in the recorded map so a stale end event can't stop an
+;; indicator that was already replaced (pi: clearStatusIndicator(kind)
+;; checks the active kind and no-ops on mismatch).
 
 (defn- show-status-indicator!
-  "Replace the status container child with the given indicator (pi:
-   showStatusIndicator — disposes the active indicator). KIND records which
-   indicator is active for kind-gated clears."
+  "Record INDICATOR as the active status child (pi: showStatusIndicator —
+   disposes the active indicator). KIND records which indicator is active
+   for kind-gated clears."
   [cs kind indicator]
   (ui/status-indicator-stop! (:status-indicator cs))
-  (container/container-clear (:status-container cs))
-  (container/container-add-child (:status-container cs) indicator)
-  (reset! (:active-status-kind cs) kind)
+  (reset! (:status-current cs) {:kind kind :indicator indicator})
   (tui/tui-request-render (:tui cs)))
 
 (defn- activate-working-indicator!
-  "Restore the default working StatusIndicator as the container child and
-   activate it (pi: agent_start → showStatusIndicator(new
+  "Restore the default working StatusIndicator as the status layer's child
+   and activate it (pi: agent_start → showStatusIndicator(new
    WorkingStatusIndicator)). Used when a new LLM call starts after a retry
    backoff or compaction, which swapped in a transient indicator."
   [cs]
-  (container/container-clear (:status-container cs))
-  (container/container-add-child (:status-container cs) (:status-indicator cs))
+  (reset! (:status-current cs) nil)
   (ui/status-indicator-start! (:status-indicator cs))
-  (reset! (:active-status-kind cs) :working)
   (tui/tui-request-render (:tui cs)))
 
 (defn- clear-status-indicator!
@@ -1885,11 +1883,9 @@
    end event (e.g. auto-retry-end arriving after the working indicator was
    revived) then no-ops instead of stopping the working spinner."
   [cs & [kind]]
-  (when (or (nil? kind) (= kind @(:active-status-kind cs)))
-    (container/container-clear (:status-container cs))
-    (container/container-add-child (:status-container cs) (:status-indicator cs))
+  (when (or (nil? kind) (= kind (:kind @(:status-current cs))))
+    (reset! (:status-current cs) nil)
     (ui/status-indicator-stop! (:status-indicator cs))
-    (reset! (:active-status-kind cs) nil)
     (tui/tui-request-render (:tui cs))))
 
 ;; ─── Pending messages display (pi: updatePendingMessagesDisplay) ──────────
@@ -2511,7 +2507,7 @@
       ;; in-turn, so turn-start is the equivalent signal).
       (do (when-let [cs @cs-ref]
             (when (and @(:running-turn? cs)
-                       (not= :working @(:active-status-kind cs)))
+                       (not= :working (:kind @(:status-current cs))))
               (activate-working-indicator! cs)))
           (tui/tui-request-render tui))
       :auto-retry-start
@@ -2812,7 +2808,7 @@
                             ;; setting; overflow-only recovery doesn't count
                             :auto-compact (get config :auto-compact true))
 
-        ;; Core state (status-indicator/status-container filled in after layout)
+        ;; Core state (status-indicator/status-root filled in after layout)
         cs (map->CoreState {:tui t
                             :agent-state (atom ag)
                             :chat-history ch
@@ -2824,7 +2820,8 @@
                             :footer-comp ftr
                             :footer-provider fdp
                             :status-indicator nil
-                            :status-container nil
+                            :status-current (atom nil)
+                            :status-root nil
                             :pending-messages-comp pm
                             :session-atom (atom session)
                             :running-turn? (atom false)
@@ -2833,8 +2830,7 @@
                             :bash-running? (atom false)
                             :bash-signal (atom false)
                             :pending-bash-components (atom [])
-                            :pending-messages-container (container/make-container [pm])
-                            :active-status-kind (atom nil)})]
+                            :pending-messages-container (container/make-container [pm])})]
 
     ;; Initial loaded-resources sections (rebuilt on /reload)
     (ui/loaded-resources-set-sections! lr (build-loaded-resource-sections))
@@ -2902,13 +2898,16 @@
                                                         loaded-resources-container
                                                         chat-container])
           pending-messages-container (:pending-messages-container cs)
-          status-container (container/make-container [si])
+          ;; The status layer as a mounted DSL tree (dsl.md stage 4): the
+          ;; root's reaction re-derives when :status-current swaps, and
+          ;; reconcile swaps the child record — no clear/add dance.
+          status-root (hiccup/root (ui/make-status-area (:status-current cs) si))
           ;; pi: renderWidgets initializes the above-editor container with a
           ;; default spacer when no extension widgets are registered
           widget-container-above (container/make-container [sp2])
           editor-container (container/make-container [ed])
           widget-container-below (container/make-container)
-          cs (assoc cs :status-container status-container
+          cs (assoc cs :status-root status-root
                     :editor-container editor-container)]
 
       ;; Add components in pi's layout-root order: the transcript document
@@ -2916,7 +2915,7 @@
       ;; status, widgets above, editor, widgets below, footer)
       (tui/tui-add-child t document-container)
       (tui/tui-add-child t pending-messages-container)
-      (tui/tui-add-child t status-container)
+      (tui/tui-add-child t status-root)
       (tui/tui-add-child t widget-container-above)
       (tui/tui-add-child t editor-container)
       (tui/tui-add-child t widget-container-below)

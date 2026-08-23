@@ -8,6 +8,7 @@
    All indicators render the same two-row shape (leading blank + content) so
    the editor and footer below never jump."
   (:require [kmet.tui.protocols :as protocols]
+            [kmet.tui.reagent :as r]
             [kmet.tui.theme :as theme]
             [kmet.tui.utils :as u]
             [kmet.tui.components.spinner :as spinner]
@@ -82,6 +83,21 @@
                                          #(theme/fg th :accent %))
   (spinner/spinner-set-message-color-fn! (:spinner indicator)
                                          #(theme/fg th :muted %)))
+
+(defn make-status-area
+  "The status layer as a fn component (dsl.md stage 4, pi: statusContainer):
+   renders the transient indicator recorded in CURRENT-ATOM ({:kind k
+   :indicator c} or nil), else the default WORKING-INDICATOR record.
+   The current atom is read through a tracked deref inside the mounted
+   ComponentFn's reaction, so a swap re-derives the tree exactly once and
+   an idle UI re-derives nothing; indicator records are spliced foreign —
+   reconcile swaps identity on change and never disposes them (their
+   lifecycle stays with the swapper, dsl.md §5)."
+  [current-atom working-indicator]
+  (fn [_props]
+    (if-let [{:keys [indicator]} (r/tracked-deref current-atom)]
+      indicator
+      working-indicator)))
 
 ;; ─── Transient indicators (pi: Retry/CompactionStatusIndicator) ───────────
 ;; Self-animating from elapsed time; colors read from the current theme at

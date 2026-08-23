@@ -20,8 +20,9 @@ that shipped noted inline. Implemented so far:
   the `(hiccup/ref)` wrapper type, `with-let` macro over the store
   primitives, and the §3.4 scheduler hook installed beside the flush
   (default no-op; call-site retirement stays Stage 5).
-- **Stage 4–5**: not started — nothing mounted in app code yet;
-  `compute` and mirror-plumbing removal are pending.
+- **Stage 4–5**: item 10 (status container) done — first app mount;
+  dock/widget areas and dialogs pending; `compute` and mirror-plumbing
+  removal are pending.
 
 ---
 
@@ -1138,9 +1139,17 @@ Each conversion is one commit: convert, eyeball in a real session, full
 gate. Rollback = revert that commit. Order chosen bottom-up — smallest
 blast radius first:
 
-10. **Status container** — the clear/add/stop dance becomes a
-    `when-let` tree mounted via `hiccup/root`. Smallest, most isolated,
-    already churn-heavy today.
+10. **Status container — DONE** — the clear/add/stop dance became a
+    `when-let` tree mounted via `hiccup/root`. The layer is
+    `ui/make-status-area` (`kmet.app.ui.status-indicator`): a fn component
+    derefing a `:status-current` atom ({`:kind k :indicator c}` or nil,
+    tracked read → narrow reaction) over the default working indicator;
+    swaps are pure `reset!`s and reconcile diffs the single child.
+    `CoreState` lost `:status-container`/`:active-status-kind` to
+    `:status-root` + `:status-current`; spinner start/stop stays imperative
+    at the swap sites (dsl.md §5), manual request-render kept per stage
+    rules. Transient indicators splice as foreign records — never disposed
+    by reconcile; their lifecycle stays with the swapper.
 11. **Dock / widget areas** — static-ish composition, exercises keyed
     reconcile against real input handlers.
 12. **Dialogs** — exercises `:ref` (focus) and imperative interop; do

@@ -84,9 +84,9 @@
                :session-atom (atom old-sess)
                :pending-messages-container (container/make-container)
                :pending-bash-components (atom [])
-               :status-container (container/make-container)
+               :status-current (atom nil)
+               :status-root nil
                :status-indicator (ui/make-status-indicator)
-               :active-status-kind (atom nil)
                :footer-comp ftr
                :footer-provider fdp})
           shutdown-events (atom [])
@@ -139,9 +139,9 @@
                :session-atom (atom old-sess)
                :pending-messages-container (container/make-container)
                :pending-bash-components (atom [])
-               :status-container (container/make-container)
+               :status-current (atom nil)
+               :status-root nil
                :status-indicator (ui/make-status-indicator)
-               :active-status-kind (atom nil)
                :footer-comp nil
                :footer-provider nil})
           shutdown-events (atom [])

@@ -5,7 +5,7 @@
   (:require [clojure.test :as t :refer [deftest testing]]
             [kmet.tui.autocomplete :as ac]
             [kmet.tui.components.editor :as editor]
-            [kmet.tui.components.container :as container]
+            [kmet.tui.hiccup :as hiccup]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.core :as tui]
             [kmet.modes.interactive :as inter]
@@ -244,9 +244,9 @@
               :tui nil
               :footer-comp nil
               :footer-provider nil
-              :status-container nil
+              :status-root nil
               :status-indicator nil
-              :active-status-kind (atom nil)
+              :status-current (atom nil)
               :anim-timer (atom nil)}]
       (with-redefs [ui/chat-history-add-message! (fn [_ _] nil)
                     ui/chat-history-start-streaming! (fn [_] nil)
@@ -271,26 +271,28 @@
 ;; already replaced (pi: clearStatusIndicator(kind) is kind-gated).
 
 (defn- test-status-cs
-  "A minimal CoreState-like map for the status swap helpers."
+  "A minimal CoreState-like map for the status swap helpers: the status
+   layer is a hiccup/root-mounted fn component over a :status-current atom
+   (dsl.md stage 4), so renders go through the root's reaction + reconcile."
   []
   (let [si (ui/make-status-indicator :text "Working...")
-        sc (container/make-container [si])]
+        cur (atom nil)]
     {:tui {:render-requested? (atom false)}
      :status-indicator si
-     :status-container sc
-     :active-status-kind (atom nil)
+     :status-current cur
+     :status-root (hiccup/root (ui/make-status-area cur si))
      :running-turn? (atom true)}))
 
-(defn- status-lines [sc]
-  (protocols/render sc 60))
+(defn- status-lines [cs]
+  (protocols/render (:status-root cs) 60))
 
-(defn- working-status? [sc]
-  (let [lines (status-lines sc)]
+(defn- working-status? [cs]
+  (let [lines (status-lines cs)]
     (and (= 2 (count lines))
          (boolean (some #(re-find #"Working" %) lines)))))
 
-(defn- blank-status? [sc]
-  (let [lines (status-lines sc)]
+(defn- blank-status? [cs]
+  (let [lines (status-lines cs)]
     (and (= 2 (count lines))
          (every? #(re-find #"^\s*$" %) lines))))
 
@@ -298,58 +300,55 @@
   (testing "the working indicator is revived after a retry backoff and kept
             by the kind-gated auto-retry-end (pi: agent_start after
             continue() re-shows WorkingStatusIndicator)"
-    (let [cs (test-status-cs)
-          sc (:status-container cs)]
+    (let [cs (test-status-cs)]
       (testing "submit activates the working indicator"
         ((var inter/activate-working-indicator!) cs)
-        (t/is (working-status? sc)))
+        (t/is (working-status? cs)))
       (testing "auto-retry-start swaps in the retry countdown"
         ((var inter/show-status-indicator!) cs :retry
                                             (ui/make-retry-status-indicator 1 3 2000))
-        (t/is (not (working-status? sc))))
+        (t/is (not (working-status? cs))))
       (testing "turn-start after the backoff revives the working indicator"
         ((var inter/activate-working-indicator!) cs)
-        (t/is (working-status? sc)))
+        (t/is (working-status? cs)))
       (testing "auto-retry-end no-ops once the working indicator is active"
         ((var inter/clear-status-indicator!) cs :retry)
-        (t/is (working-status? sc))
-        (t/is (= :working @(:active-status-kind cs))))
+        (t/is (working-status? cs))
+        (t/is (nil? @(:status-current cs))))
       (testing "turn end clears to the idle two rows"
         ((var inter/clear-status-indicator!) cs)
-        (t/is (blank-status? sc))))))
+        (t/is (blank-status? cs))))))
 
 (deftest test-status-indicator-survives-compaction
   (testing "in-loop compaction clears at compaction-end and the following
             turn-start revives the working indicator"
-    (let [cs (test-status-cs)
-          sc (:status-container cs)]
+    (let [cs (test-status-cs)]
       ((var inter/activate-working-indicator!) cs)
       ((var inter/show-status-indicator!) cs :compaction
                                           (ui/make-compaction-status-indicator))
-      (t/is (not (working-status? sc)))
+      (t/is (not (working-status? cs)))
       ((var inter/clear-status-indicator!) cs :compaction)
-      (t/is (blank-status? sc))
+      (t/is (blank-status? cs))
       ((var inter/activate-working-indicator!) cs)
-      (t/is (working-status? sc)))))
+      (t/is (working-status? cs)))))
 
 (deftest test-status-indicator-kind-gated-clear
   (testing "a stale end event cannot stop an indicator it didn't own"
-    (let [cs (test-status-cs)
-          sc (:status-container cs)]
+    (let [cs (test-status-cs)]
       ((var inter/activate-working-indicator!) cs)
       ((var inter/show-status-indicator!) cs :compaction
                                           (ui/make-compaction-status-indicator))
       ;; auto-retry-end arriving while compaction is active must no-op
       ((var inter/clear-status-indicator!) cs :retry)
-      (t/is (not (working-status? sc)))
-      (t/is (= :compaction @(:active-status-kind cs)))
+      (t/is (not (working-status? cs)))
+      (t/is (= :compaction (:kind @(:status-current cs))))
       (testing "cancel during backoff clears unconditionally; the late
                 retry-end no-ops"
         ((var inter/clear-status-indicator!) cs)
-        (t/is (blank-status? sc))
+        (t/is (blank-status? cs))
         ((var inter/clear-status-indicator!) cs :retry)
-        (t/is (blank-status? sc))
-        (t/is (nil? @(:active-status-kind cs)))))))
+        (t/is (blank-status? cs))
+        (t/is (nil? @(:status-current cs)))))))
 
 ;; ─── /scoped-models + /settings (missing slash commands) ───────────────────
 
