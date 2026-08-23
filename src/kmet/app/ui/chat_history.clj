@@ -406,11 +406,11 @@
 ;; ─── Toggles ─────────────────────────────────────────────────────────────
 
 (defn- kind-of
-  "Get the component kind via the IComponentKind protocol.
-   Every message component implements it (user/assistant/tool/bash/custom)."
+  "Kind-as-data dispatch (dsl.md §5): the component's stamped :kind field
+   (set by defcomponent). nil for components without one — same semantics
+   as the old IComponentKind satisfies? guard, without the protocol."
   [child]
-  (when (satisfies? protocols/IComponentKind child)
-    (protocols/component-kind child)))
+  (:kind child))
 
 (defn chat-history-toggle-tool-expanded!
   "Toggle tool output expansion on all ToolExecutionComponent children.

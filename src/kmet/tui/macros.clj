@@ -317,8 +317,7 @@
   (first (filter #(and (seq? %) (= sym (first %))) body)))
 
 (defmacro defcomponent
-  "Define a TUI component: a defrecord implementing protocols/IComponent,
-   plus protocols/IComponentKind when KIND is non-nil.
+  "Define a TUI component: a defrecord implementing protocols/IComponent.
 
      (defcomponent Name kind [field...]
        (render [this width] ...)          ; required
@@ -331,15 +330,17 @@
    method for additional side effects (delegating to children, firing
    request-render).
 
-   KIND is a keyword like :user / :assistant / :tool / :custom for message
+   KIND is stamped as the record's FIRST FIELD (kind-as-data, dsl.md §5):
+   a keyword like :user / :assistant / :tool / :custom for message
    components, or nil for plain tui components (Text, Spacer, footer...).
-   Expands to a defrecord with the given method bodies, then an extend-type
-   for IComponentKind when KIND is given. Components that need additional
-   protocols (IFocusable) keep a separate extend-type form after the call.
-   The expansion requires kmet.tui.protocols first, so component namespaces
-   load standalone (their own ns need not require it — clj-kondo would flag
-   that as unused)."
-  [name kind fields & body]
+   Dispatch reads (:kind component) — there is no IComponentKind
+   protocol. Construct via map-> (kind defaults to nil when absent from
+   the map). Components that need additional protocols (IFocusable) keep
+   a separate extend-type form after the call. The expansion requires
+   kmet.tui.protocols first, so component namespaces load standalone
+   (their own ns need not require it — clj-kondo would flag that as
+   unused)."
+  [name _kind fields & body]
   (let [render (body-method body 'render)]
     (when-not render
       (throw (ex-info "defcomponent requires a render method" {:name name})))
@@ -355,12 +356,8 @@
                        :else '(invalidate [this] nil))]
       `(do
          (clojure.core/require 'kmet.tui.protocols)
-         (defrecord ~name ~fields
+         (defrecord ~name ~(vec (cons 'kind fields))
            kmet.tui.protocols/IComponent
            ~render
            ~handle-input
-           ~invalidate)
-         ~@(when kind
-             [`(extend-type ~name
-                 kmet.tui.protocols/IComponentKind
-                 (component-kind [~'_] ~kind))])))))
+           ~invalidate)))))

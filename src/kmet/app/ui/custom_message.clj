@@ -138,7 +138,8 @@
         s (spacer/make-spacer 1)
         b (box/make-box output-pad 1 nil)]
     (box/box-add-child b inner-container)
-    (let [comp (map->CustomMessageComponent {:spacer (atom s)
+    (let [comp (map->CustomMessageComponent {:kind :custom
+                                             :spacer (atom s)
                                              :box (atom b)
                                              :inner-container (atom inner-container)
                                              :label-atom (atom label)

@@ -89,7 +89,9 @@
             (let [styled-preview (mapv #(theme/fg t :tool-output %) preview-logical-lines)
                   preview-text (str "\n" (str/join "\n" styled-preview))]
               (container/container-add-child content-container
-                                             (->BashPreview preview-text content-pad)))))
+                                             (map->BashPreview {:kind nil
+                                                                :preview-text preview-text
+                                                                :pad content-pad})))))
 
             ;; ── Loader or status ───────────────────────────────────────
         (if (= status :running)
@@ -176,7 +178,8 @@
             :spinner-color-fn (fn [s] (theme/fg theme color-key s))
             :message-color-fn (fn [s] (theme/fg theme :muted s)))
         comp (map->BashExecutionComponent
-              {:command-atom (atom command)
+              {:kind :bash
+               :command-atom (atom command)
                :output-lines-atom (atom [])
                :status-atom (atom :running)
                :exit-code-atom (atom nil)

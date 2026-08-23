@@ -18,8 +18,7 @@
     (mapv (fn [entry]
             (let [message (u/truncate-to-width (str " " (:message entry) " ") width "")]
               (theme/inverse message)))
-          @entries-atom))
-  (handle-input [_this _data] nil))
+          @entries-atom)))
 
 (defn- request-render!
   "Call the host's re-render callback when present."

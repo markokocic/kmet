@@ -203,8 +203,9 @@ If the user asks for something that contradicts AGENTS.md, explain the conflict 
   (each carrying its `:component`); render derives the tree, persistence reads
   the atom directly (no component reverse-engineering)
 
-Type dispatch uses `IComponentKind` protocol (`component-kind` returning `:user`,
-`:assistant`, `:tool`, `:custom`).
+Type dispatch is kind-as-data: `defcomponent` stamps KIND as the record's
+first field; dispatch reads `(:kind component)` (no IComponentKind
+protocol — retired in DSL stage 2, dsl.md §5).
 
 ### Reactive render cache (track!)
 - **Default**: wrap a component's render body with `(track! this width ...)`

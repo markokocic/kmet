@@ -15,12 +15,6 @@
   (focused [this])
   (set-focused! [this val]))
 
-(defprotocol IComponentKind
-  "Reliable type dispatch for message components.
-   Safer than key-based duck typing (contains? :name-atom) which
-   silently breaks when record fields are renamed."
-  (component-kind [this] "Returns :user, :assistant, :tool, :custom, or nil"))
-
 (defprotocol IEditorComponent
   "Custom editor contract (pi: EditorComponent in editor-component.ts).
    Extends IComponent with text access and app-integration callbacks so

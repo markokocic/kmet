@@ -167,7 +167,8 @@
   ;; messages invalidate at once (pi: hideThinkingBlock). Callers passing a
   ;; nil label fall back to the default.
   (let [hidden-label (or hidden-label "Thinking...")
-        comp (map->AssistantMessageComponent {:text-atom (atom text)
+        comp (map->AssistantMessageComponent {:kind :assistant
+                                              :text-atom (atom text)
                                               :thinking-text-atom (atom thinking)
                                               :theme-atom (atom theme)
                                               :output-pad-atom (atom output-pad)

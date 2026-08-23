@@ -10,8 +10,7 @@
 
 (defcomponent DynamicBorder nil [color-fn]
   (render [_this width]
-    [(color-fn (apply str (repeat (max 1 width) "─")))])
-  (handle-input [_this _data] nil))
+    [(color-fn (apply str (repeat (max 1 width) "─")))]))
 
 (defn make-dynamic-border
   "Create a DynamicBorder. COLOR-FN receives the border string and returns

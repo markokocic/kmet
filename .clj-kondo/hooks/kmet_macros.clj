@@ -4,15 +4,19 @@
 
 (defn defcomponent
   "Teach clj-kondo that (defcomponent Name kind [fields] method...)
-   is a defrecord. The protocol is omitted: kmet.tui.protocols is not
-   required by every component file, and method bodies/fields are
-   analyzed identically without it."
+   is a defrecord whose FIRST field is the stamped kind (kind-as-data).
+   The field is the SYMBOL `kind` — the value at the call site (nil or a
+   keyword) must not leak into the binding vector. The protocol is
+   omitted: kmet.tui.protocols is not required by every component file,
+   and method bodies/fields are analyzed identically without it."
   [{:keys [node]}]
-  (let [[_ name _ fields & methods] (:children node)]
+  (let [[_ name _kind fields & methods] (:children node)
+        fields-with-kind (api/vector-node
+                         (cons (api/token-node 'kind) (:children fields)))]
     {:node (api/list-node
             (list* (api/token-node 'defrecord)
                    name
-                   fields
+                   fields-with-kind
                    methods))}))
 
 (defn defsetter

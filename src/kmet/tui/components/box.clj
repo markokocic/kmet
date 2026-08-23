@@ -41,7 +41,6 @@
             (reset! cache {:width width :bg-sample bg-sample
                            :child-lines child-lines :lines result})
             result)))))
-  (handle-input [_this _data] nil)
   (invalidate [this]
     (reset! (:cache this) nil)
     (doseq [c @children] (protocols/invalidate c))))

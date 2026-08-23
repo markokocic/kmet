@@ -39,7 +39,6 @@
     ;; Render the child's FULL content — the caller windows it via
     ;; update-layout! + render-window (render itself never clips).
     (protocols/render child (get-content-width this width)))
-  (handle-input [_this _data] nil)
   (invalidate [_this]
     (protocols/invalidate child)))
 

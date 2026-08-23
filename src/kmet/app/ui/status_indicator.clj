@@ -98,7 +98,6 @@
                        remaining "s... (" @cancel-hint-atom " to cancel)")
           line (str (theme/fg th :warning frame) " " (theme/fg th :muted message))]
       ["" (u/truncate-to-width line width)]))
-  (handle-input [_this _data] nil)
   (invalidate [this] (reset! (:cache-atom this) nil)))
 
 (defn make-retry-status-indicator
@@ -121,7 +120,6 @@
           frame (frame-at elapsed)
           line (str (theme/fg th :accent frame) " " (theme/fg th :muted @message-atom))]
       ["" (u/truncate-to-width line width)]))
-  (handle-input [_this _data] nil)
   (invalidate [this] (reset! (:cache-atom this) nil)))
 
 (defn make-compaction-status-indicator
@@ -141,7 +139,6 @@
           message (str @message-atom " (" @cancel-hint-atom " to cancel)")
           line (str (theme/fg th :accent frame) " " (theme/fg th :muted message))]
       ["" (u/truncate-to-width line width)]))
-  (handle-input [_this _data] nil)
   (invalidate [this] (reset! (:cache-atom this) nil)))
 
 (defn make-branch-summary-status-indicator

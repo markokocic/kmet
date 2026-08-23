@@ -182,7 +182,8 @@
         bg-key (if is-error :tool-error-bg :tool-success-bg)
         b (box/make-box output-pad 1 #(theme/bg theme bg-key %))]
     (box/box-add-child b inner-container)
-    (map->ToolExecutionComponent {:name-atom (atom name)
+    (map->ToolExecutionComponent {:kind :tool
+                                  :name-atom (atom name)
                                   :args-atom (atom args)
                                   :content-atom (atom content)
                                   :is-error-atom (atom is-error)

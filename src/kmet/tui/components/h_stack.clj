@@ -53,7 +53,6 @@
                                              (u/composite-line (nth acc target)
                                                                (nth lines row)
                                                                x child-width safe-width)))))))))))))))
-  (handle-input [_this _data] nil)
   (invalidate [_this]
     (doseq [e @entries-atom] (protocols/invalidate (stack/entry-component e)))))
 

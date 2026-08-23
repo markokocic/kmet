@@ -76,7 +76,8 @@
                             :transform (make-user-transform)
                             :padding-x 0)
         b (box/make-box output-pad 1 nil)
-        comp (map->UserMessageComponent {:box (atom b)
+        comp (map->UserMessageComponent {:kind :user
+                                         :box (atom b)
                                          :markdown-comp (atom m)
                                          :text-atom (atom text)
                                          :theme-atom (atom theme)

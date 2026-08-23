@@ -37,8 +37,7 @@
                       (when (seq rendered-frame) (str rendered-frame " "))
                       (msg-fn @text-atom))]
         ;; pi Loader: leading blank line above the animated line
-        ["" (u/truncate-to-width line width)])))
-  (handle-input [_this _data] nil))
+        ["" (u/truncate-to-width line width)]))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 

@@ -30,7 +30,6 @@
 (defcomponent VStack nil [entries-atom gap-atom]
   (render [_this width]
     (render-entries @entries-atom width @gap-atom))
-  (handle-input [_this _data] nil)
   (invalidate [_this]
     (doseq [e @entries-atom] (protocols/invalidate (stack/entry-component e)))))
 
