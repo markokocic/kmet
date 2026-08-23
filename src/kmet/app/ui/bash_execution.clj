@@ -11,6 +11,7 @@
             [kmet.app.bash-executor :as bash-exec]
             [kmet.app.keybindings :as app-kb]
             [kmet.tui.keybindings :as tui-kb]
+            [kmet.app.ui.subs :as s]
             [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]
             [clojure.string :as str]))
 
@@ -42,7 +43,6 @@
                ended-at-atom     ;; long or nil
                cache-atom        ;; render cache
                exclude-from-context-atom ;; boolean (!! vs !)
-               theme-atom        ;; Theme record (default dark-theme)
                ticker-atom]      ;; 1s elapsed-tick future while running
   (render [this width]
     (track! this width
@@ -56,8 +56,15 @@
             full-output-path @full-output-path-atom
             started-at @started-at-atom
             ended-at @ended-at-atom
-            t @theme-atom
+            ;; tracked read of the shared palette sub: a theme switch
+            ;; re-derives this cache exactly once (Stage 5, dsl.md §3.2);
+            ;; the spinner color fns re-apply below on every cache miss,
+            ;; so the loader never keeps a stale palette while running
+            t (deref s/theme-sub)
             color-key (if exclude? :dim :bash-mode)
+            _ (let [sp @spinner-comp]
+                (spinner/spinner-set-spinner-color-fn! sp #(theme/fg t color-key %))
+                (spinner/spinner-set-message-color-fn! sp #(theme/fg t :muted %)))
             border-color (fn [s] (theme/fg t color-key s))
             content-pad 1
             ;; ── Context truncation (pi: truncateTail before display) ──
@@ -159,23 +166,26 @@
 ;; ─── Construction ─────────────────────────────────────────────────────────
 
 (defn make-bash-execution
-  "Create a BashExecutionComponent with animated spinner.
+  "Create a BashExecutionComponent with animated spinner. THEME is no
+   longer taken: styling subscribes to ui.subs/theme-sub and follows
+   palette changes live (Stage 5).
    Options:
      :command                — the shell command string
-     :exclude-from-context?  — boolean (!! vs !)
-     :theme                  — Theme record (default dark-theme)"
-  [& {:keys [command exclude-from-context? theme]
-      :or {command "" exclude-from-context? false theme theme/dark-theme}}]
+     :exclude-from-context?  — boolean (!! vs !)"
+  [& {:keys [command exclude-from-context?]
+      :or {command "" exclude-from-context? false}}]
   (let [content-container (container/make-container)
+        t0 (theme/get-current-theme)
         color-key (if exclude-from-context? :dim :bash-mode)
         cancel-key (or (tui-kb/key-text (tui-kb/get-global-keybindings) "app.interrupt") "Esc")
-        ;; Create animated spinner with text and colors set once (pi: Loader constructor)
+        ;; Create animated spinner (pi: Loader constructor); colors are
+        ;; refreshed from theme-sub on every render pass of the component
         sp (spinner/make-spinner
             :text (str "Running... (" cancel-key " to cancel)")
             :active true
             :prefix ""
-            :spinner-color-fn (fn [s] (theme/fg theme color-key s))
-            :message-color-fn (fn [s] (theme/fg theme :muted s)))
+            :spinner-color-fn (fn [x] (theme/fg t0 color-key x))
+            :message-color-fn (fn [x] (theme/fg t0 :muted x)))
         comp (map->BashExecutionComponent
               {:kind :bash
                :command-atom (atom command)
@@ -191,7 +201,6 @@
                :ended-at-atom (atom nil)
                :cache-atom (atom nil)
                :exclude-from-context-atom (atom exclude-from-context?)
-               :theme-atom (atom theme)
                :ticker-atom (atom nil)})]
     ;; Pi: the loader's setInterval drives re-renders while running —
     ;; kmet's spinner is passive, so a 1s ticker invalidates the
@@ -215,17 +224,6 @@
                     nil))
                 (catch InterruptedException _))))
     comp))
-
-(defn bash-execution-set-theme!
-  "Set the theme on the border/output colors and the spinner."
-  [comp theme]
-  (reset! (:theme-atom comp) theme)
-  (let [color-key (if @(:exclude-from-context-atom comp) :dim :bash-mode)]
-    (spinner/spinner-set-spinner-color-fn! @(:spinner-comp comp)
-                                           #(theme/fg theme color-key %))
-    (spinner/spinner-set-message-color-fn! @(:spinner-comp comp)
-                                           #(theme/fg theme :muted %)))
-  (protocols/invalidate comp))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 

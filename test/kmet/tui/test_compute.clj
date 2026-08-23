@@ -22,7 +22,7 @@
 (t/deftest compute-derived-ref
   (let [a (atom 1)
         b (atom 10)
-        c (h/compute [a b] #(+ @a @b))]
+        c (h/compute [a b] +)]
     ;; lazy: nothing ran until read; first deref brings it current
     (t/is (= 11 @c) "first deref computes")
     (reset! a 2)
@@ -34,7 +34,7 @@
   ;; the payoff: recomputing to the SAME value notifies nobody — fine-grained
   ;; invalidation for free (component caches stay valid, no frame requested)
   (let [a (atom 1)
-        c (h/compute [a] #(mod @a 3))
+        c (h/compute [a] (fn [x] (mod x 3)))
         _ @c
         fired (atom 0)]
     (rag/watch-ref c :w (fn [_ _ _ _] (swap! fired inc)))
@@ -49,8 +49,8 @@
   ;; each compute instance owns its dependency watches — two computes over
   ;; the same dep don't interfere
   (let [a (atom 1)
-        c1 (h/compute [a] #(* @a 2))
-        c2 (h/compute [a] #(* @a 3))]
+        c1 (h/compute [a] (fn [x] (* x 2)))
+        c2 (h/compute [a] (fn [x] (* x 3)))]
     (reset! a 5)
     (t/is (= 10 @c1))
     (t/is (= 15 @c2))))
@@ -61,9 +61,9 @@
   (let [a (atom 1)
         hidden (atom 100)
         c (h/compute [a]
-                     #(+
-                       (macros/tracked-deref a)
-                       (macros/tracked-deref hidden)))]
+                     (fn [x]
+                       (+ x
+                          (macros/tracked-deref hidden))))]
     (t/is (= 101 @c))
     (reset! hidden 200)
     (t/is (= 201 @c) "unlisted but tracked read re-derives")))
@@ -74,7 +74,7 @@
   (let [a (atom 1)
         log (atom [])
         r (h/root (fn [_]
-                    (with-let [c (h/compute [a] #(+ @a 1))]
+                    (with-let [c (h/compute [a] inc)]
                       [:text {:padding-x 0 :padding-y 0} (str "v" @c)]
                       (finally (swap! log conj :disposed)))))]
     (t/is (str/includes? (str/join "\n" (core/render r 20)) "v2"))
@@ -93,7 +93,7 @@
         calls (atom 0)
         r (h/root (fn [_]
                     (swap! calls inc)
-                    (with-let [c (h/compute [a] #(* @a 2))]
+                    (with-let [c (h/compute [a] (fn [x] (* x 2)))]
                       [:text {:padding-x 0 :padding-y 0} (str "v" @c)])))]
     (core/render r 20)
     (core/render r 20)
@@ -111,7 +111,7 @@
   ;; the reactive ref joins the tracked set, so an upstream change
   ;; invalidates the record's cache without any manual invalidate call
   (let [a (atom 5)
-        c (h/compute [a] #(* @a 2))
+        c (h/compute [a] (fn [x] (* x 2)))
         renders (atom 0)
         probe (map->Probe {:cache-atom (atom nil)
                            :render-count-atom renders
@@ -131,7 +131,7 @@
   ;; consumes), and writes to the dropped source change nothing
   (let [a (atom 1)
         b (atom 0)
-        c (h/compute [a] #(+ @a 100))
+        c (h/compute [a] (fn [x] (+ x 100)))
         renders (atom 0)
         probe (map->Probe {:cache-atom (atom nil)
                            :render-count-atom renders
@@ -158,7 +158,7 @@
   ;; invalidates, and invalidate-cache requests EXACTLY ONE frame through
   ;; the hook (installed here like tui.core does)
   (let [a (atom 1)
-        c (h/compute [a] #(* @a 2))
+        c (h/compute [a] (fn [x] (* x 2)))
         fired (atom 0)
         r (h/root (fn [_]
                     [:text {:padding-x 0 :padding-y 0}
@@ -182,7 +182,7 @@
   ;; no enclosing store → the reaction keeps its dep watches (the shared
   ;; def'd compute pattern)
   (let [a (atom 1)
-        c (h/compute [a] #(* @a 2))]
+        c (h/compute [a] (fn [x] (* x 2)))]
     (t/is (= 2 @c))
     (reset! a 4)
     (t/is (= 8 @c) "still live after no dispose path")))

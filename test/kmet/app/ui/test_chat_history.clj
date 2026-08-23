@@ -2,7 +2,6 @@
   (:require [clojure.string :as str]
             [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
-            [kmet.tui.theme :as theme]
             [kmet.app.ui :as ui]
             [kmet.app.ui.chat-history :as ch]))
 
@@ -420,8 +419,8 @@
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-set-info-msg! ch {:label "kmet" :content "banner"})
       (is (some? @(:info-comp-atom ch)) "banner component exists")
-      ;; theme + output-pad must reach the banner without errors
-      (ch/chat-history-set-theme! ch theme/dark-theme)
+      ;; output-pad must reach the banner without errors (theme needs no
+      ;; walk — components subscribe to ui.subs/theme-sub, Stage 5)
       (ch/chat-history-set-output-pad! ch 2)
       (ch/chat-history-add-message! ch {:role :user :content "hi"})
       (is (= [:info :user] (mapv :role (ch/chat-history-get-messages ch))))

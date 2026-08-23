@@ -4,7 +4,8 @@
    the call-render and result-render children.
    Matching Pi architecture: Box handles padding/background/caching.
    Timing is managed internally (started-at on first content, ended-at on error/finalize)."
-  (:require [kmet.tui.protocols :as protocols]
+  (:require [kmet.app.ui.subs :as s]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.box :as box]
             [kmet.tui.components.container :as container]
@@ -60,7 +61,7 @@
 
 (defcomponent ToolExecutionComponent :tool
               [name-atom args-atom content-atom is-error-atom
-               theme-atom output-pad-atom expanded-atom
+               output-pad-atom expanded-atom
                custom-render-call-atom custom-render-result-atom
                started-at-atom ended-at-atom
                truncation-atom tool-call-id-atom
@@ -77,7 +78,9 @@
                cache-atom]     ;; render cache (track!)
   (render [this width]
     (track! this width
-      (let [theme @theme-atom
+      (let [;; tracked read of the shared palette sub: a theme switch
+            ;; re-derives this cache exactly once (Stage 5, dsl.md §3.2)
+            theme (deref s/theme-sub)
             is-error @is-error-atom
             output-pad @output-pad-atom
             name @name-atom
@@ -156,20 +159,21 @@
 ;; Pi: component manages timing internally — no started-at/ended-at passed in.
 
 (defn make-tool-execution
-  [& {:keys [name args content is-error theme output-pad expanded? render-call-fn render-result-fn truncation details cwd render-shell]
-      :or {name "" args {} content "" is-error false theme theme/dark-theme
+  "THEME is no longer taken: the box background subscribes to
+   ui.subs/theme-sub and follows palette changes live (Stage 5)."
+  [& {:keys [name args content is-error output-pad expanded? render-call-fn render-result-fn truncation details cwd render-shell]
+      :or {name "" args {} content "" is-error false
            output-pad 1 expanded? false truncation nil details nil
            cwd (or (System/getProperty "user.dir") ".")}}]
   (let [inner-container (container/make-container)
         bg-key (if is-error :tool-error-bg :tool-success-bg)
-        b (box/make-box output-pad 1 #(theme/bg theme bg-key %))]
+        b (box/make-box output-pad 1 #(theme/bg (theme/get-current-theme) bg-key %))]
     (box/box-add-child b inner-container)
     (map->ToolExecutionComponent {:kind :tool
                                   :name-atom (atom name)
                                   :args-atom (atom args)
                                   :content-atom (atom content)
                                   :is-error-atom (atom is-error)
-                                  :theme-atom (atom theme)
                                   :output-pad-atom (atom output-pad)
                                   :expanded-atom (atom expanded?)
                                   :started-at-atom (atom nil)
@@ -219,8 +223,6 @@
   (protocols/invalidate comp))
 
 (defsetter tool-execution-set-expanded! :expanded-atom comp expanded?
-  (protocols/invalidate comp))
-(defsetter tool-execution-set-theme! :theme-atom comp theme
   (protocols/invalidate comp))
 (defsetter tool-execution-set-output-pad! :output-pad-atom comp n
   ;; Rebuild the box with the new horizontal padding (render sets the bg-fn)

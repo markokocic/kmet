@@ -41,11 +41,18 @@
       (um/user-message-set-text! c "updated")
       (is (some #(re-find #"updated" %) (mapv strip-ansi (core/render c 40)))))))
 
-(deftest test-set-theme
-  (testing "set-theme! does not crash"
-    (let [c (um/make-user-message :text "hello")]
-      (um/user-message-set-theme! c (kmet.tui.theme/make-theme {:name "dark"}))
-      (is (pos? (count (core/render c 40)))))))
+(deftest test-theme-sub-retheme
+  (testing "swapping the shared theme atom re-themes the message on next render (Stage 5)"
+    (let [c (um/make-user-message :text "hello")
+          before (core/render c 40)]
+      (reset! theme/theme-atom (theme/get-theme "light"))
+      (try
+        (let [after (core/render c 40)]
+          (is (= (mapv strip-ansi before) (mapv strip-ansi after))
+              "content unchanged across the palette switch")
+          (is (not= before after) "styling changed with the theme"))
+        (finally
+          (reset! theme/theme-atom (theme/get-theme "dark")))))))
 
 (deftest test-set-output-pad
   (testing "set-output-pad! changes padding"

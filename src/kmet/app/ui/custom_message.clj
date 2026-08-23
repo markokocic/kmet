@@ -4,12 +4,15 @@
    Matching Pi architecture: Box handles padding/background/caching."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
+            [kmet.app.ui.subs :as s]
             [kmet.tui.components.box :as box]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.markdown :as md]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.macros :refer [track! track-deps defsetter defgetter defcomponent]]))
+
+(declare apply-theme!)
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
@@ -19,7 +22,7 @@
                inner-container  ;; Container holding label + content Text children
                label-atom
                content-atom
-               theme-atom
+               applied-theme-atom  ;; scratch: theme the box/children were built with
                output-pad-atom
                expanded-atom   ;; current expanded state (collapsible messages)
                collapsed-content-atom  ;; content when collapsed (nil = not collapsible)
@@ -28,8 +31,13 @@
   (render [this width]
     (track! this width
       (let [s @spacer
-            b @box]
-        (track-deps @inner-container @label-atom @content-atom @theme-atom
+            b @box
+            ;; tracked read: a palette switch re-applies once, then re-caches
+            thm (deref s/theme-sub)
+            _ (when-not (identical? thm @applied-theme-atom)
+                (reset! applied-theme-atom thm)
+                (apply-theme! this thm))]
+        (track-deps @inner-container @label-atom @content-atom
                     @output-pad-atom @expanded-atom @collapsed-content-atom
                     @expanded-content-atom)
         (into [] (concat (protocols/render s width)
@@ -58,7 +66,7 @@
    Spacer(1) always separates the label from the content (pi: box.addChild
    label Text → new Spacer(1) → content Markdown)."
   [comp]
-  (let [theme @(:theme-atom comp)
+  (let [theme (deref s/theme-sub)
         label @(:label-atom comp)
         content (current-content comp)
         container @(:inner-container comp)]
@@ -109,13 +117,16 @@
 
 (defgetter custom-message-get-expanded :expanded-atom comp)
 
-(defsetter custom-message-set-theme! :theme-atom comp theme
+(defn- apply-theme!
+  "Apply THEME to the derived structures (box bg-fn + rebuilt children).
+   Runs at construction and whenever theme-sub changes (render, apply-once)."
+  [comp theme]
   (box/box-set-bg-fn @(:box comp) #(theme/bg theme :custom-message-bg %))
   (rebuild-content! comp))
 
 (defsetter custom-message-set-output-pad! :output-pad-atom comp n
   ;; Rebuild box with new padding, keep spacer
-  (let [theme @(:theme-atom comp)
+  (let [theme (deref s/theme-sub)
         inner-container (container/make-container)
         b (box/make-box n 1 #(theme/bg theme :custom-message-bg %))]
     (box/box-add-child b inner-container)
@@ -132,8 +143,8 @@
      :content     — message text (default \"\")
      :theme       — theme map (default dark-theme)
      :output-pad  — horizontal padding (default 1)"
-  [& {:keys [label content theme output-pad]
-      :or {content "" theme theme/dark-theme output-pad 1}}]
+  [& {:keys [label content output-pad]
+      :or {content "" output-pad 1}}]
   (let [inner-container (container/make-container)
         s (spacer/make-spacer 1)
         b (box/make-box output-pad 1 nil)]
@@ -144,13 +155,16 @@
                                              :inner-container (atom inner-container)
                                              :label-atom (atom label)
                                              :content-atom (atom content)
-                                             :theme-atom (atom theme)
+                                             :applied-theme-atom (atom nil)
                                              :output-pad-atom (atom output-pad)
                                              :expanded-atom (atom false)
                                              :collapsed-content-atom (atom nil)
                                              :expanded-content-atom (atom nil)
                                              :cache-atom (atom nil)})]
-      ;; Set initial content
+      ;; Set initial content; theme applies here from the global snapshot and
+      ;; again on the first render from theme-sub if it changed meanwhile
       (rebuild-content! comp)
-      (box/box-set-bg-fn b #(theme/bg theme :custom-message-bg %))
+      (let [thm (theme/get-current-theme)]
+        (reset! (:applied-theme-atom comp) thm)
+        (apply-theme! comp thm))
       comp)))

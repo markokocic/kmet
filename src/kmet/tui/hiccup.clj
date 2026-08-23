@@ -747,6 +747,10 @@
    output changes, component caches stay valid, no frame is requested
    (fine-grained invalidation for free).
 
+   F is applied to the CURRENT VALUES of the deps as arguments —
+   (compute [theme-atom] identity), (compute [a b] +), and zero-arg bodies
+   closing over their own slices all work.
+
    Returns a reaction: derefable everywhere (@c), watchable via
    kmet.tui.reagent/watch-ref, never reset!. Derefs outside a reaction
    settle the batch queue first and always answer the CURRENT value;
@@ -763,11 +767,10 @@
   [deps f]
   (let [rx (r/make-reaction
             (fn []
-              ;; Seed with the listed deps (read TRACKED): they are watched
-              ;; even where F reads them bare. Anything else F reads through
-              ;; tracked channels is discovered during the body run.
-              (doseq [d deps] (macros/tracked-deref d))
-              (f)))]
+              ;; Read the listed deps TRACKED and hand their values to F:
+              ;; they are watched even where F ignores them. Anything else
+              ;; F reads through tracked channels is discovered too.
+              (apply f (mapv macros/tracked-deref deps))))]
     (when macros/*store*
       (macros/register-cleanup!
        (gensym "compute-")

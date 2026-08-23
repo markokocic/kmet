@@ -9,6 +9,7 @@
    Does NOT include a working spinner — the working indicator is a separate
    StatusIndicator in a dedicated layout layer between chat and editor (Pi-style)."
   (:require [clojure.string :as str]
+            [kmet.app.ui.subs :as s]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.markdown :as md]
@@ -69,7 +70,7 @@
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
 (defcomponent AssistantMessageComponent :assistant
-              [text-atom thinking-text-atom theme-atom
+              [text-atom thinking-text-atom
                output-pad-atom hide-thinking-atom hidden-label-atom
                streaming-atom
                rendered-text-lines-atom
@@ -79,6 +80,7 @@
                rendered-streaming-atom   ;; streaming flag of the cached lines (stale check)
                rendered-hide?-atom       ;; hide flag the cached lines were built with
                rendered-hidden-label-atom ;; label the cached lines were built with
+               rendered-theme-atom       ;; theme the cached lines were built with (theme-sub)
                last-render-width-atom
                cache-atom]
   (render [this width]
@@ -90,7 +92,9 @@
             thinking (let [t (str/trim (or @thinking-text-atom ""))] (when (seq t) t))
             streaming? (boolean @streaming-atom)
             ;; Read in the track! body so a flip of the (possibly SHARED)
-            ;; flag/label atoms invalidates this cache like any other input.
+            ;; flag/label atoms invalidates this cache like any other input;
+            ;; theme-sub is the shared palette subscription (Stage 5).
+            theme (deref s/theme-sub)
             hide? (boolean @hide-thinking-atom)
             hidden-label @hidden-label-atom
             text-empty? (nil? text)
@@ -105,7 +109,8 @@
                        (not= thinking @rendered-thinking-atom)
                        (not= streaming? @rendered-streaming-atom)
                        (not= hide? @rendered-hide?-atom)
-                       (not= hidden-label @rendered-hidden-label-atom))
+                       (not= hidden-label @rendered-hidden-label-atom)
+                       (not= theme @rendered-theme-atom))
             _ (when stale? (reflow-all! this width))
             text-lines @rendered-text-lines-atom
             thinking-lines @rendered-thinking-lines-atom]
@@ -132,7 +137,7 @@
   "Re-wrap/render all text and thinking, storing into line atoms plus the
    source text they were wrapped from (the render's stale check)."
   [comp width]
-  (let [theme @(:theme-atom comp)
+  (let [theme (deref s/theme-sub)
         output-pad @(:output-pad-atom comp)
         hide? @(:hide-thinking-atom comp)
         hidden-label @(:hidden-label-atom comp)
@@ -152,14 +157,17 @@
     (reset! (:rendered-streaming-atom comp) streaming?)
     (reset! (:rendered-hide?-atom comp) hide?)
     (reset! (:rendered-hidden-label-atom comp) hidden-label)
+    (reset! (:rendered-theme-atom comp) theme)
     (reset! (:last-render-width-atom comp) width)))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-assistant-message
-  [& {:keys [text thinking text-atom thinking-atom theme output-pad
+  "THEME is no longer taken: styling subscribes to ui.subs/theme-sub and
+   follows palette changes live (Stage 5)."
+  [& {:keys [text thinking text-atom thinking-atom output-pad
              hide-thinking? hidden-label thinking-hidden-atom hidden-label-atom]
-      :or {text "" thinking "" theme theme/dark-theme
+      :or {text "" thinking ""
            output-pad 1 hide-thinking? false}}]
   ;; Optional SHARED flag atoms: when the chat history passes its own
   ;; thinking-hidden/hidden-label atoms, every message built from it reads
@@ -174,7 +182,6 @@
         comp (map->AssistantMessageComponent {:kind :assistant
                                               :text-atom (or text-atom (atom text))
                                               :thinking-text-atom (or thinking-atom (atom thinking))
-                                              :theme-atom (atom theme)
                                               :output-pad-atom (atom output-pad)
                                               :hide-thinking-atom (or thinking-hidden-atom
                                                                       (atom hide-thinking?))
@@ -188,9 +195,11 @@
                                               :rendered-streaming-atom (atom nil)
                                               :rendered-hide?-atom (atom nil)
                                               :rendered-hidden-label-atom (atom nil)
+                                              :rendered-theme-atom (atom nil)
                                               :last-render-width-atom (atom nil)
                                               :cache-atom (atom nil)})]
-    ;; Do initial render so lines are ready immediately
+    ;; Do the initial render so lines are ready immediately (records the
+    ;; theme-sub snapshot the lines were built with)
     (reflow-all! comp 80)
     comp))
 
@@ -213,10 +222,6 @@
     (reflow-all! comp w)))
 
 (defsetter assistant-message-set-hidden-label! :hidden-label-atom comp label
-  (when-let [w @(:last-render-width-atom comp)]
-    (reflow-all! comp w)))
-
-(defsetter assistant-message-set-theme! :theme-atom comp theme
   (when-let [w @(:last-render-width-atom comp)]
     (reflow-all! comp w)))
 

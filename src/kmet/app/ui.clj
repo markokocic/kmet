@@ -19,7 +19,6 @@
 ;; UserMessageComponent
 (def make-user-message user-message/make-user-message)
 (def user-message-set-text! user-message/user-message-set-text!)
-(def user-message-set-theme! user-message/user-message-set-theme!)
 (def user-message-set-output-pad! user-message/user-message-set-output-pad!)
 
 ;; AssistantMessageComponent — content lives in the message map's data
@@ -52,7 +51,6 @@
 ;; BashExecutionComponent
 (def make-bash-execution bash-execution/make-bash-execution)
 (def bash-execution-set-expanded! bash-execution/bash-execution-set-expanded!)
-(def bash-execution-set-theme! bash-execution/bash-execution-set-theme!)
 (def bash-execution-append-output! bash-execution/bash-execution-append-output!)
 (def bash-execution-set-complete! bash-execution/bash-execution-set-complete!)
 (def bash-execution-get-output bash-execution/bash-execution-get-output)
@@ -116,7 +114,6 @@
 (def chat-history-rebuild! chat-history/chat-history-rebuild!)
 (def chat-history-get-messages chat-history/chat-history-get-messages)
 (def chat-history-set-max-lines! chat-history/chat-history-set-max-lines!)
-(def chat-history-set-theme! chat-history/chat-history-set-theme!)
 (def chat-history-set-info-msg! chat-history/chat-history-set-info-msg!)
 (def chat-history-clear-info-msg! chat-history/chat-history-clear-info-msg!)
 (def chat-history-toggle-tool-expanded! chat-history/chat-history-toggle-tool-expanded!)

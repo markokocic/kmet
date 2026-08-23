@@ -599,7 +599,12 @@
 ;; ═══════════════════════════════════════════════════════════════════════════
 
 ;; ─── Current theme state (pi: global Theme instance + setTheme machinery) ───
-(defonce ^:private current-theme (atom dark-theme))
+;; The active theme as a reactive input (dsl.md §3.2 Stage 5): components
+;; subscribe through kmet.app.ui.subs/theme-sub instead of receiving the
+;; theme as a constructor argument; a palette switch invalidates exactly the
+;; subscribed subtrees. Plain get-current-theme reads remain valid for
+;; construction-time snapshots.
+(defonce theme-atom (atom dark-theme))
 (defonce ^:private current-theme-name (atom nil))
 (defonce ^:private theme-change-callback (atom nil))
 
@@ -654,7 +659,7 @@
                               (try
                                 (let [t (load-theme-from-path (str f))]
                                   (register-theme! t)
-                                  (reset! current-theme t)
+                                  (reset! theme-atom t)
                                   (notify-theme-change!))
                                 (catch Exception _ "keep the last good theme")))))
                         (recur))
@@ -667,7 +672,7 @@
 (defn get-current-theme
   "The active theme instance (pi: the global theme getter)."
   []
-  @current-theme)
+  @theme-atom)
 
 (defn get-current-theme-name
   "The active theme's name (pi: currentThemeName)."
@@ -688,7 +693,7 @@
   ([name enable-watcher?]
    (let [name (or name (get-default-theme))]
      (reset! current-theme-name name)
-     (reset! current-theme (get-theme name))
+     (reset! theme-atom (get-theme name))
      (when enable-watcher? (start-theme-watcher! (get-custom-themes-dir))))))
 
 (defn set-theme!
@@ -699,10 +704,10 @@
    (let [t (get @themes (str name))]
      (if (nil? t)
        (do (reset! current-theme-name "dark")
-           (reset! current-theme dark-theme)
+           (reset! theme-atom dark-theme)
            {:success false :error (str "Theme not found: " name)})
        (do (reset! current-theme-name (str name))
-           (reset! current-theme t)
+           (reset! theme-atom t)
            (when enable-watcher? (start-theme-watcher! (get-custom-themes-dir)))
            (notify-theme-change!)
            {:success true})))))
@@ -713,7 +718,7 @@
   [t]
   (stop-theme-watcher!)
   (reset! current-theme-name "<in-memory>")
-  (reset! current-theme t)
+  (reset! theme-atom t)
   (notify-theme-change!))
 
 ;; ═══════════════════════════════════════════════════════════════════════════

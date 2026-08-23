@@ -13,6 +13,7 @@
             [kmet.tui.components.truncated-text :as truncated-text]
             [kmet.tui.components.markdown :as md]
             [kmet.tui.components.container :as container]
+            [kmet.app.ui.subs :as subs]
             [kmet.app.ui.user-message :as um]
             [kmet.app.ui.assistant-message :as am]
             [kmet.app.ui.tool-execution :as te]
@@ -27,11 +28,10 @@
   "Create a CustomMessageComponent for the top info banner.
    Supports :collapsed-content / :expanded-content variants (pi: ExpandableText)
    and an :expanded? flag to restore a previously expanded banner."
-  [msg theme output-pad]
+  [msg output-pad]
   (when msg
     (let [comp (cm/make-custom-message :label (:label msg)
                                        :content (:content msg "")
-                                       :theme theme
                                        :output-pad output-pad)]
       (when (and (some? (:collapsed-content msg))
                  (some? (:expanded-content msg)))
@@ -64,7 +64,6 @@
 (defcomponent ChatHistoryComponent nil
               [messages-atom  ;; atom of vec of message maps, each with :component
                info-comp-atom  ;; atom of CustomMessageComponent or nil
-               theme-atom
                output-pad-atom
                streaming-atom  ;; atom of streaming message map or nil
                tools-expanded-atom   ;; flag: tool output expanded (pi: toolOutputExpanded)
@@ -84,17 +83,16 @@
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
 (defn make-chat-history
-  "Create a ChatHistoryComponent.
+  "Create a ChatHistoryComponent. Message components subscribe to
+   ui.subs/theme-sub themselves — no theme is threaded through (Stage 5).
    Options:
-     :theme            — Theme record (default dark-theme)
      :output-pad       — horizontal padding for boxed messages (default 1)
      :thinking-hidden  — initial thinking-blocks hidden flag (default false;
                          pi: hideThinkingBlock loaded from settings at startup)"
-  [& {:keys [theme output-pad thinking-hidden]
-      :or {theme theme/dark-theme output-pad 1 thinking-hidden false}}]
+  [& {:keys [output-pad thinking-hidden]
+      :or {output-pad 1 thinking-hidden false}}]
   (map->ChatHistoryComponent {:messages-atom (atom [])
                               :info-comp-atom (atom nil)
-                              :theme-atom (atom theme)
                               :output-pad-atom (atom output-pad)
                               :streaming-atom (atom nil)
                               :tools-expanded-atom (atom false)
@@ -182,66 +180,66 @@
    of the current expansion flag. A message carrying a pre-built :component
    (extension renderers returning a component directly, and replayed :bash
    executions) uses it as-is."
-  [msg theme output-pad tools-expanded? thinking-hidden-atom hidden-label-atom]
-  (cond
+  [msg output-pad tools-expanded? thinking-hidden-atom hidden-label-atom]
+  (let [thm @subs/theme-sub]
+    (cond
     ;; Pre-built component — extension entry/message renderers may return a
     ;; bare component (pi: renderers produce components); the interactive
     ;; wraps those as {:component comp}. :bash messages carry theirs too.
-    (:component msg) (:component msg)
+      (:component msg) (:component msg)
 
-    :else
-    (case (:role msg)
-      :user (um/make-user-message
-             :text (content->display-text (:content msg ""))
-             :theme theme :output-pad output-pad)
-      :assistant (am/make-assistant-message
+      :else
+      (case (:role msg)
+        :user (um/make-user-message
+               :text (content->display-text (:content msg ""))
+               :output-pad output-pad)
+        :assistant (am/make-assistant-message
                   ;; content atoms come from the message map (with-assistant-data
                   ;; created them) — one home, owned by the data layer (§3.2)
-                  :text-atom (:text-atom msg)
-                  :thinking-atom (:thinking-atom msg)
-                  :theme theme
-                  :output-pad output-pad
-                  :thinking-hidden-atom thinking-hidden-atom
-                  :hidden-label-atom hidden-label-atom)
-      :tool (let [tool (tools/get-tool (:name msg ""))
-                  comp (te/make-tool-execution
-                        :name (:name msg "")
-                        :args (:args msg {})
-                        :content (content->display-text (:content msg ""))
-                        :is-error (:is-error msg false)
-                        :truncation (:truncation msg)
-                        :details (:details msg)
-                        :theme theme
-                        :output-pad output-pad
-                        :expanded? tools-expanded?
+                    :text-atom (:text-atom msg)
+                    :thinking-atom (:thinking-atom msg)
+                    :output-pad output-pad
+                    :thinking-hidden-atom thinking-hidden-atom
+                    :hidden-label-atom hidden-label-atom)
+        :tool (let [tool (tools/get-tool (:name msg ""))
+                    comp (te/make-tool-execution
+                          :name (:name msg "")
+                          :args (:args msg {})
+                          :content (content->display-text (:content msg ""))
+                          :is-error (:is-error msg false)
+                          :truncation (:truncation msg)
+                          :details (:details msg)
+                          :output-pad output-pad
+                          :expanded? tools-expanded?
                         ;; pi: ToolDefinition.renderCall/renderResult — the
                         ;; record's fns (extension tools) win over the
                         ;; builtin renderers; both get the ToolRenderContext
                         ;; map (tool-execution-context)
-                        :render-call-fn (:render-call tool)
-                        :render-result-fn (:render-result tool)
-                        :render-shell (:render-shell tool))]
+                          :render-call-fn (:render-call tool)
+                          :render-result-fn (:render-result tool)
+                          :render-shell (:render-shell tool))]
             ;; Pi: replayed/persisted tool results are final — mark ended so
             ;; they render with success/error bg, footer strip, and Took.
             ;; Live pending messages (content "" + is-error false) are skipped.
-              (when (or (seq (:content msg)) (:is-error msg))
-                (te/tool-execution-set-error! comp (:is-error msg false)))
-              (when-let [images (:images msg)]
-                (te/tool-execution-set-images! comp images))
-              comp)
-      :bash (:component msg)  ;; Already-constructed BashExecutionComponent
-      :info (cm/make-custom-message :label (:label msg)
-                                    :content (:content msg "")
-                                    :theme theme
-                                    :output-pad output-pad)
-      :error (make-plain-msg (theme/fg theme :error (str "Error: " (:content msg ""))))
-      :warning (make-plain-msg (theme/fg theme :warning (str "Warning: " (:content msg ""))))
-      :status (make-status-line (:content msg ""))
+                (when (or (seq (:content msg)) (:is-error msg))
+                  (te/tool-execution-set-error! comp (:is-error msg false)))
+                (when-let [images (:images msg)]
+                  (te/tool-execution-set-images! comp images))
+                comp)
+        :bash (:component msg)  ;; Already-constructed BashExecutionComponent
+        :info (cm/make-custom-message :label (:label msg)
+                                      :content (:content msg "")
+                                      :output-pad output-pad)
+      ;; one-shot styled entries take the palette snapshot at creation —
+      ;; they are plain Text, there is nothing to re-theme
+        :error (make-plain-msg (theme/fg thm :error (str "Error: " (:content msg ""))))
+        :warning (make-plain-msg (theme/fg thm :warning (str "Warning: " (:content msg ""))))
+        :status (make-status-line (:content msg ""))
     ;; Fallback for roles with no dedicated component (e.g. :system compaction
     ;; summaries, unknown roles from session data): render content as markdown
     ;; (pi renders compaction summaries via Markdown) rather than dropping it.
-      (make-plain-md-msg (content->display-text (:content msg "")) theme
-                         (fn [s] (theme/fg theme :text s))))))
+        (make-plain-md-msg (content->display-text (:content msg "")) thm
+                           (fn [c] (theme/fg thm :text c)))))))
 
 (defn- with-assistant-data
   "Attach the data-layer content atoms to an assistant message map
@@ -263,7 +261,7 @@
    created component (or nil)."
   [ch msg]
   (let [msg (with-assistant-data msg)
-        comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch)
+        comp (make-component-for-msg msg @(:output-pad-atom ch)
                                      @(:tools-expanded-atom ch) (:thinking-hidden-atom ch)
                                      (:hidden-label-atom ch))]
     (when comp
@@ -283,7 +281,7 @@
    no streaming message exists. Returns the created component (or nil)."
   [ch msg]
   (let [msg (with-assistant-data msg)
-        comp (make-component-for-msg msg @(:theme-atom ch) @(:output-pad-atom ch)
+        comp (make-component-for-msg msg @(:output-pad-atom ch)
                                      @(:tools-expanded-atom ch) (:thinking-hidden-atom ch)
                                      (:hidden-label-atom ch))
         streaming @(:streaming-atom ch)]
@@ -344,7 +342,6 @@
         comp (am/make-assistant-message
               :text-atom (:text-atom msg)
               :thinking-atom (:thinking-atom msg)
-              :theme @(:theme-atom ch)
               :output-pad @(:output-pad-atom ch)
               :thinking-hidden-atom (:thinking-hidden-atom ch)
               :hidden-label-atom (:hidden-label-atom ch))]
@@ -426,7 +423,7 @@
    Pass {:label \"...\" :content \"...\"} or nil to clear."
   [ch msg]
   (if msg
-    (when-let [comp (make-info-msg msg @(:theme-atom ch) @(:output-pad-atom ch))]
+    (when-let [comp (make-info-msg msg @(:output-pad-atom ch))]
       (reset! (:info-comp-atom ch) comp))
     (reset! (:info-comp-atom ch) nil)))
 
@@ -569,22 +566,11 @@
   "No-op: Pi architecture doesn't use max-lines (terminal handles viewport)."
   [_ch _n] nil)
 
-(defn- all-message-comps
+(defn- message-comps
   "All message components plus the info banner component."
   [ch]
   (concat (map :component @(:messages-atom ch))
           (when-let [info @(:info-comp-atom ch)] [info])))
-
-(defn- set-theme-on!
-  "Set theme on a child based on its kind."
-  [child t]
-  (case (kind-of child)
-    :user (um/user-message-set-theme! child t)
-    :assistant (am/assistant-message-set-theme! child t)
-    :tool (te/tool-execution-set-theme! child t)
-    :custom (cm/custom-message-set-theme! child t)
-    :bash (be/bash-execution-set-theme! child t)
-    nil))
 
 (defn- set-pad-on!
   "Set output padding on a child based on its kind."
@@ -596,18 +582,13 @@
     :custom (cm/custom-message-set-output-pad! child n)
     nil))
 
-(defn chat-history-set-theme!
-  "Set the theme on all messages and the info banner."
-  [ch t]
-  (reset! (:theme-atom ch) t)
-  (doseq [child (all-message-comps ch)]
-    (set-theme-on! child t)))
-
 (defn chat-history-set-output-pad!
-  "Set horizontal padding on all messages and the info banner."
+  "Set horizontal padding on all messages and the info banner. Theme needs
+   no equivalent walk: components subscribe to ui.subs/theme-sub themselves
+   (Stage 5); output-pad is still a constructor-threaded value."
   [ch n]
   (reset! (:output-pad-atom ch) n)
-  (doseq [child (all-message-comps ch)]
+  (doseq [child (message-comps ch)]
     (set-pad-on! child n)))
 
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────

@@ -73,15 +73,20 @@
         (t/is (= took-idx (- (count lines) 2))
               "bottom border directly follows the status line")))))
 
-(t/deftest test-bash-execution-set-theme
-  ;; BashExecutionComponent takes a theme (was hardcoded dark-theme) and
-  ;; bash-execution-set-theme! updates the render + spinner colors without
-  ;; breaking subsequent renders.
-  (let [c (be/make-bash-execution :command "ls" :theme theme/dark-theme)]
+(t/deftest test-theme-sub-retheme
+  ;; Stage 5: the component subscribes to ui.subs/theme-sub — swapping the
+  ;; shared atom re-themes borders/spinner on the next render, without any
+  ;; per-component setter.
+  (let [c (be/make-bash-execution :command "ls")]
     (t/is (some? c))
-    (t/is (seq (protocols/render c 40)) "renders with dark theme")
-    (be/bash-execution-set-theme! c theme/light-theme)
-    (let [lines (protocols/render c 40)]
-      (t/is (some #(clojure.string/includes? % "$ ls") lines)
-            "still renders after theme switch")
-      (t/is (= 40 (u/visible-width (first lines))) "borders stay flush"))))
+    (let [before (protocols/render c 40)]
+      (t/is (seq before) "renders with the current theme")
+      (reset! theme/theme-atom (theme/get-theme "light"))
+      (try
+        (let [lines (protocols/render c 40)]
+          (t/is (some #(clojure.string/includes? % "$ ls") lines)
+                "still renders after theme switch")
+          (t/is (= 40 (u/visible-width (first lines))) "borders stay flush")
+          (t/is (not= before lines) "styling changed with the theme"))
+        (finally
+          (reset! theme/theme-atom (theme/get-theme "dark")))))))

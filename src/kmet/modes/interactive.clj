@@ -2908,7 +2908,9 @@
                   ;; the content fns that use them
                   (app-kb/set-key-hint-theme-fns!
                    #(th/dim %) #(th/fg current-theme :muted %))
-                  (ui/chat-history-set-theme! ch current-theme)
+                  ;; transcript components subscribe to ui.subs/theme-sub —
+                  ;; no walk needed (Stage 5); footer/indicator/resources
+                  ;; keep their setter paths
                   (ui/footer-set-theme! ftr current-theme)
                   (ui/status-indicator-set-theme! si current-theme)
                   (ui/loaded-resources-set-theme! lr current-theme)
