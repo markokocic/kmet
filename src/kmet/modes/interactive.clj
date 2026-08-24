@@ -116,6 +116,7 @@
                       header-comp
                       loaded-resources-comp
                       anim-timer
+                      indicator-timer
                       footer-comp
                       footer-provider
                       status-indicator
@@ -363,11 +364,8 @@
         indicator (spinner/make-spinner :text "Creating gist..." :active true)
         done (promise)]
     (show-status-indicator! cs :share indicator)
-    ;; render driver: tick the spinner while the gist creation runs
-    (future
-      (while (not (realized? done))
-        (Thread/sleep 100)
-        (tui/tui-request-render (:tui cs))))
+    ;; spinner animation rides the transient-indicator frame driver while
+    ;; :share is up (cleared below on completion/timeout)
     (future
       (let [result
             (try
@@ -1865,6 +1863,37 @@
                 (debug/log "anim timer: " e))))]
     (reset! (:anim-timer cs) t)))
 
+(defn- start-indicator-timer!
+  "Request renders every 80ms while a TRANSIENT status indicator is up.
+   Covers indicators shown outside agent turns (manual /compact, /share)
+   — the elapsed-time/countdown indicators render from wall-clock time per
+   pass and otherwise sit on a single static frame when no anim timer is
+   running. Self-exits when the TUI stops or the indicator clears; also
+   cancelled explicitly by clear-status-indicator!."
+  [cs]
+  ;; tolerate stub CoreStates without the field (headless tests)
+  (let [cell (:indicator-timer cs)]
+    (when (and cell (not @cell))
+      (reset! cell
+              (future
+                (try
+                  (loop []
+                    (Thread/sleep 80)
+                    (if (and @(:running? (:tui cs))
+                             @(:status-current cs))
+                      (do (tui/tui-request-render (:tui cs))
+                          (recur))
+                      nil))
+                  (catch InterruptedException _)))))))
+
+(defn- stop-indicator-timer!
+  "Cancel the transient-indicator frame driver (idempotent)."
+  [cs]
+  (when-some [cell (:indicator-timer cs)]
+    (when-let [t @cell]
+      (future-cancel t))
+    (reset! cell nil)))
+
 (defn- stop-anim-timer!
   "Cancel the animation timer."
   [cs]
@@ -1886,12 +1915,15 @@
 (defn- show-status-indicator!
   "Record INDICATOR as the active status child (pi: showStatusIndicator —
    disposes the active indicator). KIND records which indicator is active
-   for kind-gated clears. No manual render request: the swap on
-   :status-current is a tracked dep of the status-area root reaction, whose
-   auto-run hook schedules the frame (§3.4)."
+   for kind-gated clears. No manual render request for the SWAP itself —
+   the tracked :status-current read schedules that frame (§3.4) — but the
+   transient indicators animate from wall-clock time, so outside agent
+   turns this starts an 80ms frame driver (a no-op while one is running;
+   during turns the anim timer already drives frames)."
   [cs kind indicator]
   (ui/status-indicator-stop! (:status-indicator cs))
-  (reset! (:status-current cs) {:kind kind :indicator indicator}))
+  (reset! (:status-current cs) {:kind kind :indicator indicator})
+  (start-indicator-timer! cs))
 
 (defn- activate-working-indicator!
   "Restore the default working StatusIndicator as the status layer's child
@@ -1902,8 +1934,11 @@
   ;; The nil swap schedules the frame through the status-area root's
   ;; reaction when a transient indicator was shown; start-agent-run! (the
   ;; one cold-start path where current is already nil) requests its own
-  ;; frame right after, covering the spinner activation.
+  ;; frame right after, covering the spinner activation. The transient
+  ;; indicator's frame driver stops — the working spinner animates via the
+  ;; anim timer once the turn runs.
   (reset! (:status-current cs) nil)
+  (stop-indicator-timer! cs)
   (ui/status-indicator-start! (:status-indicator cs)))
 
 (defn- clear-status-indicator!
@@ -1916,7 +1951,8 @@
     ;; A real swap (transient → idle) schedules its own frame through the
     ;; status-area root reaction; an already-idle clear needs no frame.
     (reset! (:status-current cs) nil)
-    (ui/status-indicator-stop! (:status-indicator cs))))
+    (ui/status-indicator-stop! (:status-indicator cs))
+    (stop-indicator-timer! cs)))
 
 ;; ─── Pending messages display (pi: updatePendingMessagesDisplay) ──────────
 
