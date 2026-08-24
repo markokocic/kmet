@@ -109,7 +109,7 @@ unit-testable without a live LLM.
 2. ✅ Renderer registry map replacing the `case`s; kind method tables —
    `builtin-renderers` table in `tool_execution.clj` (:call/:result/:shell),
    `expand-fns` + `pad-fns` tables in `chat_history.clj`. *(small)*
-3. ▸ Extend subs to shared state; push-setters → bare resets *(medium)*
+3. ✅ Extend subs to shared state; push-setters → bare resets *(medium)*
 
    **Status-slice finding (commit d7d0c89):** `:status` turned out to have
    ZERO render-input consumers — all ten readers are event-handler guards
@@ -119,9 +119,14 @@ unit-testable without a live LLM.
    :status event) and `sync-footer-model!` invalidated by hand. Fixed with
    track-deps over the fdp atoms + the live session :entries vector (which
    Session mutates in place); both manual invalidations deleted, regression
-   test added. Remaining item-3 candidates: the chat-history flags
-   (thinking-hidden / tools-expanded shared-atom tricks), model/provider
-   via computes once another consumer appears.
+   test added.
+
+   **Flags slice (commit 931af52):** tools-expanded converted — tool/bash
+   components OR the shared chat toggle atom into their render (lexical
+   deref inside track!); toggle is one swap!, inheritance automatic,
+   `expand-fns` push table deleted. thinking-hidden already used the
+   shared-atom pattern. Item 3 complete; model/provider computes deferred
+   until a second consumer appears.
 4. Config-field grouping in `AgentState` *(medium)*
 5. Hiccup-based renderer subtrees in `tool_renderers.clj` *(larger)*
 6. `run-agent-turn` phase extraction *(larger)*
