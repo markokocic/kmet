@@ -115,10 +115,17 @@
             _ (when stale? (reflow-all! this width))
             text-lines @rendered-text-lines-atom
             thinking-lines @rendered-thinking-lines-atom]
-        ;; Pi-style: no visible content (streaming or finalized empty) → render nothing.
-        ;; The working indicator is a separate StatusIndicator between chat and editor.
+        ;; Pi-style: no visible content → render nothing while STREAMING (the
+        ;; working indicator covers the wait). A FINALIZED empty response (the
+        ;; provider returned a silent :stop completion — no text, no thinking,
+        ;; no tool calls) renders a muted placeholder instead of a blank
+        ;; bubble, so the user isn't left staring at nothing after the run
+        ;; settled.
         (if (and text-empty? thinking-empty?)
-          []
+          (when-not streaming?
+            (let [pad-x @output-pad-atom
+                  left-pad (apply str (repeat pad-x \space))]
+              [(str left-pad (theme/dim (theme/fg theme :muted "(no response)")))]))
           ;; Normal: render with reactive cache + top pad-y=1 only (Pi-style Spacer(1) equivalent)
           (let [pad-y 1
                 empty (apply str (repeat width \space))

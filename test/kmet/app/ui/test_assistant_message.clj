@@ -91,10 +91,18 @@
             "Unhiding should show thinking content")))))
 
 (deftest test-empty-message
-  (testing "empty message renders nothing (Pi-style: no content → no output)"
+  (testing "finalized empty message renders a muted placeholder (not a blank bubble)"
     (let [c (am/make-assistant-message)
+          lines (mapv strip-ansi (core/render c 40))]
+      (is (= [" (no response)"] lines)
+          "finalized empty response shows the placeholder (with the output pad)"))))
+
+(deftest test-empty-message-streaming
+  (testing "streaming empty message renders nothing (working indicator covers the wait)"
+    (let [c (am/make-assistant-message)
+          _ (am/assistant-message-set-streaming! c true)
           lines (core/render c 40)]
-      (is (zero? (count lines)) "empty message renders []"))))
+      (is (zero? (count lines)) "streaming empty renders []"))))
 
 (deftest test-only-thinking
   (testing "message with only thinking renders correctly"
@@ -103,10 +111,10 @@
       (is (some #(re-find #"just thinking" %) plain)))))
 
 (deftest test-whitespace-only-renders-nothing
-  (testing "whitespace-only text/thinking renders no lines (pi: content.text.trim() check)"
+  (testing "whitespace-only text/thinking finalizes to the placeholder (pi: content.text.trim() check)"
     (let [c (am/make-assistant-message :text "   \n  ")]
-      (is (= [] (mapv strip-ansi (core/render c 40)))
-          "no pad line, no content — the block is invisible"))))
+      (is (= [" (no response)"] (mapv strip-ansi (core/render c 40)))
+          "whitespace-only content is an empty response → placeholder"))))
 
 (deftest test-text-trimmed
   (testing "leading/trailing whitespace is trimmed before wrap (pi: text.trim())"
