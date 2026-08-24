@@ -130,6 +130,18 @@ unit-testable without a live LLM.
 4. Config-field grouping in `AgentState` *(medium)*
 5. Hiccup-based renderer subtrees in `tool_renderers.clj` *(larger)*
 6. `run-agent-turn` phase extraction *(larger)*
+7. ✅ Extract reactive core to **`kmet.libs.reakt`** *(commit 4d9c355)* —
+   reactions/cursors/batching/tracked-deref now standalone (tui.reagent
+   deleted, generic half of tui.macros merged in); self-contained guard
+   enforces purity. New `reakt/derive` = pure core of hiccup/compute
+   (which keeps store-disposal + counters as a thin wrapper). with-let
+   stays in tui.macros: component-model machinery, zero reaction coupling,
+   no second consumer yet — promote when one appears.
+8. ✅ Delete defsetter/defgetter *(same commit)* — defgetter had 1 caller;
+   defsetter generated the pass-through accessors removed in item 1 and
+   couldn't carry docstrings (set-content!'s timing contract moved to
+   mark-execution-started!, the only legitimate stamper). Pure pass-
+   throughs inlined; logic-bearing setters became plain documented defns.
 
 ## Validation (items 1–2)
 
