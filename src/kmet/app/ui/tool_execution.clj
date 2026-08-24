@@ -16,7 +16,22 @@
 
 ;; ─── Renderer dispatch ─────────────────────────────────────────────────────
 ;; Built-in renderer functions live in kmet.app.ui.tool-renderers so supported
-;; extensions can reuse them directly.
+;; extensions can reuse them directly. One data table keyed by tool name holds
+;; every built-in per-tool fact (:call / :result renderers, :shell mode); the
+;; render method resolves custom override → builtin entry → default through a
+;; single path instead of per-field case ladders.
+
+(def ^:private builtin-renderers
+  {"read"  {:call renderers/render-read-call
+            :result renderers/render-read-result}
+   "write" {:call renderers/render-write-call
+            :result renderers/render-write-result}
+   "edit"  {:call renderers/render-edit-call
+            :result renderers/render-edit-result
+            ;; pi: edit renders its own diff framing, no outer Box
+            :shell :self}
+   "bash"  {:call renderers/render-bash-call
+            :result renderers/render-bash-result}})
 
 ;; ─── Render context helper ─────────────────────────────────────────────────
 
@@ -90,26 +105,14 @@
             started-at @started-at-atom
             ended-at @ended-at-atom
       ;; Re-check empty — only when no call component rendered and no result
-            builtin-call-fn (case name
-                              "read" renderers/render-read-call
-                              "write" renderers/render-write-call
-                              "edit" renderers/render-edit-call
-                              "bash" renderers/render-bash-call
-                              nil)
-            builtin-result-fn (case name
-                                "read" renderers/render-read-result
-                                "write" renderers/render-write-result
-                                "edit" renderers/render-edit-result
-                                "bash" renderers/render-bash-result
-                                nil)
-            builtin-shell (when (= name "edit") :self)
+            builtin (get builtin-renderers name)
             render-call-fn (or @custom-render-call-atom
-                               builtin-call-fn
+                               (:call builtin)
                                renderers/render-default-call)
             render-result-fn (or @custom-render-result-atom
-                                 builtin-result-fn
+                                 (:result builtin)
                                  renderers/render-default-result)
-            render-shell (or @render-shell-atom builtin-shell :default)
+            render-shell (or @render-shell-atom (:shell builtin) :default)
             container @inner-container
             content-width (max 1 (- width (* 2 output-pad)))
             call-context (tool-execution-context this (last-call-component this))

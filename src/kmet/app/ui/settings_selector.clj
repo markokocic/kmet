@@ -72,8 +72,8 @@
                     300000)
         apply-retry! (fn []
                        (let [r @retry-atom]
-                         (agent/set-max-retries! ag (if (:enabled r) (:max-retries r) 0))
-                         (agent/set-base-delay-ms! ag (:base-delay-ms r))))
+                         (reset! (:max-retries ag) (if (:enabled r) (:max-retries r) 0))
+                         (reset! (:base-delay-ms ag) (:base-delay-ms r))))
         save-retry! (fn [path value]
                       (cfg/save-setting! path value)
                       (apply-retry!))
@@ -155,11 +155,11 @@
                                (ui/footer-set-auto-compact! f on?)))
                            :steering-mode
                            (let [mode (keyword value)]
-                             (agent/set-steering-mode! ag mode)
+                             (reset! (:steering-mode ag) mode)
                              (cfg/save-setting! [:steering-mode] mode))
                            :follow-up-mode
                            (let [mode (keyword value)]
-                             (agent/set-follow-up-mode! ag mode)
+                             (reset! (:follow-up-mode ag) mode)
                              (cfg/save-setting! [:follow-up-mode] mode))
                            :http-idle-timeout
                            (let [ms (:ms (some #(when (= value (:label %)) %)

@@ -31,9 +31,10 @@
    sequentially (see :execution-mode on the Tool record).
 
    Per-turn hooks (pi: prepareNextTurn / shouldStopAfterTurn / transformContext):
-   set-prepare-next-turn! / set-should-stop-after-turn! run after each turn
-   (in pi order); set-transform-context! rewrites the conversation before each
-   LLM call. set-system-prompt-override! sets a per-run system prompt override.
+   the :prepare-next-turn / :should-stop-after-turn hooks run after each turn
+   (in pi order); :transform-context rewrites the conversation before each
+   LLM call. The :system-prompt-override atom holds a per-run system prompt
+   override.
 
    Compaction (pi: auto-compaction): the session is compacted proactively
    (measured usage vs. the model's context window) and reactively after a
@@ -43,8 +44,7 @@
 
    Model management (pi: setModel / cycleModel): set-scoped-models! sets the
    session scoped model list; cycle-model! moves through it emitting
-   :model-select.
-   set-get-api-key! registers a dynamic API key resolver.
+   :model-select. The :get-api-key atom holds a dynamic API key resolver.
 
    Input hooks (pi: input extension event): applied at the interactive input
    path (modes.interactive handle-submit) via extensions/apply-input-hooks —
@@ -123,7 +123,7 @@
          :max-retries (default 3), :base-delay-ms (default 2000),
          :before-tool-call, :after-tool-call, :system-prompt-override,
          :transform-context, :prepare-next-turn, :should-stop-after-turn,
-         :should-stop-after-turn, :get-api-key, :scoped-models (default []),
+         :get-api-key, :scoped-models (default []),
          :compact-token-threshold, :auto-compact (default true, pi:
          autoCompact), :context-window, :compact-reserve-tokens (default 16384,
          pi: reserveTokens), :keep-recent-tokens (default 20000, pi:
@@ -182,7 +182,7 @@ Be precise and concise in your responses."}}]
                     :pending-bash (atom [])
                     :http-idle-timeout-ms (atom http-idle-timeout-ms)}))
 
-;; ─── Active tools (pi: ctx.getActiveTools / setActiveTools) ─────────────
+;; ─── Active tools (pi: ctx.setActiveTools) ──────────────────────
 
 (defn- active-tools
   "The tools sent to the LLM: the registry filtered to the :enabled-tools
@@ -192,23 +192,12 @@ Be precise and concise in your responses."}}]
     (filterv #(contains? enabled (:name %)) (vals (tools/get-all-tools)))
     (vals (tools/get-all-tools))))
 
-(defn get-active-tools
-  "Names of the currently active tools; nil = all tools active
-   (pi: getActiveTools)."
-  [agent]
-  @(:enabled-tools agent))
-
 (defn set-active-tools!
   "Restrict the tools sent to the LLM to NAMES (a set or seq of tool
    names); nil restores all tools (pi: setActiveTools)."
   [agent names]
   (reset! (:enabled-tools agent) (when names (set names)))
   nil)
-
-(defn get-thinking-level
-  "The agent's current thinking level (pi: getThinkingLevel)."
-  [agent]
-  @(:thinking agent))
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
 (defn- emit
@@ -1695,24 +1684,6 @@ Be precise and concise in your responses."}}]
         (vreset! changed true))
       @changed)))
 
-(defn set-system-prompt! [agent prompt]
-  (reset! (:system agent) prompt))
-
-(defn set-before-tool-call!
-  "Register a before-tool-call hook (pi: beforeToolCall).
-   Hook: (fn [{:keys [assistant-message tool-call-id tool-name args]}])
-   Return {:block true :reason \"...\"} to prevent execution, or nil to allow."
-  [agent hook]
-  (reset! (:before-tool-call agent) hook))
-
-(defn set-after-tool-call!
-  "Register an after-tool-call hook (pi: afterToolCall).
-   Hook: (fn [{:keys [assistant-message tool-call-id tool-name args result is-error]}])
-   Return a map with :content and/or :is-error to rewrite the result, or nil
-   to keep it unchanged."
-  [agent hook]
-  (reset! (:after-tool-call agent) hook))
-
 (defn set-model!
   "Set the active model, emitting :model-select and persisting a
    :model-change session entry (pi: setModel → appendModelChange)."
@@ -1727,25 +1698,12 @@ Be precise and concise in your responses."}}]
                    :previous-model previous
                    :source :set}))))
 
-(defn set-context-window!
-  "Set the model context window used by the proactive compaction check (pi:
-   state.model.contextWindow — follows model switches)."
-  [agent window]
-  (reset! (:context-window agent) window)
-  nil)
-
 (defn set-scoped-models!
   "Set the session scoped model list used by cycle-model! (pi:
    session.setScopedModels — the list holds \"provider/id\" full ids; empty
    = no scoping, cycle over all available models)."
   [agent models]
   (reset! (:scoped-models agent) (vec models)))
-
-(defn get-scoped-models
-  "The session scoped model list (pi: session.scopedModels) — \"provider/id\"
-   full ids, or [] when unset."
-  [agent]
-  @(:scoped-models agent))
 
 (defn init-scoped-models!
   "Seed the session scoped model list from the config at startup (pi:
@@ -1766,33 +1724,11 @@ Be precise and concise in your responses."}}]
        agent (mapv (fn [m] (str (name (:provider m)) "/" (:id m))) models))))
   agent)
 
-(defn set-max-retries!
-  "Set the auto-retry attempt limit live (pi: retry settings change — the
-   /settings rows apply immediately). 0 disables auto-retry."
-  [agent n]
-  (reset! (:max-retries agent) n))
-
-(defn set-base-delay-ms!
-  "Set the auto-retry backoff base in ms live (pi: retry baseDelayMs)."
-  [agent ms]
-  (reset! (:base-delay-ms agent) ms))
-
 (defn set-auto-compact!
   "Toggle proactive compaction live (pi: setAutoCompact); overflow recovery
    is unaffected."
   [agent enabled?]
   (reset! (:auto-compact agent) (boolean enabled?)))
-
-(defn set-steering-mode!
-  "Set the steering queue drain mode live (pi: setSteeringMode) —
-   :all delivers every queued message at once, :one-at-a-time one per turn."
-  [agent mode]
-  (reset! (:steering-mode agent) mode))
-
-(defn set-follow-up-mode!
-  "Set the follow-up queue drain mode live (pi: setFollowUpMode)."
-  [agent mode]
-  (reset! (:follow-up-mode agent) mode))
 
 (defn set-http-idle-timeout-ms!
   "Set the SSE idle timeout live (pi: setHttpIdleTimeoutMs); 0 disables."
@@ -1909,43 +1845,4 @@ Be precise and concise in your responses."}}]
           (nth new-think new-i))
         (shared/clamp-thinking-level new-model current-level)))))
 
-(defn set-system-prompt-override!
-  "Set the per-run system prompt override (pi: _systemPromptOverride).
-   call-llm prefers this over the base system prompt until the run resets it."
-  [agent prompt]
-  (reset! (:system-prompt-override agent) prompt))
 
-(defn set-transform-context!
-  "Register a transform-context hook (pi: transformContext).
-   Hook: (fn [messages]) → messages — applied to the conversation before the
-   system prompt is prepended on every LLM call."
-  [agent hook]
-  (reset! (:transform-context agent) hook))
-
-(defn set-prepare-next-turn!
-  "Register a prepare-next-turn hook (pi: prepareNextTurn).
-   Hook: (fn [{:keys [turn-index message tool-results messages]}])
-   Return a map with :model, :system, :thinking, :system-prompt-override,
-   and/or :context to update state for the remaining turns, or nil."
-  [agent hook]
-  (reset! (:prepare-next-turn agent) hook))
-
-(defn set-should-stop-after-turn!
-  "Register a should-stop-after-turn hook (pi: shouldStopAfterTurn).
-   Hook: (fn [{:keys [turn-index message tool-results messages]}])
-   Return truthy to stop the loop gracefully after this turn."
-  [agent hook]
-  (reset! (:should-stop-after-turn agent) hook))
-
-(defn set-get-api-key!
-  "Register a dynamic API key resolver (pi: config.getApiKey).
-   Hook: (fn [provider]) → key string — resolved before each LLM call,
-   preferred over cfg/get-api-key."
-  [agent hook]
-  (reset! (:get-api-key agent) hook))
-
-(defn set-provider! [agent provider]
-  (reset! (:provider agent) provider))
-
-(defn get-status [agent]
-  @(:status agent))

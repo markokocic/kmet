@@ -119,7 +119,7 @@
 
 (t/deftest test-loop-set-system-prompt
   (let [agent (loop/make-agent-state)]
-    (loop/set-system-prompt! agent "new prompt")
+    (reset! (:system agent) "new prompt")
     (t/is (= "new prompt" @(:system agent)))))
 
 (t/deftest test-loop-set-model
@@ -129,7 +129,7 @@
 
 (t/deftest test-loop-set-provider
   (let [agent (loop/make-agent-state)]
-    (loop/set-provider! agent :anthropic)
+    (reset! (:provider agent) :anthropic)
     (t/is (= :anthropic @(:provider agent)))))
 
 ;; ─── Model/thinking change persistence (G6) ───────────────────────────────
@@ -480,7 +480,7 @@
       (t/is (= :system (-> llm-msgs first :role)) "system prompt prepended"))
     (t/is (= :assistant (-> (loop/get-context agent) last :role))
           "the continued turn lands as the final assistant message")
-    (t/is (= :idle (loop/get-status agent)))))
+    (t/is (= :idle @(:status agent)))))
 
 (t/deftest test-loop-continue-after-error
   ;; End-to-end /continue flow: a run dies with a network error (the user
@@ -509,7 +509,7 @@
       @(loop/run-agent-turn agent
                             {:message "fix the bug"
                              :on-error (fn [_])})
-      (t/is (= :error (loop/get-status agent))
+      (t/is (= :error @(:status agent))
             "run ends in :error after the network failure")
       (t/is (= 1 (count (filter #(= :user (:role %)) (loop/get-context agent))))
             "the user message stays in context after the error")
@@ -523,7 +523,7 @@
       (t/is (= "fix the bug" (get-in (first users) [:content 0 :text]))))
     (t/is (= "fixed" (get-in (last (loop/get-context agent)) [:content 0 :text]))
           "the continued run completes the response")
-    (t/is (= :idle (loop/get-status agent)) "run settles idle after continue")))
+    (t/is (= :idle @(:status agent)) "run settles idle after continue")))
 
 ;; ─── Multiple turns ──────────────────────────────────────────────────────
 
@@ -1025,8 +1025,8 @@
   ;; /settings applies queue modes + idle timeout live (pi: setSteeringMode /
   ;; setFollowUpMode / setHttpIdleTimeoutMs)
   (let [agent (loop/make-agent-state)]
-    (loop/set-steering-mode! agent :one-at-a-time)
-    (loop/set-follow-up-mode! agent :one-at-a-time)
+    (reset! (:steering-mode agent) :one-at-a-time)
+    (reset! (:follow-up-mode agent) :one-at-a-time)
     (t/is (= :one-at-a-time @(:steering-mode agent)))
     (t/is (= :one-at-a-time @(:follow-up-mode agent)))
     (loop/set-http-idle-timeout-ms! agent 60000)
@@ -1264,8 +1264,8 @@
   (let [events (atom [])
         executed (atom false)
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
-    (loop/set-before-tool-call! agent
-                                (fn [_] {:block true :reason "Permission denied"}))
+    (reset! (:before-tool-call agent)
+            (fn [_] {:block true :reason "Permission denied"}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] (reset! executed true)
@@ -1282,8 +1282,8 @@
         executed (atom false)
         llm-calls (atom 0)
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
-    (loop/set-before-tool-call! agent
-                                (fn [_] {:block true :reason "Policy" :terminate true}))
+    (reset! (:before-tool-call agent)
+            (fn [_] {:block true :reason "Policy" :terminate true}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (fn [opts]
                                      (future
@@ -1298,7 +1298,7 @@
       @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
     (t/is (false? @executed) "blocked tool must not execute")
     (t/is (= 1 @llm-calls) "terminate stops the run — no follow-up LLM call")
-    (t/is (= :idle (loop/get-status agent)))
+    (t/is (= :idle @(:status agent)))
     (let [end (first (filter #(= :tool-execution-end (:type %)) @events))]
       (t/is (= "tc1" (:tool-call-id end)))
       (t/is (= "Policy" (:content (:result end))) "blocked result still in transcript")
@@ -1311,10 +1311,10 @@
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
     ;; pi: terminate only when EVERY finalized call in the batch carries
     ;; the hint — a single non-terminated call keeps the run going
-    (loop/set-before-tool-call! agent
-                                (fn [ctx]
-                                  (when (= "tc1" (:tool-call-id ctx))
-                                    {:block true :reason "Policy" :terminate true})))
+    (reset! (:before-tool-call agent)
+            (fn [ctx]
+              (when (= "tc1" (:tool-call-id ctx))
+                {:block true :reason "Policy" :terminate true})))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (fn [opts]
                                      (future
@@ -1334,7 +1334,7 @@
       @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
     (t/is (= 1 @executed) "non-blocked call in the batch executed")
     (t/is (= 2 @llm-calls) "mixed batch does not terminate — follow-up LLM call happened")
-    (t/is (= :idle (loop/get-status agent)))
+    (t/is (= :idle @(:status agent)))
     (t/is (some #(and (= :tool-execution-end (:type %))
                       (= "tc1" (:tool-call-id %))
                       (true? (:is-error %)))
@@ -1344,8 +1344,8 @@
 (t/deftest test-loop-before-tool-call-hook-throws
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
-    (loop/set-before-tool-call! agent
-                                (fn [_] (throw (ex-info "hook boom" {}))))
+    (reset! (:before-tool-call agent)
+            (fn [_] (throw (ex-info "hook boom" {}))))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
@@ -1357,9 +1357,9 @@
 (t/deftest test-loop-after-tool-call-rewrites
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
-    (loop/set-after-tool-call! agent
-                               (fn [{:keys [result]}]
-                                 {:content (str (:content result) " [sanitized]")}))
+    (reset! (:after-tool-call agent)
+            (fn [{:keys [result]}]
+              {:content (str (:content result) " [sanitized]")}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] {:content "secret-key=abc" :is-error false})]
@@ -1371,9 +1371,9 @@
 (t/deftest test-loop-after-tool-call-sets-error
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
-    (loop/set-after-tool-call! agent
-                               (fn [{:keys [result]}]
-                                 {:content (:content result) :is-error true}))
+    (reset! (:after-tool-call agent)
+            (fn [{:keys [result]}]
+              {:content (:content result) :is-error true}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
@@ -1384,8 +1384,8 @@
 (t/deftest test-loop-after-tool-call-hook-throws
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
-    (loop/set-after-tool-call! agent
-                               (fn [_] (throw (ex-info "hook boom" {}))))
+    (reset! (:after-tool-call agent)
+            (fn [_] (throw (ex-info "hook boom" {}))))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
@@ -1428,7 +1428,7 @@
       (t/is (= 1 (count ends)))
       (t/is (true? (:success (first ends))))
       (t/is (= 2 (:attempt (first ends)))))
-    (t/is (= :idle (loop/get-status agent)))
+    (t/is (= :idle @(:status agent)))
     ;; The retried stream's text is the final assistant message
     (t/is (some #(and (= :message-end (:type %))
                       (= "recovered" (get-in % [:message :content 0 :text])))
@@ -1455,7 +1455,7 @@
       (t/is (false? (:success (first ends))))
       (t/is (= 1 (:attempt (first ends))))
       (t/is (= "503 service unavailable" (:final-error (first ends)))))
-    (t/is (= :error (loop/get-status agent)))
+    (t/is (= :error @(:status agent)))
     (t/is (some #(= :error (:type %)) @events) "terminal :error event emitted")
     ;; Every failed attempt is recorded — one :message-end per LLM call that
     ;; errored (pi: message_end persists each stopReason-error partial, even
@@ -1564,7 +1564,7 @@
           (t/is (= "half a thought" (get-in (first aborted) [:content 0 :text]))))
         (t/is (empty? (filterv #(= :assistant (:role %)) (loop/get-context agent)))
               "aborted attempt excluded from the live context")
-        (t/is (= :idle (loop/get-status agent)))
+        (t/is (= :idle @(:status agent)))
         (try (fs/delete-tree dir) (catch Exception _ nil))))))
 
 (t/deftest test-loop-thinking-signature-captured
@@ -1614,7 +1614,7 @@
                                    :on-error (fn [e] (swap! errors conj e))}))
     (t/is (= 1 @calls) "no auto-retry is scheduled")
     (t/is (empty? @errors) "no error surfaces")
-    (t/is (= :idle (loop/get-status agent)) "the run settles quietly")
+    (t/is (= :idle @(:status agent)) "the run settles quietly")
     (t/is (= [:user :assistant] (mapv :role (loop/get-context agent)))
           "the empty assistant entry is recorded like any other")))
 
@@ -1642,7 +1642,7 @@
     (t/is (= 1 @calls) "no auto-retry (max-retries 0)")
     (t/is (= 1 (count @errors)) "the error surfaces to the UI")
     (t/is (= "Provider stopped with: error" (first @errors)))
-    (t/is (= :error (loop/get-status agent)) "the run ends in :error")
+    (t/is (= :error @(:status agent)) "the run ends in :error")
     (t/is (empty? (filterv #(= :assistant (:role %)) (loop/get-context agent)))
           "the errored attempt is excluded from the live context")))
 
@@ -1727,7 +1727,7 @@
       (t/is (= 1 (count ends)))
       (t/is (false? (:success (first ends))))
       (t/is (= "Retry cancelled" (:final-error (first ends)))))
-    (t/is (= :idle (loop/get-status agent)) "run settles idle after cancel during backoff")))
+    (t/is (= :idle @(:status agent)) "run settles idle after cancel during backoff")))
 
 (t/deftest ^:slow test-loop-retry-resets-count-on-success-then-error
   (let [events (atom [])
@@ -1970,8 +1970,8 @@
   (let [agent (loop/make-agent-state)]
     (t/is (= 3 @(:max-retries agent)))
     (t/is (= 2000 @(:base-delay-ms agent)))
-    (loop/set-max-retries! agent 0)
-    (loop/set-base-delay-ms! agent 500)
+    (reset! (:max-retries agent) 0)
+    (reset! (:base-delay-ms agent) 500)
     (t/is (= 0 @(:max-retries agent)) "0 disables auto-retry")
     (t/is (= 500 @(:base-delay-ms agent)))))
 
@@ -1993,10 +1993,10 @@
 (t/deftest test-loop-transform-context
   (let [seen (atom nil)
         agent (loop/make-agent-state)]
-    (loop/set-transform-context! agent
-                                 (fn [messages]
-                                   (reset! seen messages)
-                                   (conj messages {:role :user :content [{:type :text :text "injected"}]})))
+    (reset! (:transform-context agent)
+            (fn [messages]
+              (reset! seen messages)
+              (conj messages {:role :user :content [{:type :text :text "injected"}]})))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
@@ -2024,7 +2024,7 @@
                :system "base prompt"
                :on-event (fn [evt]
                            (when (= :agent-start (:type evt))
-                             (loop/set-system-prompt-override! @holder "override prompt"))))]
+                             (reset! (:system-prompt-override @holder) "override prompt"))))]
     (reset! holder agent)
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
@@ -2040,16 +2040,16 @@
     (t/is (= "override prompt" @(:system-prompt-override agent))
           "override persists for the duration of the run")
     ;; Next run resets the override at start (pi: prompt() resets per run)
-    (loop/set-system-prompt-override! agent "override prompt")
-    (loop/set-system-prompt-override! agent nil)
+    (reset! (:system-prompt-override agent) "override prompt")
+    (reset! (:system-prompt-override agent) nil)
     (t/is (nil? @(:system-prompt-override agent)))))
 
 ;; ─── Phase 3: prepareNextTurn / shouldStopAfterTurn ──────────────────────
 
 (t/deftest test-loop-prepare-next-turn-updates-state
   (let [agent (loop/make-agent-state :model "model-a" :thinking :off)]
-    (loop/set-prepare-next-turn! agent
-                                 (fn [_] {:model "model-b" :thinking :high :system-prompt-override "custom"}))
+    (reset! (:prepare-next-turn agent)
+            (fn [_] {:model "model-b" :thinking :high :system-prompt-override "custom"}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
@@ -2062,7 +2062,7 @@
 (t/deftest ^:slow test-loop-should-stop-after-turn
   (let [calls (atom 0)
         agent (loop/make-agent-state)]
-    (loop/set-should-stop-after-turn! agent (fn [_] true))
+    (reset! (:should-stop-after-turn agent) (fn [_] true))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
@@ -2075,7 +2075,7 @@
                       :done))]
       @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
     (t/is (= 1 @calls) "loop stops after the first turn")
-    (t/is (= :idle (loop/get-status agent)))))
+    (t/is (= :idle @(:status agent)))))
 
 ;; ─── Phase 3: parallel tool execution ────────────────────────────────────
 
@@ -2223,7 +2223,7 @@
 
 (t/deftest test-loop-get-api-key-hook
   (let [agent (loop/make-agent-state)]
-    (loop/set-get-api-key! agent (fn [_] "hook-key"))
+    (reset! (:get-api-key agent) (fn [_] "hook-key"))
     (with-redefs [cfg/get-api-key (fn [_] "cfg-key")
                   llm/send-message
                   (fn [opts]
@@ -2494,8 +2494,8 @@
         llm-keys (atom [])
         calls (atom 0)
         agent (loop/make-agent-state)]
-    (loop/set-get-api-key! agent
-                           (fn [_] (swap! keys-seen conj (str "key-" (count @keys-seen)))))
+    (reset! (:get-api-key agent)
+            (fn [_] (swap! keys-seen conj (str "key-" (count @keys-seen)))))
     (with-redefs [cfg/get-api-key (fn [_] "cfg-key")
                   llm/send-message
                   (fn [opts]
@@ -2524,8 +2524,8 @@
         sess (session/create-session (str dir))
         agent (loop/make-agent-state :session sess)]
     (try
-      (loop/set-prepare-next-turn! agent
-                                   (fn [_] {:context [{:role :user :content [{:type :text :text "replacement"}]}]}))
+      (reset! (:prepare-next-turn agent)
+              (fn [_] {:context [{:role :user :content [{:type :text :text "replacement"}]}]}))
       (with-redefs [cfg/get-api-key (fn [_] "test-key")
                     llm/send-message (stub-llm-tool-then-text (atom 0))
                     tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
@@ -2543,8 +2543,8 @@
 (t/deftest test-loop-context-replaced-event
   (let [events (atom [])
         agent (loop/make-agent-state :on-event (fn [e] (swap! events conj e)))]
-    (loop/set-prepare-next-turn! agent
-                                 (fn [_] {:context [{:role :user :content [{:type :text :text "replacement"}]}]}))
+    (reset! (:prepare-next-turn agent)
+            (fn [_] {:context [{:role :user :content [{:type :text :text "replacement"}]}]}))
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message (stub-llm-tool-then-text (atom 0))
                   tools/execute-tool (fn [_ _ _] {:content "ok" :is-error false})]
@@ -2742,11 +2742,11 @@
 (t/deftest test-active-tools
   (t/testing "nil = all tools; set restricts; nil restores"
     (let [ag (loop/make-agent-state :provider :opencode-go :model "deepseek-v4-flash")]
-      (t/is (nil? (loop/get-active-tools ag)))
+      (t/is (nil? @(:enabled-tools ag)))
       (loop/set-active-tools! ag ["read" "write"])
-      (t/is (= #{"read" "write"} (loop/get-active-tools ag)))
+      (t/is (= #{"read" "write"} @(:enabled-tools ag)))
       (loop/set-active-tools! ag nil)
-      (t/is (nil? (loop/get-active-tools ag))))))
+      (t/is (nil? @(:enabled-tools ag))))))
 
 (t/deftest test-thinking-level-select-event
   (let [events (atom [])

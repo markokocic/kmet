@@ -46,7 +46,7 @@
     (fdp/fdp-set-thinking! fdp @(:thinking ag))
     (fdp/fdp-set-reasoning! fdp (boolean (:reasoning m)))
     (fdp/fdp-set-context-window! fdp window)
-    (agent/set-context-window! ag window)
+    (reset! (:context-window ag) window)
     (protocols/invalidate (:footer-comp cs))
     (tui/tui-request-render (:tui cs))
     nil))
@@ -64,7 +64,7 @@
   (let [ag @(:agent-state cs)
         old-model (models/get-model @(:provider ag) @(:model ag))
         clamped (agent/switch-thinking-level old-model model @(:thinking ag) thinking-level)]
-    (agent/set-provider! ag (:provider model))
+    (reset! (:provider ag) (:provider model))
     (agent/set-model! ag (:id model))
     (cfg/set-default-model! (:provider model) (:id model))
     (agent/set-thinking-level! ag clamped)
@@ -338,7 +338,7 @@
                                    (when slash
                                      (models/get-model (keyword (subs id 0 slash))
                                                        (subs id (inc slash))))))
-                               (agent/get-scoped-models ag)))
+                               @(:scoped-models ag)))
              current (models/get-model @(:provider ag) @(:model ag))
              ;; late binding: the callbacks reach the mount's done through
              ;; this atom (pi: done() is created by showSelector)

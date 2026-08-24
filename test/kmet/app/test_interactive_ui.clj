@@ -441,11 +441,11 @@
         ((:handler (commands/find-command "scoped-models")) cs "")
         (let [sel @sel-ref]
           (protocols/handle-input sel "\r")  ;; enter — toggle the first model
-          (t/is (seq (agent/get-scoped-models ag))
+          (t/is (seq @(:scoped-models ag))
                 "session scoped list updated after an edit")
           ;; Ctrl+A (all enabled) clears the session scoping again
           (protocols/handle-input sel "\u0001")
-          (t/is (= [] (agent/get-scoped-models ag))
+          (t/is (= [] @(:scoped-models ag))
                 "all-enabled clears the session scoped list (pi updateSessionModels)"))))))
 
 (deftest test-settings-thinking-row

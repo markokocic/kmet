@@ -3,7 +3,6 @@
    /model and /scoped-models overlays."
   (:require [clojure.string :as str]
             [kmet.ai.models :as models]
-            [kmet.app.loop :as agent]
             [kmet.app.ui.footer-data-provider :as fdp]
             [kmet.tui.theme :as theme]))
 
@@ -16,7 +15,7 @@
   "Models matched against first (pi: session scoped models when set, else
    the available snapshot). Scoped entries that no longer resolve drop out."
   [agent-state]
-  (let [scoped (agent/get-scoped-models agent-state)]
+  (let [scoped @(:scoped-models agent-state)]
     (if (seq scoped)
       (vec (keep (fn [id]
                    (let [slash (str/index-of id "/")]
@@ -30,7 +29,7 @@
   "pi: session scoped models when set, else the available snapshot (feeds
    cycling, /model, and the footer provider count)."
   [agent-state]
-  (if (seq (agent/get-scoped-models agent-state))
+  (if (seq @(:scoped-models agent-state))
     (scoped-model-snapshot agent-state)
     (models/get-available)))
 

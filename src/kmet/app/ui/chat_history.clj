@@ -441,6 +441,13 @@
   [child]
   (:kind child))
 
+(def ^:private expand-fns
+  "Kind-as-data method table (dsl.md §5): kind → set-expanded! fn applied by
+   the global tool-output expansion toggle. Kinds without an entry aren't
+   expandable."
+  {:tool te/tool-execution-set-expanded!
+   :bash be/bash-execution-set-expanded!})
+
 (defn chat-history-toggle-tool-expanded!
   "Toggle tool output expansion on all ToolExecutionComponent children.
    Tracks a single expansion flag (pi: toolOutputExpanded) applied to tools,
@@ -451,10 +458,8 @@
     (reset! (:tools-expanded-atom ch) expanded?)
     (doseq [m @(:messages-atom ch)]
       (let [child (:component m)]
-        (case (kind-of child)
-          :tool (te/tool-execution-set-expanded! child expanded?)
-          :bash (be/bash-execution-set-expanded! child expanded?)
-          nil)))
+        (when-some [set-expanded! (expand-fns (kind-of child))]
+          (set-expanded! child expanded?))))
     ;; pi: startup info banner is expandable with ctrl+o
     (when-let [info @(:info-comp-atom ch)]
       (when (cm/custom-message-collapsible? info)

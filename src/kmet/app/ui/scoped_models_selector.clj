@@ -400,7 +400,7 @@
   (let [sel-atom (atom nil)
         available (models/get-available)
         ag @(:agent-state cs)
-        session-scoped (vec (agent/get-scoped-models ag))
+        session-scoped (vec @(:scoped-models ag))
         patterns (cfg/get-enabled-models-live (:config cs))
         configured-ids (fn []
                          ;; resolve each pattern; unresolved ones survive as

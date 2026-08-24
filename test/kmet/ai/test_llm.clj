@@ -1451,7 +1451,7 @@
       (with-redefs [cfg/get-api-key (fn [_] "sk-test")]
         @(loop/run-agent-turn ag {:message "hi" :on-done (fn [_]) :on-error (fn [_])}))
       (let [assistant (last (filter #(= :assistant (:role %)) (session/get-branch sess)))]
-        (t/is (= :idle (loop/get-status ag)))
+        (t/is (= :idle @(:status ag)))
         (t/is (= {:prompt_tokens 1000 :completion_tokens 200 :total_tokens 1200
                   :prompt_tokens_details {:cached_tokens 300}
                   :cost {:input 9.800000000000001E-5 :output 5.6000000000000006E-5

@@ -905,7 +905,7 @@
                    ;; (set synchronously on submit) and the agent status
                    ;; (:thinking/:executing, set by the run future) are checked.
                    (or @(:running-turn? cs)
-                       (contains? #{:thinking :executing} (agent/get-status agent-state)))
+                       (contains? #{:thinking :executing} @(:status agent-state)))
                    (ui/chat-history-add-message! chat-history
                                                  {:role :info :label "Continue"
                                                   :content "Wait for the current response to finish before continuing."})
@@ -1089,7 +1089,7 @@
                      agent-state @(:agent-state cs)
                      instructions (when (seq args) args)]
                  (cond
-                   (not= :idle (agent/get-status agent-state))
+                   (not= :idle @(:status agent-state))
                    (ui/chat-history-add-message! chat-history
                                                  {:role :info :label "Compact"
                                                   :content "Wait for the current response to finish before compacting."})
@@ -1172,7 +1172,7 @@
   [cs _]
   (let [{:keys [chat-history]} cs
         agent-state @(:agent-state cs)]
-    (if-not (= :idle (agent/get-status agent-state))
+    (if-not (= :idle @(:status agent-state))
       (ui/chat-history-add-message! chat-history
                                     {:role :info :label "Reload"
                                      :content "Wait for the current response to finish before reloading."})
@@ -1212,7 +1212,7 @@
           ;; from settings to existing chat messages
           (ui/chat-history-set-thinking-hidden! chat-history
                                                 (cfg/get-hide-thinking-block config))
-          (agent/set-system-prompt! agent-state system-prompt)
+          (reset! (:system agent-state) system-prompt)
           (ui/loaded-resources-set-sections!
            (:loaded-resources-comp cs) (build-loaded-resource-sections))
           (update-footer! cs)
@@ -3108,7 +3108,7 @@
                                             (sync-footer-model! cs))
                                         (ui/chat-history-show-status!
                                          (:chat-history cs)
-                                         (if (seq (agent/get-scoped-models @(:agent-state cs)))
+                                         (if (seq @(:scoped-models @(:agent-state cs)))
                                            "Only one model in scope"
                                            "Only one model available")))))
       (editor/editor-set-on-action! ed "app.model.cycleBackward"
@@ -3119,7 +3119,7 @@
                                             (sync-footer-model! cs))
                                         (ui/chat-history-show-status!
                                          (:chat-history cs)
-                                         (if (seq (agent/get-scoped-models @(:agent-state cs)))
+                                         (if (seq @(:scoped-models @(:agent-state cs)))
                                            "Only one model in scope"
                                            "Only one model available")))))
 
@@ -3548,7 +3548,7 @@
                       (if (and model (models/has-configured-auth model))
                         (let [ag @(:agent-state cs)
                               old-model (models/get-model @(:provider ag) @(:model ag))]
-                          (agent/set-provider! ag (:provider model))
+                          (reset! (:provider ag) (:provider model))
                           (agent/set-model! ag (:id model))
                           (let [new-thinking (agent/switch-thinking-level old-model model @(:thinking ag) nil)]
                             (agent/set-thinking-level! ag new-thinking)
@@ -3567,7 +3567,7 @@
                                  (tui/tui-request-render (:tui cs)))
                                nil)
          :get-thinking-level (fn []
-                               (agent/get-thinking-level @(:agent-state cs)))
+                               @(:thinking @(:agent-state cs)))
          :send-user-message (fn [text & [{:keys [deliver-as expand-prompt-templates?]}]]
                               (let [ag @(:agent-state cs)
                                     ;; pi: prompt() with expandPromptTemplates —
@@ -3580,7 +3580,7 @@
                                            (expand-user-message-text cs text)
                                            text)]
                                 (when text
-                                  (if (= :idle (agent/get-status ag))
+                                  (if (= :idle @(:status ag))
                                     ;; pi: sendUserMessage always triggers a
                                     ;; turn when idle
                                     (start-agent-run! cs text)
@@ -3613,7 +3613,7 @@
                                display (:details message)))
                             (agent/add-context-message! ag msg)
                             (when (:trigger-turn opts)
-                              (if (= :idle (agent/get-status ag))
+                              (if (= :idle @(:status ag))
                                 (start-agent-run! cs)
                                 (if (= :steer (:deliver-as opts))
                                   ;; already in context — the next LLM call
@@ -3625,7 +3625,7 @@
                             (update-footer! cs)
                             true))
          :get-active-tools (fn []
-                             (agent/get-active-tools @(:agent-state cs)))
+                             @(:enabled-tools @(:agent-state cs)))
          :set-active-tools (fn [names]
                              ;; agent state only — no display depends on
                              ;; this synchronously
@@ -3646,15 +3646,15 @@
                              :cwd (fdp/fdp-get-cwd fdp)
                              :model @(:model ag)
                              :scoped-models @(:scoped-models ag)
-                             :thinking-level (agent/get-thinking-level ag)
-                             :is-idle (fn [] (= :idle (agent/get-status @ag-atom)))
+                             :thinking-level @(:thinking ag)
+                             :is-idle (fn [] (= :idle @(:status @ag-atom)))
                              :has-pending-messages (fn []
                                                      (boolean
                                                       (agent/has-queued-messages?
                                                        @ag-atom)))
                              :signal (fn [] @(:signal @ag-atom))
                              :abort (fn []
-                                      (when-not (= :idle (agent/get-status @ag-atom))
+                                      (when-not (= :idle @(:status @ag-atom))
                                         ;; pi: ctx.abort() restores queued
                                         ;; steering/follow-up messages to the
                                         ;; editor before aborting — a message
@@ -3695,12 +3695,12 @@
                                                                              (cfg/get-agent-dir)
                                                                              (str (fs/cwd)))}))
                              :wait-for-idle (fn []
-                                              (if (= :idle (agent/get-status @ag-atom))
+                                              (if (= :idle @(:status @ag-atom))
                                                 nil
                                                 (let [p (promise)]
                                                   (future
                                                     (loop []
-                                                      (if (= :idle (agent/get-status @ag-atom))
+                                                      (if (= :idle @(:status @ag-atom))
                                                         (deliver p true)
                                                         (do (Thread/sleep 100) (recur)))))
                                                   p)))
