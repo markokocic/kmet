@@ -127,7 +127,12 @@ unit-testable without a live LLM.
    `expand-fns` push table deleted. thinking-hidden already used the
    shared-atom pattern. Item 3 complete; model/provider computes deferred
    until a second consumer appears.
-4. Config-field grouping in `AgentState` *(medium)*
+4. ✅ Config-field grouping in `AgentState` *(commit ed567fa)* — seven
+   runtime knobs (`max-retries`, `base-delay-ms`, `http-idle-timeout-ms`,
+   `steering-mode`, `follow-up-mode`, `auto-compact`, `context-window`)
+   collapsed into one `:cfg` atom holding an immutable map; reads
+  `(:k @(:cfg ag))`, writers swap!-assoc. Concurrent cells + plain ctor
+   ints untouched; make-agent-state opts API unchanged.
 5. Hiccup-based renderer subtrees in `tool_renderers.clj` *(larger)*
 6. `run-agent-turn` phase extraction *(larger)*
 7. ✅ Extract reactive core to **`kmet.libs.reakt`** *(commit 4d9c355)* —
