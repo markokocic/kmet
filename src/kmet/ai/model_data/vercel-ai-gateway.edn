@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-22T07:16:35Z"
+ :generated-at "2026-08-24T13:18:05Z"
  :provider {:id :vercel-ai-gateway
             :name "Vercel AI Gateway"
             :env-vars ["AI_GATEWAY_API_KEY"]
@@ -1428,9 +1428,20 @@
     :base-url "https://ai-gateway.vercel.sh"
     :reasoning true
     :input [:text]
-    :cost {:input 0.05 :output 0.2 :cache-read 0.01 :cache-write 0}
-    :context-window 262144
-    :max-tokens 131072}
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 32768}
+   "nvidia/nemotron-3.5-lightning-free"
+   {:id "nvidia/nemotron-3.5-lightning-free"
+    :name "Nemotron 3.5 Lightning 30B (Free)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 32768}
    "nvidia/nemotron-nano-12b-v2-vl"
    {:id "nvidia/nemotron-nano-12b-v2-vl"
     :name "Nvidia Nemotron Nano 12B V2 VL"
