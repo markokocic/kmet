@@ -275,13 +275,13 @@ type**: Babashka seals `IWatchable`/`IReset` away from pure-source
 implementations, so dependency capture rides the existing deref funnel —
 `kmet.libs.reakt/tracked-deref`, through which every component render body
 routes its reads via `track!`. Plain `clojure.lang.Atom`s ARE the tracked
-inputs; `(r/atom x)` returns a plain atom so Reagent-shaped call sites port
-mechanically.
+inputs — plain atoms need no wrapper, so there is no `ratom` sugar.
 
-API: `make-reaction` / `reaction` (macro) / `track` / `cursor`, `ratom`,
-`watch-ref` / `unwatch-ref` (reactions aren't IRefs — core `add-watch`
-cannot take them), `add-on-dispose!`, `flush!` (drain the batch queue),
-`run!`, `invalidate!`, `dispose!`, `tracked-deref`, `changed?`.
+API: `make-reaction` / `reaction` (macro) / `derive` (derived ref over
+explicit deps) / `cursor`, `watch-ref` / `unwatch-ref` (reactions aren't
+IRefs — core `add-watch` cannot take them), `add-on-dispose!`, `flush!`
+(drain the batch queue), `force-run!`, `invalidate!`, `dispose!`,
+`tracked-deref`, `changed?`.
 
 Scheduling: a reaction whose deps change (by `=`) is marked dirty and
 **enqueued**; `flush!` runs each dirty reaction once per pass — drained

@@ -86,7 +86,7 @@
                      (:values cache)))
       (:result cache)
       (let [tracked (atom {})]
-        (binding [reakt/*tracked* tracked]
+        (binding [reakt/*tracking-scope* tracked]
           (let [cache-watch-key (keyword (str "track!cache" (System/identityHashCode component)))
                 invalidated? (atom false)
                 ;; Watch the cache atom itself: an invalidate mid-body (a

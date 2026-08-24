@@ -10,8 +10,8 @@
    from pure-source implementations, so a drop-in RAtom cannot exist.
    Dependency capture rides the deref funnel instead — tracked-deref, which
    records into BOTH capture frames: the render-body tracking scope
-   (*tracked*, bound by track-render) and any running reaction
-   (*ratom-context*). Reactions and cursors are reify'd IDeref refs carrying
+   (*tracking-scope*, bound by track-render) and any running reaction
+   (*reaction-frame*). Reactions and cursors are reify'd IDeref refs carrying
    their own watcher registries; they record themselves into an enclosing
    reaction from their own deref, and are watched/disposed through
    watch-ref/unwatch-ref (core add-watch cannot take them — they are not
@@ -33,34 +33,34 @@
    Examined against reagent.ratom (2.0.1) and rum's derived-atom/cursor
    (battle-tested references, ~/src/cvstree/). Adopted from them: sticky
    caught errors (a failed body's exception is rethrown by derefs without
-   re-execution; run! retries; the next dep change clears it), callback
+   re-execution; force-run! retries; the next dep change clears it), callback
    scheduling (:auto-run? fn → ComponentFn's invalidate hook), manual-track
-   value caching, last-watcher auto-dispose for manual reactions, and run!
+   value caching, last-watcher auto-dispose for manual reactions, and force-run!
    flushing the queue first. One deliberate deviation from current Reagent:
    plain reactions re-run QUEUED at the frame tick, not synchronously in the
    watch handler — coalescing matters at streaming write rates."
-  (:refer-clojure :exclude [run! derive]))
+  (:refer-clojure :exclude [derive]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Context
 ;; ═══════════════════════════════════════════════════════════════════════════
 
-(def ^:dynamic *tracked*
+(def ^:dynamic *tracking-scope*
   "During a tracking scope, a map of the refs deref'd so far, keyed by
    ref → value as read. Bound by kmet.tui.macros/track-render around render
    bodies; nil outside one."
   nil)
 
-(def ^:dynamic *ratom-context*
+(def ^:dynamic *reaction-frame*
   "The running reaction's capture frame ({:pending (atom #{}) :self ref}),
    bound around reaction bodies below. nil outside one."
   nil)
 
-(defn in-context?
+(defn in-reaction?
   "True when called inside a running reaction body (derefs here become
    tracked dependencies of that reaction)."
   []
-  (some? *ratom-context*))
+  (some? *reaction-frame*))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Universal watching — plain atoms take the core path, library refs the
@@ -71,14 +71,14 @@
   "Internal surface of this library's refs (reactions, cursors).
    Plain atoms are watched through core add-watch; these refs are not IRefs,
    so they carry their own watcher registry. Not for external use — go
-   through watch-ref/unwatch-ref, run!, dispose!."
+   through watch-ref/unwatch-ref, force-run!, dispose!."
   (-add-watch [this key f] "Register watcher F under KEY.")
   (-remove-watch [this key] "Drop the watcher under KEY.")
   (-cell [this] "The internal state atom.")
   (-dispose [this] "Kill the ref: unwatch deps, purge from the queue.")
   (-force-run [this] "Bring the ref current without going through deref."))
 
-(defn reactive-ref?
+(defn reaction?
   "True for the library's own refs (reactions, cursors)."
   [ref]
   (satisfies? RXRef ref))
@@ -91,20 +91,20 @@
   [ref]
   (or (instance? clojure.lang.IRef ref) (satisfies? RXRef ref)))
 
-(defn capture-deref!
+(defn record-dep!
   "Record REF in the active reaction's pending-dependency set, if a reaction
    is running. Called from tracked-deref; reactions and cursors additionally
    record themselves from their own deref implementations."
   [ref]
-  (when-some [{:keys [pending self]} *ratom-context*]
+  (when-some [{:keys [pending self]} *reaction-frame*]
     (when-not (identical? self ref)
       (swap! pending conj ref)))
   nil)
 
 (defn tracked-deref
   "Deref wrapper recording REF in every active capture frame: the tracking
-   scope (*tracked*, when one is bound — with the value just read) and the
-   running reaction (*ratom-context*). Trackable refs (plain atoms/vars and
+   scope (*tracking-scope*, when one is bound — with the value just read) and the
+   running reaction (*reaction-frame*). Trackable refs (plain atoms/vars and
    library reactions/cursors, see trackable-ref?) are registered as
    dependencies; volatiles and delays can't take watches and are skipped
    (read but never registered, here or in a running reaction). This is the
@@ -112,17 +112,17 @@
    route through the track! rewrite)."
   [ref]
   (let [v (deref ref)]
-    (when (and *tracked* (trackable-ref? ref))
-      (swap! *tracked* assoc ref v))
+    (when (and *tracking-scope* (trackable-ref? ref))
+      (swap! *tracking-scope* assoc ref v))
     (when (trackable-ref? ref)
-      (capture-deref! ref))
+      (record-dep! ref))
     v))
 
 (defn add-on-dispose!
   "Register F to run when R is disposed; F receives R (Reagent's
    add-on-dispose!). Runs after R is inert — deps unwatched, queue purged."
   [r f]
-  (when (reactive-ref? r)
+  (when (reaction? r)
     (swap! (-cell r) update :on-dispose (fnil conj []) f))
   r)
 
@@ -131,14 +131,14 @@
    clojure.core/add-watch, library refs (reactions, cursors) through their
    internal registry. F receives (key ref old-val new-val) either way."
   [ref key f]
-  (if (reactive-ref? ref)
+  (if (reaction? ref)
     (-add-watch ref key f)
     (add-watch ref key f)))
 
 (defn unwatch-ref
   "remove-watch counterpart of watch-ref."
   [ref key]
-  (if (reactive-ref? ref)
+  (if (reaction? ref)
     (-remove-watch ref key)
     (remove-watch ref key)))
 
@@ -222,7 +222,7 @@
 ;; Cell states: :unrun (created, never executed) → :idle (cached value
 ;; valid) → :dirty (a dep changed; queued) → :busy (body running right now)
 ;; → :failed (body threw; :caught holds the ex, sticky until next change or
-;; explicit run!). :disposed is terminal. Watches on the reaction itself live in the cell;
+;; explicit force-run!). :disposed is terminal. Watches on the reaction itself live in the cell;
 ;; so does the dependency set (:watching).
 
 ;; ═══════════════════════════════════════════════════════════════════════════
@@ -354,13 +354,13 @@
                          ;; stale flag this run was started for.
                          pending (atom #{})
                          result (try
-                                  (binding [*ratom-context* {:pending pending :self @self}]
+                                  (binding [*reaction-frame* {:pending pending :self @self}]
                                     ((:f snap)))
                                   (catch Throwable e
                                     ;; Body threw: sticky failure (Reagent's
                                     ;; caught) — derefs rethrow it without
                                     ;; re-executing the body; an explicit
-                                    ;; run! retries; the next dep change
+                                    ;; force-run! retries; the next dep change
                                     ;; clears it.
                                     (swap! cell assoc :state :failed :caught e)
                                     (throw e)))
@@ -404,7 +404,7 @@
                (= :disposed state) nil
                ;; Sticky failure: rethrow the captured error without
                ;; re-executing the body (Reagent's caught) — a read must
-               ;; never re-run side effects. run! is the explicit retry.
+               ;; never re-run side effects. force-run! is the explicit retry.
                (some? caught) (throw caught)
                (= :busy state) value
                :else (do
@@ -414,7 +414,7 @@
                        ;; current before this ref answers, or chained reads
                        ;; see a stale slice. The flush may run THIS reaction
                        ;; too (it can sit queued), so re-read after.
-                       (when (nil? *ratom-context*)
+                       (when (nil? *reaction-frame*)
                          (flush!))
                        (let [{:keys [state value caught]} @cell]
                          (cond
@@ -430,7 +430,7 @@
                            ;; anywhere (unrun — Reagent births reactions dirty),
                            ;; manual tracks' first read, dirty reactions. An
                            ;; in-context parent captured SELF just before (reify
-                           ;; deref → capture-deref!), so it tracks this ref.
+                           ;; deref → record-dep!), so it tracks this ref.
                            :else (run-sync!)))))))
          r (reify
              RXRef
@@ -478,15 +478,10 @@
              (deref [_]
                ;; Record R as a dependency of the ENCLOSING reaction, if one
                ;; is running, then produce the value under our own frame.
-               (capture-deref! @self)
+               (record-dep! @self)
                (deref-fn)))]
      (reset! self r)
      r)))
-
-(defn reaction?
-  "True when X is a reaction or cursor made by this library."
-  [x]
-  (reactive-ref? x))
 
 (defn reaction-state
   "Debugging introspection: {:state :value :watching} of R."
@@ -494,7 +489,7 @@
   (let [{:keys [state value watching]} @(-cell r)]
     {:state state :value value :watching watching}))
 
-(defn run!
+(defn force-run!
   "Flush the batch queue (so upstream reactions are current), then bring R
    current synchronously — Reagent's run. Retries through sticky failures;
    manual tracks always recompute here (deref is the cached path)."
@@ -510,7 +505,7 @@
    dynamic var, not an atom. Marks R :dirty, so the next deref (or a flush,
    should one land in between) brings it current. Disposed refs are ignored."
   [r]
-  (when (reactive-ref? r)
+  (when (reaction? r)
     (swap! (-cell r)
            (fn [{:keys [state] :as c}]
              (if (= :disposed state)
@@ -522,21 +517,13 @@
   "Kill R: unwatch every dependency, drop watchers, leave the queue.
    Later derefs return nil. Idempotent."
   [r]
-  (when (reactive-ref? r)
+  (when (reaction? r)
     (-dispose r))
   nil)
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Public sugar
 ;; ═══════════════════════════════════════════════════════════════════════════
-
-(defn ratom
-  "Create a reactive input atom — a plain clojure.lang.Atom (see the ns
-   docstring: bb cannot ship a drop-in RAtom, and none is needed; plain
-   atoms ARE the tracked inputs). Provided so (reakt/ratom x) call sites
-   port from Reagent unchanged."
-  [x]
-  (atom x))
 
 (defn derive
   "A derived reactive ref over DEPS: sugar over make-reaction whose body
@@ -562,13 +549,6 @@
    deref other reactions/cursors) inside."
   [& body]
   `(make-reaction (fn [] ~@body)))
-
-(defmacro track
-  "Like reaction, but manual (auto-run? false): caches its value between dep
-   changes, runs lazily on first deref, and self-disposes when its last
-   watcher is removed (Reagent's Track). (track f a b) wraps (f a b)."
-  [f & args]
-  `(make-reaction (fn [] (~f ~@args)) {:auto-run? false}))
 
 (defn cursor
   "A derived view over SOURCE at PATH: (get-in @source path) with the source

@@ -42,7 +42,7 @@
                               (case (rd switch)
                                 :a (rd a)
                                 :b (rd b))))]
-    (t/is (= 1 (r/run! rx)))
+    (t/is (= 1 (r/force-run! rx)))
     (t/is (= #{a switch} (set (:watching (r/reaction-state rx)))))
     (reset! b 99)
     (r/flush!)
@@ -63,7 +63,7 @@
   ;; = -gated notification end to end: identical? and structural-equal
   ;; dep writes produce no dirty flag, no queue entry, no re-run.
   (let [{:keys [rx runs ref]} (counting-rx (atom {:n 1}))]
-    (r/run! rx)
+    (r/force-run! rx)
     (swap! ref identity)
     (r/flush!)
     (t/is (= 1 @runs))
@@ -77,7 +77,7 @@
   (let [a (atom {:n 1})
         notes (atom [])
         rx (r/make-reaction #(rd a))]
-    (r/run! rx)
+    (r/force-run! rx)
     (r/watch-ref rx :w (fn [_ _ o n] (swap! notes conj [o n])))
     (reset! a {:n 2})
     (r/flush!)
@@ -99,7 +99,7 @@
                                 (when @gate
                                   (reset! x :b))
                                 v)))]
-    (r/run! rx)                       ; prime: registers the watch on x
+    (r/force-run! rx)                       ; prime: registers the watch on x
     (t/is (= 1 @runs))
     (reset! gate true)
     (reset! x :a2)                    ; dirty the reaction so the drain recomputes
@@ -145,8 +145,8 @@
         out-runs (atom 0)
         mid (r/make-reaction (fn [] (swap! mid-runs inc) (inc (rd src))))
         out (r/make-reaction (fn [] (swap! out-runs inc) (inc (rd mid))))]
-    (r/run! mid)
-    (r/run! out)
+    (r/force-run! mid)
+    (r/force-run! out)
     (reset! src 10)
     (r/flush!)
     (t/is (= 11 @mid))
@@ -161,8 +161,8 @@
         b-runs (atom 0)
         ra (r/make-reaction (fn [] (swap! a-runs inc) (* 2 (rd src))))
         rb (r/make-reaction (fn [] (swap! b-runs inc) (+ 100 (rd src))))]
-    (r/run! ra)
-    (r/run! rb)
+    (r/force-run! ra)
+    (r/force-run! rb)
     (reset! src 1)
     (r/flush!)
     (t/is (= 2 @ra))
@@ -172,7 +172,7 @@
 
 (t/deftest test-n-invalidations-collapse-to-one-run
   (let [{:keys [rx runs ref]} (counting-rx (atom 0))]
-    (r/run! rx)
+    (r/force-run! rx)
     (reset! ref 1)
     (reset! ref 2)
     (reset! ref 3)
@@ -185,7 +185,7 @@
   ;; Dirty + enqueued + disposed: the drain must skip it without error and
   ;; leave nothing stuck in the queue.
   (let [{:keys [rx runs ref]} (counting-rx (atom 1))]
-    (r/run! rx)
+    (r/force-run! rx)
     (reset! ref 2)                 ; dirty + queued
     (r/dispose! rx)
     (r/flush!)                     ; must not run the body, must not throw
@@ -196,7 +196,7 @@
   ;; A throwing entry surfaces its error AFTER the batch drained — its
   ;; siblings still ran. The thrower lands in :failed: sticky, NOT retried
   ;; by later flushes — recovery needs a new dep change or an explicit
-  ;; run!.
+  ;; force-run!.
   (let [flag (atom true)
         shared (atom 0)
         boom-runs (atom 0)
@@ -209,8 +209,8 @@
         ok (r/make-reaction (fn [] (swap! ok-runs inc) (inc (rd shared))))]
     ;; prime both with flag false so watches register
     (reset! flag false)
-    (r/run! boom)
-    (r/run! ok)
+    (r/force-run! boom)
+    (r/force-run! ok)
     (t/is (zero? @boom))
     (reset! flag true)
     (reset! shared 1)              ; queues both, boom first (registered first)
@@ -223,7 +223,7 @@
     (t/is (= 2 @boom-runs))
     ;; ...an explicit run! does:
     (reset! flag false)
-    (t/is (= 1 (r/run! boom)))
+    (t/is (= 1 (r/force-run! boom)))
     (t/is (= 3 @boom-runs))))
 
 (t/deftest test-flush-is-reentrancy-safe
@@ -234,23 +234,23 @@
         inner (r/make-reaction (fn []
                                  (swap! inner-runs inc)
                                  (rd a)))
-        _ (r/run! inner)
+        _ (r/force-run! inner)
         trigger (r/make-reaction (fn []
                                    (rd a)
                                    (r/flush!) ; no-op: the outer drain holds the lock
                                    :done))]
-    (r/run! trigger)
+    (r/force-run! trigger)
     (reset! a 2) ; queues inner + trigger
     (r/flush!)
     (t/is (= 2 @inner-runs) "initial run + one flush run — nested flush added none")
-    (t/is (= 2 (r/run! inner)))))
+    (t/is (= 2 (r/force-run! inner)))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Plain-atom interop (the pivot's core claim)
 ;; ═══════════════════════════════════════════════════════════════════════════
 
 (t/deftest test-ratom-returns-a-plain-atom
-  (let [ra (r/ratom 5)]
+  (let [ra (atom 5)]
     (t/is (instance? clojure.lang.Atom ra))
     (t/is (= 5 @ra))
     (swap! ra inc)
@@ -263,7 +263,7 @@
         set-text! #(reset! (:text %1) %2)
         runs (atom 0)
         rx (r/make-reaction (fn [] (swap! runs inc) (rd (:text record))))]
-    (r/run! rx)
+    (r/force-run! rx)
     (set-text! record "y")
     (r/flush!)
     (t/is (= "y" @rx))
@@ -282,7 +282,7 @@
         rx (r/make-reaction (fn []
                               (swap! runs inc)
                               (core/render c 20)))]
-    (r/run! rx)
+    (r/force-run! rx)
     (t/is (= 1 @runs))
     (text/text-set! c "b")
     (t/is (pos? (r/queued-count)) "component setter dirtied the enclosing reaction")
@@ -302,14 +302,14 @@
         rx (r/make-reaction (fn []
                               (swap! runs inc)
                               [(rd tracked-ref) @bare-ref]))]
-    (r/run! rx)
+    (r/force-run! rx)
     (reset! bare-ref 200)
     (r/flush!)
     (t/is (= 1 @runs) "bare read captured nothing")
     (reset! tracked-ref 2)
     (r/flush!)
     (t/is (= 2 @runs))
-    (t/is (= [2 200] (r/run! rx)) "untracked read still yields the current value")))
+    (t/is (= [2 200] (r/force-run! rx)) "untracked read still yields the current value")))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Tracks, cursors, nesting, disposal
@@ -321,7 +321,8 @@
   ;; unread track still refreshes at the next flush.
   (let [src (atom 1)
         runs (atom 0)
-        tr (r/track (fn [] (swap! runs inc) (inc (rd src))))]
+        tr (r/make-reaction (fn [] (swap! runs inc) (inc (rd src)))
+                            {:auto-run? false})]
     (t/is (zero? @runs) "creation runs nothing")
     (t/is (zero? (r/queued-count)))
     (t/is (= 2 @tr))
@@ -341,11 +342,11 @@
   (let [v (volatile! 42)
         runs (atom 0)
         rx (r/make-reaction (fn [] (swap! runs inc) [(rd v) @v]))]
-    (t/is (= [42 42] (r/run! rx)))
+    (t/is (= [42 42] (r/force-run! rx)))
     (t/is (= [] (:watching (r/reaction-state rx))) "volatile captured nothing")
     (vreset! v 43)
     (t/is (zero? (r/queued-count)))
-    (t/is (= [43 43] (r/run! rx)) "untracked read still yields current value")))
+    (t/is (= [43 43] (r/force-run! rx)) "untracked read still yields current value")))
 
 (t/deftest throwing-watcher-isolated-from-siblings-and-mutator
   ;; Watchers fire on the MUTATOR's thread (any background thread swapping
@@ -354,7 +355,7 @@
   (let [a (atom 0)
         good (atom [])
         rx (r/make-reaction #(rd a))]
-    (r/run! rx)
+    (r/force-run! rx)
     (r/watch-ref rx :bad (fn [_ _ _ _] (throw (ex-info "watcher boom" {}))))
     (r/watch-ref rx :good (fn [_ _ _o n] (swap! good conj n)))
     (t/is (= 1 (reset! a 1))
@@ -366,30 +367,30 @@
   (let [state (atom {:a {:b {:c 7}}})
         outer (r/cursor state [:a])
         inner (r/cursor outer [:b :c])]
-    (r/run! inner)
-    (t/is (= 7 (r/run! inner)))
+    (r/force-run! inner)
+    (t/is (= 7 (r/force-run! inner)))
     (swap! state assoc-in [:a :b :c] 8)
     (r/flush!)
-    (t/is (= 8 (r/run! inner)) "chained through both cursors"))
+    (t/is (= 8 (r/force-run! inner)) "chained through both cursors"))
   (let [state (atom {:whole 5})
         cur (r/cursor state [])]
-    (t/is (= {:whole 5} (r/run! cur)) "empty path = whole value")))
+    (t/is (= {:whole 5} (r/force-run! cur)) "empty path = whole value")))
 
 (t/deftest test-cursor-follows-source-and-composes
   (let [state (atom {:profile {:name "ada"}})
         name-cur (r/cursor state [:profile :name])
         shout (r/make-reaction (fn [] (str/upper-case (rd name-cur))))
-        pre-cur (do (r/run! name-cur) (r/run! name-cur))
-        pre-shout (do (r/run! shout) (r/run! shout))]
+        pre-cur (do (r/force-run! name-cur) (r/force-run! name-cur))
+        pre-shout (do (r/force-run! shout) (r/force-run! shout))]
     (t/is (= "ada" pre-cur))
     (t/is (= "ADA" pre-shout))
     (reset! state {:profile {:name "grace"}})
     (r/flush!)
-    (t/is (= "grace" (r/run! name-cur)) "cursor followed the source")
-    (t/is (= "GRACE" (r/run! shout)) "cursor-as-dep propagated through the reaction"))
+    (t/is (= "grace" (r/force-run! name-cur)) "cursor followed the source")
+    (t/is (= "GRACE" (r/force-run! shout)) "cursor-as-dep propagated through the reaction"))
   (let [state (atom {:a {:b 7}})
         cur (r/cursor state :a)]
-    (t/is (= {:b 7} (r/run! cur)) "bare-key path form")))
+    (t/is (= {:b 7} (r/force-run! cur)) "bare-key path form")))
 
 (t/deftest test-reset-in-reaction-converges
   ;; Ported from reagent's reset-in-reaction: a body writing back to its own
@@ -406,7 +407,7 @@
                                      cc2 (or (rd c2) 0)]
                                  (swap! state assoc :derived (+ cc1 cc2))
                                  nil)))]
-    (r/run! rxn)
+    (r/force-run! rxn)
     (t/is (= (:derived @state) 0))
     (swap! state assoc :data {:a 1 :b 2})
     (r/flush!)
@@ -432,7 +433,7 @@
         rnr (r/make-reaction (fn []
                                (swap! runner-runs inc)
                                (rd ref)))]
-    (r/run! rnr)
+    (r/force-run! rnr)
     (t/is (= 1 @runner-runs))
     (swap! state inc)                    ; → 2: upstream will throw
     (t/is (thrown? Exception (r/flush!)))
@@ -455,8 +456,8 @@
         inner (r/make-reaction #(rd src))
         outer-runs (atom 0)
         outer (r/make-reaction (fn [] (swap! outer-runs inc) (* 2 (rd inner))))]
-    (r/run! inner)
-    (r/run! outer)
+    (r/force-run! inner)
+    (r/force-run! outer)
     (reset! src 21)
     (r/flush!)
     (t/is (= 42 @outer))
@@ -464,7 +465,7 @@
 
 (t/deftest test-dispose-stops-tracking-and-idempotent
   (let [{:keys [rx runs ref]} (counting-rx (atom 1))]
-    (r/run! rx)
+    (r/force-run! rx)
     (r/dispose! rx)
     (r/dispose! rx)
     (reset! ref 2)
@@ -483,7 +484,7 @@
         rx (r/make-reaction (fn []
                               (swap! runs inc)
                               (* 10 (rd x))))]
-    (r/run! rx)
+    (r/force-run! rx)
     (add-watch x :killer (fn [_ _ _ _] (r/dispose! rx)))
     (try
       (reset! x 2)                   ; killer fires, then rx's own handler
@@ -491,7 +492,7 @@
     (t/is (= :disposed (:state (r/reaction-state rx))) "handler must not resurrect")
     (t/is (= 1 @runs))
     (t/is (zero? (r/queued-count)))
-    (t/is (nil? (r/run! rx)) "force-run on disposed is a no-op")
+    (t/is (nil? (r/force-run! rx)) "force-run on disposed is a no-op")
     (t/is (= 1 @runs) "still no body execution")
     ;; A later write must not re-enqueue or re-run anything.
     (reset! x 3)
@@ -500,12 +501,12 @@
     (t/is (= 1 @runs))))
 
 (t/deftest test-in-context-flag
-  (t/is (false? (r/in-context?)))
+  (t/is (false? (r/in-reaction?)))
   (let [seen (atom nil)
-        rx (r/make-reaction (fn [] (reset! seen (r/in-context?)) :ok))]
-    (r/run! rx)
+        rx (r/make-reaction (fn [] (reset! seen (r/in-reaction?)) :ok))]
+    (r/force-run! rx)
     (t/is (true? @seen))
-    (t/is (false? (r/in-context?)) "context unwound after the run")))
+    (t/is (false? (r/in-reaction?)) "context unwound after the run")))
 
 (t/deftest test-body-exception-propagates-and-reaction-stays-retryable
   (let [fail? (atom true)
@@ -513,10 +514,10 @@
         rx (r/make-reaction (fn []
                               (swap! runs inc)
                               (if @fail? (throw (ex-info "boom" {})) :ok)))]
-    (t/is (thrown? Exception (r/run! rx)))
-    (t/is (thrown? Exception (r/run! rx)) "explicit run! retries")
+    (t/is (thrown? Exception (r/force-run! rx)))
+    (t/is (thrown? Exception (r/force-run! rx)) "explicit run! retries")
     (reset! fail? false)
-    (t/is (= :ok (r/run! rx)))
+    (t/is (= :ok (r/force-run! rx)))
     (t/is (= 3 @runs))))
 
 (t/deftest test-caught-error-sticky-until-change
@@ -530,7 +531,7 @@
                               (if (= :bad (rd src))
                                 (throw (ex-info "bad state" {}))
                                 (str "ok:" (rd src)))))]
-    (r/run! rx)
+    (r/force-run! rx)
     (reset! src :bad)
     (t/is (thrown? Exception (r/flush!)) "the error surfaces from the drain")
     (let [after-fail @runs]          ; the failing run itself counts
@@ -554,13 +555,13 @@
                               (rd src))
                             {:auto-run? (fn [reaction]
                                           (swap! fired conj reaction))})]
-    (r/run! rx)
+    (r/force-run! rx)
     (reset! src 2)
     (t/is (= 1 (count @fired)) "callback invoked once per change")
     (t/is (identical? rx (first @fired)) "with the reaction itself")
     (t/is (zero? (r/queued-count)) "nothing queued — callback owns scheduling")
     (t/is (= 1 @body-runs) "engine did not re-run the body")
-    (t/is (= 2 (r/run! rx)) "explicit run! still brings it current")
+    (t/is (= 2 (r/force-run! rx)) "explicit run! still brings it current")
     (t/is (= 2 @body-runs))))
 
 (t/deftest test-on-dispose-and-branch-auto-dispose
@@ -585,7 +586,7 @@
                             :on-dispose (fn [_] (reset! c-disposed true))})
         res (atom nil)
         cns (r/make-reaction (fn [] (reset! res (rd c))))]
-    (r/run! cns)
+    (r/force-run! cns)
     (t/is (= @res 1))
     (t/is (= 1 @b-runs))
     (reset! a -1)
@@ -604,7 +605,7 @@
   (let [a (atom 0)
         seen (atom [])
         rx (r/make-reaction #(rd a))]
-    (r/run! rx)
+    (r/force-run! rx)
     (r/add-on-dispose! rx (fn [reaction] (swap! seen conj [:first reaction])))
     (r/add-on-dispose! rx (fn [_] (swap! seen conj :second)))
     (r/dispose! rx)
@@ -629,7 +630,7 @@
                                        (swap! counter inc)
                                        (rd src))))
                   runs)]
-    (doseq [rx rxs] (r/run! rx))
+    (doseq [rx rxs] (r/force-run! rx))
     (reset! src 1)
     (r/flush!)
     (doseq [i (range 20)]
@@ -641,7 +642,7 @@
   (let [a (atom 0)
         notes (atom [])
         rx (r/make-reaction #(rd a))]
-    (r/run! rx)
+    (r/force-run! rx)
     (r/watch-ref a :plain (fn [_ _ o n] (swap! notes conj [:atom o n])))
     (r/watch-ref rx :rx (fn [_ _ o n] (swap! notes conj [:reaction o n])))
     (reset! a 1)
@@ -792,7 +793,7 @@
         rx (r/make-reaction (fn []
                               (swap! runs inc)
                               (str (rd a))))]
-    (r/run! rx)
+    (r/force-run! rx)
     (t/is (= "1" @rx))
     (t/is (= 1 @runs) "idle deref hands back the cached value")
     (r/invalidate! rx)

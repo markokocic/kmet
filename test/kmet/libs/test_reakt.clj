@@ -52,7 +52,9 @@
   (testing "manual track caches and disposes with its last watcher"
     (let [a (atom 1)
           runs (atom 0)
-          tr (r/track (fn [v] (swap! runs inc) v) @a)]
+          v0 @a
+          tr (r/make-reaction (fn [] (swap! runs inc) v0)
+                              {:auto-run? false})]
       (is (zero? @runs) "no eager run")
       (is (= 1 @tr))
       (is (= 1 @runs))
@@ -83,5 +85,5 @@
       (is (thrown? Exception @rx) "second deref rethrows captured error")
       (is (= 1 @runs) "body did not re-execute")
       (reset! fail? false)
-      (r/run! rx)
+      (r/force-run! rx)
       (is (= :ok @rx) "run! retries through sticky failure"))))
