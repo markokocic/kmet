@@ -78,7 +78,13 @@ map untouched — `{:overlay ... :overlay-options {:anchor :center :width
 
 ## Shipped extensions
 
+The extension authoring guide — the full `kmet.extension` API contract —
+lives in [`extensions.md`](extensions.md); keep it up to date whenever the
+contract changes.
+
 | Extension | Description |
 |-----------|-------------|
 | `tools.clj` | Interactive `/tools` command to enable/disable tools, with selection persisted across session reloads and branch navigation (port of pi's example tools extension) |
+| `deepseek-peak.clj` | `/deepseek-peak` — DeepSeek API peak/off-peak hours in your local time zone, shown as a `/session`-style chat info panel (flash fallback in headless mode) |
+| `clojure/` | Clojure-aware editing tools ported from clojure-mcp: `clojure_edit`, `clojure_edit_replace_sexp`, `clojure_paren_repair`, plus the `clojure-edit` skill — see `clojure/README.md` |
 | `mcp-adapter/` | MCP server access via one lazy `mcp` proxy tool: stdio + streamable-HTTP/SSE transports, EDN config (`~/.kmet/agent/mcp.edn` + `.kmet/mcp.edn`), OAuth (PKCE loopback + device flow), direct tools, `/mcp` command (port of pi-mcp-adapter — see `mcp-adapter/README.md`) |

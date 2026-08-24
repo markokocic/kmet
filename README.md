@@ -241,7 +241,10 @@ Create EDN theme files in `~/.kmet/agent/themes/`. See `examples/themes/` for fo
   namespace defining `(defn init [api])` (and optionally `(defn shutdown [api])`),
   depending only on `kmet.extension`. A manifest dir declares `{:name :entry
   :files}` — its own source deps. Loaded at startup, reloadable via `/reload`, and
-  unloadable at runtime; unload runs shutdown + deregisters everything
+  unloadable at runtime; unload runs shutdown + deregisters everything.
+  Shipped opt-in extensions live in [`extensions/`](extensions/)
+  ([usage](extensions/README.md)); writing your own:
+  [`extensions/extensions.md`](extensions/extensions.md)
 
 ## Development
 

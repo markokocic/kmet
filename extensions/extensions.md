@@ -5,6 +5,12 @@ CLI flags, custom message/entry renderers, UI contributions, and more. Extension
 are **Clojure namespaces** with an explicit contract — they depend on exactly one
 namespace, `kmet.extension`, and are loaded, reloaded and unloaded at runtime.
 
+This document is the authoritative guide for writing extensions. Keep it up to
+date whenever the described behavior changes.
+
+Related docs: [`README.md`](README.md) (loading rules, layout, building UI) and
+the shipped examples in `extensions/` (see the catalog table there).
+
 ## The contract
 
 An extension is a Clojure namespace defining an `init` function. The loader
@@ -83,7 +89,7 @@ ln -s "$PWD/extensions/tools.clj" ~/.kmet/agent/extensions/tools.clj
 
 Single-file extensions ship without tests (they must stay small and
 self-contained); directory-based extensions are separate projects with
-their own tests. See `extensions/README.md`.
+their own tests. See [`README.md`](README.md).
 
 ### Single-file extensions
 
@@ -488,7 +494,12 @@ expandPromptTemplates; kmet defaults to no expansion).
 ### UI
 
 The `:ui` capability map dispatches through the runtime registry — calls are
-inert before the interactive layout exists and in headless/print mode.
+inert before the interactive layout exists and in headless/print mode. There
+are **no host-built dialogs**: dialogs/selectors/editors are components you
+compose yourself from the shared `kmet.tui.*` layer and mount with
+`ui-custom`; theme objects come from `kmet.tui.theme` directly
+(`get-theme`/`get-all-themes`/`get-theme-by-name`/`get-current-theme`), not
+from the api.
 
 ```clojure
 (ext/ui-set-status api "my-ext" "loaded")   ; footer status; nil clears
@@ -496,14 +507,12 @@ inert before the interactive layout exists and in headless/print mode.
 (ext/ui-set-widget api "my-widget" ["line 1" "line 2"] {:placement :above-editor})
 (ext/ui-set-widget api "my-widget" nil)          ; removes the widget (disposes it)
 
-;; dialogs return a promise — deref on a worker thread
-(ext/ui-select api "Pick" [{:value "a" :label "A"}])
-(ext/ui-confirm api "Sure?" "Proceed?")
-(ext/ui-input api "Name" "placeholder")
+;; append an :info message to the chat history (the /session display style):
+;; LABEL renders bracketed above CONTENT; part of the live transcript,
+;; never sent to the LLM, not persisted across restarts
+(ext/ui-chat-info api "Label" "content")
 
 (ext/ui-set-theme api "light")
-(ext/ui-get-theme api)
-(ext/ui-get-all-themes api)
 (ext/ui-set-editor-text api "text")
 (ext/ui-get-editor-text api)
 (ext/ui-paste-to-editor api "text")
@@ -519,15 +528,21 @@ inert before the interactive layout exists and in headless/print mode.
 (ext/ui-on-terminal-input api (fn [data] nil-or-{:consume true :data d}))
 (ext/ui-set-tools-expanded api true)
 (ext/ui-get-tools-expanded api)
-(ext/ui-editor api "Title" "prefill")   ; modal editor dialog → promise of text, nil when dismissed (nil headless)
-(ext/ui-get-theme-by-name api "dark")     ; real Theme record, nil for unknown names (pi: getTheme)
 
-;; ui-custom's factory may return the component OR a promise of one (deref'd
-;; with a 5s timeout); when the component carries a :dispose fn, it is
-;; called when the dialog closes (pi: dispose?()) — same for widgets,
-;; custom footer/header and the :reset path (extension reload)
-(ext/ui-custom api (fn [tui theme kb close] (comp-with-dispose)) {:overlay false})
+;; mount your own component — THE way to show any dialog/panel. The factory
+;; receives (tui theme keybindings close); close delivers its result to the
+;; returned promise and dismisses the dialog. Opts: {:overlay bool
+;; :overlay-options {...} :on-handle fn}; {:anchor :center :width 82} is a
+;; typical overlay-options map. The factory may return the component OR a
+;; promise of one (deref'd with a 5s timeout); when the component carries a
+;; :dispose fn, it is called when the dialog closes (pi: dispose?()) — same
+;; for widgets, custom footer/header and the :reset path (extension reload).
+(ext/ui-custom api (fn [tui theme kb close] (my-selector comp close))
+                {:overlay true :overlay-options {:anchor :center :width 82}})
 ```
+
+Headless/print mode has no layout: check `(:mode ctx)` in command/event
+handlers (`:interactive` vs headless) and fall back to `ui-notify`.
 
 ### Models
 
@@ -624,14 +639,15 @@ registered:
     (is (= 1 (count (get-in @state [:handlers :session-start]))))))
 ```
 
-State shape: `:commands` `:tools` `:handlers` `:flags` `:entry-renderers`
-`:message-renderers` `:tool-call-hooks` `:tool-result-hooks` `:input-hooks`
+State shape: `:commands` `:tools` `:handlers` `:flags` `:shortcuts`
+`:markdown-transformers` `:entry-renderers` `:message-renderers`
+`:tool-call-hooks` `:tool-result-hooks` `:input-hooks`
 `:before-agent-start-hooks` `:ui-calls` `:emitted` `:model-calls`. Every
 registration function returns a deregister fn; the nullable api's deregister
 fns remove the corresponding registration.
 
 For runtime integration tests, `load-extension!` + `unload-extension!` against
-the real registries (see `test/kmet/app/test_extensions.clj`).
+the real registries (see `../test/kmet/app/test_extensions.clj`).
 
 ## Example
 

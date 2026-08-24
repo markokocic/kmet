@@ -113,12 +113,13 @@ Editing guidelines pulled on demand when working with Clojure files. Covers:
 
 ## Dependencies
 
-Declared in `deps.edn`, resolved per-extension in isolated SCI context:
+Declared in `deps.edn`, resolved per-extension in an isolated context:
 
-- rewrite-clj 1.1.47 — zipper-based Clojure parsing
-- cljfmt 0.13.1 — code formatting
-- edamame 1.5.35 — delimiter error detection
-- parinferish 0.8.0 — delimiter repair (pure Clojure; parinfer is a JVM lib and can't run in SCI contexts)
+- cljfmt 0.16.5 — code formatting (Maven rewrite-clj excluded; the
+  bb-bundled adapted copy is used)
+- parinferish 0.8.0 — delimiter repair (pure Clojure; parinfer is a JVM lib
+  and can't run in SCI contexts)
+- edamame — delimiter error detection; bundled with Babashka
 
 ## Skills
 

@@ -97,6 +97,11 @@ src/kmet/
     │           with any behavior change they describe
     └── components/ — TUI leaf components (Container, Box, Text, ...)
 
+extensions/ — Shipped opt-in extensions (single .clj files or manifest dirs;
+              pi: examples/extensions). Extension authoring guide (the full
+              kmet.extension contract): extensions/extensions.md — MUST be
+              kept up to date with any behavior it describes
+
 Root-level files: core.clj (CLI entry, arg parsing, mode dispatch), config.clj
 (configuration loading), debug.clj (debug/error logging), extension.clj (the
 extension contract root: namespaces extensions depend on, init/shutdown, api).
