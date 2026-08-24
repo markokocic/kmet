@@ -97,6 +97,7 @@
 (def chat-history-append-streaming-text! chat-history/chat-history-append-streaming-text!)
 (def chat-history-append-thinking-text! chat-history/chat-history-append-thinking-text!)
 (def chat-history-finalize-streaming! chat-history/chat-history-finalize-streaming!)
+(def chat-history-mark-streaming-tool-calls! chat-history/chat-history-mark-streaming-tool-calls!)
 (def chat-history-finalize-thinking! chat-history/chat-history-finalize-thinking!)
 (def chat-history-get-streaming-text chat-history/chat-history-get-streaming-text)
 (def chat-history-streaming-empty? chat-history/chat-history-streaming-empty?)

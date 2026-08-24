@@ -74,6 +74,7 @@
               [text-atom thinking-text-atom
                output-pad-atom hide-thinking-atom hidden-label-atom
                streaming-atom
+               tool-calls-atom          ;; message carries tool calls (pi: hasToolCalls)
                rendered-text-lines-atom
                rendered-thinking-lines-atom
                rendered-text-atom        ;; text source of the cached lines (stale check)
@@ -92,6 +93,9 @@
             text (let [t (str/trim (or @text-atom ""))] (when (seq t) t))
             thinking (let [t (str/trim (or @thinking-text-atom ""))] (when (seq t) t))
             streaming? (boolean @streaming-atom)
+            ;; Read in the track! body: marking tool calls on a finalized
+            ;; empty message invalidates the placeholder away.
+            tool-calls? (boolean @tool-calls-atom)
             ;; Read in the track! body so a flip of the (possibly SHARED)
             ;; flag/label atoms invalidates this cache like any other input;
             ;; theme-sub is the shared palette subscription (Stage 5).
@@ -116,16 +120,20 @@
             text-lines @rendered-text-lines-atom
             thinking-lines @rendered-thinking-lines-atom]
         ;; Pi-style: no visible content → render nothing while STREAMING (the
-        ;; working indicator covers the wait). A FINALIZED empty response (the
-        ;; provider returned a silent :stop completion — no text, no thinking,
-        ;; no tool calls) renders a muted placeholder instead of a blank
-        ;; bubble, so the user isn't left staring at nothing after the run
-        ;; settled.
+        ;; working indicator covers the wait) and render nothing for a FINALIZED
+        ;; response that carried tool calls — its ToolExecutionComponents are
+        ;; the visuals (pi: hasToolCalls; loop-continue assistant messages are
+        ;; usually tool-call-only and must not bubble). Only a genuinely silent
+        ;; final stop (:stop with no text/thinking/tool calls) renders the muted
+        ;; placeholder, with the same top pad-y=1 spacer as content-bearing
+        ;; messages so it doesn't glue to the box above.
         (if (and text-empty? thinking-empty?)
-          (when-not streaming?
+          (when-not (or streaming? tool-calls?)
             (let [pad-x @output-pad-atom
-                  left-pad (apply str (repeat pad-x \space))]
-              [(str left-pad (theme/dim (theme/fg theme :muted "(no response)")))]))
+                  left-pad (apply str (repeat pad-x \space))
+                  pad-line (apply str (repeat width \space))]
+              [pad-line
+               (str left-pad (theme/dim (theme/fg theme :muted "(no response)")))]))
           ;; Normal: render with reactive cache + top pad-y=1 only (Pi-style Spacer(1) equivalent)
           (let [pad-y 1
                 empty (apply str (repeat width \space))
@@ -174,7 +182,8 @@
   "THEME is no longer taken: styling subscribes to ui.subs/theme-sub and
    follows palette changes live (Stage 5)."
   [& {:keys [text thinking text-atom thinking-atom output-pad
-             hide-thinking? hidden-label thinking-hidden-atom hidden-label-atom]
+             hide-thinking? hidden-label thinking-hidden-atom hidden-label-atom
+             tool-calls?]
       :or {text "" thinking ""
            output-pad 1 hide-thinking? false}}]
   ;; Optional SHARED flag atoms: when the chat history passes its own
@@ -196,6 +205,7 @@
                                               :hidden-label-atom (or hidden-label-atom
                                                                      (atom hidden-label))
                                               :streaming-atom (atom false)
+                                              :tool-calls-atom (atom (boolean tool-calls?))
                                               :rendered-text-lines-atom (atom [])
                                               :rendered-thinking-lines-atom (atom [])
                                               :rendered-text-atom (atom nil)
@@ -224,6 +234,14 @@
    :is-streaming context and forces a reflow on the next render."
   [comp streaming?]
   (reset! (:streaming-atom comp) (boolean streaming?)))
+
+(defn assistant-message-set-tool-calls!
+  "Flag the message as carrying tool calls (pi: hasToolCalls) — a finalized
+   tool-call-only response renders nothing (its ToolExecutionComponents are
+   the visuals), suppressing the '(no response)' placeholder. Flipping the
+   atom invalidates the reactive cache like any other tracked input."
+  [comp tool-calls?]
+  (reset! (:tool-calls-atom comp) (boolean tool-calls?)))
 
 (defsetter assistant-message-set-hide-thinking! :hide-thinking-atom comp hide?
   (when-let [w @(:last-render-width-atom comp)]

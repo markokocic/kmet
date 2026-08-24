@@ -1337,7 +1337,11 @@
           (do
             (ui/chat-history-add-message! (:chat-history cs)
                                           (cond-> {:role role :content (content-of e)}
-                                            (= role :assistant) (assoc :thinking (:thinking e))))
+                                            (= role :assistant) (assoc :thinking (:thinking e)
+                                                                       ;; replayed tool-call-only
+                                                                       ;; messages render no
+                                                                       ;; '(no response)' bubble
+                                                                       :tool-calls (:tool-calls e))))
             ;; Pi: create a ToolExecutionComponent per tool call declared in
             ;; the assistant message (name + args from the call — the same
             ;; fields the live :tool-execution-start event carries), then
@@ -2497,12 +2501,17 @@
   (fn [evt]
     (case (:type evt)
       :tool-execution-start
-      ;; Pi: create pending component once, update in place
+      ;; Pi: create pending component once, update in place.
+      ;; The streaming placeholder finalizes here (the tool box lands after
+      ;; it) — mark the message as tool-call-bearing FIRST so a tool-call-only
+      ;; assistant message stays invisible instead of bubbling '(no response)'
+      ;; (pi: hasToolCalls; loop-continue turns are usually tool-call-only).
       (let [msg {:role :tool
                  :name (:tool-name evt)
                  :args (:args evt {})
                  :content ""
                  :is-error false}]
+        (ui/chat-history-mark-streaming-tool-calls! chat-history)
         (ui/chat-history-finalize-streaming! chat-history)
         (let [comp (ui/chat-history-add-message! chat-history msg)]
           ;; Store tool call ID for correlation

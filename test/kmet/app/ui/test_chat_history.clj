@@ -111,9 +111,9 @@
     (macros/set-frame-hook! #(swap! fired inc))
     (try
       (ch/chat-history-append-streaming-text! ch "Hello")
-      (t/is (= 1 @fired) "first append scheduled exactly one frame")
+      (is (= 1 @fired) "first append scheduled exactly one frame")
       (ch/chat-history-append-streaming-text! ch " world")
-      (t/is (= 2 @fired) "second append scheduled another frame")
+      (is (= 2 @fired) "second append scheduled another frame")
       (is (= "Hello world" (ch/chat-history-get-streaming-text ch)))
       (finally
         (macros/set-frame-hook! nil)))))

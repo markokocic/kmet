@@ -198,6 +198,7 @@
                   ;; created them) — one home, owned by the data layer (§3.2)
                     :text-atom (:text-atom msg)
                     :thinking-atom (:thinking-atom msg)
+                    :tool-calls? (boolean (seq (:tool-calls msg)))
                     :output-pad output-pad
                     :thinking-hidden-atom thinking-hidden-atom
                     :hidden-label-atom hidden-label-atom)
@@ -362,6 +363,16 @@
   (let [msg (or @(:streaming-atom ch)
                 (chat-history-start-streaming! ch))]
     (swap! (:thinking-atom msg) str text)))
+
+(defn chat-history-mark-streaming-tool-calls!
+  "Mark the current streaming assistant message as carrying tool calls
+   (pi: hasToolCalls). Call BEFORE chat-history-finalize-streaming! when the
+   message's first tool starts executing: a tool-call-only assistant message
+   must not settle into the '(no response)' placeholder — its tool components
+   are the visuals. No-op without a streaming message."
+  [ch]
+  (when-let [msg @(:streaming-atom ch)]
+    (am/assistant-message-set-tool-calls! (:component msg) true)))
 
 (defn chat-history-finalize-streaming!
   "Finalize the current streaming message: materialize the live content

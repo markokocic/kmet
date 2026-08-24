@@ -94,8 +94,8 @@
   (testing "finalized empty message renders a muted placeholder (not a blank bubble)"
     (let [c (am/make-assistant-message)
           lines (mapv strip-ansi (core/render c 40))]
-      (is (= [" (no response)"] lines)
-          "finalized empty response shows the placeholder (with the output pad)"))))
+      (is (= [(apply str (repeat 40 \space)) " (no response)"] lines)
+          "finalized empty response shows the placeholder (top spacer + output pad)"))))
 
 (deftest test-empty-message-streaming
   (testing "streaming empty message renders nothing (working indicator covers the wait)"
@@ -113,8 +113,23 @@
 (deftest test-whitespace-only-renders-nothing
   (testing "whitespace-only text/thinking finalizes to the placeholder (pi: content.text.trim() check)"
     (let [c (am/make-assistant-message :text "   \n  ")]
-      (is (= [" (no response)"] (mapv strip-ansi (core/render c 40)))
+      (is (= [(apply str (repeat 40 \space)) " (no response)"]
+             (mapv strip-ansi (core/render c 40)))
           "whitespace-only content is an empty response → placeholder"))))
+
+(deftest test-tool-calls-only-renders-nothing
+  (testing "a finalized tool-call-only message renders nothing — its tool\n            components are the visuals, no '(no response)' bubble"
+    ;; constructor flag (replayed sessions: assistant entry carries :tool-calls)
+    (let [c (am/make-assistant-message :tool-calls? true)]
+      (is (zero? (count (core/render c 40))) "tool-call-only renders []"))
+    ;; live flag flip after finalization (:tool-execution-start path) —
+    ;; including flipping AFTER a cached placeholder render (track!
+    ;; watches the flag atom, so the cache invalidates and re-renders)
+    (let [c (am/make-assistant-message)]
+      (is (= [" (no response)"] (rest (mapv strip-ansi (core/render c 40))))
+          "pre-mark render shows the placeholder")
+      (am/assistant-message-set-tool-calls! c true)
+      (is (zero? (count (core/render c 40))) "late-marked tool-call-only renders []"))))
 
 (deftest test-text-trimmed
   (testing "leading/trailing whitespace is trimmed before wrap (pi: text.trim())"
