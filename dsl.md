@@ -28,7 +28,15 @@ that shipped noted inline. Implemented so far:
   assistant content lives on the message map (`assistant-message-append-text!`
   retired), tool/bash injected request-render-fns retired, theme is a
   shared def'd reaction (`kmet.app.ui.subs/theme-sub`) and the per-kind
-  set-theme walks are gone.
+  set-theme walks are gone. **Stage 6 (item 17) complete**: dormant API
+  retired — `user-message-set-text!`, `custom-message-set-label!`/
+  `set-content!` (content is construction-fixed; collapsible variants
+  remain mutable), bash getters, tool render-fn setters +
+  `get-tool-call-id`, `chat-history-add-messages!`/`clear-info-msg!`/
+  `set-max-lines!`, `pending-messages-set-hint!`,
+  `footer-set-provider!` — plus the last safely-retirable request-render
+  pokes (handle-cancel branches, share-session kick-off,
+  `:set-active-tools`).
 
 ---
 
@@ -1243,11 +1251,13 @@ scheduler comes later, so nothing can freeze.
     implementable again, a tracked atom type could return — as sugar,
     not as a premise.)
 
-17. **Retire leftovers** — dormant setters with no live callers
-    (`user-message-set-text!`, `custom-message-set-content!`/
-    `set-label!`), unused adapter ctors, any remaining manual
-    request-render next to converted trees (follow-up/dequeue/cancel
-    paths still carry conservative pokes).
+17. **Retire leftovers** — DONE: fourteen dead fns removed across seven
+    component namespaces plus their facade exports (list in the header
+    note); handle-cancel/share-session/`:set-active-tools` pokes retired
+    where every preceding mutation self-schedules. Kept: follow-up /
+    dequeue / login / session-switch pokes — each precedes an UNCACHED
+    editor write or an untracked `messages-atom` add that nothing else
+    schedules (§3.4 carve-outs).
 
 ### The transcript, explicitly
 

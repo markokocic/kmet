@@ -18,7 +18,6 @@
 
 ;; UserMessageComponent
 (def make-user-message user-message/make-user-message)
-(def user-message-set-text! user-message/user-message-set-text!)
 (def user-message-set-output-pad! user-message/user-message-set-output-pad!)
 
 ;; AssistantMessageComponent — content lives in the message map's data
@@ -31,19 +30,15 @@
 (def tool-execution-set-content! tool-execution/tool-execution-set-content!)
 (def tool-execution-set-error! tool-execution/tool-execution-set-error!)
 (def tool-execution-set-expanded! tool-execution/tool-execution-set-expanded!)
-(def tool-execution-set-render-call-fn! tool-execution/tool-execution-set-render-call-fn!)
-(def tool-execution-set-render-result-fn! tool-execution/tool-execution-set-render-result-fn!)
 (def tool-execution-set-truncation! tool-execution/tool-execution-set-truncation!)
 (def tool-execution-set-details! tool-execution/tool-execution-set-details!)
 (def tool-execution-set-images! tool-execution/tool-execution-set-images!)
 (def tool-execution-set-tool-call-id! tool-execution/tool-execution-set-tool-call-id!)
-(def tool-execution-get-tool-call-id tool-execution/tool-execution-get-tool-call-id)
 (def tool-execution-set-args-complete! tool-execution/tool-execution-set-args-complete!)
 (def tool-execution-mark-execution-started! tool-execution/tool-execution-mark-execution-started!)
 
 ;; CustomMessageComponent
 (def make-custom-message custom-message/make-custom-message)
-(def custom-message-set-content! custom-message/custom-message-set-content!)
 (def custom-message-set-collapsible-content! custom-message/custom-message-set-collapsible-content!)
 (def custom-message-collapsible? custom-message/custom-message-collapsible?)
 (def custom-message-set-expanded! custom-message/custom-message-set-expanded!)
@@ -53,14 +48,11 @@
 (def bash-execution-set-expanded! bash-execution/bash-execution-set-expanded!)
 (def bash-execution-append-output! bash-execution/bash-execution-append-output!)
 (def bash-execution-set-complete! bash-execution/bash-execution-set-complete!)
-(def bash-execution-get-output bash-execution/bash-execution-get-output)
-(def bash-execution-get-command bash-execution/bash-execution-get-command)
 
 ;; Footer
 (def make-footer footer/make-footer)
 (def footer-set-extension-status! footer/footer-set-extension-status!)
 (def footer-set-theme! footer/footer-set-theme!)
-(def footer-set-provider! footer/footer-set-provider!)
 (def footer-set-auto-compact! footer/footer-set-auto-compact!)
 
 ;; FooterDataProvider
@@ -78,7 +70,6 @@
 ;; PendingMessages
 (def make-pending-messages pending-messages/make-pending-messages)
 (def pending-messages-set-queues! pending-messages/pending-messages-set-queues!)
-(def pending-messages-set-hint! pending-messages/pending-messages-set-hint!)
 
 ;; LoadedResources
 (def make-loaded-resources loaded-resources/make-loaded-resources)
@@ -100,7 +91,6 @@
 ;; ChatHistoryComponent
 (def make-chat-history chat-history/make-chat-history)
 (def chat-history-add-message! chat-history/chat-history-add-message!)
-(def chat-history-add-messages! chat-history/chat-history-add-messages!)
 (def chat-history-remove-streaming-placeholder! chat-history/chat-history-remove-streaming-placeholder!)
 (def chat-history-insert-before-streaming! chat-history/chat-history-insert-before-streaming!)
 (def chat-history-start-streaming! chat-history/chat-history-start-streaming!)
@@ -113,9 +103,7 @@
 (def chat-history-clear! chat-history/chat-history-clear!)
 (def chat-history-rebuild! chat-history/chat-history-rebuild!)
 (def chat-history-get-messages chat-history/chat-history-get-messages)
-(def chat-history-set-max-lines! chat-history/chat-history-set-max-lines!)
 (def chat-history-set-info-msg! chat-history/chat-history-set-info-msg!)
-(def chat-history-clear-info-msg! chat-history/chat-history-clear-info-msg!)
 (def chat-history-toggle-tool-expanded! chat-history/chat-history-toggle-tool-expanded!)
 (def chat-history-toggle-thinking-hidden! chat-history/chat-history-toggle-thinking-hidden!)
 (def chat-history-set-thinking-hidden! chat-history/chat-history-set-thinking-hidden!)

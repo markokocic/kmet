@@ -45,8 +45,3 @@
   (reset! (:follow-up-atom comp) (vec follow-up))
   nil)
 
-(defn pending-messages-set-hint!
-  "Set the dequeue key hint text."
-  [comp hint]
-  (reset! (:hint-atom comp) hint)
-  nil)

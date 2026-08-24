@@ -187,12 +187,6 @@
   (reset! (:theme-atom comp) theme)
   (protocols/invalidate comp))
 
-(defn footer-set-provider!
-  "Swap the FooterDataProvider (session/cwd changes, new session)."
-  [comp provider]
-  (reset! (:provider-atom comp) provider)
-  (protocols/invalidate comp))
-
 (defn footer-set-extension-status!
   "Set/clear a keyed extension status shown on footer line 3 (pi:
    FooterDataProvider.setExtensionStatus). Statuses render verbatim,

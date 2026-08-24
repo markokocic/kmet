@@ -86,16 +86,9 @@
                                                        :padding-x 0)))))
 
 ;; ─── Public API (defined before make- to avoid forward ref) ──────────────
-
-(defsetter custom-message-set-label! :label-atom comp label
-  (rebuild-content! comp))
-
-(defsetter custom-message-set-content! :content-atom comp content
-  ;; Setting plain content clears any collapsible variants
-  (reset! (:collapsed-content-atom comp) nil)
-  (reset! (:expanded-content-atom comp) nil)
-  (reset! (:expanded-atom comp) false)
-  (rebuild-content! comp))
+;; Label and plain content are fixed at construction (the atoms are the
+;; single data home, read by persistence); only the collapsible variants
+;; mutate afterwards.
 
 (defn custom-message-set-collapsible-content!
   "Set collapsed/expanded content variants (pi: ExpandableText).

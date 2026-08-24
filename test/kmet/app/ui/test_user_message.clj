@@ -34,13 +34,6 @@
       (is (every? #(re-find #"\u001b\[48" %) lines)
           "All lines should have background ANSI codes"))))
 
-(deftest test-set-text
-  (testing "set-text! updates content"
-    (let [c (um/make-user-message :text "original")]
-      (is (some #(re-find #"original" %) (mapv strip-ansi (core/render c 40))))
-      (um/user-message-set-text! c "updated")
-      (is (some #(re-find #"updated" %) (mapv strip-ansi (core/render c 40)))))))
-
 (deftest test-theme-sub-retheme
   (testing "swapping the shared theme atom re-themes the message on next render (Stage 5)"
     (let [c (um/make-user-message :text "hello")

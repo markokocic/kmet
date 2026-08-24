@@ -60,21 +60,6 @@
       (is (= content-idx 2)
           "box top pad, content line — no blank line between them"))))
 
-(deftest test-set-label
-  (testing "set-label! updates label"
-    (let [c (cm/make-custom-message :label "old" :content "text")]
-      (cm/custom-message-set-label! c "new")
-      (let [plain (mapv strip-ansi (core/render c 40))]
-        (is (some #(re-find #"\[new\]" %) plain))
-        (is (not-any? #(re-find #"\[old\]" %) plain))))))
-
-(deftest test-set-content
-  (testing "set-content! updates content"
-    (let [c (cm/make-custom-message :label "info" :content "old")]
-      (cm/custom-message-set-content! c "new content")
-      (let [plain (mapv strip-ansi (core/render c 40))]
-        (is (some #(re-find #"new content" %) plain))))))
-
 (deftest test-theme-sub-retheme
   (testing "swapping the shared theme atom re-themes the message on next render (Stage 5)"
     (let [c (cm/make-custom-message :label "test" :content "test")

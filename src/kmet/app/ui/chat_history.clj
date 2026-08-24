@@ -268,12 +268,6 @@
       (swap! (:messages-atom ch) conj (assoc msg :component comp)))
     comp))
 
-(defn chat-history-add-messages!
-  "Add multiple messages at once."
-  [ch msgs]
-  (doseq [m msgs]
-    (chat-history-add-message! ch m)))
-
 (defn chat-history-insert-before-streaming!
   "Insert a message immediately before the current streaming message.
    Used for before-agent-start injected messages, which are input context
@@ -427,11 +421,6 @@
       (reset! (:info-comp-atom ch) comp))
     (reset! (:info-comp-atom ch) nil)))
 
-(defn chat-history-clear-info-msg!
-  "Clear the top info message."
-  [ch]
-  (chat-history-set-info-msg! ch nil))
-
 ;; ─── Toggles ─────────────────────────────────────────────────────────────
 
 (defn- kind-of
@@ -561,10 +550,6 @@
                (cond-> (dissoc m :component :streaming? :text-atom :thinking-atom)
                  text-atom (assoc :content @text-atom)
                  thinking-atom (assoc :thinking @thinking-atom))))))
-
-(defn chat-history-set-max-lines!
-  "No-op: Pi architecture doesn't use max-lines (terminal handles viewport)."
-  [_ch _n] nil)
 
 (defn- message-comps
   "All message components plus the info banner component."

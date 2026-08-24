@@ -38,10 +38,8 @@
   (invalidate [_this]
     (protocols/invalidate @box)))
 
-;; ─── Public API (defined before make-user-message to avoid forward ref) ───
-
-(defsetter user-message-set-text! :text-atom comp text
-  (md/markdown-set-text! @(:markdown-comp comp) text))
+;; ─── Theme application (defined before make-user-message; forward-declared
+;; ─── for the render method's apply-once use)
 
 (defn- apply-theme!
   "Apply THEME to the derived structures (box bg-fn + markdown tint). Runs at
@@ -98,10 +96,11 @@
                                          :output-pad-atom (atom output-pad)
                                          :cache-atom (atom nil)})]
     (box/box-add-child b m)
-    ;; Set initial text; theme applies on the first render from theme-sub
-    ;; (apply-once pattern) — but seed it here too so a pre-render snapshot
-    ;; is styled correctly
-    (user-message-set-text! comp text)
+    ;; Set initial text (content is fixed at construction — user messages
+    ;; never mutate); theme applies on the first render from theme-sub
+    ;; (apply-once pattern), seeded here so pre-render snapshots are styled
+    (reset! (:text-atom comp) text)
+    (md/markdown-set-text! m text)
     (let [thm (theme/get-current-theme)]
       (reset! (:applied-theme-atom comp) thm)
       (apply-theme! comp thm))

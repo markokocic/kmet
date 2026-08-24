@@ -12,7 +12,7 @@
             [kmet.app.keybindings :as app-kb]
             [kmet.tui.keybindings :as tui-kb]
             [kmet.app.ui.subs :as s]
-            [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]
+            [kmet.tui.macros :refer [track! defsetter defcomponent]]
             [clojure.string :as str]))
 
 ;; ─── Preview line limit ────────────────────────────────────────────────────
@@ -276,17 +276,4 @@
     (future-cancel t)
     (reset! (:ticker-atom comp) nil)))
 
-(defn bash-execution-get-output
-  "Get the raw accumulated output string."
-  [comp]
-  (str/join "\n" @(:output-lines-atom comp)))
-
-(defgetter bash-execution-get-command :command-atom comp)
-
-(defn bash-execution-is-running?
-  "Returns true if the bash command is still running."
-  [comp]
-  (= :running @(:status-atom comp)))
-
 ;; nil if still running or cancelled
-(defgetter bash-execution-get-exit-code :exit-code-atom comp)

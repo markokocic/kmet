@@ -363,7 +363,6 @@
         indicator (spinner/make-spinner :text "Creating gist..." :active true)
         done (promise)]
     (show-status-indicator! cs :share indicator)
-    (tui/tui-request-render (:tui cs))
     ;; render driver: tick the spinner while the gist creation runs
     (future
       (while (not (realized? done))
@@ -2357,14 +2356,14 @@
     ;; abortCompaction). The compaction-end event clears the indicator and
     ;; reports the cancellation.
     (debug/log "compaction cancelled by user")
-    (reset! (:signal @(:agent-state cs)) true)
-    (tui/tui-request-render (:tui cs)))
+    ;; no visual change here — compaction-end's clear-status-indicator!
+    ;; schedules the frame when the abort lands
+    (reset! (:signal @(:agent-state cs)) true))
   (when @(:bash-running? cs)
     (debug/log "bash command cancelled by user")
     (reset! (:bash-signal cs) true)
     (reset! (:bash-running? cs) false)
-    (update-footer! cs)
-    (tui/tui-request-render (:tui cs)))
+    (update-footer! cs))
   (when @(:running-turn? cs)
     (debug/log "agent turn cancelled by user")
     (stop-anim-timer! cs)
@@ -2392,8 +2391,7 @@
          (str "Restored " restored " queued message"
               (when (> restored 1) "s") " to editor"))))
     (reset! (:running-turn? cs) false)
-    (update-footer! cs)
-    (tui/tui-request-render (:tui cs))))
+    (update-footer! cs)))
 
 ;; ─── External editor (pi: handleOpenExternalEditor) ────────────────────────
 
@@ -3584,8 +3582,9 @@
          :get-active-tools (fn []
                              (agent/get-active-tools @(:agent-state cs)))
          :set-active-tools (fn [names]
+                             ;; agent state only — no display depends on
+                             ;; this synchronously
                              (agent/set-active-tools! @(:agent-state cs) names)
-                             (tui/tui-request-render t)
                              nil)
          ;; Extension context (pi: ExtensionContext) — captures the live
          ;; layout/agent state per call; the headless default in

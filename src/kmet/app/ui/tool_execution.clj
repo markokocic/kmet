@@ -12,7 +12,7 @@
             [kmet.app.ui.tool-renderers :as renderers]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.image :as ic]
-            [kmet.tui.macros :refer [track! defsetter defgetter defcomponent]]))
+            [kmet.tui.macros :refer [track! defsetter defcomponent]]))
 
 ;; ─── Renderer dispatch ─────────────────────────────────────────────────────
 ;; Built-in renderer functions live in kmet.app.ui.tool-renderers so supported
@@ -249,8 +249,6 @@
     (reset! (:started-at-atom comp) (System/currentTimeMillis)))
   (protocols/invalidate comp))
 
-(defgetter tool-execution-get-tool-call-id :tool-call-id-atom comp)
-
 (defn tool-execution-set-args-complete!
   "Mark that all tool arguments have been received.
    Pi: setArgsComplete() — affects render context :args-complete."
@@ -266,7 +264,3 @@
     (reset! (:image-data-atom comp) image-data)
     (protocols/invalidate comp)))
 
-(defsetter tool-execution-set-render-call-fn! :custom-render-call-atom comp f
-  (protocols/invalidate comp))
-(defsetter tool-execution-set-render-result-fn! :custom-render-result-atom comp f
-  (protocols/invalidate comp))
