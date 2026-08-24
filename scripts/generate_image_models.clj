@@ -14,7 +14,8 @@
             [babashka.http-client :as http]
             [cheshire.core :as json]
             [clojure.edn :as edn]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [kmet.libs.edn-writer :as edn-w]))
 
 (def openrouter-base-url "https://openrouter.ai/api/v1")
 (def catalog-path
@@ -78,33 +79,16 @@
     (parse-openrouter-image-models (json/parse-string (:body response) true) strict)))
 
 (defn- write-catalog!
-  "Deterministic EDN for the committed catalog: one model per entry, sorted
-   by id, one :generated-at timestamp."
+  "Deterministic EDN for the committed catalog via kmet.libs.edn-writer —
+   the same canonical key order / normalized numbers / escaping as the
+   provider catalogs (no hand-built string buffer). Sorted by id, one
+   :generated-at timestamp."
   [models]
-  (let [sb (StringBuilder.)
-        _ (.append sb "{:schema-version 1\n")
-        _ (.append sb " :generated-at \"")
-        _ (.append sb (str (java.time.Instant/now)))
-        _ (.append sb "\"\n")
-        _ (.append sb " :provider {:id :openrouter\n")
-        _ (.append sb "            :name \"OpenRouter\"}\n")
-        _ (.append sb " :models\n")
-        _ (.append sb "{")]   ; cljfmt-canonical: no space after the brace
-    (doseq [m (sort-by :id models)]
-      (.append sb (format "\"%s\"\n" (:id m)))
-      (.append sb (format "  {:id \"%s\"\n" (:id m)))
-      (.append sb (format "   :name \"%s\"\n" (str/replace (:name m) "\"" "\\\"")))
-      (.append sb (format "   :api :%s\n" (name (:api m))))
-      (.append sb (format "   :provider :%s\n" (name (:provider m))))
-      (.append sb (format "   :base-url \"%s\"\n" (:base-url m)))
-      (.append sb (format "   :input [%s]\n" (str/join " " (map #(str ":" (name %)) (:input m)))))
-      (.append sb (format "   :output [%s]\n" (str/join " " (map #(str ":" (name %)) (:output m)))))
-      (.append sb (format "   :cost {:input %g :output %g :cache-read %g :cache-write %g}}\n"
-                          (:input (:cost m)) (:output (:cost m))
-                          (:cache-read (:cost m)) (:cache-write (:cost m)))))
-    ;; cljfmt-canonical tail: models map and top-level map close inline
-    (.append sb "}}\n")
-    (spit catalog-path (str sb)))
+  (let [blob {:schema-version 1
+              :generated-at (str (java.time.Instant/now))
+              :provider {:id :openrouter :name "OpenRouter"}
+              :models (into (sorted-map) (map (fn [m] [(:id m) m]) models))}]
+    (spit catalog-path (str (edn-w/render blob) "\n")))
   (println (str "Generated " catalog-path " (" (count models) " models)")))
 
 (defn validate-committed!
