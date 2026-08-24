@@ -94,11 +94,11 @@
                        api-type      ;; wire api override (:openai-completions | :openai-responses | :anthropic-messages | :google-generative-ai)
                        steering      ;; atom of vector of queued steer messages
                        follow-up     ;; atom of vector of queued follow-up messages
-                       steering-mode ;; atom of :all | :one-at-a-time (drain mode)
-                       follow-up-mode ;; atom of :all | :one-at-a-time (drain mode)
                        active-call      ;; atom of {:promise p :partials f} while an LLM call is in flight (for cancel)
-                       max-retries      ;; atom of int: max auto-retry attempts on transient LLM errors (pi default 3)
-                       base-delay-ms    ;; atom of int: exponential backoff base in ms (pi default 2000)
+                       cfg              ;; atom of a config MAP — runtime-tunable knobs, replaced wholesale:
+                                        ;;   {:max-retries int :base-delay-ms int :http-idle-timeout-ms int
+                                        ;;    :steering-mode :all|:one-at-a-time :follow-up-mode :all|:one-at-a-time
+                                        ;;    :auto-compact bool :context-window int-or-nil}
                        retry-count      ;; atom of int: retries performed for the in-flight LLM call
                        before-tool-call ;; atom of (fn [ctx]) → {:block true :reason} | nil
                        after-tool-call  ;; atom of (fn [ctx]) → override map | nil
@@ -109,12 +109,10 @@
                        get-api-key            ;; atom of (fn [provider]) → key | nil (dynamic auth)
                        scoped-models          ;; atom of vector of "provider/id" full ids (scoped list for cycling; pi: session.scopedModels)
                        overflow-recovered     ;; atom of bool: context-overflow compacted once this run
-                       auto-compact           ;; atom of bool: proactive compaction on/off (pi: autoCompact)
                        compact-token-threshold ;; int or nil: compact when estimated tokens exceed this
                        keep-recent-tokens     ;; int: cut-point budget in tokens (pi: keepRecentTokens, default 20000)
                        compacting?           ;; atom of bool: a compaction is in progress (escape cancels it)
-                       pending-bash          ;; atom of vector of bash entries queued while streaming
-                       http-idle-timeout-ms]) ;; atom of int: SSE idle timeout in ms (0 = disabled, pi: httpIdleTimeoutMs)
+                       pending-bash])         ;; atom of vector of bash entries queued while streaming
 
 (defn make-agent-state
   "Create a new agent state.
@@ -159,10 +157,14 @@ Be precise and concise in your responses."}}]
                     :steering (atom [])
                     :follow-up (atom [])
                     :steering-mode (atom steering-mode)
-                    :follow-up-mode (atom follow-up-mode)
                     :active-call (atom nil)
-                    :max-retries (atom max-retries)
-                    :base-delay-ms (atom base-delay-ms)
+                    :cfg (atom {:max-retries max-retries
+                                :base-delay-ms base-delay-ms
+                                :http-idle-timeout-ms http-idle-timeout-ms
+                                :steering-mode steering-mode
+                                :follow-up-mode follow-up-mode
+                                :auto-compact (boolean auto-compact)
+                                :context-window context-window})
                     :retry-count (atom 0)
                     :before-tool-call (atom before-tool-call)
                     :after-tool-call (atom after-tool-call)
@@ -173,14 +175,11 @@ Be precise and concise in your responses."}}]
                     :get-api-key (atom get-api-key)
                     :scoped-models (atom scoped-models)
                     :overflow-recovered (atom false)
-                    :auto-compact (atom (boolean auto-compact))
                     :compact-token-threshold compact-token-threshold
-                    :context-window (atom context-window)
                     :compact-reserve-tokens compact-reserve-tokens
                     :keep-recent-tokens keep-recent-tokens
                     :compacting? (atom false)
-                    :pending-bash (atom [])
-                    :http-idle-timeout-ms (atom http-idle-timeout-ms)}))
+                    :pending-bash (atom [])}))
 
 ;; ─── Active tools (pi: ctx.setActiveTools) ──────────────────────
 
@@ -849,7 +848,7 @@ Be precise and concise in your responses."}}]
       :messages messages
       :tools (active-tools agent)
       :signal (:signal agent)
-      :idle-timeout-ms @(:http-idle-timeout-ms agent)
+      :idle-timeout-ms (:http-idle-timeout-ms @(:cfg agent))
       :thinking @(:thinking agent)
       :session-id (some-> (:session agent) :id)
       :on-text (fn [t]
@@ -1040,7 +1039,7 @@ Be precise and concise in your responses."}}]
           :base-url (:base-url ep)
           :messages msgs
           :signal signal
-          :idle-timeout-ms @(:http-idle-timeout-ms agent)
+          :idle-timeout-ms (:http-idle-timeout-ms @(:cfg agent))
           :session-id (some-> (:session agent) :id)
           :cache-retention :none
           :on-text (fn [t] (swap! text-buf str t))
@@ -1089,7 +1088,7 @@ Be precise and concise in your responses."}}]
           :base-url (:base-url ep)
           :messages msgs
           :signal signal
-          :idle-timeout-ms @(:http-idle-timeout-ms agent)
+          :idle-timeout-ms (:http-idle-timeout-ms @(:cfg agent))
           :session-id (some-> (:session agent) :id)
           :cache-retention :none
           :on-text (fn [t] (swap! text-buf str t))
@@ -1201,11 +1200,11 @@ Be precise and concise in your responses."}}]
    always available. Returns true when compaction happened."
   [agent]
   ;; nil session OR auto-compact off → no proactive compaction
-  (if-let [sess (and @(:auto-compact agent) (:session agent))]
+  (if-let [sess (and (:auto-compact @(:cfg agent)) (:session agent))]
     (let [context (session/build-context sess)
           branch (session/get-branch sess)
           token-threshold (:compact-token-threshold agent)
-          window @(:context-window agent)
+          window (:context-window @(:cfg agent))
           reserve (:compact-reserve-tokens agent)
           window-reserve (when window (- window reserve))
           ;; Measure the context that would be sent, not the whole file:
@@ -1319,7 +1318,7 @@ Be precise and concise in your responses."}}]
    before the total deadline. 0 (or an unset value) means no total deadline
    (pi: timeoutMs ?? httpIdleTimeoutMs, 0 → effectively disabled)."
   [agent]
-  (let [idle (or @(:http-idle-timeout-ms agent) 0)]
+  (let [idle (or (:http-idle-timeout-ms @(:cfg agent)) 0)]
     (if (pos? idle)
       (+ idle 30000)
       Integer/MAX_VALUE)))
@@ -1424,7 +1423,7 @@ Be precise and concise in your responses."}}]
                                         {:aborted true}) ;; cancelled — exit quietly
                                     {:settled t})
                                   (let [steer-msgs (drain-queue! (:steering agent)
-                                                                 @(:steering-mode agent))]
+                                                                 (:steering-mode @(:cfg agent)))]
                                     (doseq [m steer-msgs]
                                       (add-user-message! agent m))
                                       ;; Consumed messages left the queue — refresh the
@@ -1475,7 +1474,7 @@ Be precise and concise in your responses."}}]
                                                     ;; message from agent state while
                                                     ;; keeping it in the file)
                                                     _ (record-abandoned-attempt! agent result :error)
-                                                    max-retries @(:max-retries agent)]
+                                                    max-retries (:max-retries @(:cfg agent))]
                                                 (cond
                                                   ;; Context overflow → compact once, then retry
                                                   ;; (pi: overflow is compaction territory, not auto-retry)
@@ -1491,7 +1490,7 @@ Be precise and concise in your responses."}}]
                                                        (retryable-error? err))
                                                   ;; Auto-retry with exponential backoff (pi: _prepareRetry)
                                                   (let [attempt (inc @(:retry-count agent))
-                                                        delay-ms (* @(:base-delay-ms agent)
+                                                        delay-ms (* (:base-delay-ms @(:cfg agent))
                                                                     (long (Math/pow 2 (dec attempt))))]
                                                     (reset! (:retry-count agent) attempt)
                                                     (emit agent {:type :auto-retry-start
@@ -1574,7 +1573,7 @@ Be precise and concise in your responses."}}]
                       (let [turn' (:settled inner)
                             ;; Outer: poll follow-up queue
                             follow-ups (drain-queue! (:follow-up agent)
-                                                     @(:follow-up-mode agent))]
+                                                     (:follow-up-mode @(:cfg agent)))]
                         (if (seq follow-ups)
                           (do (doseq [m follow-ups]
                                 ;; strings are user messages; maps are
@@ -1728,12 +1727,12 @@ Be precise and concise in your responses."}}]
   "Toggle proactive compaction live (pi: setAutoCompact); overflow recovery
    is unaffected."
   [agent enabled?]
-  (reset! (:auto-compact agent) (boolean enabled?)))
+  (swap! (:cfg agent) assoc :auto-compact (boolean enabled?)))
 
 (defn set-http-idle-timeout-ms!
   "Set the SSE idle timeout live (pi: setHttpIdleTimeoutMs); 0 disables."
   [agent ms]
-  (reset! (:http-idle-timeout-ms agent) (long ms)))
+  (swap! (:cfg agent) assoc :http-idle-timeout-ms (long ms)))
 
 (declare switch-thinking-level set-thinking-level!)
 

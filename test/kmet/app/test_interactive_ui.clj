@@ -508,7 +508,7 @@
                     dock/mount! (capture-mount! sl-ref)
                     tui/tui-set-focus (fn [_ _])
                     tui/tui-request-render (fn [_])]
-        (t/is (= 3 @(:max-retries ag)) "default retry wired at startup")
+        (t/is (= 3 (:max-retries @(:cfg ag))) "default retry wired at startup")
         ((:handler (commands/find-command "settings")) cs "")
         (let [sl @sl-ref]
           ;; rows 0..13: auto-compact steering follow-up http-idle cache-miss
@@ -517,17 +517,17 @@
           (dotimes [_ 11]
             (protocols/handle-input sl "\u001b[B")) ;; down → auto-retry
           (protocols/handle-input sl "\r") ;; enter — auto-retry true -> false
-          (t/is (= 0 @(:max-retries ag)) "disabled retry gates max-retries to 0")
+          (t/is (= 0 (:max-retries @(:cfg ag))) "disabled retry gates max-retries to 0")
           (t/is (= [[:retry :enabled] false] @saved) "auto-retry persisted")
           (protocols/handle-input sl "\r") ;; enter — auto-retry back on
-          (t/is (= 3 @(:max-retries ag)) "re-enabled retry restores max-retries")
+          (t/is (= 3 (:max-retries @(:cfg ag))) "re-enabled retry restores max-retries")
           (protocols/handle-input sl "\u001b[B") ;; down → max-retries
           (protocols/handle-input sl "\r") ;; enter — 3 -> 5
-          (t/is (= 5 @(:max-retries ag)) "max-retries applies live")
+          (t/is (= 5 (:max-retries @(:cfg ag))) "max-retries applies live")
           (t/is (= [[:retry :max-retries] 5] @saved) "max-retries persisted")
           (protocols/handle-input sl "\u001b[B") ;; down → base-delay
           (protocols/handle-input sl "\r") ;; enter — 2000 -> 4000
-          (t/is (= 4000 @(:base-delay-ms ag)) "base delay applies live")
+          (t/is (= 4000 (:base-delay-ms @(:cfg ag))) "base delay applies live")
           (t/is (= [[:retry :base-delay-ms] 4000] @saved) "base delay persisted"))))))
 
 ;; ─── /theme command ───────────────────────────────────────────────────────

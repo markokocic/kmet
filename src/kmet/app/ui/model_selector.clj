@@ -46,7 +46,7 @@
     (fdp/fdp-set-thinking! fdp @(:thinking ag))
     (fdp/fdp-set-reasoning! fdp (boolean (:reasoning m)))
     (fdp/fdp-set-context-window! fdp window)
-    (reset! (:context-window ag) window)
+    (swap! (:cfg ag) assoc :context-window window)
     ;; No explicit footer invalidation: the footer's track-deps cover the
     ;; fdp atoms — the setters above schedule the frame reactively.
     (tui/tui-request-render (:tui cs))

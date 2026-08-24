@@ -1018,31 +1018,31 @@
 
 (t/deftest test-loop-queue-modes-default
   (let [agent (loop/make-agent-state)]
-    (t/is (= :all @(:steering-mode agent)))
-    (t/is (= :all @(:follow-up-mode agent)))))
+    (t/is (= :all (:steering-mode @(:cfg agent))))
+    (t/is (= :all (:follow-up-mode @(:cfg agent))))))
 
 (t/deftest test-loop-queue-mode-setters
   ;; /settings applies queue modes + idle timeout live (pi: setSteeringMode /
   ;; setFollowUpMode / setHttpIdleTimeoutMs)
   (let [agent (loop/make-agent-state)]
-    (reset! (:steering-mode agent) :one-at-a-time)
-    (reset! (:follow-up-mode agent) :one-at-a-time)
-    (t/is (= :one-at-a-time @(:steering-mode agent)))
-    (t/is (= :one-at-a-time @(:follow-up-mode agent)))
+    (swap! (:cfg agent) assoc :steering-mode :one-at-a-time)
+    (swap! (:cfg agent) assoc :follow-up-mode :one-at-a-time)
+    (t/is (= :one-at-a-time (:steering-mode @(:cfg agent))))
+    (t/is (= :one-at-a-time (:follow-up-mode @(:cfg agent))))
     (loop/set-http-idle-timeout-ms! agent 60000)
-    (t/is (= 60000 @(:http-idle-timeout-ms agent)))))
+    (t/is (= 60000 (:http-idle-timeout-ms @(:cfg agent))))))
 
 (t/deftest test-loop-auto-compact-flag
   ;; pi: autoCompact — the flag gates proactive compaction, defaults on,
   ;; and is settable live (/settings row)
   (let [agent (loop/make-agent-state)]
-    (t/is (true? @(:auto-compact agent)))
+    (t/is (true? (:auto-compact @(:cfg agent))))
     (loop/set-auto-compact! agent false)
-    (t/is (false? @(:auto-compact agent)))
+    (t/is (false? (:auto-compact @(:cfg agent))))
     (t/is (false? (loop/maybe-compact! agent))
           "no session → no proactive compaction regardless"))
   (let [agent (loop/make-agent-state :auto-compact false)]
-    (t/is (false? @(:auto-compact agent)))))
+    (t/is (false? (:auto-compact @(:cfg agent))))))
 
 (t/deftest test-loop-followup-one-at-a-time
   (let [calls (atom 0)
@@ -1777,9 +1777,9 @@
     (t/is (= [] @(:scoped-models agent)))
     (t/is (false? @(:overflow-recovered agent)))
     (t/is (nil? (:compact-token-threshold agent)))
-    (t/is (nil? @(:context-window agent)))
+    (t/is (nil? (:context-window @(:cfg agent))))
     (t/is (= 16384 (:compact-reserve-tokens agent)) "pi default reserveTokens")
-    (t/is (= 3 @(:max-retries agent)) "pi default maxRetries")))
+    (t/is (= 3 (:max-retries @(:cfg agent))) "pi default maxRetries")))
 
 (defn- make-test-provider
   "A minimal test provider with models IDS (pi-shaped Model records)."
@@ -1968,12 +1968,12 @@
 
 (t/deftest test-loop-retry-setters
   (let [agent (loop/make-agent-state)]
-    (t/is (= 3 @(:max-retries agent)))
-    (t/is (= 2000 @(:base-delay-ms agent)))
-    (reset! (:max-retries agent) 0)
-    (reset! (:base-delay-ms agent) 500)
-    (t/is (= 0 @(:max-retries agent)) "0 disables auto-retry")
-    (t/is (= 500 @(:base-delay-ms agent)))))
+    (t/is (= 3 (:max-retries @(:cfg agent))))
+    (t/is (= 2000 (:base-delay-ms @(:cfg agent))))
+    (swap! (:cfg agent) assoc :max-retries 0)
+    (swap! (:cfg agent) assoc :base-delay-ms 500)
+    (t/is (= 0 (:max-retries @(:cfg agent))) "0 disables auto-retry")
+    (t/is (= 500 (:base-delay-ms @(:cfg agent))))))
 
 (t/deftest test-loop-set-model-emits-model-select
   (let [events (atom [])

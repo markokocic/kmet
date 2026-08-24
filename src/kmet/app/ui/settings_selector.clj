@@ -72,19 +72,19 @@
                     300000)
         apply-retry! (fn []
                        (let [r @retry-atom]
-                         (reset! (:max-retries ag) (if (:enabled r) (:max-retries r) 0))
-                         (reset! (:base-delay-ms ag) (:base-delay-ms r))))
+                         (swap! (:cfg ag) assoc :max-retries (if (:enabled r) (:max-retries r) 0))
+                         (swap! (:cfg ag) assoc :base-delay-ms (:base-delay-ms r))))
         save-retry! (fn [path value]
                       (cfg/save-setting! path value)
                       (apply-retry!))
-        base-items [(bool-row :auto-compact "Auto-compact" @(:auto-compact ag))
+        base-items [(bool-row :auto-compact "Auto-compact" (:auto-compact @(:cfg ag)))
                     {:id :steering-mode
                      :label "Steering mode"
-                     :value (name @(:steering-mode ag))
+                     :value (name (:steering-mode @(:cfg ag)))
                      :values ["one-at-a-time" "all"]}
                     {:id :follow-up-mode
                      :label "Follow-up mode"
-                     :value (name @(:follow-up-mode ag))
+                     :value (name (:follow-up-mode @(:cfg ag)))
                      :values ["one-at-a-time" "all"]}
                     {:id :http-idle-timeout
                      :label "HTTP idle timeout"
@@ -155,11 +155,11 @@
                                (ui/footer-set-auto-compact! f on?)))
                            :steering-mode
                            (let [mode (keyword value)]
-                             (reset! (:steering-mode ag) mode)
+                             (swap! (:cfg ag) assoc :steering-mode mode)
                              (cfg/save-setting! [:steering-mode] mode))
                            :follow-up-mode
                            (let [mode (keyword value)]
-                             (reset! (:follow-up-mode ag) mode)
+                             (swap! (:cfg ag) assoc :follow-up-mode mode)
                              (cfg/save-setting! [:follow-up-mode] mode))
                            :http-idle-timeout
                            (let [ms (:ms (some #(when (= value (:label %)) %)
