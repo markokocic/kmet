@@ -292,8 +292,13 @@ next dep change clears them.
 
 Coverage contract — tracked reads are exactly:
 (a) component render bodies via `track!` (automatic),
-(b) explicit `macros/tracked-deref` calls in hand-written bodies,
+(b) explicit `reakt/tracked-deref` calls in hand-written bodies,
 (c) nested reaction/cursor derefs (automatic).
+
+Layering note: `kmet.libs.reakt` has no TUI dependencies, so
+`kmet.app.*` (non-ui) code may require it directly for derived state and
+reactions outside any component — only `kmet.tui.*` itself is off-limits
+to the app layer.
 A bare `@plain-atom` inside a hand-written reaction body is UNTRACKED —
 correct under the batched fallback (§2.5), just not narrow.
 

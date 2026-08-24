@@ -204,7 +204,6 @@
                                   :cache-atom (atom nil)})))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
-;; Pi: set-content! and set-error! manage timing internally.
 
 (defn tool-execution-set-error!
   "Mark errored; pi: error marks execution ended (stamps ended-at once) and
@@ -219,8 +218,7 @@
     (when-let [interval (:interval state)]
       (future-cancel interval))
     (when (contains? state :interval)
-      (reset! (:renderer-state-atom comp) (dissoc state :interval))))
-  (protocols/invalidate comp))
+      (reset! (:renderer-state-atom comp) (dissoc state :interval)))))
 
 (defn tool-execution-set-output-pad!
   "Rebuild the box with the new horizontal padding (render sets the bg-fn)."
@@ -229,8 +227,7 @@
   (let [b (box/make-box n 1 nil)
         inner @(:inner-container comp)]
     (box/box-add-child b inner)
-    (reset! (:box comp) b))
-  (protocols/invalidate comp))
+    (reset! (:box comp) b)))
 
 (defn tool-execution-mark-execution-started!
   "Mark that tool execution has started (Pi: markExecutionStarted()).
@@ -242,8 +239,7 @@
    a duration: startedAt stays undefined, updateResult never touches it)."
   [comp]
   (when (nil? @(:started-at-atom comp))
-    (reset! (:started-at-atom comp) (System/currentTimeMillis)))
-  (protocols/invalidate comp))
+    (reset! (:started-at-atom comp) (System/currentTimeMillis))))
 
 (defn tool-execution-set-args-complete!
   "Mark that all tool arguments have been received.
@@ -257,6 +253,5 @@
    Stores raw image data; ImageComponents are built at render time."
   [comp images]
   (let [image-data (mapv (fn [img] {:data (:data img) :mime-type (:mime-type img)}) images)]
-    (reset! (:image-data-atom comp) image-data)
-    (protocols/invalidate comp)))
+    (reset! (:image-data-atom comp) image-data)))
 

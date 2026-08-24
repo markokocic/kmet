@@ -1,5 +1,5 @@
-(ns kmet.tui.test-reagent
-  "Headless tests for the reactive engine (kmet.libs.reakt) exercised through
+(ns kmet.tui.test-reakt-integration
+  "Integration tests: kmet.libs.reakt exercised through
    the TUI harness (dsl.md Stage 1).
    No terminal, no sleeps: dependency discovery, watch set-diff, =-gated
    notification, queue draining, plain-atom interop, component-body capture

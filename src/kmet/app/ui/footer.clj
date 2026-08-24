@@ -13,7 +13,6 @@
    No separator line — the two content lines are the footer (pi parity)."
   (:require [clojure.string :as str]
             [babashka.fs :as fs]
-            [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.app.ui.footer-data-provider :as fdp]
@@ -199,10 +198,10 @@
 ;; ─── Public API ────────────────────────────────────────────────────────────
 
 (defn footer-set-theme!
-  "Switch the footer's theme (live re-theme on theme changes)."
+  "Switch the footer's theme (live re-theme on theme changes). The reset
+   schedules the frame itself — theme-atom is a tracked dep of the render."
   [comp theme]
-  (reset! (:theme-atom comp) theme)
-  (protocols/invalidate comp))
+  (reset! (:theme-atom comp) theme))
 
 (defn footer-set-extension-status!
   "Set/clear a keyed extension status shown on footer line 3 (pi:

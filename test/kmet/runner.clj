@@ -58,7 +58,7 @@
     kmet.tui.test-autocomplete
     kmet.tui.test-core
     kmet.libs.test-reakt
-    kmet.tui.test-reagent
+    kmet.tui.test-reakt-integration
     kmet.tui.test-compute
     kmet.tui.test-hiccup
     kmet.tui.test-dispose

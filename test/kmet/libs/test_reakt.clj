@@ -3,7 +3,7 @@
    discovery across branches, =-gated watch notification, cursors, manual
    tracks, disposal semantics, and the changed? gate. (The engine's
    integration with component render bodies is covered in
-   kmet.tui.test-reagent / test-compute / test-track.)"
+   kmet.tui.test-reakt-integration / test-compute / test-track.)"
   (:require [clojure.test :as t :refer [deftest is testing]]
             [kmet.libs.reakt :as r]))
 
