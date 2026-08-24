@@ -460,6 +460,32 @@
       (t/is (identical? box1 (deref ref))
             "structural prop change keeps the container instance"))))
 
+(t/deftest string-children-survive-second-pass
+  ;; Stage 3 review find: a matched ::string item fell into the passthrough
+  ;; branch of reuse-or-build, which installed a NIL child (the parsed
+  ;; string has no :c) — the text silently vanished on every pass after
+  ;; the first. Strings are display leaves: rebuild on change, keep when
+  ;; equal.
+  (let [r (h/root (fn [_] [:container [:v-stack "hello"]]))]
+    (t/is (str/includes? (str/join "\n" (core/render r 40)) "hello")
+          "first pass renders")
+    (t/is (str/includes? (str/join "\n" (core/render r 40)) "hello")
+          "second pass keeps the string child")))
+
+(t/deftest string-children-update-and-computed-strings-rebuild
+  (let [txt (atom "hello")
+        r (h/root (fn [_] [:v-stack
+                           "static"
+                           (when-some [t @txt] [:text {:padding-x 0} t])
+                           (str "count-" (count @txt))]))]
+    (core/render r 40)
+    (reset! txt "hi!")
+    (let [lines (str/join "\n" (core/render r 40))]
+      (t/is (str/includes? lines "static") "unchanged sibling kept")
+      (t/is (str/includes? lines "hi!") "text element updated")
+      (t/is (str/includes? lines "count-3") "computed string rebuilt")
+      (t/is (not (str/includes? lines "count-5")) "stale computed string gone"))))
+
 (t/deftest bare-ref-as-primary-value-throws
   ;; [:widget (h/ref)] missing the props map — every other child position
   ;; rejects refs; the primary slot must not swallow one either

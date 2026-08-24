@@ -611,6 +611,16 @@
           (-fill-ref! r w)
           (remember-ref! w r))
         (keep w w))
+      ;; ::string — a display leaf like a host leaf: rebuild when the text
+      ;; changed (the parsed item has no :c; falling through to the
+      ;; passthrough below would install a nil child), keep otherwise
+      ::string
+      (let [prev-props (:props (stamped-meta (:c prev)))]
+        (if (= (:props d) prev-props)
+          (do (bump! :reuses)
+              (keep (:c prev) (:c prev)))
+          (do (retire-item! prev)
+              {:item (construct-item d) :retire nil})))
       ;; ::record / ::entry — passthrough, take the DESIRED payload (the
       ;; bucket matched structically; the tree's own object is canonical)
       {:item {:kind (:kind d) :mkey (:mkey d) :key (:key d) :ref (:ref d)
