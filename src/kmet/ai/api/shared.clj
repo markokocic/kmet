@@ -684,6 +684,10 @@
    stop-reason)."
   [{:keys [on-text on-thinking on-tool-call on-done on-error on-usage]} model-record]
   (let [stop-reason (atom nil)
+        stop-reason-error (atom nil) ;; pi output.errorMessage — the
+                                     ;; provider's specific finish-reason
+                                     ;; error text, kept alongside an :error
+                                     ;; stop-reason
         errored? (atom false)]
     [(fn [event]
        (case (:type event)
@@ -697,17 +701,25 @@
          :tool-call-args (when on-tool-call
                            (on-tool-call {:arguments (:arguments event)
                                           :index (:index event)}))
-         :done (compare-and-set! stop-reason nil (:stop-reason event))
+         :done (let [sr (:stop-reason event)]
+                 (when (compare-and-set! stop-reason nil sr)
+                   (when (= :error sr)
+                     (reset! stop-reason-error (:error-message event)))))
          :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
          :error (do (reset! errored? true)
                     (when on-error (on-error (:message event))))
          nil))
      (fn [cancelled?]
-       (when (and on-done
-                  (some? @stop-reason)
-                  (not @errored?)
-                  (not cancelled?))
-         (on-done @stop-reason)))]))
+       (let [sr @stop-reason]
+         (when (and (= :error sr) (not @errored?) on-error)
+           (on-error (or @stop-reason-error
+                         (str "Provider stopped with: " (name sr)))))
+         (when (and on-done
+                    (some? sr)
+                    (not= :error sr)
+                    (not @errored?)
+                    (not cancelled?))
+           (on-done sr))))]))
 
 (def network-exception-classes
   "JVM exception classes indicating a transport/network failure (connect,

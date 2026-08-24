@@ -70,6 +70,11 @@
             ;; provider usage (footer token counts / cost never update — pi
             ;; resolves its stream only after the final chunk).
             stop-reason (atom nil)
+            stop-reason-error (atom nil) ;; pi output.errorMessage — the
+                                        ;; provider's specific finish_reason
+                                        ;; error text (content_filter /
+                                        ;; network_error / unknown), kept
+                                        ;; alongside the :error stop-reason
             errored? (atom false)]
         (sse/process-openai-stream response
                                    (fn [event]
@@ -84,7 +89,10 @@
                                        :tool-call-args (when on-tool-call
                                                          (on-tool-call {:arguments (:arguments event)
                                                                         :index (:index event)}))
-                                       :done (compare-and-set! stop-reason nil (:stop-reason event))
+                                       :done (let [sr (:stop-reason event)]
+                                               (when (compare-and-set! stop-reason nil sr)
+                                                 (when (= :error sr)
+                                                   (reset! stop-reason-error (:error-message event)))))
                                        :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
                                        :error (do (reset! errored? true)
                                                   (when on-error (on-error (:message event))))
@@ -94,12 +102,21 @@
                                    (fn [] (proxy/abort-stream! response)))
         ;; stream fully consumed — the trailing usage chunk (if any) was
         ;; dispatched; emit the deferred terminal done now (unless the run
-        ;; was cancelled or an error already surfaced)
-        (when (and on-done
-                   (some? @stop-reason)
-                   (not @errored?)
-                   (not (and signal @signal)))
-          (on-done @stop-reason))
+        ;; was cancelled or an error already surfaced). An :error
+        ;; stop-reason (content_filter / network_error / unknown — pi
+        ;; mapStopReason) is NOT a normal completion: surface it via
+        ;; on-error so the loop's retry/error path engages (pi pushes
+        ;; {type: "error"} for these instead of done).
+        (let [sr @stop-reason]
+          (when (and (= :error sr) (not @errored?) on-error)
+            (on-error (or @stop-reason-error
+                          (str "Provider stopped with: " (name sr)))))
+          (when (and on-done
+                     (some? sr)
+                     (not= :error sr)
+                     (not @errored?)
+                     (not (and signal @signal)))
+            (on-done sr)))
         (proxy/finish-curl! response signal on-error))
       (catch Exception e
         (when on-error (on-error (transport-error-message e)))))))

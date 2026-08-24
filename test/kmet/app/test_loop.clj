@@ -1618,6 +1618,34 @@
     (t/is (= [:user :assistant] (mapv :role (loop/get-context agent)))
           "the empty assistant entry is recorded like any other")))
 
+(t/deftest test-loop-error-stop-reason-folds-to-error
+  ;; pi mapStopReason parity: a provider-delivered :error stop-reason
+  ;; (content_filter / network_error / unknown) must NOT be recorded as a
+  ;; normal empty completion. The loop folds it into :error so the retry
+  ;; machinery and the user-visible error path engage. Here it arrives via
+  ;; on-done (defensive — openai-completions already routes it to
+  ;; on-error); the same fold applies.
+  (let [calls (atom 0)
+        errors (atom [])
+        agent (loop/make-agent-state :max-retries 0)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (swap! calls inc)
+                      (when-let [on-done (:on-done opts)]
+                        (on-done :error))
+                      :done))]
+      @(loop/run-agent-turn agent {:message "hi"
+                                   :on-done (fn [_])
+                                   :on-error (fn [e] (swap! errors conj e))}))
+    (t/is (= 1 @calls) "no auto-retry (max-retries 0)")
+    (t/is (= 1 (count @errors)) "the error surfaces to the UI")
+    (t/is (= "Provider stopped with: error" (first @errors)))
+    (t/is (= :error (loop/get-status agent)) "the run ends in :error")
+    (t/is (empty? (filterv #(= :assistant (:role %)) (loop/get-context agent)))
+          "the errored attempt is excluded from the live context")))
+
 (t/deftest test-loop-auto-retry-on-network-error
   ;; Regression: a connect-time failure used to surface as "Request failed:
   ;; ConnectException" (nil JVM message), which matched no retryable pattern —

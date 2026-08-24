@@ -20,6 +20,23 @@
     (str/starts-with? line "data:")  [nil (str/trim (subs line 5))]
     :else [nil nil]))
 
+(defn- openai-stop-reason
+  "pi mapStopReason (openai-completions.ts): stop/end → :stop,
+   length → :length, tool_calls/function_call → :tool-use, and
+   content_filter/network_error/any unknown reason → :error with an
+   error message. An odd finish_reason must not look like a normal empty
+   completion — pi classifies it as an error so the retry machinery and
+   the user-visible error path engage instead of silently recording an
+   empty assistant turn."
+  [reason]
+  (cond
+    (or (nil? reason) (= reason "stop") (= reason "end")) {:stop-reason :stop}
+    (= reason "length") {:stop-reason :length}
+    (or (= reason "tool_calls") (= reason "function_call")) {:stop-reason :tool-use}
+    (= reason "content_filter") {:stop-reason :error :error-message "Provider finish_reason: content_filter"}
+    (= reason "network_error") {:stop-reason :error :error-message "Provider finish_reason: network_error"}
+    :else {:stop-reason :error :error-message (str "Provider finish_reason: " reason)}))
+
 (defn parse-openai-event
   "Parse an OpenAI chat-completions SSE data payload into a vector of kmet
    events: :text, :thinking, :tool-call, :tool-call-args, :done (with
@@ -74,7 +91,7 @@
         ;; on-done flushes the tool-call accumulator (pi pushes one done
         ;; event after the whole stream is consumed)
         (when finish
-          (vswap! events conj {:type :done :stop-reason (keyword finish)}))
+          (vswap! events conj (merge {:type :done} (openai-stop-reason finish))))
         (if (seq @events)
           @events
           [{:type :delta :chunk chunk}]))

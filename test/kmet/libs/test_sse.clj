@@ -41,9 +41,30 @@
             "{\"choices\":[{\"delta\":{\"reasoning\":\"a\",\"reasoning_content\":\"b\"}}]}"))))
 
 (t/deftest test-parse-openai-event-finish
-  (t/is (= [{:type :done :stop-reason :tool_calls}]
+  ;; pi mapStopReason: tool_calls → :tool-use (not the raw keyword)
+  (t/is (= [{:type :done :stop-reason :tool-use}]
            (sse/parse-openai-event
-            "{\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}"))))
+            "{\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}")))
+  (t/is (= [{:type :done :stop-reason :stop}]
+           (sse/parse-openai-event
+            "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}")))
+  (t/is (= [{:type :done :stop-reason :length}]
+           (sse/parse-openai-event
+            "{\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}")))
+  ;; pi mapStopReason: content_filter / network_error / unknown → :error,
+  ;; never a silent normal completion
+  (t/is (= [{:type :done :stop-reason :error
+             :error-message "Provider finish_reason: content_filter"}]
+           (sse/parse-openai-event
+            "{\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}")))
+  (t/is (= [{:type :done :stop-reason :error
+             :error-message "Provider finish_reason: network_error"}]
+           (sse/parse-openai-event
+            "{\"choices\":[{\"delta\":{},\"finish_reason\":\"network_error\"}]}")))
+  (t/is (= [{:type :done :stop-reason :error
+             :error-message "Provider finish_reason: weird"}]
+           (sse/parse-openai-event
+            "{\"choices\":[{\"delta\":{},\"finish_reason\":\"weird\"}]}"))))
 
 (t/deftest test-parse-openai-event-both-text-and-thinking
   ;; A chunk can carry a content delta AND a reasoning delta — both events

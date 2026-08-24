@@ -1449,7 +1449,21 @@ Be precise and concise in your responses."}}]
                                           (do (reset! text-buf "")
                                               (call-llm agent (resolve-api-key agent) text-buf on-text on-thinking))]
                                       (reset! (:active-call agent) call)
-                                      (let [result (deref promise (llm-total-timeout-ms agent) :timeout)]
+                                      (let [raw-result (deref promise (llm-total-timeout-ms agent) :timeout)
+                                            ;; Defensive: a provider-delivered :error stop-reason
+                                            ;; (content_filter / network_error / unknown — pi
+                                            ;; mapStopReason) that reached the loop without an
+                                            ;; :error key (e.g. another wire delivered it via
+                                            ;; on-done) is folded into :error so the existing
+                                            ;; retry/error path engages (pi pushes {type:
+                                            ;; "error"} for these instead of done).
+                                            result (if (and (nil? (:error raw-result))
+                                                            (= :error (:stop-reason raw-result)))
+                                                     (assoc raw-result :error
+                                                            (or (:error-message raw-result)
+                                                                (str "Provider stopped with: "
+                                                                     (name (:stop-reason raw-result)))))
+                                                     raw-result)]
                                         (reset! (:active-call agent) nil)
                                         (if (:cancelled result)
                                           (do (record-abandoned-attempt! agent result :aborted)
