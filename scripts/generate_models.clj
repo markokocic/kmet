@@ -1,6 +1,6 @@
 ;; scripts/generate_models.clj — regenerate src/kmet/ai/model_data/*.edn from
 ;; models.dev + the live catalogs (pi: packages/ai/scripts/generate-models.ts,
-;; ported to kmet's 39 providers).
+;; ported to kmet's 40 providers).
 ;;
 ;; Radius is deliberately dropped (pi-messages API + dynamic gateway
 ;; catalog, both out of kmet's scope); every other pi provider is
@@ -134,6 +134,9 @@
                            :env-vars ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"
                                       "CLOUDFLARE_GATEWAY_ID"]
                            :default-model "workers-ai/@cf/moonshotai/kimi-k2.6"}
+   :commandcode {:name "Command Code"
+                 :env-vars ["CMD_API_KEY"]
+                 :default-model "deepseek/deepseek-v4-flash"}
    :mistral {:name "Mistral"
              :env-vars ["MISTRAL_API_KEY"]
              :default-model "devstral-medium-latest"}
@@ -526,26 +529,26 @@
                 codex-spark-context)
    (codex-model "gpt-5.4" "GPT-5.4" [:text :image]
                 (with-openai-long-context-pricing
-                 (array-map :input 2.5 :output 15 :cache-read 0.25 :cache-write 0))
+                  (array-map :input 2.5 :output 15 :cache-read 0.25 :cache-write 0))
                 codex-context)
    (codex-model "gpt-5.4-mini" "GPT-5.4 mini" [:text :image]
                 (array-map :input 0.75 :output 4.5 :cache-read 0.075 :cache-write 0)
                 codex-context)
    (codex-model "gpt-5.5" "GPT-5.5" [:text :image]
                 (with-openai-long-context-pricing
-                 (array-map :input 5 :output 30 :cache-read 0.5 :cache-write 0))
+                  (array-map :input 5 :output 30 :cache-read 0.5 :cache-write 0))
                 codex-context)
    (codex-model "gpt-5.6-luna" "GPT-5.6 Luna" [:text :image]
                 (with-openai-long-context-pricing
-                 (get openai-gpt-56-standard-costs "gpt-5.6-luna"))
+                  (get openai-gpt-56-standard-costs "gpt-5.6-luna"))
                 codex-context)
    (codex-model "gpt-5.6-sol" "GPT-5.6 Sol" [:text :image]
                 (with-openai-long-context-pricing
-                 (array-map :input 5 :output 30 :cache-read 0.5 :cache-write 6.25))
+                  (array-map :input 5 :output 30 :cache-read 0.5 :cache-write 6.25))
                 codex-context)
    (codex-model "gpt-5.6-terra" "GPT-5.6 Terra" [:text :image]
                 (with-openai-long-context-pricing
-                 (get openai-gpt-56-standard-costs "gpt-5.6-terra"))
+                  (get openai-gpt-56-standard-costs "gpt-5.6-terra"))
                 codex-context)])
 
 ;; ─── azure-openai-responses (pi: azureOpenAiModels — the mirror of the
@@ -882,7 +885,7 @@
                      :reasoning (boolean (some #(= "reasoning" %)
                                                (get model "supported_parameters")))
                      :input (if (str/includes? (or (get-in model ["architecture" "modality"]) "")
-                                              "image")
+                                               "image")
                               [:text :image] [:text])
                      :cost (array-map :input (cost "prompt")
                                       :output (cost "completion")
@@ -1401,16 +1404,16 @@
         is-nvidia? (or (= :nvidia provider) (str/includes? base-url "integrate.api.nvidia.com"))
         is-ant-ling? (or (= :ant-ling provider) (str/includes? base-url "api.ant-ling.com"))
         together-reasoning-only? (and is-together?
-                                     (contains? together-reasoning-only-models id))
+                                      (contains? together-reasoning-only-models id))
         is-deepseek? (or (= :deepseek provider)
                          (str/includes? (str/lower-case base-url) "deepseek.com"))
         is-non-standard? (or is-nvidia? (= :cerebras provider)
-                              (str/includes? base-url "cerebras.ai")
-                              (= :xai provider) (str/includes? base-url "api.x.ai")
-                              is-together? (str/includes? base-url "chutes.ai")
-                              is-deepseek? is-zai? is-moonshot?
-                              (= :opencode provider) (str/includes? base-url "opencode.ai")
-                              is-cloudflare-workers-ai? is-cloudflare-ai-gateway? is-ant-ling?)
+                             (str/includes? base-url "cerebras.ai")
+                             (= :xai provider) (str/includes? base-url "api.x.ai")
+                             is-together? (str/includes? base-url "chutes.ai")
+                             is-deepseek? is-zai? is-moonshot?
+                             (= :opencode provider) (str/includes? base-url "opencode.ai")
+                             is-cloudflare-workers-ai? is-cloudflare-ai-gateway? is-ant-ling?)
         use-max-tokens? (or (str/includes? base-url "chutes.ai") is-deepseek?
                             is-moonshot? is-cloudflare-ai-gateway? is-together?
                             is-nvidia? is-ant-ling? is-zai?)
@@ -1435,7 +1438,7 @@
      :thinking-format thinking-format
      :zai-tool-stream false
      :supports-strict-mode (not (or is-moonshot? is-together?
-                                     is-cloudflare-ai-gateway? is-nvidia?))
+                                    is-cloudflare-ai-gateway? is-nvidia?))
      :send-session-affinity-headers false
      :supports-long-cache-retention (not (or is-together? is-cloudflare-workers-ai?
                                              is-cloudflare-ai-gateway? is-nvidia? is-ant-ling?))}))
@@ -1482,8 +1485,6 @@
 
 ;; ─── Thinking level maps (pi applyModelsDevReasoningOptionMetadata +
 ;;     applyThinkingLevelMetadata, kmet's providers only) ─────────────────────
-
-
 
 (defn- merge-thinking-level-map
   [mm extra]
@@ -1601,7 +1602,7 @@
       ;; claude 4.6+ on anthropic-messages) — the xhigh/max maps already
       ;; merge above
       (and (= :anthropic-messages (:api mm)) (or adaptive-max?
-                                                  (str/includes? id "fable-5")))
+                                                 (str/includes? id "fable-5")))
       (merge-compat {:force-adaptive-thinking true})
       (and (= :opencode-go provider) (= id "kimi-k2.6"))
       (merge-thinking-level-map {:minimal nil :low nil :medium nil})
@@ -1738,8 +1739,8 @@
       (and (= :openai (:provider mm))
            (contains? openai-long-context-pricing-model-ids id))
       (assoc :cost (with-openai-long-context-pricing
-                    (or (get openai-gpt-56-standard-costs id)
-                        (:cost mm))))
+                     (or (get openai-gpt-56-standard-costs id)
+                         (:cost mm))))
 
       ;; models.dev reports gpt-5-pro output as 272000 (a duplicate of the
       ;; input sub-limit); the actual max output is 128000.
@@ -1778,6 +1779,236 @@
 
 ;; ─── Generation ────────────────────────────────────────────────────────────
 
+;; ─── commandcode (Command Code Provider API — not on models.dev) ──────────
+;;     The live /models list decides inclusion and supplies id/name/context;
+;;     every other capability transfers from kmet's canonical catalogs via
+;;     the identity refs below, so nothing is guessed. Pricing is ignored:
+;;     CommandCode bills through plans and credits, not token rates.
+
+(def ^:private commandcode-base-url "https://api.commandcode.ai/provider/v1")
+
+(def ^:private commandcode-anthropic-base-url
+  "Anthropic Messages base (endpoint-url appends /v1/messages); claude-*
+   models route here, everything else through the OpenAI-compatible base."
+  "https://api.commandcode.ai/provider")
+
+(def ^:private commandcode-free-cost
+  "Zero rates across the board — see the section banner."
+  (array-map :input 0 :output 0 :cache-read 0 :cache-write 0))
+
+(defn- fetch-commandcode-models
+  "The live CommandCode /models list ({id name context_length} maps;
+   throws on failure, like fetch-models-dev). Authenticated with CMD_API_KEY
+   when the env var is set (richer fields may arrive for authenticated
+   callers later), anonymous otherwise."
+  []
+  (let [headers (merge {"User-Agent" "kmet-generate-models"}
+                       (when-some [key (not-empty (System/getenv "CMD_API_KEY"))]
+                         {"Authorization" (str "Bearer " key)}))
+        resp (http/get (str commandcode-base-url "/models")
+                       {:headers headers :timeout 60000})]
+    (when-not (= 200 (:status resp))
+      (throw (ex-info (str "CommandCode API returned HTTP " (:status resp))
+                      {:type :http-error :status (:status resp)})))
+    (let [models (get (json/parse-string (:body resp) false) "data")]
+      (when-not (vector? models)
+        (throw (ex-info "Invalid CommandCode models response" {:type :http-error})))
+      models)))
+
+(defn- fetch-commandcode-prices
+  "CommandCode's published per-model rates ($/M), decoded from the
+   commandcode.ai /models page payload — the provider API itself carries no
+   rate fields (billing goes through plans and credits). The page embeds a
+   React Router turbo-stream graph; we resolve it generically and keep the
+   four rate fields per id. Pricing is optional data: any failure (HTTP,
+   payload shape, decode) prints a warning and returns nil so generation
+   degrades to zero rates instead of aborting."
+  []
+  (try
+    (let [resp (http/get "https://commandcode.ai/models"
+                         {:headers {"User-Agent" "kmet-generate-models"}
+                          :timeout 60000})]
+      (when-not (= 200 (:status resp))
+        (throw (ex-info (str "commandcode.ai/models returned HTTP " (:status resp))
+                        {:type :http-error :status (:status resp)})))
+      ;; payload sits in streamController.enqueue("<escaped>")
+      (let [[_ raw] (re-find #"(?s)streamController\.enqueue\(\"(.*?)\"\);" (:body resp))]
+        (when-not raw
+          (throw (ex-info "no stream payload found" {:type :http-error})))
+        (let [arr (json/parse-string (json/parse-string (str "\"" raw "\"")))
+              node (fn node [i]
+                     (cond
+                       (not (int? i)) nil
+                       (neg? i) nil
+                       :else (let [x (nth arr i)]
+                               (cond
+                                 (vector? x) (mapv #(node (if (int? %) % nil)) x)
+                                 (map? x) (into {}
+                                                (for [[k v] x]
+                                                  [(node (parse-long (subs k 1)))
+                                                   (if (int? v) (node v) v)]))
+                                 :else x))))
+              root (node 0)
+              models (get-in root ["loaderData" "routes/models/index" "models"])
+              rate (fn [m k] (let [v (get m k)] (if (number? v) v 0)))]
+          (when-not (vector? models)
+            (throw (ex-info "unexpected payload shape" {:type :http-error})))
+          (into {}
+                (for [m models
+                      :when (string? (get m "id"))]
+                  [(get m "id")
+                   (array-map :input (rate m "inputCost")
+                              :output (rate m "outputCost")
+                              :cache-read (rate m "cacheReadCost")
+                              :cache-write (rate m "cacheWriteCost"))])))))
+      (catch Exception e
+        (println (str "Warning: CommandCode price fetch failed ("
+                      (ex-message e) ") — models will carry zero rates."))
+        nil)))
+(def ^:private commandcode-canonical-refs
+  "CommandCode id -> [provider-id canonical-model-id]: the SAME WEIGHTS as
+   kmet's curated catalogs list them, so :reasoning/:input/
+   :thinking-level-map/:max-tokens transfer from canonical data instead of
+   guesses. Identity mapping only -- wire api is NOT transferred (canonical
+   :openai is responses-api; CommandCode speaks completions/messages).
+   tencent/hy3-paid has no canonical entry anywhere -> conservative defaults."
+  (array-map
+   "claude-fable-5"                    [:anthropic "claude-fable-5"]
+   "claude-haiku-4-5-20251001"         [:anthropic "claude-haiku-4-5-20251001"]
+   "claude-opus-4-7"                   [:anthropic "claude-opus-4-7"]
+   "claude-opus-4-8"                   [:anthropic "claude-opus-4-8"]
+   "claude-opus-5"                     [:anthropic "claude-opus-5"]
+   "claude-sonnet-4-6"                 [:anthropic "claude-sonnet-4-6"]
+   "claude-sonnet-5"                   [:anthropic "claude-sonnet-5"]
+   "deepseek/deepseek-v4-flash"        [:deepseek "deepseek-v4-flash"]
+   "deepseek/deepseek-v4-flash-vision-exp" [:opencode-go "deepseek-v4-flash-vision-exp"]
+   "deepseek/deepseek-v4-pro"          [:deepseek "deepseek-v4-pro"]
+   "google/gemini-3.1-flash-lite"      [:google "gemini-3.1-flash-lite"]
+   "google/gemini-3.5-flash"           [:google "gemini-3.5-flash"]
+   "google/gemini-3.5-flash-lite"      [:google "gemini-3.5-flash-lite"]
+   "google/gemini-3.6-flash"           [:google "gemini-3.6-flash"]
+   "google/gemini-3.7-flash"           [:google "gemini-3.7-flash"]
+   "gpt-5.3-codex"                     [:openai "gpt-5.3-codex"]
+   "gpt-5.4"                           [:openai "gpt-5.4"]
+   "gpt-5.4-mini"                      [:openai "gpt-5.4-mini"]
+   "gpt-5.5"                           [:openai "gpt-5.5"]
+   "gpt-5.6-luna"                      [:openai "gpt-5.6-luna"]
+   "gpt-5.6-sol"                       [:openai "gpt-5.6-sol"]
+   "gpt-5.6-terra"                     [:openai "gpt-5.6-terra"]
+   "meta/muse-spark-1.1"               [:openrouter "meta/muse-spark-1.1"]
+   "meta/muse-spark-1.2"               [:openrouter "meta/muse-spark-1.2"]
+   "meta/muse-spark-1.2-contributor"   [:opencode-go "muse-spark-1.2-contributor"]
+   "MiniMaxAI/MiniMax-M2.5"            [:qwen-token-plan "MiniMax-M2.5"]
+   "MiniMaxAI/MiniMax-M2.7"            [:minimax "MiniMax-M2.7"]
+   "MiniMaxAI/MiniMax-M3"              [:minimax "MiniMax-M3"]
+   "moonshotai/Kimi-K2.5"              [:moonshotai "kimi-k2.5"]
+   "moonshotai/Kimi-K2.6"              [:moonshotai "kimi-k2.6"]
+   "moonshotai/Kimi-K2.7-Code"         [:moonshotai "kimi-k2.7-code"]
+   "moonshotai/Kimi-K2.7-Code-Highspeed" [:moonshotai "kimi-k2.7-code-highspeed"]
+   "moonshotai/Kimi-K3"                [:moonshotai "kimi-k3"]
+   "nvidia/nemotron-3-ultra-550b-a55b" [:nvidia "nvidia/nemotron-3-ultra-550b-a55b"]
+   "poolside/laguna-s-2.1-free"        [:openrouter "poolside/laguna-s-2.1:free"]
+   "Qwen/Qwen3.6-Max-Preview"          [:qwen-token-plan "qwen3.6-max-preview"]
+   "Qwen/Qwen3.6-Plus"                 [:qwen-token-plan "qwen3.6-plus"]
+   "Qwen/Qwen3.7-Flash"                [:qwen-token-plan "qwen3.7-flash"]
+   "Qwen/Qwen3.7-Max"                  [:qwen-token-plan "qwen3.7-max"]
+   "Qwen/Qwen3.7-Plus"                 [:qwen-token-plan "qwen3.7-plus"]
+   "Qwen/Qwen3.8-27B"                  [:openrouter "qwen/qwen3.8-27b"]
+   "Qwen/Qwen3.8-Max"                  [:qwen-token-plan "qwen3.8-max"]
+   "sakana/fugu-ultra"                 [:openrouter "sakana/fugu-ultra"]
+   "stepfun/Step-3.5-Flash"            [:openrouter "stepfun/step-3.5-flash"]
+   "stepfun/Step-3.7-Flash"            [:openrouter "stepfun/step-3.7-flash"]
+   "stealth/ox-alpha"                  [:openrouter "stealth/ox-alpha"]
+   "thinkingmachines/inkling"          [:nvidia "thinkingmachines/inkling"]
+   "thinkingmachines/inkling-small"    [:openrouter "thinkingmachines/inkling-small"]
+   "xai/grok-4.5"                      [:xai "grok-4.5"]
+   "xai/grok-4.6"                      [:xai "grok-4.6"]
+   "xiaomi/mimo-v2.5"                  [:xiaomi "mimo-v2.5"]
+   "xiaomi/mimo-v2.5-pro"              [:xiaomi "mimo-v2.5-pro"]
+   "zai-org/GLM-5"                     [:baseten "zai-org/GLM-5"]
+   "zai-org/GLM-5.1"                   [:baseten "zai-org/GLM-5.1"]
+   "zai-org/GLM-5.2"                   [:zai "glm-5.2"]
+   "zai-org/GLM-5.2-Fast"              [:baseten "zai-org/GLM-5.2-Fast"]
+   "zai-org/GLM-5.3"                   [:zai "glm-5.3"]))
+
+(def ^:private commandcode-no-compat-refs
+  "Ref entries whose :thinking-format is endpoint-bound rather than
+   model-bound (baseten's GLM handling; the qwen-token-plan catalog hosts
+   non-Qwen models whose qwen format does not follow the weights)."
+  #{"MiniMaxAI/MiniMax-M2.5"
+    "zai-org/GLM-5"
+    "zai-org/GLM-5.1"
+    "zai-org/GLM-5.2-Fast"})
+
+(def ^:private commandcode-price-aliases
+  "Endpoint ids whose pricing lives under a different id on the /models
+   page (the API lists Anthropic's dated alias, the page the bare family
+   name). Consulted when a direct price lookup misses."
+  {"claude-haiku-4-5-20251001" "claude-haiku-4-5"})
+
+(def ^:private commandcode-overrides
+  "Explicit capability wins over refs. stealth/ox-alpha mirrors opencode's
+   x-preview-f-free treatment verbatim (free preview model, low/high/max
+   thinking levels, no store/developer-role)."
+  {"stealth/ox-alpha"
+   {:reasoning true
+    :input [:text :image]
+    :max-tokens 131072
+    :thinking-level-map (array-map :high "high" :low "low" :max "max"
+                                   :medium nil :minimal nil :off nil :xhigh nil)
+    :compat (array-map :supports-store false
+                       :supports-developer-role false
+                       :max-tokens-field :max-tokens)}})
+
+(defn- process-commandcode
+  "Live CommandCode entries × the canonical groups built this run → kmet
+   model maps. Capabilities resolve per id: explicit override > canonical
+   ref (model-bound compat keys only) > conservative defaults (no reasoning,
+   text-only). Unlisted endpoint ids still ship with defaults; listed ids
+   missing from the live list disappear (the endpoint decides inclusion)."
+  [fetched grouped prices]
+  (for [m fetched
+        :let [cid (get m "id")
+              [rp rid] (get commandcode-canonical-refs cid)
+              ref (when rp (get-in grouped [rp rid]))
+              ov (get commandcode-overrides cid)
+              api (if (str/starts-with? (or cid "") "claude")
+                    :anthropic-messages
+                    :openai-completions)]
+        :when cid]
+    (let [{ref-reasoning :reasoning
+           ref-input :input
+           ref-tlm :thinking-level-map
+           ref-mt :max-tokens
+           ref-compat :compat} ref
+          compat (when-not (contains? commandcode-no-compat-refs cid)
+                   (select-keys ref-compat [:thinking-format :force-adaptive-thinking]))
+          cap (merge {:api api
+                      :reasoning (boolean ref-reasoning)
+                      :input (or ref-input [:text])
+                      :max-tokens (or ref-mt 32768)}
+                     (when (seq compat) {:compat compat})
+                     (when ref-tlm {:thinking-level-map ref-tlm})
+                     ov)
+          cost (or (get prices cid)
+                   (get prices (get commandcode-price-aliases cid))
+                   commandcode-free-cost)]
+      (cond-> (array-map
+               :id cid
+               :name (or (get m "name") cid)
+               :provider :commandcode
+               :api api
+               :base-url (if (= :anthropic-messages api)
+                           commandcode-anthropic-base-url
+                           commandcode-base-url)
+               :reasoning (:reasoning cap)
+               :input (:input cap)
+               :cost cost
+               :context-window (long (or (get m "context_length") 32768))
+               :max-tokens (:max-tokens cap))
+        (:thinking-level-map cap) (assoc :thinking-level-map (:thinking-level-map cap))
+        (:compat cap) (assoc :compat (:compat cap))))))
+
 (defn- fetch-models-dev
   []
   (let [resp (http/get "https://models.dev/api.json"
@@ -1806,7 +2037,8 @@
    minimax direct-supported filter, context/cost overrides, missing gpt
    models, codex + the azure mirror, deepseek-v4 compat normalization, then
    the metadata passes)."
-  [data nim-ids openrouter-models ai-gateway-models]
+  [data nim-ids openrouter-models ai-gateway-models
+   commandcode-fetched commandcode-prices]
   (let [all (->> (concat (process-opencode data)
                          (process-copilot data)
                          (process-xai data)
@@ -1863,10 +2095,17 @@
         ;; after the section overrides, before the metadata passes) and gets
         ;; the thinking metadata rules on top (off:null for gpt-5* etc.)
         azure (map #(apply-thinking-maps % nil) (process-azure normalized))
-        grouped (group-by :provider
-                          (->> (concat normalized azure)
-                               (map apply-compat-metadata)
-                               (normalize-deepseek-v4)))]
+        ;; commandcode resolves against the groups built above (its refs
+        ;; point into them), then joins the pipeline so the shared passes
+        ;; (deepseek-v4 compat normalization) still apply
+        base-grouped (group-by :provider
+                               (->> (concat normalized azure)
+                                    (map apply-compat-metadata)
+                                    normalize-deepseek-v4))
+        grouped (assoc base-grouped :commandcode
+                       (->> (process-commandcode commandcode-fetched base-grouped
+                                                 commandcode-prices)
+                            normalize-deepseek-v4))]
     (into (array-map)
           (for [[pid _] providers]
             [pid (get grouped pid [])]))))
@@ -2159,7 +2398,13 @@
                               (fetch-openrouter-models))
         ai-gateway-models (do (println "Fetching Vercel AI Gateway models ...")
                               (fetch-ai-gateway-models))
-        catalogs (generate-models-data data nim-ids openrouter-models ai-gateway-models)
+        commandcode-fetched (do (println "Fetching CommandCode models ...")
+                                (fetch-commandcode-models))
+        commandcode-prices (do (println "Fetching CommandCode prices ...")
+                               (fetch-commandcode-prices))
+        catalogs (generate-models-data data nim-ids openrouter-models
+                                       ai-gateway-models commandcode-fetched
+                                       commandcode-prices)
         errors (into []
                      (mapcat (fn [[pid models]]
                                (validate-groups! pid (group-models models)))

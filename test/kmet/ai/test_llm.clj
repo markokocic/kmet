@@ -29,7 +29,7 @@
 (t/deftest test-llm-loaded
   (t/is (fn? llm/send-message))
   (m/load-catalogs!)
-  (t/is (= 39 (count (m/get-providers))))
+  (t/is (= 40 (count (m/get-providers))))
   (t/is (fn? m/get-model)))
 
 ;; ─── Model resolution & dispatch ───────────────────────────────────────────
@@ -483,7 +483,7 @@
 
 (t/deftest test-llm-all-providers-resolve
   (m/load-catalogs!)
-  (t/is (= 39 (count (m/get-providers))))
+  (t/is (= 40 (count (m/get-providers))))
   (doseq [p [:opencode-go :opencode :deepseek :github-copilot :openai :xai
              :openai-codex :azure-openai-responses :anthropic :google :groq
              :cerebras :huggingface :moonshotai :moonshotai-cn :xiaomi
@@ -492,7 +492,7 @@
              :minimax :minimax-cn :nvidia :openrouter :fireworks
              :vercel-ai-gateway :zai :zai-coding-cn :together :baseten
              :ant-ling :kimi-coding :cloudflare-workers-ai :cloudflare-ai-gateway
-             :mistral :google-vertex :amazon-bedrock]]
+             :mistral :google-vertex :amazon-bedrock :commandcode]]
     (t/is (some? (m/get-provider p)) (str p " has a catalog entry"))))
 
 ;; ─── Image block conversion ───────────────────────────────────────────────

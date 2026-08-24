@@ -1,6 +1,6 @@
 {:schema-version 1
- :generated-at "2026-08-22T07:16:35Z"
- :structure-hash "275df09f87a4e269912fb85f808bee094c9c9b1d9e6c29e54586cfdfc27b276f"
+ :generated-at "2026-08-24T13:12:53Z"
+ :structure-hash "63de5ce5899d3d0246f6d175b594a741ba5aa708e1a5fb4daa377a35ab7994b1"
  :files {"amazon-bedrock.edn" "f480a3663e61248d0b81d6f39789703f8eda37d16312884f540b802133a2ae94"
          "ant-ling.edn" "2b58184883a8b41d30694d09005c7a4f63b533250a8461601ae0002d7c9ccc38"
          "anthropic.edn" "78907a483619a242c6e6d4e87ff51ce141d86794faba28d31d00ee2929140ded"
@@ -9,6 +9,7 @@
          "cerebras.edn" "0e005041970e29fe45ddcb8b486a79e77791ab83f7094860e1b21b1ea20af431"
          "cloudflare-ai-gateway.edn" "65e862e6a8deb2eed6351571ea098d44ed9c652c3231fc2a4a335a6378144ff4"
          "cloudflare-workers-ai.edn" "a1bf571d961935ca9e46e6a6dbd3cf0929e2d6645e7bc85cd73243f5945793f2"
+         "commandcode.edn" "d8edb1ae9f20ef36ecd953ad7ca099affe0e8fbcbe42592082b28ce3c124c1e1"
          "deepseek.edn" "3a400bd4c6d7cb7be91288bbc58f044f00ffd193119ed2f3b78aa7aa95fc2b6a"
          "fireworks.edn" "5195e1a63d6c4eface90da4ffd665d2dd772ff305f95a5e31776199b1a50e787"
          "github-copilot.edn" "5493cca2844e480a67f0e08cb17b5e2e8831f0ed32ce815fa47d88e9dc238227"
