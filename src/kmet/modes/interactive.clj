@@ -2082,7 +2082,10 @@
       ;; no :theme — the component subscribes to ui.subs/theme-sub (Stage 5)
       (let [bash-comp (be/make-bash-execution
                        :command command
-                       :exclude-from-context? exclude-from-context?)
+                       :exclude-from-context? exclude-from-context?
+                       ;; link to the chat-wide expansion toggle so ctrl+o
+                       ;; reaches live bash executions too (reactive read)
+                       :tools-expanded-atom (:tools-expanded-atom (:chat-history cs)))
             ;; ── Build session env (pi: resolveSpawnContext) ─────────────
             ag @(:agent-state cs)
             session-env

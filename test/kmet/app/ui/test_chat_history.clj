@@ -154,6 +154,11 @@
       (is (false? (ch/chat-history-get-tool-expanded ch)))
       (ch/chat-history-toggle-tool-expanded! ch)
       (is (true? (ch/chat-history-get-tool-expanded ch)))
+      ;; the child reads the shared toggle atom reactively — no per-child
+      ;; push happened, yet the next render must show expanded output
+      (let [child (:component (first @(:messages-atom ch)))]
+        (is (some #(re-find #"files" %) (core/render child 60))
+            "tool output visible after global expand with no push"))
       (ch/chat-history-toggle-tool-expanded! ch)
       (is (false? (ch/chat-history-get-tool-expanded ch))))))
 
@@ -393,8 +398,10 @@
                                   (:component m)))
                         @(:messages-atom ch))]
         (is (= 2 (count tools)))
-        (is (every? #(true? @(:expanded-atom %)) tools)
-            "all tools — old and new — are expanded"))))
+        (is (every? #(identical? (:tools-expanded-atom ch)
+                                 (:tools-expanded-atom %))
+                    tools)
+            "all tools — old and new — link to the shared toggle atom"))))
   (testing "new assistant messages inherit the thinking-hidden flag"
     (let [ch (ch/make-chat-history)]
       (ch/chat-history-add-message! ch

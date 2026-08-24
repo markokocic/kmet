@@ -18,7 +18,6 @@
             [kmet.app.ui.assistant-message :as am]
             [kmet.app.ui.tool-execution :as te]
             [kmet.app.ui.custom-message :as cm]
-            [kmet.app.ui.bash-execution :as be]
             [kmet.app.tools.core :as tools]
             [kmet.tui.macros :refer [track! track-deps defcomponent]]))
 
@@ -176,11 +175,11 @@
    For tool messages, looks up render functions from the tool registry.
    Assistant messages SHARE the chat history's thinking-hidden/hidden-label
    atoms (pi: hideThinkingBlock / hiddenThinkingLabel) — a toggle is one
-   reset! that invalidates every message at once; tool components get a copy
-   of the current expansion flag. A message carrying a pre-built :component
+   reset! that invalidates every message at once; tool components share the
+   tools-expanded toggle atom the same way. A message carrying a pre-built :component
    (extension renderers returning a component directly, and replayed :bash
    executions) uses it as-is."
-  [msg output-pad tools-expanded? thinking-hidden-atom hidden-label-atom]
+  [msg output-pad tools-expanded-atom thinking-hidden-atom hidden-label-atom]
   (let [thm @subs/theme-sub]
     (cond
     ;; Pre-built component — extension entry/message renderers may return a
@@ -211,7 +210,7 @@
                           :truncation (:truncation msg)
                           :details (:details msg)
                           :output-pad output-pad
-                          :expanded? tools-expanded?
+                          :tools-expanded-atom tools-expanded-atom
                         ;; pi: ToolDefinition.renderCall/renderResult — the
                         ;; record's fns (extension tools) win over the
                         ;; builtin renderers; both get the ToolRenderContext
@@ -263,7 +262,7 @@
   [ch msg]
   (let [msg (with-assistant-data msg)
         comp (make-component-for-msg msg @(:output-pad-atom ch)
-                                     @(:tools-expanded-atom ch) (:thinking-hidden-atom ch)
+                                     (:tools-expanded-atom ch) (:thinking-hidden-atom ch)
                                      (:hidden-label-atom ch))]
     (when comp
       (swap! (:messages-atom ch) conj (assoc msg :component comp)))
@@ -277,7 +276,7 @@
   [ch msg]
   (let [msg (with-assistant-data msg)
         comp (make-component-for-msg msg @(:output-pad-atom ch)
-                                     @(:tools-expanded-atom ch) (:thinking-hidden-atom ch)
+                                     (:tools-expanded-atom ch) (:thinking-hidden-atom ch)
                                      (:hidden-label-atom ch))
         streaming @(:streaming-atom ch)]
     (when comp
@@ -441,25 +440,14 @@
   [child]
   (:kind child))
 
-(def ^:private expand-fns
-  "Kind-as-data method table (dsl.md §5): kind → set-expanded! fn applied by
-   the global tool-output expansion toggle. Kinds without an entry aren't
-   expandable."
-  {:tool te/tool-execution-set-expanded!
-   :bash be/bash-execution-set-expanded!})
-
 (defn chat-history-toggle-tool-expanded!
-  "Toggle tool output expansion on all ToolExecutionComponent children.
-   Tracks a single expansion flag (pi: toolOutputExpanded) applied to tools,
-   bash executions, and the collapsible info/help banner; new tool components
-   inherit the flag. Returns the new expansion state."
+  "Toggle tool output expansion (pi: toolOutputExpanded). One reset! on the
+   shared toggle atom — tool and bash components read it lexically inside
+   their track! bodies, so existing children re-derive and new ones inherit
+   with no per-child push. The collapsible info banner keeps its own
+   expanded state and is updated directly. Returns the new expansion state."
   [ch]
-  (let [expanded? (not @(:tools-expanded-atom ch))]
-    (reset! (:tools-expanded-atom ch) expanded?)
-    (doseq [m @(:messages-atom ch)]
-      (let [child (:component m)]
-        (when-some [set-expanded! (expand-fns (kind-of child))]
-          (set-expanded! child expanded?))))
+  (let [expanded? (swap! (:tools-expanded-atom ch) not)]
     ;; pi: startup info banner is expandable with ctrl+o
     (when-let [info @(:info-comp-atom ch)]
       (when (cm/custom-message-collapsible? info)

@@ -65,7 +65,8 @@
    :args-complete @(:args-complete-atom comp)
    :details @(:details-atom comp)
    :is-partial (nil? @(:ended-at-atom comp))
-   :expanded @(:expanded-atom comp)
+   :expanded (or @(:expanded-atom comp)
+                 (when-some [shared (:tools-expanded-atom comp)] @shared))
    :show-images true
    :is-error @(:is-error-atom comp)})
 
@@ -77,6 +78,7 @@
 (defcomponent ToolExecutionComponent :tool
               [name-atom args-atom content-atom is-error-atom
                output-pad-atom expanded-atom
+               tools-expanded-atom ;; chat-history-wide toggle atom, or nil (unlinked)
                custom-render-call-atom custom-render-result-atom
                started-at-atom ended-at-atom
                truncation-atom tool-call-id-atom
@@ -101,7 +103,10 @@
             name @name-atom
             args @args-atom
             content @content-atom
-            expanded? @expanded-atom
+            expanded? (or @expanded-atom
+                          ;; chat-history-wide toggle — read lexically so
+                          ;; track! records it (tui.md §4 track-deps rule)
+                          (when tools-expanded-atom @tools-expanded-atom))
             started-at @started-at-atom
             ended-at @ended-at-atom
       ;; Re-check empty — only when no call component rendered and no result
@@ -164,7 +169,7 @@
 (defn make-tool-execution
   "THEME is no longer taken: the box background subscribes to
    ui.subs/theme-sub and follows palette changes live (Stage 5)."
-  [& {:keys [name args content is-error output-pad expanded? render-call-fn render-result-fn truncation details cwd render-shell]
+  [& {:keys [name args content is-error output-pad expanded? tools-expanded-atom render-call-fn render-result-fn truncation details cwd render-shell]
       :or {name "" args {} content "" is-error false
            output-pad 1 expanded? false truncation nil details nil
            cwd (or (System/getProperty "user.dir") ".")}}]
@@ -179,6 +184,7 @@
                                   :is-error-atom (atom is-error)
                                   :output-pad-atom (atom output-pad)
                                   :expanded-atom (atom expanded?)
+                                  :tools-expanded-atom tools-expanded-atom
                                   :started-at-atom (atom nil)
                                   :ended-at-atom (atom nil)
                                   :truncation-atom (atom truncation)

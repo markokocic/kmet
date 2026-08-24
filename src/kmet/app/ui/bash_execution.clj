@@ -35,6 +35,7 @@
                status-atom       ;; :running :complete :cancelled :error
                exit-code-atom    ;; int or nil
                expanded-atom     ;; boolean
+               tools-expanded-atom ;; chat-history-wide toggle atom, or nil (unlinked)
                content-container  ;; Container for command/output/status
                spinner-comp      ;; Spinner component (animated loader)
                truncation-atom   ;; bash-exec truncation result or nil
@@ -50,7 +51,10 @@
             raw-output-lines @output-lines-atom
             status @status-atom
             exit-code @exit-code-atom
-            expanded? @expanded-atom
+            expanded? (or @expanded-atom
+                          ;; chat-history-wide toggle — read lexically so
+                          ;; track! records it (tui.md §4 track-deps rule)
+                          (when tools-expanded-atom @tools-expanded-atom))
             exclude? @exclude-from-context-atom
             truncation @truncation-atom
             full-output-path @full-output-path-atom
@@ -172,7 +176,7 @@
    Options:
      :command                — the shell command string
      :exclude-from-context?  — boolean (!! vs !)"
-  [& {:keys [command exclude-from-context?]
+  [& {:keys [command exclude-from-context? tools-expanded-atom]
       :or {command "" exclude-from-context? false}}]
   (let [content-container (container/make-container)
         t0 (theme/get-current-theme)
@@ -193,6 +197,7 @@
                :status-atom (atom :running)
                :exit-code-atom (atom nil)
                :expanded-atom (atom false)
+               :tools-expanded-atom tools-expanded-atom
                :content-container content-container
                :spinner-comp (atom sp)
                :truncation-atom (atom nil)
