@@ -1,5 +1,6 @@
 (ns kmet.tui.test-reagent
-  "Headless tests for kmet.tui.reagent — the reactive engine (dsl.md Stage 1).
+  "Headless tests for the reactive engine (kmet.libs.reakt) exercised through
+   the TUI harness (dsl.md Stage 1).
    No terminal, no sleeps: dependency discovery, watch set-diff, =-gated
    notification, queue draining, plain-atom interop, component-body capture
    (a Text render inside a reaction tracks text-set!), tracks, cursors,
@@ -9,7 +10,7 @@
             [kmet.tui.core :as core]
             [kmet.tui.components.text :as text]
             [kmet.tui.macros :as macros :refer [with-let]]
-            [kmet.tui.reagent :as r]))
+            [kmet.libs.reakt :as r]))
 
 (defn- rd
   "Tracked deref for reaction bodies under test."

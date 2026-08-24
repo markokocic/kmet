@@ -11,7 +11,7 @@
             [kmet.tui.hiccup :as h]
             [kmet.tui.macros :as macros :refer [with-let defcomponent track!]]
             [kmet.tui.protocols :as protocols]
-            [kmet.tui.reagent :as rag]))
+            [kmet.libs.reakt :as rag]))
 
 (defcomponent Probe nil [cache-atom render-count-atom body]
   (render [this width]
@@ -63,7 +63,7 @@
         c (h/compute [a]
                      (fn [x]
                        (+ x
-                          (macros/tracked-deref hidden))))]
+                          (rag/tracked-deref hidden))))]
     (t/is (= 101 @c))
     (reset! hidden 200)
     (t/is (= 201 @c) "unlisted but tracked read re-derives")))
@@ -136,7 +136,7 @@
         probe (map->Probe {:cache-atom (atom nil)
                            :render-count-atom renders
                            :body (fn []
-                                   (if (pos? (macros/tracked-deref b))
+                                   (if (pos? (rag/tracked-deref b))
                                      [(str "v" @c)]
                                      ["off"]))})]
     (protocols/render probe 40)
@@ -215,9 +215,9 @@
         probe (map->Probe {:cache-atom (atom nil)
                            :render-count-atom renders
                            :body (fn []
-                                   (if (= :compute (macros/tracked-deref mode))
+                                   (if (= :compute (rag/tracked-deref mode))
                                      [(str @c)]
-                                     [(str "raw-" (macros/tracked-deref a))]))})]
+                                     [(str "raw-" (rag/tracked-deref a))]))})]
     (protocols/render probe 40)
     (t/is (= ["raw-0"] (protocols/render probe 40)) "atom branch cached")
     (reset! a 5)

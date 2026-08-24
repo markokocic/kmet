@@ -14,7 +14,7 @@
             [kmet.tui.macros :as macros :refer [with-let defcomponent]]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.components.stack :as stack]
-            [kmet.tui.reagent :as rag]))
+            [kmet.libs.reakt :as rag]))
 
 (defn- joined [tree width]
   (str/join "\n" (h/render-lines tree width)))

@@ -8,7 +8,7 @@
    All indicators render the same two-row shape (leading blank + content) so
    the editor and footer below never jump."
   (:require [kmet.tui.protocols :as protocols]
-            [kmet.tui.reagent :as r]
+            [kmet.libs.reakt :as r]
             [kmet.tui.theme :as theme]
             [kmet.tui.utils :as u]
             [kmet.tui.components.spinner :as spinner]

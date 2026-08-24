@@ -44,8 +44,8 @@
    [kmet.tui.components.v-stack :as v-stack]
    [kmet.tui.fuzzy :as fuzzy]
    [kmet.tui.macros :as macros :refer [defcomponent]]
-   [kmet.tui.protocols :as protocols]
-   [kmet.tui.reagent :as r]))
+   [kmet.libs.reakt :as r]
+   [kmet.tui.protocols :as protocols]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Refs — the imperative escape hatch (tui.md §2.4)
@@ -397,11 +397,11 @@
                                (macros/with-store store
                                  (macros/begin-pass! store)
                                  (bump! :bodies-run)
-                                 (let [p (macros/tracked-deref props)
+                                 (let [p (r/tracked-deref props)
                                        ;; tracked: a parent adding/removing the
                                        ;; element's children changes CTREE alone,
                                        ;; with equal props — must still re-derive
-                                       ct (macros/tracked-deref ctree)
+                                       ct (r/tracked-deref ctree)
                                        tree (if ct (f p ct) (f p))]
                                    (reconcile! kids tree))))
                              {:auto-run? (fn [_] (macros/schedule-frame!))
@@ -749,47 +749,23 @@
           (protocols/dispose c))))))
 
 (defn compute
-  "A derived reactive ref over DEPS (tui.md §3.3): sugar over
-   kmet.tui.reaction whose body reads every dep through a tracked deref
-   and applies F to their current values. The reaction re-derives when any
-   dependency changes by =
-   — the explicit DEPS list seeds tracking, and everything F itself reads
-   through tracked channels (tracked-deref, other computes/reactions,
-   cursors) joins the discovered set automatically. A recomputation to an
-   equal value notifies nobody: watchers of the ref fire only on real
-   output changes, component caches stay valid, no frame is requested
-   (fine-grained invalidation for free).
-
-   F is applied to the CURRENT VALUES of the deps as arguments:
-   (compute [theme-atom] identity) and (compute [a b] +) work directly;
-   with an empty dep list F takes no arguments and may close over its own
-   slices.
-
-   Returns a reaction: derefable everywhere (@c), watchable via
-   kmet.tui.reagent/watch-ref, never reset!. Derefs outside a reaction
-   settle the batch queue first and always answer the CURRENT value;
-   inside a running reaction the deref records this ref as a dependency —
-   the component-body pattern. First deref runs F lazily; dep changes
-   re-run queued at the frame flush.
-
-   When created during a component render pass (macros/*store* bound —
-   under with-let), the reaction is disposed with the component: per-instance
-   computes need no manual cleanup. Top-level shared computes (no enclosing
-   store) live forever, which is the point. Create computes ONCE per
-   instance — one built bare inside a component body leaks a reaction per
-   pass, visible as :computes climbing in hiccup's --debug counters."
+  "A derived reactive ref over DEPS (tui.md §3.3): kmet.libs.reakt/derive
+   plus two TUI-side conveniences — creation counting (--debug :computes)
+   and auto-disposal when created during a component render pass (macros/*store*
+   bound under with-let): the reaction is disposed with the component, so
+   per-instance computes need no manual cleanup. Top-level shared computes
+   (no enclosing store) live forever, which is the point. Create computes
+   ONCE per instance — one built bare inside a component body leaks a
+   reaction per pass, visible as :computes climbing in hiccup's --debug
+   counters. See kmet.libs.reakt/derive for the full semantics (dep
+   seeding, =-gated notification, batched re-runs)."
   [deps f]
   ;; Count creations: computes are created ONCE per instance (top-level def
   ;; or with-let init). A compute built bare inside a component body leaks a
   ;; reaction per render pass — the counter climbing frame over frame makes
   ;; that visible (tui.md §3.3).
   (let [_ (bump! :computes)
-        rx (r/make-reaction
-            (fn []
-              ;; Read the listed deps TRACKED and hand their values to F:
-              ;; they are watched even where F ignores them. Anything else
-              ;; F reads through tracked channels is discovered too.
-              (apply f (mapv macros/tracked-deref deps))))]
+        rx (r/derive deps f)]
     (when macros/*store*
       (macros/register-cleanup!
        (gensym "compute-")

@@ -1,104 +1,24 @@
 (ns kmet.tui.macros
-  "Macros for TUI components.
+  "TUI render-cache layer over the standalone reactive engine
+   (kmet.libs.reakt — reactions, cursors, batching; no TUI concepts there).
 
-   track! — reactive render cache: rewrites @atom reads in the render body to
-   tracked derefs, so any atom change invalidates the cache automatically and
-   setters need no manual invalidate call. It must be a macro because deref
-   rewriting happens at compile time; it expands to a plain runtime call
-   (track-render), so SCI-based callers only need the function, not the macro.
+   track! — reactive render cache: rewrites @atom reads in the render body
+   to tracked derefs (kmet.libs.reakt/tracked-deref), so any atom change
+   invalidates the cache automatically and setters need no manual
+   invalidate call. It must be a macro because deref rewriting happens at
+   compile time. Also hosts with-let — per-instance fn-component state —
+   and defcomponent."
+  (:require [kmet.libs.reakt :as reakt]))
 
-   defsetter / defgetter — component state accessor boilerplate: generate the
-   (defn name [comp value] (reset! (:field comp) value)) skeleton that every
-   component setter/getter repeats.")
-
-;; ═══════════════════════════════════════════════════════════════════════════
-;; track! — reactive cache (Reagent-style dependency tracking)
-;; ═══════════════════════════════════════════════════════════════════════════
-
-(def ^:dynamic *tracked*
-  "During track! execution, a map of the atoms deref'd so far in the
-   current reactive render pass, keyed by atom → value as read. nil outside
-   a tracking scope."
-  nil)
-
-(def ^:dynamic *ratom-context*
-  "The running reaction's capture frame ({:pending (atom #{}) :self ref}),
-   bound by kmet.tui.reagent around reaction bodies. nil outside one.
-   Lives here (not in reagent.clj) so tracked-deref can feed it without a
-   require cycle — reagent sits above macros."
-  nil)
-
-(defn capture-deref!
-  "Record REF in the active reaction's pending-dependency set, if a reaction
-   is running. Called from tracked-deref; reactions and cursors additionally
-   record themselves from their own deref implementations."
-  [ref]
-  (when-some [{:keys [pending self]} *ratom-context*]
-    (when-not (identical? self ref)
-      (swap! pending conj ref)))
-  nil)
-
-;; ─── Reactive refs ──────────────────────────────────────────────────────
-
-(defprotocol RXRef
-  "Internal surface of kmet.tui.reagent's refs (reactions, cursors).
-   Defined HERE — not in reagent.clj — so the track! machinery can watch
-   them without a require cycle: record-component render bodies subscribe
-   to computes/reactions through the same tracked-deref funnel as plain
-   atoms (Stage 5: a message record computing its slice). Not for external
-   use — go through kmet.tui.reagent/watch-ref, run!, dispose!."
-  (-add-watch [this key f] "Register watcher F under KEY.")
-  (-remove-watch [this key] "Drop the watcher under KEY.")
-  (-cell [this] "The internal state atom.")
-  (-dispose [this] "Kill the ref: unwatch deps, purge from the queue.")
-  (-force-run [this] "Bring the ref current without going through deref."))
-
-(defn trackable-ref?
-  "True when REF can be a tracked dependency: IRef instances (plain atoms,
-   vars — core add-watch works) or library reactive refs (reactions,
-   cursors — watched through RXRef). Volatiles and delays can't take
-   watches and are never tracked."
-  [ref]
-  (or (instance? clojure.lang.IRef ref) (satisfies? RXRef ref)))
-
-(defn- watch-dep!
-  "Register HANDLER on DEP under KEY, through the right machinery."
-  [dep key handler]
-  (if (instance? clojure.lang.IRef dep)
-    (add-watch dep key handler)
-    (-add-watch dep key handler)))
-
-(defn- unwatch-dep!
-  "Drop DEP's watcher under KEY, through the right machinery."
-  [dep key]
-  (if (instance? clojure.lang.IRef dep)
-    (remove-watch dep key)
-    (-remove-watch dep key)))
-
-(defn tracked-deref
-  "Deref wrapper used by track!. Records A in the active tracking map (when
-   one is bound) with the value just read, then returns it. Trackable refs
-   (plain atoms/vars and library reactions/cursors, see trackable-ref?) are
-   registered as dependencies; volatiles and delays can't take watches and
-   are skipped (read but never registered, here or in a running reaction).
-   Also records A in the running reaction (when one is bound), so component
-   render bodies are reactive under the DSL."
-  [a]
-  (let [v (deref a)]
-    (when (and *tracked* (trackable-ref? a))
-      (swap! *tracked* assoc a v))
-    (when (trackable-ref? a)
-      (capture-deref! a))
-    v))
-
-(defn- deref-form? [f]
-  ;; Only the 1-arg (deref x) form — @x reads as (clojure.core/deref x).
-  ;; Multi-arg deref (timeout variants) is left untouched.
-  (and (seq? f)
-       (symbol? (first f))
-       (or (= 'clojure.core/deref (first f))
-           (= 'deref (first f)))
-       (= 2 (count f))))
+(def ^:private deref-form?
+  "Only the 1-arg (deref x) form — @x reads as (clojure.core/deref x).
+   Multi-arg deref (timeout variants) is left untouched."
+  (fn [f]
+    (and (seq? f)
+         (symbol? (first f))
+         (or (= 'clojure.core/deref (first f))
+             (= 'deref (first f)))
+         (= 2 (count f)))))
 
 (defn- rewrite-derefs
   "Replace every @atom / (deref atom) form in FORM with a tracked-deref call,
@@ -108,7 +28,7 @@
   (cond
     (or (symbol? form) (not (coll? form))) form
     (and (seq? form) (= 'quote (first form))) form
-    (deref-form? form) (list 'kmet.tui.macros/tracked-deref (rewrite-derefs (second form)))
+    (deref-form? form) (list 'kmet.libs.reakt/tracked-deref (rewrite-derefs (second form)))
     (seq? form) (apply list (map rewrite-derefs form))
     (vector? form) (mapv rewrite-derefs form)
     (map? form) (into (empty form) (map (fn [[k v]] [(rewrite-derefs k) (rewrite-derefs v)]) form))
@@ -166,7 +86,7 @@
                      (:values cache)))
       (:result cache)
       (let [tracked (atom {})]
-        (binding [*tracked* tracked]
+        (binding [reakt/*tracked* tracked]
           (let [cache-watch-key (keyword (str "track!cache" (System/identityHashCode component)))
                 invalidated? (atom false)
                 ;; Watch the cache atom itself: an invalidate mid-body (a
@@ -196,13 +116,13 @@
                     atoms (set (keys tracked-map))
                     prev-atoms (:atoms (get @watch-registry watch-key))]
                 (doseq [a atoms]
-                  (watch-dep! a watch-key handler))
+                  (reakt/watch-ref a watch-key handler))
                 ;; A previous pass's refs this pass no longer reads (branch
                 ;; switch) lose their watches here — otherwise they fire
                 ;; invalidate-cache forever on writes nobody consumes.
                 (doseq [a prev-atoms]
                   (when-not (contains? atoms a)
-                    (unwatch-dep! a watch-key)))
+                    (reakt/unwatch-ref a watch-key)))
                 (swap! watch-registry assoc watch-key
                        {:component component :atoms atoms})
                 (when-not @invalidated?
@@ -253,38 +173,9 @@
   (let [k (tracker-key component)]
     (when-some [{:keys [atoms]} (get @watch-registry k)]
       (doseq [a atoms]
-        (unwatch-dep! a k))
+        (reakt/unwatch-ref a k))
       (swap! watch-registry dissoc k)))
   nil)
-
-;; ═══════════════════════════════════════════════════════════════════════════
-;; defsetter / defgetter — component state accessor boilerplate
-;; ═══════════════════════════════════════════════════════════════════════════
-
-(defmacro defsetter
-  "Define a one-arg setter for a component atom field.
-
-     (defsetter name field comp value body...)
-       → (defn name [comp value] (reset! (field comp) value) body...)
-
-   FIELD is the keyword name of the atom field. COMP and VALUE are the
-   parameter names of the generated function — BODY refers to them as
-   needed. BODY is optional and spliced after the reset, for side effects
-   that must follow the state change ((protocols/invalidate comp), reflow,
-   additional resets)."
-  [name field comp value & body]
-  `(defn ~name [~comp ~value]
-     (reset! (~field ~comp) ~value)
-     ~@body))
-
-(defmacro defgetter
-  "Define a one-arg getter for a component atom field.
-
-     (defgetter name field comp)
-       → (defn name [comp] @(field comp))"
-  [name field comp]
-  `(defn ~name [~comp]
-     @(~field ~comp)))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; ═════════════════════════════════════════════════════════════════════

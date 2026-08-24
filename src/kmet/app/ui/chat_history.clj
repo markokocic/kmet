@@ -526,7 +526,7 @@
                      (cm/custom-message-collapsible? info)
                      (assoc :collapsed-content @(:collapsed-content-atom info)
                             :expanded-content @(:expanded-content-atom info)
-                            :expanded? (cm/custom-message-get-expanded info))))]
+                            :expanded? @(:expanded-atom info))))]
     (chat-history-clear! ch)
     (doseq [m msgs]
       (chat-history-add-message! ch m))

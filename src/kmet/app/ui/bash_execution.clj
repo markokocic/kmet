@@ -12,7 +12,7 @@
             [kmet.app.keybindings :as app-kb]
             [kmet.tui.keybindings :as tui-kb]
             [kmet.app.ui.subs :as s]
-            [kmet.tui.macros :refer [track! defsetter defcomponent]]
+            [kmet.tui.macros :refer [track! defcomponent]]
             [clojure.string :as str]))
 
 ;; ─── Preview line limit ────────────────────────────────────────────────────
@@ -231,8 +231,6 @@
     comp))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
-
-(defsetter bash-execution-set-expanded! :expanded-atom comp expanded?)
 
 (defn bash-execution-append-output!
   "Append a chunk of output text. Handles incomplete line continuation

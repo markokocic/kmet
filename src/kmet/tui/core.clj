@@ -6,7 +6,7 @@
             [clojure.java.io :as io]
             [kmet.tui.macros :as macros]
             [kmet.tui.protocols :as protocols]
-            [kmet.tui.reagent :as reagent]
+            [kmet.libs.reakt :as reakt]
             [kmet.tui.terminal :as terminal]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as utils]
@@ -45,7 +45,7 @@
    dirtied since the last frame — are always current in what gets drawn.
    The flush is a no-op while nothing is queued."
   [c width]
-  (reagent/flush!)
+  (reakt/flush!)
   (protocols/render c width))
 (def handle-input protocols/handle-input)
 (def invalidate protocols/invalidate)
@@ -1566,13 +1566,13 @@
         (when @(:running? tui)
           (let [w (.getWidth jline)
                 h (.getHeight jline)]
-            ;; Frame flush: drain the reaction batch queue (kmet.tui.reagent)
+            ;; Frame flush: drain the reaction batch queue (kmet.libs.reakt)
             ;; at the loop's ~16ms cadence — Reagent's animation-frame
             ;; batching. A no-op while nothing is queued (headless tests, no
             ;; reactions in use yet); dirty reactions brought current here
             ;; invalidate their subscribers' caches before the render gate
             ;; below reads them.
-            (reagent/flush!)
+            (reakt/flush!)
             ;; Terminal resize detection. JLine's native WINCH handling does
             ;; not work under babashka's GraalVM native image (no native
             ;; signal handlers are registered), so the on-resize callback is

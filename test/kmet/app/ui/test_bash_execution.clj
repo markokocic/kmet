@@ -33,7 +33,7 @@
   (let [c (be/make-bash-execution :command "ls" :exclude-from-context? false)
         big (clojure.string/join "\n" (repeat 30 "line"))]
     (be/bash-execution-append-output! c big)
-    (be/bash-execution-set-expanded! c true)
+    (reset! (:expanded-atom c) true)
     (let [lines (protocols/render c 40)]
       (t/is (seq lines))
       (t/is (>= (count lines) 30) "expanded output renders all lines"))))

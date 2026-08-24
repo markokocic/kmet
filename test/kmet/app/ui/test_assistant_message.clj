@@ -51,7 +51,7 @@
             setHiddenThinkingLabel)"
     (let [c (am/make-assistant-message :text "response" :thinking "secret"
                                        :hide-thinking? true)
-          _ (am/assistant-message-set-hidden-label! c "Thoughts hidden")
+          _ (reset! (:hidden-label-atom c) "Thoughts hidden")
           plain (mapv strip-ansi (core/render c 40))]
       (is (some #(re-find #"Thoughts hidden" %) plain)
           "custom label shown")

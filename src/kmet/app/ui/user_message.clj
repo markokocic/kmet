@@ -11,7 +11,7 @@
             [kmet.app.ui.subs :as s]
             [kmet.tui.components.box :as box]
             [kmet.tui.components.markdown :as md]
-            [kmet.tui.macros :refer [track! track-deps defsetter defcomponent]]
+            [kmet.tui.macros :refer [track! track-deps defcomponent]]
             [kmet.app.extensions :as extensions]))
 
 (declare apply-theme!)
@@ -52,8 +52,10 @@
     (md/markdown-set-default-style! m
                                     (fn [s] (theme/fg theme :user-message-text s)))))
 
-(defsetter user-message-set-output-pad! :output-pad-atom comp n
-  ;; Rebuild box with new padding, reusing the same markdown child
+(defn user-message-set-output-pad!
+  "Rebuild box with new padding, reusing the same markdown child."
+  [comp n]
+  (reset! (:output-pad-atom comp) n)
   (let [theme (deref s/theme-sub)
         m @(:markdown-comp comp)
         b (box/make-box n 1 #(theme/bg theme :user-message-bg %))]

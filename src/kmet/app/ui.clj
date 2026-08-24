@@ -27,25 +27,18 @@
 
 ;; ToolExecutionComponent
 (def make-tool-execution tool-execution/make-tool-execution)
-(def tool-execution-set-content! tool-execution/tool-execution-set-content!)
-(def tool-execution-set-error! tool-execution/tool-execution-set-error!)
-(def tool-execution-set-expanded! tool-execution/tool-execution-set-expanded!)
-(def tool-execution-set-truncation! tool-execution/tool-execution-set-truncation!)
-(def tool-execution-set-details! tool-execution/tool-execution-set-details!)
-(def tool-execution-set-images! tool-execution/tool-execution-set-images!)
-(def tool-execution-set-tool-call-id! tool-execution/tool-execution-set-tool-call-id!)
-(def tool-execution-set-args-complete! tool-execution/tool-execution-set-args-complete!)
 (def tool-execution-mark-execution-started! tool-execution/tool-execution-mark-execution-started!)
+(def tool-execution-set-error! tool-execution/tool-execution-set-error!)
+(def tool-execution-set-images! tool-execution/tool-execution-set-images!)
+(def tool-execution-set-args-complete! tool-execution/tool-execution-set-args-complete!)
 
 ;; CustomMessageComponent
 (def make-custom-message custom-message/make-custom-message)
 (def custom-message-set-collapsible-content! custom-message/custom-message-set-collapsible-content!)
 (def custom-message-collapsible? custom-message/custom-message-collapsible?)
 (def custom-message-set-expanded! custom-message/custom-message-set-expanded!)
-(def custom-message-get-expanded custom-message/custom-message-get-expanded)
 ;; BashExecutionComponent
 (def make-bash-execution bash-execution/make-bash-execution)
-(def bash-execution-set-expanded! bash-execution/bash-execution-set-expanded!)
 (def bash-execution-append-output! bash-execution/bash-execution-append-output!)
 (def bash-execution-set-complete! bash-execution/bash-execution-set-complete!)
 

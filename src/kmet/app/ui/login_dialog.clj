@@ -21,7 +21,7 @@
             [kmet.tui.keybindings :as kb]
             [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
-            [kmet.tui.reagent :as r]
+            [kmet.libs.reakt :as r]
             [kmet.tui.theme :as theme]
             [kmet.tui.utils :as u]))
 

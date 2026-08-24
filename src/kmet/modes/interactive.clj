@@ -12,7 +12,7 @@
             [kmet.tui.components.expandable-text :as expandable-text]
             [kmet.tui.components.container :as container]
             [kmet.tui.hiccup :as hiccup]
-            [kmet.tui.reagent :as r]
+            [kmet.libs.reakt :as r]
             [kmet.app.ui :as ui]
             [kmet.app.ui.auth-selector :as auth-selector]
             [kmet.app.ui.dock :as dock]
@@ -1356,14 +1356,14 @@
                                   :args (:arguments tc)
                                   :content ""
                                   :is-error false})]
-                  (ui/tool-execution-set-tool-call-id! comp (:id tc))
+                  (reset! (:tool-call-id-atom comp) (:id tc))
                   (ui/tool-execution-set-args-complete! comp)
                   (if errored?
-                    (do (ui/tool-execution-set-content!
-                         comp (or (:error-message e)
-                                  (if (= :aborted (:stop-reason e))
-                                    "Aborted"
-                                    "Error")))
+                    (do (reset! (:content-atom comp)
+                                (or (:error-message e)
+                                    (if (= :aborted (:stop-reason e))
+                                      "Aborted"
+                                      "Error")))
                         (ui/tool-execution-set-error! comp true))
                     (swap! pending-tools assoc (:id tc) comp))))))
 
@@ -1374,12 +1374,12 @@
             (if-let [comp (get @pending-tools tc-id)]
               ;; matched result — fill the pending call component (pi:
               ;; updateResult by toolCallId)
-              (do (ui/tool-execution-set-content! comp (content-of e))
+              (do (reset! (:content-atom comp) (content-of e))
                   (ui/tool-execution-set-error! comp (:is-error e false))
                   (when-let [truncation (:truncation e)]
-                    (ui/tool-execution-set-truncation! comp truncation))
+                    (reset! (:truncation-atom comp) truncation))
                   (when-let [details (:details e)]
-                    (ui/tool-execution-set-details! comp details))
+                    (reset! (:details-atom comp) details))
                   (when-let [images (:images e)]
                     (ui/tool-execution-set-images! comp images))
                   (swap! pending-tools dissoc tc-id))
@@ -2514,7 +2514,7 @@
         (ui/chat-history-finalize-streaming! chat-history)
         (let [comp (ui/chat-history-add-message! chat-history msg)]
           ;; Store tool call ID for correlation
-          (ui/tool-execution-set-tool-call-id! comp (:tool-call-id evt))
+          (reset! (:tool-call-id-atom comp) (:tool-call-id evt))
           ;; Args are complete when received (kmet: no streaming args)
           (ui/tool-execution-set-args-complete! comp)
           ;; Mark execution started so pending bg + timer activate now
@@ -2535,18 +2535,18 @@
       ;; atom, which schedules the frame itself (§3.4).
       (when-let [comp (get @pending-tool-comps (:tool-call-id evt))]
         (when-let [content (:content evt)]
-          (ui/tool-execution-set-content! comp content)))
+          (reset! (:content-atom comp) content)))
       :tool-execution-end
       ;; Pi: update the component by id and remove it from pendingTools
       ;; (watched atoms schedule their own frame — §3.4)
       (when-let [comp (get @pending-tool-comps (:tool-call-id evt))]
         (let [result (:result evt)]
-          (ui/tool-execution-set-content! comp (:content result))
+          (reset! (:content-atom comp) (:content result))
           (ui/tool-execution-set-error! comp (:is-error result false))
           (when-let [truncation (:truncation result)]
-            (ui/tool-execution-set-truncation! comp truncation))
+            (reset! (:truncation-atom comp) truncation))
           (when-let [details (:details result)]
-            (ui/tool-execution-set-details! comp details))
+            (reset! (:details-atom comp) details))
           (when-let [images (:images result)]
             (ui/tool-execution-set-images! comp images))
           (swap! pending-tool-comps dissoc (:tool-call-id evt))))

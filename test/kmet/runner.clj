@@ -57,6 +57,7 @@
     kmet.tui.test-fuzzy
     kmet.tui.test-autocomplete
     kmet.tui.test-core
+    kmet.libs.test-reakt
     kmet.tui.test-reagent
     kmet.tui.test-compute
     kmet.tui.test-hiccup

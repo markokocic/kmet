@@ -10,7 +10,7 @@
             [kmet.tui.components.markdown :as md]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.spacer :as spacer]
-            [kmet.tui.macros :refer [track! track-deps defsetter defgetter defcomponent]]))
+            [kmet.tui.macros :refer [track! track-deps defcomponent]]))
 
 (declare apply-theme!)
 
@@ -105,10 +105,10 @@
   (and (some? @(:collapsed-content-atom comp))
        (some? @(:expanded-content-atom comp))))
 
-(defsetter custom-message-set-expanded! :expanded-atom comp expanded?
+(defn custom-message-set-expanded!
+  [comp expanded?]
+  (reset! (:expanded-atom comp) expanded?)
   (rebuild-content! comp))
-
-(defgetter custom-message-get-expanded :expanded-atom comp)
 
 (defn- apply-theme!
   "Apply THEME to the derived structures (box bg-fn + rebuilt children).
@@ -117,8 +117,10 @@
   (box/box-set-bg-fn @(:box comp) #(theme/bg theme :custom-message-bg %))
   (rebuild-content! comp))
 
-(defsetter custom-message-set-output-pad! :output-pad-atom comp n
-  ;; Rebuild box with new padding, keep spacer
+(defn custom-message-set-output-pad!
+  "Rebuild box with new padding, keep spacer."
+  [comp n]
+  (reset! (:output-pad-atom comp) n)
   (let [theme (deref s/theme-sub)
         inner-container (container/make-container)
         b (box/make-box n 1 #(theme/bg theme :custom-message-bg %))]

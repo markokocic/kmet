@@ -39,13 +39,13 @@
 (deftest test-set-name
   (testing "set-name! updates tool name"
     (let [c (te/make-tool-execution :name "old")]
-      (te/tool-execution-set-name! c "new")
+      (reset! (:name-atom c) "new")
       (is (some #(re-find #"new" %) (mapv strip-ansi (core/render c 40)))))))
 
 (deftest test-set-content
   (testing "set-content! updates output"
     (let [c (te/make-tool-execution :name "ls" :content "old")]
-      (te/tool-execution-set-content! c "new content")
+      (reset! (:content-atom c) "new content")
       (is (some #(re-find #"new content" %) (mapv strip-ansi (core/render c 40)))))))
 
 (deftest test-set-error
@@ -81,7 +81,7 @@
   (testing "invalidate clears cache"
     (let [c (te/make-tool-execution :name "ls" :content "first")]
       (core/render c 40) ;; populate cache
-      (te/tool-execution-set-content! c "second")
+      (reset! (:content-atom c) "second")
       (is (some #(re-find #"second" %) (mapv strip-ansi (core/render c 40)))))))
 
 ;; ─── Built-in renderers (read / write / edit / bash) ──────────────────────
@@ -305,7 +305,7 @@
       (is (nil? (:interval @(:renderer-state-atom c)))
           "completion clears the ticker")
       ;; a later render (cache miss) must not restart it
-      (te/tool-execution-set-expanded! c true)
+      (reset! (:expanded-atom c) true)
       (core/render c 60)
       (is (nil? (:interval @(:renderer-state-atom c)))
           "no ticker after completion"))))
@@ -326,11 +326,11 @@
         ;; file changed between preview and apply — the tool applied a diff
         ;; that differs from the previewed one
         (spit f "alpha\nbeta\ngamma\ndelta")
-        (te/tool-execution-set-content! c
-                                        "Successfully replaced 1 block(s) in target/test-tools-edit-resultdiff.txt.")
+        (reset! (:content-atom c)
+                "Successfully replaced 1 block(s) in target/test-tools-edit-resultdiff.txt.")
         (te/tool-execution-set-error! c false)
-        (te/tool-execution-set-details! c
-                                        {:diff " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma\n 4 delta"})
+        (reset! (:details-atom c)
+                {:diff " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma\n 4 delta"})
         ;; this pass still shows the stale preview; the result corrects the cache
         (let [plain (mapv strip-ansi (core/render c 60))]
           (is (some #(re-find #"\+2 BETA" %) plain)))
@@ -365,11 +365,11 @@
                     :old-text "beta" :new-text "BETA"})]
       (te/tool-execution-set-args-complete! c)
       (let [before (mapv strip-ansi (core/render c 60))]
-        (te/tool-execution-set-content! c
-                                        "Successfully replaced 1 block(s) in target/test-tools-edit-match.txt.")
+        (reset! (:content-atom c)
+                "Successfully replaced 1 block(s) in target/test-tools-edit-match.txt.")
         (te/tool-execution-set-error! c false)
-        (te/tool-execution-set-details! c
-                                        {:diff " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma"})
+        (reset! (:details-atom c)
+                {:diff " 1 alpha\n-2 beta\n+2 BETA\n 3 gamma"})
         (let [after2 (mapv strip-ansi (core/render c 60))]
           ;; identical diff: no correction, no stale-file error
           (is (= before after2))
@@ -477,7 +477,7 @@
       ;; (pi: markExecutionStarted; set-content! must not mark started —
       ;; replayed tools render without a duration)
       (te/tool-execution-mark-execution-started! c)
-      (te/tool-execution-set-content! c "hi\n")
+      (reset! (:content-atom c) "hi\n")
       (te/tool-execution-set-error! c false)
       (let [plain (mapv strip-ansi (core/render c 60))
             trimmed (mapv str/trim plain)

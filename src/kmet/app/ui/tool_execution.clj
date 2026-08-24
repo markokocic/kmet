@@ -12,7 +12,7 @@
             [kmet.app.ui.tool-renderers :as renderers]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.image :as ic]
-            [kmet.tui.macros :refer [track! defsetter defcomponent]]))
+            [kmet.tui.macros :refer [track! defcomponent]]))
 
 ;; ─── Renderer dispatch ─────────────────────────────────────────────────────
 ;; Built-in renderer functions live in kmet.app.ui.tool-renderers so supported
@@ -206,24 +206,15 @@
 ;; ─── Public API ────────────────────────────────────────────────────────────
 ;; Pi: set-content! and set-error! manage timing internally.
 
-(defsetter tool-execution-set-name! :name-atom comp name
-  (protocols/invalidate comp))
-
-(defsetter tool-execution-set-content! :content-atom comp content
-  ;; Pi: timing is driven exclusively by markExecutionStarted (the
-  ;; :tool-execution-start lifecycle event) — set-content! must NOT mark
-  ;; execution started, or replayed results (restore / -c) would show a
-  ;; fabricated "Took 0.0s". Pi renders replayed tools without a duration
-  ;; (startedAt stays undefined: updateResult never touches it).
-  (protocols/invalidate comp))
-
-(defsetter tool-execution-set-error! :is-error-atom comp is-error
-  ;; Pi: error marks execution ended
+(defn tool-execution-set-error!
+  "Mark errored; pi: error marks execution ended (stamps ended-at once) and
+   clears the elapsed ticker on completion — a component dropped from the
+   chat (e.g. /new while a tool runs) must not keep a zombie interval
+   invalidating forever."
+  [comp is-error]
+  (reset! (:is-error-atom comp) is-error)
   (when (nil? @(:ended-at-atom comp))
     (reset! (:ended-at-atom comp) (System/currentTimeMillis)))
-  ;; Pi: renderResult clears the elapsed ticker on completion — do it here
-  ;; too, so a component dropped from the chat (e.g. /new while a tool runs)
-  ;; doesn't keep a zombie interval invalidating forever.
   (let [state @(:renderer-state-atom comp)]
     (when-let [interval (:interval state)]
       (future-cancel interval))
@@ -231,28 +222,24 @@
       (reset! (:renderer-state-atom comp) (dissoc state :interval))))
   (protocols/invalidate comp))
 
-(defsetter tool-execution-set-expanded! :expanded-atom comp expanded?
-  (protocols/invalidate comp))
-(defsetter tool-execution-set-output-pad! :output-pad-atom comp n
-  ;; Rebuild the box with the new horizontal padding (render sets the bg-fn)
+(defn tool-execution-set-output-pad!
+  "Rebuild the box with the new horizontal padding (render sets the bg-fn)."
+  [comp n]
+  (reset! (:output-pad-atom comp) n)
   (let [b (box/make-box n 1 nil)
         inner @(:inner-container comp)]
     (box/box-add-child b inner)
     (reset! (:box comp) b))
   (protocols/invalidate comp))
 
-(defsetter tool-execution-set-truncation! :truncation-atom comp truncation
-  (protocols/invalidate comp))
-
-(defsetter tool-execution-set-details! :details-atom comp details
-  (protocols/invalidate comp))
-
-(defsetter tool-execution-set-tool-call-id! :tool-call-id-atom comp id)
-
 (defn tool-execution-mark-execution-started!
   "Mark that tool execution has started (Pi: markExecutionStarted()).
-   Sets started-at timestamp so pending background and timer activate
-   from tool start rather than waiting for first content delivery."
+   Sets started-at so pending background and timer activate from tool start
+   rather than waiting for first content delivery. This is the ONLY thing
+   that may stamp started-at: content updates are plain resets on the
+   :content-atom — if they stamped too, replayed results (restore / -c)
+   would show a fabricated \"Took 0.0s\" (pi renders replayed tools without
+   a duration: startedAt stays undefined, updateResult never touches it)."
   [comp]
   (when (nil? @(:started-at-atom comp))
     (reset! (:started-at-atom comp) (System/currentTimeMillis)))

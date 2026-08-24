@@ -7,7 +7,7 @@
             [clojure.test :refer [deftest is testing]]
             [kmet.app.ui.login-dialog :as ld]
             [kmet.tui.protocols :as protocols]
-            [kmet.tui.reagent :as r]))
+            [kmet.libs.reakt :as r]))
 
 (defn- strip-ansi [s]
   (str/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))

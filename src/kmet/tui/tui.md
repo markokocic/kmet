@@ -39,7 +39,7 @@ components sit above them**, exactly like React components above `[:div]`.
   them by key.
 - **Root** (`hiccup/root`): the one constructor from a tree to a mounted,
   disposable record.
-- **Reactivity** (`kmet.tui.reagent` + `track!`): dependency-discovering
+- **Reactivity** (`kmet.libs.reakt` + `track!`): dependency-discovering
   reactions over plain atoms; invalidation schedules the next frame.
 - **Output**: every record caches its rendered lines per width; the frame
   loop emits only the diff against the previous frame.
@@ -60,7 +60,7 @@ atom change → reaction dirty → queued → frame flush runs it →
 | `kmet.tui.core` | TUI instance: create/start/stop, child list, focus, overlays, input listeners, flash, render loop with line diffing |
 | `kmet.tui.protocols` | `IComponent`, `IFocusable`, `IEditorComponent` |
 | `kmet.tui.macros` | `defcomponent`, `track!`, `with-let`, `invalidate-cache`, deref-capture runtime |
-| `kmet.tui.reagent` | reactions/track/cursor/batching over plain atoms |
+| `kmet.libs.reakt` | reactions/track/cursor/batching over plain atoms |
 | `kmet.tui.hiccup` | tag table, compile/reconcile, `root`, `ref`, `compute`, `render-lines` |
 | `kmet.tui.components.*` | host elements (see §10) |
 | `kmet.tui.theme` | color/styling API, active theme atom, theme files |
@@ -268,12 +268,12 @@ sleeps: fast-path `bb test` material, never `^:slow`.
 
 ## 3. Reactivity
 
-### 3.1 `kmet.tui.reagent` — reactions over plain atoms
+### 3.1 `kmet.libs.reakt` — reactions over plain atoms
 
 A Babashka port of `reagent.ratom`'s semantics. There is **no custom atom
 type**: Babashka seals `IWatchable`/`IReset` away from pure-source
 implementations, so dependency capture rides the existing deref funnel —
-`kmet.tui.macros/tracked-deref`, through which every component render body
+`kmet.libs.reakt/tracked-deref`, through which every component render body
 routes its reads via `track!`. Plain `clojure.lang.Atom`s ARE the tracked
 inputs; `(r/atom x)` returns a plain atom so Reagent-shaped call sites port
 mechanically.

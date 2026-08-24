@@ -4,7 +4,7 @@
    the editor in the editor dock and takes focus; the returned done fn
    restores the previously active editor and focus (pi: done())."
   (:require [kmet.tui.core :as tui]
-            [kmet.tui.reagent :as r]))
+            [kmet.libs.reakt :as r]))
 
 (def ^:private dock-generation
   "pi: activeSelectorToken — only the most recently mounted selector may

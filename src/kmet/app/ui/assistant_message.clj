@@ -14,7 +14,7 @@
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.components.markdown :as md]
-            [kmet.tui.macros :refer [track! defsetter defcomponent]]
+            [kmet.tui.macros :refer [track! defcomponent]]
             [kmet.app.extensions :as extensions]))
 
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
@@ -243,14 +243,14 @@
   [comp tool-calls?]
   (reset! (:tool-calls-atom comp) (boolean tool-calls?)))
 
-(defsetter assistant-message-set-hide-thinking! :hide-thinking-atom comp hide?
+(defn assistant-message-set-hide-thinking!
+  [comp hide?]
+  (reset! (:hide-thinking-atom comp) hide?)
   (when-let [w @(:last-render-width-atom comp)]
     (reflow-all! comp w)))
 
-(defsetter assistant-message-set-hidden-label! :hidden-label-atom comp label
-  (when-let [w @(:last-render-width-atom comp)]
-    (reflow-all! comp w)))
-
-(defsetter assistant-message-set-output-pad! :output-pad-atom comp n
+(defn assistant-message-set-output-pad!
+  [comp n]
+  (reset! (:output-pad-atom comp) n)
   (when-let [w @(:last-render-width-atom comp)]
     (reflow-all! comp w)))
