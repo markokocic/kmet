@@ -242,16 +242,35 @@
         (subs id 0 40)
         id))))
 
+(defn- same-origin?
+  "True when a recorded message was produced by the current request's
+   provider+model — the provenance stamps every recorded assistant message
+   carries (add-assistant-message!/record-abandoned-attempt!). Replay-gating
+   predicate: only reasoning the target model produced itself round-trips;
+   messages without stamps (legacy sessions) count as foreign."
+  [m provider model-id]
+  (and (some? provider) (some? model-id)
+       (= (:provider m) provider)
+       (= (:model m) model-id)))
+
 (defn openai-messages
   "Map agent messages to OpenAI chat-completion messages.
    Bash entries become user messages (pi: convertToLlm bashExecution);
-   excluded ones are dropped. Assistant messages with :thinking send it back
-   as reasoning_content (pi: the thinking signature field — DeepSeek thinking
-   mode round-trips the CoT). Tested directly by test_llm, hence public."
-  [messages & [provider]]
+   excluded ones are dropped. PROVIDER and MODEL-ID identify the request's
+   target; an assistant message's :thinking is echoed back as
+   reasoning_content only when the message was produced by that same
+   provider+model (pi: converters replay thinking only for same-model
+   messages and degrade everything else — feeding another model's
+   chain-of-thought back as if it were the target's own derails DeepSeek-class
+   thinking models into re-running their last tool call after a mid-session
+   /model switch). Tested directly by test_llm, hence public."
+  [messages & [provider model-id]]
   (into []
         (keep (fn [m]
-                (let [role (name (:role m))]
+                (let [role (name (:role m))
+                      ;; provenance-gated: nil unless this model said it
+                      thinking (when (same-origin? m provider model-id)
+                                 (str/trim (or (:thinking m) "")))]
                   (case role
                     "bash"
                     (when-not (:exclude-from-context? m)
@@ -263,7 +282,6 @@
                      :content (tool-result-content m)}
                     "assistant"
                     (let [text (content-text (:content m))
-                          thinking (str/trim (or (:thinking m) ""))
                           has-tc (seq (:tool-calls m))
                           msg (cond-> {:role "assistant"}
                                 (seq text) (assoc :content text)
@@ -292,51 +310,58 @@
         messages))
 
 (defn openai-messages-with-reasoning
-  "Like openai-messages but adds reasoning_content to assistant messages.
-   Some providers (e.g., opencode-go/deepseek-v4-flash) require a
-   reasoning_content field on assistant messages even when empty; a message's
-   own :thinking is sent back verbatim (pi round-trips the thinking
-   signature)."
-  [messages & [provider]]
+  "Like openai-messages but every kept assistant message carries a
+   reasoning_content field. Some providers (e.g., opencode-go/deepseek-v4-flash)
+   require the field on assistant messages even when empty — DeepSeek
+   thinking-mode rejects requests that carry tools but omit reasoning_content
+   on any assistant message (400 \"must be passed back to the API\").
+   PROVIDER and MODEL-ID identify the request's target; a message's own
+   :thinking is sent back verbatim only when it was produced by that same
+   provider+model (see openai-messages — cross-model CoT is never replayed);
+   everything else gets the empty-string fill."
+  [messages & [provider model-id]]
   (into []
         (keep (fn [m]
                 (let [role (name (:role m))
-                      msg (case role
-                            "bash"
-                            (when-not (:exclude-from-context? m)
-                              {:role "user" :content (bash-execution-text m)})
-                            "tool"
-                            {:role "tool"
-                             :tool_call_id (normalize-openai-tool-call-id
-                                            (-> m :content first :tool_use_id) provider)
-                             :content (tool-result-content m)}
-                            "assistant"
-                            (let [text (content-text (:content m))
-                                  has-tc (seq (:tool-calls m))
-                                  msg (cond-> {:role "assistant"}
-                                        (seq text) (assoc :content text)
-                                        has-tc (assoc :tool_calls
-                                                      (mapv (fn [tc]
-                                                              {:id (normalize-openai-tool-call-id (:id tc) provider)
-                                                               :type "function"
-                                                               :function {:name (:name tc)
-                                                                          :arguments (cheshire.core/generate-string
-                                                                                      (:arguments tc))}})
-                                                            (:tool-calls m))))]
-                              ;; skip empty assistant messages (pi: providers
-                              ;; require content or tool_calls) — an empty
-                              ;; reasoning_content-only message is rejected too
-                              (when (or (seq text) has-tc)
-                                ;; opencode-go requires reasoning_content on assistant messages
-                                (assoc msg :reasoning_content (or (str/trim (or (:thinking m) "")) ""))))
-                            ;; custom messages (pi: convertToLlm custom→user)
-                            "custom"
-                            {:role "user"
-                             :content (openai-content (:content m))}
-                            {:role role
-                             :content (openai-content (:content m))})]
-                  msg)))
-        messages))
+                      ;; provenance-gated: "" unless this model said it
+                      thinking (or (when (same-origin? m provider model-id)
+                                     (str/trim (or (:thinking m) "")))
+                                   "")]
+                  (case role
+                    "bash"
+                    (when-not (:exclude-from-context? m)
+                      {:role "user" :content (bash-execution-text m)})
+                    "tool"
+                    {:role "tool"
+                     :tool_call_id (normalize-openai-tool-call-id
+                                    (-> m :content first :tool_use_id) provider)
+                     :content (tool-result-content m)}
+                    "assistant"
+                    (let [text (content-text (:content m))
+                          has-tc (seq (:tool-calls m))
+                          msg (cond-> {:role "assistant"}
+                                (seq text) (assoc :content text)
+                                has-tc (assoc :tool_calls
+                                              (mapv (fn [tc]
+                                                      {:id (normalize-openai-tool-call-id (:id tc) provider)
+                                                       :type "function"
+                                                       :function {:name (:name tc)
+                                                                  :arguments (cheshire.core/generate-string
+                                                                              (:arguments tc))}})
+                                                    (:tool-calls m))))]
+                      ;; skip empty assistant messages (pi: providers
+                      ;; require content or tool_calls) — an empty
+                      ;; reasoning_content-only message is rejected too
+                      (when (or (seq text) has-tc)
+                        ;; deepseek thinking mode requires reasoning_content on assistant messages
+                        (assoc msg :reasoning_content thinking)))
+                    ;; custom messages (pi: convertToLlm custom→user)
+                    "custom"
+                    {:role "user"
+                     :content (openai-content (:content m))}
+                    {:role role
+                     :content (openai-content (:content m))})))
+              messages)))
 
 (defn resolve-template-values
   "pi buildChatTemplateValues + resolveChatTemplateKwargValue: resolve the
@@ -461,13 +486,25 @@
   "pi getCompat: the model's explicit :compat overlaid key-wise on
    detect-openai-compat — an explicit non-nil value wins, nil/absent falls
    back to the detected default (pi's ?? merge). The single source of compat
-   truth for the openai-completions request builders."
+   truth for the openai-completions request builders.
+
+   One deliberate exception to pure key-wise merge: an explicit
+   :thinking-format :deepseek pins a model to the DeepSeek thinking-mode
+   protocol, which requires reasoning_content on every assistant message once
+   tools are carried. Proxies detect-openai-compat can't recognize (custom
+   provider ids / non-deepseek.com base urls) would otherwise leave the
+   requirement undetected and 400 mid-session — so the requirement is derived
+   from the format unless the compat sets the flag explicitly."
   [model]
-  (let [explicit (:compat model)]
-    (into {}
-          (map (fn [[k detected]]
-                 [k (let [v (get explicit k)] (if (nil? v) detected v))]))
-          (detect-openai-compat model))))
+  (let [explicit (:compat model)
+        merged (into {}
+                     (map (fn [[k detected]]
+                            [k (let [v (get explicit k)] (if (nil? v) detected v))]))
+                     (detect-openai-compat model))]
+    (cond-> merged
+      (and (= :deepseek (:thinking-format merged))
+           (nil? (get explicit :requires-reasoning-content-on-assistant-messages)))
+      (assoc :requires-reasoning-content-on-assistant-messages true))))
 
 (defn openai-thinking-params
   "Thinking params for an openai-completions payload (pi buildParams thinking

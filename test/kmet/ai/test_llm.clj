@@ -623,17 +623,45 @@
           "text-only messages keep string content for Anthropic")))
 
 (t/deftest test-llm-assistant-thinking-roundtrip
-  ;; pi round-trips the thinking signature: assistant messages with :thinking
-  ;; send it back as reasoning_content (DeepSeek thinking mode)
+  ;; pi round-trips thinking only for same-provider-same-model messages and
+  ;; degrades everything else: assistant messages with :thinking send it back
+  ;; as reasoning_content (DeepSeek thinking mode) only when the recorded
+  ;; provenance matches the request's target model — a mid-session /model
+  ;; switch must not feed another model's chain-of-thought back as if it were
+  ;; the new model's own reasoning (DeepSeek-class models derail into
+  ;; re-running their last tool call on such transcripts).
+  (let [own [{:role :assistant
+              :content [{:type :text :text "answer"}]
+              :thinking "let me think\nabout it"
+              :provider :commandcode :model "deepseek/deepseek-v4-flash"}]
+        openai (@#'shared/openai-messages own :commandcode "deepseek/deepseek-v4-flash")
+        reasoning (@#'shared/openai-messages-with-reasoning own :commandcode "deepseek/deepseek-v4-flash")]
+    (t/is (= "let me think\nabout it" (:reasoning_content (first openai)))
+          "same-model thinking round-trips")
+    (t/is (= "let me think\nabout it" (:reasoning_content (first reasoning)))
+          "with-reasoning variant uses same-model thinking"))
+  ;; cross-model / legacy-unstamped messages never leak their CoT; the
+  ;; with-reasoning variant pads the required empty field instead
+  (doseq [foreign [{:role :assistant
+                    :content [{:type :text :text "answer"}]
+                    :thinking "CoT produced by hetzner Qwen"
+                    :provider :hetzner :model "Qwen3.8-27B"}
+                   {:role :assistant
+                    :content [{:type :text :text "answer"}]
+                    :thinking "recorded before kmet stamped provenance"}]
+          :let [openai (@#'shared/openai-messages [foreign] :commandcode "deepseek/deepseek-v4-flash")
+                reasoning (@#'shared/openai-messages-with-reasoning [foreign] :commandcode "deepseek/deepseek-v4-flash")]]
+    (t/is (nil? (:reasoning_content (first openai)))
+          "foreign/unstamped thinking is not replayed")
+    (t/is (= "" (:reasoning_content (first reasoning)))
+          "with-reasoning pads the empty field for deepseek thinking mode"))
+  ;; no target identity given (legacy call shape): nothing is replayed
   (let [msgs [{:role :assistant
                :content [{:type :text :text "answer"}]
-               :thinking "let me think\nabout it"}]
-        openai (@#'shared/openai-messages msgs)
-        reasoning (@#'shared/openai-messages-with-reasoning msgs)]
-    (t/is (= "let me think\nabout it" (:reasoning_content (first openai)))
-          "plain openai-messages sends the thinking back")
-    (t/is (= "let me think\nabout it" (:reasoning_content (first reasoning)))
-          "with-reasoning variant uses the message thinking"))
+               :thinking "orphan CoT"}]]
+    (t/is (nil? (:reasoning_content (first (@#'shared/openai-messages msgs)))))
+    (t/is (= "" (:reasoning_content
+                 (first (@#'shared/openai-messages-with-reasoning msgs))))))
   ;; messages without thinking keep the empty-field compat for
   ;; requires-reasoning-content-on-assistant-messages providers
   (let [msgs [{:role :assistant :content [{:type :text :text "answer"}]}]]
@@ -1240,9 +1268,23 @@
              (cmodel :base-url "https://api.commandcode.ai/provider/v1"
                      :compat {:thinking-format :deepseek}))]
       (t/is (= :deepseek (:thinking-format r)) "explicit format kept")
-      (t/is (false? (:requires-reasoning-content-on-assistant-messages r))
-            "unset keys fall back to the detected default")
+      (t/is (true? (:requires-reasoning-content-on-assistant-messages r))
+            "deepseek thinking format implies the reasoning_content echo-back
+             requirement (undetectable proxies — DeepSeek 400s without it)")
       (t/is (= :max-completion-tokens (:max-tokens-field r)))))
+  (t/testing "an explicit flag beats the deepseek-format derivation"
+    (t/is (false? (:requires-reasoning-content-on-assistant-messages
+                   (shared/resolved-openai-compat
+                    (cmodel :compat {:thinking-format :deepseek
+                                     :requires-reasoning-content-on-assistant-messages false})))))
+    (t/is (true? (:requires-reasoning-content-on-assistant-messages
+                  (shared/resolved-openai-compat
+                   (cmodel :compat {:thinking-format :deepseek
+                                    :requires-reasoning-content-on-assistant-messages true}))))))
+  (t/testing "non-deepseek formats don't derive the requirement"
+    (t/is (false? (:requires-reasoning-content-on-assistant-messages
+                   (shared/resolved-openai-compat
+                    (cmodel :compat {:thinking-format :openrouter}))))))
   (t/testing "explicit false beats a detected true (pi ?? merge semantics)"
     (t/is (false? (:supports-store
                    (shared/resolved-openai-compat
@@ -1277,7 +1319,9 @@
                :compat nil}
         msgs [{:role :user :content [{:type :text :text "hi"}]}
               {:role :assistant :content [{:type :text :text "done"}]
-               :thinking "prior CoT"
+               ;; provenance stamps match the request target (the model that
+               ;; produced this message IS deepseek-v4-flash)
+               :thinking "prior CoT" :provider :custom :model "deepseek-v4-flash"
                :tool-calls [{:id "c1" :name "bash" :arguments {}}]}]
         payload (@#'completions/openai-payload model :high msgs [] "deepseek-v4-flash")]
     (t/is (= {:thinking {:type "enabled"} :reasoning_effort "high"}
@@ -1292,6 +1336,59 @@
                                                    :content [{:type :text :text "hi"}]}]
                                                  [] "deepseek-v4-flash")]
       (t/is (= "" (:reasoning_content (first (:messages payload))))))))
+
+(t/deftest test-openai-payload-model-switch-foreign-thinking
+  ;; Regression for the mid-session /model switch tool-loop: history recorded
+  ;; by another model (here hetzner Qwen) replayed against a DeepSeek-class
+  ;; target. The foreign chain-of-thought must never ride along as
+  ;; reasoning_content — DeepSeek thinking-mode treats the field as ITS OWN
+  ;; prior reasoning, and a transcript full of someone else's CoT derails it
+  ;; into re-running its last tool call forever. The strict-mode requirement
+  ;; is still satisfied: every assistant message carries the field (empty
+  ;; fill where there is no own-model reasoning).
+  (let [qwen-era {:id "Qwen3.8-27B" :name "Q" :provider :hetzner
+                  :base-url "https://inference.hetzner.com/api/v1"
+                  :reasoning true :input [:text] :max-tokens 32768
+                  :compat {:thinking-format :qwen-chat-template}}
+        msgs [{:role :user :content [{:type :text :text "list files"}]}
+              {:role :assistant :content [{:type :text :text "Checking."}]
+               :thinking "Qwen's own CoT about running ls"
+               :provider :hetzner :model "Qwen3.8-27B"
+               :tool-calls [{:id "call_1" :name "bash" :arguments {:command "ls"}}]}
+              {:role :tool
+               :content [{:type :tool_result :tool_use_id "call_1" :content "a.txt b.txt"}]
+               :tool-name "bash"}
+              {:role :assistant :content [{:type :text :text "Found a.txt and b.txt."}]
+               :thinking "Qwen's summary CoT"
+               :provider :hetzner :model "Qwen3.8-27B"}]]
+    (let [payload (@#'completions/openai-payload qwen-era :high msgs [] "Qwen3.8-27B")
+          [_ a1 _ a2] (:messages payload)]
+      ;; pre-switch sanity: same-model replay still works on the old model
+      (t/is (= "Qwen's own CoT about running ls" (:reasoning_content a1)))
+      (t/is (= "Qwen's summary CoT" (:reasoning_content a2))))
+    ;; after the switch the SAME history goes to deepseek-v4-flash
+    (let [ds (assoc (tmodel) :compat {:thinking-format :deepseek})
+          payload (@#'completions/openai-payload ds :high msgs [] "deepseek/deepseek-v4-flash")
+          [_ a1 _ a2] (:messages payload)]
+      (t/is (= {:thinking {:type "enabled"}} (select-keys payload [:thinking])))
+      ;; the :deepseek format derives the reasoning_content echo-back
+      ;; requirement, so the field is present on every assistant message —
+      ;; filled with the empty string, never with Qwen's CoT
+      (t/is (= "" (:reasoning_content a1))
+            "Qwen CoT does not leak into the deepseek request")
+      (t/is (= "" (:reasoning_content a2)))
+      (t/is (= "a.txt b.txt" (:content (nth (:messages payload) 2)))
+            "tool results still convert normally")
+      ;; with-reasoning path (derived from the explicit :deepseek format):
+      ;; field present everywhere, but filled only with own-model reasoning
+      (let [ds-flag (assoc ds :compat {:thinking-format :deepseek
+                                       :requires-reasoning-content-on-assistant-messages true})
+            payload (@#'completions/openai-payload ds-flag :high msgs [] "deepseek/deepseek-v4-flash")
+            [_ a1 _ a2] (:messages payload)]
+        (t/is (= "" (:reasoning_content a1))
+              "foreign turn carries the required empty fill")
+        (t/is (= "" (:reasoning_content a2))
+              "no foreign CoT rides along on any assistant message")))))
 
 (t/deftest test-reasoning-content-gating-data
   ;; pi: requiresReasoningContentOnAssistantMessages gates reasoning_content
