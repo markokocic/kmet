@@ -99,25 +99,26 @@
                                *command-line-args*
                                ["src" "test" "extensions"])]
                    (apply p/shell "clj-kondo" "--lint" paths))}
-  format  {:doc "Format src/test/extensions with cljfmt (fix in place; optionally: specific files/dirs)"
+  format  {:doc "Format src/test/extensions with cljfmt (fix in place; optionally: specific files/dirs; generated model_data catalogs excluded)"
            :requires ([babashka.fs :as fs] [clojure.string :as str] [cljfmt.tool :as fmt])
            :task (let [paths (if (seq *command-line-args*)
                                *command-line-args*
-                               ;; enumerate files so generated target/ artifacts
-                               ;; (extension test fixtures, gitignored) stay out
+                               ;; enumerate files so generated artifacts stay out:
+                               ;; target/, plus the committed provider catalogs ([image_]model_data/) — their exact
+                               ;; bytes are sha256-manifested, owned by the generator scripts rather than cljfmt
                                (->> ["src" "test" "extensions"]
                                     (mapcat (fn [root] (fs/glob root "**.{clj,cljs,cljc,cljd,bb,edn}")))
-                                    (remove (fn [path] (str/includes? (str path) "/target/")))
+                                    (remove (fn [path] (re-find (re-pattern "/target/|/(image_)?model_data/") (str path))))
                                     (mapv str)))]
                    (fmt/fix {:paths paths}))}
-  format-check {:doc "Check src/test/extensions formatting with cljfmt (no changes; optionally: specific files/dirs)"
+  format-check {:doc "Check src/test/extensions formatting with cljfmt (no changes; optionally: specific files/dirs; generated model_data catalogs excluded)"
                 :requires ([babashka.fs :as fs] [clojure.string :as str] [cljfmt.tool :as fmt])
                 :task (let [paths (if (seq *command-line-args*)
                                     *command-line-args*
-                                    ;; same enumeration as format — no target/
+                                    ;; same enumeration as format (target/ + generated model_data excluded)
                                     (->> ["src" "test" "extensions"]
                                          (mapcat (fn [root] (fs/glob root "**.{clj,cljs,cljc,cljd,bb,edn}")))
-                                         (remove (fn [path] (str/includes? (str path) "/target/")))
+                                         (remove (fn [path] (re-find (re-pattern "/target/|/(image_)?model_data/") (str path))))
                                          (mapv str)))]
                         (fmt/check {:paths paths}))}
   help    {:doc "Show this help"

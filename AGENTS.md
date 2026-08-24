@@ -10,6 +10,10 @@
   are handled via analysis hooks in `.clj-kondo/hooks/`; keep them in sync when the macro shapes change.
   The gate requires `bb lint` to pass with 0 errors, warnings, and info findings.
 - **Format**: `bb format` (fix) / `bb format-check` (verify) — cljfmt over `src`/`test`.
+  The generated EDN provider catalogs (`src/kmet/ai/model_data/`,
+  `src/kmet/ai/image_model_data/`) are excluded: their exact bytes are
+  sha256-manifested (`manifest.edn`, checked by `bb check-model-data`) and are
+  owned solely by the generator scripts.
   `cljfmt.edn` carries `:extra-indents` for the custom macros; default arg alignment is
   align-to-first-argument (modern cljfmt). Run `bb format` after structural edits (e.g. let merges).
 - **Changed-file dev loop** (fast validation of only the current changes): the `bb *-changed`
