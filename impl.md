@@ -109,7 +109,19 @@ unit-testable without a live LLM.
 2. ✅ Renderer registry map replacing the `case`s; kind method tables —
    `builtin-renderers` table in `tool_execution.clj` (:call/:result/:shell),
    `expand-fns` + `pad-fns` tables in `chat_history.clj`. *(small)*
-3. Extend `subs.clj` to status/model/flags; push-setters → bare resets *(medium)*
+3. ▸ Extend subs to shared state; push-setters → bare resets *(medium)*
+
+   **Status-slice finding (commit d7d0c89):** `:status` turned out to have
+   ZERO render-input consumers — all ten readers are event-handler guards
+   ("may I start a run?"), which stay direct field reads. The real push-web
+   was around the FOOTER: fdp atoms were deref'd inside getter fns,
+   invisible to the track! lexical rewrite, so `update-footer!` (on every
+   :status event) and `sync-footer-model!` invalidated by hand. Fixed with
+   track-deps over the fdp atoms + the live session :entries vector (which
+   Session mutates in place); both manual invalidations deleted, regression
+   test added. Remaining item-3 candidates: the chat-history flags
+   (thinking-hidden / tools-expanded shared-atom tricks), model/provider
+   via computes once another consumer appears.
 4. Config-field grouping in `AgentState` *(medium)*
 5. Hiccup-based renderer subtrees in `tool_renderers.clj` *(larger)*
 6. `run-agent-turn` phase extraction *(larger)*
