@@ -202,17 +202,13 @@
             (th/get-thinking-border-color theme level))))
 
 (defn- update-footer!
-  "Sync the footer's session data source. The explicit invalidation
-   schedules the re-render itself (invalidate-cache fires the §3.4 hook).
-   The footer's model/provider/thinking live in the fdp atoms (set once
-   at startup; sync-footer-model! refreshes them on model changes), so
-   only session changes need wiring here."
+  "Sync the footer's session data source (cs → fdp bridge). No explicit
+   invalidation: the footer's track! pass declares the fdp atoms — and the
+   live session :entries vector, which mutates in place — as track-deps,
+   so every change here re-derives the footer and schedules the frame
+   reactively (§3.4 hook)."
   [cs]
   (ui/fdp-set-session! (:footer-provider cs) @(:session-atom cs))
-  ;; The fdp atoms are read inside helper fns — not lexically tracked by
-  ;; track! — so invalidate explicitly on every sync. The invalidation
-  ;; schedules the frame itself (invalidate-cache fires the §3.4 hook).
-  (protocols/invalidate (:footer-comp cs))
   nil)
 
 (defn- update-terminal-title!

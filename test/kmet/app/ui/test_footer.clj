@@ -252,3 +252,32 @@
           plain (render-plain c 80)]
       (is (not-any? #(re-find #"\$" %) plain)
           "zero cost renders nothing (pi: if (usageTotals.cost …))"))))
+
+(deftest test-reactive-re-render
+  (testing "fdp atom changes re-derive the footer with NO manual invalidation"
+    (let [c (make-footer-with-session :model "gpt-4o" :provider :openai)]
+      (is (some #(re-find #"openai/gpt-4o" %) (render-plain c 60)))
+      ;; Bare fdp setter — no protocols/invalidate, no update-footer!:
+      ;; the footer's track-deps cover the fdp atoms, so the next render
+      ;; must reflect the change (regression guard for the removed
+      ;; update-footer!/sync-footer-model! invalidation pushes).
+      (fdp/fdp-set-model! @(:provider-atom c) "claude")
+      (is (some #(re-find #"openai/claude" %) (render-plain c 60))
+          "model change alone schedules the re-derivation")))
+  (testing "in-place session :entries mutation re-renders usage"
+    ;; Session records mutate their :entries atom in place — the footer
+    ;; tracks the live entry vector, not just the session record ref.
+    (let [dir (str "target/test-footer-reactive-" (System/currentTimeMillis))
+          sess (s/create-session dir)]
+      (try
+        (let [c (make-footer-with-session :session sess)
+              _ (is (not-any? #(re-find #"\$" %) (render-plain c 80))
+                    "no usage yet — no cost part")]
+          (s/append-entry sess {:role :assistant :content [{:type :text :text "a"}]
+                                :usage {:prompt_tokens 1000 :completion_tokens 500
+                                        :cost {:input 0.002 :output 0.004
+                                               :cache-read 0.0 :cache-write 0.0
+                                               :total 0.006}}})
+          (is (some #(re-find #"\$0\.006" %) (render-plain c 80))
+              "entries appended in place appear on the next render"))
+        (finally (fs/delete-tree dir))))))

@@ -17,7 +17,7 @@
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.app.ui.footer-data-provider :as fdp]
-            [kmet.tui.macros :refer [track! defcomponent]]))
+            [kmet.tui.macros :refer [track! track-deps defcomponent]]))
 
 (defn format-tokens
   "Format token counts for compact footer display (pi: formatTokens).
@@ -59,6 +59,23 @@
     (track! this width
       (let [thm @theme-atom
             provider @provider-atom
+            session (fdp/fdp-get-session provider)
+            ;; The fdp getters below deref their atoms outside this body
+            ;; (plain derefs in helper fns are invisible to the lexical
+            ;; rewrite) — declare them as explicit deps so any change
+            ;; invalidates this cache (tui.md §4). Session ENTRIES mutate
+            ;; in place (Session carries an :entries atom), so the live
+            ;; entry vector is a dep too; the dep set re-diffuses each
+            ;; pass when the session record itself is replaced.
+            _ (track-deps @(:model-atom provider)
+                          @(:provider-atom provider)
+                          @(:thinking-atom provider)
+                          @(:reasoning-atom provider)
+                          @(:context-window-atom provider)
+                          @(:cwd-atom provider)
+                          @(:git-branch-atom provider)
+                          @(:session-atom provider)
+                          (when session @(:entries session)))
             auto @auto-compact-atom
             usage (fdp/fdp-usage-totals provider)
             hit-rate (fdp/fdp-latest-cache-hit-rate provider)
