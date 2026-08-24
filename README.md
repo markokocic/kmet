@@ -17,6 +17,7 @@ extensions and prompt templates.
 ### Features
 
 - **TUI Framework** — differential rendering, component model, overlays, raw-mode input
+  ([package docs](src/kmet/tui/tui.md))
 - **Multi-line Editor** — word-wrap, undo/redo, kill-ring, history, paste markers
 - **Chat History** — user/assistant/tool message display with scrolling
 - **Agent Loop** — orchestrates LLM calls and tool execution with streaming
@@ -152,7 +153,8 @@ src/kmet/
 │   ├── model_resolver.clj — model pattern/CLI resolution
 │   ├── tools/          — read/write/edit/bash tools (grep/find/ls disabled)
 │   └── ui/             — app TUI components (chat history, footer, ...)
-├── tui/                — Generic TUI library (pi: @earendil-works/pi-tui)
+├── tui/                — Generic TUI library (pi: @earendil-works/pi-tui;
+│   │                     usage docs in src/kmet/tui/tui.md)
 │   └── components/     — text, input, editor, markdown, select/settings
 │                         lists, spinner, image, stack layouts, ...
 ```

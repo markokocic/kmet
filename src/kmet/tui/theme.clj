@@ -599,7 +599,7 @@
 ;; ═══════════════════════════════════════════════════════════════════════════
 
 ;; ─── Current theme state (pi: global Theme instance + setTheme machinery) ───
-;; The active theme as a reactive input (dsl.md §3.2 Stage 5): components
+;; The active theme as a reactive input (tui.md §9): components
 ;; subscribe through kmet.app.ui.subs/theme-sub instead of receiving the
 ;; theme as a constructor argument; a palette switch invalidates exactly the
 ;; subscribed subtrees. Plain get-current-theme reads remain valid for

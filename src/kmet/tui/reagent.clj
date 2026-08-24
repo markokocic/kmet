@@ -1,8 +1,7 @@
 (ns kmet.tui.reagent
   "Reactive engine for the TUI DSL: a Babashka port of reagent.ratom's
    semantics — auto-dependency-discovering reactions, cursors, batching —
-   with plain clojure.lang.Atoms as first-class inputs (dsl.md §2.8,
-   §2.8-bb).
+   with plain clojure.lang.Atoms as first-class inputs (tui.md §3.1).
 
    There is no custom atom type: Babashka seals IWatchable/IReset/IRef away
    from pure-source implementations, so a drop-in RAtom cannot exist.
@@ -235,7 +234,7 @@
        pre-reaction code did, instead of caching once forever. A body with
        at least one real tracked dep is cached normally — mixed bodies must
        read their reactive inputs through tracked-deref/cursors/slices
-       (coverage contract, dsl.md §2.8-bb).
+       (coverage contract, tui.md §3.1).
      :implicit-deps — collection of refs to ignore in the emptiness check
        (the framework's own seeded reads, e.g. ComponentFn's props/ctree)"
   ([f] (make-reaction f nil))

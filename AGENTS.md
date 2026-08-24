@@ -93,6 +93,8 @@ src/kmet/
 │   ├── tools/  — Tool implementations (one file per tool)
 │   └── ui/     — App-specific TUI components (Pi's coding-agent layer)
 └── tui/      — Generic TUI library (Pi's @earendil-works/pi-tui)
+    │           Usage docs: src/kmet/tui/tui.md — MUST be kept up to date
+    │           with any behavior change they describe
     └── components/ — TUI leaf components (Container, Box, Text, ...)
 
 Root-level files: core.clj (CLI entry, arg parsing, mode dispatch), config.clj
@@ -212,7 +214,7 @@ If the user asks for something that contradicts AGENTS.md, explain the conflict 
 
 Type dispatch is kind-as-data: `defcomponent` stamps KIND as the record's
 first field; dispatch reads `(:kind component)` (no IComponentKind
-protocol — retired in DSL stage 2, dsl.md §5).
+protocol — retired in DSL stage 2, see tui.md §8).
 
 ### Reactive render cache (track!)
 - **Default**: wrap a component's render body with `(track! this width ...)`
@@ -262,4 +264,9 @@ protocol — retired in DSL stage 2, dsl.md §5).
   output (see `do-full-redraw` in `kmet.tui.core`).
 
 ## Reference
+- **TUI package docs**: `src/kmet/tui/tui.md` is the usage reference for
+  `kmet.tui.*` (Hiccup DSL, fn components, reactivity/track!, state model,
+  lifecycle, scheduling, input boundary). It must be kept up to date: a
+  change to TUI behavior described there updates the doc in the same
+  change.
 - Consult `~/src/cvstree/pi/` for implementation patterns before building new features — e.g., study its TUI component model before adding new components, or its diff rendering approach before implementing a diff view.

@@ -1,6 +1,6 @@
 (ns kmet.tui.hiccup
   "Hiccup-style construction + reconciliation layer for the TUI DSL
-   (dsl.md §2, stages 2–3).
+   (tui.md §2).
 
    Trees are plain data: [:tag {props} children...] or [my-fn {props}]
    function heads. Compilation walks the tree through a CLOSED TAG TABLE —
@@ -9,7 +9,7 @@
    deps) or raw records spliced into the tree (identity preserved, never
    disposed — they are owned elsewhere).
 
-   Reconciliation (dsl.md §2.3): ONE keyed diff drives everything — the
+   Reconciliation (tui.md §2.3): ONE keyed diff drives everything — the
    ComponentFn wrapper's child list AND the fill of every host container
    (through per-tag children lenses). Matching is explicit :key first,
    fallback match-kind (tag / fn value / record payload / string);
@@ -48,7 +48,7 @@
    [kmet.tui.reagent :as r]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
-;; Refs — the imperative escape hatch (dsl.md §2.3)
+;; Refs — the imperative escape hatch (tui.md §2.4)
 ;; ═══════════════════════════════════════════════════════════════════════════
 
 (defprotocol DslRef
@@ -73,7 +73,7 @@
       (deref [_] @cell))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
-;; Dynamics + observability (dsl.md §2.4)
+;; Dynamics + observability (tui.md §2.5)
 ;; ═══════════════════════════════════════════════════════════════════════════
 
 (def ^:dynamic *width*
@@ -109,7 +109,7 @@
 (defn- bump! [k] (swap! counters-atom update k (fnil inc 0)))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
-;; Tag table — the closed set of host elements (dsl.md §2.2)
+;; Tag table — the closed set of host elements (tui.md §2.2)
 ;; ═══════════════════════════════════════════════════════════════════════════
 
 ;; Spec fields:
@@ -357,7 +357,7 @@
 (defn- parse-nodes
   "Tree nodes → desired items, seqs spliced, nils dropped, duplicate
    explicit keys throwing (two spliced siblings sharing a key makes reuse
-   undefined — throwing beats silent subtree loss, dsl.md §2.3). STACK?
+   undefined — throwing beats silent subtree loss, tui.md §2.3). STACK?
    licenses entry maps (true only for stack-tag children)."
   [nodes stack?]
   (loop [flat (flatten-nodes nodes [])
@@ -381,7 +381,7 @@
 (declare reconcile!)
 
 ;; ═══════════════════════════════════════════════════════════════════════════
-;; ComponentFn — the fn-component wrapper (dsl.md §2.4)
+;; ComponentFn — the fn-component wrapper (tui.md §2.5)
 ;; ═══════════════════════════════════════════════════════════════════════════
 
 (defcomponent ComponentFn nil [f props kids store rx ctree last-width]
@@ -441,7 +441,7 @@
                  vec)
             [])))))
   (dispose [_this]
-    ;; Contractual order (dsl.md §2.4): children first — their cleanups
+    ;; Contractual order (tui.md §5.1): children first — their cleanups
     ;; still see intact parent state; then the reaction (unwatches deps),
     ;; then the store's cleanups LIFO, leaving nothing registered.
     (doseq [it @kids :when (:owned it)]
@@ -636,7 +636,7 @@
     [nil buckets]))
 
 (defn- diff-items
-  "The keyed diff (dsl.md §2.3): walk desired items in order, reusing the
+  "The keyed diff (tui.md §2.3): walk desired items in order, reusing the
    matching previous item per match-kind bucket; leftovers are retired
    (disposed iff owned, ref cleared). Returns the kept items in desired
    order."
@@ -660,7 +660,7 @@
 (defn- reconcile-into
   "Reconcile NODES into CONTAINER through SPEC's lens: read the current
    raw children, diff, install the result back. The one children
-   mechanism — used by host containers at every nesting level (dsl.md §5)."
+   mechanism — used by host containers at every nesting level (tui.md §2.3)."
   [lens container nodes stack?]
   (let [prev (mapv itemize-prev ((:get lens) container))
         kept (diff-items prev (parse-nodes nodes stack?))]
@@ -679,7 +679,7 @@
 
 (defn reconcile!
   "Diff TREE against KIDS-ATOM's current items and install the result —
-   the ComponentFn render pass (dsl.md §2.3). TREE may be one element, a
+   the ComponentFn render pass (tui.md §2.3). TREE may be one element, a
    sequence of roots, or nil. Returns the kept items."
   [kids-atom tree]
   (let [kept (diff-items @kids-atom (parse-nodes (as-roots tree) false))]
@@ -749,7 +749,7 @@
           (protocols/dispose c))))))
 
 (defn compute
-  "A derived reactive ref over DEPS (dsl.md §3.1, Stage 5): sugar over
+  "A derived reactive ref over DEPS (tui.md §3.3): sugar over
    kmet.tui.reaction whose body reads every dep through a tracked deref
    and applies F to their current values. The reaction re-derives when any
    dependency changes by =
@@ -782,7 +782,7 @@
   ;; Count creations: computes are created ONCE per instance (top-level def
   ;; or with-let init). A compute built bare inside a component body leaks a
   ;; reaction per render pass — the counter climbing frame over frame makes
-  ;; that visible (dsl.md §3.1).
+  ;; that visible (tui.md §3.3).
   (let [_ (bump! :computes)
         rx (r/make-reaction
             (fn []
@@ -796,7 +796,7 @@
        #(r/dispose! rx)))
     rx))
 
-;; root — the one mount path (dsl.md §2.6)
+;; root — the one mount path (tui.md §2.6)
 ;; ═══════════════════════════════════════════════════════════════════════════
 
 (defn root

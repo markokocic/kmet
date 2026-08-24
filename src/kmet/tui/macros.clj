@@ -233,7 +233,7 @@
 (defn invalidate-cache
   "Invalidate a component's cache. Call from your invalidate method.
    Equivalent to (reset! (:cache-atom component) nil). Also requests a frame
-   through the scheduler hook (dsl.md §3.4) — the gate that closes the
+   through the scheduler hook (tui.md §6) — the gate that closes the
    reactive loop: every invalidation funnels through here, and an atom
    change that invalidates a subscriber schedules the next render. The hook
    is a no-op by default (headless tests, library use); kmet.tui.core
@@ -374,7 +374,7 @@
      ~@body))
 
 (defmacro with-let
-  "Form-2 local state for fn components (Reagent's with-let, dsl.md §2.5).
+  "Form-2 local state for fn components (Reagent's with-let, tui.md §5.2).
 
      (with-let [x (init) y (other-init)]
        body...
@@ -414,7 +414,7 @@
        ~@body-forms)))
 
 ;; ═════════════════════════════════════════════════════════════════
-;; Frame scheduler hook — dependency changes schedule the render (dsl.md §3.4)
+;; Frame scheduler hook — dependency changes schedule the render (tui.md §6)
 ;; ═════════════════════════════════════════════════════════════════
 
 ;; kmet.tui.core installs #(tui-request-render tui) on start and clears it
@@ -520,7 +520,7 @@
    method for additional side effects (delegating to children, firing
    request-render).
 
-   KIND is stamped as the record's FIRST FIELD (kind-as-data, dsl.md §5):
+   KIND is stamped as the record's FIRST FIELD (kind-as-data, tui.md §8):
    a keyword like :user / :assistant / :tool / :custom for message
    components, or nil for plain tui components (Text, Spacer, footer...).
    Dispatch reads (:kind component) — there is no IComponentKind

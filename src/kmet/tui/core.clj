@@ -153,7 +153,7 @@
 (defn tui-remove-child [tui c]
   (swap! (:components tui) (fn [v] (vec (remove #(identical? % c) v))))
   ;; a removed component is leaving the tree — release its resources
-  ;; (dispose is idempotent, dsl.md §5)
+  ;; (dispose is idempotent, tui.md §5.1)
   (protocols/dispose c))
 (defn tui-clear [tui]
   (doseq [c @(:components tui)] (protocols/dispose c))
