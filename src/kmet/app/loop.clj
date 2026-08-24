@@ -156,7 +156,6 @@ Be precise and concise in your responses."}}]
                     :api-type api-type
                     :steering (atom [])
                     :follow-up (atom [])
-                    :steering-mode (atom steering-mode)
                     :active-call (atom nil)
                     :cfg (atom {:max-retries max-retries
                                 :base-delay-ms base-delay-ms
