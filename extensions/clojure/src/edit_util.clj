@@ -294,7 +294,7 @@
   "cljfmt options for FILE-PATH mirroring cljfmt.tool/fix (what `bb format`
    produces): the project's cljfmt.edn — walked up from the file's directory —
    merged over cljfmt's defaults, so :extra-indents/:indents/:alias-map etc.
-   apply to custom macros (defcomponent, defsetter, ...). Falls back to plain
+   apply to custom macros (defcomponent, with-let, ...). Falls back to plain
    defaults when no config file exists or the file's directory does not exist
    (load-config cannot search a nonexistent directory)."
   [file-path]
