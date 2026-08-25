@@ -428,9 +428,8 @@
    ({:c component ...}) in a :kids atom, stack tags keep entries in an
    :entries-atom whose values are entry maps ({:component c ...}) or bare
    components. Anything else (leaf records, foreign splices) has no
-   traversable children. Missing this traversal made every DSL-managed
-   component look unmounted, so overlay close fell back to the last root
-   child and the footer silently swallowed all input."
+   traversable children - which is why mount checks must go through this
+   fn instead of guessing at storage."
   [root]
   (cond
     (instance? clojure.lang.IRef (:children root))
@@ -516,22 +515,27 @@
 
 ;; ─── OverlayHandle (pi: OverlayHandle) ─────────────────────────────────────
 
-(defn- restore-after-overlay!
-  "Focus where input should land after ENTRY left the capturing stack:
-   topmost visible overlay below it, else the recorded pre-focus when
-   still mounted, else the app-registered focus home (the active editor,
-   tui-set-focus-home!), else null focus - keys drop at the dispatch guard
-   instead of reaching a removed dialog. Never an arbitrary root child:
-   the old last-root-child fallback once landed on the footer, which
-   silently swallowed all input after overlay close. Call AFTER the entry
-   left the stack or was hidden, so the topmost scan skips it."
+(defn- overlay-restore-target
+  "Where input should land once ENTRY stops capturing: topmost visible
+   overlay other than ENTRY, ENTRY's recorded pre-focus when still
+   mounted, then the app-registered focus home (tui-set-focus-home!) -
+   nil when nothing live. Never an arbitrary root child: the old
+   last-root-child fallback landed on the footer, which silently
+   swallowed all input after overlay close."
   [tui entry]
-  (if-let [top (get-topmost-visible-overlay tui)]
-    (tui-set-focus tui (:component top))
-    (let [prev @(:pre-focus entry)]
-      (if (and prev (is-component-mounted? tui prev))
-        (tui-set-focus tui prev)
-        (tui-set-focus tui (resolve-focus-home tui))))))
+  (or (when-let [top (get-topmost-visible-overlay tui)]
+        (when-not (identical? top entry) (:component top)))
+      (let [prev @(:pre-focus entry)]
+        (when (and prev (is-component-mounted? tui prev))
+          prev))
+      (resolve-focus-home tui)))
+
+(defn- restore-after-overlay!
+  "Apply overlay-restore-target after ENTRY left the stack or was hidden;
+   null focus is fine - keys drop at the dispatch guard instead of
+   reaching a removed dialog."
+  [tui entry]
+  (tui-set-focus tui (overlay-restore-target tui entry)))
 
 (defn- overlay-handle
   "Return the OverlayHandle map for ENTRY: {:hide :set-hidden! :is-hidden?
@@ -584,16 +588,10 @@
                         (tui-request-render tui))
                     (do (clear-overlay-focus-restore-for! tui entry)
                         (when (or is-focused? (some? unfocus-options))
-                          (let [top (get-topmost-visible-overlay tui)
-                                prev @(:pre-focus entry)
-                                fallback (or (when (and top (not (identical? top entry)))
-                                               (:component top))
-                                             (when (and prev (is-component-mounted? tui prev))
-                                               prev)
-                                             (resolve-focus-home tui))]
-                            (tui-set-focus tui (if (some? unfocus-options)
-                                                 (:target unfocus-options)
-                                                 fallback))))
+                          (tui-set-focus tui
+                                         (if (some? unfocus-options)
+                                           (:target unfocus-options)
+                                           (overlay-restore-target tui entry))))
                         (tui-request-render tui))))))
    :is-focused? (fn [] (identical? (:component entry) @(:focused-component tui)))})
 
