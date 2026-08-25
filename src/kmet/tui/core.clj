@@ -882,7 +882,7 @@
     ;; pi: a listener chain that transforms data to an empty string drops
     ;; the event entirely
     (when-not (or (:consumed chained) (empty? data))
-        ;; Modality invariant: while a visible capturing overlay exists,
+      ;; Modality invariant: while a visible capturing overlay exists,
       ;; input belongs to its component - whatever else grabbed focus
       ;; (including a hidden/removed overlay) hands it back before
       ;; delivery. Replaces pi's blocked/eligible restore machine.

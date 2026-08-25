@@ -25,17 +25,6 @@
     (handle-input [_ _] nil)
     (invalidate [_])))
 
-;; A RECORD leaf (like the editor): hiccup splices records as foreign
-;; nodes, so this is the shape a dock body yields to the tree.
-(defrecord TestDockLeaf [focused?-atom]
-  core/IComponent
-  (render [_ _] [""])
-  (handle-input [_ _] nil)
-  (invalidate [_])
-  core/IFocusable
-  (focused [_] @focused?-atom)
-  (set-focused! [_ v] (reset! focused?-atom v)))
-
 (defn- lines-comp
   "Component rendering multiple fixed lines."
   [& lines]
