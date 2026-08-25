@@ -1,7 +1,9 @@
 # kmet lsp-adapter extension — implementation plan (Phase 1)
 
-Status: **planned**. This document is the design contract; deviations during
-implementation must be reflected back here (§18).
+Status: **implemented (Rev 2 — simplified)**. See §18 for the Rev 2
+simplification pass and its recorded deviations; where sections below still
+describe the pre-Rev-2 shape (file granularity, config ceremony, lifecycle
+modes, command surface), §18's mapping wins.
 
 Design sources:
 
@@ -117,35 +119,32 @@ From mcp-adapter, reused by copy (extensions cannot require each other):
 
 ## 5. File layout
 
-New core files (inside the `bb lint`/`bb test` gates):
-
-```
-src/kmet/libs/jsonrpc.clj           NEW shared lib — framing + correlation + stdio client
-test/kmet/libs/jsonrpc_test.clj     NEW lib unit tests (runner-registered)
-```
-
-The extension (outside the gates — lint manually, clj-kondo-clean anyway):
+Rev 2 collapsed seven planned namespaces into five files (config handling
+folded into the entry; language/servers merged into `detect`; client layer
+into `lsp`; diagnostics into `tools`):
 
 ```
 extensions/lsp-adapter/
 ├── extension.edn                 {:name "lsp-adapter" :entry "src/extensions/lsp_adapter.clj"}
-├── README.md                     usage, config reference, /lsp reference, server notes
+├── README.md                     install, builtin table, .kmet/lsp.edn format, tool+command ref
 ├── scripts/
-│   ├── fake-lsp-server.bb        fake content-length-framed LSP server (validation)
-│   ├── validate-client.bb        handshake/requests/notifications/shutdown checks
-│   ├── validate-config.bb        config merge + effective registry + root resolution + language invariant
-│   └── e2e.bb                    headless tool-executor smoke
+│   ├── fake-lsp-server.bb        self-contained framed LSP server (validation)
+│   └── validate.bb               detect fixtures + e2e over piped subprocess (28→21 checks)
 └── src/
-    ├── extensions/lsp_adapter.clj          entry: init/shutdown, state, registrations, /lsp
+    ├── extensions/lsp_adapter.clj          entry: init/shutdown, tool+/lsp registration,
+    │                                       project-config load, status, reaper, events
     └── extensions/lsp_adapter/
-        ├── config.clj      lsp.edn load/merge/template/write-back
-        ├── language.clj    path → languageId
-        ├── servers.clj     builtin registry + effective registry + root resolution
-        ├── client.clj      handshake, policies, document-sync builders, uri helpers
-        ├── manager.clj     connections, doc-sync state, fan-out, backoff
-        ├── query.clj       operation dispatch, coordinates, result shaping
-        └── diagnostics.clj diagnostics store + rendering
-```
+        ├── detect.clj      languageId tables + builtin registry + effective registry
+        │                   + root walk-up
+        ├── lsp.clj         handshake, capabilities, server-request/notification policy,
+        │                   doc-sync builders, path↔uri
+        ├── runtime.clj     conns keyed [name root], sticky broken-set, doc sync,
+        │                   fan-out, reaper support
+        └── tools.clj       operation dispatch, shaping caps, diagnostics store/render
+
+Shared lib (inside the bb gates): src/kmet/libs/jsonrpc.clj +
+test/kmet/libs/test_jsonrpc.clj — see §8; registered in
+libs-library-namespaces and kmet.runner/all-namespaces.
 
 Dependencies allowed: `kmet.extension`, `kmet.libs.*` (incl. the new
 `kmet.libs.jsonrpc`, plus existing `kmet.libs.process`,
@@ -160,89 +159,16 @@ Lib registration mechanics (do these when landing step 1 of §16):
    (~line 807 — its docstring says keep in sync with `src/kmet/libs/`).
 3. Register `test/kmet/libs/jsonrpc_test.clj` in `kmet.runner/all-namespaces`.
 
-## 6. Config — `config.clj`
+## 6. Config — one optional project file
 
-### 6.1 Sources & precedence
-
-- Global: `~/.kmet/agent/lsp.edn`
-- Project: `<cwd>/.kmet/lsp.edn` — highest precedence, per-field server
-  merge + per-key settings merge (later wins). This is the only file the
-  extension writes.
-- No other sources, no flags.
-
-Composition: built on `kmet.libs.edn-store` — load =
-`(deep-merge (read-edn-map global) (read-edn-map project))`; every write
-(§6.4/§6.5) goes through `update-edn-map!` under its file lock. No new
-custom lib (§4).
-
-### 6.2 EDN format
-
-```clojure
-{:settings {:disabled false              ;; literal true disables the whole extension
-            :request-timeout-ms 30000    ;; per-LSP-request bound
-            :initialize-timeout-ms 60000
-            :idle-timeout 15             ;; minutes; 0 disables reaping
-            :diagnostics false}          ;; false | map (§12); Phase 2 knobs live here
- :servers
- {"clojure-lsp" {:command "clojure-lsp"  ;; overrides the builtin entry's argv
-                 :initialization-options {}
-                 :lifecycle :lazy}
-  "rust" {:request-timeout-ms 60000}     ;; overrides settings only — slow first index
-  "jdtls" {:disabled true}               ;; removes the builtin entirely
-  "clojure-alt" {:command "/opt/lsp/clj-lsp"
-                 :extensions ["cljc"]}   ;; REPLACES builtin claims (same-id override)
-  "fennel" {:command "fennel-ls"         ;; out-of-tree server: full descriptor
-            :args []
-            :extensions ["fnl"]
-            :root-markers ["flxproject.ni"]
-            :initialization-options {}}}}
-```
-
-Server keys:
-
-| Key | Type | Notes |
-|---|---|---|
-| `:command` | string or vector | spawn argv base; vector = full argv merged with `:args`. Present + unknown id ⇒ new custom server; present + builtin id ⇒ overrides that builtin's argv |
-| `:args` | vector of strings | appended to `:command` |
-| `:env` | map | merged over `System/getenv` (bb `:env` replaces — merge manually) |
-| `:extensions` | vector of strings | claimed file extensions (dot-less, case-insensitive). On a builtin id this REPLACES the builtin list (principle of least surprise — dirge semantics) |
-| `:extend-extensions` | vector | ADDITIVE append, deduped (e.g. add `janet` to clojure-lsp without relisting) |
-| `:filenames` | vector | whole-filename claims (`CMakeLists.txt`), case-insensitive |
-| `:root-markers` | vector | include markers for the root walk-up; absent ⇒ cwd is the root. Bash-style rootless servers use the file's parent dir (builtin flag, §7.3) |
-| `:exclude-root-markers` | vector | hand-off markers (deno.json steals a JS tree) |
-| `:root-dir` | string | explicit workspace root; skips the walk entirely |
-| `:initialization-options` | map | sent verbatim as `initializationOptions` |
-| `:request-timeout-ms` | number | overrides the settings default |
-| `:lifecycle` | `:lazy` (default) \| `:eager` \| `:keep-alive` | `:eager`/`:keep-alive` connect at `:session-start`; `:keep-alive` is exempt from reaping |
-| `:idle-timeout` | number | per-server reaper override (minutes) |
-| `:disabled` | bool | only literal `true` acts |
-
-A config entry for an unknown id **without** `:command` is ignored but shown
-as `misconfigured` in `/lsp status`.
-
-### 6.3 Key normalization
-
-Known keys accepted in camel or kebab form (copying a pi/opencode-style JSON
-config is a light edit): `:settings`/`:servers`, `:requestTimeoutMs`,
-`:initializeTimeoutMs`, `:idleTimeout`, `:initializationOptions`,
-`:rootMarkers`, `:excludeRootMarkers`, `:rootDir`, `:extendExtensions`.
-Values accept string or keyword for enums. Unknown keys pass through.
-
-### 6.4 Template creation
-
-At init, if `~/.kmet/agent/lsp.edn` does not exist, write a
-schema-commented starter (one builtin override, one custom server, settings
-block). Project `.kmet/lsp.edn` is created only by the first
-enable/disable write (§6.5).
-
-### 6.5 enable/disable write
-
-Same semantics as mcp-adapter §6.5, onto `.kmet/lsp.edn`: disable sets
-`:disabled true` (creating the entry if absent); enable removes `:disabled`
-(writing `:disabled false` instead when the lower-precedence file still
-disables it); empty entries are pruned; pretty EDN with trailing newline;
-returns `{:path … :changed bool}`; the command tells the user to `/reload`
-(or use `/lsp refresh`).
+`<cwd>/.kmet/lsp.edn`, read leniently at init (`{}` when missing/malformed
+— startup never crashes on config). Entries are used **verbatim EDN**
+(no camel/kebab folding, no template creation, no write-back commands):
+same-id entries override builtins or disable them; unknown ids with
+`:command` are custom servers. The `:settings` block accepts global
+`:request-timeout-ms` / `:initialize-timeout-ms` / `:idle-timeout`
+overrides; defaults live as constants in runtime.clj (30 s / 60 s /
+15 min). After edits: `/lsp refresh`.
 
 ## 7. Detection — `language.clj` + `servers.clj`
 
@@ -694,23 +620,16 @@ trust), Phase-2 roadmap.
    (`bb lint-changed` covers the lib + dependents), plan/README
    consistency.
 
-## 16. Implementation order
+## 16. Implementation order (Rev 2)
 
-1. `kmet.libs.jsonrpc` + unit tests; register in
-   `libs-library-namespaces` + `kmet.runner/all-namespaces`; gates green.
-2. `config.clj` (+ §15.4 pieces).
-3. `language.clj` + `servers.clj` (tables, effective registry, root
-   resolution + fixture tests).
-4. `client.clj` (handshake, policies, builders, uri helpers) validated
-   against the fake server.
-5. `manager.clj` (connections, doc sync, fan-out, backoff).
-6. `query.clj` + tool registration; `diagnostics.clj` store + op.
-7. Entry `lsp_adapter.clj` (state, `/lsp`, events, status, reaper) +
-   completions.
-8. Scripts polish, README, real-world smoke (§15.7).
-
-Phase 2 lands separately after Phase 1 settles: after-edit hook → panel →
-incremental sync → (optional) mcp-adapter stdio adoption.
+1. ✅ `kmet.libs.jsonrpc` + tests (commit 0700f0e)
+2. ✅ ~~config.clj~~ → superseded by Rev 2: loader lives in the entry
+   (~20 lines); the 230-line config.clj + 28-check validator were removed.
+3. ✅ `detect.clj` (tables, effective registry, roots)
+4. ✅ `lsp.clj` (handshake/policies/builders) validated against fake server
+5. ✅ `runtime.clj` (conns/doc-sync/fan-out/sticky-broken)
+6. ✅ `tools.clj` (ops/shaping/diagnostics) + entry wiring
+7. ✅ scripts + README; e2e green (21 checks)
 
 ## 17. Risks & notes
 
@@ -745,6 +664,36 @@ incremental sync → (optional) mcp-adapter stdio adoption.
 - Windows: header tolerance for `\r\n`; process-tree kill already proven by
   mcp-adapter.
 
+
+### Rev 2 — radical simplification (before steps 3-8 of the original order)
+
+User call: "can we simplify the whole extension?" — much of the planned
+surface was mcp-adapter ceremony LSP doesn't need. Cuts, all recorded here:
+
+- **Config ceremony removed**: two-file global+project precedence,
+  camel/kebab normalization, template creation, and the §6.5
+  enable/disable write-back (incl. force-enable semantics) are gone. One
+  optional project `.kmet/lsp.edn`, entries verbatim EDN; disabling =
+  deleting lines + `/lsp refresh`. The committed 230-line config.clj +
+  28-check validator were deleted; a ~20-line loader lives in the entry.
+- **File granularity**: 7 namespaces → 5 (config → entry; language+servers
+  → detect.clj; client → lsp.clj; diagnostics → tools.clj).
+- **Lifecycle modes cut**: no :eager/:keep-alive — everything is lazy +
+  idle reaper. Session switches touch nothing (§13 Lifecycle edges).
+- **/lsp surface trimmed** to status/list/restart/refresh (no
+  enable/disable/auth-style subcommands).
+- **Root resolution simplified**: files outside cwd attach at their own
+  directory (no walk to home); the rust `[workspace]` special case dropped.
+- **Sticky broken-set kept** exactly as decided mid-planning (no time-based
+  retry), now surfaced through for-file so cached failures appear in tool
+  output instantly.
+
+Kept in full: the sticky-broken model, ESC/session lifecycle edges,
+reaper-skips-initializing, applyEdit refusal, shaping caps, the single
+coordinate conversion, `kmet.libs.jsonrpc` under the gates.
+
+e2e note: scripts/fake-lsp-server.bb is deliberately self-contained (its
+cwd is the workspace root, where repo-relative classpaths don't resolve).
 ## 18. Implementation notes & recorded deviations
 
 ### Phase 1 step 1 — kmet.libs.jsonrpc (implemented)
