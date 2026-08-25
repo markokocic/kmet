@@ -99,14 +99,16 @@ Deliberately not ported from dirge: the plugin harness bridge (`harness.rs`),
 the `TouchMode::AwaitPush` diagnostic wait (Phase 2), the pull-diagnostics
 race (Phase 2), worktree-permission path guarding (extensions have no
 worktree concept — cwd bounds the walk instead), and the `[timeouts]` config
-subsystem (flat settings keys here).
+subsystem (flat settings keys here), and mcp-adapter's credential-url
+binding rule (its §6 SECURITY) — LSP config carries no credential fields
+by convention (`:env` aside); adopt the rebinding rule if that ever
+changes.
 
 From mcp-adapter, reused by copy (extensions cannot require each other):
 
 | mcp-adapter piece | Destination | Note |
 |---|---|---|
 | `config.clj` mechanics | `config.clj` | built on the **existing** `kmet.libs.edn-store` primitives (`deep-merge`, `read-edn-map`, `update-edn-map!` under lock, `pretty-edn`) — no new config lib; extension-local remainder is only the camel/kebab alias list, the two-file load composition, and the entry write-back glue. Note: mcp-adapter currently re-implements these primitives instead of using edn-store — optional future cleanup alongside the jsonrpc adoption |
-| credential-url binding (mcp §6 SECURITY) | *(not ported)* | LSP config carries no credential fields by convention (`:env` aside); if that ever changes, adopt the rebinding rule |
 | §10.3 `ensure-connected!` + failure backoff | `manager.clj` | locked idempotent connect, `:failed-at` window, explicit-restart bypass |
 | idle-reaper daemon | `lsp_adapter.clj` | same 30s daemon-thread shape |
 | output-guard *idea* | `query.clj`/`diagnostics.clj` | LSP shaping is semantic (locations/symbols/hover), not byte-guards |
@@ -185,8 +187,7 @@ custom lib (§4).
  {"clojure-lsp" {:command "clojure-lsp"  ;; overrides the builtin entry's argv
                  :initialization-options {}
                  :lifecycle :lazy}
-  "rust" {:command "rust-analyzer"
-          :disabled false}
+  "rust" {:request-timeout-ms 60000}     ;; overrides settings only — slow first index
   "jdtls" {:disabled true}               ;; removes the builtin entirely
   "clojure-alt" {:command "/opt/lsp/clj-lsp"
                  :extensions ["cljc"]}   ;; REPLACES builtin claims (same-id override)
@@ -554,8 +555,7 @@ severity 1/2/3/4 → ERROR/WARN/INFO/HINT, absent ⇒ ERROR.
 - Project view: ≤5 additional files beyond the queried one, sorted by
   error count desc.
 
-### 12.3 Phase 2 — after-edit hook (specified, gated by
-`settings :diagnostics {:after-edit true}`, default off)
+### 12.3 Phase 2 — after-edit hook (specified, gated by `settings :diagnostics {:after-edit true}`, default off)
 
 `ext/on-tool-result` fires for `edit`/`write` with the tool's `:args` in
 the hook payload (verified: `loop.clj` `after-tool-hook-result` passes

@@ -100,7 +100,8 @@
     ;; delegating handleInput to the settingsList)
     {:render (fn [width] (protocols/render c width))
      :handle-input (fn [data] (protocols/handle-input settings data))
-     :invalidate (fn [] (protocols/invalidate c))}))
+     :invalidate (fn [] (protocols/invalidate c))
+     :dispose #(h/dispose-tree! c)}))
 
 (defn- open-selector!
   "Open the /tools selector. Headless/print mode has no UI registry

@@ -860,4 +860,5 @@
                inp])]
     {:render (fn [width] (protocols/render comp width))
      :handle-input (fn [data] (protocols/handle-input inp data))
-     :invalidate (fn [] (protocols/invalidate comp))}))
+     :invalidate (fn [] (protocols/invalidate comp))
+     :dispose #(h/dispose-tree! comp)}))

@@ -3181,11 +3181,11 @@
    multimethod — which dispatches correctly under SCI even when
    satisfies? does not (bb reify limitation)."
   [component]
-  (cond
-    (map? component)
-    (when-let [dispose (:dispose component)]
-      (try (dispose) (catch Exception _)))
-    :else
+  ;; :dispose key (duck-typed maps) wins; otherwise the protocol
+  ;; multimethod — which also covers records, since (:dispose record)
+  ;; is nil unless a field of that name exists.
+  (if-let [dispose (:dispose component)]
+    (try (dispose) (catch Exception _))
     (try (protocols/dispose component) (catch Exception _))))
 
 (defn- make-extension-widget-component

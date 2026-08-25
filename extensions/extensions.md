@@ -515,19 +515,15 @@ from the api.
 ;; compiled trees are real components — the host disposes them on replace
 ;; and removal, so with-let cleanups / reactive subtrees never leak
 
-;; richer widgets: return a factory whose result is a duck-typed component
-;; wrapping a compiled hiccup tree — compile ONCE, dispose on teardown via
-;; `kmet.tui.hiccup/dispose-tree!` (the host calls :dispose on replace and
-;; removal, so reactive subtrees never leak):
+;; richer/reactive widgets: return a factory whose result is a compiled
+;; hiccup tree — the host disposes it automatically on replace and removal
+;; (with-let cleanups and reactions unwind via kmet.tui.hiccup ownership):
 ;;
-;;   (require '[kmet.tui.hiccup :as h]
-;;            '[kmet.tui.protocols :as protocols])
+;;   (require '[kmet.tui.hiccup :as h])
 ;;   (ext/ui-set-widget api "clock"
 ;;     (fn [tui theme]
-;;       (let [comp (h/compile-tree [:container {}
-;;                                   [:text {:padding-x 1 :padding-y 0} "tick"]])]
-;;         {:render  (fn [width] (protocols/render comp width))
-;;          :dispose #(h/dispose-tree! comp)})))
+;;       (h/compile-tree [:container {}
+;;                        [:text {:padding-x 1 :padding-y 0} "tick"]])))
 ;;
 ;; ui-custom factories may also return element trees directly — they are
 ;; compiled and wrapped (input goes nowhere; interactive customs should
