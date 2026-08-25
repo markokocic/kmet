@@ -139,7 +139,12 @@ unit-testable without a live LLM.
    headless test-tool-renderers. Bash pair + render-edit-result stay
    imperative (per-component state/intervals). Leak-safety argument:
    converted leaves are precomputed-string-only, no reactive derefs.
-6. `run-agent-turn` phase extraction *(larger)*
+6. ✅ `run-agent-turn` phase extraction *(commit c0da194)* — normalize-llm-result
+   + retry-decision extracted as PURE fns (unit-tested headlessly),
+   prepare-run!/timeout-abort!/terminal-error!/tools-phase!/final-phase!
+   as named side-effecting phases; emission-site multiset proven identical,
+   after-turn unconditional-hook invariant preserved (self-review caught a
+   short-circuit that would have skipped hooks on terminate).
 7. ✅ Extract reactive core to **`kmet.libs.reakt`** *(commit 4d9c355)* —
    reactions/cursors/batching/tracked-deref now standalone (tui.reagent
    deleted, generic half of tui.macros merged in); self-contained guard
