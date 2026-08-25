@@ -1,0 +1,4 @@
+{:paths ["src" "test" "resources"]
+ ;; babashka.fs / babashka.process / babashka.http-client are bb-bundled;
+ ;; http-client is declared so non-bb consumers resolve the same API.
+ :deps {org.babashka/http-client {:mvn/version "0.4.24"}}}

@@ -1,0 +1,12 @@
+{:paths ["src" "test" "resources"]
+ :tasks
+ {test {:doc "Run tree-sitter extension tests (args: namespace symbols; defaults to the offline set)"
+        :task (let [nss (or (some->> *command-line-args* (map symbol))
+                            '[kmet.extensions.tree-sitter.paths-test
+                              kmet.extensions.tree-sitter.fetch-test
+                              kmet.extensions.tree-sitter.cli-test])]
+                (doseq [ns-sym nss]
+                  (require ns-sym))
+                (let [summary (apply clojure.test/run-tests nss)]
+                  (when (pos? (+ (:fail summary) (:error summary)))
+                    (System/exit 1))))}}}

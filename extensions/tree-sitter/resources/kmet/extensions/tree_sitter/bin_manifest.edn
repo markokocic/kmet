@@ -1,0 +1,31 @@
+;; Pinned tree-sitter CLI release: {version {target {:url :sha256 :binary-sha256}}}.
+;; Targets are os-arch slugs (see fetch.clj/host-target); each zip contains
+;; a single `tree-sitter` (unix) or `tree-sitter.exe` (windows) entry.
+;; :sha256 pins the downloaded zip; :binary-sha256 pins the extracted
+;; executable (cache-validity check). Version pin upgrade = new top-level
+;; version key with freshly hashed assets.
+{"0.26.13"
+ {"linux-x64"
+  {:url "https://github.com/tree-sitter/tree-sitter/releases/download/v0.26.13/tree-sitter-cli-linux-x64.zip"
+   :sha256 "1b781c0dc1dfefea44b5db2ec2a58440fe9d006856c3f5b3fd9a17119d1138a2"
+   :binary-sha256 "ad369a4df2bb1ebf5cd37045d34bdc9160b9351f92520399106d8e689cac00af"}
+  "linux-arm64"
+  {:url "https://github.com/tree-sitter/tree-sitter/releases/download/v0.26.13/tree-sitter-cli-linux-arm64.zip"
+   :sha256 "72c6d6c669c70491f93db290b285d9e85fd68ead9e324cc55ace35a1be66c3bd"
+   :binary-sha256 "89fa5f92264afaf851545f97669947af86fac8ed5fb0fe8042cb74d161a301bb"}
+  "macos-x64"
+  {:url "https://github.com/tree-sitter/tree-sitter/releases/download/v0.26.13/tree-sitter-cli-macos-x64.zip"
+   :sha256 "052f2866ad453bb39ab2905e5b7bbb9de670875f67483243cd9659c0503d97ef"
+   :binary-sha256 "3f473c3a308de1c01458473f931daa9c4613490b7d2692e779dcb3d71ebddef0"}
+  "macos-arm64"
+  {:url "https://github.com/tree-sitter/tree-sitter/releases/download/v0.26.13/tree-sitter-cli-macos-arm64.zip"
+   :sha256 "eeb4c0fd909187de2e77a6403ca9c748d41f209f1186cac0d38f38f571930c02"
+   :binary-sha256 "89375793233b2854ca3ead7bc7ccdf4c3e22497052c0bd2429fe9efdb8968912"}
+  "windows-x64"
+  {:url "https://github.com/tree-sitter/tree-sitter/releases/download/v0.26.13/tree-sitter-cli-windows-x64.zip"
+   :sha256 "c167ecf331ecd5d067cf96f612f404d7d8ebd08569b142939fcc264211f8cd9a"
+   :binary-sha256 "4da8e3e19080cd65906d55c7b5b5c68bc6bfbff7482bb5e069997abbf8805d4c"}
+  "windows-arm64"
+  {:url "https://github.com/tree-sitter/tree-sitter/releases/download/v0.26.13/tree-sitter-cli-windows-arm64.zip"
+   :sha256 "c4306ddb015aca7fd01504cfb6ac5fc449d285d50a4c60f051ef648bb303a4c9"
+   :binary-sha256 "4409b6dc663f08c9686718f98b56953e7c7efd08da431107764ac7fcc715fcf5"}}}
