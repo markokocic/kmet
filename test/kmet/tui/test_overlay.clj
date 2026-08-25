@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.test :as t :refer [testing]]
             [kmet.tui.core :as core]
+            [kmet.tui.hiccup :as hiccup]
             [kmet.tui.terminal :as term]))
 
 (defn- leaf
@@ -24,6 +25,17 @@
     (render [_ _] [line])
     (handle-input [_ _] nil)
     (invalidate [_])))
+
+;; A RECORD leaf (like the editor): hiccup splices records as foreign
+;; nodes, so this is the shape a dock body yields to the tree.
+(defrecord TestDockLeaf [focused?-atom]
+  core/IComponent
+  (render [_ _] [""])
+  (handle-input [_ _] nil)
+  (invalidate [_])
+  core/IFocusable
+  (focused [_] @focused?-atom)
+  (set-focused! [_ v] (reset! focused?-atom v)))
 
 (defn- lines-comp
   "Component rendering multiple fixed lines."
@@ -224,6 +236,29 @@
         (t/is (false? (core/tui-has-overlay? tui)))
         (t/is (identical? (:comp a) @(:focused-component tui))
               "pre-focus restored after hide")))))
+
+(t/deftest test-hide-restores-pre-focus-inside-dsl-tree
+  (testing "pre-focus nested in a ComponentFn tree counts as mounted
+           (the editor-in-dock shape): hide must not fall back to the
+           last root child"
+    (let [tui (core/create-tui nil)
+          ed (->TestDockLeaf (atom false))
+          ;; the dock area: a fn component whose body yields the active
+          ;; editor — the editor record itself is the focused leaf
+          dock (hiccup/root (fn [_props] ed))
+          overlay-comp (->TestDockLeaf (atom false))
+          footer (lines-comp "footer")]
+      (core/tui-add-child tui dock)
+      (core/tui-add-child tui footer)
+      ;; one render pass fills the ComponentFn's kids with the editor
+      (core/render dock 40)
+      (core/tui-set-focus tui ed)
+      (core/tui-show-overlay tui overlay-comp)
+      (t/is (identical? overlay-comp @(:focused-component tui)))
+      (core/tui-hide-overlay tui)
+      (t/is (false? (core/tui-has-overlay? tui)))
+      (t/is (identical? ed @(:focused-component tui))
+            "pre-focus inside a DSL tree restored after hide"))))
 
 (t/deftest test-handle-set-hidden-focus-moves
   (testing "set-hidden! releases focus to the pre-focus; showing restores it"

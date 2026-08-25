@@ -400,11 +400,36 @@
                (identical? @(:pre-focus o) (:component removed)))
       (reset! (:pre-focus o) @(:pre-focus removed)))))
 
+(defn- child-components
+  "Direct children of ROOT across every storage shape the TUI uses
+   (pi: isComponentMounted walks the whole tree): host containers keep
+   components in a :children atom, ComponentFn nodes keep reconcile items
+   ({:c component ...}) in a :kids atom, stack tags keep entries in an
+   :entries-atom whose values are entry maps ({:component c ...}) or bare
+   components. Anything else (leaf records, foreign splices) has no
+   traversable children. Missing this traversal made every DSL-managed
+   component look unmounted, so overlay close fell back to the last root
+   child and the footer silently swallowed all input."
+  [root]
+  (cond
+    (instance? clojure.lang.IRef (:children root))
+    (remove nil? @(:children root))
+
+    (instance? clojure.lang.IRef (:kids root))
+    (keep :c @(:kids root))
+
+    (instance? clojure.lang.IRef (:entries-atom root))
+    (keep (fn [x] (cond (map? x) (or (:c x) (:component x))
+                        :else x))
+          @(:entries-atom root))
+
+    :else nil))
+
 (defn- contains-component?
   [root target]
   (or (identical? root target)
-      (when (instance? clojure.lang.IRef (:children root))
-        (boolean (some #(contains-component? % target) @(:children root))))))
+      (boolean (some #(contains-component? % target)
+                     (child-components root)))))
 
 (defn- is-component-mounted?
   "True when COMPONENT is still reachable from the base layout
