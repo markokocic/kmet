@@ -1,0 +1,692 @@
+# kmet lsp-adapter extension — implementation plan (Phase 1)
+
+Status: **planned**. This document is the design contract; deviations during
+implementation must be reflected back here (§18).
+
+Design sources:
+
+- **[dirge](file:///home/u0_a766/src/cvstree/dirge)** — local checkout
+  `~/src/cvstree/dirge/src/lsp/` is the authoritative behavioral reference
+  (read the .rs modules named in §4 before implementing each counterpart).
+  Dirge itself mirrors opencode's `tool/lsp.ts` agent surface.
+- **extensions/mcp-adapter** — the structural template: EDN config pair,
+  locked idempotent connect + failure backoff, idle-reaper daemon, command
+  surface, footer status, validation-scripts harness.
+
+## 1. Goal
+
+Give the agent semantic code intelligence (definition, references, hover,
+symbols, call hierarchy, diagnostics) through **one ~150-token `lsp` tool**,
+speaking the Language Server Protocol to lazily-spawned stdio servers.
+Servers start only when a claimed file is actually queried — same
+context-economy pitch as mcp-adapter, applied to code navigation: `grep`
+finds text, `lsp` finds meaning.
+
+Immediately useful target: `clojure-lsp` on this very repo (root marker
+`deps.edn`). Everything is best-effort per server: a missing binary is a
+status line, never an error at startup.
+
+## 2. Locked decisions
+
+| Decision | Choice |
+|---|---|
+| Design source | dirge `src/lsp/*` — behavioral parity wherever feasible; structure follows `extensions/mcp-adapter` |
+| Scope | Phase 1 only (see §3); Phase 2 items specified but not built |
+| Tool name | `lsp` — one proxy-style tool with an `operation` enum (dirge/opencode surface); no direct tools |
+| Transports | **stdio only** — LSP reality; no HTTP/SSE (the complexity budget goes to Content-Length framing + server→client requests instead) |
+| Config format | EDN only — exactly two files: global `~/.kmet/agent/lsp.edn`, project `.kmet/lsp.edn` (project wins) |
+| Shared machinery | new lib **`kmet.libs.jsonrpc`** (framing + correlation + dispatch); mcp-adapter is **untouched** in Phase 1 (adoption recorded as optional follow-up, §3) |
+| Server discovery | builtin registry (dirge's set) reshaped by config; user adds out-of-tree servers in `lsp.edn` |
+| Workspace roots | marker walk-up from the queried file, bounded by cwd (port of dirge `nearest_root`) |
+| Coordinates | the tool takes **1-based** line/character (editor convention); conversion to 0-based wire format lives in exactly one place (`query.clj`) |
+| Writes | out of scope — no rename/codeAction/formatting/applyEdit (an extension silently rewriting files is a policy question; `workspace/applyEdit` is *refused* by policy, see §9.4) |
+| Entry ns | `extensions.lsp-adapter` (a `kmet.*` prefix is rejected by the loader) |
+
+## 3. Scope
+
+### In scope (Phase 1)
+
+- EDN config loading/merging/template/write-back (§6)
+- New shared lib `kmet.libs.jsonrpc`: both framings (content-length,
+  line-delimited), correlation core, server-request/notification dispatch,
+  graceful-shutdown parameterization, stderr tails (§8)
+- Builtin server registry + language detection + workspace-root resolution
+  (§7)
+- LSP client layer: initialize handshake, conservative capabilities,
+  server-request policy, notification routing, document-sync builders (§9)
+- Manager: lazy spawn keyed `(server, root)` with dedupe locks, broken-server
+  backoff, document sync (full-text), fan-out operations, idle reaper (§10)
+- The `lsp` tool: 10 operations incl. `diagnostics` (§11)
+- Diagnostics store + pretty printing (push-collect only) (§12)
+- Entry: init/shutdown, `/lsp` command, footer status, events (§13)
+- Validation scripts + README (§14, §15)
+
+### Phase 2 (specified, not built)
+
+- **Diagnostics-after-edit hook** (§12.3): `on-tool-result` on `edit`/`write`
+  appends fresh `<diagnostics>` to the tool result (dirge Phase-6 parity).
+- Interactive panel (`/lsp` plain dialog stays; a pi-McpPanel-style TUI panel).
+- Incremental text sync (`TextDocumentSyncKind.Incremental`) if full-text
+  sync ever shows up in profiling.
+- Pull-diagnostics race in the after-edit wait (dirge B3-10).
+- Optional cleanup: refactor mcp-adapter's stdio transport onto
+  `kmet.libs.jsonrpc` (churn-vs-dedup judged not worth destabilizing a
+  shipped extension in Phase 1).
+
+### Out of scope
+
+- Rename / codeAction / formatting / completion / `workspace/applyEdit`
+  acceptance — the agent edits files itself through kmet's own tools.
+- HTTP/socket LSP transports (no ecosystem demand).
+- Multi-root workspaces (one root per `(server, file)` resolution).
+
+## 4. Port mapping (dirge → kmet)
+
+| dirge module | kmet file | Ported behavior |
+|---|---|---|
+| `src/lsp/rpc.rs` + shared `jsonrpc_client` core | **`kmet.libs.jsonrpc`** | framing (content-length), correlation (pending-by-id), server-request dispatch, drain-on-close — dirge already factored this core out; we do the same up front |
+| `src/lsp/language.rs` | `language.clj` | extension/filename → languageId tables, `"plaintext"` fallback |
+| `src/lsp/server.rs` | `servers.clj` | builtin descriptors (id, claims, root markers), `nearest_root` walk-up with include/exclude markers + boundary fallback, rust `[workspace]` special case, deno hand-off exclusion, config override semantics (`:extensions` replaces / `:extend-extensions` additive / `:disabled` removes) |
+| `src/lsp/spawn.rs` | `kmet.libs.process` + client | spawn abstraction collapses into the lib's `connect-stdio`; tree-kill via existing lib |
+| `src/lsp/init.rs` | `client.clj` | initialize handshake params, conservative client capabilities, `initialized` ack |
+| `src/lsp/client.rs` | `client.clj` + `manager.clj` | document-sync message builders, capability introspection |
+| `src/lsp/manager.rs` | `manager.clj` | lazy spawn per `(root, server-id)` with in-flight dedupe, broken-server backoff, touch_file sync, fan-out ops, `shutdown_all`, active/broken reporting |
+| `src/lsp/query.rs` | `query.clj` | operation parsing + camelCase aliases, op→method mapping, the single 1-based→0-based coordinate conversion, "(no results)" convention |
+| `src/lsp/diagnostic.rs` | `diagnostics.clj` | severity names, 1-based rendering, caps (8/file, flood 40 → summary, ≤5 project files) |
+| `src/agent/tools/lsp.rs` | `lsp_adapter.clj` + `query.clj` | tool description, parameter schema (operation/file_path/line/character/query), result shaping philosophy |
+
+Deliberately not ported from dirge: the plugin harness bridge (`harness.rs`),
+the `TouchMode::AwaitPush` diagnostic wait (Phase 2), the pull-diagnostics
+race (Phase 2), worktree-permission path guarding (extensions have no
+worktree concept — cwd bounds the walk instead), and the `[timeouts]` config
+subsystem (flat settings keys here).
+
+From mcp-adapter, reused by copy (extensions cannot require each other):
+
+| mcp-adapter piece | Destination | Note |
+|---|---|---|
+| `config.clj` mechanics | `config.clj` | two-file precedence merge, kebab/camel normalization, template creation, enable/disable write-back — adapted to LSP keys |
+| §10.3 `ensure-connected!` + failure backoff | `manager.clj` | locked idempotent connect, `:failed-at` window, explicit-restart bypass |
+| idle-reaper daemon | `lsp_adapter.clj` | same 30s daemon-thread shape |
+| output-guard *idea* | `query.clj`/`diagnostics.clj` | LSP shaping is semantic (locations/symbols/hover), not byte-guards |
+| scripts/ harness pattern | `scripts/` | fake server + validators + e2e |
+| daemon-thread helper (`spawn`) | each ns needing it | futures don't exist in the extension sci context — ~7-line helper, copied |
+
+## 5. File layout
+
+New core files (inside the `bb lint`/`bb test` gates):
+
+```
+src/kmet/libs/jsonrpc.clj           NEW shared lib — framing + correlation + stdio client
+test/kmet/libs/jsonrpc_test.clj     NEW lib unit tests (runner-registered)
+```
+
+The extension (outside the gates — lint manually, clj-kondo-clean anyway):
+
+```
+extensions/lsp-adapter/
+├── extension.edn                 {:name "lsp-adapter" :entry "src/extensions/lsp_adapter.clj"}
+├── README.md                     usage, config reference, /lsp reference, server notes
+├── scripts/
+│   ├── fake-lsp-server.bb        fake content-length-framed LSP server (validation)
+│   ├── validate-client.bb        handshake/requests/notifications/shutdown checks
+│   ├── validate-config.bb        config merge + effective registry + root resolution + language invariant
+│   └── e2e.bb                    headless tool-executor smoke
+└── src/
+    ├── extensions/lsp_adapter.clj          entry: init/shutdown, state, registrations, /lsp
+    └── extensions/lsp_adapter/
+        ├── config.clj      lsp.edn load/merge/template/write-back
+        ├── language.clj    path → languageId
+        ├── servers.clj     builtin registry + effective registry + root resolution
+        ├── client.clj      handshake, policies, document-sync builders, uri helpers
+        ├── manager.clj     connections, doc-sync state, fan-out, backoff
+        ├── query.clj       operation dispatch, coordinates, result shaping
+        └── diagnostics.clj diagnostics store + rendering
+```
+
+Dependencies allowed: `kmet.extension`, `kmet.libs.*` (incl. the new
+`kmet.libs.jsonrpc`, `kmet.libs.process`), `clojure.*`, `babashka.*`,
+bundled `cheshire.core` + `clojure.core.async`. **No `deps.edn`.**
+
+Lib registration mechanics (do these when landing step 1 of §16):
+
+1. `kmet.libs.jsonrpc` must pass `kmet.libs.test-self-contained` (no
+   `kmet.*` requires).
+2. Add it to `libs-library-namespaces` in `src/kmet/app/extensions.clj`
+   (~line 807 — its docstring says keep in sync with `src/kmet/libs/`).
+3. Register `test/kmet/libs/jsonrpc_test.clj` in `kmet.runner/all-namespaces`.
+
+## 6. Config — `config.clj`
+
+### 6.1 Sources & precedence
+
+- Global: `~/.kmet/agent/lsp.edn`
+- Project: `<cwd>/.kmet/lsp.edn` — highest precedence, per-field server
+  merge + per-key settings merge (later wins). This is the only file the
+  extension writes.
+- No other sources, no flags.
+
+### 6.2 EDN format
+
+```clojure
+{:settings {:disabled false              ;; literal true disables the whole extension
+            :request-timeout-ms 30000    ;; per-LSP-request bound
+            :initialize-timeout-ms 60000
+            :idle-timeout 15             ;; minutes; 0 disables reaping
+            :diagnostics false}          ;; false | map (§12); Phase 2 knobs live here
+ :servers
+ {"clojure-lsp" {:command "clojure-lsp"  ;; overrides the builtin entry's argv
+                 :initialization-options {}
+                 :lifecycle :lazy}
+  "rust" {:command "rust-analyzer"
+          :disabled false}
+  "jdtls" {:disabled true}               ;; removes the builtin entirely
+  "clojure-alt" {:command "/opt/lsp/clj-lsp"
+                 :extensions ["cljc"]}   ;; REPLACES builtin claims (same-id override)
+  "fennel" {:command "fennel-ls"         ;; out-of-tree server: full descriptor
+            :args []
+            :extensions ["fnl"]
+            :root-markers ["flxproject.ni"]
+            :initialization-options {}}}}
+```
+
+Server keys:
+
+| Key | Type | Notes |
+|---|---|---|
+| `:command` | string or vector | spawn argv base; vector = full argv merged with `:args`. Present + unknown id ⇒ new custom server; present + builtin id ⇒ overrides that builtin's argv |
+| `:args` | vector of strings | appended to `:command` |
+| `:env` | map | merged over `System/getenv` (bb `:env` replaces — merge manually) |
+| `:extensions` | vector of strings | claimed file extensions (dot-less, case-insensitive). On a builtin id this REPLACES the builtin list (principle of least surprise — dirge semantics) |
+| `:extend-extensions` | vector | ADDITIVE append, deduped (e.g. add `janet` to clojure-lsp without relisting) |
+| `:filenames` | vector | whole-filename claims (`CMakeLists.txt`), case-insensitive |
+| `:root-markers` | vector | include markers for the root walk-up; absent ⇒ cwd is the root. Bash-style rootless servers use the file's parent dir (builtin flag, §7.3) |
+| `:exclude-root-markers` | vector | hand-off markers (deno.json steals a JS tree) |
+| `:root-dir` | string | explicit workspace root; skips the walk entirely |
+| `:initialization-options` | map | sent verbatim as `initializationOptions` |
+| `:request-timeout-ms` | number | overrides the settings default |
+| `:lifecycle` | `:lazy` (default) \| `:eager` \| `:keep-alive` | `:eager`/`:keep-alive` connect at `:session-start`; `:keep-alive` is exempt from reaping |
+| `:idle-timeout` | number | per-server reaper override (minutes) |
+| `:disabled` | bool | only literal `true` acts |
+
+A config entry for an unknown id **without** `:command` is ignored but shown
+as `misconfigured` in `/lsp status`.
+
+### 6.3 Key normalization
+
+Known keys accepted in camel or kebab form (copying a pi/opencode-style JSON
+config is a light edit): `:settings`/`:servers`, `:requestTimeoutMs`,
+`:initializeTimeoutMs`, `:idleTimeout`, `:initializationOptions`,
+`:rootMarkers`, `:excludeRootMarkers`, `:rootDir`, `:extendExtensions`.
+Values accept string or keyword for enums. Unknown keys pass through.
+
+### 6.4 Template creation
+
+At init, if `~/.kmet/agent/lsp.edn` does not exist, write a
+schema-commented starter (one builtin override, one custom server, settings
+block). Project `.kmet/lsp.edn` is created only by the first
+enable/disable write (§6.5).
+
+### 6.5 enable/disable write
+
+Same semantics as mcp-adapter §6.5, onto `.kmet/lsp.edn`: disable sets
+`:disabled true` (creating the entry if absent); enable removes `:disabled`
+(writing `:disabled false` instead when the lower-precedence file still
+disables it); empty entries are pruned; pretty EDN with trailing newline;
+returns `{:path … :changed bool}`; the command tells the user to `/reload`
+(or use `/lsp refresh`).
+
+## 7. Detection — `language.clj` + `servers.clj`
+
+One query resolves three questions: which language, which server(s), which
+root — then spawn-or-reuse (§10).
+
+### 7.1 Path → languageId (`language.clj`)
+
+Port of dirge `language.rs`: lowercased-extension lookup; extension-less
+files match whole filenames (`Makefile` → `makefile`, `Dockerfile`);
+unknown → `"plaintext"` so every `didOpen` carries a well-formed payload.
+Table lifted from dirge (covers clj cljs cljc edn bb, ts/tsx/js/jsx, py,
+go, c/cpp family, m/mm, java, rb, sh/bash/zsh, json/yaml/toml/md/html/css,
+nix, swift, zig, cmake, …). **Invariant (unit-tested)**: every extension
+claimed by any builtin server must have a languageId entry — dirge shipped
+twice with a claimed-but-unmapped extension and the server silently
+answered nothing.
+
+### 7.2 Builtin registry (`servers.clj`)
+
+Static descriptors. All entries best-effort: a missing binary surfaces in
+status, nothing crashes.
+
+| id | argv | claims (extensions) | root markers | notes |
+|---|---|---|---|---|
+| `clojure-lsp` | `["clojure-lsp"]` | clj cljs cljc edn bb | deps.edn, project.clj, shadow-cljs.edn, bb.edn, .clj-kondo | |
+| `typescript-language-server` | `["typescript-language-server" "--stdio"]` | ts tsx mts cts js jsx mjs cjs | package.json, tsconfig.json, jsconfig.json, package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lock, bun.lockb | exclude: deno.json, deno.jsonc (hand-off) |
+| `pyright-langserver` | `["pyright-langserver" "--stdio"]` | py pyi | pyproject.toml, setup.py, setup.cfg, requirements.txt, pyrightconfig.json, Pipfile | |
+| `rust-analyzer` | `["rust-analyzer"]` | rs | Cargo.toml | prefers the manifest containing `[workspace]` (walk past nested member crates; literal substring match, dirge's accepted tradeoff) |
+| `gopls` | `["gopls" "serve"]` | go | go.mod, go.work | |
+| `clangd` | `["clangd"]` | c cc cpp cxx ixx h hh hpp hxx m mm | compile_commands.json, .clangd, CMakeLists.txt, Makefile, meson.build | |
+| `ruby-lsp` | `["ruby-lsp"]` | rb rake gemspec | Gemfile, Rakefile, .rubocop.yml, config.ru | |
+| `bash-language-server` | `["bash-language-server" "start"]` | sh bash zsh | *(none)* | rootless: root = the file's parent dir |
+| `jdtls` | `["jdtls"]` | java | pom.xml, build.gradle, build.gradle.kts, settings.gradle, settings.gradle.kts | JDK-heavy; expected unused on Termux |
+
+Matching: file extension ∈ `:extensions` (lowercased) OR whole filename ∈
+`:filenames`. Earlier registry entries win ties when two servers claim the
+same extension.
+
+### 7.3 Effective registry + root resolution
+
+Effective registry = builtins, minus `:disabled true` entries, overridden
+in place by same-id config entries (`:extensions` replaces;
+`:extend-extensions` appends deduped; `:command`/`:args`/markers/options
+override), plus custom config entries appended after builtins.
+
+Root resolution — port of `nearest_root`:
+
+1. Canonicalize the queried file; determine the boundary: cwd when the file
+   is under cwd, else `fs/home`.
+2. If the file is outside the boundary, bail to "boundary = file's own
+   directory" (never walk past the boundary — dirge's symlink guard).
+3. Walk up from the file's parent: per directory, check
+   `:exclude-root-markers` first (hand-off), then `:root-markers` — hit ⇒
+   that directory.
+4. Boundary reached without a hit ⇒ the boundary itself (single-file
+   projects still get a server attached).
+5. `:root-dir` in config skips the walk. Rootless servers (flagged builtin
+   or no `:root-markers`): root = the file's parent dir.
+
+### 7.4 Spawn-or-reuse
+
+Key `(server-id, root-str)`. Live conn ⇒ reuse. Else, under the server's
+lock: cheap `(fs/which command)` first — a miss records a distinct *"not
+installed"* failure (better UX than dirge's learn-on-spawn); spawn +
+handshake; success clears `:failed-at`, failure records it. Backoff: the
+lazy/tool path refuses retries inside the window (60 s base, doubling on
+repeat failures, capped at 10 min) reporting *"last failed Ns ago"*;
+`/lsp restart <name>` bypasses and clears. Zero processes at startup unless
+`:lifecycle :eager/:keep-alive`.
+
+A file whose language nobody claims yields a clean
+`(no LSP server for .<ext>)` — no spawn attempt is ever made.
+
+## 8. Shared lib — `kmet.libs.jsonrpc`
+
+JSON-RPC 2.0 plumbing for stdio-speaking protocols (extracted up front —
+the dirge lesson; its `lsp/rpc.rs` sits on exactly such a shared core).
+Protocol-agnostic: MCP/LSP specifics stay in callers.
+
+### 8.1 Framing (pure functions, heavily tested)
+
+```clojure
+(encode-content-length payload-string)   ; => bytes to write: header + UTF-8 body
+(read-content-length input-stream)       ; => payload-string (blocks for exact N bytes)
+(encode-line-msg payload-string)         ; newline-delimited variant (MCP style)
+(read-line-msg reader)
+```
+
+- `Content-Length` counts **UTF-8 bytes, never chars** — encode first, then
+  count the byte array; reads take exactly N bytes off the InputStream and
+  decode after accumulation. THE classic LSP client bug; centralized here.
+- Header parse: case-insensitive field names, tolerate `\r\n\r\n` and bare
+  `\n\n` terminators, ignore `Content-Type` (`application/vscode-jsonrpc;
+  charset=utf-8` et al.).
+
+### 8.2 Connection
+
+```clojure
+(connect-stdio {:command :args :env :cwd
+                :framing :content-length | :line-delimited
+                :on-notification (fn [msg])            ; notifications (has :method, no :id)
+                :on-request      (fn [method params])  ; server→client requests; return
+                                                       ; result map, or nil ⇒ -32601
+                :stderr-tail-lines n})                 ; default 20
+(request! conn method params & [{:keys [timeout-ms]}]) ; => :result; throws ex-info on
+                                                       ; JSON-RPC error / timeout / death
+(notify!  conn method params)
+(close!   conn & [{:keys [graceful]}])
+(alive? conn)  (last-used conn)  (stderr-tail conn)
+```
+
+- Reader thread (daemon) parses frames and classifies: **response** (has
+  `:id` in pending) delivers its promise and removes it; stale/unknown ids
+  are dropped; **server request** (`:method` + `:id`) is answered
+  immediately — `:on-request`'s return value as `:result`, nil as
+  `{ :code -32601 :message "Method not found: <method>" }`, a throwing
+  handler as `-32603` internal error; **notification** goes to
+  `:on-notification` (exceptions swallowed, logged to the tail).
+- EOF on stdout: mark closed, fail every pending request with
+  `ex-info "... connection closed"` `{:type ::transport-dead}` — so
+  `request!` distinguishes *timeout* from *process died*.
+- `request!`: register `{id → promise}` in an atom, write the frame, deref
+  with deadline. Every `request!`/`notify!` bumps `:last-used` (reaper feed).
+- `close!`: default kills the process tree immediately
+  (`kmet.libs.process`: `collect-descendant-pids` + `kill-process-tree!` —
+  npx/jvm-style children must not orphan). `{:graceful
+  {:request "shutdown" :notification "exit"}}` sends the polite LSP dance
+  first (bounded 2 s), then kills regardless. MCP passes no `:graceful`.
+- Self-containment: requires only babashka.process, clojure.core.async,
+  cheshire.core, clojure.java.io, clojure.string. No `kmet.*`.
+
+### 8.3 Lib tests (`test/kmet/libs/jsonrpc_test.clj`, in-repo gates)
+
+Frame round-trips with multi-byte UTF-8 payloads (byte-count regression);
+chunked/split stream reads; `\r\n` vs `\n` headers; out-of-order and stale
+responses; `-32601` fallback and `-32603` on throwing handlers; EOF fails
+pending requests (timeout-vs-death distinction); graceful shutdown emits
+request+notification before killing; line-delimited mode end-to-end against
+an in-process fake (piped streams, no subprocess needed for most cases).
+
+## 9. LSP client layer — `client.clj`
+
+Thin protocol adapter over the lib.
+
+### 9.1 Handshake
+
+`initialize` (settings `:initialize-timeout-ms`, default 60 s):
+
+```clojure
+{:processId <pid or nil>
+ :rootUri  (path->uri root)            ; also :rootPath (deprecated, harmless)
+ :capabilities {...§9.2...}
+ :initializationOptions (:initialization-options definition {})
+ :workspaceFolders [{:uri (path->uri root) :name (fs/file-name root)}]}
+```
+
+then `initialized` notification. Record `serverInfo` (name/version) for
+status display.
+
+File URIs: `(str (.toUri (fs/path p)))` interop — correct percent-encoding
+(spaces, unicode Android paths) without any `java.nio.file` import; the
+reverse strips `file://` and URL-decodes.
+
+### 9.2 Client capabilities (conservative, static)
+
+```clojure
+{:textDocument {:synchronization {:dynamicRegistration false}
+                :publishDiagnostics {:relatedInformation false
+                                     :versionSupport true}}
+ :workspace {:configuration true
+             :workspaceFolders true
+             :didChangeConfiguration {:dynamicRegistration false}}}
+```
+
+Full-text sync assumed; servers that need more degrade gracefully.
+
+### 9.3 Notification routing
+
+- `textDocument/publishDiagnostics` → the diagnostics store callback (§12).
+- `window/logMessage`, `window/showMessage` → bounded ring (rendered in
+  `/lsp status` failure detail alongside stderr tails).
+- everything else (`$/progress`, `$/logTrace`, `textDocument/*` partial
+  results) → dropped.
+
+### 9.4 Server-request policy
+
+| Method | Reply |
+|---|---|
+| `workspace/configuration` | vector of `nil` per requested item (defaults) |
+| `client/registerCapability` | `{}` (accept, ignore) |
+| `window/workDoneProgress/create` | `{}` |
+| `workspace/applyEdit` | `{:applied false :failureReason "kmet edits files itself"}` — servers must never write through us |
+| anything else | nil ⇒ lib replies `-32601` |
+
+### 9.5 Document-sync builders
+
+`did-open` (uri, languageId via `language.clj`, version 1, full text),
+`did-change` (full-text single content change, version inc),
+`did-close`, `did-save`. Builders here; ownership/versioning state in the
+manager.
+
+## 10. Manager — `manager.clj`
+
+State (per extension instance):
+
+```clojure
+{:servers {name {:definition {}
+                 :roots   (atom {"<root-str>" conn})
+                 :failed-at (atom nil)   ; epoch-ms of last failure
+                 :error    (atom nil)    ; last failure message
+                 :lock     (Object.)}}}
+;; conn = {:client   <lib conn>
+;;         :root     path
+;;         :docs     (atom {path version})     ; open-document versions
+;;         :diags    (atom {uri {:diagnostics [...] :received-at ms}})
+;;         }
+```
+
+- `claiming-servers path` → `[{name definition root}]` over the effective
+  registry (§7).
+- `ensure-connected! name root` — locked, idempotent; which-check; spawn via
+  lib; handshake; wire §9.3/§9.4 policies scoped to this conn; backoff
+  bookkeeping (§7.4).
+- `touch-file! conn path` — read from disk; unopened ⇒ `didOpen`;
+  otherwise `didChange` full-text, `version++`. Re-reading disk on every
+  touch means kmet's own edits are picked up without watching the FS.
+  Positional queries touch with **Notify** semantics — no diagnostic wait
+  (that's Phase 2's edit-hook concern, dirge's note verbatim).
+- Fan-out: for each claiming conn — touch, request, collect. Per-server
+  errors are logged into the section output, never fatal; all-empty ⇒
+  `(no results)`. Sequential across conns (requests pipeline safely;
+  typically ≤2 servers claim a file).
+- `disconnect-server! name root` — `didClose` all open docs, graceful
+  shutdown dance, tree-kill, clear conn. `shutdown-all!` for unload.
+- Reaper support: `last-used` from the lib; the daemon lives in the entry.
+
+## 11. Query tool — `query.clj`
+
+### 11.1 Operations
+
+| Operation | Aliases | LSP method | Needs | Answers |
+|---|---|---|---|---|
+| `definition` | `goToDefinition` | `textDocument/definition` | pos | Where is this symbol defined |
+| `references` | `findReferences` | `textDocument/references` | pos | Every reference (`includeDeclaration: true`) |
+| `hover` | | `textDocument/hover` | pos | Docs/type signature |
+| `documentSymbol` | | `textDocument/documentSymbol` | file | File outline |
+| `workspaceSymbol` | | `workspace/symbol` | file + `query` | Project-wide symbol search |
+| `implementation` | `goToImplementation` | `textDocument/implementation` | pos | Implementors |
+| `prepareCallHierarchy` | | `textDocument/prepareCallHierarchy` | pos | Call-hierarchy seed item |
+| `incomingCalls` | | `callHierarchy/incomingCalls` | pos | Callers (two-step: prepare → incoming) |
+| `outgoingCalls` | | `callHierarchy/outgoingCalls` | pos | Callees (two-step) |
+| `diagnostics` | | *(store read)* | file | Current published diagnostics |
+
+Position ops take `line`/`character` **1-based**; the subtraction happens
+once, here (dirge's drift lesson: aliases and conversion share this single
+dispatch point). `callHierarchy/incoming/outgoing` send `{:item <first
+prepare-result>}` — the prepare round-trip is internal to one tool call.
+
+### 11.2 Parameters (JSON schema)
+
+```json
+{"operation": {"type": "string", "enum": [...§11.1...] },
+ "filePath":  {"type": "string", "description": "Absolute preferred; resolved against cwd"},
+ "line":      {"type": "number", "description": "1-based"},
+ "character": {"type": "number", "description": "1-based"},
+ "query":     {"type": "string", "description": "workspaceSymbol search"}}
+```
+
+Required: `operation`, `filePath`. Position validation errors name the
+missing field and the operation's needs.
+
+### 11.3 Result shaping (token economy)
+
+- Locations (definition/references/implementation) → deduped
+  `<rel-path>:<line>:<col>` lines, cap 50 + `… and N more`; paths displayed
+  relative to cwd when under it.
+- Hover → contents flattened (string / `{:value}` / array joined), trimmed
+  at 2000 chars.
+- Symbols (document/workspace) → `name kind:line` lines, hierarchical
+  flattened, cap 50.
+- Call hierarchy → `caller-name kind @ path:line (N call sites)`.
+- Multi-server sections labelled `── <server> (<root>) ──`; per-server
+  failures listed at the end; empty overall ⇒ `(no results)`.
+- Servers answering `nil` normalize to empty (common for positional ops).
+
+Tool description mirrors dirge's `DESCRIPTION` (~150 tokens): operation
+list, position conventions, `(no results)` note, "raw-ish but shaped"
+promise.
+
+## 12. Diagnostics — `diagnostics.clj`
+
+### 12.1 Store
+
+`publishDiagnostics` notifications swap into the owning conn's `:diags`
+atom: `{uri {:diagnostics [...] :received-at epoch-ms}}`. Version-aware
+(`versionSupport`) — stale pushes for older versions are ignored when the
+doc is tracked.
+
+### 12.2 Rendering (dirge `diagnostic.rs` caps)
+
+`pretty`: `SEVERITY [line:col] message (source)` — 1-based coordinates;
+severity 1/2/3/4 → ERROR/WARN/INFO/HINT, absent ⇒ ERROR.
+
+- Per-file view (`operation: "diagnostics"`): cap 8 rendered, overflow
+  `… and N more`.
+- Flood guard: ≥40 errors in one file ⇒ one-line summary instead (a flood
+  is almost never caused by the agent — dumping a wall of noise is the
+  opposite of useful).
+- Project view: ≤5 additional files beyond the queried one, sorted by
+  error count desc.
+
+### 12.3 Phase 2 — after-edit hook (specified, gated by
+`settings :diagnostics {:after-edit true}`, default off)
+
+`ext/on-tool-result` fires for `edit`/`write` with the tool's `:args` in
+the hook payload (verified: `loop.clj` `after-tool-hook-result` passes
+`{:tool-call-id :tool-name :args :result :is-error}`) — **no core change
+needed**. Flow: extract the edited `:path` → claiming servers → touch
+(await-push semantics): send the sync, then wait up to
+`:wait-ms` (default 4000) for a fresh `publishDiagnostics`
+(`received-at > t0`); on timeout report whatever is stored (cold-start
+servers simply report stale-or-empty rather than blocking forever — the
+pull-diagnostics race is the Phase-2 refinement). Append a capped
+`<diagnostics>` block to the tool result content.
+
+## 13. Entry — `lsp_adapter.clj`
+
+Init order (all no-ops when `settings :disabled true`):
+
+1. Load config; create the global template when missing.
+2. State atom (§10 shape) + api ref.
+3. Register the `lsp` tool (description §11.3, schema §11.2).
+4. Register `/lsp` with argument completions (subcommands, then server
+   names).
+5. Start the idle-reaper daemon (30 s ticks; skip `:keep-alive`; honor
+   per-server `:idle-timeout`; 0 disables).
+6. Footer status: `ui-set-status api "lsp"` — compact summary
+   (`🔌 LSP: clojure-lsp@~/kmet` or `🔌 LSP: 2 servers`), cleared when no
+   servers are configured/running; inert in headless mode.
+7. Events: `:session-start` → background eager/keep-alive connects (daemon
+   thread, never blocks); `:session-shutdown` → `shutdown-all!`.
+
+`shutdown` (unload/reload): stop reaper, `shutdown-all!` (graceful dance +
+tree-kill), deregistration is automatic.
+
+`/lsp` subcommands:
+
+| Subcommand | Effect |
+|---|---|
+| *(bare)* / `status` | servers, states (connected / idle / failed+why / not-installed / disabled / misconfigured), roots, open-doc counts, recent log tail — text dialog (TUI) or println (headless) |
+| `list [server]` | registry entries + claims + markers |
+| `restart <name>` | disconnect all roots of the server, clear backoff, reconnect on next claim |
+| `enable\|disable <name>` | write-back §6.5; suggests `/reload` |
+| `refresh` | reload `lsp.edn` live: drop removed/disabled conns, rebuild the effective registry |
+
+## 14. README
+
+Enabling (symlink `extensions/lsp-adapter` into `~/.kmet/agent/extensions/`
+or `.kmet/extensions/`), first-run template note, EDN config reference
+(server keys table, builtin registry table), the `lsp` tool reference with
+examples, `/lsp` reference, lifecycle notes (lazy spawn, backoff, idle
+reaping), per-language install hints (`clojure-lsp`, `typescript-language-
+server`, … — "install the binary, done"), security note (LSP servers run
+with your user privileges and index your code — configure only servers you
+trust), Phase-2 roadmap.
+
+## 15. Validation plan
+
+1. **Lib unit tests** (`test/kmet/libs/jsonrpc_test.clj`, in-repo gates —
+   §8.3 list).
+2. **Fake LSP server** (`scripts/fake-lsp-server.bb`): content-length
+   framing; `initialize` reply advertising full-text sync +
+   `textDocumentDefinitionProvider` etc.; `initialized` ack; canned
+   `textDocument/definition` (a fixed Location), `documentSymbol` (nested),
+   `workspace/symbol`; a `textDocument/publishDiagnostics` push after the
+   first `didOpen`; a `workspace/configuration` server-request asserting the
+   client answers; handles the `shutdown`→`exit` dance; clean exit 0.
+3. **Client validation** (`validate-client.bb`, fake server): handshake,
+   each operation, notification capture, server-request auto-reply, EOF
+   failing pending requests, graceful shutdown, restart cycle, stderr-tail
+   capture.
+4. **Config validation** (`validate-config.bb`): precedence merge,
+   camel/kebab normalization, template creation, enable/disable round-trip
+   (incl. lower-source-disabled case), effective-registry computation
+   (override/extend/disable/custom/misconfigured), root-resolution fixtures
+   (temp dirs with marker files, incl. deno hand-off and boundary
+   fallback), language-table invariant.
+5. **Nullable-api load check**: `init` against
+   `kmet.extension/create-nullable-api` — tool, command, event
+   registrations present; `:disabled` settings ⇒ nothing registered;
+   `shutdown` tears down cleanly.
+6. **e2e** (`e2e.bb`): headless — drive the registered tool's `execute`
+   directly against the fake server (definition/hover/diagnostics/status
+   flows), like mcp-adapter's headless smoke.
+7. **Real-world smoke**: clojure-lsp on this repo (`deps.edn` marker) —
+   definition/hover/documentSymbol/workspaceSymbol/diagnostics on
+   `src/kmet/app/extensions.clj`; record results in the README.
+8. **Quality**: manual clj-kondo + cljfmt over the extension files
+   (`bb lint-changed` covers the lib + dependents), plan/README
+   consistency.
+
+## 16. Implementation order
+
+1. `kmet.libs.jsonrpc` + unit tests; register in
+   `libs-library-namespaces` + `kmet.runner/all-namespaces`; gates green.
+2. `config.clj` (+ §15.4 pieces).
+3. `language.clj` + `servers.clj` (tables, effective registry, root
+   resolution + fixture tests).
+4. `client.clj` (handshake, policies, builders, uri helpers) validated
+   against the fake server.
+5. `manager.clj` (connections, doc sync, fan-out, backoff).
+6. `query.clj` + tool registration; `diagnostics.clj` store + op.
+7. Entry `lsp_adapter.clj` (state, `/lsp`, events, status, reaper) +
+   completions.
+8. Scripts polish, README, real-world smoke (§15.7).
+
+Phase 2 lands separately after Phase 1 settles: after-edit hook → panel →
+incremental sync → (optional) mcp-adapter stdio adoption.
+
+## 17. Risks & notes
+
+- **Content-Length counts bytes, not chars** — centralized in the lib; never
+  hand-roll framing at call sites.
+- Extension sci context: no futures — daemon threads via the copied `spawn`
+  helper; exceptions in daemons swallowed deliberately.
+- bb `:env` replaces the environment — merge `System/getenv` manually.
+- `:pid` absent on bb process records — `(.pid (:proc p))`.
+- First-touch indexing latency: cold clojure-lsp/jdtls can exceed casual
+  expectations — initialize bounded at 60 s, requests at 30 s; timeouts are
+  retryable, backoff applies to spawn/handshake failures only (a slow-but-
+  healthy server is never marked broken mid-index).
+- Parallel tool calls race first-connect — per-server lock serializes;
+  post-handshake requests are id-matched and safe to pipeline.
+- Termux reality: most servers are absent; the `fs/which` pre-check makes
+  "not installed" a first-class status, and nothing attempts spawns for
+  unclaimed languages.
+- File URIs on Android paths (spaces, unicode): `(.toUri (fs/path …))`
+  interop; no `java.io.*`/`java.nio.file` imports (AGENTS convention).
+- Full-text `didChange` always (simplest correct); disk re-read per touch;
+  incremental sync only if profiling ever demands it (Phase 2).
+- `workspace/applyEdit` refused by policy — a server that insists will show
+  `applied: false` in its logs; our edits flow exclusively through kmet's
+  edit tools.
+- Large results: shaping caps (§11.3) keep responses bounded; no byte-level
+  output guard needed.
+- Extension files sit outside `bb lint` — keep them clj-kondo-clean manually;
+  the lib enjoys the full gates (this asymmetry is why the risky code lives
+  in the lib).
+- Windows: header tolerance for `\r\n`; process-tree kill already proven by
+  mcp-adapter.
+
+## 18. Implementation notes & recorded deviations
+
+*(empty — fill during implementation)*
