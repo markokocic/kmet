@@ -264,6 +264,12 @@ Assert on returned lines directly, or call twice across a state change and
 diff — identical lines prove keyed reuse and cache hits held. No tty, no
 sleeps: fast-path `bb test` material, never `^:slow`.
 
+Trees compiled OUTSIDE a mount (`hiccup/compile-tree` for widgets, dialogs,
+any hold-then-render lifetime) are owned by their holder: dispose them with
+`hiccup/dispose-tree!` on replacement/close — with-let cleanups and
+reactions unwind through it. Pure-string leaves may be abandoned safely;
+reactive subtrees may not.
+
 ---
 
 ## 3. Reactivity
@@ -412,6 +418,12 @@ overlay close, reconcile removal, shutdown; implementations must be
   must never outlive the component ("zombie watchers").
 - Timers/intervals belong in `dispose` — a dropped component must not keep
   a ticker invalidating forever.
+- Trees compiled outside a mount are disposed by their holder via
+  `hiccup/dispose-tree!` (widget replacement, dialog close) — see §2.7.
+- Do NOT branch on `(satisfies? SomeProto reify)` under Babashka/SCI —
+  satisfies? can return false for sci reify instances. Dispatch through
+  the protocol's multimethod instead (methods register reliably); this is
+  how extension dialog/widget disposal routes.
 
 ### 5.2 Local state — with-let
 

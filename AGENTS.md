@@ -58,6 +58,14 @@
 - **Records, not deftype**: use `defrecord` + `map->` constructors
 - **Protocols** for extension: `IComponent` (render/handle-input/invalidate), `IFocusable` (focused/set-focused!)
 - **State**: atoms for mutable state (component children, input listeners, render flags)
+- **Agent state model** (`kmet.app.loop/AgentState`): per-field atoms ARE
+  the concurrency model — independent cells (`signal`, `active-call`,
+  queues) stay separate; runtime-tunable knobs live in one `:cfg` atom
+  holding an immutable map (`swap!`-assoc). No single app-db atom:
+  swap-retry storms at token-streaming rates.
+- **Dispatch**: explicit tables/maps over multimethods — extensions register
+  at runtime through calls, so compile-time `defmethod` registries would
+  fork the mechanism (see the tool renderer registry)
 - **Private vars**: use `defn-` / `def-` for implementation details not part of public API
 
 ## Editing
@@ -161,6 +169,10 @@ for a full gate. The default validation loop is the changed-file tasks above.
 `bb lint` must pass with 0 errors, warnings, and info findings.
 
 ## Platform
+
+- **SCI gotcha**: `(satisfies? SomeProto reify-instance)` can return false
+  under Babashka even when methods are registered — dispatch through the
+  protocol's multimethod instead (see tui.md §5.1).
 - **Fully supported**: Linux, WSL, Windows, Termux (Android)
 - **macOS**: supported too, but no way to test there — expect untested rough edges
 - **Primary dev environment**: Termux on Android — glibc babashka via `ld-linux-aarch64.so.1 --library-path`.
