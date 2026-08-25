@@ -91,5 +91,5 @@ Headless: same data as text.
 - `workspace/applyEdit` is refused by design: edits flow through kmet's
   own edit tools exclusively.
 - ESC during a query abandons it promptly; the server process stays warm.
-- Validation: `bb -cp ../../src:src scripts/validate.bb` (28 checks,
+- Validation: `bb -cp ../../src:src scripts/validate.bb` (26 checks,
   hermetic — spawns `scripts/fake-lsp-server.bb`, touches nothing real).

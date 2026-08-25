@@ -23,16 +23,29 @@
 (defn new-state
   "One state MAP per extension instance whose mutable fields are atoms:
    CONNS keyed [name root-str], BROKEN {name {:reason :at}}, CONFIG, LOCKS
-   created on demand under swap."
+   created on demand under swap. ON-CHANGE (optional, set by the entry)
+   is invoked with no args whenever anything footer-visible mutates -
+   runtime can't reach the entry namespace, so the entry injects its
+   status refresher here."
   [api config]
   {:api api
    :config (atom config)
    :conns (atom {})
    :broken (atom {})
    :locks (atom {})
-   :reaper-stop (atom false)})
+   :reaper-stop (atom false)
+   :on-change (atom nil)})
 
-(defn set-config! [st config] (reset! (:config st) config))
+(defn- notify-change! [st]
+  (when-let [f @(:on-change st)]
+    (try (f) (catch Exception _ nil))))
+
+(defn set-on-change! [st f] (reset! (:on-change st) f))
+
+(defn set-config!
+  [st config]
+  (reset! (:config st) config)
+  (notify-change! st))
 (defn config [st] @(:config st))
 (defn configured-servers
   "The :servers map from the active config - the input effective-servers
@@ -61,10 +74,16 @@
 ;; ─── Sticky broken-set ────────────────────────────────────────────────────
 
 (defn mark-broken! [st name reason]
-  (swap! (:broken st) assoc name {:reason reason :at (System/currentTimeMillis)}))
+  (swap! (:broken st) assoc name {:reason reason :at (System/currentTimeMillis)})
+  (notify-change! st))
 
-(defn clear-broken! [st name] (swap! (:broken st) dissoc name))
-(defn clear-all-broken! [st] (reset! (:broken st) {}))
+(defn clear-broken! [st name]
+  (swap! (:broken st) dissoc name)
+  (notify-change! st))
+
+(defn clear-all-broken! [st]
+  (reset! (:broken st) {})
+  (notify-change! st))
 (defn broken [st name] (@(:broken st) name))
 
 (defn broken-error
@@ -134,6 +153,7 @@
                   (when-let [p (jrpc/pid conn)] (process/track-pid! p))
                   (clear-broken! st name)
                   (swap! (:conns st) assoc key entry)
+                  (notify-change! st)
                   entry))
               (catch Exception e
                 (when-not (::server-broken (:type (ex-data e)))
@@ -149,6 +169,7 @@
   [st key]
   (when-let [entry (get @(:conns st) key)]
     (swap! (:conns st) dissoc key)
+    (notify-change! st)
     (try
       (jrpc/close! (:client entry) {:graceful lsp/shutdown-dance})
       (catch Exception _ nil))

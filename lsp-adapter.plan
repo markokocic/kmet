@@ -569,41 +569,26 @@ server`, … — "install the binary, done"), security note (LSP servers run
 with your user privileges and index your code — configure only servers you
 trust), Phase-2 roadmap.
 
-## 15. Validation plan
+## 15. Validation plan (Rev 2 — one script)
 
-1. **Lib unit tests** (`test/kmet/libs/jsonrpc_test.clj`, in-repo gates —
-   §8.3 list).
-2. **Fake LSP server** (`scripts/fake-lsp-server.bb`): content-length
-   framing; `initialize` reply advertising full-text sync +
-   `textDocumentDefinitionProvider` etc.; `initialized` ack; canned
-   `textDocument/definition` (a fixed Location), `documentSymbol` (nested),
-   `workspace/symbol`; a `textDocument/publishDiagnostics` push after the
-   first `didOpen`; a `workspace/configuration` server-request asserting the
-   client answers; handles the `shutdown`→`exit` dance; clean exit 0.
-3. **Client validation** (`validate-client.bb`, fake server): handshake,
-   each operation, notification capture, server-request auto-reply, EOF
-   failing pending requests, graceful shutdown, restart cycle, stderr-tail
-   capture, broken-mark stickiness (a failed claim ⇒ the second query is
-   served from the cache with no spawn attempt).
-4. **Config validation** (`validate-config.bb`): precedence merge,
-   camel/kebab normalization, template creation, enable/disable round-trip
-   (incl. lower-source-disabled case), effective-registry computation
-   (override/extend/disable/custom/misconfigured), root-resolution fixtures
-   (temp dirs with marker files, incl. deno hand-off and boundary
-   fallback), language-table invariant.
-5. **Nullable-api load check**: `init` against
-   `kmet.extension/create-nullable-api` — tool, command, event
-   registrations present; `:disabled` settings ⇒ nothing registered;
-   `shutdown` tears down cleanly.
-6. **e2e** (`e2e.bb`): headless — drive the registered tool's `execute`
-   directly against the fake server (definition/hover/diagnostics/status
-   flows), like mcp-adapter's headless smoke.
-7. **Real-world smoke**: clojure-lsp on this repo (`deps.edn` marker) —
-   definition/hover/documentSymbol/workspaceSymbol/diagnostics on
-   `src/kmet/app/extensions.clj`; record results in the README.
-8. **Quality**: manual clj-kondo + cljfmt over the extension files
-   (`bb lint-changed` covers the lib + dependents), plan/README
-   consistency.
+`scripts/validate.bb` (hermetic, run from the extension dir with
+`bb -cp ../../src:src`) covers everything in sections:
+
+1. **detect** — language invariant (every builtin-claimed extension has a
+   languageId), filename markers, plaintext fallback, effective registry
+   (disable/override/extend/custom-append), root walk-up fixtures,
+   deno hand-off exclusion, outside-cwd attachment.
+2. **e2e against fake-lsp-server.bb** (real subprocess): handshake,
+   definition/hover/documentSymbol/references shapes, incoming-calls
+   two-step compose, configuration-probe auto-reply (marker file),
+   diagnostics push collection + rendering, broken-stickiness (<500ms
+   cached failure), shutdown-all.
+3. **panel** — render rows/icons/hints at width, selection range,
+   restart fires + clears broken, refresh fires, esc closes.
+4. **footer** — `LSP <connected>/<total>` counting rules incl. clear-on-
+   empty; live-connection counting.
+
+Quality gates: clj-kondo 0/0 over src+scripts, cljfmt clean.
 
 ## 16. Implementation order (Rev 2)
 

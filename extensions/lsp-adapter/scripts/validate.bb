@@ -124,7 +124,9 @@
 (let [{:keys [dir cfg sample]} (temp-project)
       marker (str dir "/config-marker")
       cfg (assoc-in cfg [:servers "fake" :command] ["bb" fake-server marker])
-      st (runtime/new-state nil cfg)]
+      st (runtime/new-state nil cfg)
+      changes (atom 0)]
+  (runtime/set-on-change! st (fn [] (swap! changes inc)))
   (try
     (check "definition returns a shaped location"
            (let [out (tools/execute st nil
@@ -188,9 +190,11 @@
                   (str/includes? out1 "not installed")
                   (str/includes? out2 "not installed")
                   (< ms2 500))))
-    (finally
-      (runtime/shutdown-all! st)
-      (fs/delete-tree dir))))
+      (check "on-change hook fired during connects/broken marks"
+             (pos? @changes))
+      (finally
+        (runtime/shutdown-all! st)
+        (fs/delete-tree dir))))
 
 (println "\n-- panel --")
 
@@ -239,6 +243,15 @@
     (finally
       (runtime/shutdown-all! st)
       (fs/delete-tree proj))))
+(check "shutdown-all disconnects everything"
+       (let [{:keys [dir cfg sample]} (temp-project)
+             st (runtime/new-state nil cfg)]
+         (try
+           (tools/execute st nil {:operation "hover"
+                                  :filePath sample :line 1 :character 1})
+           (runtime/shutdown-all! st)
+           (empty? @(:conns st))
+           (finally (fs/delete-tree dir)))))
 
 (println "\n-- footer --")
 

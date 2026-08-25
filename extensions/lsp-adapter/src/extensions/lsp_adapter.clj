@@ -229,6 +229,9 @@ seconds while indexing; a failed install stays failed until /lsp restart.")
 (defn init [api]
   (let [st (runtime/new-state api (load-config))]
     (reset! state-atom st)
+    ;; footer refreshes on every lazy connect/disconnect/broken change -
+    ;; runtime can't call the entry, so it invokes this injected hook
+    (runtime/set-on-change! st #(update-status! st))
     (register-tool! st)
     (ext/register-command! api
                            {:name "lsp"
