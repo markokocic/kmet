@@ -71,7 +71,12 @@ After editing: `/lsp refresh`.
 
 ## Commands
 
-`/lsp` (status) · `/lsp list` · `/lsp restart <server>` · `/lsp refresh`
+`/lsp` — interactive panel (TUI): rows show each server's state
+(● connected · ✗ broken + reason · ○ idle), `↑↓`/`k j` select,
+`enter`/`r` restarts, `f` reloads `.kmet/lsp.edn`, `esc` closes.
+Headless: same data as text.
+
+`/lsp list` · `/lsp restart <server>` · `/lsp refresh`
 
 ## Notes
 

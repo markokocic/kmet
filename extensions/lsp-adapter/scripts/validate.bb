@@ -17,7 +17,9 @@
          '[clojure.string :as str]
          '[extensions.lsp-adapter.detect :as detect]
          '[extensions.lsp-adapter.runtime :as runtime]
-         '[extensions.lsp-adapter.tools :as tools])
+         '[extensions.lsp-adapter.tools :as tools]
+         '[extensions.lsp-adapter.panel :as panel]
+         '[kmet.tui.protocols :as protocols])
 
 (def failures (atom 0))
 
@@ -188,6 +190,54 @@
     (finally
       (runtime/shutdown-all! st)
       (fs/delete-tree dir))))
+
+(println "\n-- panel --")
+
+(let [proj (tmp-dir)
+      _ (spit (str proj "/root-marker.txt") "")
+      cfg {:servers {"fake" {:command ["bb" fake-server]
+                             :extensions ["txt"]
+                             :root-markers ["root-marker.txt"]}}}
+      st (runtime/new-state nil cfg)]
+  (try
+    (runtime/mark-broken! st "fake" ":not installed")
+    (let [closed (atom false)
+          restarted (atom nil)
+          refreshed (atom false)
+          comp (panel/make-panel st (fn [_] (reset! closed true))
+                                 {:restart-fn (fn [n]
+                                                (reset! restarted n)
+                                                (runtime/clear-broken! st n))
+                                  :refresh-fn (fn [] (reset! refreshed true))})
+          rendered (protocols/render comp 70)]
+      (check "panel renders rows, icons and hints"
+             (and (str/includes? rendered "fake")
+                  (str/includes? rendered "\u2717")   ;; broken icon
+                  (str/includes? rendered "esc close")))
+      ;; selection wraps inside the full registry row count
+      (protocols/handle-input comp "\u001b[B")
+      (check "selection stays in range after down"
+             (and (>= @(:sel comp) 0)
+                  (< @(:sel comp) 10)))
+      ;; pin selection to the fake row, then restart it
+      (let [eff (detect/effective-servers (:servers cfg))
+            fake-i (some (fn [[i r]] (when (= "fake" (:id r)) i))
+                         (map-indexed vector eff))]
+        (reset! (:sel comp) fake-i))
+      (protocols/handle-input comp "r")
+      (check "restart action fires for the selected server"
+             (= "fake" @restarted))
+      (check "restart cleared the broken mark"
+             (nil? (runtime/broken st "fake")))
+      (protocols/handle-input comp "f")
+      (check "refresh action fires"
+             (true? @refreshed))
+      (protocols/handle-input comp "\u001b")
+      (check "esc closes the panel"
+             (true? @closed)))
+    (finally
+      (runtime/shutdown-all! st)
+      (fs/delete-tree proj))))
 
 (check "shutdown-all disconnects everything"
        (let [{:keys [dir cfg sample]} (temp-project)

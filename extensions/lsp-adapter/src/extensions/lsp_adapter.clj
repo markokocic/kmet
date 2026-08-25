@@ -8,6 +8,7 @@
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
             [extensions.lsp-adapter.detect :as detect]
+            [extensions.lsp-adapter.panel :as panel]
             [extensions.lsp-adapter.runtime :as runtime]
             [extensions.lsp-adapter.tools :as tools]
             [kmet.extension :as ext]
@@ -155,6 +156,24 @@ seconds while indexing; a failed install stays failed until /lsp restart.")
       (str/join "\n" lines)
       "no language servers connected")))
 
+(defn- open-panel!
+  "The interactive /lsp panel (TUI); headless callers fall back to text."
+  [st ctx]
+  (if (:has-ui ctx)
+    (ext/ui-custom
+     (:api @state-atom)
+     (fn [_tui _theme _kb close]
+       (panel/make-panel st close
+                         {:restart-fn (fn [name]
+                                        (runtime/clear-broken! st name)
+                                        (runtime/disconnect-server! st name))
+                          :refresh-fn (fn []
+                                        (runtime/set-config! st (load-config))
+                                        (runtime/clear-all-broken! st))}))
+     {:overlay true
+      :overlay-options {:anchor :center :width 64}})
+    (report ctx "LSP" (status-report st))))
+
 (defn- list-report [st]
   (str/join "\n"
             (for [{:keys [id extensions root-markers rootless]}
@@ -168,7 +187,7 @@ seconds while indexing; a failed install stays failed until /lsp restart.")
   (let [[sub arg] (split-args args)
         sub (if (str/blank? sub) "status" sub)]
     (case sub
-      "status" (report ctx "LSP" (status-report st))
+      "status" (open-panel! st ctx)
       "list" (report ctx "LSP servers" (list-report st))
       "restart"
       (if (str/blank? arg)
