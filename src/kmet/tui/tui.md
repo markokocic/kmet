@@ -495,6 +495,24 @@ sees). Consequences:
 - Widgets implement `handle-input`; dialogs trap keys manually around their
   focused editor.
 
+**Focus home — the terminal fallback.** Input reaching a focused-but-inert
+component is the silent failure mode of focus-only routing, so overlay
+close paths never fall back to an arbitrary root child. When an overlay
+leaves (hide / set-hidden! / unfocus), focus resolves in order: topmost
+visible overlay below, the recorded pre-focus when still mounted, then the
+app-registered **focus home**, else focus stays untouched. The app layer
+registers the home once per session — interactive points it at the ACTIVE
+editor, read through its atom at restore time so custom-editor swaps stay
+live:
+
+```clojure
+(tui/tui-set-focus-home! t #(deref current-editor-atom))
+```
+
+`kmet.tui.core` stays generic: it knows nothing about editors, only about
+the thunk. If the home is unregistered or throws, focus becomes null —
+input drops at the dispatch guard rather than reaching a removed dialog.
+
 ---
 
 ## 8. Protocols

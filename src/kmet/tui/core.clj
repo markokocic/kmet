@@ -101,7 +101,8 @@
                 color-scheme-listeners terminal-response-buffer
                 terminal-response-timer color-scheme-notifications-enabled?
                 debug-redraw? tui-debug?
-                input-generation incomplete-flush-timer])
+                input-generation incomplete-flush-timer
+                focus-home])
 
 (declare tui-request-render tui-stop set-focus-internal
          overlay-visible? overlay-handle process-input-buffer! tui-invalidate)
@@ -141,7 +142,10 @@
                        :debug-redraw? (atom (= (System/getenv "KMET_DEBUG_REDRAW") "1"))
                        :tui-debug? (atom (= (System/getenv "KMET_TUI_DEBUG") "1"))
                        :input-generation (atom 0)
-                       :incomplete-flush-timer (atom nil)})]
+                       :incomplete-flush-timer (atom nil)
+                       ;; terminal focus fallback, registered by the app
+                       ;; layer (tui-set-focus-home!) — see resolve-focus-home
+                       :focus-home (atom nil)})]
     ;; AltScreenFlashContainer owned by the TUI (pi: TuiAltScreen owns its
     ;; flash container) — the render loop composites flash lines over the
     ;; screen window; tui-flash! / tui-flash-dispose! are the public API.
@@ -162,6 +166,23 @@
 (defn tui-set-focus [tui component]
   ;; pi: public setFocus — clears any pending overlay restore state
   (set-focus-internal tui component :clear))
+
+(defn tui-set-focus-home!
+  "Register the terminal focus fallback as a THUNK resolved lazily at
+   restore time. The app layer points it at the active editor (reading
+   current-editor-atom, so custom-editor swaps stay live); overlay close
+   paths land here when no overlay below and a stale pre-focus exist.
+   Pass nil to unregister. Returns nil."
+  [tui f]
+  (reset! (:focus-home tui) f)
+  nil)
+
+(defn- resolve-focus-home
+  "Invoke the registered focus home; nil when none is registered or the
+   thunk throws (a broken home must not take the input loop down)."
+  [tui]
+  (when-let [home @(:focus-home tui)]
+    (try (home) (catch Exception _ nil))))
 
 (defn tui-get-show-hardware-cursor
   "Whether the hardware terminal cursor is visible (pi: getShowHardwareCursor)."
@@ -495,6 +516,23 @@
 
 ;; ─── OverlayHandle (pi: OverlayHandle) ─────────────────────────────────────
 
+(defn- restore-after-overlay!
+  "Focus where input should land after ENTRY left the capturing stack:
+   topmost visible overlay below it, else the recorded pre-focus when
+   still mounted, else the app-registered focus home (the active editor,
+   tui-set-focus-home!), else null focus - keys drop at the dispatch guard
+   instead of reaching a removed dialog. Never an arbitrary root child:
+   the old last-root-child fallback once landed on the footer, which
+   silently swallowed all input after overlay close. Call AFTER the entry
+   left the stack or was hidden, so the topmost scan skips it."
+  [tui entry]
+  (if-let [top (get-topmost-visible-overlay tui)]
+    (tui-set-focus tui (:component top))
+    (let [prev @(:pre-focus entry)]
+      (if (and prev (is-component-mounted? tui prev))
+        (tui-set-focus tui prev)
+        (tui-set-focus tui (resolve-focus-home tui))))))
+
 (defn- overlay-handle
   "Return the OverlayHandle map for ENTRY: {:hide :set-hidden! :is-hidden?
    :focus :unfocus :is-focused?} (pi: OverlayHandle)."
@@ -505,9 +543,7 @@
              (retarget-overlay-pre-focus! tui entry)
              (swap! (:overlays tui) (fn [v] (vec (remove #(identical? % entry) v))))
              (when (identical? (:component entry) @(:focused-component tui))
-               (if-let [top (get-topmost-visible-overlay tui)]
-                 (tui-set-focus tui (:component top))
-                 (tui-set-focus tui @(:pre-focus entry))))
+               (restore-after-overlay! tui entry))
              (when (empty? @(:overlays tui))
                (when-let [term @(:terminal tui)] (terminal/hide-cursor! term)))
              (tui-request-render tui)))
@@ -517,9 +553,7 @@
                     (if hidden?
                       (do (clear-overlay-focus-restore-for! tui entry)
                           (when (identical? (:component entry) @(:focused-component tui))
-                            (if-let [top (get-topmost-visible-overlay tui)]
-                              (tui-set-focus tui (:component top))
-                              (tui-set-focus tui @(:pre-focus entry)))))
+                            (restore-after-overlay! tui entry)))
                       (when (and (not (:non-capturing (:options entry)))
                                  (overlay-visible? tui entry))
                         (reset! (:focus-order entry) (swap! (:focus-order-counter tui) inc))
@@ -551,9 +585,12 @@
                     (do (clear-overlay-focus-restore-for! tui entry)
                         (when (or is-focused? (some? unfocus-options))
                           (let [top (get-topmost-visible-overlay tui)
-                                fallback (if (and top (not (identical? top entry)))
-                                           (:component top)
-                                           @(:pre-focus entry))]
+                                prev @(:pre-focus entry)
+                                fallback (or (when (and top (not (identical? top entry)))
+                                               (:component top))
+                                             (when (and prev (is-component-mounted? tui prev))
+                                               prev)
+                                             (resolve-focus-home tui))]
                             (tui-set-focus tui (if (some? unfocus-options)
                                                  (:target unfocus-options)
                                                  fallback))))
@@ -561,22 +598,16 @@
    :is-focused? (fn [] (identical? (:component entry) @(:focused-component tui)))})
 
 (defn tui-hide-overlay
-  "Hide the topmost overlay and restore focus — topmost visible overlay, or
-   the pre-overlay focus when still mounted, else the last component
-   (pi: TUI.hideOverlay)."
+  "Hide the topmost overlay and restore focus — topmost visible overlay,
+   the pre-overlay focus when still mounted, else the app-registered focus
+   home (pi: TUI.hideOverlay)."
   [tui]
   (when-let [overlay (peek @(:overlays tui))]
     (clear-overlay-focus-restore-for! tui overlay)
     (retarget-overlay-pre-focus! tui overlay)
     (swap! (:overlays tui) pop)
     (when (identical? (:component overlay) @(:focused-component tui))
-      (if-let [top (get-topmost-visible-overlay tui)]
-        (tui-set-focus tui (:component top))
-        (let [prev @(:pre-focus overlay)]
-          (if (and prev (is-component-mounted? tui prev))
-            (tui-set-focus tui prev)
-            (when-let [last (last @(:components tui))]
-              (tui-set-focus tui last))))))
+      (restore-after-overlay! tui overlay))
     (when (empty? @(:overlays tui))
       (when-let [term @(:terminal tui)] (terminal/hide-cursor! term)))
     (tui-request-render tui)))

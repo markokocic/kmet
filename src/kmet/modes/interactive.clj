@@ -2887,11 +2887,14 @@
                             :auto-compact (get config :auto-compact true))
 
         ;; Core state (status-indicator/status-root filled in after layout)
+        ;; the active editor lives behind an atom so custom editors can swap
+        ;; in; the focus home reads it at restore time (tui-set-focus-home!)
+        current-editor-atom (atom ed)
         cs (map->CoreState {:tui t
                             :agent-state (atom ag)
                             :chat-history ch
                             :editor ed
-                            :current-editor-atom (atom ed)
+                            :current-editor-atom current-editor-atom
                             :header-comp hdr
                             :loaded-resources-comp lr
                             :anim-timer (atom nil)
@@ -2916,6 +2919,10 @@
 
     ;; Focus editor
     (tui/tui-set-focus t ed)
+    ;; Terminal focus fallback: when overlay close finds no live pre-focus,
+    ;; input returns to the ACTIVE editor - resolved through the atom so a
+    ;; swapped-in custom editor stays the valid home (tui-set-focus-home!)
+    (tui/tui-set-focus-home! t #(deref current-editor-atom))
 
     ;; Hardware cursor: the setting wins over the KMET_HARDWARE_CURSOR env
     ;; default (pi: showHardwareCursor)

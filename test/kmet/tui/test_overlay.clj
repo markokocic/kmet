@@ -260,6 +260,49 @@
       (t/is (identical? ed @(:focused-component tui))
             "pre-focus inside a DSL tree restored after hide"))))
 
+(t/deftest test-hide-unmounted-prefocus-falls-back-to-home
+  (testing "unmounted pre-focus lands on the registered focus home"
+    (let [tui (core/create-tui nil)
+          gone (leaf)                 ;; never added to the tree
+          home (leaf)]
+      (core/tui-add-child tui (:comp home))
+      (core/tui-set-focus-home! tui (fn [] (:comp home)))
+      (core/tui-set-focus tui (:comp gone))
+      (let [o (leaf)]
+        (core/tui-show-overlay tui (:comp o))
+        (t/is (identical? (:comp o) @(:focused-component tui)))
+        (core/tui-hide-overlay tui)
+        (t/is (identical? (:comp home) @(:focused-component tui))
+              "home receives focus when pre-focus is unmounted")))))
+
+(t/deftest test-hide-no-home-clears-focus-instead-of-last-root-child
+  (testing "without a home, focus goes null — never the last root child
+            (the footer-swallowed-all-input regression)"
+    (let [tui (core/create-tui nil)
+          gone (leaf)
+          last-child (leaf)]
+      ;; deliberately NOT focused or mounted: gone is the stale pre-focus,
+      ;; last-child is what the old fallback wrongly focused
+      (core/tui-add-child tui (:comp last-child))
+      (core/tui-set-focus tui (:comp gone))
+      (let [o (leaf)]
+        (core/tui-show-overlay tui (:comp o))
+        (core/tui-hide-overlay tui)
+        (t/is (nil? @(:focused-component tui))
+              "no home: null focus, not an inert root child")))))
+
+(t/deftest test-hide-throwing-home-is-not-fatal
+  (testing "a throwing focus home degrades to null focus"
+    (let [tui (core/create-tui nil)
+          gone (leaf)]
+      (core/tui-set-focus-home! tui (fn [] (throw (ex-info "boom" {}))))
+      (core/tui-set-focus tui (:comp gone))
+      (let [o (leaf)]
+        (core/tui-show-overlay tui (:comp o))
+        (core/tui-hide-overlay tui)
+        (t/is (nil? @(:focused-component tui))
+              "throwing home does not take input handling down")))))
+
 (t/deftest test-handle-set-hidden-focus-moves
   (testing "set-hidden! releases focus to the pre-focus; showing restores it"
     (let [tui (core/create-tui nil)

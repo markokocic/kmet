@@ -51,15 +51,26 @@
             "lower overlay gets focus when the top one closes"))))
 
 (t/deftest test-overlay-focus-fallback
-  (testing "no previous focus → falls back to the last component"
+  (testing "no previous focus → null focus without a home; home when registered"
     (let [tui (core/create-tui nil)
           a (leaf)
           o (leaf)]
+      ;; a is mounted but INERT — focusing it would swallow keys silently
+      ;; (the footer-swallowed-all-input regression)
       (core/tui-add-child tui (:comp a))
       (core/tui-show-overlay tui (:comp o) :width 10 :height 5)
       (core/tui-hide-overlay tui)
-      (t/is (identical? (:comp a) @(:focused-component tui))
-            "falls back to the last top-level component"))))
+      (t/is (nil? @(:focused-component tui))
+            "no home: null focus, never an arbitrary root child"))
+    (let [tui (core/create-tui nil)
+          home (leaf)
+          o (leaf)]
+      (core/tui-add-child tui (:comp home))
+      (core/tui-set-focus-home! tui (fn [] (:comp home)))
+      (core/tui-show-overlay tui (:comp o) :width 10 :height 5)
+      (core/tui-hide-overlay tui)
+      (t/is (identical? (:comp home) @(:focused-component tui))
+            "registered home receives focus"))))
 
 (t/deftest test-flash-api
   (testing "tui-flash! shows a flash and tui-flash-dispose! clears it"
@@ -78,19 +89,21 @@
       (t/is (= [] (core/render @(:flashes tui) 20))))))
 
 (t/deftest test-overlay-stale-previous-focus
-  (testing "a removed previous-focus falls back to the last remaining component"
+  (testing "a removed previous-focus falls back to the focus home, not a\n           guessed sibling"
     (let [tui (core/create-tui nil)
           a (leaf)
           b (leaf)
           o (leaf)]
       (core/tui-add-child tui (:comp a))
       (core/tui-add-child tui (:comp b))
+      ;; the app designates the editor-equivalent (a) as home
+      (core/tui-set-focus-home! tui (fn [] (:comp a)))
       (core/tui-set-focus tui (:comp b))
       (core/tui-show-overlay tui (:comp o) :width 10 :height 5)
       (core/tui-remove-child tui (:comp b))
       (core/tui-hide-overlay tui)
       (t/is (identical? (:comp a) @(:focused-component tui))
-            "falls back to the last live component"))))
+            "home resolves the restore target"))))
 
 (defn- dispatch!
   "Call the private input dispatcher (pi: TUI input routing)."
