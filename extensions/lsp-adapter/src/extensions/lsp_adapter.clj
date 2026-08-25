@@ -48,18 +48,18 @@
 
 (defn- status-text
   "Compact footer line, mcp-adapter style: \"LSP <connected>/<total>\".
-   total counts CONFIGURED server entries (non-disabled; builtins alone
-   don't count - an unconfigured install shows nothing), connected counts
-   configured names with a live connection. nil clears the slot when
-   nothing is configured."
+   total counts CONFIGURED server entries (non-disabled); connected counts
+   configured names with a live connection. nil clears the slot unless at
+   least one server is CONNECTED - an idle fleet is not worth footer
+   space."
   [st]
   (let [configured (for [[name entry] (get-in (runtime/config st) [:servers])
                          :when (and (map? entry) (not (true? (:disabled entry))))]
                      name)
-        connected (set (map :name (runtime/all-conns st)))]
-    (when (pos? (count configured))
-      (str "LSP " (count (filter connected configured)) "/"
-           (count configured)))))
+        connected (set (map :name (runtime/all-conns st)))
+        n-connected (count (filter connected configured))]
+    (when (pos? n-connected)
+      (str "LSP " n-connected "/" (count configured)))))
 
 (defn- update-status! [st]
   (when-let [api (:api st)]

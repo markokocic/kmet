@@ -260,12 +260,12 @@
                              :root-markers ["root-marker.txt"]}}}
       st (runtime/new-state nil cfg)
       f #'entry/status-text]
-  (check "footer shows connected/total"
-         (= "LSP 0/1" (f st)))
+  (check "idle fleet stays out of the footer"
+         (nil? (f st)))
   (swap! (:conns st) assoc ["fake" (str (tmp-dir))]
          {:client nil :name "fake" :root (tmp-dir)
           :docs (atom {}) :diags (atom {})})
-  (check "footer counts live connections"
+  (check "connected shows connected/total"
          (= "LSP 1/1" (f st)))
   (check "footer clears when nothing is configured"
          (nil? (do (runtime/set-config! st {})

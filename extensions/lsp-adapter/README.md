@@ -71,8 +71,8 @@ After editing: `/lsp refresh`.
 
 ## Footer
 
-While servers are configured, the footer shows `LSP <connected>/<total>`
-(error-tinted while any server is broken) - same terse form as mcp's
+The footer shows `LSP <connected>/<total>` only while at least one
+server is CONNECTED - same terse form and hide-when-idle rule as mcp's
 `MCP <connected>/<enabled>`.
 
 ## Commands

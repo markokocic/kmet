@@ -658,8 +658,9 @@
 (defn- mcp-status-text
   "Compact footer status: \"MCP <connected>/<enabled>\" - enabled counts
    every non-disabled server, connected counts servers with a live
-   connection. nil clears the slot (no servers configured, or
-   :mcp-footer-status :off). Rev 2 of the extension dropped the verbose
+   connection. nil clears the slot (no servers configured, none
+   connected, or :mcp-footer-status :off). Rev 2 of the extension dropped
+   the verbose
    :full/:compact modes and the icon prefix for a single terse form."
   [state]
   (let [config (:config @state)
@@ -679,7 +680,9 @@
                           :else (update acc :enabled inc))))
                     {:enabled 0 :connected 0}
                     (keys servers))]
-        (str "MCP " connected "/" enabled)))))
+        ;; idle fleets stay out of the footer entirely
+        (when (pos? connected)
+          (str "MCP " connected "/" enabled))))))
 
 (defn- update-status-bar!
   "Refresh the footer's MCP status line (pi: init.ts updateStatusBar).
