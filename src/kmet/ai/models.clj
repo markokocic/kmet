@@ -193,6 +193,19 @@
    project root — the bb tasks and the app always run from there)."
   (str (fs/path (fs/cwd) "src" "kmet" "ai" "model_data")))
 
+(def ^:dynamic *models-cache-dir*
+  "User-level provider catalog cache, written by `kmet --generate-models`
+   (the same pipeline as `bb generate-models`). load-catalogs! prefers it
+   over the bundled catalogs when it is strictly newer (fresh-model-cache).
+   Bindable for tests."
+  (str (fs/path (fs/home) ".kmet" "agent" "models-cache")))
+
+(def ^:dynamic *use-models-cache*
+  "When false, load-catalogs! ignores *models-cache-dir* even when fresh.
+   The test runner binds it false so suites always exercise the committed
+   catalogs regardless of the local machine's cache state."
+  true)
+
 (defn- builtin-oauth
   "The OAuthAuth record for a builtin catalog provider (pi: the provider
    factories declare auth.oauth — kmet attaches them at catalog load).
@@ -265,9 +278,9 @@
                         {:type :catalog-invalid :file file :model (first dup)}))))))
 
 (defn- catalog-files
-  "Catalog EDN paths (excludes manifest.edn), sorted by filename."
-  []
-  (->> (fs/list-dir model-data-dir)
+  "Catalog EDN paths under DIR (excludes manifest.edn), sorted by filename."
+  [dir]
+  (->> (fs/list-dir dir)
        (filter fs/regular-file?)
        (map fs/file)
        (filter #(str/ends-with? (str %) ".edn"))
@@ -327,30 +340,109 @@
                    (catch Exception _ nil))))
        (sort-by :name)))
 
+(defn- newest-mtime-ms
+  "Newest last-modified time (epoch ms) among DIR's top-level .edn files,
+   nil when the directory is missing or holds none."
+  [dir]
+  (when (fs/directory? dir)
+    (let [ts (->> (fs/list-dir dir)
+                  (filter fs/regular-file?)
+                  (filter #(str/ends-with? (str %) ".edn"))
+                  (map #(-> (fs/last-modified-time %) (.toMillis))))]
+      (when (seq ts) (apply max ts)))))
+
+(defn- bundled-mtime
+  "Freshness marker of the bundled catalogs (epoch ms): in a dev checkout
+   the newest mtime under model-data-dir; in a packaged binary (catalogs
+   inside the uberjar / catted babashka binary) the mtime of the classpath
+   entry carrying them. nil when neither applies."
+  []
+  (if (fs/exists? model-data-dir)
+    (newest-mtime-ms model-data-dir)
+    (->> (str/split (bcp/get-classpath) #"::?")
+         (remove fs/directory?)
+         (keep (fn [cp]
+                 (try
+                   (with-open [zf (java.util.zip.ZipFile. (fs/file cp))]
+                     (when (some #(str/starts-with? (.getName %) "kmet/ai/model_data/")
+                                 (enumeration-seq (.entries zf)))
+                       (-> (fs/last-modified-time cp) (.toMillis))))
+                   (catch Exception _ nil))))
+         seq
+         (apply max))))
+
+(defn fresh-model-cache
+  "*models-cache-dir when usable: it must hold a complete generation (at
+   least one catalog .edn plus its manifest.edn) whose newest mtime is
+   strictly newer than the bundled catalogs' — so an upgrade that ships
+   newer model data wins over a stale cache until `kmet --generate-models`
+   refreshes it (pi remote-catalog semantics: the persisted overlay applies
+   only over older locally generated data). nil otherwise."
+  []
+  (when *use-models-cache*
+    (let [dir *models-cache-dir*
+          cache-mtime (newest-mtime-ms dir)]
+      (when (and cache-mtime
+                 (fs/exists? (fs/path dir "manifest.edn")))
+        (when-let [bundled (bundled-mtime)]
+          (when (> cache-mtime bundled)
+            dir))))))
+
+(defn- load-dir-providers
+  "Provider map from catalog EDN files directly under DIR (throws on an
+   unreadable/invalid catalog — callers fall back to the bundled data)."
+  [dir]
+  (into {}
+        (for [f (catalog-files dir)
+              :let [data (or (load-catalog-file f)
+                             (throw (ex-info (str "Catalog " f " is unreadable")
+                                             {:type :catalog-invalid :file (str f)})))]]
+          [(:id (:provider data)) (catalog->provider data)])))
+
+;; Startup calls load-catalogs! more than once (directly, then through
+;; load-models-config!) — announce a newly-adopted cache source only on the
+;; transition, not on every reload.
+(defonce ^:private announced-cache (atom nil))
+
+(defn- load-bundled-providers
+  "The pristine built-in providers: catalogs on disk in a dev checkout;
+   packaged binary: loaded from the classpath resources instead."
+  []
+  (if (fs/exists? model-data-dir)
+    (load-dir-providers model-data-dir)
+    (into {}
+          (for [{:keys [name data]} (jar-resources "kmet/ai/model_data" ".edn")
+                :when (not= "manifest.edn" name)]
+            (do (validate-catalog! name data)
+                [(:id (:provider data)) (catalog->provider data)])))))
+
 (defn load-catalogs!
-  "Load all committed provider catalogs from model_data/ into the registry,
-   replacing whatever was registered before. Also snapshots the pristine
-   builtins (compose-model-provider's base layer — pi never mutates its
-   builtins map) and installs the auth config-key source (models.edn /
-   extension :api-key), so auth resolution reflects composed providers.
-   Returns the providers map. Call once at startup (pi registers its
-   generated providers at creation)."
+  "Load all provider catalogs into the registry, replacing whatever was
+   registered before: the user-level cache (*models-cache-dir*, written by
+   `kmet --generate-models`) when strictly newer than the bundled data,
+   else the bundled model_data/ — falling back to the bundled data with a
+   warning when a present-but-unusable cache fails to load. Also snapshots
+   the pristine builtins (compose-model-provider's base layer — pi never
+   mutates its builtins map) and installs the auth config-key source
+   (models.edn / extension :api-key), so auth resolution reflects composed
+   providers. Returns the providers map. Call once at startup (pi registers
+   its generated providers at creation)."
   []
   (auth/set-config-key-source! (fn [provider-id] (:api-key (get-provider provider-id))))
   (auth/set-oauth-source! (fn [provider-id] (:oauth (get-provider provider-id))))
   (let [providers
-        ;; dev checkout: catalogs on disk; packaged binary: inside the
-        ;; uberjar / catted binary, loaded from the classpath instead
-        (if (fs/exists? model-data-dir)
-          (into {}
-                (for [f (catalog-files)
-                      :let [data (load-catalog-file f)]]
-                  [(:id (:provider data)) (catalog->provider data)]))
-          (into {}
-                (for [{:keys [name data]} (jar-resources "kmet/ai/model_data" ".edn")
-                      :when (not= "manifest.edn" name)]
-                  (do (validate-catalog! name data)
-                      [(:id (:provider data)) (catalog->provider data)]))))
+        (or (when-let [cache (fresh-model-cache)]
+              (try
+                (when (not= cache @announced-cache)
+                  (reset! announced-cache cache)
+                  (println "Models: using cached catalogs from" cache))
+                (load-dir-providers cache)
+                (catch Exception e
+                  (binding [*out* *err*]
+                    (println "Warning: ignoring unusable model catalog cache:" (ex-message e)))
+                  nil)))
+            (do (reset! announced-cache nil)
+                (load-bundled-providers)))
         providers (into {}
                         (for [[pid p] providers]
                           [pid (assoc p :oauth (builtin-oauth p))]))]
@@ -372,7 +464,7 @@
    files (pi: ModelDataStructure). Used for the structure hash."
   []
   (into (sorted-map)
-        (for [f (catalog-files)
+        (for [f (catalog-files model-data-dir)
               :let [data (load-catalog-file f)
                     pid (name (get-in data [:provider :id]))]]
           [pid (into (sorted-map)
@@ -396,7 +488,7 @@
    :generated-at nil
    :structure-hash (structure-hash)
    :files (into (sorted-map)
-                (for [f (catalog-files)]
+                (for [f (catalog-files model-data-dir)]
                   [(fs/file-name f) (sha256-hex (slurp f))]))})
 
 (defn manifest-matches?

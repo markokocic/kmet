@@ -91,6 +91,9 @@ bb run --print "list files in current directory"
                         openrouter, fireworks, vercel-ai-gateway, ...)
   --models <patterns>   Comma-separated model patterns for Ctrl+P cycling
   --list-models [search] List available models (with optional fuzzy search)
+  --generate-models     Fetch current provider catalogs (models.dev + live
+                        sources) into ~/.kmet/agent/models-cache and exit;
+                        used at startup when newer than the built-in data
   -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)
   -h, --help            Show this help
 ```
@@ -183,12 +186,19 @@ Example `~/.kmet/agent/settings.edn`:
 ```
 
 `kmet` reads its provider catalog from `src/kmet/ai/model_data/*.edn`
-(39 providers: opencode-go, deepseek, anthropic, google, groq, cerebras,
+(40 providers: opencode-go, deepseek, anthropic, google, groq, cerebras,
 openrouter, nvidia, moonshotai, qwen-token-plan, minimax, fireworks,
 vercel-ai-gateway, zai, together, baseten, kimi-coding, cloudflare, mistral,
 google-vertex, amazon-bedrock, ...; generated from models.dev + live
-catalogs — `bb generate-models`). The image-model catalog lives in
-`src/kmet/ai/image_model_data/image-models.edn` (`bb generate-image-models`).
+catalogs — `bb generate-models`). A user-level cache can be refreshed
+without touching the repo: `kmet --generate-models` runs the same generator
+into `~/.kmet/agent/models-cache/` (one `<provider>.edn` per provider +
+`manifest.edn`, same layout as the built-ins), and that cache replaces the
+built-in catalogs whenever it is strictly newer — so an upgrade shipping
+newer bundled data wins over a stale cache until the next refresh.
+Reruns with no upstream changes rewrite nothing. The image-model catalog
+lives in `src/kmet/ai/image_model_data/image-models.edn`
+(`bb generate-image-models`).
 Models, base URLs and defaults are registry data; custom providers, API keys
 and model overrides go in `~/.kmet/agent/models.edn`. OpenAI-completions
 wire compatibility (thinking format, max-tokens field, reasoning
@@ -254,7 +264,8 @@ bb test            # Run fast test suites (excludes ^:slow tests)
 bb test-ext        # Run only the slow (^:slow) test suites
 bb lint            # clj-kondo over src/test
 bb format          # cljfmt (fix) / bb format-check (verify)
-bb generate-models # Regenerate provider catalogs (network)
+bb generate-models     # Regenerate provider catalogs (network)
+kmet --generate-models # Refresh the user-level catalog cache (network)
 bb generate-image-models # Regenerate the image model catalog (network)
 bb check-model-data      # Offline catalog validation
 bb help            # Show task help

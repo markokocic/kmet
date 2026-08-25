@@ -8,6 +8,7 @@
             [kmet.config :as cfg]
             [kmet.app.extensions :as extensions]
             [kmet.ai.image-models :as image-models]
+            [kmet.ai.model-gen :as model-gen]
             [kmet.ai.models :as models]
             [kmet.app.model-resolver :as resolver]
             [kmet.debug :as debug]
@@ -84,6 +85,9 @@
             (recur (rest rest-args) (assoc opts :list-models (first rest-args)))
             (recur rest-args (assoc opts :list-models true)))
 
+          (#{"--generate-models"} arg)
+          (recur rest-args (assoc opts :generate-models true))
+
           (#{"-h" "--help"} arg)
           (assoc opts :help true)
 
@@ -131,6 +135,9 @@
   (println "  --provider <name>     Provider (opencode-go, opencode, deepseek,\n                        github-copilot, openai, xai, openai-codex,\n                        azure-openai-responses, anthropic, google, groq,\n                        cerebras, huggingface, moonshotai, xiaomi, qwen-token-plan,\n                        minimax, nvidia, openrouter, fireworks, ...)")
   (println "  --models <patterns>   Comma-separated model patterns for Ctrl+P cycling")
   (println "  --list-models [search] List available models (with optional fuzzy search)")
+  (println "  --generate-models     Fetch current provider catalogs (models.dev +")
+  (println "                        live sources) into ~/.kmet/agent/models-cache and exit;")
+  (println "                        used at startup when newer than the built-in data")
   (println "  --system-prompt <txt> Replace the system prompt (or path to a file)")
   (println "  --append-system-prompt <txt> Append to the system prompt (repeatable)")
   (println "  -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)")
@@ -233,6 +240,19 @@
     (when (:help opts)
       (print-usage)
       (System/exit 0))
+
+    ;; --generate-models runs the bb generate-models pipeline into the
+    ;; user-level cache (~/.kmet/agent/models-cache) and exits — no registry
+    ;; or config needed. load-catalogs! prefers that cache over the built-in
+    ;; model_data whenever it is strictly newer.
+    (when (:generate-models opts)
+      (let [{:keys [ok]} (try
+                           (model-gen/generate-and-write! models/*models-cache-dir*)
+                           (catch Exception e
+                             (binding [*out* *err*]
+                               (println "Error:" (ex-message e)))
+                             {:ok false}))]
+        (System/exit (if ok 0 1))))
 
     ;; Provider/model registry — loads the committed catalogs (pi registers
     ;; its generated providers at startup), then the models.edn user config

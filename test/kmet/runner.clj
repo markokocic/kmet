@@ -13,7 +13,8 @@
    `bb test-ext kmet.app.test-loop/test-…`) loads only the namespaces it
    needs, so single-test runs skip most of the require phase."
   (:require [clojure.string :as str]
-            [clojure.test :as t]))
+            [clojure.test :as t]
+            [kmet.ai.models :as models]))
 
 (def all-namespaces
   "Every test namespace. The slow/fast split happens per test var via ^:slow
@@ -289,7 +290,10 @@
    and everything passed, records the changed-files baseline (kmet.changed)."
   [vars mark-validated?]
   (let [start-ms (System/currentTimeMillis)
-        results (binding [t/*report-counters* (ref t/*initial-report-counters*)]
+        ;; suites always exercise the committed catalogs — a fresh user-level
+        ;; model cache (~/.kmet/agent/models-cache) must not change results
+        results (binding [t/*report-counters* (ref t/*initial-report-counters*)
+                          models/*use-models-cache* false]
                   (run-selected vars)
                   @t/*report-counters*)
         n-tests (:test results)

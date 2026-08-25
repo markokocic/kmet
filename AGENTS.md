@@ -13,7 +13,10 @@
   The generated EDN provider catalogs (`src/kmet/ai/model_data/`,
   `src/kmet/ai/image_model_data/`) are excluded: their exact bytes are
   sha256-manifested (`manifest.edn`, checked by `bb check-model-data`) and are
-  owned solely by the generator scripts.
+  owned solely by the generator (scripts/generate_models.clj, delegating to
+  `kmet.ai.model-gen`; `kmet --generate-models` runs the same pipeline into
+  the user-level cache ~/.kmet/agent/models-cache/, preferred over the
+  bundled catalogs when strictly newer).
   `cljfmt.edn` carries `:extra-indents` for the custom macros; default arg alignment is
   align-to-first-argument (modern cljfmt). Run `bb format` after structural edits (e.g. let merges).
 - **Changed-file dev loop** (fast validation of only the current changes): the `bb *-changed`
