@@ -379,8 +379,18 @@ Protocol-agnostic: MCP/LSP specifics stay in callers.
   npx/jvm-style children must not orphan). `{:graceful
   {:request "shutdown" :notification "exit"}}` sends the polite LSP dance
   first (bounded 2 s), then kills regardless. MCP passes no `:graceful`.
-- Self-containment: requires only babashka.process, clojure.core.async,
-  cheshire.core, clojure.java.io, clojure.string. No `kmet.*`.
+- Self-containment: requires only babashka.process, cheshire.core,
+  clojure.java.io, clojure.string — no `kmet.*`, no core.async
+  (correlation is promise-per-id; no channel needed).
+- Pending-map mutations (`register` / `remove-on-response` /
+  `fail-all`) are guarded by the write lock rather than swap-vals!: sci's
+  `swap-vals!` silently drops the reset value (atom left nil), which
+  broke EOF delivery until the lock pattern replaced it.
+- `connect-streams` is public on purpose: it is the stream-injection seam
+  tests use in place of subprocesses (and a future hook point for any
+  socket transport). Default kill is `babashka.process/destroy-tree`; the
+  extension layer additionally registers pids with `kmet.libs.process`
+  at spawn time.
 
 ### 8.3 Lib tests (`test/kmet/libs/jsonrpc_test.clj`, in-repo gates)
 
@@ -538,7 +548,17 @@ missing field and the operation's needs.
 
 Tool description mirrors dirge's `DESCRIPTION` (~150 tokens): operation
 list, position conventions, `(no results)` note, "raw-ish but shaped"
-promise.
+promise, plus the lazy cold-start line ("first call on a language spawns
+its server and may take seconds while it indexes"). Error-prone
+conventions live in parameter descriptions — notably `line`/`character`
+"1-based, as shown in editors", the known model footgun.
+
+**No skill ships with the extension** (mcp-adapter ships one because proxy
+discovery is non-inferable; `lsp`'s vocabulary is editor-native and the
+tool description carries the contract — a skill would be pure context
+overhead). Gate: if the §15.7 real-world smoke shows convention fumbles,
+promote a compact `skills/lsp/SKILL.md` in Phase 2 via
+`:resources-discover`.
 
 ## 12. Diagnostics — `diagnostics.clj`
 
@@ -727,4 +747,20 @@ incremental sync → (optional) mcp-adapter stdio adoption.
 
 ## 18. Implementation notes & recorded deviations
 
-*(empty — fill during implementation)*
+### Phase 1 step 1 — kmet.libs.jsonrpc (implemented)
+
+- **No core.async**: the plan's dependency list carried over from
+  mcp-adapter out of habit; promise-per-id correlation needs no channel.
+  Lib requires only babashka.process, cheshire, clojure.java.io,
+  clojure.string.
+- **Lock-guarded pending map instead of swap-vals!**: discovered during
+  testing that sci's `swap-vals!` returns `[old nil]` and leaves the atom
+  nil (reset value lost) — an EOF'd connection therefore delivered
+  nothing and requests hung until timeout. All pending mutations now run
+  under `(:write-lock conn)`; clj-kondo-clean via bind-before-locking.
+- **`connect-streams` is public** (contract said "the seam tests use" but
+  didn't mark visibility): private would trip clj-kondo in the tests;
+  doubles as the future socket-transport hook.
+- Tests: 17 deftests / 41 assertions over piped streams, ~0.6s total;
+  registered in `kmet.runner/all-namespaces` as `kmet.libs.test-jsonrpc`;
+  lib registered in `libs-library-namespaces`.

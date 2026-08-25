@@ -810,6 +810,7 @@
     kmet.libs.edn-store
     kmet.libs.hash
     kmet.libs.highlight
+    kmet.libs.jsonrpc
     kmet.libs.markdown
     kmet.libs.process
     kmet.libs.sse
