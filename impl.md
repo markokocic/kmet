@@ -60,8 +60,8 @@ Zero `defmulti` in src. Three dispatch sites:
 
 | Site | Was | Now |
 |---|---|---|
-| `tool_execution.clj` builtin renderers | hardcoded `case name` | one registry map `{name {:call f :result g}}`; custom/extension overrides win |
-| `chat_history.clj` expand-toggle fan-out | `case (kind-of child)` | method table `{:tool te/set-expanded :bash be/set-expanded}` |
+| `tool_execution.clj` builtin renderers | hardcoded `case name` | one registry map `{name {:call f :result g :shell s}}`; custom/extension overrides win |
+| `chat_history.clj` expand-toggle fan-out | `case (kind-of child)` | method table — later DELETED (see item 3): children read the shared toggle atom directly, no per-child push remains; `pad-fns` table survives for the output-pad walk |
 | `event_bus.clj` | listeners map keyed by event type | unchanged — already an open dispatch |
 
 Why not `defmethod`: extensions register at *runtime* through atoms/calls;
@@ -74,7 +74,7 @@ tool-name domain as-is — keywordizing at lookup adds a transformation per
 construction with no downstream consumer of the keyword form. Revisit if
 another dispatch site ever shares the keyword.
 
-## 5. Declarative construction: use the Hiccup DSL
+## 5. Declarative construction: use the Hiccup DSL ✅ DONE (75ea264)
 
 `tool_renderers.clj` builds trees imperatively (`make-box` → repeated
 `container-add-child`). `compile-element` passes foreign records through,
@@ -82,7 +82,7 @@ so hybrid trees work today: static scaffolding as element vectors, dynamic
 leaves as records. Renderers become data testable headlessly via
 `render-lines`. Biggest line-count reducer in `app/ui`.
 
-## 6. `run-agent-turn`: decompose into phases
+## 6. `run-agent-turn`: decompose into phases ✅ DONE (c0da194)
 
 ~290 lines: nested future → try → inline closures. Extract phases
 returning values — `prepare-run`, `llm-turn`, `execute-tools`,
@@ -109,6 +109,8 @@ unit-testable without a live LLM.
 2. ✅ Renderer registry map replacing the `case`s; kind method tables —
    `builtin-renderers` table in `tool_execution.clj` (:call/:result/:shell),
    `expand-fns` + `pad-fns` tables in `chat_history.clj`. *(small)*
+   (expand-fns subsequently deleted by item 3's shared-toggle conversion;
+   pad-fns remains.)
 3. ✅ Extend subs to shared state; push-setters → bare resets *(medium)*
 
    **Status-slice finding (commit d7d0c89):** `:status` turned out to have
@@ -164,3 +166,20 @@ unit-testable without a live LLM.
 - `bb test-changed` — 402 tests, 1625 assertions, all passing
 - `bb format-check-changed` — clean
 - Net: −95 lines across 11 files
+
+## Final verification at HEAD (post item 6)
+
+All four tiers exercised after the last structural change:
+
+- Full fast suite — **1772 tests / 11,682 assertions passing**
+- Extension project lens (`extensions/clojure`, consumes ../../src) —
+  144 tests / 396 assertions
+- Slow real-timing suite (`bb test-ext`: subprocesses, git, terminal
+  queries) — 60 tests / 291 assertions
+- `bb lint-changed` full-lint escalation (hooks/config change) — 0/0
+
+Review ledger across the session: five defects caught post-implementation
+by adversarial passes (double-parens from scripted edits, a zombie twin
+atom, mangled paren-repair on legacy formatting, an or-short-circuit that
+would have skipped unconditional after-turn hooks, an emit payload re-read
+instead of decision snapshot) — none escaped into a settled commit.
