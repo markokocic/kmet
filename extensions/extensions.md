@@ -504,8 +504,16 @@ from the api.
 ```clojure
 (ext/ui-set-status api "my-ext" "loaded")   ; footer status; nil clears
 (ext/ui-notify api "Done" :info)            ; :info | :warning | :error
-(ext/ui-set-widget api "my-widget" ["line 1" "line 2"] {:placement :above-editor})
+
+;; widgets take HICCUP ELEMENT TREES (or a factory fn → component):
+(ext/ui-set-widget api "my-widget"
+                   [:container {}
+                    [:text {:padding-x 1 :padding-y 0} "line 1"]
+                    [:text {:padding-x 1 :padding-y 0} "line 2"]]
+                   {:placement :above-editor})
 (ext/ui-set-widget api "my-widget" nil)          ; removes the widget (disposes it)
+;; compiled trees are real components — the host disposes them on replace
+;; and removal, so with-let cleanups / reactive subtrees never leak
 
 ;; richer widgets: return a factory whose result is a duck-typed component
 ;; wrapping a compiled hiccup tree — compile ONCE, dispose on teardown via
@@ -520,6 +528,10 @@ from the api.
 ;;                                   [:text {:padding-x 1 :padding-y 0} "tick"]])]
 ;;         {:render  (fn [width] (protocols/render comp width))
 ;;          :dispose #(h/dispose-tree! comp)})))
+;;
+;; ui-custom factories may also return element trees directly — they are
+;; compiled and wrapped (input goes nowhere; interactive customs should
+;; still return components/maps).
 
 ;; append an :info message to the chat history (the /session display style):
 ;; LABEL renders bracketed above CONTENT; part of the live transcript,

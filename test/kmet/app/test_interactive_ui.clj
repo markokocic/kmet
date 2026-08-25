@@ -7,6 +7,7 @@
             [kmet.tui.autocomplete :as ac]
             [kmet.tui.components.editor :as editor]
             [kmet.tui.hiccup :as hiccup]
+            [kmet.tui.macros :as macros]
             [kmet.tui.theme :as theme]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.core :as tui]
@@ -647,7 +648,8 @@
             nothing while empty, dispose unwinds cleanly"
     (let [above (atom {})
           below (atom {})
-          mk (fn [label] ((var inter/make-extension-widget-component) nil [label]))
+          mk (fn [label] ((var inter/make-extension-widget-component) nil
+                                                                      [:text {:padding-x 1 :padding-y 0} label]))
           above-root (hiccup/root ((var inter/make-widget-area-above) above))
           below-root (hiccup/root ((var inter/make-widget-area-below) below))]
       (try
@@ -672,3 +674,52 @@
           (protocols/dispose above-root)
           (protocols/dispose below-root))))))
 
+(t/deftest test-widget-tree-content-and-dispose
+  (testing "hiccup tree content compiles to a renderable wrapper whose
+            :dispose unwinds owned cleanups (the set-widget replace/remove
+            hook's contract)"
+    (let [cleanups (atom 0)
+          cleanup-fn (fn [_props]
+                       (macros/with-let [_ (swap! cleanups inc)]
+                         [:text {:padding-x 0 :padding-y 0} "owned"]
+                         (finally (swap! cleanups dec))))
+          w ((var inter/make-extension-widget-component)
+             nil [:container {}
+                  [:text {:padding-x 1 :padding-y 0} "tree widget"]
+                  [cleanup-fn {}]])]
+      ;; vector content compiles to a real stamped component — spliceable
+      (t/is (satisfies? protocols/IComponent w))
+      (let [lines (strip-ansi-lines (protocols/render w 40))]
+        (t/is (some #(re-find #"tree widget" %) lines)))
+      (t/is (= 1 @cleanups) "render initialized the owned subtree")
+      (protocols/dispose w)
+      (t/is (= 0 @cleanups) "component dispose unwound the owned subtree"))))
+
+(t/deftest test-custom-component-tree-content
+  (testing "normalize-custom-component accepts a hiccup element tree for
+            ui-custom dialogs — compiles to a renderable IComponent whose
+            dispose unwinds owned cleanups"
+    (let [cleanups (atom 0)
+          cleanup-fn (fn [_props]
+                       (macros/with-let [_ (swap! cleanups inc)]
+                         [:text {:padding-x 0 :padding-y 0} "dialog body"]
+                         (finally (swap! cleanups dec))))
+          comp (var-get #'inter/normalize-custom-component)
+          c (comp [:container {}
+                   [:text {:padding-x 1 :padding-y 0} "MCP OAuth"]
+                   [cleanup-fn {}]])]
+      ;; NOTE: satisfies? is unreliable for reify under SCI — assert via
+      ;; protocol dispatch (render/dispose), which is what the host uses
+      (let [lines (strip-ansi-lines (protocols/render c 40))]
+        (t/is (some #(re-find #"MCP OAuth" %) lines))
+        (t/is (some #(re-find #"dialog body" %) lines)))
+      (t/is (= 1 @cleanups))
+      (protocols/dispose c)
+      (t/is (= 0 @cleanups) "dispose unwinds on dialog close"))))
+
+(t/deftest test-widget-string-vector-no-longer-lines
+  (testing "breaking change: string vectors are NOT line lists anymore —
+            they fail tree compilation loudly instead of silently rendering
+            text lines"
+    (t/is (thrown? Exception
+                   ((var inter/make-extension-widget-component) nil ["just" "lines"])))))

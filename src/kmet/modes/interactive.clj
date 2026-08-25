@@ -6,7 +6,6 @@
             [kmet.tui.protocols :as protocols]
             [kmet.tui.terminal :as term]
             [kmet.tui.theme :as th]
-            [kmet.tui.components.text :as text]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.editor :as editor]
             [kmet.tui.components.expandable-text :as expandable-text]
@@ -3156,8 +3155,6 @@
 ;; call the kmet.app.extensions ui-* fns, which dispatch through it. All
 ;; closures capture the layout pieces they mutate.
 
-(def ^:private MAX-WIDGET-LINES 10)
-
 (defn- make-widget-area-above
   "The above-editor widget strip as a fn component (dsl.md stage 4, pi:
    renderWidgets): a leading spacer plus the registered widgets. The widget
@@ -3179,36 +3176,37 @@
     (vals (r/tracked-deref widgets-atom))))
 
 (defn- make-extension-widget-component
-  "pi: string arrays wrap in a Container of Text lines truncated to
-   MAX_WIDGET_LINES with a '... (widget truncated)' tail; factory functions
-   produce the component directly."
+  "Widget content forms (pi: renderWidgets' map values):
+   - hiccup element tree → compiled once to a stamped component (spliceable
+     into the widget strips; its dispose unwinds owned cleanups)
+   - factory fn → (content t theme), result passed through as-is"
   [t content]
-  (if (vector? content)
-    (let [c (container/make-container)]
-      (doseq [line (take MAX-WIDGET-LINES content)]
-        (container/container-add-child c (text/make-text line 1 0)))
-      (when (> (count content) MAX-WIDGET-LINES)
-        (container/container-add-child c
-                                       (text/make-text
-                                        (th/fg (th/get-current-theme) :muted "... (widget truncated)")
-                                        1 0)))
-      c)
-    (content t (th/get-current-theme))))
+  (if (fn? content)
+    (content t (th/get-current-theme))
+    (hiccup/compile-tree content)))
 
 (defn- normalize-custom-component
-  "Accept either an IComponent or a plain render map {:render :handle-input
-   :invalidate} from an extension factory (pi: custom() accepts both a
-   Component and a duck-typed object)."
+  "Accept an IComponent, a plain render map {:render :handle-input
+   :invalidate :dispose} (pi: custom() accepts both a Component and a
+   duck-typed object), or a hiccup element tree — trees compile once here
+   and the reified wrapper carries :dispose so close/replace unwinds them."
   [x]
-  (if (satisfies? tui/IComponent x)
-    x
-    (when (and (map? x) (fn? (:render x)))
-      (let [m x]
-        (reify tui/IComponent
-          (render [_ width] ((:render m) width))
-          (handle-input [_ data] (when-let [f (:handle-input m)] (f data)))
-          (invalidate [_] (when-let [f (:invalidate m)] (f)))
-          (dispose [_] (when-let [f (:dispose m)] (f))))))))
+  (cond
+    (satisfies? tui/IComponent x) x
+    (vector? x)
+    (let [comp (hiccup/compile-tree x)]
+      ;; static trees take no input; invalidate clears the compiled caches
+      (reify tui/IComponent
+        (render [_ width] (protocols/render comp width))
+        (handle-input [_ _data] nil)
+        (invalidate [_] (protocols/invalidate comp))
+        (dispose [_] (hiccup/dispose-tree! comp))))
+    (and (map? x) (fn? (:render x)))
+    (reify tui/IComponent
+      (render [_ width] ((:render x) width))
+      (handle-input [_ data] (when-let [f (:handle-input x)] (f data)))
+      (invalidate [_] (when-let [f (:invalidate x)] (f)))
+      (dispose [_] (when-let [f (:dispose x)] (f))))))
 
 (defn- transfer-editor!
   "Copy the app editor's wiring onto a custom editor component (pi:
@@ -3375,6 +3373,11 @@
                            (when-not @closed
                              (throw (ex-info "ui-custom factory returned no component (or timed out)" {}))))
                          (when-not @closed
+                           ;; a previous live dialog (defensive — normal flow
+                           ;; closes first) unwinds exactly like widget replace
+                           (when-let [prev @custom-dialog-comp]
+                             (when-let [dispose (:dispose prev)]
+                               (try (dispose) (catch Exception _))))
                            (reset! custom-dialog-comp component)
                            (if overlay
                              (let [opts (if (fn? overlay-options)
@@ -3402,10 +3405,15 @@
                              existing (get @m key)]
                          ;; pi: removeExisting disposes the old widget on
                          ;; replace AND remove — skipping :remove would leak
-                         ;; its cleanups
+                         ;; its cleanups. Duck-typed maps carry :dispose;
+                         ;; compiled trees are IComponents.
                          (when existing
-                           (when-let [dispose (:dispose existing)]
-                             (try (dispose) (catch Exception _))))
+                           (cond
+                             (map? existing)
+                             (when-let [dispose (:dispose existing)]
+                               (try (dispose) (catch Exception _)))
+                             (satisfies? tui/IComponent existing)
+                             (try (protocols/dispose existing) (catch Exception _))))
                          (swap! m dissoc key)
                          (when content
                            (swap! m assoc key
