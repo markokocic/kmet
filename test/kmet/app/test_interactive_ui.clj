@@ -714,7 +714,9 @@
         (t/is (some #(re-find #"MCP OAuth" %) lines))
         (t/is (some #(re-find #"dialog body" %) lines)))
       (t/is (= 1 @cleanups))
-      (protocols/dispose c)
+      ;; the host's close/replace/shutdown sites all funnel through
+      ;; dispose-dialog-component! — prove THAT path unwinds tree dialogs
+      ((var-get #'inter/dispose-dialog-component!) c)
       (t/is (= 0 @cleanups) "dispose unwinds on dialog close"))))
 
 (t/deftest test-widget-string-vector-no-longer-lines

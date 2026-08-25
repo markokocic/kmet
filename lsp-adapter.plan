@@ -105,7 +105,8 @@ From mcp-adapter, reused by copy (extensions cannot require each other):
 
 | mcp-adapter piece | Destination | Note |
 |---|---|---|
-| `config.clj` mechanics | `config.clj` | two-file precedence merge, kebab/camel normalization, template creation, enable/disable write-back — adapted to LSP keys |
+| `config.clj` mechanics | `config.clj` | built on the **existing** `kmet.libs.edn-store` primitives (`deep-merge`, `read-edn-map`, `update-edn-map!` under lock, `pretty-edn`) — no new config lib; extension-local remainder is only the camel/kebab alias list, the two-file load composition, and the entry write-back glue. Note: mcp-adapter currently re-implements these primitives instead of using edn-store — optional future cleanup alongside the jsonrpc adoption |
+| credential-url binding (mcp §6 SECURITY) | *(not ported)* | LSP config carries no credential fields by convention (`:env` aside); if that ever changes, adopt the rebinding rule |
 | §10.3 `ensure-connected!` + failure backoff | `manager.clj` | locked idempotent connect, `:failed-at` window, explicit-restart bypass |
 | idle-reaper daemon | `lsp_adapter.clj` | same 30s daemon-thread shape |
 | output-guard *idea* | `query.clj`/`diagnostics.clj` | LSP shaping is semantic (locations/symbols/hover), not byte-guards |
@@ -145,7 +146,8 @@ extensions/lsp-adapter/
 ```
 
 Dependencies allowed: `kmet.extension`, `kmet.libs.*` (incl. the new
-`kmet.libs.jsonrpc`, `kmet.libs.process`), `clojure.*`, `babashka.*`,
+`kmet.libs.jsonrpc`, plus existing `kmet.libs.process`,
+`kmet.libs.edn-store`), `clojure.*`, `babashka.*`,
 bundled `cheshire.core` + `clojure.core.async`. **No `deps.edn`.**
 
 Lib registration mechanics (do these when landing step 1 of §16):
@@ -165,6 +167,11 @@ Lib registration mechanics (do these when landing step 1 of §16):
   merge + per-key settings merge (later wins). This is the only file the
   extension writes.
 - No other sources, no flags.
+
+Composition: built on `kmet.libs.edn-store` — load =
+`(deep-merge (read-edn-map global) (read-edn-map project))`; every write
+(§6.4/§6.5) goes through `update-edn-map!` under its file lock. No new
+custom lib (§4).
 
 ### 6.2 EDN format
 

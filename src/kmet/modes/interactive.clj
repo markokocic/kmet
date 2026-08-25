@@ -3175,6 +3175,19 @@
   (fn [_props]
     (vals (r/tracked-deref widgets-atom))))
 
+(defn- dispose-dialog-component!
+  "Dispose an extension dialog/widget value: duck-typed maps carry a
+   :dispose fn; everything else disposes through the protocol's
+   multimethod — which dispatches correctly under SCI even when
+   satisfies? does not (bb reify limitation)."
+  [component]
+  (cond
+    (map? component)
+    (when-let [dispose (:dispose component)]
+      (try (dispose) (catch Exception _)))
+    :else
+    (try (protocols/dispose component) (catch Exception _))))
+
 (defn- make-extension-widget-component
   "Widget content forms (pi: renderWidgets' map values):
    - hiccup element tree → compiled once to a stamped component (spliceable
@@ -3350,9 +3363,7 @@
                                    ;; closes, before the component is
                                    ;; removed — a map/record :dispose fn
                                    (when-let [component @custom-dialog-comp]
-                                     (when-let [dispose (:dispose component)]
-                                       (try (dispose)
-                                            (catch Exception _))))
+                                     (dispose-dialog-component! component))
                                    (reset! custom-dialog-comp nil)
                                    (if overlay
                                      (tui/tui-hide-overlay t)
@@ -3376,8 +3387,7 @@
                            ;; a previous live dialog (defensive — normal flow
                            ;; closes first) unwinds exactly like widget replace
                            (when-let [prev @custom-dialog-comp]
-                             (when-let [dispose (:dispose prev)]
-                               (try (dispose) (catch Exception _))))
+                             (dispose-dialog-component! prev))
                            (reset! custom-dialog-comp component)
                            (if overlay
                              (let [opts (if (fn? overlay-options)
@@ -3408,12 +3418,7 @@
                          ;; its cleanups. Duck-typed maps carry :dispose;
                          ;; compiled trees are IComponents.
                          (when existing
-                           (cond
-                             (map? existing)
-                             (when-let [dispose (:dispose existing)]
-                               (try (dispose) (catch Exception _)))
-                             (satisfies? tui/IComponent existing)
-                             (try (protocols/dispose existing) (catch Exception _))))
+                           (dispose-dialog-component! existing))
                          (swap! m dissoc key)
                          (when content
                            (swap! m assoc key
@@ -3771,8 +3776,7 @@
                     (container/container-add-child header-container sp1)
                     (expandable-text/expandable-text-rebuild! hdr))
                   (when-let [component @custom-dialog-comp]
-                    (when-let [dispose (:dispose component)]
-                      (try (dispose) (catch Exception _)))
+                    (dispose-dialog-component! component)
                     (reset! custom-dialog-comp nil))
                   (doseq [unsub @terminal-input-unsubscribers]
                     (try (unsub) (catch Exception _)))
