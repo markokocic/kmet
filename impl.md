@@ -133,7 +133,12 @@ unit-testable without a live LLM.
    collapsed into one `:cfg` atom holding an immutable map; reads
   `(:k @(:cfg ag))`, writers swap!-assoc. Concurrent cells + plain ctor
    ints untouched; make-agent-state opts API unchanged.
-5. Hiccup-based renderer subtrees in `tool_renderers.clj` *(larger)*
+5. ✅ Hiccup renderer subtrees *(commit 75ea264)* — read/write/default
+   call+result + build-edit-box compile element trees (tool-text leaf,
+   :container/:box/:spacer) through hiccup/compile-tree; −70 lines, new
+   headless test-tool-renderers. Bash pair + render-edit-result stay
+   imperative (per-component state/intervals). Leak-safety argument:
+   converted leaves are precomputed-string-only, no reactive derefs.
 6. `run-agent-turn` phase extraction *(larger)*
 7. ✅ Extract reactive core to **`kmet.libs.reakt`** *(commit 4d9c355)* —
    reactions/cursors/batching/tracked-deref now standalone (tui.reagent
