@@ -6,8 +6,10 @@
    function heads. Compilation walks the tree through a CLOSED TAG TABLE —
    there is no registry; custom composition uses fn components (wrapped in
    ComponentFn, their bodies running inside reactions with auto-discovered
-   deps) or raw records spliced into the tree (identity preserved, never
-   disposed — they are owned elsewhere).
+   deps) or raw components spliced into the tree (identity preserved,
+   never disposed — they are owned elsewhere): defcomponent/defrecord
+   instances AND reified or deftype'd IComponent objects (hand-rolled
+   components from widgets or extension code) splice identically.
 
    Reconciliation (tui.md §2.3): ONE keyed diff drives everything — the
    ComponentFn wrapper's child list AND the fill of every host container
@@ -217,6 +219,23 @@
 
 (declare check-ref!)
 
+(defn- mounted-component?
+  "A non-record object that plausibly dispatches as an IComponent — a
+  reified or deftype'd component spliced into a tree by host code (the
+  ui-custom dialog wrapper, widget factories). Best-effort by necessity:
+  bb's satisfies? can return false for reifies created in other
+  evaluation contexts even though method dispatch works on them (the
+  documented SCI gotcha), and the protocol method table misses those
+  too — so both signals are OR-ed and anything slipping past still
+  fails LOUDLY here instead of corrupting a render pass. Records never
+  reach this predicate (spliced earlier); ui-custom hands the dock
+  records in the first place (CustomDialogAdapter)."
+  [node]
+  (try
+    (or (satisfies? protocols/IComponent node)
+        (contains? (methods protocols/render) (class node)))
+    (catch Exception _ false)))
+
 (defn- normalize-element
   "[TAG ...] → [spec props children]: an optional MAP right after the tag
    is the props; everything else is children. When the tag declares
@@ -316,6 +335,10 @@
                      " — expected a keyword tag or a function component")
                 {:head tag}))))
     (record? node)
+    {:kind ::record :mkey node :c node :item node :owned false}
+    (mounted-component? node)
+    ;; reified/deftype'd IComponent — same contract as the record splice:
+    ;; identity preserved, owned elsewhere, never disposed by the tree
     {:kind ::record :mkey node :c node :item node :owned false}
     (map? node)
     (if (contains? node :component)
@@ -495,6 +518,10 @@
       (instance? ComponentFn raw)
       {:kind ::fncomp :mkey (:f raw) :c raw :item raw :owned true}
       (record? raw)
+      {:kind ::record :mkey raw :c raw :item raw :owned false}
+      (mounted-component? raw)
+      ;; reified/deftype'd IComponent stored by a previous pass — foreign,
+      ;; like the record splice it mirrors
       {:kind ::record :mkey raw :c raw :item raw :owned false}
       :else
       (throw (ex-info
@@ -693,7 +720,8 @@
 (defn compile-element
   "Compile one tree node into a live component (fresh construction —
    reconcile against an empty previous pool). Returns nil for nil.
-   Records pass through untouched (identity preserved); stack-entry maps
+   Mounted components pass through untouched (records and reified
+   IComponent instances alike — identity preserved); stack-entry maps
    ({:component c ...}) are rejected outside stack tags; strings become
    bare zero-padding Text. A SEQ input throws — splicing multiple roots
    is compile-tree's business."
@@ -728,8 +756,13 @@
                                 vec)
     :else (vec (protocols/render compiled width))))
 
-(defn- owned? [c]
-  (or (instance? ComponentFn c) (contains? c :dsl/meta)))
+(defn- owned?
+  "DSL-constructed: fn wrappers always, host tags via their stamp. The
+   stamp check is guarded by record? — a spliced reified component isn't
+   associative and contains? would throw."
+  [c]
+  (or (instance? ComponentFn c)
+      (and (record? c) (contains? c :dsl/meta))))
 
 (defn dispose-tree!
   "Dispose every DSL-owned component inside COMPS — a compiled component,

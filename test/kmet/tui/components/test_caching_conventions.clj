@@ -39,6 +39,9 @@
    "AuthSelector"               :transparent-parent
    "AuthMethodSelector"         :transparent-parent
    "LoginDialog"                :transparent-parent
+   ;; transparent delegate over foreign dialog closures — nothing the
+   ;; deref tracker could see; lifetime owned by ui-custom's bookkeeping
+   "CustomDialogAdapter"        :transparent-parent
    "Spinner"                    :time-animated
    "StatusIndicator"            :time-animated
    "RetryStatusIndicator"       :time-animated
@@ -131,7 +134,7 @@
    when components are added or removed; a mismatch means the scan below
    silently lost forms (a scanner regression), so the convention checks
    would otherwise pass vacuously."
-  42)
+  43)
 
 (deftest caching-conventions
   (let [checked (atom [])]

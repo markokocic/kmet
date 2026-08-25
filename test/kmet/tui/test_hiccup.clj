@@ -314,6 +314,56 @@
     (protocols/dispose r)
     (t/is (false? @disposed))))
 
+(t/deftest reified-components-pass-through-with-identity
+  ;; the record splice's sibling: a hand-rolled (reify IComponent) — the
+  ;; shape extension dialogs used to arrive in before CustomDialogAdapter —
+  ;; splices as a foreign child instead of hitting the cannot-compile
+  ;; throw. Regression: /tools crashed the render loop because
+  ;; make-dock-area fed the reified wrapper through reconcile as a bare root.
+  (let [disposed (atom false)
+        foreign (reify protocols/IComponent
+                  (render [_this _width] ["reified"])
+                  (handle-input [_this _data] nil)
+                  (invalidate [_this] nil)
+                  (dispose [_this] (reset! disposed true)))
+        shown (atom true)
+        r (h/root (fn [_]
+                    [:container
+                     [:text "chrome"]
+                     (when @shown foreign)]))]
+    (t/is (identical? foreign (h/compile-element foreign))
+          "compile-element preserves identity like records")
+    (t/is (str/includes? (str/join "\n" (core/render r 20)) "reified"))
+    ;; same instance reused across passes while present
+    (t/is (str/includes? (str/join "\n" (core/render r 20)) "reified"))
+    ;; removal must NOT dispose it; teardown doesn't reach it either
+    (reset! shown false)
+    (core/render r 20)
+    (t/is (false? @disposed) "foreign reify left to its owner")
+    (protocols/dispose r)
+    (t/is (false? @disposed))
+    ;; dispose-tree! over a bare compiled reify must not blow up on
+    ;; contains? either (a reify isn't associative)
+    (h/dispose-tree! foreign)
+    (t/is (false? @disposed))))
+
+(t/deftest reified-component-as-bare-root-renders
+  ;; a reify as a bare ROOT renders like a record root; [foreign] is
+  ;; ELEMENT syntax ([tag ...]) — a component in the tag slot is an
+  ;; invalid head, same as a record there
+  (let [foreign (reify protocols/IComponent
+                  (render [_this _width] ["solo"])
+                  (handle-input [_this _data] nil)
+                  (invalidate [_this] nil)
+                  (dispose [_this] nil))]
+    (t/is (= ["solo"] (mapv str/trimr (h/render-lines foreign 20))))
+    (t/is (thrown-with-msg? Exception #"invalid element head"
+                            (h/render-lines [foreign] 20)))
+    ;; non-component scalars still throw loudly (maps have their own
+    ;; bare-map-child error)
+    (t/is (thrown-with-msg? Exception #"cannot compile tree node"
+                            (h/render-lines :a-keyword 20)))))
+
 (t/deftest duplicate-keys-throw
   (t/is (thrown-with-msg? Exception #"duplicate :key"
                           (h/render-lines

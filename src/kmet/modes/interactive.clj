@@ -13,6 +13,7 @@
             [kmet.tui.hiccup :as hiccup]
             [kmet.libs.reakt :as r]
             [kmet.app.ui :as ui]
+            [kmet.app.ui.custom-dialog-adapter :as cda]
             [kmet.app.ui.auth-selector :as auth-selector]
             [kmet.app.ui.dock :as dock]
             [kmet.app.ui.login-dialog :as login-dialog]
@@ -3192,34 +3193,52 @@
   "Widget content forms (pi: renderWidgets' map values):
    - hiccup element tree → compiled once to a stamped component (spliceable
      into the widget strips; its dispose unwinds owned cleanups)
-   - factory fn → (content t theme), result passed through as-is"
+   - factory fn → (content t theme); a duck-typed render map result is
+     adapted to a CustomDialogAdapter record so it splices into the strips'
+     trees — component/record results pass through untouched"
   [t content]
   (if (fn? content)
-    (content t (th/get-current-theme))
+    (let [c (content t (th/get-current-theme))]
+      ;; a duck-typed map cannot splice into the widget strips' trees —
+      ;; adapt it to a record; components/trees pass through untouched
+      (if (and (map? c) (not (record? c)) (fn? (:render c)))
+        (cda/map->CustomDialogAdapter
+         {:render-fn (:render c)
+          :handle-input-fn (:handle-input c)
+          :invalidate-fn (:invalidate c)
+          :dispose-fn (:dispose c)})
+        c))
     (hiccup/compile-tree content)))
 
 (defn- normalize-custom-component
   "Accept an IComponent, a plain render map {:render :handle-input
    :invalidate :dispose} (pi: custom() accepts both a Component and a
-   duck-typed object), or a hiccup element tree — trees compile once here
-   and the reified wrapper carries :dispose so close/replace unwinds them."
+   duck-typed object), or a hiccup element tree — maps and trees are
+   wrapped in a CustomDialogAdapter RECORD so the result always splices
+   into hiccup trees by record? (reify wrappers would trip reconcile:
+   bb's satisfies? misses reifies from other evaluation contexts even
+   though dispatch works on them). Trees compile once here and the
+   adapter's dispose unwinds them."
   [x]
   (cond
-    (satisfies? tui/IComponent x) x
+    ;; structural branches first: maps/trees are recognized reliably,
+    ;; satisfies? only decides for foreign component objects (records
+    ;; satisfy robustly; a hostile reify failing it fails LOUD at the
+    ;; ui-custom call site instead of crashing a render pass)
+    (and (map? x) (not (record? x)) (fn? (:render x)))
+    (cda/map->CustomDialogAdapter
+     {:render-fn (:render x)
+      :handle-input-fn (:handle-input x)
+      :invalidate-fn (:invalidate x)
+      :dispose-fn (:dispose x)})
     (vector? x)
     (let [comp (hiccup/compile-tree x)]
       ;; static trees take no input; invalidate clears the compiled caches
-      (reify tui/IComponent
-        (render [_ width] (protocols/render comp width))
-        (handle-input [_ _data] nil)
-        (invalidate [_] (protocols/invalidate comp))
-        (dispose [_] (hiccup/dispose-tree! comp))))
-    (and (map? x) (fn? (:render x)))
-    (reify tui/IComponent
-      (render [_ width] ((:render x) width))
-      (handle-input [_ data] (when-let [f (:handle-input x)] (f data)))
-      (invalidate [_] (when-let [f (:invalidate x)] (f)))
-      (dispose [_] (when-let [f (:dispose x)] (f))))))
+      (cda/map->CustomDialogAdapter
+       {:render-fn #(protocols/render comp %)
+        :invalidate-fn #(protocols/invalidate comp)
+        :dispose-fn #(hiccup/dispose-tree! comp)}))
+    (satisfies? tui/IComponent x) x))
 
 (defn- transfer-editor!
   "Copy the app editor's wiring onto a custom editor component (pi:

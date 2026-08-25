@@ -81,7 +81,8 @@ re-render:
 [:box {:padding-x 1}
  [:text "hi"]
  (when-let [s @status] [:status-line s])   ;; nil → skipped
- existing-component                        ;; records pass through
+ existing-component                        ;; mounted components pass through
+                                          ;; (records and reified IComponents)
  ;; seqs get spliced — always key spliced children, or prepending an
  ;; item rebuilds every unkeyed sibling after it:
  (map #(vector :text {:key (:id %) :text (:content %)}) msgs)]
@@ -97,6 +98,7 @@ Children rules:
 | `nil` | skipped — this is the `when`/`when-let`/`if` support, free |
 | string | compiled to a Text (the tag's `:primary` shorthand, §2.2) |
 | record | passed through as-is (identity preserved; never disposed by reconcile — ownership stays with whoever created it) |
+| reified/deftype'd `IComponent` | same as records — spliced foreign, never disposed (bb caveat: `satisfies?` can miss reifies from other evaluation contexts even though dispatch works on them, so detection is best-effort; hand the dock records — ui-custom wraps duck-typed maps in a CustomDialogAdapter for exactly this reason) |
 | seq | spliced (each element treated as a child) |
 | stack-entry map (VStack/HStack) | passed through as-is |
 
@@ -215,7 +217,7 @@ An idle UI runs zero bodies.
 | Form-1: pure fn returning a tree | `(defn status-area [props] …tree)` — reaction-backed automatically |
 | Form-2: local state | `with-let` bindings (§5.2) |
 | Form-3: class components | `defcomponent` records (§3.2, §8) |
-| — | raw records spliced into trees — the fourth form, for live instances owned elsewhere |
+| — | raw records spliced into trees — the fourth form, for live instances owned elsewhere (reified IComponents splice too, §2.1 children rules) |
 
 Bodies collecting **no tracked dependency** (only untracked reads or static
 trees) re-run on every pass — batched semantics, uncached, never stale.
