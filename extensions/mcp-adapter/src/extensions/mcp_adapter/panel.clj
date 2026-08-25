@@ -15,12 +15,10 @@
             [kmet.tui.keys :as keys]
             [kmet.tui.keybindings :as kb]
             [kmet.tui.macros :refer [defcomponent]]
+            [kmet.tui.hiccup :as h]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.utils :as u]
-            [kmet.tui.components.container :as container]
-            [kmet.tui.components.text :as text]
-            [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.input :as input]
             [kmet.libs.clipboard :as clipboard]
             [extensions.mcp-adapter.metadata :as metadata]))
@@ -850,13 +848,16 @@
   (let [inp (input/make-input)
         _ (input/input-set-on-submit! inp on-submit)
         _ (input/input-set-on-escape! inp on-cancel)
-        c (container/make-container)
-        _ (container/container-add-child
-           c (text/make-text (theme/fg th :accent (theme/bold "MCP OAuth")) 1 0))
-        _ (container/container-add-child c (spacer/make-spacer 1))
-        _ (container/container-add-child c (text/make-text message 1 0))
-        _ (container/container-add-child c (spacer/make-spacer 1))
-        _ (container/container-add-child c inp)]
-    {:render (fn [width] (protocols/render c width))
+        ;; declarative scaffolding around the live input record —
+        ;; compiled once here; dispose-tree! unwinds it with the dialog
+        comp (h/compile-tree
+              [:container {}
+               [:text {:padding-x 1 :padding-y 0}
+                (theme/fg th :accent (theme/bold "MCP OAuth"))]
+               [:spacer {:lines 1}]
+               [:text {:padding-x 1 :padding-y 0} message]
+               [:spacer {:lines 1}]
+               inp])]
+    {:render (fn [width] (protocols/render comp width))
      :handle-input (fn [data] (protocols/handle-input inp data))
-     :invalidate (fn [] (protocols/invalidate c))}))
+     :invalidate (fn [] (protocols/invalidate comp))}))

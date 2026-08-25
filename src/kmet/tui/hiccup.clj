@@ -731,6 +731,21 @@
 (defn- owned? [c]
   (or (instance? ComponentFn c) (contains? c :dsl/meta)))
 
+(defn dispose-tree!
+  "Dispose every DSL-owned component inside COMPS — a compiled component,
+   a sequence of them, or nil. Foreign spliced records are left alone.
+   Complements compile-tree for lifetimes OUTSIDE the reconcile pool:
+   widget factories and dialog builders compile once, hold the result,
+   and call this when replaced or closed (the widget contract's :dispose
+   hook is the natural trigger)."
+  [comps]
+  (doseq [c (cond
+              (nil? comps) []
+              (sequential? comps) comps
+              :else [comps])
+          :when (owned? c)]
+    (protocols/dispose c)))
+
 (defn render-lines
   "Headless render: compile TREE and return the exact lines the frame loop
    would draw. No tty, no sleeps — fast-path test material. DSL-built
@@ -741,12 +756,7 @@
     (try
       (render-compiled compiled width)
       (finally
-        (doseq [c (cond
-                    (nil? compiled) []
-                    (sequential? compiled) compiled
-                    :else [compiled])
-                :when (owned? c)]
-          (protocols/dispose c))))))
+        (dispose-tree! compiled)))))
 
 (defn compute
   "A derived reactive ref over DEPS (tui.md §3.3): kmet.libs.reakt/derive

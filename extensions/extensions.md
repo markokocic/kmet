@@ -507,6 +507,20 @@ from the api.
 (ext/ui-set-widget api "my-widget" ["line 1" "line 2"] {:placement :above-editor})
 (ext/ui-set-widget api "my-widget" nil)          ; removes the widget (disposes it)
 
+;; richer widgets: return a factory whose result is a duck-typed component
+;; wrapping a compiled hiccup tree — compile ONCE, dispose on teardown via
+;; `kmet.tui.hiccup/dispose-tree!` (the host calls :dispose on replace and
+;; removal, so reactive subtrees never leak):
+;;
+;;   (require '[kmet.tui.hiccup :as h]
+;;            '[kmet.tui.protocols :as protocols])
+;;   (ext/ui-set-widget api "clock"
+;;     (fn [tui theme]
+;;       (let [comp (h/compile-tree [:container {}
+;;                                   [:text {:padding-x 1 :padding-y 0} "tick"]])]
+;;         {:render  (fn [width] (protocols/render comp width))
+;;          :dispose #(h/dispose-tree! comp)})))
+
 ;; append an :info message to the chat history (the /session display style):
 ;; LABEL renders bracketed above CONTENT; part of the live transcript,
 ;; never sent to the LLM, not persisted across restarts

@@ -9,6 +9,8 @@
             [clojure.test :as t]
             [kmet.tui.core :as core]
             [kmet.tui.components.text :as text]
+            [kmet.tui.protocols :as protocols]
+            [kmet.tui.hiccup :as hicc]
             [kmet.tui.macros :as macros :refer [with-let]]
             [kmet.libs.reakt :as r]))
 
@@ -804,3 +806,23 @@
     (r/dispose! rx)
     (t/is (nil? (r/invalidate! rx)) "disposed refs ignore invalidation")
     (t/is (= 2 @runs) "and never re-run afterwards")))
+
+(t/deftest test-dispose-tree
+  (t/testing "dispose-tree! unwinds with-let cleanups of compiled trees and
+            leaves foreign records alone"
+    (let [cleanups (atom 0)
+          cleanup-fn (fn [_props]
+                       (macros/with-let [_ (swap! cleanups inc)]
+                         [:text {:padding-x 0 :padding-y 0} "x"]
+                         (finally (swap! cleanups dec))))
+          comp (hicc/compile-tree
+                [:container {}
+                 [cleanup-fn {}]
+                 (text/make-text "foreign" 0 0)])]
+      ;; render once so the with-let store initializes (+1)
+      (protocols/render comp 40)
+      (t/is (= 1 @cleanups))
+      (#'hicc/dispose-tree! comp)
+      (t/is (= 0 @cleanups) "finally ran — ownership unwound")
+      (#'hicc/dispose-tree! comp)
+      (t/is (= 0 @cleanups) "second pass inert — nothing left to unwind"))))

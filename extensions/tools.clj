@@ -24,10 +24,8 @@
   (:require [kmet.extension :as ext]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
-            [kmet.tui.components.container :as container]
             [kmet.tui.components.settings-list :as settings-list]
-            [kmet.tui.components.text :as text]
-            [kmet.tui.components.spacer :as spacer]))
+            [kmet.tui.hiccup :as h]))
 
 ;; ─── Extension state ───────────────────────────────────────────────────────
 
@@ -91,12 +89,12 @@
                                (persist-state! api state)))
         _ (settings-list/settings-list-set-on-escape! settings
                                                       (fn [] (close nil)))
-        c (container/make-container)
-        _ (container/container-add-child
-           c (text/make-text
-              (theme/fg th :accent (theme/bold "Tool Configuration")) 0 0))
-        _ (container/container-add-child c (spacer/make-spacer 1))
-        _ (container/container-add-child c settings)]
+        c (h/compile-tree
+           [:container {}
+            [:text {:padding-x 0 :padding-y 0}
+             (theme/fg th :accent (theme/bold "Tool Configuration"))]
+            [:spacer {:lines 1}]
+            settings])]
     ;; duck-typed component: input goes to the settings list, render and
     ;; invalidate delegate to the container (pi: the wrapper object
     ;; delegating handleInput to the settingsList)
