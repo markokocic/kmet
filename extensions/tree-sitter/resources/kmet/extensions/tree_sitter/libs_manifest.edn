@@ -1,0 +1,39 @@
+;; Pinned grammar catalog: {lang {:source :source ...}}.
+;; Two acquisition sources:
+;;   :zed    — zed extension registry tarball (non-built-in languages like
+;;             clojure); {:id :version} build the download URL; the wasm is
+;;             extracted from the tarball's grammars/<lang>.wasm member.
+;;   :direct — a bare .wasm published by the official tree-sitter org repo
+;;             for languages zed ships built-in (python, typescript, tsx).
+;; :sha256 always pins the final libs/<lang>.wasm bytes.
+;; :file-types drive both the scaffolded tree-sitter.json discovery entry
+;; and resolve-lang routing; :probe is a known-clean one-liner used as
+;; load-check input after fresh downloads.
+{"clojure"
+ {:source :zed
+  :id "clojure"
+  :version "0.2.2"
+  :sha256 "d4e35e5b456f2aaec0dc8f98e4cbdead97f99a6087decc21fd72314791c31c2f"
+  :file-types ["clj" "cljs" "cljc" "edn"]
+  :probe "(defn greet [name] (str \"hi \" name))"}
+ "python"
+ {:source :direct
+  :version "0.25.0"
+  :url "https://github.com/tree-sitter/tree-sitter-python/releases/download/v0.25.0/tree-sitter-python.wasm"
+  :sha256 "16108b50df4ee9a30168794252ab55e7c93bfc5765d7fa0aa3e335752c515f47"
+  :file-types ["py"]
+  :probe "def greet(name):\n    return \"hi \" + name\n"}
+ "typescript"
+ {:source :direct
+  :version "0.23.2"
+  :url "https://github.com/tree-sitter/tree-sitter-typescript/releases/download/v0.23.2/tree-sitter-typescript.wasm"
+  :sha256 "778025db5a8be0e70f8ccc3671e486dfeddd048c25d9e8a70c26de2e1bf6f97d"
+  :file-types ["ts"]
+  :probe "const x: number = 42;\nexport function f(): string { return \"s\"; }\n"}
+ "tsx"
+ {:source :direct
+  :version "0.23.2"
+  :url "https://github.com/tree-sitter/tree-sitter-typescript/releases/download/v0.23.2/tree-sitter-tsx.wasm"
+  :sha256 "79e5da75ea62855a0cd67177685f0164eac87d5f630b3cbe1e0a099751ad30f8"
+  :file-types ["tsx"]
+  :probe "const el = <div className=\"x\">{count}</div>;\n"}}

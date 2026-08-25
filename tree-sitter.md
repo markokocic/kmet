@@ -75,19 +75,25 @@ local fixtures).
 
 Files: `grammars.clj` + tests.
 
-1. Language table v1: clojure, python, typescript (+tsx alias), each with
-   zed extension id, pinned version, expected wasm sha256, file-types list,
-   query resource names.
+1. Language table v1 (shipped as `libs_manifest.edn`): clojure (zed
+   registry), python / typescript / tsx (bare wasms from the official
+   tree-sitter org repos — see SPEC fact 5 caveat; tsx is its own grammar
+   row, not an alias), each with source id/url, pinned version, expected
+   wasm sha256, file-types list, probe snippet for the load-check.
+   NOTE: this differs from the original "all from zed" assumption — the
+   registry has no python/typescript entries.
 2. `scaffold!` writes exactly the proven layout per lang:
    `grammars/tree-sitter-<lang>/{tree-sitter.json, src/grammar.json,
    src/parser.c(stub, mtime set old)}`, and regenerates `config.json`
    (`{"parser-directories": [<grammars-dir>]}`).
-3. `ensure-grammar!`: wasm cached & sha-ok → ensure scaffold → done;
-   else fetch zed tarball → extract `grammars/<lang>.wasm` → scaffold →
-   **load-check**: parse a one-line snippet through `cli/exec!`; delete
-   blob+scaffold on any failure (mirror pi-tree-sitter corruption policy).
-4. `resolve-lang` maps file extension → language (tsx→typescript etc.) or
-   nil.
+3. `ensure-grammar!`: provisions the CLI binary, then — wasm cached &
+   sha-ok → ensure scaffold → done; else fetch per source (zed tarball →
+   extract `grammars/<lang>.wasm`, or direct download) → verify blob sha →
+   scaffold → **load-check**: parse a known-clean probe snippet through the
+   CLI; delete blob+scaffold on any failure (mirror pi-tree-sitter
+   corruption policy).
+4. `resolve-lang` maps file extension → language (via each entry's
+   file-types) or nil.
 
 **Done when:** `(grammars/ensure-grammar! :clojure)` then a manual
 `parse --wasm` of a `.clj` file prints a source tree (the exact flow

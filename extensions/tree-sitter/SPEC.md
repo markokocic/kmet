@@ -55,9 +55,14 @@ Empirical facts the implementation depends on (verified against CLI 0.26.13):
 5. Zed registry download endpoint:
    `https://api.zed.dev/extensions/<id>/<version>/download` → tarball with
    `grammars/<lang>.wasm` (wasi-format, loads cleanly) plus useful `.scm`
-   query files (`outline.scm`, `highlights.scm`). Catalog includes clojure,
-   bash, python, typescript, rust, go, java, kotlin, … (extension id map
-   lives in our manifest).
+   query files (`outline.scm`, `highlights.scm`). **Caveat (validated while
+   implementing): the registry only covers languages zed does NOT ship
+   built-in** — clojure, java, kotlin, … For built-in ones (python,
+   typescript/tsx, bash, rust, go) the same wasi-format wasm comes pinned
+   straight from the official grammar repos' GitHub releases
+   (`tree-sitter/tree-sitter-python` v0.25.0,
+   `tree-sitter/tree-sitter-typescript` v0.23.2 — both verified loading in
+   CLI 0.26.13).
 6. On Termux the released `tree-sitter-cli-linux-arm64` binary needs the
    glibc loader: `<prefix>/glibc/lib/ld-linux-aarch64.so.1 --library-path …`
    — same launcher pattern `kmet.build` already emits for babashka itself.
@@ -76,7 +81,8 @@ Empirical facts the implementation depends on (verified against CLI 0.26.13):
 ├── grammars/                 ; scaffold dirs, generated per cached language
 │   └── tree-sitter-clojure/…
 └── libs/
-    ├── manifest.edn          ; pinned per-language {lang, zed-ext-id, version, sha256}
+    ├── manifest.edn          ; pinned language table {lang {:source :zed|:direct,
+    │                         ; :id/:url :version :sha256 :file-types :probe}}
     └── clojure.wasm …        ; extracted blobs (this dir IS TREE_SITTER_LIBDIR)
 ```
 

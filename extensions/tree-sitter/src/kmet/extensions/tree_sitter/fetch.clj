@@ -6,6 +6,7 @@
    (available under babashka) so no external tar/unzip is needed on any
    target platform."
   (:require [babashka.fs :as fs]
+            [babashka.process :as p]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -85,7 +86,7 @@
     (try
       (io/copy in (fs/file tmp))
       (let [actual (sha256 tmp)]
-        (if (= actual expected-sha256)
+        (if (or (nil? expected-sha256) (= actual expected-sha256))
           (do (fs/move tmp dest {:replace-existing true}) dest)
           (throw (ex-info (str "sha256 mismatch for download of " dest)
                           {:type ::sha-mismatch
@@ -95,9 +96,27 @@
       (finally
         (fs/delete-if-exists tmp)))))
 
+(defn extract-tarball!
+  "Extract a .tar.gz under dest-dir via spawned tar (present on all target
+   platforms; Windows ships bsdtar). Throws ::extract-failed on non-zero
+   exit. Returns dest-dir."
+  [tarball dest-dir]
+  (fs/create-dirs dest-dir)
+  (let [res (p/shell {:out :string :err :string :continue true}
+                     "tar" "xzf" (str (fs/file tarball))
+                     "-C" (str (fs/file dest-dir)))]
+    (when-not (zero? (:exit res))
+      (throw (ex-info (str "tar extraction failed for " tarball)
+                      {:type ::extract-failed
+                       :exit (:exit res)
+                       :err (str/trim (str (:err res)))}))))
+  dest-dir)
+
 (defn download+verify!
   "GET url and persist it at dest only after sha256 verification.
-   Throws ::download-failed on non-200 and ::sha-mismatch on hash mismatch;
+   expected-sha256 may be nil to skip hashing (intermediate artifacts whose
+   integrity is checked after a later extraction step). Throws
+   ::download-failed on non-200 and ::sha-mismatch on hash mismatch;
    returns dest."
   [url dest expected-sha256]
   (let [resp (http/get url {:as :stream :request-timeout 120000})]
@@ -107,7 +126,6 @@
                        :url url
                        :status (:status resp)})))
     (store-and-verify! (:body resp) dest expected-sha256)))
-
 (defn extract-zip!
   "Extract every file entry of zip-path under dest-dir, creating nested dirs
    as needed. Rejects absolute or parent-traversing entry names (::unsafe-zip-

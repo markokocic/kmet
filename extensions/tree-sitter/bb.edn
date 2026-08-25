@@ -4,7 +4,8 @@
         :task (let [nss (or (some->> *command-line-args* (map symbol))
                             '[kmet.extensions.tree-sitter.paths-test
                               kmet.extensions.tree-sitter.fetch-test
-                              kmet.extensions.tree-sitter.cli-test])]
+                              kmet.extensions.tree-sitter.cli-test
+                              kmet.extensions.tree-sitter.grammars-test])]
                 (doseq [ns-sym nss]
                   (require ns-sym))
                 (let [summary (apply clojure.test/run-tests nss)]
