@@ -8,15 +8,24 @@
             [kmet.tui.theme :as theme]
             [kmet.tui.utils :as utils]
             [kmet.tui.components.text :as text]
-            [kmet.tui.components.box :as box]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.spacer :as spacer]
             [kmet.libs.terminal-image :as timg]
             [kmet.libs.edit-diff :as edit-diff]
             [kmet.app.keybindings :as app-kb]
+            [kmet.tui.hiccup :as h]
             [kmet.app.bash-executor :as bash-exec]))
 
 ;; ─── Shared render helpers (pi: render-utils.ts) ────────────────────────────
+
+(defn- tool-text
+  "The ubiquitous renderer leaf: zero-padded text. Element form keeps the
+   assembled trees declarative; compile-tree turns them into the same plain
+   records the imperative builders produced (all content is precomputed
+   strings — nothing reactive inside, so cache-miss rebuilds abandon them
+   safely)."
+  [s]
+  [:text {:padding-x 0 :padding-y 0} s])
 
 (defn- tool-path-str
   "Pi: str() — string passes through, missing → \"\", non-string → null."
@@ -382,29 +391,24 @@
 (defn- build-edit-box
   "Pi: buildEditCallComponent — Box whose bg reflects preview or final state."
   [name preview raw-path theme cwd context]
-  (let [box (box/make-box 1 1
-                          (cond
-                            (:is-error context)
-                            #(theme/bg theme :tool-error-bg %)
-                            (not (:is-partial context))
-                            #(theme/bg theme :tool-success-bg %)
-                            (nil? preview) #(theme/bg theme :tool-pending-bg %)
-                            (:success? preview) #(theme/bg theme :tool-success-bg %)
-                            :else #(theme/bg theme :tool-error-bg %)))]
-    (box/box-add-child box
-                       (text/make-text
-                        (str (theme/fg theme :tool-title (theme/bold (str name " ")))
-                             (render-tool-path raw-path theme cwd))
-                        0 0))
-    (when preview
-      (box/box-add-child box (spacer/make-spacer 1))
-      (box/box-add-child box
-                         (text/make-text
-                          (if (:success? preview)
-                            (str/join "\n" (render-diff-lines (:diff-lines preview) theme))
-                            (theme/fg theme :error (:error preview)))
-                          0 0)))
-    box))
+  (let [bg-fn (cond
+                (:is-error context)
+                #(theme/bg theme :tool-error-bg %)
+                (not (:is-partial context))
+                #(theme/bg theme :tool-success-bg %)
+                (nil? preview) #(theme/bg theme :tool-pending-bg %)
+                (:success? preview) #(theme/bg theme :tool-success-bg %)
+                :else #(theme/bg theme :tool-error-bg %))
+        kids (cond-> [(tool-text (str (theme/fg theme :tool-title
+                                                (theme/bold (str name " ")))
+                                      (render-tool-path raw-path theme cwd)))]
+               preview (into [[:spacer {:lines 1}]
+                              (tool-text
+                               (if (:success? preview)
+                                 (str/join "\n"
+                                           (render-diff-lines (:diff-lines preview) theme))
+                                 (theme/fg theme :error (:error preview))))]))]
+    (h/compile-tree (into [:box {:padding-x 1 :padding-y 1 :bg-fn bg-fn}] kids))))
 
 (defn render-read-call
   [name args theme _width context]
@@ -413,157 +417,87 @@
         range-str (read-line-range args theme)
         classification (when-not (:expanded context)
                          (compact-read-classification raw-path (:cwd context)))]
-    (text/make-text
-     (if classification
-       (format-compact-read-call classification name theme range-str)
-       (str (theme/fg theme :tool-title (theme/bold (str name " ")))
-            (render-tool-path raw-path theme (:cwd context))
-            range-str))
-     0 0)))
-(defn
-  render-read-result
-  [content
-   is-error
-   theme
-   _width
-   expanded?
-   _started-at
-   _ended-at
-   truncation
-   _context]
-  (if
-   (and (not expanded?) (not is-error))
+    (h/compile-tree
+     (tool-text
+      (if classification
+        (format-compact-read-call classification name theme range-str)
+        (str (theme/fg theme :tool-title (theme/bold (str name " ")))
+             (render-tool-path raw-path theme (:cwd context))
+             range-str))))))
+(defn render-read-result
+  "Collapsed: spacer + up to 10 output lines + expand hint + truncation warn."
+  [content is-error theme _width expanded? _started-at _ended-at truncation _context]
+  (if (and (not expanded?) (not is-error))
     nil
-    (let
-     [c
-      (container/make-container)
-      lines
-      (trim-trailing-empty-lines
-       (str/split-lines (sanitize-display-text (or content ""))))
-      n
-      (count lines)
-      max-lines
-      (if expanded? n 10)
-      show
-      (take max-lines lines)
-      more
-      (- n max-lines)]
-      (container/container-add-child c (spacer/make-spacer 1))
-      (when
-       (seq lines)
-        (doseq
-         [line show]
-          (container/container-add-child
-           c
-           (text/make-text
-            (theme/fg theme :tool-output (replace-tabs line))
-            0
-            0)))
-        (when
-         (pos? more)
-          (container/container-add-child
-           c
-           (text/make-text
-            (str
-             (theme/fg theme :muted (str "... (" more " more lines,"))
-             " "
-             (app-kb/key-hint "app.tools.expand" "to expand")
-             (theme/fg theme :muted ")"))
-            0
-            0)))
-        (when
-         truncation
-          (let
-           [{:keys
-             [first-line-exceeds-limit
-              truncated-by
-              output-lines
-              total-lines
-              max-lines
-              max-bytes]}
-            truncation
-            warn
-            (cond
-              first-line-exceeds-limit
-              (str
-               "[First line exceeds "
-               (bash-exec/format-size
-                (or max-bytes bash-exec/DEFAULT-MAX-BYTES))
-               " limit]")
-              (= truncated-by :lines)
-              (str
-               "[Truncated: showing "
-               output-lines
-               " of "
-               total-lines
-               " lines ("
-               (or max-lines bash-exec/DEFAULT-MAX-LINES)
-               " line limit)]")
-              (= truncated-by :bytes)
-              (str
-               "[Truncated: "
-               output-lines
-               " lines shown ("
-               (bash-exec/format-size
-                (or max-bytes bash-exec/DEFAULT-MAX-BYTES))
-               " limit)]")
-              :else
-              nil)]
-            (when
-             warn
-              (container/container-add-child c (spacer/make-spacer 1))
-              (container/container-add-child
-               c
-               (text/make-text (theme/fg theme :warning warn) 0 0))))))
-      c)))
+    (let [lines (trim-trailing-empty-lines
+                 (str/split-lines (sanitize-display-text (or content ""))))
+          n (count lines)
+          max-lines (if expanded? n 10)
+          show (take max-lines lines)
+          more (- n max-lines)
+          truncation-warn
+          (when (seq lines)
+            (let [{:keys [first-line-exceeds-limit truncated-by output-lines
+                          total-lines max-lines max-bytes]} truncation]
+              (cond
+                first-line-exceeds-limit
+                (str "[First line exceeds "
+                     (bash-exec/format-size (or max-bytes bash-exec/DEFAULT-MAX-BYTES))
+                     " limit]")
+                (= truncated-by :lines)
+                (str "[Truncated: showing " output-lines " of " total-lines
+                     " lines (" (or max-lines bash-exec/DEFAULT-MAX-LINES) " line limit)]")
+                (= truncated-by :bytes)
+                (str "[Truncated: " output-lines " lines shown ("
+                     (bash-exec/format-size (or max-bytes bash-exec/DEFAULT-MAX-BYTES)) " limit)]"))))
+          kids (concat
+                (when (seq lines)
+                  (concat
+                   (mapv #(tool-text (theme/fg theme :tool-output (replace-tabs %))) show)
+                   (when (pos? more)
+                     [(tool-text
+                       (str (theme/fg theme :muted (str "... (" more " more lines,"))
+                            " " (app-kb/key-hint "app.tools.expand" "to expand")
+                            (theme/fg theme :muted ")")))])
+                   (when truncation-warn
+                     [[:spacer {:lines 1}]
+                      (tool-text (theme/fg theme :warning truncation-warn))]))))]
+      (h/compile-tree (into [:container {} [:spacer {:lines 1}]] kids)))))
+
 (defn render-write-call
   [name args theme _width context]
   (let [name (if (seq name) name "write")
         raw-path (:file_path args (:path args))
         content (:content args)
-        c (container/make-container)]
-    (container/container-add-child
-     c
-     (text/make-text
-      (str (theme/fg theme :tool-title (theme/bold (str name " ")))
-           (render-tool-path raw-path theme (:cwd context)))
-      0 0))
-    (if (nil? (tool-path-str content))
-      (container/container-add-child
-       c
-       (text/make-text
-        (str "\n\n" (theme/fg theme :error "[invalid content arg - expected string]"))
-        0 0))
-      (when (seq content)
-        (let [lines (trim-trailing-empty-lines
-                     (str/split-lines (normalize-display-text content)))
-              total (count lines)
-              max-lines (if (:expanded context) total 10)
-              show (take max-lines lines)
-              remaining (- total max-lines)]
-          (container/container-add-child c (spacer/make-spacer 1))
-          (container/container-add-child c (spacer/make-spacer 1))
-          (doseq [line show]
-            (container/container-add-child
-             c
-             (text/make-text (theme/fg theme :tool-output (replace-tabs line)) 0 0)))
-          (when (pos? remaining)
-            (container/container-add-child
-             c
-             (text/make-text
-              (str (theme/fg theme :muted
-                             (str "... (" remaining " more lines, " total " total,"))
-                   " "
-                   (app-kb/key-hint "app.tools.expand" "to expand")
-                   (theme/fg theme :muted ")"))
-              0 0))))))
-    c))
-(defn
-  render-write-result
+        title (tool-text (str (theme/fg theme :tool-title (theme/bold (str name " ")))
+                              (render-tool-path raw-path theme (:cwd context))))
+        kids (if (nil? (tool-path-str content))
+               [title (tool-text (str "\n\n"
+                                      (theme/fg theme :error "[invalid content arg - expected string]")))]
+               (if-not (seq content)
+                 [title]
+                 (let [lines (trim-trailing-empty-lines
+                              (str/split-lines (normalize-display-text content)))
+                       total (count lines)
+                       max-lines (if (:expanded context) total 10)
+                       show (take max-lines lines)
+                       remaining (- total max-lines)]
+                   (into [title [:spacer {:lines 1}] [:spacer {:lines 1}]]
+                         (concat
+                          (mapv #(tool-text (theme/fg theme :tool-output (replace-tabs %))) show)
+                          (when (pos? remaining)
+                            [(tool-text
+                              (str (theme/fg theme :muted
+                                             (str "... (" remaining " more lines, " total " total,"))
+                                   " " (app-kb/key-hint "app.tools.expand" "to expand")
+                                   (theme/fg theme :muted ")")))]))))))]
+    (h/compile-tree (into [:container {}] kids))))
+
+(defn render-write-result
   [content is-error theme _width _expanded? & _]
-  (when
-   is-error
-    (text/make-text (str "\n" (theme/fg theme :error content)) 0 0)))
+  (when is-error
+    (h/compile-tree (tool-text (str "\n" (theme/fg theme :error content))))))
+
 (defn render-edit-call
   [name args theme _width context]
   (let [name (if (seq name) name "edit")
@@ -841,34 +775,28 @@
                     (let [values (map (comp pr-str val) args)
                           joined (str/join " " values)]
                       (utils/truncate-to-width joined avail "...")))]
-    (text/make-text
-     (if (seq param-str)
-       (str title " " param-str)
-       title)
-     0 0)))
+    (h/compile-tree
+     (tool-text
+      (if (seq param-str)
+        (str title " " param-str)
+        title)))))
 
 (defn render-default-result
   "Default render-result: show collapsed preview (5 lines) with expand hint,
    full content when expanded."
   [content _is-error theme _width expanded? & _]
-  (let [c (container/make-container)
-        lines (-> (or content "") str/split-lines trim-trailing-empty-lines)
+  (let [lines (-> (or content "") str/split-lines trim-trailing-empty-lines)
         n (count lines)
         max-preview 5
         show (take (if expanded? n max-preview) lines)
-        more (- n max-preview)]
-    (container/container-add-child c (spacer/make-spacer 1))
-    (when (seq lines)
-      (doseq [line show]
-        (container/container-add-child c
-                                       (text/make-text (theme/fg theme :tool-output line) 0 0)))
-      (when (and (not expanded?) (pos? more))
-        (container/container-add-child c
-                                       (text/make-text
-                                        (str (theme/fg theme :muted (str "... (" more " more lines,"))
-                                             " "
-                                             (app-kb/key-hint "app.tools.expand" "to expand")
-                                             (theme/fg theme :muted ")"))
-                                        0 0))))
-    c))
-
+        more (- n max-preview)
+        kids (concat
+              (when (seq lines)
+                (concat
+                 (mapv #(tool-text (theme/fg theme :tool-output %)) show)
+                 (when (and (not expanded?) (pos? more))
+                   [(tool-text
+                     (str (theme/fg theme :muted (str "... (" more " more lines,"))
+                          " " (app-kb/key-hint "app.tools.expand" "to expand")
+                          (theme/fg theme :muted ")")))]))))]
+    (h/compile-tree (into [:container {} [:spacer {:lines 1}]] kids))))

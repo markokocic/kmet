@@ -102,6 +102,7 @@
     kmet.app.ui.test-chat-history
     kmet.app.ui.test-user-message
     kmet.app.ui.test-assistant-message
+    kmet.app.ui.test-tool-renderers
     kmet.app.ui.test-tool-execution
     kmet.app.ui.test-custom-message
     kmet.app.ui.test-bash-execution
