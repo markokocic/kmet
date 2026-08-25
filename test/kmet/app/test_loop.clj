@@ -2795,7 +2795,8 @@
               :base-delay-ms 2000 :overflow-recovered false :has-session true})]
       (t/is (= :backoff (:kind d)))
       (t/is (= 2 (:attempt d)))
-      (t/is (= 4000 (:delay-ms d)) "2000 * 2^(2-1)")))
+      (t/is (= 4000 (:delay-ms d)) "2000 * 2^(2-1)")
+      (t/is (= 3 (:max-attempts d)) "budget snapshot rides the decision")))
   (t/testing "exhausted budget or non-retryable errors are terminal"
     (t/is (= {:kind :terminal}
              (#'loop/retry-decision

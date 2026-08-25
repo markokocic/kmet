@@ -1341,8 +1341,8 @@ Be precise and concise in your responses."}}]
    effects; the caller performs them):
      {:kind :overflow-recover} — context overflow, not yet recovered:
        compact once, then retry the same turn
-     {:kind :backoff :attempt n :delay-ms ms} — retryable within budget:
-       exponential backoff, same turn
+     {:kind :backoff :attempt n :delay-ms ms :max-attempts max-retries} —
+       retryable within budget: exponential backoff, same turn
      {:kind :terminal} — non-retryable or retries exhausted"
   [{:keys [err retry-count max-retries base-delay-ms overflow-recovered
            has-session]}]
@@ -1358,7 +1358,8 @@ Be precise and concise in your responses."}}]
     (let [attempt (inc retry-count)
           delay-ms (* base-delay-ms
                       (long (Math/pow 2 (dec attempt))))]
-      {:kind :backoff :attempt attempt :delay-ms delay-ms})
+      {:kind :backoff :attempt attempt :delay-ms delay-ms
+       :max-attempts max-retries})
 
     :else {:kind :terminal}))
 
@@ -1577,11 +1578,11 @@ Be precise and concise in your responses."}}]
 
                                             ;; Auto-retry with exponential backoff (pi: _prepareRetry)
                                             :backoff
-                                            (let [{:keys [attempt delay-ms]} action]
+                                            (let [{:keys [attempt delay-ms max-attempts]} action]
                                               (reset! (:retry-count agent) attempt)
                                               (emit agent {:type :auto-retry-start
                                                            :attempt attempt
-                                                           :max-attempts (:max-retries @(:cfg agent))
+                                                           :max-attempts max-attempts
                                                            :delay-ms delay-ms
                                                            :error-message err})
                                               (if (backoff-sleep! agent delay-ms)
