@@ -63,17 +63,15 @@ status line, never an error at startup.
 - Entry: init/shutdown, `/lsp` command, footer status, events (§13)
 - Validation scripts + README (§14, §15)
 
-### Phase 2 (specified, not built)
+### Phase 2 (remaining)
 
-- **Diagnostics-after-edit hook** (§12.3): `on-tool-result` on `edit`/`write`
-  appends fresh `<diagnostics>` to the tool result (dirge Phase-6 parity).
 - Interactive panel (`/lsp` plain dialog stays; a pi-McpPanel-style TUI panel).
-- Incremental text sync (`TextDocumentSyncKind.Incremental`) if full-text
-  sync ever shows up in profiling.
-- Pull-diagnostics race in the after-edit wait (dirge B3-10).
 - Optional cleanup: refactor mcp-adapter's stdio transport onto
   `kmet.libs.jsonrpc` (churn-vs-dedup judged not worth destabilizing a
-  shipped extension in Phase 1).
+  shipped extension).
+
+Dropped entirely (Rev 2): the diagnostics-after-edit hook and incremental
+text sync — see §18.
 
 ### Out of scope
 
@@ -98,8 +96,8 @@ status line, never an error at startup.
 | `src/agent/tools/lsp.rs` | `lsp_adapter.clj` + `query.clj` | tool description, parameter schema (operation/file_path/line/character/query), result shaping philosophy |
 
 Deliberately not ported from dirge: the plugin harness bridge (`harness.rs`),
-the `TouchMode::AwaitPush` diagnostic wait (Phase 2), the pull-diagnostics
-race (Phase 2), worktree-permission path guarding (extensions have no
+the TouchMode::AwaitPush diagnostic wait, the pull-diagnostics race,
+worktree-permission path guarding (extensions have no
 worktree concept — cwd bounds the walk instead), and the `[timeouts]` config
 subsystem (flat settings keys here), and mcp-adapter's credential-url
 binding rule (its §6 SECURITY) — LSP config carries no credential fields
@@ -508,19 +506,6 @@ severity 1/2/3/4 → ERROR/WARN/INFO/HINT, absent ⇒ ERROR.
 - Project view: ≤5 additional files beyond the queried one, sorted by
   error count desc.
 
-### 12.3 Phase 2 — after-edit hook (specified, gated by `settings :diagnostics {:after-edit true}`, default off)
-
-`ext/on-tool-result` fires for `edit`/`write` with the tool's `:args` in
-the hook payload (verified: `loop.clj` `after-tool-hook-result` passes
-`{:tool-call-id :tool-name :args :result :is-error}`) — **no core change
-needed**. Flow: extract the edited `:path` → claiming servers → touch
-(await-push semantics): send the sync, then wait up to
-`:wait-ms` (default 4000) for a fresh `publishDiagnostics`
-(`received-at > t0`); on timeout report whatever is stored (cold-start
-servers simply report stale-or-empty rather than blocking forever — the
-pull-diagnostics race is the Phase-2 refinement). Append a capped
-`<diagnostics>` block to the tool result content.
-
 ## 13. Entry — `lsp_adapter.clj`
 
 Init order (all no-ops when `settings :disabled true`):
@@ -652,7 +637,7 @@ trust), Phase-2 roadmap.
 - File URIs on Android paths (spaces, unicode): `(.toUri (fs/path …))`
   interop; no `java.io.*`/`java.nio.file` imports (AGENTS convention).
 - Full-text `didChange` always (simplest correct); disk re-read per touch;
-  incremental sync only if profiling ever demands it (Phase 2).
+  incremental sync dropped in Rev 2 - see below.
 - `workspace/applyEdit` refused by policy — a server that insists will show
   `applied: false` in its logs; our edits flow exclusively through kmet's
   edit tools.
@@ -687,6 +672,13 @@ surface was mcp-adapter ceremony LSP doesn't need. Cuts, all recorded here:
 - **Sticky broken-set kept** exactly as decided mid-planning (no time-based
   retry), now surfaced through for-file so cached failures appear in tool
   output instantly.
+
+Also dropped entirely (user decision, after seeing the Phase-1 build):
+the **diagnostics-after-edit hook** and **incremental text sync** —
+full-text didChange with disk re-read per touch stays permanent; there is
+no scenario in kmet's usage where delta-tracking pays for its silent-
+corruption risk. Phase 2 now holds only the TUI panel and the optional
+mcp-adapter stdio adoption.
 
 Kept in full: the sticky-broken model, ESC/session lifecycle edges,
 reaper-skips-initializing, applyEdit refusal, shaping caps, the single
