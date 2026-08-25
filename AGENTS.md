@@ -6,7 +6,7 @@
 - **Entry**: `bb run` — runs `kmet.core/-main`
 - **nREPL**: `bb nrepl` — starts nREPL server on port 1667 for interactive development (blocks). Connect your editor/tool to `localhost:1667`.
   To stop: evaluate `(System/exit 0)` via nREPL (or `fuser -k 1667/tcp` from another terminal).
-- **Lint**: `bb lint` — clj-kondo over `src`/`test`. Custom macros (`defcomponent`/`defsetter`/`defgetter`)
+- **Lint**: `bb lint` — clj-kondo over `src`/`test`. Custom macros (`defcomponent`/`with-let`)
   are handled via analysis hooks in `.clj-kondo/hooks/`; keep them in sync when the macro shapes change.
   The gate requires `bb lint` to pass with 0 errors, warnings, and info findings.
 - **Format**: `bb format` (fix) / `bb format-check` (verify) — cljfmt over `src`/`test`.

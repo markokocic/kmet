@@ -1,4 +1,3 @@
 {:extra-indents {defcomponent [[:block 3] [:inner 1]]
-                 defsetter    [[:block 4]]
                  track!       [[:inner 0]]
                  with-let     [[:block 1]]}}

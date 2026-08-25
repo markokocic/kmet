@@ -19,21 +19,6 @@
                    fields-with-kind
                    methods))}))
 
-(defn defsetter
-  "Teach clj-kondo that (defsetter name field comp value & body)
-   defines (defn name [comp value] (reset! (field comp) value) body...)
-   so comp and value count as used."
-  [{:keys [node]}]
-  (let [[_ name field comp value & body] (:children node)]
-    {:node (api/list-node
-            (list* (api/token-node 'defn)
-                   name
-                   (api/vector-node [comp value])
-                   (api/list-node (list (api/token-node 'reset!)
-                                        (api/list-node (list field comp))
-                                        value))
-                   body))}))
-
 (defn with-let
   "Teach clj-kondo that (with-let [x init ...] body... (finally cleanup))
    binds the names like let (init/cleanup run under the store at runtime)."
@@ -44,15 +29,3 @@
                       body)]
     {:node (api/list-node
             (list* (api/token-node 'let) bindings body'))}))
-
-(defn defgetter
-  "Teach clj-kondo that (defgetter name field comp) defines
-   (defn name [comp] @(field comp)) so comp counts as used."
-  [{:keys [node]}]
-  (let [[_ name field comp] (:children node)]
-    {:node (api/list-node
-            (list (api/token-node 'defn)
-                  name
-                  (api/vector-node [comp])
-                  (api/list-node (list (api/token-node 'deref)
-                                       (api/list-node (list field comp))))))}))
