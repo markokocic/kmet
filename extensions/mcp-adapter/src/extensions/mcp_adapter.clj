@@ -656,49 +656,30 @@
       :else :idle)))
 
 (defn- mcp-status-text
-  "Compute the MCP footer status string for the live state (pi:
-   init.ts updateStatusBar → formatMcpStatus). Returns nil when the
-   status should be cleared — no servers configured, or
-   :mcp-footer-status :off. Honors settings :mcp-footer-status
-   (:full | :compact | :off, default :full) and :show-status-icon
-   (emoji prefix, default on), matching pi exactly:
-     :compact → \"MCP <connected>/<enabled>\"
-     :full    → \"<enabled> server(s) enabled\" plus, when present,
-                 \" (<connected> connected)\" and \" (<disabled> disabled)\"
-                 segments, prefixed \"🔌 MCP: \" (\"MCP: \" when
-                 :show-status-icon is false). enabled counts every server
-   that is not disabled; connected counts servers with a live connection."
+  "Compact footer status: \"MCP <connected>/<enabled>\" - enabled counts
+   every non-disabled server, connected counts servers with a live
+   connection. nil clears the slot (no servers configured, or
+   :mcp-footer-status :off). Rev 2 of the extension dropped the verbose
+   :full/:compact modes and the icon prefix for a single terse form."
   [state]
   (let [config (:config @state)
         settings (:settings config)
         servers (:mcp-servers config)
         mode (if (string? (:mcp-footer-status settings))
                (keyword (:mcp-footer-status settings))
-               (or (:mcp-footer-status settings) :full))
-        show-icon? (not= false (:show-status-icon settings))]
-    (cond
-      (empty? servers) nil
-      (= :off mode) nil
-      :else
-      (let [{:keys [enabled disabled connected]}
+               (or (:mcp-footer-status settings) :compact))]
+    (when (and (seq servers) (not= :off mode))
+      (let [{:keys [enabled connected]}
             (reduce (fn [acc name]
                       (let [s (panel-connection-status state name)]
                         (cond
-                          (= s :disabled) (update acc :disabled inc)
-                          (= s :connected) (update (update acc :enabled inc) :connected inc)
+                          (= s :disabled) acc
+                          (= s :connected) (update (update acc :enabled inc)
+                                                   :connected inc)
                           :else (update acc :enabled inc))))
-                    {:enabled 0 :disabled 0 :connected 0}
-                    (keys servers))
-            status (if (= :compact mode)
-                     (str "MCP " connected "/" enabled)
-                     (str enabled
-                          (if (= 1 enabled) " server" " servers")
-                          " enabled"
-                          (when (pos? connected) (str " (" connected " connected)"))
-                          (when (pos? disabled) (str " (" disabled " disabled)"))))]
-        (if (= :compact mode)
-          status
-          (str (if show-icon? "🔌 MCP: " "MCP: ") status))))))
+                    {:enabled 0 :connected 0}
+                    (keys servers))]
+        (str "MCP " connected "/" enabled)))))
 
 (defn- update-status-bar!
   "Refresh the footer's MCP status line (pi: init.ts updateStatusBar).

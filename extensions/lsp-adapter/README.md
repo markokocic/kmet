@@ -69,6 +69,12 @@ claims) `:extend-extensions` (adds) `:filenames` `:root-markers`
 Settings block (`:settings`) accepts the same timeout/idle keys globally.
 After editing: `/lsp refresh`.
 
+## Footer
+
+While servers are configured, the footer shows `LSP <connected>/<total>`
+(error-tinted while any server is broken) - same terse form as mcp's
+`MCP <connected>/<enabled>`.
+
 ## Commands
 
 `/lsp` — interactive panel (TUI): rows show each server's state

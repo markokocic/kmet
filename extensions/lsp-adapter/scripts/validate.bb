@@ -19,6 +19,7 @@
          '[extensions.lsp-adapter.runtime :as runtime]
          '[extensions.lsp-adapter.tools :as tools]
          '[extensions.lsp-adapter.panel :as panel]
+         '[extensions.lsp-adapter :as entry]
          '[kmet.tui.protocols :as protocols])
 
 (def failures (atom 0))
@@ -238,6 +239,24 @@
     (finally
       (runtime/shutdown-all! st)
       (fs/delete-tree proj))))
+
+(println "\n-- footer --")
+
+(let [cfg {:servers {"fake" {:command ["bb" fake-server]
+                             :extensions ["txt"]
+                             :root-markers ["root-marker.txt"]}}}
+      st (runtime/new-state nil cfg)
+      f #'entry/status-text]
+  (check "footer shows connected/total"
+         (= "LSP 0/1" (f st)))
+  (swap! (:conns st) assoc ["fake" (str (tmp-dir))]
+         {:client nil :name "fake" :root (tmp-dir)
+          :docs (atom {}) :diags (atom {})})
+  (check "footer counts live connections"
+         (= "LSP 1/1" (f st)))
+  (check "footer clears when nothing is configured"
+         (nil? (do (runtime/set-config! st {})
+                   (f st)))))
 
 (check "shutdown-all disconnects everything"
        (let [{:keys [dir cfg sample]} (temp-project)

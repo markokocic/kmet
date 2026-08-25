@@ -34,13 +34,19 @@
 
 (defn set-config! [st config] (reset! (:config st) config))
 (defn config [st] @(:config st))
+(defn configured-servers
+  "The :servers map from the active config - the input effective-servers
+   expects (NOT the whole config map; passing that would hide all custom
+   servers while builtins kept working)."
+  [st]
+  (get-in (config st) [:servers]))
 
 (defn- setting
   "Effective SETTING-KEY: per-server entry override wins, then the
    settings block, then the built-in default."
   [st name k default]
-  (or (get-in @(:config st) [:servers name k])
-      (get-in @(:config st) [:settings k])
+  (or (get-in (config st) [:servers name k])
+      (get-in (config st) [:settings k])
       default))
 
 (defn- lock-for
@@ -189,7 +195,7 @@
 (defn claiming-specs
   "[{:id :desc :root}] for PATH over the effective registry."
   [st path]
-  (detect/claiming (detect/effective-servers (get-in @(:config st) [:servers]))
+  (detect/claiming (detect/effective-servers (configured-servers st))
                    path (str (fs/cwd))))
 
 (defn broken-claiming
@@ -233,7 +239,7 @@
    timeout). Never reaps mid-handshake: a conn only exists post-initialize."
   [st {:keys [name] :as conn}]
   (let [desc (some (fn [d] (when (= (:id d) name) d))
-                   (detect/effective-servers (get-in @(:config st) [:servers])))
+                   (detect/effective-servers (configured-servers st)))
         min* (setting st name :idle-timeout-minutes idle-timeout-minutes)
         idle-ms (- (System/currentTimeMillis) (last-used conn))]
     (and (pos? min*)

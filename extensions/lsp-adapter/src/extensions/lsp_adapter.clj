@@ -47,25 +47,27 @@
 ;; ─── Footer status ────────────────────────────────────────────────────────
 
 (defn- status-text
-  "Compact footer line for the live state; nil clears the slot. Shown only
-   while something is connected or broken — never as passive noise."
+  "Compact footer line, mcp-adapter style: \"LSP <connected>/<total>\".
+   total counts CONFIGURED server entries (non-disabled; builtins alone
+   don't count - an unconfigured install shows nothing), connected counts
+   configured names with a live connection. nil clears the slot when
+   nothing is configured."
   [st]
-  (let [conns (sort-by :name (runtime/all-conns st))
-        broken @(:broken st)]
-    (when (or (seq conns) (seq broken))
-      (if (seq conns)
-        (str "🔌 LSP: "
-             (str/join ", "
-                       (map (fn [c] (str (:name c) "@" (short-root (:root c))))
-                            (take 3 conns)))
-             (when (> (count conns) 3) (str " +" (- (count conns) 3))))
-        (str "🔌 LSP broken: " (str/join ", " (keys broken)))))))
+  (let [configured (for [[name entry] (get-in (runtime/config st) [:servers])
+                         :when (and (map? entry) (not (true? (:disabled entry))))]
+                     name)
+        connected (set (map :name (runtime/all-conns st)))]
+    (when (pos? (count configured))
+      (str "LSP " (count (filter connected configured)) "/"
+           (count configured)))))
 
 (defn- update-status! [st]
   (when-let [api (:api st)]
-    (ext/ui-set-status api "lsp"
-                       (some->> (status-text st)
-                                (theme/fg (theme/get-current-theme) :accent)))))
+    (let [broken? (seq @(:broken st))
+          color (if broken? :error :accent)]
+      (ext/ui-set-status api "lsp"
+                         (some->> (status-text st)
+                                  (theme/fg (theme/get-current-theme) color))))))
 
 ;; ─── The lsp tool ─────────────────────────────────────────────────────────
 
@@ -122,7 +124,7 @@ seconds while indexing; a failed install stays failed until /lsp restart.")
     [(first parts) (str/trim (second parts ""))]))
 
 (defn- server-names [st]
-  (mapv :id (detect/effective-servers (get-in (runtime/config st) [:servers]))))
+  (mapv :id (detect/effective-servers (runtime/configured-servers st))))
 
 (defn- completions [st arg-prefix]
   (let [prefix (str/trim (str arg-prefix))]
@@ -177,7 +179,7 @@ seconds while indexing; a failed install stays failed until /lsp restart.")
 (defn- list-report [st]
   (str/join "\n"
             (for [{:keys [id extensions root-markers rootless]}
-                  (detect/effective-servers (get-in (runtime/config st) [:servers]))]
+                  (detect/effective-servers (runtime/configured-servers st))]
               (format "%s — %s | roots: %s"
                       id
                       (str/join " " (sort extensions))
