@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-24T13:18:05Z"
+ :generated-at "2026-08-25T13:41:10Z"
  :provider {:id :openai
             :name "OpenAI"
             :env-vars ["OPENAI_API_KEY"]
@@ -478,11 +478,11 @@
                          :off "none"
                          :xhigh "xhigh"}
     :input [:text :image]
-    :cost {:input 5
-           :tiers [{:input 10 :input-tokens-above 272000 :output 45 :cache-read 1 :cache-write 12.5}]
-           :output 30
-           :cache-read 0.5
-           :cache-write 6.25}
+    :cost {:input 4
+           :tiers [{:input 8 :input-tokens-above 272000 :output 30 :cache-read 0.8 :cache-write 10}]
+           :output 20
+           :cache-read 0.4
+           :cache-write 5}
     :context-window 272000
     :max-tokens 128000
     :compat {:supports-strict-mode true

@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-24T13:18:05Z"
+ :generated-at "2026-08-25T13:41:10Z"
  :provider {:id :azure-openai-responses
             :name "Azure OpenAI"
             :env-vars ["AZURE_OPENAI_API_KEY"]
@@ -436,7 +436,7 @@
                          :off nil
                          :xhigh "xhigh"}
     :input [:text :image]
-    :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 6.25}
+    :cost {:input 4 :output 20 :cache-read 0.4 :cache-write 5}
     :context-window 1050000
     :max-tokens 128000
     :compat {:supports-openai-grammar-tools true}}
