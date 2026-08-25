@@ -164,6 +164,8 @@
                               :fromRanges [{:start {:line 20 :character 2}
                                             :end {:line 20 :character 9}}]}]})
 
-            (when id (send! {:jsonrpc "2.0" :id id :result {}}))))
-
+            ;; default clause: unknown notifications/methods are no-ops
+            ;; (never kill the server mid-session)
+            (when id
+              (send! {:jsonrpc "2.0" :id id :result {}}))))
         (recur)))))
