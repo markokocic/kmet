@@ -121,7 +121,7 @@ seconds while indexing; a failed install stays failed until /lsp restart.")
   "\"restart clojure-lsp\" → [\"restart\" \"clojure-lsp\"]"
   [args]
   (let [parts (str/split (str/trim (or args "")) #"\s+" 2)]
-    [(first parts) (str/trim (second parts ""))]))
+    [(first parts) (str/trim (get parts 1 ""))]))
 
 (defn- server-names [st]
   (mapv :id (detect/effective-servers (runtime/configured-servers st))))
