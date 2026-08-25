@@ -495,22 +495,32 @@ sees). Consequences:
 - Widgets implement `handle-input`; dialogs trap keys manually around their
   focused editor.
 
-**Focus home — the terminal fallback.** Input reaching a focused-but-inert
-component is the silent failure mode of focus-only routing, so overlay
-close paths never fall back to an arbitrary root child. When an overlay
-leaves (hide / set-hidden! / unfocus), focus resolves in order: topmost
-visible overlay below, the recorded pre-focus when still mounted, then the
-app-registered **focus home**, else focus stays untouched. The app layer
-registers the home once per session — interactive points it at the ACTIVE
-editor, read through its atom at restore time so custom-editor swaps stay
+**Modality + focus home.** Input reaching a focused-but-inert component
+is the silent failure mode of focus-only routing, so two rules keep it
+recoverable:
+
+1. **Modality is enforced at dispatch.** While a visible capturing overlay
+   exists, `dispatch-input!` snaps focus to its component before delivery —
+   focus stolen by anything else comes straight back, and a hidden or
+   removed overlay never keeps receiving keys. There is no restore state
+   machine to drift out of sync.
+2. **Restore resolves from live state.** When an overlay stops capturing
+   (hide / set-hidden! / unfocus), focus goes to the visible overlay below
+   it, else the app-registered **focus home**, else null (keys drop at the
+   dispatch guard). No snapshot of "what was focused before" is kept and
+   no tree walk validates it - both rotted once already.
+
+The app layer registers the home once per session; interactive points it
+through the dock state and the ACTIVE editor so custom-editor swaps stay
 live:
 
 ```clojure
-(tui/tui-set-focus-home! t #(deref current-editor-atom))
+(tui/tui-set-focus-home! t #(or (:component @dock-current)
+                                @current-editor-atom))
 ```
 
 `kmet.tui.core` stays generic: it knows nothing about editors, only about
-the thunk. If the home is unregistered or throws, focus becomes null —
+the thunk. If the home is unregistered or throws, focus becomes null -
 input drops at the dispatch guard rather than reaching a removed dialog.
 
 ---

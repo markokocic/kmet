@@ -2,7 +2,6 @@
   (:require [clojure.string :as str]
             [clojure.test :as t :refer [testing]]
             [kmet.tui.core :as core]
-            [kmet.tui.hiccup :as hiccup]
             [kmet.tui.terminal :as term]))
 
 (defn- leaf
@@ -224,44 +223,21 @@
 ;; ─── OverlayHandle ─────────────────────────────────────────────────────────
 
 (t/deftest test-handle-hide-removes-overlay
-  (testing "hide permanently removes the overlay and restores pre-focus"
+  (testing "hide permanently removes the overlay and restores input to home"
     (let [tui (core/create-tui nil)
           a (leaf)
           o (leaf)]
       (core/tui-add-child tui (:comp a))
-      (core/tui-set-focus tui (:comp a))
+      (core/tui-set-focus-home! tui (fn [] (:comp a)))
       (let [h (core/tui-show-overlay tui (:comp o))]
         (t/is (true? ((:is-focused? h))))
         ((:hide h))
         (t/is (false? (core/tui-has-overlay? tui)))
         (t/is (identical? (:comp a) @(:focused-component tui))
-              "pre-focus restored after hide")))))
+              "home receives focus after hide")))))
 
-(t/deftest test-hide-restores-pre-focus-inside-dsl-tree
-  (testing "pre-focus nested in a ComponentFn tree counts as mounted
-           (the editor-in-dock shape): hide must not fall back to the
-           last root child"
-    (let [tui (core/create-tui nil)
-          ed (->TestDockLeaf (atom false))
-          ;; the dock area: a fn component whose body yields the active
-          ;; editor — the editor record itself is the focused leaf
-          dock (hiccup/root (fn [_props] ed))
-          overlay-comp (->TestDockLeaf (atom false))
-          footer (lines-comp "footer")]
-      (core/tui-add-child tui dock)
-      (core/tui-add-child tui footer)
-      ;; one render pass fills the ComponentFn's kids with the editor
-      (core/render dock 40)
-      (core/tui-set-focus tui ed)
-      (core/tui-show-overlay tui overlay-comp)
-      (t/is (identical? overlay-comp @(:focused-component tui)))
-      (core/tui-hide-overlay tui)
-      (t/is (false? (core/tui-has-overlay? tui)))
-      (t/is (identical? ed @(:focused-component tui))
-            "pre-focus inside a DSL tree restored after hide"))))
-
-(t/deftest test-hide-unmounted-prefocus-falls-back-to-home
-  (testing "unmounted pre-focus lands on the registered focus home"
+(t/deftest test-hide-falls-back-to-focus-home
+  (testing "with no capturing overlay below, hide lands on the focus home"
     (let [tui (core/create-tui nil)
           gone (leaf)                 ;; never added to the tree
           home (leaf)]
@@ -273,7 +249,7 @@
         (t/is (identical? (:comp o) @(:focused-component tui)))
         (core/tui-hide-overlay tui)
         (t/is (identical? (:comp home) @(:focused-component tui))
-              "home receives focus when pre-focus is unmounted")))))
+              "home receives focus when nothing below captures")))))
 
 (t/deftest test-hide-no-home-clears-focus-instead-of-last-root-child
   (testing "without a home, focus goes null — never the last root child
@@ -281,8 +257,8 @@
     (let [tui (core/create-tui nil)
           gone (leaf)
           last-child (leaf)]
-      ;; deliberately NOT focused or mounted: gone is the stale pre-focus,
-      ;; last-child is what the old fallback wrongly focused
+      ;; gone was focused but is mounted nowhere; last-child is what the
+      ;; old fallback wrongly focused
       (core/tui-add-child tui (:comp last-child))
       (core/tui-set-focus tui (:comp gone))
       (let [o (leaf)]
@@ -304,17 +280,18 @@
               "throwing home does not take input handling down")))))
 
 (t/deftest test-handle-set-hidden-focus-moves
-  (testing "set-hidden! releases focus to the pre-focus; showing restores it"
+  (testing "set-hidden! releases focus to home; showing restores it"
     (let [tui (core/create-tui nil)
           a (leaf)
           o (leaf)]
       (core/tui-add-child tui (:comp a))
       (core/tui-set-focus tui (:comp a))
+      (core/tui-set-focus-home! tui (fn [] (:comp a)))
       (let [h (core/tui-show-overlay tui (:comp o))]
         (t/is (identical? (:comp o) @(:focused-component tui)))
         ((:set-hidden! h) true)
         (t/is (identical? (:comp a) @(:focused-component tui))
-              "focus returns to pre-focus while hidden")
+              "focus returns home while hidden")
         ((:set-hidden! h) false)
         (t/is (identical? (:comp o) @(:focused-component tui))
               "un-hiding refocuses the overlay")
@@ -336,15 +313,28 @@
         (t/is (true? (core/tui-has-overlay? tui)) "overlay stays visible")))))
 
 (t/deftest test-handle-unfocus-no-target
-  (testing "unfocus without a target falls back to the pre-focus"
+  (testing "unfocus without a target releases input to home; modality
+           re-snaps on the next key"
     (let [tui (core/create-tui nil)
           a (leaf)
-          o (leaf)]
+          got-o (atom nil)
+          o (reify core/IComponent
+              core/IFocusable
+              (render [_ _] [""])
+              (handle-input [_ data] (reset! got-o data))
+              (invalidate [_])
+              (focused [_] false)
+              (set-focused! [_ _] nil))]
       (core/tui-add-child tui (:comp a))
-      (core/tui-set-focus tui (:comp a))
-      (let [h (core/tui-show-overlay tui (:comp o))]
+      (core/tui-set-focus-home! tui (fn [] (:comp a)))
+      (let [h (core/tui-show-overlay tui o)]
         ((:unfocus h))
-        (t/is (identical? (:comp a) @(:focused-component tui)))))))
+        (t/is (identical? (:comp a) @(:focused-component tui))
+              "released to home")
+        ((var kmet.tui.core/dispatch-input!) tui "x")
+        (t/is (identical? o @(:focused-component tui))
+              "modality re-snaps to the visible overlay")
+        (t/is (= "x" @got-o) "the key went to the overlay, not home")))))
 
 (t/deftest test-non-capturing-overlay
   (testing "nonCapturing overlays render without taking focus"
@@ -358,86 +348,84 @@
             "focus stays on the base component")
       (t/is (true? (core/tui-has-overlay? tui)) "overlay is visible"))))
 
-;; ─── Focus restore state machine (pi: overlayFocusRestore) ────────────────
+;; ─── Modality ──────────────────────────────────────────────────────────────
 
 (defn- dispatch! [tui data]
   ((var kmet.tui.core/dispatch-input!) tui data))
 
-(t/deftest test-overlay-reclaims-focus-after-temporary-ui
-  (testing "temporary non-overlay UI blocks the restore; closing it reclaims"
-    (let [tui (core/create-tui nil)
-          a (leaf)
-          temp (leaf)
-          o (leaf)]
-      (core/tui-add-child tui (:comp a))
-      (core/tui-set-focus tui (:comp a))
-      (core/tui-show-overlay tui (:comp o))
-      ;; Temporary UI takes focus away from the focused overlay
-      (core/tui-set-focus tui (:comp temp))
-      (t/is (identical? (:comp temp) @(:focused-component tui)))
-      (t/is (= :blocked (:status @(:overlay-focus-restore tui)))
-            "restore state is blocked by the temporary UI")
-      ;; Temporary UI closes (focus → nil): the overlay reclaims focus
-      (core/tui-set-focus tui nil)
-      (t/is (identical? (:comp o) @(:focused-component tui))
-            "focused overlay reclaims input (pi: restore-overlay)")
-      (t/is (true? @(:focused? o))))))
+(defn- capturing-leaf
+  "A focusable overlay-style component recording everything it receives."
+  [got]
+  (reify core/IComponent
+    core/IFocusable
+    (render [_ _] [""])
+    (handle-input [_ data] (swap! got conj data))
+    (invalidate [_])
+    (focused [_] false)
+    (set-focused! [_ _] nil)))
 
-(t/deftest test-dispatch-reclaims-eligible-overlay
-  (testing "input dispatch reclaims an eligible overlay after an ancestor focus"
+(t/deftest test-dispatch-delivers-to-visible-overlay
+  (testing "while an overlay captures, input goes to it"
     (let [tui (core/create-tui nil)
           a (leaf)
           got (atom [])
-          o (reify core/IComponent
-              core/IFocusable
-              (render [_ _] [""])
-              (handle-input [_ data] (swap! got conj data))
-              (invalidate [_])
-              (focused [_] false)
-              (set-focused! [_ _] nil))]
+          o (capturing-leaf got)]
       (core/tui-add-child tui (:comp a))
-      (core/tui-set-focus tui (:comp a))
+      (core/tui-set-focus-home! tui (fn [] (:comp a)))
       (core/tui-show-overlay tui o)
-      ;; Focusing the overlay's pre-focus (an ancestor of its focus chain)
-      ;; does NOT block the restore — the state stays eligible (pi:
-      ;; isOverlayFocusAncestor).
-      (core/tui-set-focus tui (:comp a))
-      (t/is (= :eligible (:status @(:overlay-focus-restore tui)))
-            "ancestor focus keeps the restore eligible")
-      (dispatch! tui "x")
-      (t/is (identical? o @(:focused-component tui))
-            "input dispatch reclaims focus for the eligible overlay")
-      (t/is (= ["x"] @got) "input delivered to the reclaimed overlay"))))
+      (dispatch! tui "k")
+      (t/is (= ["k"] @got) "delivered to the capturing overlay"))))
 
-(t/deftest test-unfocus-blocked-with-target
-  (testing "unfocus while blocked points the resume at an explicit target"
+(t/deftest test-dispatch-reclaims-focus-from-temporary-ui
+  (testing "focus stolen while an overlay captures snaps back on dispatch"
     (let [tui (core/create-tui nil)
-          a (leaf)
           temp (leaf)
-          b (leaf)
-          o (leaf)]
-      (core/tui-add-child tui (:comp a))
-      (core/tui-add-child tui (:comp temp))
-      (core/tui-add-child tui (:comp b))
-      (core/tui-set-focus tui (:comp a))
-      (let [h (core/tui-show-overlay tui (:comp o))]
-        (core/tui-set-focus tui (:comp temp))
-        ((:unfocus h) {:target (:comp b)})
-        (core/tui-set-focus tui nil)
-        (t/is (identical? (:comp b) @(:focused-component tui))
-              "focus-target resume wins over restore-overlay")))))
+          got-o (atom [])
+          o (capturing-leaf got-o)]
+      (core/tui-show-overlay tui o)
+      ;; temporary UI grabs focus away from the capturing overlay
+      (core/tui-show-overlay tui (:comp temp) :non-capturing true)
+      (core/tui-set-focus tui (:comp temp))
+      (t/is (identical? (:comp temp) @(:focused-component tui)))
+      (dispatch! tui "esc")
+      (t/is (identical? o @(:focused-component tui))
+            "modality re-snaps focus to the overlay")
+      (t/is (= ["esc"] @got-o) "the key went to the overlay, not the thief"))))
 
-(t/deftest test-overlay-ancestor-focus-does-not-block
-  (testing "focusing an overlay ancestor of the pre-focus chain does not block"
+(t/deftest test-unfocus-target-does-not-stick-against-modality
+  (testing "unfocus {:target} hands input over once; the next key re-snaps"
     (let [tui (core/create-tui nil)
-          a (leaf)
-          o1 (leaf)
-          o2 (leaf)]
-      (core/tui-add-child tui (:comp a))
-      (core/tui-set-focus tui (:comp a))
-      (core/tui-show-overlay tui (:comp o1))
-      ;; o2's pre-focus is o1 — focusing o1 again is an ancestor focus
-      (core/tui-show-overlay tui (:comp o2))
-      (core/tui-set-focus tui (:comp o1))
-      (t/is (not= :blocked (:status @(:overlay-focus-restore tui)))
-            "no blocked state for an ancestor focus"))))
+          b (leaf)
+          got-o (atom [])
+          o (capturing-leaf got-o)
+          h (core/tui-show-overlay tui o)]
+      ((:unfocus h) {:target (:comp b)})
+      (t/is (identical? (:comp b) @(:focused-component tui)))
+      (t/is (false? ((:is-focused? h))))
+      (t/is (true? (core/tui-has-overlay? tui)) "overlay stays visible")
+      (dispatch! tui "y")
+      (t/is (identical? o @(:focused-component tui))
+            "modality wins over the released target")
+      (t/is (= ["y"] @got-o)))))
+
+(t/deftest test-hidden-overlay-stops-capturing
+  (testing "a hidden overlay neither receives input nor reclaims it;
+           keys fall through to home until shown again"
+    (let [tui (core/create-tui nil)
+          got-home (atom [])
+          home (capturing-leaf got-home)
+          got-o (atom [])
+          o (capturing-leaf got-o)]
+      (core/tui-set-focus-home! tui (fn [] home))
+      (let [h (core/tui-show-overlay tui o)]
+        ((:set-hidden! h) true)
+        (t/is (identical? home @(:focused-component tui))
+              "hiding releases focus to home")
+        (dispatch! tui "k")
+        (t/is (= ["k"] @got-home) "home receives keys while hidden")
+        (t/is (empty? @got-o) "the hidden overlay gets nothing")
+        ((:set-hidden! h) false)
+        (t/is (identical? o @(:focused-component tui))
+              "showing refocuses the overlay")
+        (dispatch! tui "j")
+        (t/is (= ["j"] @got-o) "overlay captures again")))))

@@ -2888,8 +2888,10 @@
 
         ;; Core state (status-indicator/status-root filled in after layout)
         ;; the active editor lives behind an atom so custom editors can swap
-        ;; in; the focus home reads it at restore time (tui-set-focus-home!)
+        ;; in; the focus home reads both atoms at restore time so a mounted
+        ;; dock selector outranks the editor (tui-set-focus-home!)
         current-editor-atom (atom ed)
+        dock-current (atom nil)
         cs (map->CoreState {:tui t
                             :agent-state (atom ag)
                             :chat-history ch
@@ -2912,17 +2914,19 @@
                             :bash-signal (atom false)
                             :pending-bash-components (atom [])
                             :pending-messages-container (container/make-container [pm])
-                            :dock-current (atom nil)})]
+                            :dock-current dock-current})]
 
     ;; Initial loaded-resources sections (rebuilt on /reload)
     (ui/loaded-resources-set-sections! lr (build-loaded-resource-sections))
 
     ;; Focus editor
     (tui/tui-set-focus t ed)
-    ;; Terminal focus fallback: when overlay close finds no live pre-focus,
-    ;; input returns to the ACTIVE editor - resolved through the atom so a
-    ;; swapped-in custom editor stays the valid home (tui-set-focus-home!)
-    (tui/tui-set-focus-home! t #(deref current-editor-atom))
+    ;; Terminal focus fallback: when nothing capturing holds input, keys
+    ;; return to the dock's selector if one is mounted, else the ACTIVE
+    ;; editor - resolved through atoms so swaps stay live
+    ;; (tui-set-focus-home!)
+    (tui/tui-set-focus-home! t #(or (:component (deref dock-current))
+                                    (deref current-editor-atom)))
 
     ;; Hardware cursor: the setting wins over the KMET_HARDWARE_CURSOR env
     ;; default (pi: showHardwareCursor)

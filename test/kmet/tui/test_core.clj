@@ -19,21 +19,23 @@
      :focused? focused?}))
 
 (t/deftest test-overlay-focus-restores-previous
-  (testing "hiding an overlay restores the component focused before it was shown"
+  (testing "hiding an overlay returns input to the focus home"
     (let [tui (core/create-tui nil)
           a (leaf)
           b (leaf)
           c (leaf)]
       (core/tui-add-child tui (:comp a))
       (core/tui-add-child tui (:comp b))
+      ;; b plays the editor: focused before the overlay, designated home
       (core/tui-set-focus tui (:comp b))
+      (core/tui-set-focus-home! tui (fn [] (:comp b)))
       (core/tui-show-overlay tui (:comp c) :width 10 :height 5)
       (t/is (identical? (:comp c) @(:focused-component tui)))
       (t/is (true? @(:focused? c)))
-      (t/is (false? @(:focused? b)) "previous focus loses the flag")
+      (t/is (false? @(:focused? b)) "home loses the flag while covered")
       (core/tui-hide-overlay tui)
       (t/is (identical? (:comp b) @(:focused-component tui))
-            "focus returns to the pre-overlay component")
+            "focus returns home")
       (t/is (true? @(:focused? b)) "focus flag restored"))))
 
 (t/deftest test-overlay-stacked-focus

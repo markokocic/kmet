@@ -92,7 +92,7 @@
                 previous-width render-requested?
                 running? stopped? overlays
                 render-loop input-reader current-reader
-                flashes overlay-focus-restore focus-order-counter
+                flashes focus-order-counter
                 show-hardware-cursor? keyboard-protocol-pushed?
                 negotiation-buffer negotiation-timer
                 previous-height max-lines-rendered clear-on-shrink?
@@ -104,7 +104,7 @@
                 input-generation incomplete-flush-timer
                 focus-home])
 
-(declare tui-request-render tui-stop set-focus-internal
+(declare tui-request-render tui-stop set-focused-component!
          overlay-visible? overlay-handle process-input-buffer! tui-invalidate)
 
 (defn create-tui [terminal]
@@ -122,7 +122,6 @@
                        :input-reader (atom nil)
                        :current-reader (atom nil)
                        :flashes (atom nil)
-                       :overlay-focus-restore (atom {:status :inactive})
                        :focus-order-counter (atom 0)
                        :show-hardware-cursor? (atom (= (System/getenv "KMET_HARDWARE_CURSOR") "1"))
                        :keyboard-protocol-pushed? (atom false)
@@ -163,16 +162,17 @@
   (doseq [c @(:components tui)] (protocols/dispose c))
   (reset! (:components tui) []))
 
-(defn tui-set-focus [tui component]
-  ;; pi: public setFocus — clears any pending overlay restore state
-  (set-focus-internal tui component :clear))
+(defn tui-set-focus
+  "Point input at COMPONENT (pi: public setFocus)."
+  [tui component]
+  (set-focused-component! tui component))
 
 (defn tui-set-focus-home!
   "Register the terminal focus fallback as a THUNK resolved lazily at
    restore time. The app layer points it at the active editor (reading
-   current-editor-atom, so custom-editor swaps stay live); overlay close
-   paths land here when no overlay below and a stale pre-focus exist.
-   Pass nil to unregister. Returns nil."
+   current-editor-atom, so custom-editor swaps stay live); when an overlay
+   stops capturing and no other capturing overlay sits below it, input
+   lands here. Pass nil to unregister. Returns nil."
   [tui f]
   (reset! (:focus-home tui) f)
   nil)
@@ -224,7 +224,7 @@
 ;; Overlay stack entry. Mutable fields hold atoms so the handle keeps
 ;; identity across set-hidden!/focus/retarget mutations (kmet convention:
 ;; atoms for mutable state).
-(defrecord Overlay [component options pre-focus hidden? focus-order])
+(defrecord Overlay [component options hidden? focus-order])
 
 ;; ─── Layout resolution (pi: resolveOverlayLayout + anchors) ────────────────
 
@@ -329,7 +329,6 @@
   (let [options (normalize-overlay-options options)
         entry (map->Overlay {:component component
                              :options options
-                             :pre-focus (atom @(:focused-component tui))
                              :hidden? (atom false)
                              :focus-order (atom (swap! (:focus-order-counter tui) inc))})]
     (swap! (:overlays tui) conj entry)
@@ -366,168 +365,29 @@
           nil
           @(:overlays tui)))
 
-(defn- get-visible-overlay-focus-restore
-  "The overlay focus restore state, unless its overlay left the stack or
-   became invisible (pi: getVisibleOverlayFocusRestore)."
-  [tui]
-  (let [state @(:overlay-focus-restore tui)]
-    (if (and (not= :inactive (:status state))
-             (some #(identical? (:overlay state) %) @(:overlays tui))
-             (overlay-visible? tui (:overlay state)))
-      state
-      {:status :inactive})))
-
-(defn- clear-overlay-focus-restore! [tui]
-  (reset! (:overlay-focus-restore tui) {:status :inactive}))
-
-(defn- clear-overlay-focus-restore-for!
-  "Drop restore state belonging to OVERLAY (pi: clearOverlayFocusRestoreFor)."
-  [tui overlay]
-  (let [state @(:overlay-focus-restore tui)]
-    (when (and (not= :inactive (:status state))
-               (identical? (:overlay state) overlay))
-      (reset! (:overlay-focus-restore tui) {:status :inactive}))))
-
-(defn- resolve-blocked-overlay-focus-resume
-  "Resolve a blocked restore: re-focus the overlay (restore-overlay) or the
-   explicit target (focus-target, pi: resolveBlockedOverlayFocusResume)."
-  [tui restore-state]
-  (if (= :restore-overlay (:status (:resume restore-state)))
-    (:component (:overlay restore-state))
-    (do (clear-overlay-focus-restore! tui)
-        (:target (:resume restore-state)))))
-
-(defn- is-overlay-focus-ancestor?
-  "True when COMPONENT is reachable via the preFocus chain of ENTRY
-   (pi: isOverlayFocusAncestor)."
-  [tui entry component]
-  (loop [visited #{}
-         current @(:pre-focus entry)]
-    (cond
-      (or (nil? current) (contains? visited current)) false
-      (identical? current component) true
-      :else (let [next-prev (some (fn [o]
-                                    (when (identical? (:component o) current)
-                                      @(:pre-focus o)))
-                                  @(:overlays tui))]
-              (recur (conj visited current) next-prev)))))
-
-(defn- retarget-overlay-pre-focus!
-  "When an overlay is removed, overlays that pointed at it as pre-focus are
-   retargeted to its own pre-focus (pi: retargetOverlayPreFocus)."
-  [tui removed]
-  (doseq [o @(:overlays tui)]
-    (when (and (not (identical? o removed))
-               (identical? @(:pre-focus o) (:component removed)))
-      (reset! (:pre-focus o) @(:pre-focus removed)))))
-
-(defn- child-components
-  "Direct children of ROOT across every storage shape the TUI uses
-   (pi: isComponentMounted walks the whole tree): host containers keep
-   components in a :children atom, ComponentFn nodes keep reconcile items
-   ({:c component ...}) in a :kids atom, stack tags keep entries in an
-   :entries-atom whose values are entry maps ({:component c ...}) or bare
-   components. Anything else (leaf records, foreign splices) has no
-   traversable children - which is why mount checks must go through this
-   fn instead of guessing at storage."
-  [root]
-  (cond
-    (instance? clojure.lang.IRef (:children root))
-    (remove nil? @(:children root))
-
-    (instance? clojure.lang.IRef (:kids root))
-    (keep :c @(:kids root))
-
-    (instance? clojure.lang.IRef (:entries-atom root))
-    (keep (fn [x] (cond (map? x) (or (:c x) (:component x))
-                        :else x))
-          @(:entries-atom root))
-
-    :else nil))
-
-(defn- contains-component?
-  [root target]
-  (or (identical? root target)
-      (boolean (some #(contains-component? % target)
-                     (child-components root)))))
-
-(defn- is-component-mounted?
-  "True when COMPONENT is still reachable from the base layout
-   (pi: isComponentMounted)."
+(defn- set-focused-component!
+  "Point focused-component at COMPONENT, flipping the IFocusable flag on
+   both sides. Modality is not this fn's business - dispatch-input!
+   enforces who holds input."
   [tui component]
-  (boolean (some #(contains-component? % component) @(:components tui))))
-
-(defn- set-focus-internal
-  "Port of pi's TUI.setFocusInternal — switches focus while maintaining the
-   overlay focus restore state machine (eligible/blocked/inactive).
-   OVERLAY-FOCUS-RESTORE-POLICY: :clear drops pending restore state on a
-   null target (public setFocus), :preserve keeps it (input dispatch
-   redirect of a no-longer-visible focused overlay)."
-  [tui component overlay-focus-restore-policy]
-  (let [previous-focus @(:focused-component tui)
-        previous-focused-overlay (some #(when (and (identical? (:component %) previous-focus)
-                                                   (overlay-visible? tui %))
-                                          %)
-                                       @(:overlays tui))
-        next-focus-is-overlay? (boolean (some #(identical? (:component %) component)
-                                              @(:overlays tui)))
-        restore-state (get-visible-overlay-focus-restore tui)
-        next-focus (atom component)]
-    (cond
-      (and (some? component) (not next-focus-is-overlay?))
-      (if (and (= :blocked (:status restore-state))
-               (identical? (:blocked-by restore-state) previous-focus))
-        (if (or (= :focus-target (:status (:resume restore-state)))
-                (not (is-component-mounted? tui (:blocked-by restore-state))))
-          (reset! next-focus (resolve-blocked-overlay-focus-resume tui restore-state))
-          (reset! (:overlay-focus-restore tui)
-                  {:status :blocked :overlay (:overlay restore-state)
-                   :blocked-by component :resume (:resume restore-state)}))
-        (when (and previous-focused-overlay
-                   (not= :inactive (:status restore-state))
-                   (identical? (:overlay restore-state) previous-focused-overlay)
-                   (not (is-overlay-focus-ancestor? tui previous-focused-overlay component)))
-          (reset! (:overlay-focus-restore tui)
-                  {:status :blocked :overlay previous-focused-overlay
-                   :blocked-by component :resume {:status :restore-overlay}})))
-
-      (nil? component)
-      (if (and (= :blocked (:status restore-state))
-               (identical? (:blocked-by restore-state) previous-focus))
-        (reset! next-focus (resolve-blocked-overlay-focus-resume tui restore-state))
-        (when (= :clear overlay-focus-restore-policy)
-          (clear-overlay-focus-restore! tui)))
-
-      ;; next focus is an overlay component — restore state unchanged
-      :else nil)
-    (when (satisfies? IFocusable previous-focus)
-      (set-focused! previous-focus false))
-    (reset! (:focused-component tui) @next-focus)
-    (when (satisfies? IFocusable @next-focus)
-      (set-focused! @next-focus true))
-    (when-let [focused-overlay (some #(when (and (identical? (:component %) @next-focus)
-                                                 (overlay-visible? tui %))
-                                        %)
-                                     @(:overlays tui))]
-      (reset! (:overlay-focus-restore tui)
-              {:status :eligible :overlay focused-overlay}))
-    nil))
+  (let [prev @(:focused-component tui)]
+    (when (satisfies? IFocusable prev)
+      (set-focused! prev false))
+    (reset! (:focused-component tui) component)
+    (when (satisfies? IFocusable component)
+      (set-focused! component true))))
 
 ;; ─── OverlayHandle (pi: OverlayHandle) ─────────────────────────────────────
 
 (defn- overlay-restore-target
   "Where input should land once ENTRY stops capturing: topmost visible
-   overlay other than ENTRY, ENTRY's recorded pre-focus when still
-   mounted, then the app-registered focus home (tui-set-focus-home!) -
-   nil when nothing live. Never an arbitrary root child: the old
-   last-root-child fallback landed on the footer, which silently
-   swallowed all input after overlay close."
+   overlay other than ENTRY, then the app-registered focus home
+   (tui-set-focus-home!) - nil when nothing live. Never an arbitrary root
+   child: the old last-root-child fallback landed on the footer, which
+   silently swallowed all input after overlay close."
   [tui entry]
   (or (when-let [top (get-topmost-visible-overlay tui)]
         (when-not (identical? top entry) (:component top)))
-      (let [prev @(:pre-focus entry)]
-        (when (and prev (is-component-mounted? tui prev))
-          prev))
       (resolve-focus-home tui)))
 
 (defn- restore-after-overlay!
@@ -543,8 +403,6 @@
   [tui entry]
   {:hide (fn []
            (when (some #(identical? % entry) @(:overlays tui))
-             (clear-overlay-focus-restore-for! tui entry)
-             (retarget-overlay-pre-focus! tui entry)
              (swap! (:overlays tui) (fn [v] (vec (remove #(identical? % entry) v))))
              (when (identical? (:component entry) @(:focused-component tui))
                (restore-after-overlay! tui entry))
@@ -555,9 +413,8 @@
                   (when (not= hidden? @(:hidden? entry))
                     (reset! (:hidden? entry) hidden?)
                     (if hidden?
-                      (do (clear-overlay-focus-restore-for! tui entry)
-                          (when (identical? (:component entry) @(:focused-component tui))
-                            (restore-after-overlay! tui entry)))
+                      (when (identical? (:component entry) @(:focused-component tui))
+                        (restore-after-overlay! tui entry))
                       (when (and (not (:non-capturing (:options entry)))
                                  (overlay-visible? tui entry))
                         (reset! (:focus-order entry) (swap! (:focus-order-counter tui) inc))
@@ -570,39 +427,22 @@
               (reset! (:focus-order entry) (swap! (:focus-order-counter tui) inc))
               (tui-set-focus tui (:component entry))
               (tui-request-render tui)))
+   ;; Releases input now; the dispatch modality guard re-snaps to a still
+   ;; visible capturing overlay on the next key unless {:target comp} was
+   ;; given AND comp holds focus... it does not stick: modality wins.
    :unfocus (fn [& [unfocus-options]]
-              (let [is-focused? (identical? (:component entry) @(:focused-component tui))
-                    restore-state @(:overlay-focus-restore tui)
-                    has-pending-restore? (and (not= :inactive (:status restore-state))
-                                              (identical? (:overlay restore-state) entry))]
-                (when (or is-focused? has-pending-restore?)
-                  (if (and (= :blocked (:status restore-state))
-                           (identical? (:overlay restore-state) entry)
-                           (identical? (:blocked-by restore-state) @(:focused-component tui)))
-                    (do (if (some? unfocus-options)
-                          (reset! (:overlay-focus-restore tui)
-                                  {:status :blocked :overlay entry
-                                   :blocked-by (:blocked-by restore-state)
-                                   :resume {:status :focus-target :target (:target unfocus-options)}})
-                          (clear-overlay-focus-restore! tui))
-                        (tui-request-render tui))
-                    (do (clear-overlay-focus-restore-for! tui entry)
-                        (when (or is-focused? (some? unfocus-options))
-                          (tui-set-focus tui
-                                         (if (some? unfocus-options)
-                                           (:target unfocus-options)
-                                           (overlay-restore-target tui entry))))
-                        (tui-request-render tui))))))
+              (when (identical? (:component entry) @(:focused-component tui))
+                (tui-set-focus tui (if (some? unfocus-options)
+                                     (:target unfocus-options)
+                                     (overlay-restore-target tui entry)))
+                (tui-request-render tui)))
    :is-focused? (fn [] (identical? (:component entry) @(:focused-component tui)))})
 
 (defn tui-hide-overlay
-  "Hide the topmost overlay and restore focus — topmost visible overlay,
-   the pre-overlay focus when still mounted, else the app-registered focus
-   home (pi: TUI.hideOverlay)."
+  "Hide the topmost overlay and restore focus - the visible overlay below
+   it, else the focus home (pi: TUI.hideOverlay)."
   [tui]
   (when-let [overlay (peek @(:overlays tui))]
-    (clear-overlay-focus-restore-for! tui overlay)
-    (retarget-overlay-pre-focus! tui overlay)
     (swap! (:overlays tui) pop)
     (when (identical? (:component overlay) @(:focused-component tui))
       (restore-after-overlay! tui overlay))
@@ -1015,11 +855,11 @@
           nil))))
 
 (defn- dispatch-input!
-  "Port of pi's TUI input routing: listeners first, then overlay focus
-   maintenance (focused-overlay visibility redirect + focus-restore
-   reclaim), then delivery to the focused component. Key release events
-   are filtered unless the component opts in via a :wants-key-release?
-   field (pi: Component.wantsKeyRelease)."
+  "Port of pi's TUI input routing: listeners first, the modality guard
+   (input belongs to the topmost visible capturing overlay), then delivery
+   to the focused component. Key release events are filtered unless the
+   component opts in via a :wants-key-release? field (pi:
+   Component.wantsKeyRelease)."
   [tui data]
   ;; pi: input listeners run as a chain — each may :consume (stop dispatch)
   ;; or return transformed :data for the later listeners and the focused
@@ -1042,32 +882,18 @@
     ;; pi: a listener chain that transforms data to an empty string drops
     ;; the event entirely
     (when-not (or (:consumed chained) (empty? data))
-      ;; If the focused component is an overlay that is no longer visible
-      ;; (hidden via handle, or the :visible callback went false), redirect
-      ;; focus to the topmost visible overlay or back to the pre-focus
-      ;; (pi: handleInput overlay visibility check).
-      (let [fc @(:focused-component tui)
-            focused-overlay (some #(when (identical? (:component %) fc) %) @(:overlays tui))]
-        (when (and focused-overlay (not (overlay-visible? tui focused-overlay)))
-          (if-let [top (get-topmost-visible-overlay tui)]
-            (tui-set-focus tui (:component top))
-            (set-focus-internal tui @(:pre-focus focused-overlay) :preserve))))
-      ;; Focus is not an overlay: reclaim input for the focused visible overlay
-      ;; (pi: eligible → reclaim; blocked → resolve the resume, unless the
-      ;; current focus is the blocker itself).
-      (let [fc @(:focused-component tui)
-            focus-is-overlay? (boolean (some #(identical? (:component %) fc) @(:overlays tui)))]
-        (when-not focus-is-overlay?
-          (let [rs (get-visible-overlay-focus-restore tui)]
-            (cond
-              (= :eligible (:status rs))
-              (tui-set-focus tui (:component (:overlay rs)))
-
-              (and (= :blocked (:status rs)) (not (identical? (:blocked-by rs) fc)))
-              (if (= :restore-overlay (:status (:resume rs)))
-                (tui-set-focus tui (:component (:overlay rs)))
-                (do (clear-overlay-focus-restore! tui)
-                    (tui-set-focus tui (:target (:resume rs)))))))))
+        ;; Modality invariant: while a visible capturing overlay exists,
+      ;; input belongs to its component - whatever else grabbed focus
+      ;; (including a hidden/removed overlay) hands it back before
+      ;; delivery. Replaces pi's blocked/eligible restore machine.
+      (if-let [cap (get-topmost-visible-overlay tui)]
+        (when-not (identical? (:component cap) @(:focused-component tui))
+          (tui-set-focus tui (:component cap)))
+        (let [fc @(:focused-component tui)]
+          (when-let [entry (some #(when (identical? (:component %) fc) %)
+                                 @(:overlays tui))]
+            (when-not (overlay-visible? tui entry)
+              (tui-set-focus tui (overlay-restore-target tui entry))))))
       (when-let [fc @(:focused-component tui)]
         ;; pi: input goes only to the focused leaf; key release events are
         ;; filtered unless the component opts in via a :wants-key-release?
