@@ -308,11 +308,18 @@ Root resolution — port of `nearest_root`:
 Key `(server-id, root-str)`. Live conn ⇒ reuse. Else, under the server's
 lock: cheap `(fs/which command)` first — a miss records a distinct *"not
 installed"* failure (better UX than dirge's learn-on-spawn); spawn +
-handshake; success clears `:failed-at`, failure records it. Backoff: the
-lazy/tool path refuses retries inside the window (60 s base, doubling on
-repeat failures, capped at 10 min) reporting *"last failed Ns ago"*;
-`/lsp restart <name>` bypasses and clears. Zero processes at startup unless
-`:lifecycle :eager/:keep-alive`.
+handshake; success clears any broken mark, failure sets it.
+
+**Learned-broken, sticky until reset**: a failed claim — which-miss, spawn
+error, or handshake failure — marks the server broken with its reason
+(`:not-installed` | `:spawn-failed` + stderr tail). There is **no
+time-based retry**: every later query against a claimed file returns the
+cached failure instantly (no lock, no which check, no spawn). The mark is
+cleared only by an explicit reset — `/lsp restart <name>`, `/lsp refresh`
+(a registry rebuild; a changed `:command`/`:args` deserves a fresh
+attempt), or `/reload`. Session switches do NOT clear it — binary
+availability doesn't change with the session. Zero processes at startup
+unless `:lifecycle :eager/:keep-alive`.
 
 A file whose language nobody claims yields a clean
 `(no LSP server for .<ext>)` — no spawn attempt is ever made.
@@ -465,7 +472,7 @@ State (per extension instance):
 - `claiming-servers path` → `[{name definition root}]` over the effective
   registry (§7).
 - `ensure-connected! name root` — locked, idempotent; which-check; spawn via
-  lib; handshake; wire §9.3/§9.4 policies scoped to this conn; backoff
+  lib; handshake; wire §9.3/§9.4 policies scoped to this conn; broken-mark
   bookkeeping (§7.4).
 - `touch-file! conn path` — read from disk; unopened ⇒ `didOpen`;
   otherwise `didChange` full-text, `version++`. Re-reading disk on every
@@ -574,27 +581,49 @@ Init order (all no-ops when `settings :disabled true`):
 
 1. Load config; create the global template when missing.
 2. State atom (§10 shape) + api ref.
-3. Register the `lsp` tool (description §11.3, schema §11.2).
+3. Register the `lsp` tool (description §11.3, schema §11.2) with the
+   contextual contract — the execute fn polls the run's abort signal
+   between request waits (§13 Lifecycle edges).
 4. Register `/lsp` with argument completions (subcommands, then server
    names).
 5. Start the idle-reaper daemon (30 s ticks; skip `:keep-alive`; honor
-   per-server `:idle-timeout`; 0 disables).
+   per-server `:idle-timeout`; 0 disables; skips servers holding their
+   connect lock — never reap mid-initialize).
 6. Footer status: `ui-set-status api "lsp"` — compact summary
    (`🔌 LSP: clojure-lsp@~/kmet` or `🔌 LSP: 2 servers`), cleared when no
    servers are configured/running; inert in headless mode.
-7. Events: `:session-start` → background eager/keep-alive connects (daemon
-   thread, never blocks); `:session-shutdown` → `shutdown-all!`.
+7. Events: `:session-start` (any reason) → background eager/keep-alive
+   connects (daemon thread, idempotent — live conns no-op, never blocks);
+   `:session-shutdown` → full teardown (`shutdown-all!` + reaper stop)
+   **only for `:reason :quit`**. On `:new`/`:resume`/`:fork` do nothing:
+   kmet fires shutdown/start around every session switch (event_bus.clj),
+   and servers are workspace-scoped — killing them would force a cold
+   re-index after every `/new`.
 
 `shutdown` (unload/reload): stop reaper, `shutdown-all!` (graceful dance +
 tree-kill), deregistration is automatic.
+
+Lifecycle edges:
+
+- **ESC / run interrupt**: the tool honors the run's abort signal —
+  in-flight request waits are abandoned promptly (the result is discarded
+  by the host anyway); the LSP process is NOT killed — cached
+  infrastructure, warm for the next call. Late responses arrive as stale
+  replies and drop in the lib.
+- **Session switch** (`/new`, `/resume`, tree fork): nothing torn down.
+  Conns, doc versions, diagnostics stores and learned-broken marks all
+  persist — workspace truth didn't change, and the disk re-read per touch
+  self-heals document state.
+- **`/reload`**: full unload path above; next use starts completely fresh
+  (learned-broken marks included).
 
 `/lsp` subcommands:
 
 | Subcommand | Effect |
 |---|---|
-| *(bare)* / `status` | servers, states (connected / idle / failed+why / not-installed / disabled / misconfigured), roots, open-doc counts, recent log tail — text dialog (TUI) or println (headless) |
+| *(bare)* / `status` | servers, states (connected / idle / broken+reason / disabled / misconfigured), roots, open-doc counts, recent log tail — text dialog (TUI) or println (headless) |
 | `list [server]` | registry entries + claims + markers |
-| `restart <name>` | disconnect all roots of the server, clear backoff, reconnect on next claim |
+| `restart <name>` | clear the learned-broken mark, disconnect all roots, reconnect on next claim |
 | `enable\|disable <name>` | write-back §6.5; suggests `/reload` |
 | `refresh` | reload `lsp.edn` live: drop removed/disabled conns, rebuild the effective registry |
 
@@ -623,7 +652,8 @@ trust), Phase-2 roadmap.
 3. **Client validation** (`validate-client.bb`, fake server): handshake,
    each operation, notification capture, server-request auto-reply, EOF
    failing pending requests, graceful shutdown, restart cycle, stderr-tail
-   capture.
+   capture, broken-mark stickiness (a failed claim ⇒ the second query is
+   served from the cache with no spawn attempt).
 4. **Config validation** (`validate-config.bb`): precedence merge,
    camel/kebab normalization, template creation, enable/disable round-trip
    (incl. lower-source-disabled case), effective-registry computation
@@ -672,8 +702,9 @@ incremental sync → (optional) mcp-adapter stdio adoption.
 - `:pid` absent on bb process records — `(.pid (:proc p))`.
 - First-touch indexing latency: cold clojure-lsp/jdtls can exceed casual
   expectations — initialize bounded at 60 s, requests at 30 s; timeouts are
-  retryable, backoff applies to spawn/handshake failures only (a slow-but-
-  healthy server is never marked broken mid-index).
+  retryable, while the broken mark applies to spawn/handshake failures only
+  and sticks until an explicit reset (§7.4) — a slow-but-healthy server is
+  never marked broken mid-index.
 - Parallel tool calls race first-connect — per-server lock serializes;
   post-handshake requests are id-matched and safe to pipeline.
 - Termux reality: most servers are absent; the `fs/which` pre-check makes
