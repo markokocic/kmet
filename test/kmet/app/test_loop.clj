@@ -2756,3 +2756,57 @@
     (loop/set-thinking-level! ag :high)
     (loop/set-thinking-level! ag :high) ;; no change → no event
     (t/is (= [:thinking-level-select] @events))))
+
+;; ─── Pure phase helpers of run-agent-turn ─────────────────────────────────
+
+(t/deftest test-normalize-llm-result
+  (t/testing "provider :error stop-reason folds into :error (pi mapStopReason)"
+    (let [out (#'loop/normalize-llm-result
+               {:stop-reason :error :error-message "content filter"})]
+      (t/is (= "content filter" (:error out)))))
+  (t/testing "missing error-message gets a generic provider-stopped text"
+    (let [out (#'loop/normalize-llm-result {:stop-reason :error})]
+      (t/is (= "Provider stopped with: error" (:error out)))))
+  (t/testing "normal results and the :timeout sentinel pass through untouched"
+    (let [r {:stop-reason :end_turn :content [{:type :text :text "hi"}]}]
+      (t/is (= r (#'loop/normalize-llm-result r))))
+    (t/is (= :timeout (#'loop/normalize-llm-result :timeout)))))
+
+(t/deftest test-retry-decision
+  (t/testing "context overflow with session and no prior recovery compacts first"
+    (t/is (= {:kind :overflow-recover}
+             (#'loop/retry-decision
+              {:err "prompt is too long" :retry-count 0 :max-retries 3
+               :base-delay-ms 2000 :overflow-recovered false :has-session true}))))
+  (t/testing "overflow is compaction territory even with retries left"
+    (t/is (= {:kind :overflow-recover}
+             (#'loop/retry-decision
+              {:err "prompt is too long" :retry-count 1 :max-retries 3
+               :base-delay-ms 2000 :overflow-recovered false :has-session true}))))
+  (t/testing "second overflow (already recovered) falls through to classification"
+    (t/is (= {:kind :terminal}
+             (#'loop/retry-decision
+              {:err "prompt is too long" :retry-count 0 :max-retries 3
+               :base-delay-ms 2000 :overflow-recovered true :has-session true}))
+          "overflow errors are not retryable-error? matches"))
+  (t/testing "retryable within budget backs off exponentially, same turn"
+    (let [d (#'loop/retry-decision
+             {:err "rate limited" :retry-count 1 :max-retries 3
+              :base-delay-ms 2000 :overflow-recovered false :has-session true})]
+      (t/is (= :backoff (:kind d)))
+      (t/is (= 2 (:attempt d)))
+      (t/is (= 4000 (:delay-ms d)) "2000 * 2^(2-1)")))
+  (t/testing "exhausted budget or non-retryable errors are terminal"
+    (t/is (= {:kind :terminal}
+             (#'loop/retry-decision
+              {:err "rate limited" :retry-count 3 :max-retries 3
+               :base-delay-ms 2000 :overflow-recovered false :has-session true})))
+    (t/is (= {:kind :terminal}
+             (#'loop/retry-decision
+              {:err "quota exceeded for project" :retry-count 0 :max-retries 3
+               :base-delay-ms 2000 :overflow-recovered false :has-session true}))))
+  (t/testing "overflow without a session cannot recover — terminal here"
+    (t/is (= {:kind :terminal}
+             (#'loop/retry-decision
+              {:err "prompt is too long" :retry-count 0 :max-retries 3
+               :base-delay-ms 2000 :overflow-recovered false :has-session false})))))
