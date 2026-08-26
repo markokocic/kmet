@@ -176,10 +176,11 @@
 
 (defn tui-set-focus-home!
   "Register the terminal focus fallback as a THUNK resolved lazily at
-   restore time. The app layer points it at the active editor (reading
-   current-editor-atom, so custom-editor swaps stay live); when an overlay
-   stops capturing and no other capturing overlay sits below it, input
-   lands here. Pass nil to unregister. Returns nil."
+   restore time; it must return a mounted component or nil. Interactive
+   points it through dock state plus the ACTIVE editor, so custom-editor
+   swaps stay live and a mounted dock selector outranks the editor; when
+   an overlay stops capturing and no other capturing overlay sits below
+   it, input lands here. Pass nil to unregister. Returns nil."
   [tui f]
   (reset! (:focus-home tui) f)
   nil)
