@@ -77,15 +77,19 @@
 
 (defn- analyze-chunks
   "Run symbols/file-symbols-and-calls over every file in paths, batching
-   parses. Yields [path src-el src-lines lang] tuples."
+   parses. Yields [path src-el src-lines lang] tuples; unreadable files are
+   skipped rather than failing the whole batch."
   [paths lang opts]
   (for [chunk (partition-all symbols/batch-size paths)
         :let [sources (symbols/sources-by-path
                        (symbols/parse-files! chunk lang opts))]
         p chunk
-        :let [src-el (get sources p)]
-        :when src-el]
-    [p src-el (str/split-lines (slurp p)) lang]))
+        :let [src-el (get sources p)
+              lines (when src-el
+                      (try (str/split-lines (slurp p))
+                           (catch Exception _ ::unreadable)))]
+        :when (and src-el (not= ::unreadable lines))]
+    [p src-el lines lang]))
 
 ;; ─── formatting ───────────────────────────────────────────────────────────
 

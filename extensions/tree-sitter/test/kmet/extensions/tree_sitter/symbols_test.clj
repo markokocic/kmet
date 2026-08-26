@@ -175,6 +175,61 @@
     (is (= [["answer" "var"] ["double-it" "function"]]
            (mapv (juxt :name :kind) syms)))))
 
+(deftest collect-clojure-def-forms-test
+  ;; defrecord/defprotocol/defmulti are symbols with their own kinds — and
+  ;; defining heads must never leak through as bogus calls
+  (let [xml "<?xml version=\"1.0\"?>
+<sources>
+  <source name=\"r.clj\">
+    <source srow=\"0\" scol=\"0\" erow=\"5\" ecol=\"9\">
+      <list_lit srow=\"0\" scol=\"0\" erow=\"0\" ecol=\"7\">(<sym_lit><sym_name>ns</sym_name></sym_lit>)</list_lit>
+      <list_lit srow=\"1\" scol=\"0\" erow=\"1\" ecol=\"24\">(<sym_lit><sym_name>defrecord</sym_name></sym_lit>
+        <sym_lit><sym_name>Point</sym_name></sym_lit>)</list_lit>
+      <list_lit srow=\"2\" scol=\"0\" erow=\"2\" ecol=\"15\">(<sym_lit><sym_name>defprotocol</sym_name></sym_lit>
+        <sym_lit><sym_name>P</sym_name></sym_lit>)</list_lit>
+      <list_lit srow=\"3\" scol=\"0\" erow=\"3\" ecol=\"17\">(<sym_lit><sym_name>defmulti</sym_name></sym_lit>
+        <sym_lit><sym_name>area</sym_name></sym_lit>)</list_lit>
+      <list_lit srow=\"4\" scol=\"0\" erow=\"4\" ecol=\"9\">(<sym_lit><sym_name>def</sym_name></sym_lit>
+        <sym_lit><sym_name>x</sym_name></sym_lit>)</list_lit>
+    </source>
+  </source>
+</sources>"
+        el (parse-el xml)
+        src ["(ns r)" "(defrecord Point [x y])" "(defprotocol P)" "(defmulti area)" "(def x 1)"]
+        res (symbols/collect el src (symbols/rules "clojure"))]
+    (is (= [["Point" "type"] ["P" "protocol"] ["area" "multimethod"] ["x" "var"]]
+           (mapv (juxt :name :kind) (:symbols res))))
+    (testing "no defining heads leak as calls"
+      (is (= [] (:calls res))))))
+
+(deftest collect-ts-binding-filter-test
+  ;; const bindings count only when function-valued
+  (let [xml "<?xml version=\"1.0\"?>
+<sources>
+  <source name=\"t.ts\">
+    <program srow=\"0\" scol=\"0\" erow=\"2\" ecol=\"0\">
+      <lexical_declaration srow=\"0\" scol=\"0\" erow=\"0\" ecol=\"11\">
+        const
+        <variable_declarator srow=\"0\" scol=\"6\" erow=\"0\" ecol=\"11\">
+          <identifier field=\"name\">n</identifier>
+          <number field=\"value\">5</number>
+        </variable_declarator>
+      </lexical_declaration>
+      <lexical_declaration srow=\"1\" scol=\"0\" erow=\"1\" ecol=\"22\">
+        const
+        <variable_declarator srow=\"1\" scol=\"6\" erow=\"1\" ecol=\"22\">
+          <identifier field=\"name\">f</identifier>
+          <arrow_function field=\"value\">() =&gt; 1</arrow_function>
+        </variable_declarator>
+      </lexical_declaration>
+    </program>
+  </source>
+</sources>"
+        el (parse-el xml)
+        src ["const n = 5;" "const f = () => 1;"]
+        syms (:symbols (symbols/collect el src (symbols/rules "typescript")))]
+    (is (= [["f" "binding"]] (mapv (juxt :name :kind) syms)))))
+
 (deftest rules-integrity-test
   (doseq [lang ["clojure" "python" "typescript" "tsx"]]
     (let [r (symbols/rules lang)]

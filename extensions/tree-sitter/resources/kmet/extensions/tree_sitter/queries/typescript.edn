@@ -4,7 +4,10 @@
  [{:type "function_declaration" :name-field "name" :kind "function"}
   {:type "method_definition" :name-field "name" :kind "method"}
   {:type "class_declaration" :name-field "name" :kind "class"}
-  {:type "variable_declarator" :name-field "name" :kind "binding"}]
+  ;; const bindings count as symbols only when they hold a function
+  ;; (arrow or classic) — every `const x = 5` would be pure noise
+  {:type "variable_declarator" :name-field "name" :kind "binding"
+   :value-types ["arrow_function" "function_expression"]}]
  :calls
  [{:type "call_expression"
    :callee-field "function"

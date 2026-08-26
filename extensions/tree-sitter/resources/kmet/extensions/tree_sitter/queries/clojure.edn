@@ -1,14 +1,35 @@
 ;; Clojure extraction rules (see symbols.clj for the walker contract).
 ;; The clojure grammar represents forms structurally (list_lit / sym_lit),
 ;; so defs are identified by their leading head symbol rather than node type.
+;; Heads that DEFINE things must appear in :defs AND be excluded from
+;; :calls, otherwise defining forms show up as bogus invocations.
 {:defs
  [{:type "list_lit"
-   :first-sym-in ["defn" "defn-" "defmacro" "defmacro-"]
+   :first-sym-in ["defn" "defn-" "defmacro" "defmacro-" "definline"]
    :kind "function"}
   {:type "list_lit"
-   :first-sym-in ["def" "defonce"]
-   :kind "var"}]
+   :first-sym-in ["def" "defonce" "defstruct"]
+   :kind "var"}
+  {:type "list_lit"
+   :first-sym-in ["defrecord" "deftype" "definterface"]
+   :kind "type"}
+  {:type "list_lit"
+   :first-sym-in ["defprotocol"]
+   :kind "protocol"}
+  {:type "list_lit"
+   :first-sym-in ["defmulti"]
+   :kind "multimethod"}
+  {:type "list_lit"
+   :first-sym-in ["deftest"]
+   :kind "test"}]
+ ;; defmethod's \"name\" is its multimethod (already listed via defmulti),
+ ;; so it stays out of :defs and out of :calls.
  :calls
  [{:type "list_lit"
-   :callee-first-sym-except ["def" "defonce" "defn" "defn-" "defmacro"
-                             "defmacro-" "quote" "comment" "declare"]}]}
+   :callee-first-sym-except
+   ["def" "defonce" "defn" "defn-" "defmacro" "defmacro-" "definline"
+    "defstruct" "defrecord" "deftype" "definterface" "defprotocol"
+    "defmulti" "defmethod" "declare" "deftest"
+    "quote" "comment" "ns"
+    "fn" "letfn" "reify" "proxy" "specify!"
+    "extend" "extend-type" "extend-protocol"]}]}

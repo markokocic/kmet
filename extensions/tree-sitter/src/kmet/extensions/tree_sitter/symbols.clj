@@ -6,11 +6,14 @@
    queries we parse files to XML and walk them with small per-language
    rule sets shipped as resources (queries/<lang>.edn). Rule contract:
 
-     :defs  [{:type NODE :kind \"fn\" (:name-field F | :first-sym-in [..])}]
+     :defs  [{:type NODE :kind \"fn\" (:name-field F | :first-sym-in [..])
+              [:value-types [NODES]]}]
        - :name-field  -> name is the text of that field's child node
        - :first-sym-in + kind on a list-like node (clojure): matched when
          the first sym child's text is in the set; the name is the next
          non-meta sym child.
+       - :value-types -> optional shape filter: a child at field \"value\"
+         must exist and have one of these types (function-valued consts).
      :calls [{:type NODE (:callee-field F [:attr-field-by-type {T F}])
               | :callee-first-sym-except [..]}]
        - callee-field -> invoked name from that field's child; when that
@@ -81,32 +84,43 @@
 
 (defn- signature-of
   "First line of a definition, trimmed of trailing block-openers and
-   truncated — enough context to recognize the symbol, never the body."
+   truncated — enough context to recognize the symbol, never the body.
+   Returns nil for nodes that cover no source lines (malformed trees)."
   [src-lines el]
-  (let [s (-> (first (body-lines src-lines el))
-              str/trim
-              (str/replace #"[{(:]\s*$" ""))]
-    (subs s 0 (min (count s) 120))))
+  (let [line (some->> (body-lines src-lines el)
+                      first
+                      str/trim)
+        line (when line
+               (if (contains? #{\( \{ \:} (last line))
+                 (subs line 0 (dec (count line)))
+                 line))]
+    (when-not (str/blank? line)
+      (subs line 0 (min (count line) 120)))))
 
 ;; ─── Rule application ─────────────────────────────────────────────────────
 
 (defn- def-name-el
-  "Name node for el under a def rule, or nil when the rule doesn't match."
-  [el {:keys [type name-field first-sym-in]}]
+  "Name node for el under a def rule, or nil when the rule doesn't match.
+   With :value-types, el must additionally have a child at field \"value\"
+   whose type is in the set (e.g. only function-valued const bindings)."
+  [el {:keys [type name-field first-sym-in value-types]}]
   (when (= type (tag-of el))
-    (cond
-      name-field (child-by-field el name-field)
-      first-sym-in (let [syms (filter #(= "sym_lit" (tag-of %)) (children el))
-                         head (some->> (first syms) text-of str/trim)]
-                     (when (contains? (set first-sym-in) head)
-                       ;; first non-head, non-metadata sym after the head
-                       (->> (rest syms)
-                            (map (fn [s]
-                                   [s (str/trim (text-of s))]))
-                            (some (fn [[s t]]
-                                    (when (and (not (str/starts-with? t ":"))
-                                               (not (contains? (set first-sym-in) t)))
-                                      s)))))))))
+    (when (or (empty? value-types)
+              (contains? (set value-types)
+                         (some-> (child-by-field el "value") tag-of)))
+      (cond
+        name-field (child-by-field el name-field)
+        first-sym-in (let [syms (filter #(= "sym_lit" (tag-of %)) (children el))
+                           head (some->> (first syms) text-of str/trim)]
+                       (when (contains? (set first-sym-in) head)
+                         ;; first non-head, non-metadata sym after the head
+                         (->> (rest syms)
+                              (map (fn [s]
+                                     [s (str/trim (text-of s))]))
+                              (some (fn [[s t]]
+                                      (when (and (not (str/starts-with? t ":"))
+                                                 (not (contains? (set first-sym-in) t)))
+                                        s))))))))))
 
 (defn- call-callee
   "Invoked-name string for el under a call rule, or nil when no match."
