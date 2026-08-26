@@ -57,16 +57,26 @@
 
 (defn- absolute-uri-path
   "PATH as an absolute, slash-separated URI path component: absolutized
-   against the process cwd; on Windows (or for drive-letter paths anywhere)
-   backslashes become slashes and the drive is rooted (/C:/...). Backslashes
-   elsewhere are ordinary filename bytes and get percent-encoded."
+   against the process cwd; Windows shapes are normalized to JDK
+   Path#toUri wire forms — drive paths root as /C:/..., UNC shares become
+   the authority //server/share. Backslashes elsewhere are ordinary
+   filename bytes and get percent-encoded."
   [path]
   (let [p (str (fs/absolutize (fs/path (str path))))
+        unc (re-find #"^\\\\([^\\]+)[\\/](.*)$" p)
         drive (re-find #"^([A-Za-z]):[\\/](.*)$" p)]
     (cond
+      unc (str "//" (nth unc 1) "/" (str/replace (nth unc 2) "\\" "/"))
       drive (str "/" (nth drive 1) "/" (str/replace (nth drive 2) "\\" "/"))
       (fs/windows?) (str/replace p "\\" "/")
       :else p)))
+
+(defn- join-file-uri
+  "FILE-URI prefix + encoded path, keeping UNC authorities intact."
+  [encoded]
+  (if (str/starts-with? encoded "//")
+    (str "file:" encoded)
+    (str "file://" encoded)))
 
 (defn path->uri
   "file:// URI for PATH with correct percent-encoding (spaces, unicode).
@@ -74,7 +84,7 @@
    class is neither registered in the extension sci sandbox (instance-method
    calls throw \"not allowed\") nor reflectable in bb's native image."
   [path]
-  (str "file://" (encode-uri-path (absolute-uri-path path))))
+  (join-file-uri (encode-uri-path (absolute-uri-path path))))
 
 (defn uri->path
   "FILE-URI back to a filesystem path (percent-decoded)."

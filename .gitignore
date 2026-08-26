@@ -39,6 +39,10 @@ Thumbs.db
 *.log
 /.clj-kondo/.cache/
 
-# Tool caches (clojure-lsp, clj-kondo analysis)
+# Tool caches (clojure-lsp, clj-kondo analysis) — root and any nested
+# root a lazily-attached LSP server picks (e.g. src/kmet/libs)
 /.lsp/
 /.clj-kondo/imports/
+/**/.lsp/
+/**/.clj-kondo/.cache/
+/**/.clj-kondo/imports/

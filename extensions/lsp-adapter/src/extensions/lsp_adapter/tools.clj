@@ -280,12 +280,15 @@
             (when-not (fs/exists? path)
               (throw (ex-info (str "no such file: " path) {:type ::usage})))
             (let [td {:uri (lsp/path->uri path)}
-                  ;; position ops passed the numeric guard above
-                  pos {:line (dec (or line 1))
-                       :character (dec (or character 1))}
+                  ;; 1-based wire input, clamped against 0/negative values
+                  pos {:line (max 0 (dec (or line 1)))
+                       :character (max 0 (dec (or character 1)))}
+                  ;; position ops without a custom :params fn still must
+                  ;; carry the position — servers 500 without one (-32603)
                   params (cond
                            (:params spec) ((:params spec) td pos)
                            (:symbol-query spec) {:query (:query args)}
+                           position-op? {:textDocument td :position pos}
                            :else {:textDocument td})
                   request (fn [conn method prm]
                             (jrpc/request! (:client conn) method prm {}))

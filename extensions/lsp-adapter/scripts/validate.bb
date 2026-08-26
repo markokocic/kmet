@@ -182,13 +182,15 @@
                   (vector? (:server-stderr data)))))))
 
 (check "connect-stdio does not leak opts into the child's argv"
+       ;; the child exits 0 only when spawned with ZERO extra args; the
+       ;; historical apply-spread bug fed it the opts map as argv. Exit
+       ;; code, not stdout: jrpc's reader thread owns the stream.
        (let [c (jrpc/connect-stdio
-                {:command ["bb" "-e" "(println (count *command-line-args*))"]
-                 :cwd ext-dir})
-             line (try (let [rdr (io/reader (:in c))] (.readLine rdr))
-                       (catch Exception _ ""))]
-         (try (jrpc/close! c) (catch Exception _ nil))
-         (= "0" (str/trim (str line)))))
+                {:command ["bash" "-c" "test \"$#\" -eq 0"]
+                 :cwd ext-dir})]
+         (try
+           (= 0 (:exit (deref (:proc c) 10000 {:exit ::no-exit})))
+           (finally (try (jrpc/close! c) (catch Exception _ nil))))))
 
 ;; -- e2e against the fake server -------------------------------------------
 
@@ -348,8 +350,10 @@
   (swap! (:conns st) assoc ["fake" (str (tmp-dir))]
          {:client nil :name "fake" :root (tmp-dir)
           :docs (atom {}) :diags (atom {})})
+  ;; total includes the builtin registry now, so assert the shape:
+  ;; exactly one connected of however many the fleet holds
   (check "connected shows connected/total"
-         (= "LSP 1/1" (f st)))
+         (let [out (f st)] (and out (re-find #"^LSP 1/\d+$" out))))
   (check "footer clears when nothing is configured"
          (nil? (do (runtime/set-config! st {})
                    (f st)))))

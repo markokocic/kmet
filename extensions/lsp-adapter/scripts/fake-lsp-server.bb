@@ -113,10 +113,16 @@
                                       "textDocument/didClose") nil
 
             "textDocument/definition"
-            (send! {:jsonrpc "2.0" :id id
-                    :result {:uri (get-in params [:textDocument :uri])
-                             :range {:start {:line 4 :character 2}
-                                     :end {:line 4 :character 8}}}})
+            ;; a definition request without a position is the argv-style
+            ;; silent-shape bug class: fail loudly instead of echoing
+            (if (:position params)
+              (send! {:jsonrpc "2.0" :id id
+                      :result {:uri (get-in params [:textDocument :uri])
+                               :range {:start {:line 4 :character 2}
+                                       :end {:line 4 :character 8}}}})
+              (send! {:jsonrpc "2.0" :id id
+                      :error {:code -32603
+                              :message "fake-lsp: definition without :position"}}))
 
             "textDocument/references"
             (let [u (get-in params [:textDocument :uri])]
