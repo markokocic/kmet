@@ -12,6 +12,7 @@
             [kmet.tui.components.spacer :as spacer]
             [kmet.libs.terminal-image :as timg]
             [kmet.libs.edit-diff :as edit-diff]
+            [kmet.libs.highlight :as hl]
             [kmet.app.keybindings :as app-kb]
             [kmet.tui.hiccup :as h]
             [kmet.app.bash-executor :as bash-exec]))
@@ -466,6 +467,10 @@
                       (tool-text (theme/fg theme :warning truncation-warn))]))))]
       (h/compile-tree (into [:container {} [:spacer {:lines 1}]] kids)))))
 
+(declare write-highlight-cache
+         update-write-highlight-cache
+         write-rendered-lines)
+
 (defn render-write-call
   [name args theme _width context]
   (let [name (if (seq name) name "write")
@@ -474,19 +479,30 @@
         title (tool-text (str (theme/fg theme :tool-title (theme/bold (str name " ")))
                               (render-tool-path raw-path theme (:cwd context))))
         kids (if (nil? (tool-path-str content))
-               [title (tool-text (str "\n\n"
-                                      (theme/fg theme :error "[invalid content arg - expected string]")))]
+               ;; pi: fileContent === null → clear cache + error text
+               (let [set-state! (:set-state! context)]
+                 (when set-state!
+                   (set-state! (assoc (:state context) :write-cache nil)))
+                 [title (tool-text (str "\n\n"
+                                        (theme/fg theme :error "[invalid content arg - expected string]")))])
                (if-not (seq content)
                  [title]
-                 (let [lines (trim-trailing-empty-lines
-                              (str/split-lines (normalize-display-text content)))
+                 (let [state (:state context)
+                       set-state! (:set-state! context)
+                       ;; pi: argsComplete → full rebuild; streaming → incremental
+                       cache (if (:args-complete context)
+                               (write-highlight-cache theme raw-path content)
+                               (update-write-highlight-cache theme (:write-cache state) raw-path content))
+                       _ (when set-state!
+                           (set-state! (assoc state :write-cache cache)))
+                       lines (write-rendered-lines theme cache content)
                        total (count lines)
                        max-lines (if (:expanded context) total 10)
                        show (take max-lines lines)
                        remaining (- total max-lines)]
                    (into [title [:spacer {:lines 1}] [:spacer {:lines 1}]]
                          (concat
-                          (mapv #(tool-text (theme/fg theme :tool-output (replace-tabs %))) show)
+                          (mapv tool-text show)
                           (when (pos? remaining)
                             [(tool-text
                               (str (theme/fg theme :muted
@@ -499,6 +515,121 @@
   [content is-error theme _width _expanded? & _]
   (when is-error
     (h/compile-tree (tool-text (str "\n" (theme/fg theme :error content))))))
+
+;; ─── Write highlight cache (pi: write.ts WriteHighlightCache) ─────────────
+;; Streaming-safe: on partial tool calls, only the appended delta is
+;; re-highlighted; the first WRITE-PARTIAL-FULL-HIGHLIGHT-LINES are refreshed
+;; so multi-line tokens (strings, comments) spanning the cut get their scope
+;; fixed once context arrives. State lives in the tool-execution :state atom
+;; (pi: the cache field on WriteCallRenderComponent).
+
+(def ^:private write-partial-full-highlight-lines 50)
+
+(defn- lang-from-path
+  "Pi: getLanguageFromPath — path → language name, or nil when the extension
+   is missing or unsupported. Uses hl/aliases (extension-keyed) for most
+   files; basename languages (Dockerfile, Makefile) resolve directly."
+  [raw-path]
+  (when (and (string? raw-path) (seq raw-path))
+    (let [basename (fs/file-name raw-path)
+          ext (some-> (fs/extension raw-path) str/lower-case)]
+      (cond
+        (seq ext) (when (hl/resolve-language ext) ext)
+        ;; no dot-extension: try the basename itself (Dockerfile, Makefile)
+        (seq basename) (when (hl/resolve-language basename) basename)
+        :else nil))))
+
+(defn- write-highlight-cache
+  "Pi: rebuildWriteHighlightCacheFull — fresh cache, nil when the path has no
+   supported language. Stores raw path/content for delta detection, normalized
+   (CR-stripped, tab-expanded) source lines and their highlighted versions."
+  [theme raw-path file-content]
+  (when-let [lang (lang-from-path raw-path)]
+    (let [display (normalize-display-text file-content)
+          normalized (replace-tabs display)]
+      {:lang lang
+       :raw-path raw-path
+       :raw-content file-content
+       :normalized-lines (str/split normalized #"\n" -1)
+       :highlighted-lines (theme/render-highlighted theme normalized lang)})))
+
+(defn- refresh-write-highlight-prefix
+  "Pi: refreshWriteHighlightPrefix — re-highlight the first 50 normalized
+   lines as a block so multi-line tokens crossing the append cut recover
+   their scope. When the block highlight misses a line (rare), fall back to
+   a single-line highlight of that line (pi: highlightSingleLine)."
+  [theme cache]
+  (let [prefix-count (min write-partial-full-highlight-lines (count (:normalized-lines cache)))]
+    (if (pos? prefix-count)
+      (let [prefix-source (str/join "\n" (take prefix-count (:normalized-lines cache)))
+            prefix-highlighted (theme/render-highlighted theme prefix-source (:lang cache))
+            nls (:normalized-lines cache)]
+        (assoc cache :highlighted-lines
+               (mapv (fn [i]
+                       (let [h (nth prefix-highlighted i nil)]
+                         (if (seq h)
+                           h
+                           (or (first (theme/render-highlighted theme (nth nls i "") (:lang cache))) ""))))
+                     (range prefix-count))))
+      cache)))
+
+(defn- update-write-highlight-cache
+  "Pi: updateWriteHighlightCacheIncremental — when the cache is missing,
+   stale (path/lang changed) or the content is not a prefix of the cached
+   raw content, rebuild. Otherwise append the delta: the first delta segment
+   merges into the last existing line (guarded for an empty cache, pi pushes
+   a blank line first), later segments become new lines, each highlighted
+   individually; then the prefix block is refreshed."
+  [theme cache raw-path file-content]
+  (if-let [lang (lang-from-path raw-path)]
+    (if (or (nil? cache)
+            (not= (:lang cache) lang)
+            (not= (:raw-path cache) raw-path)
+            (not (str/starts-with? file-content (:raw-content cache))))
+      (write-highlight-cache theme raw-path file-content)
+      (let [raw-len (count (:raw-content cache))
+            delta (subs file-content raw-len)]
+        ;; pi: fileContent.length === cache.rawContent.length → no-op
+        (if (= (count file-content) raw-len)
+          cache
+          (let [segments (-> delta
+                             normalize-display-text
+                             replace-tabs
+                             (str/split #"\n" -1))
+                nls (:normalized-lines cache)
+                hls (:highlighted-lines cache)
+                ;; pi: empty cache gets a blank line pushed before merging
+                [nls hls] (if (seq nls)
+                            [nls hls]
+                            [[""] [""]])
+                last-idx (dec (count nls))
+                merged (str (nth nls last-idx) (first segments))
+                merged-hl (or (first (theme/render-highlighted theme merged lang)) "")
+                new-lines (rest segments)
+                new-hls (mapv (fn [l]
+                                (or (first (theme/render-highlighted theme l lang)) ""))
+                              new-lines)
+                nls' (into (conj (pop (vec nls)) merged) new-lines)
+                hls' (into (conj (pop (vec hls)) merged-hl) new-hls)]
+            (refresh-write-highlight-prefix
+             theme
+             (assoc cache
+                    :raw-content file-content
+                    :normalized-lines nls'
+                    :highlighted-lines hls'))))))
+    nil))
+
+(defn- write-rendered-lines
+  "Pi: formatWriteCall's renderedLines — highlighted lines when the cache
+   has a language; else plain lines in toolOutput color (pi colors the
+   no-lang fallback with theme.fg('toolOutput', ...)). Trailing empty lines
+   are trimmed BEFORE coloring so the trim sees raw strings."
+  [theme cache file-content]
+  (if (:lang cache)
+    (trim-trailing-empty-lines (:highlighted-lines cache))
+    (->> (str/split-lines (replace-tabs (normalize-display-text file-content)))
+         trim-trailing-empty-lines
+         (mapv #(theme/fg theme :tool-output %)))))
 
 (defn render-edit-call
   [name args theme _width context]

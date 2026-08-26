@@ -63,7 +63,19 @@
   (testing "error result renders content"
     (let [lines (plain (r/render-write-result "disk full" true th 40 false) 40)]
       (is (some #(str/includes? % "disk full") lines)))
-    (is (nil? (r/render-write-result "ok" false th 40 false)))))
+    (is (nil? (r/render-write-result "ok" false th 40 false))))
+  (testing "known-language paths highlight; unknown use toolOutput color"
+    (let [content "defn foo [x]\n  (println \"hi\")"
+          render (fn [p] (-> (r/render-write-call "write" {:file_path p :content content} th 60 {:expanded true})
+                             (core/render 60)
+                             ;; drop title + 2 spacers, keep content lines only
+                             (subvec 3)))
+          clj-lines (render "a.clj")
+          txt-lines (render "a.txt")
+          ;; tool-output gray = 38;2;128;128;128; syntax colors differ
+          gray-esc "\u001b[38;2;128;128;128m"]
+      (is (some #(str/includes? % gray-esc) txt-lines) ".txt content is toolOutput gray")
+      (is (not-any? #(str/includes? % gray-esc) clj-lines) ".clj content uses syntax colors, not toolOutput"))))
 
 (deftest test-default-renderers
   (testing "default call joins args, truncated to width"

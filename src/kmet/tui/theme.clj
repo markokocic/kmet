@@ -189,12 +189,14 @@
    :addition (fn [s] (fg t :tool-diff-added s))
    :deletion (fn [s] (fg t :tool-diff-removed s))})
 
-(defn- render-highlighted
+(defn render-highlighted
   "Highlight CODE as LANG → vector of ANSI-colored lines (pi: highlightCode).
    Unsupported language → each line in mdCodeBlock color (pi behavior);
    unknown scopes pass through unstyled. Tokens spanning newlines are wrapped
    per line-fragment so every line is self-contained (no color bleed). Blank
-   code renders no lines, matching the un-highlighted path."
+   code renders no lines, matching the un-highlighted path. Public: shared by
+   the markdown code-block renderer and the write tool renderer (pi: both
+   call highlightCode)."
   [t code lang]
   (if (str/blank? code)
     []
