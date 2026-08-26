@@ -7,11 +7,74 @@
             [clojure.string :as str]
             [kmet.libs.jsonrpc :as jrpc]))
 
-(defn path->uri
-  "file:// URI for PATH with correct percent-encoding (spaces, unicode) —
-   fs/path.toUri interop, no java.nio imports."
+(def ^:private uri-path-unreserved
+  "Bytes left verbatim in a file URI path: RFC 3986 unreserved characters
+   plus the '/' separator. Everything else (spaces, '#', '?', '%', unicode)
+   is percent-encoded."
+  (set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/"))
+
+(defn- utf8-percent-encoded
+  "Code point CP percent-encoded as its UTF-8 octets, one %XX triplet per
+   byte (pure arithmetic — no charset interop)."
+  [cp]
+  (let [t (fn [octet] (format "%%%02X" octet))]
+    (cond
+      (< cp 0x80) (t cp)
+      (< cp 0x800) (str (t (bit-or 0xC0 (unsigned-bit-shift-right cp 6)))
+                        (t (bit-or 0x80 (bit-and cp 0x3F))))
+      (< cp 0x10000) (str (t (bit-or 0xE0 (unsigned-bit-shift-right cp 12)))
+                          (t (bit-or 0x80 (bit-and (unsigned-bit-shift-right cp 6) 0x3F)))
+                          (t (bit-or 0x80 (bit-and cp 0x3F))))
+      :else (str (t (bit-or 0xF0 (unsigned-bit-shift-right cp 18)))
+                 (t (bit-or 0x80 (bit-and (unsigned-bit-shift-right cp 12) 0x3F)))
+                 (t (bit-or 0x80 (bit-and (unsigned-bit-shift-right cp 6) 0x3F)))
+                 (t (bit-or 0x80 (bit-and cp 0x3F)))))))
+
+(defn- encode-uri-path
+  "Percent-encode PATH for a file URI, keeping '/' separators and combining
+   surrogate pairs manually (no Character/String interop)."
   [path]
-  (str (.toUri (fs/path (str path)))))
+  (let [s (str path)
+        n (count s)]
+    (loop [i 0, ^StringBuilder sb (StringBuilder.)]
+      (if (>= i n)
+        (str sb)
+        (let [c (nth s i)
+              v (int c)
+              [cp step] (if (and (<= 0xD800 v 0xDBFF)
+                                 (< (inc i) n)
+                                 (<= 0xDC00 (int (nth s (inc i))) 0xDFFF))
+                          [(+ 0x10000
+                              (bit-shift-left (- v 0xD800) 10)
+                              (- (int (nth s (inc i))) 0xDC00))
+                           2]
+                          [v 1])]
+          (.append sb (if (and (< cp 0x80)
+                               (contains? uri-path-unreserved (char cp)))
+                        (char cp)
+                        (utf8-percent-encoded cp)))
+          (recur (+ i step) sb))))))
+
+(defn- absolute-uri-path
+  "PATH as an absolute, slash-separated URI path component: absolutized
+   against the process cwd; on Windows (or for drive-letter paths anywhere)
+   backslashes become slashes and the drive is rooted (/C:/...). Backslashes
+   elsewhere are ordinary filename bytes and get percent-encoded."
+  [path]
+  (let [p (str (fs/absolutize (fs/path (str path))))
+        drive (re-find #"^([A-Za-z]):[\\/](.*)$" p)]
+    (cond
+      drive (str "/" (nth drive 1) "/" (str/replace (nth drive 2) "\\" "/"))
+      (fs/windows?) (str/replace p "\\" "/")
+      :else p)))
+
+(defn path->uri
+  "file:// URI for PATH with correct percent-encoding (spaces, unicode).
+   Built by hand rather than via Path#toUri: the runtime Path implementation
+   class is neither registered in the extension sci sandbox (instance-method
+   calls throw \"not allowed\") nor reflectable in bb's native image."
+  [path]
+  (str "file://" (encode-uri-path (absolute-uri-path path))))
 
 (defn uri->path
   "FILE-URI back to a filesystem path (percent-decoded)."
@@ -63,8 +126,24 @@
                                                    init-options)
                                 {:timeout-ms timeout-ms})
                  (catch Exception e
-                   (jrpc/close! conn)
-                   (throw e)))]
+                   ;; A server that dies during startup takes its diagnosis
+                   ;; to stderr (missing temp dir, bad interpreter, ...).
+                   ;; The drain thread races process death, so give it a
+                   ;; bounded beat to land the lines before rethrowing.
+                   (let [tail (loop [tries 0]
+                                (or (not-empty (jrpc/stderr-tail conn))
+                                    (when (and (< tries 5) (not (jrpc/alive? conn)))
+                                      (Thread/sleep 100)
+                                      (recur (inc tries)))))
+                         msg (ex-message e)]
+                     (jrpc/close! conn)
+                     (throw (ex-info
+                             (if tail
+                               (str msg " — server stderr: "
+                                    (str/join " | " tail))
+                               msg)
+                             {:server-stderr tail}
+                             e)))))]
     (jrpc/notify! conn "initialized" {})
     ;; server-info rides on the lib conn itself - callers pass the conn
     ;; around as one opaque value

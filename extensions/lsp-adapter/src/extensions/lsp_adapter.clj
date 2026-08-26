@@ -111,7 +111,10 @@ seconds while indexing; a failed install stays failed until /lsp restart.")
                         :required ["operation" "filePath"]}
                        :contextual? true
                        :execute (fn [args _on-update signal _ctx]
-                                  (tools/execute st signal args))}))
+           ;; Tool contract (kmet.app.tools.registry): execute returns
+           ;; {:content ...}. A bare string reaches the after-tool-call
+           ;; chain, whose (contains? result :is-error) throws on strings.
+                                  {:content (str (tools/execute st signal args))})}))
 
 ;; ─── /lsp command ─────────────────────────────────────────────────────────
 

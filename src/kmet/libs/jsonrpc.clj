@@ -209,7 +209,13 @@
                      (loop []
                        (let [payload (try
                                        (read-msg-payload conn)
-                                       (catch Exception _ ::read-error))]
+                                       (catch Exception e
+                       ;; record WHY before failing everything in flight —
+                       ;; a silent mark-dead! is undiagnosable from outside
+                                         (tail-log! conn (str "reader error: "
+                                                              (.getName (class e)) " "
+                                                              (or (ex-message e) "")))
+                                         ::read-error))]
                          (if (= payload ::read-error)
                            (mark-dead! conn)
                            (do (try
@@ -274,10 +280,13 @@
    conn map."
   [{:keys [command args env cwd] :as opts}]
   (let [argv (into (if (vector? command) command [command]) args)
-        p (apply proc/process argv
-                 {:in :stream :out :stream :err :stream
-                  :dir cwd
-                  :env (merge (into {} (System/getenv)) env)})]
+        p;; NB: never (apply proc/process argv opts-map) here — apply spreads the
+                 ;; map's entries into the child's argv; servers die on the
+                 ;; junk args, tolerant ones mask the bug
+        (proc/process argv
+                      {:in :stream :out :stream :err :stream
+                       :dir cwd
+                       :env (merge (into {} (System/getenv)) env)})]
     (connect-streams (assoc (dissoc opts :command :args :env :cwd)
                             :in (:out p) :out (:in p) :err (:err p) :proc p))))
 

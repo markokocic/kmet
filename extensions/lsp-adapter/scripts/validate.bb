@@ -12,14 +12,18 @@
 ;; Run from the extension directory:
 ;;   bb -cp ../../src:src scripts/validate.bb
 
-(require '[babashka.fs :as fs]
+(require '[babashka.classes :as bc]
+         '[kmet.libs.jsonrpc :as jrpc]
+         '[babashka.fs :as fs]
          '[clojure.java.io :as io]
          '[clojure.string :as str]
+         '[sci.core :as sci]
          '[extensions.lsp-adapter.detect :as detect]
+         '[extensions.lsp-adapter :as entry]
+         '[extensions.lsp-adapter.lsp :as lsp]
          '[extensions.lsp-adapter.runtime :as runtime]
          '[extensions.lsp-adapter.tools :as tools]
          '[extensions.lsp-adapter.panel :as panel]
-         '[extensions.lsp-adapter :as entry]
          '[kmet.tui.protocols :as protocols])
 
 (def failures (atom 0))
@@ -107,6 +111,85 @@
   (check "file outside cwd attaches at its own directory"
          (= (fs/canonicalize outside) (:root claim))))
 
+;; -- uri building ----------------------------------------------------------
+;; path->uri must survive two hostile environments: kmet evaluates
+;; extension source inside an isolated sci context whose class registry
+;; lacks sun.nio.fs.UnixPath (instance-method interop throws "not
+;; allowed"), and bb's native image does not reflect Path methods even
+;; where the class is registered. The checks below simulate the exact
+;; context construction kmet uses.
+
+(let [paths (map #(str (fs/absolutize %))
+                 [(str ext-dir "/scripts/validate.bb")
+                  (str ext-dir "/a b.clj")
+                  (str ext-dir "/hash#tag.clj")
+                  (str ext-dir "/quest?.clj")
+                  (str ext-dir "/100%.clj")
+                  (str ext-dir "/ünï cödé.clj")
+                  (str ext-dir "/back\\slash.clj")
+                  (str ext-dir "/nested/dir/file.bb")
+                  "relative-sample.txt"])]
+  (check "path->uri matches Path#toUri on every sample"
+         (every? #(= (str (.toUri (fs/path %))) (lsp/path->uri %)) paths))
+  (check "uri->path inverts path->uri"
+         (every? #(= % (lsp/uri->path (lsp/path->uri %))) paths)))
+
+(let [src (slurp (str ext-dir "/src/extensions/lsp_adapter/lsp.clj"))
+      forms (remove #(and (seq? %) (= 'ns (first %)))
+                    (read-string (str "[\n" src "\n]")))
+      ctx (sci/init
+           {:classes (into {}
+                           (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
+                                (remove #(str/starts-with? (.getName ^Class %) "[")
+                                        (bc/all-classes))))
+            ;; mirror the kmet bb-imports entries lsp.clj needs
+            :imports '{StringBuilder java.lang.StringBuilder
+                       Thread java.lang.Thread}
+            :namespaces {'babashka.fs (ns-publics 'babashka.fs)
+                         'kmet.libs.jsonrpc (ns-publics 'kmet.libs.jsonrpc)}})]
+  ;; Establish the aliases inside the ctx's default user ns — do NOT eval
+  ;; an (ns ...) form here: nested sci contexts share the global
+  ;; current-ns, and switching it derails bb's evaluation of the very
+  ;; script we are running.
+  (sci/eval-form ctx '(require '[clojure.string :as str]
+                               '[babashka.fs :as fs]
+                               '[kmet.libs.jsonrpc :as jrpc]))
+  (doseq [f forms]
+    (sci/eval-form ctx f))
+  (check "path->uri survives the extension sci sandbox"
+         (let [m (try (sci/eval-form
+                       ctx '(let [inputs [(str (fs/cwd) "/plain.clj")
+                                          (str (fs/cwd) "/with space.clj")
+                                          (str (fs/cwd) "/ünï cödé.clj")]]
+                              (zipmap inputs (map path->uri inputs))))
+                      (catch Exception _ nil))
+               spaced (str ext-dir "/with space.clj")]
+           (and (map? m)
+                (= (get m spaced) (lsp/path->uri spaced))
+                (str/ends-with? (get m spaced "") "/with%20space.clj")
+                (str/ends-with? (get m (str ext-dir "/ünï cödé.clj") "")
+                                "/%C3%BCn%C3%AF%20c%C3%B6d%C3%A9.clj")))))
+
+(check "handshake failure carries the server's stderr"
+       (try
+         (lsp/start! {:command ["bb" "-e"
+                                "(do (binding [*out* *err*] (println \"boom: no /tmp here\")) (System/exit 1))"]}
+                     ext-dir nil 5000)
+         false
+         (catch Exception e
+           (let [data (ex-data e)]
+             (and (str/includes? (ex-message e) "boom: no /tmp here")
+                  (vector? (:server-stderr data)))))))
+
+(check "connect-stdio does not leak opts into the child's argv"
+       (let [c (jrpc/connect-stdio
+                {:command ["bb" "-e" "(println (count *command-line-args*))"]
+                 :cwd ext-dir})
+             line (try (let [rdr (io/reader (:in c))] (.readLine rdr))
+                       (catch Exception _ ""))]
+         (try (jrpc/close! c) (catch Exception _ nil))
+         (= "0" (str/trim (str line)))))
+
 ;; -- e2e against the fake server -------------------------------------------
 
 (defn temp-project []
@@ -190,11 +273,11 @@
                   (str/includes? out1 "not installed")
                   (str/includes? out2 "not installed")
                   (< ms2 500))))
-      (check "on-change hook fired during connects/broken marks"
-             (pos? @changes))
-      (finally
-        (runtime/shutdown-all! st)
-        (fs/delete-tree dir))))
+    (check "on-change hook fired during connects/broken marks"
+           (pos? @changes))
+    (finally
+      (runtime/shutdown-all! st)
+      (fs/delete-tree dir))))
 
 (println "\n-- panel --")
 
