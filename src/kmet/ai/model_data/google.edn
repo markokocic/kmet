@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-25T15:35:30Z"
+ :generated-at "2026-08-26T13:28:26Z"
  :provider {:id :google
             :name "Google"
             :env-vars ["GEMINI_API_KEY"]

@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-25T15:35:30Z"
+ :generated-at "2026-08-26T13:28:26Z"
  :provider {:id :huggingface
             :name "Hugging Face"
             :env-vars ["HF_TOKEN"]
@@ -338,6 +338,25 @@
     :cost {:input 2.5 :output 6.25 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 131072
+    :compat {:supports-developer-role false}}
+   "Qwen/Qwen3.8-27B"
+   {:id "Qwen/Qwen3.8-27B"
+    :name "Qwen3.8 27B"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning true
+    :thinking-level-map {:high nil
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 0.4 :output 3 :cache-read 0 :cache-write 0}
+    :context-window 262144
+    :max-tokens 32768
     :compat {:supports-developer-role false}}
    "XiaomiMiMo/MiMo-V2-Flash"
    {:id "XiaomiMiMo/MiMo-V2-Flash"

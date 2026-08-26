@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-25T16:26:45Z"
+ :generated-at "2026-08-26T13:28:26Z"
  :provider {:id :nvidia
             :name "NVIDIA NIM"
             :env-vars ["NVIDIA_API_KEY"]
@@ -67,42 +67,6 @@
              :max-tokens-field :max-tokens
              :supports-long-cache-retention false
              :supports-strict-mode false}}
-   "meta/llama-3.1-70b-instruct"
-   {:id "meta/llama-3.1-70b-instruct"
-    :name "Llama 3.1 70b Instruct"
-    :provider :nvidia
-    :api :openai-completions
-    :base-url "https://integrate.api.nvidia.com/v1"
-    :reasoning false
-    :input [:text]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 128000
-    :max-tokens 4096
-    :headers {"NVCF-POLL-SECONDS" "3600"}
-    :compat {:supports-store false
-             :supports-developer-role false
-             :supports-reasoning-effort false
-             :max-tokens-field :max-tokens
-             :supports-long-cache-retention false
-             :supports-strict-mode false}}
-   "meta/llama-3.1-8b-instruct"
-   {:id "meta/llama-3.1-8b-instruct"
-    :name "Llama 3.1 8B Instruct"
-    :provider :nvidia
-    :api :openai-completions
-    :base-url "https://integrate.api.nvidia.com/v1"
-    :reasoning false
-    :input [:text]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 16000
-    :max-tokens 4096
-    :headers {"NVCF-POLL-SECONDS" "3600"}
-    :compat {:supports-store false
-             :supports-developer-role false
-             :supports-reasoning-effort false
-             :max-tokens-field :max-tokens
-             :supports-long-cache-retention false
-             :supports-strict-mode false}}
    "meta/llama-3.2-11b-vision-instruct"
    {:id "meta/llama-3.2-11b-vision-instruct"
     :name "Llama 3.2 11b Vision Instruct"
@@ -132,24 +96,6 @@
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 128000
     :max-tokens 8192
-    :headers {"NVCF-POLL-SECONDS" "3600"}
-    :compat {:supports-store false
-             :supports-developer-role false
-             :supports-reasoning-effort false
-             :max-tokens-field :max-tokens
-             :supports-long-cache-retention false
-             :supports-strict-mode false}}
-   "meta/llama-3.3-70b-instruct"
-   {:id "meta/llama-3.3-70b-instruct"
-    :name "Llama 3.3 70b Instruct"
-    :provider :nvidia
-    :api :openai-completions
-    :base-url "https://integrate.api.nvidia.com/v1"
-    :reasoning false
-    :input [:text]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 128000
-    :max-tokens 4096
     :headers {"NVCF-POLL-SECONDS" "3600"}
     :compat {:supports-store false
              :supports-developer-role false
@@ -283,42 +229,6 @@
              :max-tokens-field :max-tokens
              :supports-long-cache-retention false
              :supports-strict-mode false}}
-   "nvidia/llama-3.1-nemotron-nano-8b-v1"
-   {:id "nvidia/llama-3.1-nemotron-nano-8b-v1"
-    :name "Llama 3.1 Nemotron Nano 8B v1"
-    :provider :nvidia
-    :api :openai-completions
-    :base-url "https://integrate.api.nvidia.com/v1"
-    :reasoning true
-    :input [:text]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 131072
-    :max-tokens 16384
-    :headers {"NVCF-POLL-SECONDS" "3600"}
-    :compat {:supports-store false
-             :supports-developer-role false
-             :supports-reasoning-effort false
-             :max-tokens-field :max-tokens
-             :supports-long-cache-retention false
-             :supports-strict-mode false}}
-   "nvidia/llama-3.1-nemotron-nano-vl-8b-v1"
-   {:id "nvidia/llama-3.1-nemotron-nano-vl-8b-v1"
-    :name "Llama 3.1 Nemotron Nano VL 8B v1"
-    :provider :nvidia
-    :api :openai-completions
-    :base-url "https://integrate.api.nvidia.com/v1"
-    :reasoning true
-    :input [:text :image]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 32768
-    :max-tokens 16384
-    :headers {"NVCF-POLL-SECONDS" "3600"}
-    :compat {:supports-store false
-             :supports-developer-role false
-             :supports-reasoning-effort false
-             :max-tokens-field :max-tokens
-             :supports-long-cache-retention false
-             :supports-strict-mode false}}
    "nvidia/llama-3.1-nemotron-ultra-253b-v1"
    {:id "nvidia/llama-3.1-nemotron-ultra-253b-v1"
     :name "Llama 3.1 Nemotron Ultra 253B"
@@ -330,42 +240,6 @@
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 128000
     :max-tokens 16384
-    :headers {"NVCF-POLL-SECONDS" "3600"}
-    :compat {:supports-store false
-             :supports-developer-role false
-             :supports-reasoning-effort false
-             :max-tokens-field :max-tokens
-             :supports-long-cache-retention false
-             :supports-strict-mode false}}
-   "nvidia/llama-3.3-nemotron-super-49b-v1"
-   {:id "nvidia/llama-3.3-nemotron-super-49b-v1"
-    :name "Llama 3.3 Nemotron Super 49B v1"
-    :provider :nvidia
-    :api :openai-completions
-    :base-url "https://integrate.api.nvidia.com/v1"
-    :reasoning true
-    :input [:text]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 131072
-    :max-tokens 65536
-    :headers {"NVCF-POLL-SECONDS" "3600"}
-    :compat {:supports-store false
-             :supports-developer-role false
-             :supports-reasoning-effort false
-             :max-tokens-field :max-tokens
-             :supports-long-cache-retention false
-             :supports-strict-mode false}}
-   "nvidia/llama-3.3-nemotron-super-49b-v1.5"
-   {:id "nvidia/llama-3.3-nemotron-super-49b-v1.5"
-    :name "Llama 3.3 Nemotron Super 49B v1.5"
-    :provider :nvidia
-    :api :openai-completions
-    :base-url "https://integrate.api.nvidia.com/v1"
-    :reasoning true
-    :input [:text]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 131072
-    :max-tokens 65536
     :headers {"NVCF-POLL-SECONDS" "3600"}
     :compat {:supports-store false
              :supports-developer-role false
@@ -456,42 +330,6 @@
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 262144
     :max-tokens 262144
-    :headers {"NVCF-POLL-SECONDS" "3600"}
-    :compat {:supports-store false
-             :supports-developer-role false
-             :supports-reasoning-effort false
-             :max-tokens-field :max-tokens
-             :supports-long-cache-retention false
-             :supports-strict-mode false}}
-   "nvidia/nemotron-nano-12b-v2-vl"
-   {:id "nvidia/nemotron-nano-12b-v2-vl"
-    :name "Nemotron Nano 12B v2 VL"
-    :provider :nvidia
-    :api :openai-completions
-    :base-url "https://integrate.api.nvidia.com/v1"
-    :reasoning true
-    :input [:text :image]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 128000
-    :max-tokens 128000
-    :headers {"NVCF-POLL-SECONDS" "3600"}
-    :compat {:supports-store false
-             :supports-developer-role false
-             :supports-reasoning-effort false
-             :max-tokens-field :max-tokens
-             :supports-long-cache-retention false
-             :supports-strict-mode false}}
-   "nvidia/nvidia-nemotron-nano-9b-v2"
-   {:id "nvidia/nvidia-nemotron-nano-9b-v2"
-    :name "nvidia-nemotron-nano-9b-v2"
-    :provider :nvidia
-    :api :openai-completions
-    :base-url "https://integrate.api.nvidia.com/v1"
-    :reasoning true
-    :input [:text]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 131072
-    :max-tokens 131072
     :headers {"NVCF-POLL-SECONDS" "3600"}
     :compat {:supports-store false
              :supports-developer-role false

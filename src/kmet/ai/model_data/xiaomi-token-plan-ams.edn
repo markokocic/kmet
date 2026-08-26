@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-25T15:35:30Z"
+ :generated-at "2026-08-26T13:28:26Z"
  :provider {:id :xiaomi-token-plan-ams
             :name "Xiaomi MiMo Token Plan (AMS)"
             :env-vars ["XIAOMI_TOKEN_PLAN_AMS_API_KEY"]
