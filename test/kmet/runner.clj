@@ -54,6 +54,7 @@
     kmet.app.test-keybindings
     kmet.modes.test-print
     kmet.modes.test-interactive
+    kmet.modes.test-overlay-input-smoke
     kmet.test-editing
     kmet.tui.test-fuzzy
     kmet.tui.test-autocomplete
