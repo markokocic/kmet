@@ -11,6 +11,8 @@
 (def ->json-schema tool/->json-schema)
 (def make-tool tool/make-tool)
 
+(def normalize-tool-definition tool/normalize-tool-definition)
+
 ;; ─── From registry.clj (registry + execution) ───────────────────────────────
 
 (def get-all-tools registry/get-all-tools)

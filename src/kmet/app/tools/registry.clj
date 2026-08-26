@@ -74,9 +74,10 @@
 (defonce ^:private custom-tools (atom {}))
 
 (defn register-tool!
-  "Register a custom tool."
+  "Register a custom tool after normalizing its provider-facing schema."
   [tool]
-  (swap! custom-tools assoc (:name tool) tool))
+  (let [tool (tool/normalize-tool-definition tool)]
+    (swap! custom-tools assoc (:name tool) tool)))
 
 (defn unregister-tool!
   "Remove a custom tool."

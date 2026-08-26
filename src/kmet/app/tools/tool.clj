@@ -32,6 +32,17 @@
                           {} params)
    :required (vec (->> params (remove #(:optional (val %))) (map key) (map name)))})
 
+(defn normalize-tool-definition
+  "Normalize a registered tool definition: convert compact :params into a
+   JSON-schema :parameters map and give argument-less tools an empty object
+   schema, which provider tool APIs require instead of null."
+  [definition]
+  (let [parameters (if-let [params (:params definition)]
+                     (->json-schema (compact->params params))
+                     (or (:parameters definition)
+                         {:type "object" :properties {} :required []}))]
+    (assoc definition :parameters parameters)))
+
 (defn make-tool
   "Create a Tool record.
    See tool/Tool for all fields. :execution-mode defaults to nil (= :parallel).

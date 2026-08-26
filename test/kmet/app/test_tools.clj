@@ -291,6 +291,32 @@
     (tools/unregister-tool! "custom")
     (t/is (not (contains? (tools/get-all-tools) "custom")))))
 
+(t/deftest test-tools-register-normalizes-provider-schema
+  (t/testing "argument-less extension tools get an object schema"
+    (let [name "schema-less-tool"]
+      (tools/register-tool! {:name name
+                             :description "No arguments"
+                             :execute (fn [_] {:content "ok"})})
+      (try
+        (t/is (= {:type "object" :properties {} :required []}
+                 (:parameters (tools/get-tool name))))
+        (finally
+          (tools/unregister-tool! name)))))
+  (t/testing "extension :params are converted to provider schema"
+    (let [name "compact-schema-tool"]
+      (tools/register-tool! {:name name
+                             :description "Compact params"
+                             :params {:value {:type :string
+                                              :description "A value"}}
+                             :execute (fn [_] {:content "ok"})})
+      (try
+        (t/is (= {:type "object"
+                  :properties {"value" {:type "string" :description "A value"}}
+                  :required ["value"]}
+                 (:parameters (tools/get-tool name))))
+        (finally
+          (tools/unregister-tool! name))))))
+
 (t/deftest test-tools-prepare-arguments
   (t/testing "pi prepareToolCallArguments: the shim rewrites args before execution"
     (let [custom (tools/make-tool
