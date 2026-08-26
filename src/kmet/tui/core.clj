@@ -105,7 +105,8 @@
                 focus-home])
 
 (declare tui-request-render tui-stop set-focused-component!
-         overlay-visible? overlay-handle process-input-buffer! tui-invalidate)
+         overlay-visible? overlay-handle process-input-buffer! tui-invalidate
+         ghost-restore!)
 
 (defn create-tui [terminal]
   (let [tui (map->TUI {:terminal (atom terminal)
@@ -145,6 +146,12 @@
                        ;; terminal focus fallback, registered by the app
                        ;; layer (tui-set-focus-home!) — see resolve-focus-home
                        :focus-home (atom nil)})]
+    ;; Ghost-focus guard: every overlay removal is a swap! on this atom,
+    ;; so the watch is the one chokepoint that cannot be bypassed by a
+    ;; future removal path forgetting to restore focus (see
+    ;; ghost-restore!).
+    (add-watch (:overlays tui) ::ghost-guard
+               (fn [_ _ old new] (ghost-restore! tui old new)))
     ;; AltScreenFlashContainer owned by the TUI (pi: TuiAltScreen owns its
     ;; flash container) — the render loop composites flash lines over the
     ;; screen window; tui-flash! / tui-flash-dispose! are the public API.
@@ -390,22 +397,33 @@
         (when-not (identical? top entry) (:component top)))
       (resolve-focus-home tui)))
 
-(defn- restore-after-overlay!
-  "Apply overlay-restore-target after ENTRY left the stack or was hidden;
-   null focus is fine - keys drop at the dispatch guard instead of
-   reaching a removed dialog."
-  [tui entry]
-  (tui-set-focus tui (overlay-restore-target tui entry)))
+(defn- ghost-restore!
+  "Watch callback on the overlay stack: a swap! that removed an entry
+   whose component currently holds focus means a removal path forgot to
+   restore - hand input to the next capturing surface or home before the
+   ghost swallows keys. Healthy paths restore explicitly right after
+   their swap, but the watch runs first (inside the swap), so for them
+   this IS the restore and their own call becomes a no-op. Never throws:
+   a broken guard must not break overlay removal."
+  [tui old new]
+  (try
+    (let [fc @(:focused-component tui)]
+      (when-let [removed (some (fn [e]
+                                 (when (and (identical? (:component e) fc)
+                                            (not (some #(identical? e %) new)))
+                                   e))
+                               old)]
+        (tui-set-focus tui (overlay-restore-target tui removed))))
+    (catch Exception _ nil)))
 
 (defn- overlay-handle
   "Return the OverlayHandle map for ENTRY: {:hide :set-hidden! :is-hidden?
    :focus :unfocus :is-focused?} (pi: OverlayHandle)."
   [tui entry]
   {:hide (fn []
+           ;; removal restores via the ::ghost-guard watch on the stack
            (when (some #(identical? % entry) @(:overlays tui))
              (swap! (:overlays tui) (fn [v] (vec (remove #(identical? % entry) v))))
-             (when (identical? (:component entry) @(:focused-component tui))
-               (restore-after-overlay! tui entry))
              (when (empty? @(:overlays tui))
                (when-let [term @(:terminal tui)] (terminal/hide-cursor! term)))
              (tui-request-render tui)))
@@ -413,8 +431,11 @@
                   (when (not= hidden? @(:hidden? entry))
                     (reset! (:hidden? entry) hidden?)
                     (if hidden?
+                      ;; hidden overlays stop capturing immediately;
+                      ;; null focus is fine - keys drop at the dispatch
+                      ;; guard instead of reaching an invisible dialog
                       (when (identical? (:component entry) @(:focused-component tui))
-                        (restore-after-overlay! tui entry))
+                        (tui-set-focus tui (overlay-restore-target tui entry)))
                       (when (and (not (:non-capturing (:options entry)))
                                  (overlay-visible? tui entry))
                         (reset! (:focus-order entry) (swap! (:focus-order-counter tui) inc))
@@ -440,12 +461,11 @@
 
 (defn tui-hide-overlay
   "Hide the topmost overlay and restore focus - the visible overlay below
-   it, else the focus home (pi: TUI.hideOverlay)."
+   it, else the focus home (pi: TUI.hideOverlay; the ::ghost-guard watch
+   on the stack performs the restore)."
   [tui]
-  (when-let [overlay (peek @(:overlays tui))]
+  (when (peek @(:overlays tui))
     (swap! (:overlays tui) pop)
-    (when (identical? (:component overlay) @(:focused-component tui))
-      (restore-after-overlay! tui overlay))
     (when (empty? @(:overlays tui))
       (when-let [term @(:terminal tui)] (terminal/hide-cursor! term)))
     (tui-request-render tui)))

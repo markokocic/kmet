@@ -505,10 +505,14 @@ recoverable:
    removed overlay never keeps receiving keys. There is no restore state
    machine to drift out of sync.
 2. **Restore resolves from live state.** When an overlay stops capturing
-   (hide / set-hidden! / unfocus), focus goes to the visible overlay below
-   it, else the app-registered **focus home**, else null (keys drop at the
-   dispatch guard). No snapshot of "what was focused before" is kept and
-   no tree walk validates it - both rotted once already.
+   (set-hidden! / unfocus / removal), focus goes to the visible overlay
+   below it, else the app-registered **focus home**, else null (keys drop
+   at the dispatch guard). No snapshot of "what was focused before" is
+   kept and no tree walk validates it - both rotted once already. Removal
+   specifically is guarded by a watch on the stack atom
+   (`::ghost-guard`): a swap! that removes the focused entry always
+   restores, so a future removal path that forgets to cannot orphan
+   input.
 
 The app layer registers the home once per session; interactive points it
 through the dock state and the ACTIVE editor so custom-editor swaps stay

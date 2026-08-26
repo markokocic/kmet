@@ -418,3 +418,35 @@
               "showing refocuses the overlay")
         (dispatch! tui "j")
         (t/is (= ["j"] @got-o) "overlay captures again")))))
+
+(t/deftest test-raw-stack-mutation-cannot-orphan-focus
+  (testing "a removal path that forgets to restore focus cannot create
+           a ghost: the ::ghost-guard watch restores from live state"
+    (let [tui (core/create-tui nil)
+          got-home (atom [])
+          home (capturing-leaf got-home)
+          got-o (atom [])
+          o (capturing-leaf got-o)]
+      (core/tui-set-focus-home! tui (fn [] home))
+      (core/tui-show-overlay tui o)
+      ;; simulate a future buggy removal: swap! without any restore call
+      (swap! (:overlays tui) pop)
+      (t/is (false? (core/tui-has-overlay? tui)))
+      (t/is (identical? home @(:focused-component tui))
+            "watch restored focus the removal path forgot")
+      (dispatch! tui "k")
+      (t/is (= ["k"] @got-home) "keys land on home, not the ghost"))))
+
+(t/deftest test-removing-non-focused-entry-leaves-focus
+  (testing "the ghost guard is a no-op when the removed entry never
+           held focus"
+    (let [tui (core/create-tui nil)
+          a (leaf)
+          o1 (leaf)
+          o2 (leaf)]
+      (core/tui-add-child tui (:comp a))
+      (core/tui-show-overlay tui (:comp o1))
+      (core/tui-show-overlay tui (:comp o2))
+      (swap! (:overlays tui) (fn [v] (vec (remove #(identical? % (:comp o1)) v))))
+      (t/is (identical? (:comp o2) @(:focused-component tui))
+            "focus untouched"))))
