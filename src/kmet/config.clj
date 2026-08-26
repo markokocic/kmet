@@ -27,6 +27,9 @@
    :retry {:enabled true :max-retries 3 :base-delay-ms 2000}
    :models []
    :http-idle-timeout-ms 300000
+   ;; pi: timeoutMs ?? httpIdleTimeoutMs — the whole-request deadline the
+   ;; transport enforces; nil = use the idle timeout, 0 disables (idle fallback)
+   :http-total-timeout-ms nil
    :show-cache-miss-notices false
    ;; pi: queue drain modes (:all | :one-at-a-time)
    :steering-mode :all

@@ -42,7 +42,7 @@
 
 (defn openai-request
   [{:keys [model-record provider-record effort api-key messages tools signal base-url
-           idle-timeout-ms session-id
+           idle-timeout-ms total-timeout-ms session-id
            on-text on-thinking on-tool-call on-done on-error
            on-usage] :as opts}]
   (future
@@ -59,9 +59,17 @@
                                                    session-id)
                                          :body (json/generate-string payload)
                                          :as :stream
-                                         ;; Total request deadline = the idle timeout (pi: SDK
-                                         ;; timeoutMs ?? httpIdleTimeoutMs); nil when disabled
-                                         :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
+                                         ;; Total request deadline (pi: SDK timeoutMs ??
+                                         ;; httpIdleTimeoutMs — the whole-request wall-clock
+                                         ;; the transport enforces). Explicit total wins;
+                                         ;; fall back to the idle timeout for callers that
+                                         ;; only set that (compaction/summarization); nil
+                                         ;; when both disabled.
+                                         :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
+                                                                     total-timeout-ms)
+                                                                   (when (pos? (or idle-timeout-ms 0))
+                                                                     idle-timeout-ms))]
+                                                    t)}
                                         signal)
             ;; The terminal :done is deferred until the whole stream is
             ;; consumed: openai-completions sends the usage-only chunk AFTER

@@ -2811,3 +2811,83 @@
              (#'loop/retry-decision
               {:err "prompt is too long" :retry-count 0 :max-retries 3
                :base-delay-ms 2000 :overflow-recovered false :has-session false})))))
+
+;; ─── Total request deadline (pi: timeoutMs ?? httpIdleTimeoutMs) ─────────
+
+(t/deftest test-loop-total-timeout-ms
+  (t/testing "nil total falls back to the idle timeout (default)"
+    (let [agent (loop/make-agent-state :http-idle-timeout-ms 300000)]
+      (t/is (= 300000 (#'loop/llm-total-timeout-ms agent)))))
+  (t/testing "explicit total wins over the idle-derived default"
+    (let [agent (loop/make-agent-state :http-idle-timeout-ms 300000
+                                       :http-total-timeout-ms 120000)]
+      (t/is (= 120000 (#'loop/llm-total-timeout-ms agent)))))
+  (t/testing "0 total falls back to idle (pi: timeoutMs ?? httpIdleTimeoutMs)"
+    (let [agent (loop/make-agent-state :http-idle-timeout-ms 300000
+                                       :http-total-timeout-ms 0)]
+      (t/is (= 300000 (#'loop/llm-total-timeout-ms agent)))))
+  (t/testing "no idle and no explicit total → disabled (MAX_VALUE)"
+    (let [agent (loop/make-agent-state :http-idle-timeout-ms 0)]
+      (t/is (= Integer/MAX_VALUE (#'loop/llm-total-timeout-ms agent))))))
+
+(t/deftest test-loop-set-http-total-timeout-ms!
+  (let [agent (loop/make-agent-state)]
+    (loop/set-http-total-timeout-ms! agent 60000)
+    (t/is (= 60000 (:http-total-timeout-ms @(:cfg agent))))
+    (loop/set-http-total-timeout-ms! agent nil)
+    (t/is (nil? (:http-total-timeout-ms @(:cfg agent)))
+          "nil resets to the use-idle default")))
+
+(t/deftest test-loop-call-llm-threads-total-timeout
+  ;; call-llm must pass the total deadline to llm/send-message so the
+  ;; transport (HttpRequest.timeout / curl --max-time) enforces it as the
+  ;; whole-request wall-clock (pi: SDK timeoutMs ?? httpIdleTimeoutMs).
+  (let [sent (atom nil)
+        agent (loop/make-agent-state :http-idle-timeout-ms 300000
+                                     :http-total-timeout-ms 120000)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (reset! sent opts)
+                    (future
+                      (when-let [on-done (:on-done opts)]
+                        (on-done :stop)))
+                    :done)]
+      @(loop/run-agent-turn agent {:message "hi" :on-done (fn [_])}))
+    (t/is (= 120000 (:total-timeout-ms @sent))
+          "the explicit total deadline reaches the transport")
+    (t/is (= 300000 (:idle-timeout-ms @sent))
+          "the idle timeout stays the separate per-byte deadline")))
+
+(t/deftest test-loop-total-deadline-timeout-retries-then-surfaces
+  ;; pi parity: a total-deadline timeout (the deref :timeout sentinel, which
+  ;; fires when the transport deadline was disabled/didn't deliver) is a
+  ;; RETRYABLE error — never a silent hard abort. It retries with backoff,
+  ;; and after exhaustion surfaces via on-error and ends the run (status
+  ;; :error), so the user sees the timeout instead of a mid-thought hang.
+  (let [events (atom [])
+        errors (atom [])
+        agent (loop/make-agent-state
+               :on-event (fn [e] (swap! events conj e))
+               :max-retries 1
+               :base-delay-ms 1
+               :http-idle-timeout-ms 0
+               :http-total-timeout-ms 10)]
+    ;; A tiny explicit total deadline makes the transport's own
+    ;; HttpRequest.timeout fire quickly; but the fake send-message never
+    ;; delivers, so the loop's deref hits the :timeout sentinel (the
+    ;; fallback when the transport didn't deliver an error).
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [_]
+                    ;; never deliver — the deref hits its timeout
+                    (future (Thread/sleep 1000) :done))]
+      @(loop/run-agent-turn agent {:message "hi" :on-error (fn [e] (swap! errors conj e))}))
+    (t/is (= 1 (count @errors)) "the timeout surfaces via on-error (not silent)")
+    (t/is (str/includes? (first @errors) "timed out")
+          "the surfaced error names the timeout")
+    (let [starts (filter #(= :auto-retry-start (:type %)) @events)]
+      (t/is (= 1 (count starts)) "the timeout is retried once (retryable)")
+      (t/is (= "LLM call timed out after 10ms" (:error-message (first starts)))))
+    (t/is (= :error @(:status agent)) "run ends errored after retries exhausted")
+    (t/is (some #(= :error (:type %)) @events) "terminal :error event emitted")))

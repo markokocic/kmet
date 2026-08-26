@@ -29,12 +29,27 @@
    {:label "5 min" :ms 300000}
    {:label "disabled" :ms 0}])
 
+;; pi: timeoutMs ?? httpIdleTimeoutMs — the whole-request total deadline.
+;; The default (nil) is "use idle" rendered as its own choice; explicit
+;; values use the same set as the idle choices; 0 means disabled (uses idle
+;; anyway via the fallback, so it renders the same as the default).
+(def ^:private http-total-timeout-choices
+  (conj http-idle-timeout-choices {:label "use idle" :ms nil}))
+
 (defn- format-idle-timeout
   "pi: formatHttpIdleTimeoutMs — a known choice shows its label; anything
    else renders as \"N sec\"."
   [ms]
   (or (:label (some #(when (= ms (:ms %)) %) http-idle-timeout-choices))
       (str (quot ms 1000) " sec")))
+
+(defn- format-total-timeout
+  "pi: formatHttpIdleTimeoutMs — a known choice shows its label; nil renders
+   the default 'use idle'; anything else renders as \"N sec\"."
+  [ms]
+  (if (nil? ms)
+    "use idle"
+    (format-idle-timeout ms)))
 
 (defn- set-editor-setting!
   "Apply an editor live setting via APPLY! to the app editor and, when it
@@ -70,6 +85,8 @@
         ;; or-guard: an explicit nil in settings.edn must not reach quot
         idle-ms (or (cfg/get-setting-live config :http-idle-timeout-ms 300000)
                     300000)
+        ;; live value: nil (absent) = use idle; explicit = override
+        total-ms (cfg/get-setting-live config :http-total-timeout-ms nil)
         apply-retry! (fn []
                        (let [r @retry-atom]
                          (swap! (:cfg ag) assoc :max-retries (if (:enabled r) (:max-retries r) 0))
@@ -90,6 +107,10 @@
                      :label "HTTP idle timeout"
                      :value (format-idle-timeout idle-ms)
                      :values (mapv :label http-idle-timeout-choices)}
+                    {:id :http-total-timeout
+                     :label "HTTP total timeout"
+                     :value (format-total-timeout total-ms)
+                     :values (mapv :label http-total-timeout-choices)}
                     (bool-row :cache-miss-notices "Cache miss notices"
                               (cfg/get-show-cache-miss-notices config))
                     {:id :tree-filter-mode
@@ -166,6 +187,11 @@
                                                http-idle-timeout-choices))]
                              (agent/set-http-idle-timeout-ms! ag ms)
                              (cfg/save-setting! [:http-idle-timeout-ms] ms))
+                           :http-total-timeout
+                           (let [ms (:ms (some #(when (= value (:label %)) %)
+                                               http-total-timeout-choices))]
+                             (agent/set-http-total-timeout-ms! ag ms)
+                             (cfg/save-setting! [:http-total-timeout-ms] ms))
                            ;; read live at emit time — no runtime state needed
                            :cache-miss-notices
                            (cfg/save-setting! [:show-cache-miss-notices] (= value "true"))

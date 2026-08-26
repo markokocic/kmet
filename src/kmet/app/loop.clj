@@ -126,8 +126,11 @@
          autoCompact), :context-window, :compact-reserve-tokens (default 16384,
          pi: reserveTokens), :keep-recent-tokens (default 20000, pi:
          keepRecentTokens), :http-idle-timeout-ms (default 300000, pi:
-         httpIdleTimeoutMs; 0 disables)"
-  [& {:keys [model provider system session on-event thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key scoped-models compact-token-threshold context-window compact-reserve-tokens keep-recent-tokens http-idle-timeout-ms auto-compact]
+         httpIdleTimeoutMs; 0 disables), :http-total-timeout-ms (default nil
+         = the idle timeout, pi: timeoutMs ?? httpIdleTimeoutMs — an explicit
+         positive number overrides the total request deadline; 0 disables it
+         (falls back to idle); nil uses idle)"
+  [& {:keys [model provider system session on-event thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key scoped-models compact-token-threshold context-window compact-reserve-tokens keep-recent-tokens http-idle-timeout-ms http-total-timeout-ms auto-compact]
       :or {provider :opencode-go
            thinking :off
            steering-mode :all
@@ -139,6 +142,7 @@
            compact-reserve-tokens 16384
            keep-recent-tokens 20000
            http-idle-timeout-ms 300000
+           http-total-timeout-ms nil
            system "You are kmet, a minimal coding agent. Help the user with their tasks.
 Use the available tools to read, write, edit files, and execute commands.
 Be precise and concise in your responses."}}]
@@ -160,6 +164,7 @@ Be precise and concise in your responses."}}]
                     :cfg (atom {:max-retries max-retries
                                 :base-delay-ms base-delay-ms
                                 :http-idle-timeout-ms http-idle-timeout-ms
+                                :http-total-timeout-ms http-total-timeout-ms
                                 :steering-mode steering-mode
                                 :follow-up-mode follow-up-mode
                                 :auto-compact (boolean auto-compact)
@@ -181,6 +186,11 @@ Be precise and concise in your responses."}}]
                     :pending-bash (atom [])}))
 
 ;; ─── Active tools (pi: ctx.setActiveTools) ──────────────────────
+
+;; Forward declaration — call-llm (the LLM call wrapper below) computes the
+;; transport total deadline via llm-total-timeout-ms, defined later with the
+;; other timeout helpers.
+(declare llm-total-timeout-ms)
 
 (defn- active-tools
   "The tools sent to the LLM: the registry filtered to the :enabled-tools
@@ -848,6 +858,11 @@ Be precise and concise in your responses."}}]
       :tools (active-tools agent)
       :signal (:signal agent)
       :idle-timeout-ms (:http-idle-timeout-ms @(:cfg agent))
+      ;; Whole-request deadline enforced by the transport (HttpRequest.timeout
+      ;; / curl --max-time) — pi: timeoutMs ?? httpIdleTimeoutMs. The idle
+      ;; timeout above is the separate per-byte read deadline (undici
+      ;; bodyTimeout) that resets on every received byte.
+      :total-timeout-ms (llm-total-timeout-ms agent)
       :thinking @(:thinking agent)
       :session-id (some-> (:session agent) :id)
       :on-text (fn [t]
@@ -1312,15 +1327,21 @@ Be precise and concise in your responses."}}]
                 (recur))))))))
 
 (defn- llm-total-timeout-ms
-  "Total deadline for one LLM call: the configured idle timeout plus a grace
-   period, so a stalled stream always errors via the idle timeout (retryable)
-   before the total deadline. 0 (or an unset value) means no total deadline
-   (pi: timeoutMs ?? httpIdleTimeoutMs, 0 → effectively disabled)."
+  "Total request deadline for one LLM call (pi: SDK timeoutMs ??
+   httpIdleTimeoutMs — the whole-request wall-clock the transport enforces;
+   the per-byte idle timeout is separate and resets on every received byte).
+   Mirrors the transport's own resolution (call-llm → api builders): the
+   configured :http-total-timeout-ms wins when positive, else the idle
+   timeout, else no deadline (MAX_VALUE so the deref never fires early — the
+   transport gets nil and waits forever, pi: httpIdleTimeoutMs 0 →
+   effectively disabled)."
   [agent]
-  (let [idle (or (:http-idle-timeout-ms @(:cfg agent)) 0)]
-    (if (pos? idle)
-      (+ idle 30000)
-      Integer/MAX_VALUE)))
+  (let [total (:http-total-timeout-ms @(:cfg agent))
+        idle (or (:http-idle-timeout-ms @(:cfg agent)) 0)]
+    (cond
+      (and total (pos? total)) total
+      (pos? idle) idle
+      :else Integer/MAX_VALUE)))
 
 (defn- normalize-llm-result
   "Fold a provider-delivered :error stop-reason (content_filter /
@@ -1379,18 +1400,6 @@ Be precise and concise in your responses."}}]
     (doseq [m (:messages bas)]
       (add-custom-message! agent m)))
   (maybe-compact! agent))
-
-(defn- timeout-abort!
-  "LLM call exceeded its total timeout: raise the signal so pending work
-   unwinds, report, and abort the run quietly-with-error."
-  [agent on-error agent-end]
-  (reset! (:signal agent) true)
-  (let [timeout-msg (str "LLM call timed out after " (llm-total-timeout-ms agent) "ms")]
-    (when on-error (on-error timeout-msg))
-    (reset! (:status agent) :error)
-    (emit agent {:type :error :message timeout-msg})
-    (agent-end timeout-msg))
-  {:aborted true})
 
 (defn- terminal-error!
   "Non-retryable error or exhausted budget: close out any open retry span,
@@ -1549,7 +1558,54 @@ Be precise and concise in your responses."}}]
                                             {:aborted true})
 
                                         (= :timeout result)
-                                        (timeout-abort! agent on-error agent-end)
+                                        ;; The transport's own total deadline
+                                        ;; (HttpRequest.timeout / curl --max-time)
+                                        ;; normally fires first and delivers a
+                                        ;; retryable :error; this is the deref
+                                        ;; fallback when it was disabled or didn't
+                                        ;; fire. Treat it as the same retryable
+                                        ;; timeout error (pi: a timeout is a
+                                        ;; stopReason-error that retries, then
+                                        ;; surfaces after exhaustion) — never a
+                                        ;; silent hard abort.
+                                        (let [err (str "LLM call timed out after "
+                                                       (llm-total-timeout-ms agent) "ms")]
+                                          ;; The deref sentinel (:timeout) carries no
+                                          ;; partials — synthesize an errored result so
+                                          ;; the abandoned-attempt recording and the
+                                          ;; retry classifier see a normal error map.
+                                          (record-abandoned-attempt!
+                                           agent (assoc {} :error err) :error)
+                                          (let [{:keys [kind] :as action}
+                                                (retry-decision
+                                                 {:err err
+                                                  :retry-count @(:retry-count agent)
+                                                  :max-retries (:max-retries @(:cfg agent))
+                                                  :base-delay-ms (:base-delay-ms @(:cfg agent))
+                                                  :overflow-recovered @(:overflow-recovered agent)
+                                                  :has-session (some? (:session agent))})]
+                                            (if (= :backoff kind)
+                                              (let [{:keys [attempt delay-ms max-attempts]} action]
+                                                (reset! (:retry-count agent) attempt)
+                                                (emit agent {:type :auto-retry-start
+                                                             :attempt attempt
+                                                             :max-attempts max-attempts
+                                                             :delay-ms delay-ms
+                                                             :error-message err})
+                                                (if (backoff-sleep! agent delay-ms)
+                                                  ;; Same turn, same context — no new user message
+                                                  (recur t prev-tool-calls must-run)
+                                                  ;; Cancelled during backoff
+                                                  (do (emit agent {:type :auto-retry-end
+                                                                   :success false
+                                                                   :attempt attempt
+                                                                   :final-error "Retry cancelled"})
+                                                      (reset! (:retry-count agent) 0)
+                                                      (reset! (:status agent) :idle)
+                                                      (emit agent {:type :status :status :idle})
+                                                      (agent-end)
+                                                      {:aborted true})))
+                                              (terminal-error! agent err on-error agent-end))))
 
                                         (:error result)
                                         (let [err (:error result)
@@ -1785,6 +1841,13 @@ Be precise and concise in your responses."}}]
   "Set the SSE idle timeout live (pi: setHttpIdleTimeoutMs); 0 disables."
   [agent ms]
   (swap! (:cfg agent) assoc :http-idle-timeout-ms (long ms)))
+
+(defn set-http-total-timeout-ms!
+  "Set the whole-request total deadline live (pi: setHttpIdleTimeoutMs — the
+   transport's HttpRequest.timeout / curl --max-time); nil resets to 'use
+   idle', 0 also falls back to idle (pi: timeoutMs ?? httpIdleTimeoutMs)."
+  [agent ms]
+  (swap! (:cfg agent) assoc :http-total-timeout-ms (some-> ms long)))
 
 (declare switch-thinking-level set-thinking-level!)
 

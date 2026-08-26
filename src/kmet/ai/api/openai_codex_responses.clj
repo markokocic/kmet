@@ -95,7 +95,7 @@
 
 (defn codex-request
   [{:keys [model-record provider-record effort api-key messages tools signal base-url
-           idle-timeout-ms session-id cache-retention on-error]
+           idle-timeout-ms total-timeout-ms session-id cache-retention on-error]
     :as opts}]
   (future
     ;; the envelope computation (account-id decode, cache key) can throw for
@@ -117,7 +117,15 @@
                                         {:headers headers
                                          :body (json/generate-string payload)
                                          :as :stream
-                                         :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
+                                         ;; Total request deadline (pi: SDK timeoutMs ??
+                                         ;; httpIdleTimeoutMs); explicit total wins, else
+                                         ;; the idle timeout (compaction/summarization), nil
+                                         ;; when both disabled.
+                                         :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
+                                                                     total-timeout-ms)
+                                                                   (when (pos? (or idle-timeout-ms 0))
+                                                                     idle-timeout-ms))]
+                                                    t)}
                                         signal)]
         (let [[dispatch finalize] (responses-events-handler opts model-record)]
           (sse/process-responses-stream response

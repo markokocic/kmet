@@ -145,7 +145,7 @@
 
 (defn google-request
   [{:keys [model-record provider-record effort api-key messages tools signal base-url
-           idle-timeout-ms session-id
+           idle-timeout-ms total-timeout-ms session-id
            on-text on-thinking on-signature on-tool-call on-done on-error
            on-usage]
     :as opts}]
@@ -181,7 +181,15 @@
                                                      session-id)
                                            :body (json/generate-string payload)
                                            :as :stream
-                                           :timeout (when (pos? (or idle-timeout-ms 0)) idle-timeout-ms)}
+                                           ;; Total request deadline (pi: SDK timeoutMs ??
+                                           ;; httpIdleTimeoutMs); explicit total wins, else
+                                           ;; the idle timeout (compaction/summarization), nil
+                                           ;; when both disabled.
+                                           :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
+                                                                       total-timeout-ms)
+                                                                     (when (pos? (or idle-timeout-ms 0))
+                                                                       idle-timeout-ms))]
+                                                      t)}
                                           signal)]
           (sse/process-google-stream response
                                      (fn [event]
