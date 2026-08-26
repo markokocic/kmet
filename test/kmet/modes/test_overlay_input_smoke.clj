@@ -2,7 +2,12 @@
   "End-to-end pty regression for the overlay-focus incident: open the /lsp
    dialog, close it with ESC, type - the editor must receive the text.
    Drives a real `bb run` through a pty via an inline python3 driver, so
-   this is ^:slow and skipped when python3 is unavailable (Windows)."
+   this is ^:slow and skipped when python3 is unavailable (Windows).
+
+   Assumes the repo-default extension set is enabled - the /lsp panel
+   footer marker doubles as proof the lsp-adapter loaded; on a machine
+   without it the panel never opens and the test fails loudly rather
+   than passing vacuously."
   (:require [babashka.fs :as fs]
             [babashka.process :as process]
             [clojure.string :as str]
