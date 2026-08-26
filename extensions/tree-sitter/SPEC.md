@@ -167,6 +167,15 @@ Guidelines text steers agents away from grep for structure questions
 
 ## Tool renderers (mirror rab's TreeSitterToolRenderer)
 
+**Implemented** in `render.clj`, aligned with the lsp-adapter renderer's
+conventions: container/text/spacer building, shared path helpers from
+`kmet.app.ui.tool-renderers` (shorten + OSC-8 hyperlink), the standard
+"(N more lines, <key> to expand)" collapsed-preview footer, and syntax
+highlighting through `kmet.tui.theme`'s markdown-theme `:highlight-code`
+(language derived from the file extension). Style tokens follow lsp usage:
+`:tool-title` `:accent` `:muted` `:tool-output` `:success` `:error`
+(`:dim` folded into `:muted`).
+
 rab's renderer (src/extensions/tree_sitter/renderer.rs) maps 1:1 onto kmet's
 extension rendering contract — same data flow, different theme API:
 
@@ -188,7 +197,7 @@ find_callers — handle_submit  in src/app/server.ts
 | tool name | toolTitle + bold | `(theme/fg theme :tool-title (theme/bold "list_symbols"))` |
 | ` — {name}` | accent | `(theme/fg theme :accent …)` |
 | `  in {path}` | muted | `(theme/fg theme :muted …)` (shorten + linkify like edit-tool paths) |
-| `  [kind: X]` | dim | `(theme/fg theme :dim …)` |
+| `  [kind: X]` | dim | `(theme/fg theme :muted …)` (kmet has no :dim token on this surface) |
 
 Segments omitted when the arg is absent. Signature:
 `(fn [name args theme width context] …component)`.

@@ -1,4 +1,4 @@
-{:paths ["src" "test" "resources"]
+{:paths ["src" "test" "resources" "../../src"]
  :tasks
  {test {:doc "Run tree-sitter extension tests (args: namespace symbols; defaults to the offline set)"
         :task (let [nss (or (some->> *command-line-args* (map symbol))
@@ -7,7 +7,8 @@
                               kmet.extensions.tree-sitter.cli-test
                               kmet.extensions.tree-sitter.grammars-test
                               kmet.extensions.tree-sitter.symbols-test
-                              kmet.extensions.tree-sitter.tools-test])]
+                              kmet.extensions.tree-sitter.tools-test
+                              kmet.extensions.tree-sitter.renderers-test])]
                 (doseq [ns-sym nss]
                   (require ns-sym))
                 (let [summary (apply clojure.test/run-tests nss)]

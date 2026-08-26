@@ -129,19 +129,22 @@ for all three languages; `bb test` green inside the dir.
 
 ## Phase 4 — renderers + docs + enablement
 
-Files: `renderers.clj`, README.md, catalog touch-ups.
+Files: `render.clj`, README.md, catalog row in `extensions/README.md`.
+DONE.
 
-1. Renderers exactly per SPEC section (call line, shared result line,
-   get_symbol_body special case; theme tokens `:tool-title :accent :muted
-   :dim :success :error`; expanded body through `kmet.libs/highlight`).
-   Visual check via scripts/pty_capture.py harness on a scripted session.
-2. README.md (user-facing): what it does, auto-download notes (first-use
-   latency, offline story), supported-language table, privacy note (files
-   parsed locally by local binary).
-3. Add row to `extensions/README.md` catalog table.
+1. Renderers implemented aligned with the lsp-adapter renderer's
+   conventions (container/text/spacer building, shared path helpers,
+   key-hint expand footer) rather than rab's exact token set — style
+   tokens follow lsp usage (`:muted`/`:tool-output`/`:success`;
+   `:dim` folded into `:muted`); expanded get_symbol_body bodies go
+   through the theme markdown-theme's `:highlight-code` with the
+   language derived from the file extension. Headless ANSI-stripped
+   tests cover collapsed/expanded/fallback.
+2. README.md written as specified.
+3. Catalog row added to `extensions/README.md`.
 
-**Done when:** extension loads via user config and renders collapsed/
-expanded states correctly in a live session.
+**Remaining from done-when:** a live-session visual pass (collapsed/
+expanded states on screen) — headless tests cover structure only.
 
 ## Phase 5 — validation + hooks
 

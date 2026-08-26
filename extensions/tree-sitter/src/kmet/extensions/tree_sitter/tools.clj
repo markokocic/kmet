@@ -9,6 +9,7 @@
             [clojure.string :as str]
             [kmet.extensions.tree-sitter.cli :as cli]
             [kmet.extensions.tree-sitter.grammars :as grammars]
+            [kmet.extensions.tree-sitter.render :as render]
             [kmet.extensions.tree-sitter.symbols :as symbols]))
 
 (def ^:private skip-dirs
@@ -261,24 +262,34 @@
   [{:name "list_symbols"
     :description "List all definitions (functions, classes, vars, methods) in a source file with line numbers and kinds. Prefer over grep when asked 'what's in this file'."
     :params {"path" param-file}
+    :render-call render/render-call
+    :render-result render/render-result
     :execute (safe list-symbols*)}
    {:name "find_definition"
     :description "Find where a named function/class/var is defined across the project. Prefer over grep: matches definitions structurally, not text occurrences."
     :params {"symbol" param-symbol
              "root" param-root}
+    :render-call render/render-call
+    :render-result render/render-result
     :execute (safe find-definition*)}
    {:name "get_symbol_body"
     :description "Read the complete source body of one definition identified by file path and exact symbol name. Prefer over re-reading whole files."
     :params {"path" param-file
              "symbol" param-symbol}
+    :render-call render/render-call
+    :render-result render/render-result
     :execute (safe get-symbol-body*)}
    {:name "find_callers"
     :description "List every call site of a named function/method across the project, shown as caller(file:line). Prefer over grep for 'who uses X' questions."
     :params {"symbol" param-symbol
              "root" param-root}
+    :render-call render/render-call
+    :render-result render/render-result
     :execute (safe find-callers*)}
    {:name "find_callees"
     :description "List what one function calls (unique callees with first call site), scoped to that function's body in the given file."
     :params {"path" param-file
              "symbol" param-symbol}
+    :render-call render/render-call
+    :render-result render/render-result
     :execute (safe find-callees*)}])
