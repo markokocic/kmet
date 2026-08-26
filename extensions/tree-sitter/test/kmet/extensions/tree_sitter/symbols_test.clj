@@ -151,6 +151,30 @@
       (is (= ["(defn greet [name]" "  (str \"hi \" name))"]
              (symbols/body-lines clj-src defn-el))))))
 
+(deftest collect-clojure-var-kind-test
+  ;; regression: several defs share the list_lit node type — each symbol's
+  ;; kind must come from ITS matching rule, not the first rule of that type
+  (let [xml "<?xml version=\"1.0\"?>
+<sources>
+  <source name=\"v.clj\">
+    <source srow=\"0\" scol=\"0\" erow=\"4\" ecol=\"0\">
+      <list_lit srow=\"2\" scol=\"0\" erow=\"2\" ecol=\"14\">
+        (<sym_lit><sym_name>def</sym_name></sym_lit>
+         <sym_lit><sym_name>answer</sym_name></sym_lit>)
+      </list_lit>
+      <list_lit srow=\"4\" scol=\"0\" erow=\"5\" ecol=\"20\">
+        (<sym_lit><sym_name>defn</sym_name></sym_lit>
+         <sym_lit><sym_name>double-it</sym_name></sym_lit>)
+      </list_lit>
+    </source>
+  </source>
+</sources>"
+        el (parse-el xml)
+        src ["(ns v)" "" "(def answer 42)" "" "(defn double-it [x] x)"]
+        syms (:symbols (symbols/collect el src (symbols/rules "clojure")))]
+    (is (= [["answer" "var"] ["double-it" "function"]]
+           (mapv (juxt :name :kind) syms)))))
+
 (deftest rules-integrity-test
   (doseq [lang ["clojure" "python" "typescript" "tsx"]]
     (let [r (symbols/rules lang)]

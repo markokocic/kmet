@@ -40,11 +40,6 @@
           (swap! rules-cache assoc lang parsed)
           parsed))))
 
-(defn reset-rules-cache!
-  "Test hook: forget memoized rule sets."
-  []
-  (reset! rules-cache {}))
-
 ;; ─── XML tree accessors (clojure.data.xml element maps) ───────────────────
 
 (defn- el? [x] (and (map? x) (:tag x)))
@@ -141,17 +136,24 @@
   [source-el src-lines rule-set]
   (let [acc (atom {:symbols [] :calls []})]
     (letfn [(visit [el enclosing]
-              (if-let [name-el (some #(def-name-el el %) (:defs rule-set))]
+              ;; first rule whose shape matches wins — several defs can
+              ;; share a node type (clojure list_lit), so kind must come
+              ;; from the SAME rule that matched the name, not a re-scan
+              (if-let [[def-rule name-el] (some (fn [rule]
+                                                  (when-some [n (def-name-el el rule)]
+                                                    [rule n]))
+                                                (:defs rule-set))]
                 (let [name (str/trim (text-of name-el))]
-                  (when (not-empty name)
-                    (swap! acc update :symbols conj
-                           {:name name
-                            :kind (:kind (some #(when (= (tag-of el) (:type %)) %)
-                                               (:defs rule-set)))
-                            :line (inc (start-row el))
-                            :end-line (inc (end-row el))
-                            :signature (signature-of src-lines el)}))
-                  (doseq [c (children el)] (visit c name)))
+                  (if-not (str/blank? name)
+                    (do (swap! acc update :symbols conj
+                               {:name name
+                                :kind (:kind def-rule)
+                                :line (inc (start-row el))
+                                :end-line (inc (end-row el))
+                                :signature (signature-of src-lines el)})
+                        (doseq [c (children el)] (visit c name)))
+                    ;; matched shape but no usable name -> keep walking
+                    (doseq [c (children el)] (visit c enclosing))))
                 (do (doseq [rule (:calls rule-set)]
                       (when-let [callee (call-callee el rule)]
                         (swap! acc update :calls conj

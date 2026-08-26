@@ -15,8 +15,15 @@
   #{".git" "node_modules" "target" "dist" "build" ".kmet" "out" ".cpcache"
     ".lsp" ".clj-kondo" ".shadow-cljs" "__pycache__" "vendor"})
 
-(def ^:private search-exts
-  #{"clj" "cljs" "cljc" "edn" "py" "ts" "tsx"})
+(defn- search-exts
+  "Extensions scanned by project-wide tools — derived from the language
+   table so the two can never drift apart."
+  []
+  (->> (grammars/languages)
+       vals
+       (mapcat :file-types)
+       (map str/lower-case)
+       set))
 
 (defn- err [msg] {:content msg :is-error true})
 
@@ -101,11 +108,17 @@
 
 ;; ─── tool implementations (opts-injectable second arity for tests) ────────
 
+(defn- existing-file!
+  "Path when it exists and is a regular file; nil otherwise."
+  [path]
+  (when (and (fs/exists? path) (not (fs/directory? path)))
+    path))
+
 (defn list-symbols*
   ([args] (list-symbols* args {}))
   ([args opts]
    (if-some [path (param args :path)]
-     (if-not (fs/exists? path)
+     (if-not (existing-file! path)
        (err (str "File not found: " path))
        (let [lang (ensure-ready! path opts)
              {:keys [symbols]} (symbols/analyze-file! path lang opts)]
@@ -120,7 +133,7 @@
   ([args opts]
    (if-some [symbol (param args :symbol)]
      (let [root (or (param args :root) ".")
-           files (tracked-files root search-exts)]
+           files (tracked-files root (search-exts))]
        (if-not (seq files)
          (err (str "no supported source files under " root))
          (let [by-lang (group-by (fn [f] (grammars/resolve-lang (ext-of f))) files)
@@ -143,7 +156,7 @@
   ([args opts]
    (if-some [path (param args :path)]
      (if-some [symbol (param args :symbol)]
-       (if-not (fs/exists? path)
+       (if-not (existing-file! path)
          (err (str "File not found: " path))
          (let [lang (ensure-ready! path opts)
                {:keys [symbols src-lines]} (symbols/analyze-file! path lang opts)
@@ -167,7 +180,7 @@
   ([args opts]
    (if-some [symbol (param args :symbol)]
      (let [root (or (param args :root) ".")
-           files (tracked-files root search-exts)]
+           files (tracked-files root (search-exts))]
        (if-not (seq files)
          (err (str "no supported source files under " root))
          (let [by-lang (group-by (fn [f] (grammars/resolve-lang (ext-of f))) files)
@@ -180,7 +193,7 @@
                                       {:file p :enclosing (:enclosing c)
                                        :line (:line c)})))
                           vec)
-               sites (vec (take 30 sites))
+               sites (->> sites (sort-by (juxt :file :line)) (take 30) vec)
                callers (distinct (map :enclosing sites))]
            (if (seq sites)
              {:content (str/join "\n" (map fmt-call-site sites))
@@ -193,7 +206,7 @@
   ([args opts]
    (if-some [path (param args :path)]
      (if-some [symbol (param args :symbol)]
-       (if-not (fs/exists? path)
+       (if-not (existing-file! path)
          (err (str "File not found: " path))
          (let [lang (ensure-ready! path opts)
                {:keys [calls]} (symbols/analyze-file! path lang opts)
