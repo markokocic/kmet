@@ -261,12 +261,26 @@
                      :label "keep" :label-timestamp "2026-02-14T10:30:00Z")]
         tl (ts/make-tree-list tree* :leaf-id "l" :max-visible-lines 5)]
     (t/is (some #(str/includes? % "[keep]") (plain tl)))
-    ;; timestamps off by default; toggling shows [+label time] + HH:MM
+    ;; timestamps off by default; toggling (shift+t) shows [+label time]+HH:MM
     (t/is (not-any? #(str/includes? % "[+label time]") (plain tl)))
-    (swap! (:state-atom tl) assoc :show-label-timestamps true)
+    (press tl "\u001b[116;2u")         ; kitty-protocol shift+t
+    (t/is (true? (:show-label-timestamps @(:state-atom tl))))
     (let [lines (plain tl)]
       (t/is (some #(str/includes? % "[+label time]") lines))
       (t/is (some #(re-find #"\d{2}:\d{2}" %) lines)))))
+
+(t/deftest shift-t-does-not-become-search-query
+  ;; a bare uppercase letter is NOT shift+letter under kitty-protocol key
+  ;; decoding (normalizeShiftedLetterIdentity lowercases it), so it must not
+  ;; pollute the search query — but real shift+t (ESC[116;2u) must not either
+  (let [tl (new-list)]
+    (press tl "T")                     ; plain t → search query "T" (raw char)
+    (t/is (= "T" (:query @(:state-atom tl))))
+    (press tl "backspace")
+    (t/is (= "" (:query @(:state-atom tl))))
+    (press tl "\u001b[116;2u")         ; real shift+t → toggle, not search
+    (t/is (= "" (:query @(:state-atom tl))))
+    (t/is (true? (:show-label-timestamps @(:state-atom tl))))))
 
 ;; ─── Horizontal panning ─────────────────────────────────────────────────────
 

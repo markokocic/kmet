@@ -16,6 +16,7 @@
    (shift+l) and label timestamp display (shift+t). ON-NAVIGATE receives
    the chosen entry — the caller performs the branch."
   (:require [clojure.string :as str]
+            [kmet.app.keybindings :as app-kb]
             [kmet.app.session :as session]
             [kmet.app.ui :as ui]
             [kmet.app.ui.dialogs :as dialogs]
@@ -253,6 +254,12 @@
                    (.getDayOfMonth ldt) " " hhmm)))
     (catch Exception _ ts)))
 
+(defn- entry-search-text
+  "pi extractContent — the content capped at 200 chars for search/display
+   haystacks, so giant messages don't bloat the token match."
+  [content]
+  (subs (entry-full-text content) 0 (min 200 (count (entry-full-text content)))))
+
 (defn- searchable-text
   "Lowercased haystack for search tokens (pi getSearchableText): label,
    role name, content, command/type/model/thinking specifics."
@@ -263,12 +270,12 @@
         add! (fn [acc & xs] (reduce conj! acc xs))
         parts
         (case (:role node)
-          :assistant (add! parts (entry-full-text content))
-          :user (add! parts (entry-full-text content))
+          :assistant (add! parts (entry-search-text content))
+          :user (add! parts (entry-search-text content))
           :tool (add! parts (str (:tool-name node)))
           :bash (add! parts (str (:command node)))
           :custom-message (add! parts (name (:custom-type node :custom))
-                                (entry-full-text content))
+                                (entry-search-text content))
           :compaction (add! parts "compaction" (str (:summary node)))
           :branch-summary (add! parts "branch summary" (str (:summary node)))
           :session_info (add! parts "title" (str (:name node)))
@@ -696,7 +703,9 @@
    separated by ' · ' until they no longer fit, then wrap onto the next."
   [width]
   (let [kmgr (or (tui-kb/get-global-keybindings)
-                 (tui-kb/make-tui-keybindings-manager))
+                 ;; no manager installed (tests, pre-startup) — app defaults
+                 ;; so app.tree.* key hints resolve
+                 (app-kb/create-agent-keybindings-manager "target/tree-help-keybindings"))
         indent "  "
         separator " · "
         rendered (for [{:keys [keys label label-first]} tree-help-items
@@ -772,8 +781,9 @@
 
   (handle-input [this data]
     (let [kmgr (or (tui-kb/get-global-keybindings)
-                   ;; no manager installed (tests, pre-startup) — use defaults
-                   (tui-kb/make-tui-keybindings-manager))
+                   ;; no manager installed (tests, pre-startup) — app defaults
+                   ;; so app.tree.* keys (fold/label/timestamp/filters) resolve
+                   (app-kb/create-agent-keybindings-manager "target/tree-input-keybindings"))
           match (fn [id] (tui-kb/matches-key kmgr data id))
           selected-node (fn []
                           (let [st @state-atom]
