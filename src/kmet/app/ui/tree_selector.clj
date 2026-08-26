@@ -209,13 +209,13 @@
           :thinking-level-change (th/fg theme :dim (str "[thinking: "
                                                         (name (:thinking-level entry :unknown)) "]"))
           :custom (th/fg theme :dim (str "[custom: " (name (:custom-type entry :custom)) "]"))
-          :label (th/fg theme :dim (str "[label: " (or (:label entry "(cleared)") "]")))
+          :label (th/fg theme :dim (str "[label: " (or (:label entry) "(cleared)") "]"))
           :session_info (let [nm (str (:name entry))]
                           (th/fg theme :dim
                                  (if (seq nm)
                                    (str "[title: " nm "]")
                                    (str "[title: " (th/italic (th/fg theme :dim "empty")) "]"))))
-          (th/fg theme :dim (str "[" (name (:role entry)) "]")))]
+          (th/fg theme :dim (str "[" (:role entry) "]")))]
     (if selected? (th/bold result) result)))
 
 (defn- copy-entry-text

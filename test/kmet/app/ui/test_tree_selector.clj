@@ -328,7 +328,12 @@
            "(aborted)"))
     (t/is (str/includes?
            (show {:role :model-change :provider "anthropic" :model "sonnet"})
-           "[model: anthropic/sonnet]"))))
+           "[model: anthropic/sonnet]"))
+    ;; label entries render balanced brackets, incl. the cleared state
+    (t/is (str/includes? (show {:role :label :label "keep"})
+                         "[label: keep]"))
+    (t/is (str/includes? (show {:role :label :label nil})
+                         "[label: (cleared)]"))))
 
 (t/deftest copy-entry-text-extracts
   (t/is (= "cmd" (#'ts/copy-entry-text {:role :bash :command "cmd"})))
