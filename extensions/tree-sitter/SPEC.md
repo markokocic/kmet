@@ -149,17 +149,17 @@ wins), and **a throwing hook becomes a block** (fail-closed) — see
 
 ## Tools
 
-All five parse on demand via short-lived CLI invocations (ms-scale; the CLI
-has no server mode — do not build one). Language support = languages whose
-grammar is in the pinned manifest AND which carry a curated `.scm` set
-shipped in the extension (start: clojure, python, typescript/tsx; grow by
-authoring queries — zed packages' `outline.scm` are a reference source).
+All five parse on demand via short-lived CLI invocations (`parse --wasm -x`,
+ms-scale; the CLI has no server mode — do not build one). Language support =
+languages whose grammar is in the pinned manifest AND which ship an
+extraction-rule set (`queries/<lang>.edn`; start: clojure, python,
+typescript/tsx — grow by authoring rules).
 
 | Tool | Implementation |
 |---|---|
-| `list_symbols` | `tree-sitter query <symbols.scm> <file>` with our config/env |
-| `find_definition` | symbol search over project files (query + name filter) |
-| `get_symbol_body` | symbol capture byte-range → slice source |
+| `list_symbols` | walk parsed XML tree for def nodes (name/kind/range/signature) |
+| `find_definition` | name-filtered defs over tracked project files |
+| `get_symbol_body` | def node range → source slice |
 | `find_callers` / `find_callees` | callee/caller `.scm` queries, range-scoped |
 
 Guidelines text steers agents away from grep for structure questions

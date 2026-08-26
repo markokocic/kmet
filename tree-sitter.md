@@ -17,9 +17,7 @@ extensions/tree-sitter/
 ├── deps.edn                  # own deps; org.babashka/http-client only extra
 ├── bb.edn                    # test task (runs from inside this dir — own project, like clojure/)
 ├── resources/kmet/extensions/tree_sitter/queries/
-│   ├── clojure/{symbols,callees}.scm
-│   ├── python/{symbols,callees}.scm
-│   └── typescript/{symbols,callees}.scm
+│   └── {clojure,python,typescript,tsx}.edn   ; tree-extraction rule sets
 └── src/kmet/extensions/tree_sitter/
     ├── core.clj              # init/shutdown: wire everything, nothing else
     ├── paths.clj             # ~/.kmet/agent/tree-sitter/{bin,libs,grammars} + config.json
@@ -103,14 +101,21 @@ validated in ~/ts-test); unknown lang → nil; tampered wasm re-fetches.
 
 Files: `symbols.clj`, `tools.clj`, query resources + tests.
 
-1. Author `.scm` sets for the three launch languages (start from zed
-   packages' outline.scm as reference; captures: `@name @kind @signature`
-   conventions defined once in symbols.clj).
-2. `symbols.clj`: run query against file(s) via `query` subcommand +
-   our config/env; parse captures → unified symbol maps
-   `{:name :kind :path :line :end-line :signature}`; range-scoped callee
-   query for callers/callees; project-wide variant walks tracked files
-   (respect .gitignore via `fs/glob` on git ls-files when inside a repo).
+**Deviation from the original plan (validated):** the CLI's `query`
+subcommand cannot load WASM grammars (native-dlopen only — SPEC fact 8),
+so instead of `.scm` queries we ship per-language EDN rule sets
+(`queries/<lang>.edn`) and walk `parse --wasm -x` XML trees in Clojure.
+The walker records every call's nearest enclosing def, which is what makes
+find_callers/find_callees work without query-engine support.
+
+1. Rule sets for clojure / python / typescript / tsx: defs matched by node
+   type (+ name-field, or leading head-symbol for clojure), calls by call
+   node with field-descend for attribute/member invocations (`obj.meth` →
+   `meth`).
+2. `symbols.clj`: batched `parse --wasm -x` over files; capture walk →
+   unified symbol maps `{:name :kind :line :end-line :signature}` + calls
+   `{:name :line :enclosing}`; project-wide variant walks tracked files
+   (git ls-files inside a repo, skip-list walk otherwise).
 3. `tools.clj`: register with descriptions/guidelines steering agents from
    grep to these (rab wording spirit); each execute returns text content
    for the model **plus details map** per SPEC renderer tables

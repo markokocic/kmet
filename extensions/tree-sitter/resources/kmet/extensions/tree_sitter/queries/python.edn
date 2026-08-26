@@ -1,0 +1,10 @@
+;; Python extraction rules (see symbols.clj for the walker contract).
+{:defs
+ [{:type "function_definition" :name-field "name" :kind "function"}
+  {:type "class_definition" :name-field "name" :kind "class"}]
+ :calls
+ [{:type "call"
+   :callee-field "function"
+   ;; obj.meth(...) -> call.function is an attribute; its attribute field
+   ;; holds the invoked method name we report
+   :attr-field-by-type {"attribute" "attribute"}}]}

@@ -5,7 +5,9 @@
                             '[kmet.extensions.tree-sitter.paths-test
                               kmet.extensions.tree-sitter.fetch-test
                               kmet.extensions.tree-sitter.cli-test
-                              kmet.extensions.tree-sitter.grammars-test])]
+                              kmet.extensions.tree-sitter.grammars-test
+                              kmet.extensions.tree-sitter.symbols-test
+                              kmet.extensions.tree-sitter.tools-test])]
                 (doseq [ns-sym nss]
                   (require ns-sym))
                 (let [summary (apply clojure.test/run-tests nss)]

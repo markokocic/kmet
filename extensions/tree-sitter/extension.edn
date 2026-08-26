@@ -1,0 +1,2 @@
+{:name "tree-sitter"
+ :entry "src/kmet/extensions/tree_sitter/core.clj"}

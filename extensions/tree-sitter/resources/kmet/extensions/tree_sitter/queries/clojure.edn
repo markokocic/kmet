@@ -1,0 +1,14 @@
+;; Clojure extraction rules (see symbols.clj for the walker contract).
+;; The clojure grammar represents forms structurally (list_lit / sym_lit),
+;; so defs are identified by their leading head symbol rather than node type.
+{:defs
+ [{:type "list_lit"
+   :first-sym-in ["defn" "defn-" "defmacro" "defmacro-"]
+   :kind "function"}
+  {:type "list_lit"
+   :first-sym-in ["def" "defonce"]
+   :kind "var"}]
+ :calls
+ [{:type "list_lit"
+   :callee-first-sym-except ["def" "defonce" "defn" "defn-" "defmacro"
+                             "defmacro-" "quote" "comment" "declare"]}]}

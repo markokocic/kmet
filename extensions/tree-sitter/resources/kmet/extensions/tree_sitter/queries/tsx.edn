@@ -1,0 +1,13 @@
+;; TSX extraction rules — same shared node types as typescript.edn.
+;; tsx.edn is a copy — the shared node types used here are identical.
+{:defs
+ [{:type "function_declaration" :name-field "name" :kind "function"}
+  {:type "method_definition" :name-field "name" :kind "method"}
+  {:type "class_declaration" :name-field "name" :kind "class"}
+  {:type "variable_declarator" :name-field "name" :kind "binding"}]
+ :calls
+ [{:type "call_expression"
+   :callee-field "function"
+   ;; obj.meth(...) -> call.function is a member_expression; its property
+   ;; field holds the invoked method name we report
+   :attr-field-by-type {"member_expression" "property"}}]}
