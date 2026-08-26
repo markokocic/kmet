@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-26T13:28:26Z"
+ :generated-at "2026-08-26T22:02:02Z"
  :provider {:id :zai
             :name "Z.AI"
             :env-vars ["ZAI_API_KEY"]
@@ -83,6 +83,40 @@
    "glm-5.3"
    {:id "glm-5.3"
     :name "GLM-5.3"
+    :provider :zai
+    :api :openai-completions
+    :base-url "https://api.z.ai/api/coding/paas/v4"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 131072
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :zai
+             :max-tokens-field :max-tokens
+             :zai-tool-stream true}}
+   "glm-5.3-flash"
+   {:id "glm-5.3-flash"
+    :name "GLM-5.3-Flash"
+    :provider :zai
+    :api :openai-completions
+    :base-url "https://api.z.ai/api/coding/paas/v4"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 131072
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :zai
+             :max-tokens-field :max-tokens
+             :zai-tool-stream true}}
+   "glm-5.3-highspeed"
+   {:id "glm-5.3-highspeed"
+    :name "GLM-5.3 Highspeed"
     :provider :zai
     :api :openai-completions
     :base-url "https://api.z.ai/api/coding/paas/v4"

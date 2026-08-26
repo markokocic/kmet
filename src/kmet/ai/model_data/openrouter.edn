@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-26T13:28:26Z"
+ :generated-at "2026-08-26T22:02:02Z"
  :provider {:id :openrouter
             :name "OpenRouter"
             :env-vars ["OPENROUTER_API_KEY"]
@@ -709,7 +709,7 @@
                          :minimal nil
                          :xhigh "xhigh"}
     :input [:text]
-    :cost {:input 0.08106 :output 0.16212 :cache-read 0.016212 :cache-write 0}
+    :cost {:input 0.07952 :output 0.15904 :cache-read 0.015904 :cache-write 0}
     :context-window 1024000
     :max-tokens 384000
     :compat {:supports-developer-role false
@@ -3603,9 +3603,9 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :input [:text :image]
-    :cost {:input 0.6 :output 3.6 :cache-read 0.12 :cache-write 0}
+    :cost {:input 0.32 :output 3.2 :cache-read 0 :cache-write 0}
     :context-window 262144
-    :max-tokens 235929
+    :max-tokens 81920
     :compat {:supports-developer-role false :thinking-format :openrouter}}
    "qwen/qwen3.6-35b-a3b"
    {:id "qwen/qwen3.6-35b-a3b"
@@ -3715,6 +3715,18 @@
     :context-window 1000000
     :max-tokens 131072
     :compat {:supports-developer-role false :thinking-format :openrouter}}
+   "qwen/qwen3.8-flash"
+   {:id "qwen/qwen3.8-flash"
+    :name "Qwen: Qwen3.8 Flash"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.16 :output 0.47 :cache-read 0.016 :cache-write 0.2}
+    :context-window 1000000
+    :max-tokens 131072
+    :compat {:supports-developer-role false :thinking-format :openrouter}}
    "qwen/qwen3.8-max"
    {:id "qwen/qwen3.8-max"
     :name "Qwen: Qwen3.8 Max"
@@ -3787,18 +3799,6 @@
     :context-window 131072
     :max-tokens 16384
     :compat {:supports-developer-role false :thinking-format :openrouter}}
-   "stealth/ox-alpha"
-   {:id "stealth/ox-alpha"
-    :name "Ox Alpha"
-    :provider :openrouter
-    :api :openai-completions
-    :base-url "https://openrouter.ai/api/v1"
-    :reasoning true
-    :input [:text :image]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 1048576
-    :max-tokens 131072
-    :compat {:supports-developer-role false :thinking-format :openrouter}}
    "stepfun/step-3.5-flash"
    {:id "stepfun/step-3.5-flash"
     :name "StepFun: Step 3.5 Flash"
@@ -3831,7 +3831,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :input [:text]
-    :cost {:input 0.132 :output 0.528 :cache-read 0.033 :cache-write 0}
+    :cost {:input 0.0825 :output 0.33 :cache-read 0.020625 :cache-write 0}
     :context-window 262144
     :max-tokens 128000
     :compat {:supports-developer-role false :thinking-format :openrouter}}
@@ -4160,18 +4160,6 @@
     :context-window 1048576
     :max-tokens 262144
     :compat {:supports-developer-role false :thinking-format :openrouter}}
-   "z-ai/glm-5.2:batch"
-   {:id "z-ai/glm-5.2:batch"
-    :name "Z.ai: GLM 5.2 (batch)"
-    :provider :openrouter
-    :api :openai-completions
-    :base-url "https://openrouter.ai/api/v1"
-    :reasoning true
-    :input [:text]
-    :cost {:input 1.4 :output 4.4 :cache-read 0.26 :cache-write 0}
-    :context-window 1048575
-    :max-tokens 943717
-    :compat {:supports-developer-role false :thinking-format :openrouter}}
    "z-ai/glm-5.2:free"
    {:id "z-ai/glm-5.2:free"
     :name "Z.ai: GLM 5.2 (free)"
@@ -4193,6 +4181,18 @@
     :reasoning true
     :input [:text]
     :cost {:input 1.4 :output 4.4 :cache-read 0.26 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 131072
+    :compat {:supports-developer-role false :thinking-format :openrouter}}
+   "z-ai/glm-5.3-flash"
+   {:id "z-ai/glm-5.3-flash"
+    :name "Z.ai: GLM 5.3 Flash"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.075 :output 0.25 :cache-read 0.015 :cache-write 0}
     :context-window 1048576
     :max-tokens 131072
     :compat {:supports-developer-role false :thinking-format :openrouter}}

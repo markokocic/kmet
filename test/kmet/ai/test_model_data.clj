@@ -97,6 +97,39 @@
           (t/is (some #(re-find #"has no reasoning boolean" %) errors)
                 (str "expected a reasoning error, got: " errors)))))))
 
+(t/deftest test-commandcode-refs-transfer-capabilities
+  "Regression: the canonical-ref lookup in process-commandcode (get-in
+   grouped [provider model-id]) must receive the {provider -> {model-id ->
+   model}} shape. When fed the bare group-by :provider vector shape it
+   silently returns nil and every commandcode model falls back to
+   conservative defaults (:reasoning false, :max-tokens 32768) — the
+   deepseek-v4/claude/gpt entries lost thinking support. Drive the same
+   path generate-models-data uses: provider-model-index over the canonical
+   models, then process-commandcode."
+  (let [canonical {:id "deepseek-v4-flash" :provider :deepseek
+                   :api :openai-completions :base-url "https://api.deepseek.com"
+                   :reasoning true :input [:text]
+                   :cost {:input 0.14 :output 0.28 :cache-read 0.0028 :cache-write 0}
+                   :context-window 1000000 :max-tokens 384000
+                   :thinking-level-map {:high "high" :low nil :max "max"
+                                        :medium nil :minimal nil}
+                   :compat {:thinking-format :deepseek}}
+        fetched [{"id" "deepseek/deepseek-v4-flash"
+                  "name" "DeepSeek V4 Flash (latest)"
+                  "context_length" 1000000}]
+        grouped (#'mg/provider-model-index [canonical])
+        out (first (#'mg/process-commandcode fetched grouped {}))]
+    (t/is (= true (:reasoning out))
+          "canonical :reasoning must transfer to the commandcode model")
+    (t/is (= 384000 (:max-tokens out))
+          "canonical :max-tokens must transfer (was clamped to 32768)")
+    (t/is (= {:high "high" :low nil :max "max" :medium nil :minimal nil}
+             (:thinking-level-map out))
+          "canonical thinking-level-map must transfer")
+    (t/is (= :deepseek (:thinking-format (:compat out)))
+          "model-bound compat keys must transfer")
+    (t/is (= "deepseek/deepseek-v4-flash" (:id out)))))
+
 (t/deftest test-write-catalogs-skips-unchanged
   (let [dir (str (fs/create-temp-dir {:dir "target" :prefix "model-gen-test-"}))
         catalogs {:gen-alpha [(gen-model :gen-alpha "a1")]

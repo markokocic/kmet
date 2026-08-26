@@ -2032,6 +2032,17 @@
   (into {} (for [[api ms] (group-by :api models)]
              [api (models-by-id ms)])))
 
+(defn- provider-model-index
+  "Vector of model maps → {provider -> {model-id -> model}} — the shape
+   process-commandcode's canonical-ref lookup (get-in grouped [provider
+   model-id]) needs. A bare group-by :provider leaves vectors under each
+   provider, and every ref silently resolves to nil (regression: all
+   commandcode models lost their :reasoning/:thinking-level-map/:max-tokens
+   and fell back to conservative defaults)."
+  [models]
+  (into {} (for [[pid ms] (group-by :provider models)]
+             [pid (models-by-id ms)])))
+
 (defn- generate-models-data
   "Build {provider-id -> [model-map ...]} from a models.dev payload + the
    live fetch results (pi generateModels order: all model sources, the
@@ -2096,15 +2107,22 @@
         ;; after the section overrides, before the metadata passes) and gets
         ;; the thinking metadata rules on top (off:null for gpt-5* etc.)
         azure (map #(apply-thinking-maps % nil) (process-azure normalized))
-        ;; commandcode resolves against the groups built above (its refs
-        ;; point into them), then joins the pipeline so the shared passes
-        ;; (deepseek-v4 compat normalization) still apply
-        base-grouped (group-by :provider
-                               (->> (concat normalized azure)
-                                    (map apply-compat-metadata)
-                                    normalize-deepseek-v4))
+        ;; commandcode resolves against the canonical groups built above (its
+        ;; refs point into them), then joins the pipeline so the shared
+        ;; passes (deepseek-v4 compat normalization) still apply. The ref
+        ;; lookup (get-in grouped [rp rid]) needs the {provider ->
+        ;; {model-id -> model}} shape (provider-model-index) — a bare
+        ;; group-by :provider leaves vectors and every ref silently resolves
+        ;; to nil (regression: all commandcode models lost their
+        ;; :reasoning/:thinking-level-map/:max-tokens and fell back to
+        ;; conservative defaults).
+        base-models (->> (concat normalized azure)
+                         (map apply-compat-metadata)
+                         normalize-deepseek-v4)
+        base-grouped (group-by :provider base-models)
+        ref-groups (provider-model-index base-models)
         grouped (assoc base-grouped :commandcode
-                       (->> (process-commandcode commandcode-fetched base-grouped
+                       (->> (process-commandcode commandcode-fetched ref-groups
                                                  commandcode-prices)
                             normalize-deepseek-v4))]
     (into (array-map)

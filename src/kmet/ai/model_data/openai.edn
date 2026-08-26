@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-25T16:26:45Z"
+ :generated-at "2026-08-26T22:02:02Z"
  :provider {:id :openai
             :name "OpenAI"
             :env-vars ["OPENAI_API_KEY"]

@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-26T13:28:26Z"
+ :generated-at "2026-08-26T22:02:02Z"
  :provider {:id :mistral
             :name "Mistral"
             :env-vars ["MISTRAL_API_KEY"]
@@ -346,4 +346,15 @@
     :input [:text]
     :cost {:input 0.1 :output 0.3 :cache-read 0.01 :cache-write 0}
     :context-window 32000
-    :max-tokens 32000}}}}
+    :max-tokens 32000}
+   "zai-glm-5-2"
+   {:id "zai-glm-5-2"
+    :name "GLM-5.2"
+    :provider :mistral
+    :api :mistral-conversations
+    :base-url "https://api.mistral.ai"
+    :reasoning true
+    :input [:text]
+    :cost {:input 1.4 :output 4.4 :cache-read 0.14 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 131072}}}}
