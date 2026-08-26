@@ -504,6 +504,25 @@
                  (let [result (extensions/load-extension! (str dir "/ext.clj"))]
                    (fs/delete-tree dir)
                    result)))]
+    (testing "a manifest-dir extension's own internal namespaces load
+              regardless of prefix (indexed from the extension dir)"
+      (let [dir "target/test-ext-internal-ns"]
+        (fs/create-dirs (str dir "/src/kmet/extensions/myext"))
+        (spit (str dir "/extension.edn")
+              "{:name \"internal-ns\" :entry \"src/kmet/extensions/myext/core.clj\"}\n")
+        (spit (str dir "/src/kmet/extensions/myext/core.clj")
+              (str "(ns kmet.extensions.myext.core\n"
+                   "  (:require [kmet.extension :as ext]\n"
+                   "            [kmet.extensions.myext.internal :as internal]))\n"
+                   "(defn init [api]\n"
+                   "  (when-not (= 42 (internal/answer))\n"
+                   "    (throw (ex-info \"internal require failed\" {}))))\n"))
+        (spit (str dir "/src/kmet/extensions/myext/internal.clj")
+              "(ns kmet.extensions.myext.internal)\n(defn answer [] 42)\n")
+        (let [result (extensions/load-extension! dir)]
+          (fs/delete-tree dir)
+          (t/is (nil? (:error result)) (str "loaded: " (:error result))))))
+
     (testing "kmet.app.* requires are rejected with an actionable error"
       (let [result (load "app" "(ns bad-app (:require [kmet.app.commands :as c]))\n(defn init [api] nil)\n")]
         (t/is (some? (:error result)))

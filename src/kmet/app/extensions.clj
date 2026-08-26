@@ -777,10 +777,57 @@
      rewrite-clj.zip.subedit
      edamame.core})
 
+(def ^:private bb-bundled-java-classes
+  "JDK classes backing libraries bundled with babashka. Plain babashka
+   resolves them, but they are absent from babashka.classes/all-classes
+   (the basis of context-classes), so without this list a bundled library
+   like org.clojure/data.xml fails inside an extension sandbox with
+   \"Unable to resolve classname\" at first use. Extend when another
+   bundled library needs more of the java.xml / javax namespace surface."
+  ["javax.xml.XMLConstants"
+   "javax.xml.datatype.DatatypeConfigurationException"
+   "javax.xml.datatype.DatatypeFactory"
+   "javax.xml.datatype.Duration"
+   "javax.xml.datatype.XMLGregorianCalendar"
+   "javax.xml.namespace.NamespaceContext"
+   "javax.xml.namespace.QName"
+   "javax.xml.stream.FactoryConfigurationError"
+   "javax.xml.stream.Location"
+   "javax.xml.stream.StreamFilter"
+   "javax.xml.stream.XMLEventReader"
+   "javax.xml.stream.XMLEventWriter"
+   "javax.xml.stream.XMLInputFactory"
+   "javax.xml.stream.XMLOutputFactory"
+   "javax.xml.stream.XMLReporter"
+   "javax.xml.stream.XMLResolver"
+   "javax.xml.stream.XMLStreamConstants"
+   "javax.xml.stream.XMLStreamException"
+   "javax.xml.stream.XMLStreamReader"
+   "javax.xml.stream.XMLStreamWriter"
+   "javax.xml.stream.events.Attribute"
+   "javax.xml.stream.events.Characters"
+   "javax.xml.stream.events.DTD"
+   "javax.xml.stream.events.EndDocument"
+   "javax.xml.stream.events.EndElement"
+   "javax.xml.stream.events.EntityReference"
+   "javax.xml.stream.events.Namespace"
+   "javax.xml.stream.events.ProcessingInstruction"
+   "javax.xml.stream.events.StartDocument"
+   "javax.xml.stream.events.StartElement"
+   "javax.xml.stream.events.XMLEvent"])
+
 (defonce ^:private context-classes
-  (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
-                (remove #(str/starts-with? (.getName ^Class %) "[")
-                        (babashka.classes/all-classes)))))
+  (let [from-bb (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
+                              (remove #(str/starts-with? (.getName ^Class %) "[")
+                                      (babashka.classes/all-classes))))
+        ;; bundled-library backing classes: resolve loudly-checked names
+        ;; silently — a missing one only matters when a lib actually uses it
+        bundled (into {}
+                      (keep (fn [n]
+                              (try [(symbol n) {:class (Class/forName n)}]
+                                   (catch Exception _))))
+                      bb-bundled-java-classes)]
+    (merge from-bb bundled)))
 
 (def ^:private tui-library-namespaces
   "The generic TUI layer and the supported app-level tool renderers shared
@@ -942,13 +989,17 @@
 (defn- validate-entry-requires!
   "Fail fast with an actionable error when the entry ns form requires a
    kmet.* namespace outside the shared set (kmet.extension + kmet.tui.* +
-   kmet.libs.*). Without this the error would be silent: sci's require
+   kmet.libs.*) or the extension's own internal namespaces (NS-FILES, the
+   index built from the extension dir — those resolve regardless of their
+   prefix). Without this the error would be silent: sci's require
    machinery NPEs on a load-fn failure and swallows the original exception."
-  [ext-name ns-form tui-namespaces libs-namespaces]
+  [ext-name ns-form tui-namespaces libs-namespaces ns-files]
   (doseq [clause-key [:require :require-macros :use]
           lib (require-libspec-libs (ns-clause ns-form clause-key))]
     (let [s (str lib)]
       (cond
+        ;; the extension's own internal namespace — always resolvable
+        (contains? ns-files lib) nil
         (str/starts-with? s "kmet.tui.")
         (when-not (contains? tui-namespaces lib)
           (throw (ex-info
@@ -1207,7 +1258,8 @@
             ;; require machinery swallows the load-fn error into an NPE
             _ (validate-entry-requires! name (read-ns-form entry)
                                         (shared-tui-namespaces)
-                                        (shared-libs-namespaces))]
+                                        (shared-libs-namespaces)
+                                        (or ns-files {}))]
         (doseq [lib (keys deps)]
           (when (contains? bb-bundled-libs (str lib))
             (binding [*out* *err*]
