@@ -12,6 +12,7 @@
             [kmet.tui.keybindings :as kb]
             [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.theme :as theme]
+            [kmet.tui.utils :as u]
             [extensions.lsp-adapter.detect :as detect]
             [extensions.lsp-adapter.runtime :as runtime]))
 
@@ -85,9 +86,29 @@
                             row inner-w t))))
       (when @flash
         (vswap! lines conj (theme/fg t :success (str " " @flash))))
-      (vswap! lines conj
-              (theme/fg t :dim
-                        "  ↑↓ select · enter/r restart · f refresh · esc close"))
+      ;; key hints, packed into width-bounded lines (mcp-adapter precedent:
+      ;; a single hardcoded hints line clips on narrow terminals)
+      (let [hints [(str (theme/italic "↑↓") " select")
+                   (str (theme/italic "⏎") "/" (theme/italic "r") " restart")
+                   (str (theme/italic "f") " refresh")
+                   (str (theme/italic "esc") " close")]
+            gap-w 2
+            max-w (- inner-w 2)]
+        (loop [hs hints, cur-line "", cur-w 0]
+          (if (empty? hs)
+            (when (seq cur-line)
+              (vswap! lines conj
+                      (theme/fg t :dim (str "  " cur-line))))
+            (let [h (first hs)
+                  hw (u/visible-width h)
+                  needed (if (zero? cur-w) hw (+ gap-w hw))]
+              (if (and (pos? cur-w) (> (+ cur-w needed) max-w))
+                (do (vswap! lines conj
+                            (theme/fg t :dim (str "  " cur-line)))
+                    (recur (rest hs) h hw))
+                (recur (rest hs)
+                       (str cur-line (if (pos? cur-w) "  " "") h)
+                       (+ cur-w needed)))))))
       (vswap! lines conj (theme/fg t :border
                                    (str "╰" (apply str (repeat inner-w "─")) "╯")))
       @lines))
