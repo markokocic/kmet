@@ -805,7 +805,8 @@
     kmet.tui.components.editing
     kmet.tui.components.expandable-text
     kmet.tui.components.image
-    kmet.app.ui.tool-renderers])
+    kmet.app.ui.tool-renderers
+    kmet.app.keybindings])
 
 (def ^:private libs-library-namespaces
   "The generic kmet.libs.* layer shared with extension contexts. Every lib
@@ -874,6 +875,7 @@
                                  (contains? bb-shared-namespaces (ns-name ns-obj))
                                  (str/starts-with? n "kmet.tui.")
                                  (= n "kmet.app.ui.tool-renderers")
+                                 (= n "kmet.app.keybindings")
                                  (str/starts-with? n "kmet.libs.")))
                     [(ns-name ns-obj) (ns-interns ns-obj)])))
               (all-ns))))
@@ -975,7 +977,7 @@
                        " — not part of the kmet.tui.* library shared with extensions")
                   {:extension ext-name :ns lib})))
 
-        (= s "kmet.app.ui.tool-renderers")
+        (#{"kmet.app.ui.tool-renderers" "kmet.app.keybindings"} s)
         (when-not (contains? tui-namespaces lib)
           (throw (ex-info
                   (str "Extension " ext-name " requires " lib
@@ -1131,7 +1133,8 @@
         (throw (ex-info
                 (cond
                   (or (str/starts-with? (str namespace) "kmet.tui.")
-                      (= (str namespace) "kmet.app.ui.tool-renderers"))
+                      (= (str namespace) "kmet.app.ui.tool-renderers")
+                      (= (str namespace) "kmet.app.keybindings"))
                   (str "Extension " ext-name " requires " namespace
                        " — the shared TUI/renderer library is shared by reference and was"
                        " not loaded when this context was built")
