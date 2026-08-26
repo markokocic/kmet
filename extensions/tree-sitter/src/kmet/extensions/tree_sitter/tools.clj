@@ -237,6 +237,13 @@
 
 ;; ─── registration ─────────────────────────────────────────────────────────
 
+(def ^:private common-guidelines
+  "Guidelines shared by all five tools — steer agents from grep to
+   structural navigation and set expectations for first-use latency."
+  ["Prefer the tree-sitter structure tools over grep for structural questions — they match parsed code shape, not text."
+   "find_definition and find_callers scan the whole project (root defaults to cwd); get_symbol_body and find_callees are file-scoped (path + symbol)."
+   "All five parse on demand; the first use auto-downloads the tree-sitter binary + grammar (one-time latency). With a cold cache and no network the call fails with a clear error and retries on the next call."])
+
 (defn- safe
   "Never-throw wrapper: infra/logic failures become normal error results."
   [f]
@@ -261,12 +268,16 @@
   []
   [{:name "list_symbols"
     :description "List all definitions (functions, classes, vars, methods) in a source file with line numbers and kinds. Prefer over grep when asked 'what's in this file'."
+    :prompt-snippet "List all definitions in a source file (functions, classes, vars) with line numbers and kinds"
+    :prompt-guidelines common-guidelines
     :params {"path" param-file}
     :render-call render/render-call
     :render-result render/render-result
     :execute (safe list-symbols*)}
    {:name "find_definition"
     :description "Find where a named function/class/var is defined across the project. Prefer over grep: matches definitions structurally, not text occurrences."
+    :prompt-snippet "Find where a named function/class/var is defined across the project"
+    :prompt-guidelines common-guidelines
     :params {"symbol" param-symbol
              "root" param-root}
     :render-call render/render-call
@@ -274,6 +285,8 @@
     :execute (safe find-definition*)}
    {:name "get_symbol_body"
     :description "Read the complete source body of one definition identified by file path and exact symbol name. Prefer over re-reading whole files."
+    :prompt-snippet "Read the complete source body of one definition (path + symbol)"
+    :prompt-guidelines common-guidelines
     :params {"path" param-file
              "symbol" param-symbol}
     :render-call render/render-call
@@ -281,6 +294,8 @@
     :execute (safe get-symbol-body*)}
    {:name "find_callers"
     :description "List every call site of a named function/method across the project, shown as caller(file:line). Prefer over grep for 'who uses X' questions."
+    :prompt-snippet "List every call site of a named function/method across the project"
+    :prompt-guidelines common-guidelines
     :params {"symbol" param-symbol
              "root" param-root}
     :render-call render/render-call
@@ -288,6 +303,8 @@
     :execute (safe find-callers*)}
    {:name "find_callees"
     :description "List what one function calls (unique callees with first call site), scoped to that function's body in the given file."
+    :prompt-snippet "List what one function calls — unique callees with first call site"
+    :prompt-guidelines common-guidelines
     :params {"path" param-file
              "symbol" param-symbol}
     :render-call render/render-call
