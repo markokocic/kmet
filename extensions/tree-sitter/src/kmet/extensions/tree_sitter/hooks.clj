@@ -40,7 +40,7 @@
           route (dispatch/route ext opts)]
       (case route
         :tree-sitter (when-some [r (validate/parse-problems! path content
-                                             nil opts)]
+                                                             nil opts)]
                        (assoc r :via :tree-sitter))
         :delimiter {:problems (validate/delimiter-problems content)
                     :via :delimiter}

@@ -209,7 +209,7 @@
                        {:type ::parse-failed :paths (vec paths)
                         :result res})))
      (xml/parse-str (str/trim (str (:out res)))
-                                :namespace-aware false))))
+                    :namespace-aware false))))
 
 (defn sources-by-path
   "<source name=...> elements of a parsed <sources>, keyed by their name

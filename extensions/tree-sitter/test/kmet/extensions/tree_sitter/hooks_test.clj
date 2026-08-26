@@ -40,7 +40,6 @@
     (is (nil? (call-write {:path "/tmp/ok.py"
                            :content "def f():\n    return 1\n"})))))
 
-
 (defn- call-write-with-tool [tool]
   (#'hooks/on-tool-call {:tool-name tool
                          :args {:path "/tmp/x.py" :content "x = (1 +"}}))
