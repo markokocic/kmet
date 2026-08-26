@@ -65,26 +65,35 @@
                          (str "kind:" k)))
 
 (defn- shape-locations
-  "Array-or-single Location → deduped `path:line:col` lines, capped."
+  "Array-or-single Location → deduped `path:line:col` display lines plus the
+   structured items behind them, capped. Items carry absolute paths — the
+   renderer relativizes/hyperlinks against its own cwd."
   [res]
   (let [locs (cond (map? res) [res]
                    (vector? res) res
                    :else [])
-        lines (distinct
-               (keep (fn [{:keys [uri range]}]
-                       (when (and uri range)
-                         (format "%s:%s:%s"
-                                 (lsp/uri->path uri)
-                                 (inc (get-in range [:start :line]))
-                                 (inc (get-in range [:start :character])))))
-                     locs))]
-    (if (empty? lines)
-      nil
-      (concat (take max-lines lines)
-              (when (> (count lines) max-lines)
-                [(str "… and " (- (count lines) max-lines) " more")])))))
+        deduped (distinct
+                 (keep (fn [{:keys [uri range]}]
+                         (when (and uri range)
+                           {:path (lsp/uri->path uri)
+                            :line (inc (get-in range [:start :line]))
+                            :col (inc (get-in range [:start :character]))}))
+                       locs))
+        lines (map (fn [{:keys [path line col]}]
+                     (format "%s:%s:%s" path line col))
+                   deduped)
+        shown (take max-lines lines)
+        more (- (count lines) max-lines)]
+    (when (seq lines)
+      {:lines (concat shown (when (pos? more)
+                              [(str "… and " more " more")]))
+       :items deduped
+       :more more})))
 
-(defn- shape-hover [res]
+(defn- shape-hover
+  "Hover contents → single-element {:lines :items} (one :text item), or nil
+   when the server sent nothing usable."
+  [res]
   (let [contents (:contents res)]
     (when contents
       (let [text (cond
@@ -97,42 +106,61 @@
                                                      contents))
                    :else (str contents))]
         (when-not (str/blank? text)
-          [(if (> (count text) max-hover-chars)
-             (str (subs text 0 max-hover-chars) "…")
-             text)])))))
+          {:lines [(if (> (count text) max-hover-chars)
+                     (str (subs text 0 max-hover-chars) "…")
+                     text)]
+           :items [{:text (if (> (count text) max-hover-chars)
+                            (str (subs text 0 max-hover-chars) "…")
+                            text)}]})))))
 
-(defn- flatten-symbol
-  ([sym] (flatten-symbol sym 0))
-  ([sym depth]
-   (concat [(str (apply str (repeat depth "  "))
-                 (or (:name sym) "?") " " (kind-name (:kind sym)))]
-           (mapcat #(flatten-symbol % (inc depth)) (:children sym [])))))
+(defn- symbol->items
+  "One symbol tree node → its {:depth :name :kind} item followed by the
+   flattened items of its children."
+  [{:keys [name kind children]} depth]
+  (cons {:depth depth
+         :name name
+         :kind (kind-name kind)}
+        (mapcat #(symbol->items % (inc depth)) children)))
 
-(defn- shape-symbols [res]
-  (let [lines (mapcat #(flatten-symbol %) (or res []))]
-    (when (seq lines) (take max-lines lines))))
-
-(defn- shape-call-item [item]
-  (format "%s %s @ %s:%s"
-          (or (:name item) "?")
-          (kind-name (:kind item))
-          (some-> item :uri lsp/uri->path)
-          (some-> item :range :start :line inc)))
+(defn- shape-symbols
+  "Symbol tree → flattened {:depth :name :kind} items plus the matching
+   display lines (derived from the items so the two never drift)."
+  [res]
+  (let [items (mapcat #(symbol->items % 0) (or res []))
+        lines (map (fn [{:keys [depth name kind]}]
+                     (str (apply str (repeat depth "  "))
+                          (or name "?") " " kind))
+                   items)]
+    (when (seq lines)
+      {:lines (take max-lines lines)
+       :items (take max-lines items)
+       :more (max 0 (- (count lines) max-lines))})))
 
 (defn- shape-hierarchy
-  "Incoming/outgoing call results → caller/callee lines with site counts."
+  "Incoming/outgoing call results → caller/callee lines with site counts,
+   deduped (servers repeat an item once per resolution context), plus
+   {:name :kind :path :line :sites} items."
   [res]
-  (let [lines (for [{:keys [from fromRanges]} (or res [])
-                    :when (map? from)]
-                (let [n (count fromRanges)]
-                  (str (shape-call-item from)
-                       (when (pos? n)
-                         (str " (" n " site" (when (> n 1) "s") ")")))))]
-    (when (seq lines) lines)))
+  (let [items (vec
+               (for [{:keys [from fromRanges]} (or res [])
+                     :when (map? from)
+                     :let [entry {:name (:name from)
+                                  :kind (kind-name (:kind from))
+                                  :path (some-> from :uri lsp/uri->path)
+                                  :line (some-> from :range :start :line inc)
+                                  :sites (count fromRanges)}]]
+                 entry))
+        deduped (distinct items)
+        lines (for [{:keys [name kind path line sites]} deduped]
+                (str (format "%s %s @ %s:%s" name kind path line)
+                     (when (pos? sites)
+                       (str " (" sites " site" (when (> sites 1) "s") ")"))))]
+    (when (seq lines)
+      {:lines lines :items deduped :more 0})))
 
 (defn- shape-result
-  "Per-operation shaping of one conn's raw result; nil when empty.
-   OP is the canonical keyword (:definition …)."
+  "Per-operation shaping of one conn's raw result → {:lines :items :more};
+   nil when empty. OP is the canonical keyword (:definition …)."
   [op res]
   (case op
     :definition (shape-locations res)
@@ -141,20 +169,56 @@
     :hover (shape-hover res)
     :documentSymbol (shape-symbols res)
     :workspaceSymbol (shape-symbols res)
-    :prepareCallHierarchy (let [items (mapv shape-call-item (or res []))]
-                            (when (seq items) items))
+    :prepareCallHierarchy (let [items (mapv (fn [item]
+                                              {:name (:name item)
+                                               :kind (kind-name (:kind item))
+                                               :path (some-> item :uri lsp/uri->path)
+                                               :line (some-> item :range :start :line inc)
+                                               :sites 0})
+                                            (or res []))]
+                            (when (seq items)
+                              {:lines (mapv #(format "%s %s @ %s:%s"
+                                                     (:name %) (:kind %)
+                                                     (:path %) (:line %))
+                                            items)
+                               :items items
+                               :more 0}))
     :incomingCalls (shape-hierarchy res)
     :outgoingCalls (shape-hierarchy res)
     nil))
+
+(def ^:private op->section-kind
+  "Wire operation → renderer section kind (render.clj switches on these)."
+  {:definition :locations
+   :references :locations
+   :implementation :locations
+   :documentSymbol :symbols
+   :workspaceSymbol :symbols
+   :hover :hover
+   :prepareCallHierarchy :prepare
+   :incomingCalls :hierarchy
+   :outgoingCalls :hierarchy})
+
+(defn- detail-sections
+  "Shaped per-conn results → :details section maps for the TUI renderer."
+  [op results]
+  (let [kind (or (get op->section-kind op) op)]
+    (for [{:keys [name root shaped]} results
+          :when (seq (:lines shaped))]
+      {:server name
+       :root (str root)
+       :kind kind
+       :more (:more shaped 0)
+       :items (:items shaped [])})))
 
 (defn- assemble
   "Multi-server output: labelled sections per conn (already shaped),
    failures listed last, nil when everything came back empty."
   [results errors cwd]
-  (let [sections (for [{:keys [name root lines]} results
-                       :when (seq lines)]
+  (let [sections (for [{:keys [name root shaped]} results
+                       :when (seq (:lines shaped))]
                    (into [(str "── " name " (" (rel-path root cwd) ") ──")]
-                         lines))
+                         (:lines shaped)))
         failure-lines (map (fn [{:keys [name message]}]
                              (str name ": " message))
                            errors)
@@ -179,24 +243,34 @@
           (if source (str " (" source ")") "")))
 
 (defn- render-file-diags
-  "Capped per-file block; a flood collapses to one line — a flood is almost
-   never caused by the agent, and a wall of noise is the opposite of useful."
+  "Capped per-file block — display lines plus {:severity :line :col :message
+   :source} items; a flood collapses to one line (a flood is almost never
+   caused by the agent, and a wall of noise is the opposite of useful)."
   [entries]
   (let [sorted (vec (sort-by #(get-in % [:range :start :line]) entries))
         n (count sorted)]
     (cond
       (= 0 n) nil
       (>= n flood-threshold)
-      [(format "%d diagnostics (flood suppressed)" n)]
+      {:lines [(format "%d diagnostics (flood suppressed)" n)] :items []}
       :else
-      (concat (map render-diag (take max-per-file sorted))
-              (when (> n max-per-file)
-                [(str "… and " (- n max-per-file) " more")])))))
+      {:lines (concat (map render-diag (take max-per-file sorted))
+                      (when (> n max-per-file)
+                        [(str "… and " (- n max-per-file) " more")]))
+       :items (mapv (fn [{:keys [severity range message source]}]
+                      {:severity severity
+                       :line (inc (get-in range [:start :line]))
+                       :col (inc (get-in range [:start :character]))
+                       :message (str/trim (or message ""))
+                       :source source})
+                    (take max-per-file sorted))})))
 
 (defn diagnostics-report
   "The `diagnostics` operation: queried file plus up to MAX-PROJECT-FILES
    other files with errors, across every live conn claiming PATH. Reads
-   collected push state only — no server round-trip."
+   collected push state only — no server round-trip. Returns
+   {:text string :sections [...]} — TEXT is the model-facing report,
+   SECTIONS feed the TUI renderer."
   [st path]
   (let [cwd (str (fs/cwd))
         file-uri (lsp/path->uri path)
@@ -211,7 +285,8 @@
                           :when block]
                       {:label (str (:name conn) " @ "
                                    (rel-path (:root conn) cwd))
-                       :lines block})
+                       :lines (:lines block)
+                       :items (:items block)})
         others (for [conn relevant
                      [uri {:keys [diagnostics]}]
                      (runtime/diagnostics-for conn)
@@ -225,18 +300,27 @@
                         (sort-by :errors >)
                         (take max-project-files))]
     (if (and (empty? file-blocks) (empty? top-others))
-      "(no results)"
-      (str/join "\n"
-                (concat
-                 (mapcat (fn [{:keys [label lines]}]
-                           (into [(str "── " label " ──")] lines))
-                         file-blocks)
-                 (when (seq top-others)
-                   (into ["── project (files with errors) ──"]
-                         (map (fn [{:keys [path errors]}]
-                                (str (rel-path path cwd) ": " errors " error"
-                                     (when (> errors 1) "s")))
-                              top-others))))))))
+      {:text "(no results)" :sections []}
+      {:text (str/join "\n"
+                       (concat
+                        (mapcat (fn [{:keys [label lines]}]
+                                  (into [(str "── " label " ──")] lines))
+                                file-blocks)
+                        (when (seq top-others)
+                          (into ["── project (files with errors) ──"]
+                                (map (fn [{:keys [path errors]}]
+                                       (str (rel-path path cwd) ": " errors " error"
+                                            (when (> errors 1) "s")))
+                                     top-others)))))
+       :sections (concat
+                  (map (fn [{:keys [label items]}]
+                         {:label label :kind :diagnostics :items items})
+                       file-blocks)
+                  (when (seq top-others)
+                    [{:kind :project-errors
+                      :items (mapv (fn [{:keys [path errors]}]
+                                     {:path path :errors errors})
+                                   top-others)}]))})))
 
 ;; ─── Tool entry point ────────────────────────────────────────────────────
 
@@ -250,7 +334,9 @@
 (defn execute
   "Tool executor. SIGNAL is the run's abort atom — polled before starting,
    so ESC skips the round-trip entirely (in-flight waits stay bounded by
-   request timeouts). Returns the shaped multi-server string."
+   request timeouts). Returns {:content string :details map} — CONTENT is
+   the shaped multi-server text, DETAILS the structured sections the TUI
+   renderer consumes (absent on usage/abort paths)."
   [st signal args]
   (let [args (or args {})
         raw-op (:operation args)
@@ -260,7 +346,7 @@
     (cond
       (str/blank? (str raw-op)) (usage-error "operation is required")
       (nil? op) (usage-error (str "unknown operation: " raw-op))
-      (and signal @signal) "(aborted)"
+      (and signal @signal) {:content "(aborted)"}
       (not (:filePath args)) (usage-error "filePath is required")
       :else
       (let [path (resolve-path cwd (:filePath args))
@@ -275,7 +361,10 @@
         (when (and (:symbol-query spec) (str/blank? (:query args)))
           (usage-error "workspaceSymbol requires query"))
         (if (:diagnostics spec)
-          (diagnostics-report st path)
+          (let [{:keys [text sections]} (diagnostics-report st path)]
+            {:content text
+             :details {:op :diagnostics :cwd cwd
+                       :sections (vec sections)}})
           (do
             (when-not (fs/exists? path)
               (throw (ex-info (str "no such file: " path) {:type ::usage})))
@@ -311,8 +400,18 @@
                   shaped (for [{:keys [name root value]} results]
                            {:name name
                             :root root
-                            :lines (if (= ::none value)
-                                     []
-                                     (or (shape-result op value) []))})]
-              (or (assemble shaped errors cwd)
-                  "(no results)"))))))))
+                            :shaped (if (= ::none value)
+                                      {:lines [] :items []}
+                                      (or (shape-result op value)
+                                          {:lines [] :items []}))})
+                  content (or (assemble shaped errors cwd)
+                              "(no results)")]
+              (cond-> {:content content}
+                (not= content "(no results)")
+                (assoc :details {:op op :cwd cwd
+                                 :sections (vec (concat
+                                                 (detail-sections op shaped)
+                                                 (for [{:keys [name message]} errors]
+                                                   {:kind :error
+                                                    :items [{:name name
+                                                             :message message}]})))})))))))))

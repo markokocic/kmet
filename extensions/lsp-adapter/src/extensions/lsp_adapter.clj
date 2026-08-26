@@ -9,6 +9,7 @@
             [clojure.string :as str]
             [extensions.lsp-adapter.detect :as detect]
             [extensions.lsp-adapter.panel :as panel]
+            [extensions.lsp-adapter.render :as render]
             [extensions.lsp-adapter.runtime :as runtime]
             [extensions.lsp-adapter.tools :as tools]
             [kmet.extension :as ext]
@@ -113,11 +114,19 @@ seconds while indexing; a failed install stays failed until /lsp restart.")
                                   :description "workspaceSymbol search text."}}
                         :required ["operation" "filePath"]}
                        :contextual? true
+                       ;; Custom transcript renderers (pi: renderCall/
+                       ;; renderResult) — structured sections from execute's
+                       ;; :details, plain preview fallback without them.
+                       :render-call render/render-lsp-call
+                       :render-result render/render-lsp-result
                        :execute (fn [args _on-update signal _ctx]
            ;; Tool contract (kmet.app.tools.registry): execute returns
-           ;; {:content ...}. A bare string reaches the after-tool-call
-           ;; chain, whose (contains? result :is-error) throws on strings.
-                                  {:content (str (tools/execute st signal args))})}))
+           ;; {:content ...}; :details rides along for the renderer. A bare
+           ;; string reaches the after-tool-call chain, whose
+           ;; (contains? result :is-error) throws on strings.
+                                  (let [res (tools/execute st signal args)]
+                                    (cond-> {:content (:content res)}
+                                      (:details res) (assoc :details (:details res)))))}))
 
 ;; ─── /lsp command ─────────────────────────────────────────────────────────
 
