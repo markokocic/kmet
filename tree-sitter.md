@@ -148,8 +148,16 @@ expanded states on screen) — headless tests cover structure only.
 
 ## Phase 5 — validation + hooks
 
-Files: `validate.clj`, `dispatch.clj`, `hooks.clj` + tests. Guardrails on
-top of phases 1–2; independent of the symbol tools.
+Files: `validate.clj`, `dispatch.clj`, `hooks.clj` + tests. DONE.
+
+Implementation notes: dispatch routes clojure-family files to defer/
+delimiter and grammar langs to tree-sitter; unknown extensions are never
+validated. validate's delimiter backend is a clojure-flavored scanner; the
+tree backend walks `parse --wasm -x` trees for ERROR/MISSING nodes (capped,
+with snippet + expected token). Hooks mirror paren_repair's write-block /
+edit-warn shapes and never throw — infra failures pass through. Known
+limitation: tolerant recovery can mask some mistakes (e.g. python
+`def f(:` parses without an ERROR node).
 
 1. `validate.clj`:
    - `parse-errors` — run `parse --wasm --format json -` (stdin content),

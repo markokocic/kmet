@@ -105,6 +105,10 @@ No background refresh thread; version bumps land via manifest updates.
 
 ## Hook policy (mirrors the shipped clojure extension)
 
+**Implemented** in `dispatch.clj` + `hooks.clj` on top of `validate.clj`;
+write-block and edit-warn semantics follow paren_repair exactly, plus the
+never-throw rule below.
+
 Composition context: `on-tool-call` hooks chain in registration order,
 arg-rewrites propagate, blocks don't short-circuit (first block's reason
 wins), and **a throwing hook becomes a block** (fail-closed) — see

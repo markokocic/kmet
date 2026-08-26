@@ -8,7 +8,10 @@
                               kmet.extensions.tree-sitter.grammars-test
                               kmet.extensions.tree-sitter.symbols-test
                               kmet.extensions.tree-sitter.tools-test
-                              kmet.extensions.tree-sitter.renderers-test])]
+                              kmet.extensions.tree-sitter.renderers-test
+                              kmet.extensions.tree-sitter.validate-test
+                              kmet.extensions.tree-sitter.dispatch-test
+                              kmet.extensions.tree-sitter.hooks-test])]
                 (doseq [ns-sym nss]
                   (require ns-sym))
                 (let [summary (apply clojure.test/run-tests nss)]

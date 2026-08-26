@@ -59,9 +59,15 @@ call — no partial state.
 binary. Source code never leaves the machine; only manifest metadata
 (version pins) references public GitHub/Zed URLs at download time.
 
-## Syntax validation hooks (planned)
+## Syntax validation hooks
 
-`write` calls with unparseable content will be blocked with line/column
-detail; `edit` results that leave a file unparseable get a ⚠️ warning
-appended. Clojure-family files defer to the clojure extension when it is
-enabled. See [`SPEC.md`](SPEC.md) §Hook policy.
+`write` calls whose content does not parse are **blocked** with line/column
+detail and a fix hint; `edit` results that leave a file unparseable get a
+⚠️ warning appended to the tool result (non-blocking). Clojure-family files
+defer to the clojure extension when it is enabled, falling back to a
+bracket-balance check otherwise; files with no known grammar are never
+validated.
+
+Note: tree-sitter error recovery is tolerant — most syntax mistakes produce
+parse errors the hooks catch, but a few recoverable ones may slip through.
+See [`SPEC.md`](SPEC.md) §Hook policy.
