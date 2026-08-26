@@ -87,7 +87,11 @@
    captured signature; without a signature the reasoning degrades to plain
    text (or an empty-signature thinking block on allow-listed compat models),
    mirroring pi convertMessages. Messages without provenance (legacy
-   sessions) degrade like unsigned ones."
+   sessions) degrade like unsigned ones.
+
+   The :system message is NOT converted — Anthropic carries the system
+   prompt in the request-level `system` field (pi params.system), never as a
+   message with role \"system\" (the API rejects it)."
   ([messages]
    (anthropic-messages messages nil))
   ([messages {:keys [provider model allow-empty-signature]}]
@@ -95,6 +99,7 @@
          (keep (fn [m]
                  (let [role (name (:role m))]
                    (case role
+                     "system" nil
                      "bash"
                      (when-not (:exclude-from-context? m)
                        {:role "user" :content (bash-execution-text m)})
@@ -171,6 +176,20 @@
     {"Authorization" (str "Bearer " t)}
     {"x-api-key" api-key}))
 
+(defn- system-prompt-text
+  "Extract the system prompt from a kmet message vector. kmet prepends the
+   system prompt as a :role :system message (loop.clj call-llm); Anthropic
+   carries it in the request-level `system` field instead (pi params.system),
+   so it is pulled out here and dropped from the message list."
+  [messages]
+  (some (fn [m]
+          (when (= :system (:role m))
+            (let [content (:content m)]
+              (if (string? content)
+                content
+                (or (-> content first :text) "")))))
+        messages))
+
 (defn anthropic-request
   [{:keys [model-record provider-record effort api-key messages tools signal base-url
            idle-timeout-ms total-timeout-ms session-id
@@ -179,6 +198,7 @@
   (future
     (let [model-id (or (:model opts) (:id model-record))
           thinking (anthropic-thinking model-record effort)
+          system (system-prompt-text messages)
           payload (apply-before-provider-request-hook
                    (cond-> {:model model-id
                             :max_tokens (:max-tokens thinking (or (:max-tokens model-record) 4096))
@@ -190,6 +210,7 @@
                                         :allow-empty-signature
                                         (-> model-record :compat :allow-empty-signature)})
                             :stream true}
+                     (seq system) (assoc :system [{:type "text" :text system}])
                      (seq tools) (assoc :tools (mapv #(tool->anthropic-schema %
                                                                               (:supports-strict-tools (:compat model-record)))
                                                      tools))
@@ -230,7 +251,12 @@
                                             :tool-call (when on-tool-call
                                                          (on-tool-call {:id (:id event)
                                                                         :name (:name event)
-                                                                        :arguments (:arguments event)}))
+                                                                        :arguments (:arguments event)
+                                                                        :index (:index event)}))
+                                            :tool-call-args (when on-tool-call
+                                                              (on-tool-call {:id (:id event)
+                                                                             :arguments (:arguments event)
+                                                                             :index (:index event)}))
                                             :done (when (and on-done
                                                              (or (not curl-backed)
                                                                  (not= :connection-closed (:stop-reason event))))

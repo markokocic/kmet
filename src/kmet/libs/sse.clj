@@ -115,7 +115,11 @@
         (case (:type cb)
           "tool_use"
           {:type :tool-call :id (:id cb) :name (:name cb)
-           :arguments (:input cb {})}
+           :arguments (:input cb {})
+           ;; parallel tool_use blocks each carry their block index — the
+           ;; tool-call accumulator keys on it (pi: blocks.findIndex by
+           ;; event.index); without it sibling calls collapse into one
+           :index (:index block)}
           {:type :content-block-start})))
     "content_block_delta"
     (when data
@@ -129,13 +133,31 @@
           {:type :signature :content (get-in delta [:delta :signature])}
           "input_json_delta"
           {:type :tool-call-args
-           :arguments (get-in delta [:delta :partial_json])}
+           :arguments (get-in delta [:delta :partial_json])
+           ;; the block index correlates args deltas to their tool_use
+           ;; block (pi: input_json_delta → findIndex by event.index)
+           :index (:index delta)}
           {:type :delta :delta delta})))
     "message_delta"
     (when data
-      (let [d (json/parse-string data true)]
-        {:type :message-delta
-         :stop-reason (get-in d [:delta :stop_reason])}))
+      (let [d (json/parse-string data true)
+            ;; pi mapStopReason: end_turn/stop_sequence/pause_turn → :stop;
+            ;; max_tokens → :length; tool_use → :tool-use; refusal/sensitive
+            ;; → :error (with the stop_details explanation, pi refusal).
+            ;; message_stop alone only says "ended" — the real reason rides
+            ;; on this event.
+            reason (get-in d [:delta :stop_reason])
+            refusal-explanation (get-in d [:delta :stop_details :explanation])]
+        (cond-> {:type :message-delta}
+          reason (assoc :stop-reason
+                        (case reason
+                          ("end_turn" "stop_sequence" "pause_turn") :stop
+                          "max_tokens" :length
+                          "tool_use" :tool-use
+                          ("refusal" "sensitive") :error
+                          reason))
+          (and (= reason "refusal") refusal-explanation)
+          (assoc :error-message refusal-explanation))))
     "error"
     {:type :error :message (or data "Anthropic stream error")}
     "message_stop"
@@ -590,6 +612,15 @@
   (try
     (let [rdr (io/reader (:body response))
           state (atom {:event-name nil :buf ""})
+          ;; pi: message_delta carries the real stop_reason (tool_use /
+          ;; max_tokens / ...); message_stop only says the stream ended.
+          ;; Captured here and folded into the terminal :done so the
+          ;; accurate reason reaches the caller (pi sets output.stopReason
+          ;; from message_delta, mapStopReason).
+          delta-stop-reason (atom nil)
+          ;; pi refusal: the message_delta stop_details.explanation becomes the
+          ;; error message on the terminal :error result
+          delta-error-message (atom nil)
           saw-message-stop (atom false)
           end-reason (stream-loop rdr idle-timeout-ms signal abort-fn
                                   (fn [line]
@@ -600,9 +631,37 @@
                                         data (reset! state {:event-name event-name :buf (str buf data)})
                                         (and (empty? line) (seq buf))
                                         (do (when-let [evt (parse-anthropic-event event-name buf)]
+                                              ;; capture the message_delta stop reason before
+                                              ;; the terminal message_stop arrives
+                                              (when (= :message-delta (:type evt))
+                                                (when-let [sr (:stop-reason evt)]
+                                                  (reset! delta-stop-reason sr))
+                                                (when-let [em (:error-message evt)]
+                                                  (reset! delta-error-message em)))
                                               (when (= :done (:type evt))
                                                 (reset! saw-message-stop true))
-                                              (handler evt))
+                                              ;; the terminal :done reports the accurate
+                                              ;; stop reason from message_delta, falling
+                                              ;; back to message_stop's :end-turn. An
+                                              ;; :error stop-reason (refusal/sensitive — pi
+                                              ;; mapStopReason) is NOT a normal completion:
+                                              ;; surface it as :error so the caller routes it
+                                              ;; through on-error like the other wires (pi
+                                              ;; pushes {type: "error"} instead of done).
+                                              (let [evt (cond-> evt
+                                                          (and (= :done (:type evt))
+                                                               @delta-stop-reason)
+                                                          (assoc :stop-reason @delta-stop-reason)
+
+                                                          (and (= :done (:type evt))
+                                                               @delta-error-message)
+                                                          (assoc :error-message @delta-error-message))]
+                                                (handler (if (and (= :done (:type evt))
+                                                                  (= :error (:stop-reason evt)))
+                                                           {:type :error
+                                                            :message (or @delta-error-message
+                                                                         "Provider stopped with: error")}
+                                                           evt))))
                                             (reset! state {:event-name nil :buf ""}))
                                         :else nil)))
                                   (fn

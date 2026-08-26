@@ -342,6 +342,119 @@
             "content_block_delta"
             "{\"delta\":{\"type\":\"signature_delta\",\"signature\":\"SIG\"}}"))))
 
+(t/deftest test-parse-anthropic-parallel-tool-calls
+  ;; pi: parallel tool_use blocks are keyed by their block index (event.index)
+  ;; so sibling calls survive the tool-call accumulator instead of collapsing.
+  (t/is (= {:type :tool-call :id "toolu_1" :name "read" :arguments {} :index 0}
+           (sse/parse-anthropic-event
+            "content_block_start"
+            "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read\",\"input\":{}}}"))
+        "content_block_start carries the block index")
+  (t/is (= {:type :tool-call :id "toolu_2" :name "bash" :arguments {} :index 1}
+           (sse/parse-anthropic-event
+            "content_block_start"
+            "{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_2\",\"name\":\"bash\",\"input\":{}}}"))
+        "second sibling block gets its own index")
+  (t/is (= {:type :tool-call-args :arguments "{\"path\":\"" :index 0}
+           (sse/parse-anthropic-event
+            "content_block_delta"
+            "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"\"}}"))
+        "input_json_delta carries the block index for correlation")
+  (t/is (= {:type :tool-call-args :arguments "a.txt\"}" :index 1}
+           (sse/parse-anthropic-event
+            "content_block_delta"
+            "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"a.txt\\\"}\"}}"))
+        "second block's args delta correlates by its own index"))
+
+(t/deftest test-parse-anthropic-message-delta-stop-reasons
+  ;; pi mapStopReason: the real stop reason rides on message_delta, not
+  ;; message_stop (which only says "ended").
+  (t/is (= {:type :message-delta :stop-reason :stop}
+           (sse/parse-anthropic-event
+            "message_delta"
+            "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}")))
+  (t/is (= {:type :message-delta :stop-reason :stop}
+           (sse/parse-anthropic-event
+            "message_delta"
+            "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"pause_turn\"}}")))
+  (t/is (= {:type :message-delta :stop-reason :length}
+           (sse/parse-anthropic-event
+            "message_delta"
+            "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}")))
+  (t/is (= {:type :message-delta :stop-reason :tool-use}
+           (sse/parse-anthropic-event
+            "message_delta"
+            "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}")))
+  (t/is (= {:type :message-delta :stop-reason :error
+            :error-message "I won't do that"}
+           (sse/parse-anthropic-event
+            "message_delta"
+            "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"refusal\",\"stop_details\":{\"explanation\":\"I won't do that\"}}}"))
+        "refusal carries the stop_details explanation (pi refusal → errorMessage)")
+  (t/is (= {:type :message-delta :stop-reason :error}
+           (sse/parse-anthropic-event
+            "message_delta"
+            "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"sensitive\"}}")))
+  (t/is (= {:type :message-delta}
+           (sse/parse-anthropic-event
+            "message_delta"
+            "{\"type\":\"message_delta\",\"delta\":{}}"))
+        "no stop_reason → no :stop-reason key"))
+
+(t/deftest test-anthropic-stream-folds-message-delta-stop-reason
+  ;; The terminal :done (message_stop) reports the accurate stop reason
+  ;; captured from message_delta — pi sets output.stopReason from
+  ;; message_delta, mapStopReason. A refusal surfaces as :error instead of
+  ;; :done (pi pushes {type: "error"} for error stop-reasons).
+  (let [[in out] (make-pipe)
+        events (atom [])
+        f (future
+            (sse/process-anthropic-stream {:body in}
+                                          (fn [e] (swap! events conj e))
+                                          nil)
+            :done)]
+    (.write out (.getBytes (str "event: content_block_delta\n"
+                                "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n")))
+    (.write out (.getBytes "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n"))
+    (.write out (.getBytes "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+    (.flush out)
+    (Thread/sleep 50)
+    (.close out)
+    (t/is (= :done (deref f 3000 :timeout)))
+    (t/is (= [{:type :text :content "hi"}
+              {:type :message-delta :stop-reason :tool-use}
+              {:type :done :stop-reason :tool-use}]
+             @events)
+          "message_delta tool_use folds into the terminal done")
+    (.close in)))
+
+(t/deftest test-anthropic-stream-refusal-surfaces-as-error
+  ;; pi: a refusal message_delta maps to stopReason "error" with the
+  ;; explanation — the stream must surface it via :error (the caller's
+  ;; on-error path), never as a normal :done.
+  (let [[in out] (make-pipe)
+        events (atom [])
+        f (future
+            (sse/process-anthropic-stream {:body in}
+                                          (fn [e] (swap! events conj e))
+                                          nil)
+            :done)]
+    (.write out (.getBytes (str "event: content_block_delta\n"
+                                "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"no\"}}\n\n")))
+    (.write out (.getBytes (str "event: message_delta\n"
+                                "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"refusal\",\"stop_details\":{\"explanation\":\"I refuse\"}}}\n\n")))
+    (.write out (.getBytes "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+    (.flush out)
+    (Thread/sleep 50)
+    (.close out)
+    (t/is (= :done (deref f 3000 :timeout)))
+    (t/is (= [{:type :text :content "no"}
+              {:type :message-delta :stop-reason :error :error-message "I refuse"}
+              {:type :error :message "I refuse"}]
+             @events)
+          "refusal becomes an :error event with the explanation")
+    (.close in)))
+
 (t/deftest test-parse-google-thought-signature
   ;; pi google-shared: thoughtSignature rides on thought parts and is
   ;; captured for same-model replay

@@ -775,7 +775,19 @@ Be precise and concise in your responses."}}]
            (swap! pending assoc idx
                   {:id (:id tc) :name name :arguments (or (:arguments tc) "")})
            (swap! pending update-in [idx :arguments]
-                  (fn [old] (str (or old "") (or (:arguments tc) "")))))))
+                  (fn [old]
+                    (let [delta (or (:arguments tc) "")]
+                      (cond
+                        ;; Anthropic content_block_start seeds the tool's input as a
+                        ;; map ({}); input_json_delta then streams the partial JSON as
+                        ;; strings. pi keeps partialJson separate from arguments and
+                        ;; re-parses at content_block_stop — the deltas REPLACE the
+                        ;; map, never concat to it (pi: block.arguments =
+                        ;; parseStreamingJson(partialJson)). A map old must therefore
+                        ;; start the string accumulator fresh.
+                        (map? old) delta
+                        (nil? old) delta
+                        :else (str old delta))))))))
      (fn []
        (let [result (into []
                           (for [[_idx {:keys [id name arguments]}] @pending]

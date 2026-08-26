@@ -1778,6 +1778,108 @@
       (finally
         (.close ss)))))
 
+;; ─── Anthropic parallel tool calls (pi parity) ─────────────────────────────
+
+(t/deftest ^:slow test-llm-anthropic-parallel-tool-calls
+  ;; Regression: parallel tool_use blocks streamed by Claude must survive the
+  ;; tool-call accumulator as SEPARATE calls. Before the :index fix, kmet's
+  ;; anthropic wire dropped the block index (and the input_json_delta events
+  ;; entirely), so sibling calls collapsed into one and args stayed {} — the
+  ;; model saw one-at-a-time execution and adapted to serial tool calls.
+  (m/load-catalogs!)
+  (let [ss (java.net.ServerSocket. 0)
+        port (.getLocalPort ss)
+        request-body (atom nil)
+        _ (doto (Thread.
+                 (fn []
+                   (try
+                     (let [s (.accept ss)
+                           din (java.io.DataInputStream. (.getInputStream s))
+                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. din))
+                           ;; capture the request body (single-line JSON)
+                           clen (atom 0)
+                           _ (loop []
+                               (let [line (.readLine rdr)]
+                                 (when-not (empty? line)
+                                   (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
+                                     (reset! clen (Long/parseLong (str/trim (subs line 15)))))
+                                   (recur))))
+                           body-sb (StringBuilder.)
+                           _ (loop [n 0]
+                               (if (< n @clen)
+                                 (let [buf (char-array (- @clen n))
+                                       m (.read rdr buf)]
+                                   (when (pos? m)
+                                     (.append body-sb buf 0 m)
+                                     (recur (+ n m))))
+                                 nil))
+                           _ (reset! request-body (str body-sb))
+                           out (.getOutputStream s)
+                           ;; Two parallel tool_use blocks: read (index 0) and
+                           ;; bash (index 1), each with input_json_delta streams.
+                           stream-body (str "event: content_block_start\n"
+                                            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_read\",\"name\":\"read\",\"input\":{}}}\n\n"
+                                            "event: content_block_delta\n"
+                                            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"\"}}\n\n"
+                                            "event: content_block_delta\n"
+                                            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"/etc/hosts\\\"\"}}\n\n"
+                                            "event: content_block_start\n"
+                                            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bash\",\"name\":\"bash\",\"input\":{}}}\n\n"
+                                            "event: content_block_delta\n"
+                                            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\\\"ls\\\"}\"}}\n\n"
+                                            "event: content_block_delta\n"
+                                            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"}\"}}\n\n"
+                                            "event: message_delta\n"
+                                            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n"
+                                            "event: message_stop\n"
+                                            "data: {\"type\":\"message_stop\"}\n\n")]
+                       (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: text/event-stream\r\n"
+                                                   "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                   stream-body)))
+                       (.flush out)
+                       (.close s))
+                     (catch Exception _ nil))))
+            (.setDaemon true)
+            (.start))
+        tool-calls (atom [])
+        done-reason (atom nil)
+        errors (atom [])
+        fut (llm/send-message {:provider :anthropic
+                               :api-key "sk-test"
+                               :base-url (str "http://localhost:" port "/v1/messages")
+                               :model "claude-haiku-4-5"
+                               :messages [{:role :system :content [{:type :text :text "S"}]}
+                                          {:role :user :content [{:type :text :text "hi"}]}]
+                               :tools [(tools/make-tool :name "read" :description "Read a file"
+                                                        :parameters {:type "object" :properties {}
+                                                                     :required []})]
+                               :on-tool-call (fn [tc] (swap! tool-calls conj tc))
+                               :on-done (fn [r] (reset! done-reason r))
+                               :on-error (fn [e] (swap! errors conj e))})]
+    (try
+      @fut
+      (t/is (= [] @errors) (str "no stream errors: " @errors))
+      (t/is (= :tool-use @done-reason))
+      (t/is (= [{:id "toolu_read" :name "read" :arguments {} :index 0}
+                {:id nil :arguments "{\"path\":\"" :index 0}
+                {:id nil :arguments "/etc/hosts\"" :index 0}
+                {:id "toolu_bash" :name "bash" :arguments {} :index 1}
+                {:id nil :arguments "{\"command\":\"ls\"}" :index 1}
+                {:id nil :arguments "\"}" :index 1}]
+               @tool-calls)
+            "both parallel tool calls stream through with their own index and merged args deltas")
+      (t/testing "the wire payload puts the system prompt in `system`, not a message"
+        (let [payload (json/parse-string @request-body true)]
+          (t/is (= [{:type "text" :text "S"}] (:system payload))
+                "system prompt goes to params.system (pi semantics)")
+          (t/is (not-any? #(= "system" (:role %)) (:messages payload))
+                "no illegal \"system\" message")
+          (t/is (= "claude-haiku-4-5" (:model payload)))
+          (t/is (seq (:tools payload)) "tools are included")))
+      (finally
+        (.close ss)))))
+
 ;; ─── OpenAI Responses caching + copilot headers (pi parity) ───────────────
 
 (t/deftest test-llm-responses-cache-params
