@@ -186,10 +186,12 @@
 
 (defn- resolve-focus-home
   "Invoke the registered focus home; nil when none is registered or the
-   thunk throws (a broken home must not take the input loop down)."
+   thunk throws. Catches Throwable: this runs inside dispatch-input!, and
+   an Error escaping there kills the reader loop - losing one restore is
+   always cheaper than dead input."
   [tui]
   (when-let [home @(:focus-home tui)]
-    (try (home) (catch Exception _ nil))))
+    (try (home) (catch Throwable _ nil))))
 
 (defn tui-get-show-hardware-cursor
   "Whether the hardware terminal cursor is visible (pi: getShowHardwareCursor)."
@@ -375,7 +377,15 @@
 (defn- set-focused-component!
   "Point focused-component at COMPONENT, flipping the IFocusable flag on
    both sides. Modality is not this fn's business - dispatch-input!
-   enforces who holds input."
+   enforces who holds input.
+
+   satisfies? is sound here by construction: everything focusable is a
+   defcomponent record (editor, dock selectors, overlay dialogs), and the
+   one entry point for foreign components - normalize-custom-component -
+   admits only records, duck-typed maps (wrapped in an adapter record)
+   and trees, rejecting reifies whose satisfies? could lie under bb. If
+   that ever loosens, flip this to probe-and-call like
+   dispose-dialog-component!."
   [tui component]
   (let [prev @(:focused-component tui)]
     (when (satisfies? IFocusable prev)
@@ -403,8 +413,9 @@
    restore - hand input to the next capturing surface or home before the
    ghost swallows keys. Healthy paths restore explicitly right after
    their swap, but the watch runs first (inside the swap), so for them
-   this IS the restore and their own call becomes a no-op. Never throws:
-   a broken guard must not break overlay removal."
+   this IS the restore and their own call becomes a no-op. Never throws -
+   catches Throwable because watches run inside swap! on the reader's
+   dispatch path, and an Error here would kill input entirely."
   [tui old new]
   (try
     (let [fc @(:focused-component tui)]
@@ -414,7 +425,7 @@
                                    e))
                                old)]
         (tui-set-focus tui (overlay-restore-target tui removed))))
-    (catch Exception _ nil)))
+    (catch Throwable _ nil)))
 
 (defn- overlay-handle
   "Return the OverlayHandle map for ENTRY: {:hide :set-hidden! :is-hidden?
@@ -900,28 +911,37 @@
                 {:data data :consumed false}
                 @(:input-listeners tui))]
     ;; pi: a listener chain that transforms data to an empty string drops
-    ;; the event entirely
+    ;; the event entirely. Everything below runs app/component code on the
+    ;; reader thread - wrapped in Throwable so a buggy listener, component
+    ;; or focus thunk costs one key event, never the input loop (an Error
+    ;; escaping here would kill the reader future: keys dead, process
+    ;; alive).
     (when-not (or (:consumed chained) (empty? data))
-      ;; Modality invariant: while a visible capturing overlay exists,
-      ;; input belongs to its component - whatever else grabbed focus
-      ;; (including a hidden/removed overlay) hands it back before
-      ;; delivery. Replaces pi's blocked/eligible restore machine.
-      (if-let [cap (get-topmost-visible-overlay tui)]
-        (when-not (identical? (:component cap) @(:focused-component tui))
-          (tui-set-focus tui (:component cap)))
-        (let [fc @(:focused-component tui)]
-          (when-let [entry (some #(when (identical? (:component %) fc) %)
-                                 @(:overlays tui))]
-            (when-not (overlay-visible? tui entry)
-              (tui-set-focus tui (overlay-restore-target tui entry))))))
-      (when-let [fc @(:focused-component tui)]
-        ;; pi: input goes only to the focused leaf; key release events are
-        ;; filtered unless the component opts in via a :wants-key-release?
-        ;; field (pi: Component.wantsKeyRelease)
-        (when (or (not (keys/is-key-release? data))
-                  (:wants-key-release? fc))
-          (handle-input fc data)))
-      (tui-request-render tui))))
+      (try
+        ;; Modality invariant: while a visible capturing overlay exists,
+        ;; input belongs to its component - whatever else grabbed focus
+        ;; (including a hidden/removed overlay) hands it back before
+        ;; delivery. Replaces pi's blocked/eligible restore machine.
+        (if-let [cap (get-topmost-visible-overlay tui)]
+          (when-not (identical? (:component cap) @(:focused-component tui))
+            (tui-set-focus tui (:component cap)))
+          (let [fc @(:focused-component tui)]
+            (when-let [entry (some #(when (identical? (:component %) fc) %)
+                                   @(:overlays tui))]
+              (when-not (overlay-visible? tui entry)
+                (tui-set-focus tui (overlay-restore-target tui entry))))))
+        (when-let [fc @(:focused-component tui)]
+          ;; pi: input goes only to the focused leaf; key release events are
+          ;; filtered unless the component opts in via a :wants-key-release?
+          ;; field (pi: Component.wantsKeyRelease)
+          (when (or (not (keys/is-key-release? data))
+                    (:wants-key-release? fc))
+            (handle-input fc data)))
+        (tui-request-render tui)
+        (catch Throwable e
+          (binding [*out* *err*]
+            (println "input dispatch:" (str (class e) ":"
+                                            (ex-message e)))))))))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Input buffer (pi: stdin-buffer.ts)
