@@ -674,7 +674,7 @@
           (protocols/dispose above-root)
           (protocols/dispose below-root))))))
 
-(t/deftest test-widget-tree-content-and-dispose
+(deftest test-widget-tree-content-and-dispose
   (testing "hiccup tree content compiles to a renderable wrapper whose
             :dispose unwinds owned cleanups (the set-widget replace/remove
             hook's contract)"
@@ -695,7 +695,7 @@
       (protocols/dispose w)
       (t/is (= 0 @cleanups) "component dispose unwound the owned subtree"))))
 
-(t/deftest test-custom-component-tree-content
+(deftest test-custom-component-tree-content
   (testing "normalize-custom-component accepts a hiccup element tree for
             ui-custom dialogs — compiles to a renderable IComponent whose
             dispose unwinds owned cleanups"
@@ -719,7 +719,7 @@
       ((var-get #'inter/dispose-dialog-component!) c)
       (t/is (= 0 @cleanups) "dispose unwinds on dialog close"))))
 
-(t/deftest test-widget-string-vector-no-longer-lines
+(deftest test-widget-string-vector-no-longer-lines
   (testing "breaking change: string vectors are NOT line lists anymore —
             they fail tree compilation loudly instead of silently rendering
             text lines"

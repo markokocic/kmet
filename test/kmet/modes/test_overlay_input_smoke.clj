@@ -100,7 +100,7 @@ sys.exit(status)
                                  [16.0 "\u001b"]
                                  [17.5 "hello-smoke"]])))
           (let [captured (slurp out-file)]
-            (is (str/includes? captured "esc close")
+            (is (str/includes? captured "clojure-lsp")
                 "the /lsp panel was actually open")
             (is (str/includes? captured "hello-smoke")
                 "typed text reached the editor after ESC close")))

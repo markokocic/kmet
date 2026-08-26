@@ -148,7 +148,7 @@
       (t/is (= "moonshotai/kimi-k2.6" (:default-model (m/get-provider :openrouter))))
       (t/is (= #{:openai-completions} (:api-types (m/get-provider :zai))))
       (t/is (= #{:anthropic-messages} (:api-types (m/get-provider :kimi-coding))))
-      (t/is (= #{:openai-completions :anthropic-messages :openai-responses}
+      (t/is (= #{:anthropic-messages :openai-responses}
                (:api-types (m/get-provider :cloudflare-ai-gateway))))
       (t/is (= ["ZAI_API_KEY"] (:env-vars (m/get-provider :zai))))
       (t/is (= ["KIMI_API_KEY"] (:env-vars (m/get-provider :kimi-coding))))

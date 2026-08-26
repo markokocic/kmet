@@ -812,7 +812,7 @@
             leaves foreign records alone"
     (let [cleanups (atom 0)
           cleanup-fn (fn [_props]
-                       (macros/with-let [_ (swap! cleanups inc)]
+                       (with-let [_ (swap! cleanups inc)]
                          [:text {:padding-x 0 :padding-y 0} "x"]
                          (finally (swap! cleanups dec))))
           comp (hicc/compile-tree
