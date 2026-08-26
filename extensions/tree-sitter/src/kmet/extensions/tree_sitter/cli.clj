@@ -150,36 +150,62 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$DIR/%s\" \"$@\"
        (emit-launcher! base))
      bin)))
 
+(def ^:private verified-installs
+  "bin-path -> [size mtime-ms] of binaries already sha-verified this
+   process; lets repeated tool calls skip the multi-MB re-hash. Any change
+   to the file (corruption, replacement) changes the stamp and forces the
+   full check again."
+  (atom {}))
+
+(defn- stamp
+  "Identity of a file on disk cheap enough for hot-path checks."
+  [path]
+  [(fs/size path) (.toMillis (fs/last-modified-time path))])
+
 (defn ensure-binary!
-  "Install orchestration: cached+sha-verified binary -> reuse; missing or
-   corrupt -> download once (zip verified, then the extracted executable
-   re-verified against its own pin), then smoke-run --version (a failed
-   smoke deletes the blob so the next call retries cleanly). Returns
-   {:path bin-path :version pinned-version}. Opts: {:base dir}."
+  "Install orchestration: cached+sha-verified binary -> reuse (no spawn);
+   missing or corrupt -> download once (zip verified, then the extracted
+   executable re-verified against its own pin) and smoke-run --version —
+   a failed smoke deletes the blob so the next call retries cleanly. The
+   smoke only guards fresh installs: a binary whose bytes match the pin
+   has already proven it runs. Returns {:path bin-path :version}.
+   Opts: {:base dir}."
   ([] (ensure-binary! nil))
   ([opts]
    (let [base (:base opts)
          _ (paths/ensure-dirs! base)
          bin (paths/bin-path base)
          {:keys [version targets]} (fetch/binary-release)
-         {:keys [binary-sha256]} (or (get-in targets [(fetch/host-target)])
+         target-key (fetch/host-target)
+         {:keys [binary-sha256]} (or (get targets target-key)
                                      (throw (ex-info (str "manifest has no entry for target: "
-                                                          (fetch/host-target))
+                                                          target-key)
                                                      {:type ::no-asset-for-target
-                                                      :target (fetch/host-target)
+                                                      :target target-key
                                                       :version version})))]
-     (spit (str (paths/manifest-copy-path base)) (fetch/manifest-text))
-     (when-not (and (fs/exists? bin) (= (fetch/sha256 bin) binary-sha256))
-       ;; missing/corrupt/stale artifact -> full reinstall (extraction
-       ;; overwrites anything sitting where the binary belongs)
-       (install-binary! base))
-     (when (termux?)
-       (emit-launcher! base))
-     (try
-       (smoke-version! base version)
-       (catch Exception e
-         ;; failed smoke -> drop the blob so the next call retries cleanly
-         (fs/delete-if-exists bin)
-         (fs/delete-if-exists (paths/launcher-path base))
-         (throw e)))
+     (let [sig (when (fs/exists? bin) (stamp bin))]
+       (if (and sig (= (get @verified-installs (str bin)) sig))
+         ;; proven earlier this process: skip the multi-MB hash + spawn;
+         ;; auxiliary files are rewritten anyway (cheap, self-healing)
+         (do (spit (str (paths/manifest-copy-path base)) (fetch/manifest-text))
+             (when (termux?)
+               (emit-launcher! base)))
+         (do (if (and sig (= (fetch/sha256 bin) binary-sha256))
+               ;; cached on disk: verify auxiliaries into place
+               (do (spit (str (paths/manifest-copy-path base))
+                         (fetch/manifest-text))
+                   (when (termux?)
+                     (emit-launcher! base)))
+               ;; fresh install: download, then prove it actually runs
+               (do (install-binary! base)
+                   (try
+                     (smoke-version! base version)
+                     (catch Exception e
+                       ;; failed smoke -> drop the blob so the next call retries
+                       ;; cleanly
+                       (fs/delete-if-exists bin)
+                       (fs/delete-if-exists (paths/launcher-path base))
+                       (throw e)))))
+             (swap! verified-installs assoc (str bin)
+                    (when (fs/exists? bin) (stamp bin))))))
      {:path bin :version version})))

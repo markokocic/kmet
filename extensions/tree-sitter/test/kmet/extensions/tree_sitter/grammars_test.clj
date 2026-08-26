@@ -4,6 +4,7 @@
             [clojure.string :as str]
             [clojure.test :refer [are deftest is testing]]
             [kmet.extensions.tree-sitter.fetch :as fetch]
+            [kmet.extensions.tree-sitter.cli :as cli]
             [kmet.extensions.tree-sitter.grammars :as g]
             [kmet.extensions.tree-sitter.paths :as paths]
             [kmet.extensions.tree-sitter.test-util :as tu]))
@@ -90,20 +91,23 @@
   (let [base (tu/temp-dir! "ts-g-hit")]
     (paths/ensure-dirs! base)
     (spit (str (g/wasm-path "testlang" base)) fixture-wasm-bytes)
-    (let [wasm (g/wasm-path "testlang" base)
-          before (fs/last-modified-time wasm)
-          calls (atom 0)
-          result (g/ensure-grammar!
-                  "testlang"
-                  {:base base :langs fixture-table
-                   :parse-runner (fn [& _] (swap! calls inc) {:exit 0 :out ""})})]
-      (testing "short-circuits without touching acquisition or load-check"
-        (is (= {:lang "testlang" :status :cached} result))
-        (is (zero? @calls))
-        (is (= before (fs/last-modified-time wasm))))
-      (testing "scaffold materialized alongside the cached hit"
-        (is (fs/exists? (fs/path (g/scaffold-dir "testlang" base) "src/grammar.json")))
-        (is (fs/exists? (paths/config-path base)))))))
+    ;; binary provisioning is stubbed: the real one downloads on a clean
+    ;; base, and this test must stay fully offline
+    (with-redefs [cli/ensure-binary! (constantly {:path :stub :version "0.0.0"})]
+      (let [wasm (g/wasm-path "testlang" base)
+            before (fs/last-modified-time wasm)
+            calls (atom 0)
+            result (g/ensure-grammar!
+                    "testlang"
+                    {:base base :langs fixture-table
+                     :parse-runner (fn [& _] (swap! calls inc) {:exit 0 :out ""})})]
+        (testing "short-circuits without touching acquisition or load-check"
+          (is (= {:lang "testlang" :status :cached} result))
+          (is (zero? @calls))
+          (is (= before (fs/last-modified-time wasm))))
+        (testing "scaffold materialized alongside the cached hit"
+          (is (fs/exists? (fs/path (g/scaffold-dir "testlang" base) "src/grammar.json")))
+          (is (fs/exists? (paths/config-path base))))))))
 
 (deftest ensure-grammar-unknown-lang-test
   (is (nil? (g/ensure-grammar! "nosuchlang" {:base (tu/temp-dir! "ts-g-none")}))))
