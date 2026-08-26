@@ -25,7 +25,6 @@
    find_callers / find_callees work without any query-engine support."
   (:require [clojure.data.xml :as xml]
             [clojure.edn :as edn]
-            [clojure.java.io :as io]
             [clojure.string :as str]
             [kmet.extensions.tree-sitter.cli :as cli]
             [kmet.extensions.tree-sitter.paths :as paths]))
@@ -38,7 +37,7 @@
   "Extraction rule set for lang, or nil when the language ships none."
   [lang]
   (or (get @rules-cache lang)
-      (when-let [r (io/resource (str "kmet/extensions/tree_sitter/queries/" lang ".edn"))]
+      (when-let [r (paths/bundled-resource (str "queries/" lang ".edn"))]
         (let [parsed (edn/read-string (slurp r))]
           (swap! rules-cache assoc lang parsed)
           parsed))))

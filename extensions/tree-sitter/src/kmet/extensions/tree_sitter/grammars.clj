@@ -8,21 +8,17 @@
    (pi-tree-sitter corruption policy). Unknown language -> nil everywhere."
   (:require [babashka.fs :as fs]
             [clojure.edn :as edn]
-            [clojure.java.io :as io]
             [clojure.string :as str]
             [kmet.extensions.tree-sitter.cli :as cli]
             [kmet.extensions.tree-sitter.fetch :as fetch]
             [kmet.extensions.tree-sitter.paths :as paths]))
 
-(def ^:private manifest-resource
-  "Classpath resource holding the pinned language table."
-  "kmet/extensions/tree_sitter/libs_manifest.edn")
-
 (defn languages
   "Pinned language table: {lang {:source :id/:url :version :sha256
    :file-types [...] :probe string}}."
   []
-  (edn/read-string (slurp (io/resource manifest-resource))))
+  (let [r (paths/bundled-resource "libs_manifest.edn")]
+    (edn/read-string (slurp r))))
 
 (defn- normalize-ext
   [ext]

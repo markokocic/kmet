@@ -10,31 +10,28 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [babashka.http-client :as http])
+            [babashka.http-client :as http]
+            [kmet.extensions.tree-sitter.paths :as paths])
   (:import [java.security MessageDigest]
            [java.util.zip ZipFile]))
-
-(def ^:private manifest-resource
-  "Classpath resource holding the pinned binary manifest."
-  "kmet/extensions/tree_sitter/bin_manifest.edn")
 
 (defn binary-release
   "Pinned CLI release from the shipped manifest:
    {:version string :targets {target {:url string :sha256 string}}}."
   []
-  (let [[version targets] (-> (io/resource manifest-resource)
+  (let [[version targets] (-> (paths/bundled-resource "bin_manifest.edn")
                               slurp
                               edn/read-string
                               first)]
     (when-not (and (string? version) (map? targets) (seq targets))
       (throw (ex-info "malformed bin manifest resource"
-                      {:type ::malformed-manifest :resource manifest-resource})))
+                      {:type ::malformed-manifest :resource "bin_manifest.edn"})))
     {:version version :targets targets}))
 
 (defn manifest-text
   "Raw manifest EDN text, materialized next to the installed binary."
   []
-  (slurp (io/resource manifest-resource)))
+  (slurp (paths/bundled-resource "bin_manifest.edn")))
 
 (defn host-target
   "os-arch slug for the machine we run on (linux-x64, macos-arm64,

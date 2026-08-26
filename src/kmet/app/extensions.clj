@@ -764,70 +764,33 @@
 
 (def ^:private bb-shared-namespaces
   "bb pre-loads these adapted-lib namespaces at startup (rewrite-clj ports,
-   edamame) and their Maven copies cannot run under SCI: they require
-   clojure.tools.reader.impl.* (impl.inspect dispatches on the removed
-   PersistentArrayMap$Seq class), which bb does not bundle. Injected by
-   reference into extension contexts like the custom ports, so extensions
-   resolving them get the bundled copy and must not declare the Maven libs
-   in deps.edn."
+    edamame, the data.xml family) and their Maven copies cannot run under
+    SCI: rewrite-clj/edamame require clojure.tools.reader.impl.* (impl.inspect
+    dispatches on the removed PersistentArrayMap$Seq class), and data.xml's
+    copy uses definline (unsupported by SCI). Injected by reference into
+    extension contexts like the custom ports, so extensions resolving them
+    get the bundled copy and must not declare the Maven libs in deps.edn."
   '#{rewrite-clj.node
      rewrite-clj.parser
      rewrite-clj.paredit
      rewrite-clj.zip
      rewrite-clj.zip.subedit
-     edamame.core})
+     edamame.core
+     clojure.data.xml})
 
-(def ^:private bb-bundled-java-classes
-  "JDK classes backing libraries bundled with babashka. Plain babashka
-   resolves them, but they are absent from babashka.classes/all-classes
-   (the basis of context-classes), so without this list a bundled library
-   like org.clojure/data.xml fails inside an extension sandbox with
-   \"Unable to resolve classname\" at first use. Extend when another
-   bundled library needs more of the java.xml / javax namespace surface."
-  ["javax.xml.XMLConstants"
-   "javax.xml.datatype.DatatypeConfigurationException"
-   "javax.xml.datatype.DatatypeFactory"
-   "javax.xml.datatype.Duration"
-   "javax.xml.datatype.XMLGregorianCalendar"
-   "javax.xml.namespace.NamespaceContext"
-   "javax.xml.namespace.QName"
-   "javax.xml.stream.FactoryConfigurationError"
-   "javax.xml.stream.Location"
-   "javax.xml.stream.StreamFilter"
-   "javax.xml.stream.XMLEventReader"
-   "javax.xml.stream.XMLEventWriter"
-   "javax.xml.stream.XMLInputFactory"
-   "javax.xml.stream.XMLOutputFactory"
-   "javax.xml.stream.XMLReporter"
-   "javax.xml.stream.XMLResolver"
-   "javax.xml.stream.XMLStreamConstants"
-   "javax.xml.stream.XMLStreamException"
-   "javax.xml.stream.XMLStreamReader"
-   "javax.xml.stream.XMLStreamWriter"
-   "javax.xml.stream.events.Attribute"
-   "javax.xml.stream.events.Characters"
-   "javax.xml.stream.events.DTD"
-   "javax.xml.stream.events.EndDocument"
-   "javax.xml.stream.events.EndElement"
-   "javax.xml.stream.events.EntityReference"
-   "javax.xml.stream.events.Namespace"
-   "javax.xml.stream.events.ProcessingInstruction"
-   "javax.xml.stream.events.StartDocument"
-   "javax.xml.stream.events.StartElement"
-   "javax.xml.stream.events.XMLEvent"])
+(def ^:private runtime-classes
+  "Classes that must be registered by their RUNTIME identity: sci resolves
+   instance-method calls against the exact class of the object, and JDK\n   factory methods return internal wrappers (e.g. MessageDigest/getInstance\n   returns a $Delegate$CloneableDelegate) whose names are not loadable via\n   Class/forName under babashka's interceptor. Captured as live Class\n   objects instead — extend when another bundled library needs more."
+  [(class (java.security.MessageDigest/getInstance "SHA-256"))
+   (.getSuperclass (class (java.security.MessageDigest/getInstance "SHA-256")))])
 
 (defonce ^:private context-classes
   (let [from-bb (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
                               (remove #(str/starts-with? (.getName ^Class %) "[")
                                       (babashka.classes/all-classes))))
-        ;; bundled-library backing classes: resolve loudly-checked names
-        ;; silently — a missing one only matters when a lib actually uses it
-        bundled (into {}
-                      (keep (fn [n]
-                              (try [(symbol n) {:class (Class/forName n)}]
-                                   (catch Exception _))))
-                      bb-bundled-java-classes)]
-    (merge from-bb bundled)))
+        runtime (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
+                              runtime-classes))]
+    (merge from-bb runtime)))
 
 (def ^:private tui-library-namespaces
   "The generic TUI layer and the supported app-level tool renderers shared
@@ -888,15 +851,20 @@
                   (when (and (not (str/starts-with? n "sci."))
                              (not= n "clojure.core")
                              ;; bundled libraries whose Maven versions run under
-                             ;; SCI (clojure.tools.cli, data.json, ...) are NOT
-                             ;; injected — they resolve through the load-fn, so a
-                             ;; declared Maven version wins over the bundled copy.
-                             ;; The adapted libs (core.async, cheshire, ...),
-                             ;; the custom ports (bundled-port-namespaces) and
-                             ;; bb-shared-namespaces stay injected: their Maven
-                             ;; copies fail under SCI, so the bundled copy is
-                             ;; the only working one.
-                             (not (or (str/starts-with? n "clojure.data.")
+                             ;; SCI (clojure.tools.cli, data.json, data.csv,
+                             ;; ...) are NOT injected — they resolve through
+                             ;; the load-fn, so a declared Maven version wins
+                             ;; over the bundled copy. The adapted libs
+                             ;; (core.async, cheshire, ...), the custom ports
+                             ;; (bundled-port-namespaces), bb-shared-namespaces
+                             ;; and the data.xml family stay injected: their
+                             ;; Maven copies fail under SCI (data.xml uses
+                             ;; definline), so the bundled copy is the only
+                             ;; working one.
+                             (not (or (and (str/starts-with? n "clojure.data.")
+                                           (not (or (= n "clojure.data.xml")
+                                                    (str/starts-with? n
+                                                                      "clojure.data.xml."))))
                                       (and (str/starts-with? n "clojure.tools.")
                                            (not (contains? bundled-port-namespaces
                                                            (ns-name ns-obj))))))
@@ -1203,7 +1171,7 @@
    bb-bundled namespaces, with actionable errors for everything else."
   [ext-name ns-files deps-resolver]
   (apply require (concat tui-library-namespaces libs-library-namespaces
-                         spec-port-namespaces))
+                         spec-port-namespaces bb-shared-namespaces))
   (sci/init {:classes context-classes
              :imports bb-imports
              :features #{:bb :clj}

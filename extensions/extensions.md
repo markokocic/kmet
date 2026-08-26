@@ -154,6 +154,13 @@ Internal dependencies are declared in each file's `ns` form:
 
 Requires that don't resolve to a file under the extension directory (kmet core
 namespaces, built-ins, declared libraries) are left to the normal classpath.
+
+An extension's **own** namespaces always resolve internally — regardless of
+their prefix. A manifest-dir extension named `tree-sitter` may therefore
+have its entry require `kmet.extensions.tree-sitter.tools`: the loader
+indexes every `.clj` file under the extension directory by its `(ns ...)`
+form and resolves those requires before the shared-namespace allowlist is
+consulted.
 The extension name defaults to the directory name (`:name` in the manifest
 overrides it).
 
@@ -190,9 +197,11 @@ it is babashka-bundled.
   it exposes. Libraries needing `definterface`, `deftype` with non-protocol
   interfaces, or unexposed Java classes fail to load — in plain bb too.
 - Libraries babashka ships adapted (`cheshire`, `core.async`, `data.json`,
-  `tools.reader`, ...) usually cannot be replaced by their raw Maven
-  versions; kmet warns when an extension pins one. Omit them from `deps.edn`
-  to use the bundled copy.
+  `tools.reader`, ..., and the whole `clojure.data.xml` family, whose Maven
+  copy uses `definline` — unsupported by SCI) usually cannot be replaced by
+  their raw Maven versions; kmet warns when an extension pins one. Omit them
+  from `deps.edn` to use the bundled copy — it is injected into your context
+  by reference.
 - Single-file extensions (plain `.clj` files, no directory) cannot carry a
   `deps.edn`.
 
@@ -275,7 +284,10 @@ expanded, is-error). `:render-shell :self` lets the renderer own its outer
 box, padding, and status background. The supported reusable built-in
 renderer vars are in `kmet.app.ui.tool-renderers`, including
 `render-edit-call` and `render-edit-result`; the namespace is explicitly
-shared with extensions. `:streams? true` keeps the 2-arg `(fn [args
+shared with extensions. Path display helpers are public too:
+`render-tool-path` (shortened, accent, hyperlinked path) and `link-path`
+(wrap any styled text in a terminal hyperlink), for tools that render
+locations (the lsp tool renderer uses both). `:streams? true` keeps the 2-arg `(fn [args
 on-update])` contract (no signal/ctx).
 
 Other pi tool fields:
