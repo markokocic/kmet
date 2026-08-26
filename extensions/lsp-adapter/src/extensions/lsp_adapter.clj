@@ -83,7 +83,11 @@ prepareCallHierarchy, incomingCalls, outgoingCalls, diagnostics. All need
 `filePath`; position-based ones also need `line` and `character`
 (1-based, as shown in editors). Empty results report (no results).
 Servers spawn lazily on first touch of a claimed language and may take
-seconds while indexing; a failed install stays failed until /lsp restart.")
+seconds while indexing; a failed install stays failed until /lsp restart.
+
+Typical flow: grep finds candidates → definition jumps → references checks
+blast radius before an edit → after editing, diagnostics reports current
+errors.")
 
 (defn- register-tool! [st]
   (ext/register-tool! (:api st)
@@ -92,6 +96,12 @@ seconds while indexing; a failed install stays failed until /lsp restart.")
                        :description tool-description
                        :prompt-snippet
                        "Semantic code intelligence: definition, references, hover, symbols, call hierarchy, diagnostics"
+                       :prompt-guidelines
+                       ["Use the lsp tool for semantic code intelligence — definition, references, hover, documentSymbol, workspaceSymbol, implementation, call hierarchy, diagnostics."
+                        "Prefer lsp/definition over grep to jump to a symbol's definition; lsp/references to check blast radius before an edit; lsp/diagnostics after editing to catch current errors."
+                        "lsp operations need filePath; position-based ones (definition, references, hover, implementation, prepareCallHierarchy, incomingCalls, outgoingCalls) also need 1-based line and character."
+                        "workspaceSymbol needs a query. Empty results report (no results)."
+                        "Servers spawn lazily on first touch of a claimed language and may take seconds while indexing; a failed install stays failed until /lsp restart."]
                        :parameters
                        {:type "object"
                         :properties
