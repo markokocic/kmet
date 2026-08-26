@@ -134,7 +134,7 @@
    when components are added or removed; a mismatch means the scan below
    silently lost forms (a scanner regression), so the convention checks
    would otherwise pass vacuously."
-  43)
+  46)
 
 (deftest caching-conventions
   (let [checked (atom [])]

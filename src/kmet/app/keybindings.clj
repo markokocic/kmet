@@ -52,7 +52,10 @@
    "app.tree.filter.all"         {:default-keys ["ctrl+a"]                 :description "Tree: show all entries"}
    "app.tree.filter.cycleForward" {:default-keys ["ctrl+o"]                :description "Tree: next filter mode"}
    "app.tree.filter.cycleBackward" {:default-keys ["ctrl+shift+o"]         :description "Tree: previous filter mode"}
-   "app.tree.editLabel"   {:default-keys ["shift+l"]                 :description "Tree: edit entry label"}})
+   "app.tree.editLabel"   {:default-keys ["shift+l"]                 :description "Tree: edit entry label"}
+   "app.tree.foldOrUp"    {:default-keys ["ctrl+left" "alt+left"]    :description "Tree: fold branch or move up"}
+   "app.tree.unfoldOrDown" {:default-keys ["ctrl+right" "alt+right"] :description "Tree: unfold branch or move down"}
+   "app.tree.toggleLabelTimestamp" {:default-keys ["shift+t"]        :description "Tree: toggle label timestamps"}})
 
 ;; ─── Combined definitions (TUI + App) ─────────────────────────────────────
 

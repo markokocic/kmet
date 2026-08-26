@@ -444,6 +444,13 @@
   [session entry-id]
   (get-in (resolve-labels @(:entries session)) [entry-id :label]))
 
+(defn get-labels
+  "All resolved labels {entry-id {:label str :timestamp str}} in one pass
+   (pi: labelsById + labelTimestampsById); targets whose latest :label entry
+   cleared the label are absent."
+  [session]
+  (resolve-labels @(:entries session)))
+
 (defn set-label!
   "Set or clear a label on an entry (pi: appendLabelChange): appends a
    :label entry as a child of the current leaf. Labels are user-defined

@@ -1726,9 +1726,12 @@
                         "custom" (prompt-custom-summary! cs sess entry))))
         on-escape (fn []
                     (tui/tui-hide-overlay (:tui cs))
+                    ;; re-open with the highlight on the entry being
+                    ;; navigated to (pi showTreeSelector initialSelectedId)
                     (show-session-tree cs
                                        (fn [entry]
-                                         (ask-branch-summary cs @(:session-atom cs) entry))))
+                                         (ask-branch-summary cs @(:session-atom cs) entry))
+                                       (:id entry)))
         sl (select-list/make-select-list items
                                          :height 3
                                          :header "Summarize branch?"
