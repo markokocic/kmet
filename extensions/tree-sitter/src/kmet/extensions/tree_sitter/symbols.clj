@@ -70,34 +70,28 @@
    boundaries — names in non-ASCII files must survive this (verified:
    tree-sitter reports byte columns, e.g. `händler` is [0,6]-[0,14]).
    ASCII lines take the subs fast path (no byte[] round-trip)."
-  ([src-lines line bstart bend] (byte-slice src-lines (line-encoding src-lines) line bstart bend))
-  ([src-lines ascii? line bstart bend]
-   (let [l (when (and src-lines line (integer? line)) (nth src-lines line nil))]
-     (when (and l (integer? bstart) (integer? bend) (<= 0 bstart bend))
-       (if (str/blank? l)
-         nil
-         (let [s (min (count l) bstart)
-               e (min (count l) bend)]
-           (when (<= s e)
-             (if (nth ascii? line true)
-               (subs l s e)
-               (let [bytes (.getBytes l "UTF-8")
-                     n (count bytes)
-                     bs (min n bstart)
-                     be (min n bend)]
-                 (String. bytes bs (- be bs) "UTF-8"))))))))))
+  [src-lines ascii? line bstart bend]
+  (when-let [l (nth src-lines line nil)]
+    (let [s (min (count l) bstart)
+          e (min (count l) bend)]
+      (when (and (<= 0 bstart bend) (<= s e) (not (str/blank? l)))
+        (if (nth ascii? line true)
+          (subs l s e)
+          (let [bytes (.getBytes l "UTF-8")
+                n (count bytes)
+                bs (min n bstart)
+                be (min n bend)]
+            (String. bytes bs (- be bs) "UTF-8")))))))
 
 (defn- node-text
   "Text covered by a node (single-line only — names/callees are), or nil
    when the node is absent/spans lines/the range is out of bounds."
-  ([src-lines node] (node-text src-lines (line-encoding src-lines) node))
-  ([src-lines ascii? node]
-   (when (and node (sexp/node? node))
-     (let [[sr sc] (sexp/start-pos node)
-           [er ec] (sexp/end-pos node)]
-       (when (= sr er)
-         (let [t (byte-slice src-lines ascii? sr sc ec)]
-           (when t (str/trim t))))))))
+  [src-lines ascii? node]
+  (when (sexp/node? node)
+    (let [[sr sc] (sexp/start-pos node)
+          [er ec] (sexp/end-pos node)]
+      (when (= sr er)
+        (some-> (byte-slice src-lines ascii? sr sc ec) str/trim)))))
 
 ;; ─── Source-text helpers ──────────────────────────────────────────────────
 
@@ -233,9 +227,8 @@
                                       (when-some [n (def-name-node node src-lines ascii? rule)]
                                         [rule n])))
                                   def-rules))]
-                (if match
-                  (let [[def-rule name-node] match
-                        name (node-text src-lines ascii? name-node)]
+                (if-some [[def-rule name-node] match]
+                  (let [name (node-text src-lines ascii? name-node)]
                     (if-not (str/blank? name)
                       (do (swap! acc update :symbols conj
                                  {:name name
@@ -315,12 +308,6 @@
   (when (fs/regular-file? path)
     [(fs/size path) (.toMillis (fs/last-modified-time path))]))
 
-(defn- parse-one
-  "Parse a single tree-string into a tree (nil when the file printed
-   nothing — empty files have no tree)."
-  [tree-str]
-  (sexp/parse-tree tree-str))
-
 (defn parse-files!
   "Parse paths (all of one language — the CLI discovers language per file
    extension) through the cached grammar; returns a map path-string ->
@@ -330,7 +317,7 @@
    the per-process tree cache (tests)."
   ([paths lang] (parse-files! paths lang nil))
   ([paths _lang {:keys [base parse-runner cache] :as _opts}]
-   (let [cache? (if (nil? cache) true cache)
+   (let [cache? (not (false? cache))
          paths (mapv str paths)
          cached (when cache?
                   (into {}
@@ -366,7 +353,7 @@
                             :result res})))
          (let [parsed (->> (split-trees fresh (:out res))
                            (reduce (fn [m [p tree-str]]
-                                     (assoc m p (parse-one tree-str)))
+                                     (assoc m p (sexp/parse-tree tree-str)))
                                    {}))]
            (when cache?
              (doseq [[p tree] parsed]
@@ -381,19 +368,18 @@
 
 (defn file-symbols-and-calls
   "Symbols + calls for one already-parsed tree (cached per file stamp)."
-  ([tree src-lines lang] (file-symbols-and-calls tree src-lines lang nil))
-  ([tree src-lines lang path]
-   (if-not path
-     (collect tree src-lines (rules lang))
-     (let [st (stamp path)
-           [cst res] (get @result-cache path)
-           fresh (or (not st) (not= cst st))]
-       (if fresh
-         (let [res (collect tree src-lines (rules lang))]
-           (when st
-             (swap! result-cache assoc path [st res]))
-           res)
-         res)))))
+  [tree src-lines lang path]
+  (if-not path
+    (collect tree src-lines (rules lang))
+    (let [st (stamp path)
+          [cst res] (get @result-cache path)
+          fresh (or (not st) (not= cst st))]
+      (if fresh
+        (let [res (collect tree src-lines (rules lang))]
+          (when st
+            (swap! result-cache assoc path [st res]))
+          res)
+        res))))
 
 (defn analyze-file!
   "Parse one file and return its symbols+calls map.

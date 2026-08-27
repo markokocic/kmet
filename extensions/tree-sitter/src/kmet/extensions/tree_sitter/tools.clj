@@ -76,6 +76,14 @@
     (grammars/ensure-grammar! lang (select-keys opts [:base]))
     lang))
 
+(defn- project-files
+  "Tracked source files under ROOT (git ls-files when in a repo, else a
+   skip-dirs walk), or nil when none — callers turn that into an error."
+  [root]
+  (let [files (tracked-files root (search-exts))]
+    (when (seq files)
+      (group-by (fn [f] (grammars/resolve-lang (ext-of f))) files))))
+
 (defn- analyze-chunks
   "Run symbols/file-symbols-and-calls over every file in paths, batching
    parses. Yields [path tree src-lines lang] tuples; unreadable files are
@@ -136,23 +144,21 @@
   ([args] (find-definition* args {}))
   ([args opts]
    (if-some [symbol (param args :symbol)]
-     (let [root (or (param args :root) ".")
-           files (tracked-files root (search-exts))]
-       (if-not (seq files)
-         (err (str "no supported source files under " root))
-         (let [by-lang (group-by (fn [f] (grammars/resolve-lang (ext-of f))) files)
-               hits (mapcat (fn [[lang paths]]
-                              (for [[p tree lines] (analyze-chunks paths lang opts)
-                                    sym (:symbols (symbols/file-symbols-and-calls
-                                                   tree lines lang p))
-                                    :when (= symbol (:name sym))]
-                                (fmt-hit p sym)))
-                            by-lang)
-               hits (vec hits)]
+     (let [root (or (param args :root) ".")]
+       (if-some [by-lang (project-files root)]
+         (let [hits (->> by-lang
+                         (mapcat (fn [[lang paths]]
+                                   (for [[p tree lines] (analyze-chunks paths lang opts)
+                                         sym (:symbols (symbols/file-symbols-and-calls
+                                                        tree lines lang p))
+                                         :when (= symbol (:name sym))]
+                                     (fmt-hit p sym))))
+                         vec)]
            (if (seq hits)
              {:content (str/join "\n" hits)
               :details (details-common "definitions" (count hits) nil symbol)}
-             (err (format "No definition found for '%s'" symbol))))))
+             (err (format "No definition found for '%s'" symbol))))
+         (err (str "no supported source files under " root))))
      (err "Missing required parameter: symbol"))))
 
 (defn get-symbol-body*
@@ -183,12 +189,9 @@
   ([args] (find-callers* args {}))
   ([args opts]
    (if-some [symbol (param args :symbol)]
-     (let [root (or (param args :root) ".")
-           files (tracked-files root (search-exts))]
-       (if-not (seq files)
-         (err (str "no supported source files under " root))
-         (let [by-lang (group-by (fn [f] (grammars/resolve-lang (ext-of f))) files)
-               sites (->> by-lang
+     (let [root (or (param args :root) ".")]
+       (if-some [by-lang (project-files root)]
+         (let [sites (->> by-lang
                           (mapcat (fn [[lang paths]]
                                     (for [[p tree lines] (analyze-chunks paths lang opts)
                                           c (:calls (symbols/file-symbols-and-calls
@@ -197,13 +200,14 @@
                                       {:file p :name (:name c)
                                        :enclosing (:enclosing c)
                                        :line (:line c)})))
+                          (sort-by (juxt :file :line))
                           vec)
-               sites (->> sites (sort-by (juxt :file :line)) vec)
                callers (distinct (map :enclosing sites))]
            (if (seq sites)
              {:content (str/join "\n" (map fmt-call-site sites))
               :details (details-common "callers" (count callers) nil symbol)}
-             (err (format "No callers found for '%s'" symbol))))))
+             (err (format "No callers found for '%s'" symbol))))
+         (err (str "no supported source files under " root))))
      (err "Missing required parameter: symbol"))))
 
 (defn find-callees*
@@ -217,16 +221,18 @@
                {:keys [calls]} (symbols/analyze-file! path lang opts)
                uniq (->> (filter #(= symbol (:enclosing %)) calls)
                          (sort-by :line)
-                         (map (juxt :name identity))
-                         (reduce (fn [[seen acc] [n c]]
-                                   (if (contains? seen n)
+                         ;; first call site per distinct callee name
+                         (reduce (fn [[seen acc] c]
+                                   (if (contains? seen (:name c))
                                      [seen acc]
-                                     [(conj seen n)
-                                      (conj acc {:file (str path) :name n
+                                     [(conj seen (:name c))
+                                      (conj acc {:file (str path)
+                                                 :name (:name c)
                                                  :enclosing symbol
                                                  :line (:line c)})]))
                                  [#{} []])
-                         peek vec)
+                         peek
+                         vec)
                sites (map fmt-callee uniq)]
            (if (seq sites)
              {:content (str/join "\n" sites)

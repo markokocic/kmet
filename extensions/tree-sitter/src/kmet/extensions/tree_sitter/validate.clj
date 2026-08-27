@@ -86,13 +86,20 @@
                 :else (mapcat walk (children-nodes node)))))]
     (take max-problems (walk tree))))
 
+(defn- with-snippets
+  "Attach 1-based :line snippet text from SRC-LINES to each problem."
+  [src-lines problems]
+  (map (fn [p]
+         (assoc p :snippet
+                (not-empty
+                 (str/trim (str (nth src-lines (dec (:line p)) nil))))))
+       problems))
+
 (defn problems-from-tree
   "ERROR + zero-width (missing) problems from a parsed tree, with
    snippet text from SRC-LINES. Capped."
   [tree src-lines]
-  (mapv #(assoc % :snippet
-                (not-empty (str/trim (str (nth src-lines (dec (:line %)) nil)))))
-        (tree-problems tree)))
+  (vec (take max-problems (with-snippets src-lines (tree-problems tree)))))
 
 (defn- problems-from-output
   "Problems from a file's tree + stats line, with snippet text from
@@ -101,19 +108,12 @@
    didn't already flag the same position."
   [tree stats-line src-lines]
   (let [tree-ps (tree-problems tree)
-        stats-p (when stats-line (stats-record stats-line))
-        stats-p (when (and stats-p
-                           (not-any? #(and (= (:kind %) (:kind stats-p))
-                                           (= (:line %) (:line stats-p)))
-                                     tree-ps))
-                  stats-p)
-        all (concat tree-ps (when stats-p [stats-p]))
-        with-snippet (map (fn [p]
-                            (assoc p :snippet
-                                   (not-empty
-                                    (str/trim (str (nth src-lines (dec (:line p)) nil))))))
-                          all)]
-    (vec (take max-problems with-snippet))))
+        stats-p (when-let [sp (stats-record stats-line)]
+                  (when-not (some #(and (= (:kind %) (:kind sp))
+                                        (= (:line %) (:line sp)))
+                                  tree-ps)
+                    sp))]
+    (vec (take max-problems (with-snippets src-lines (concat tree-ps (when stats-p [stats-p])))))))
 
 (defn parse-problems!
   "Tree-sitter backend: write CONTENT to a temp file with PATH's extension,
@@ -141,10 +141,9 @@
              ;; the tree is the leading '('... form; the stats line (with a
              ;; tab) trails it when the file has problems — keep only the
              ;; tree portion for sexp parsing
-             tree-text (first (str/split out #"\n(?=[^\s])"))
-             tree-text (if (str/starts-with? (str/trim tree-text) "(")
-                         tree-text
-                         (first (str/split-lines (str tree-text))))
+             tree-text (if (str/starts-with? (str/trim out) "(")
+                         (first (str/split out #"\n(?=[^\s])"))
+                         (first (str/split-lines out)))
              stats-line (some #(when (str/includes? % "\t") %)
                               (str/split-lines out))
              tree (sexp/parse-tree tree-text)
@@ -165,13 +164,16 @@
   "First imbalance in SOURCE (clojure flavor: ; line comments, backslash
    escapes, multi-line strings), or nil when balanced."
   [content]
-  (let [n (count content)]
+  (let [n (count content)
+        closer-set (set (vals closers))
+        open (fn [[opener line col]]
+               {:kind :unclosed :line line :col col
+                :expected (str (get closers opener))
+                :snippet (str opener)})]
     (loop [i 0, line 1, col 1, stack (), str-open nil, state :code]
       (cond
         (>= i n)
-        (or (when-some [[opener oline ocol] (first stack)]
-              {:kind :unclosed :line oline :col ocol
-               :expected (str (get closers opener)) :snippet (str opener)})
+        (or (some-> (first stack) open)
             (when str-open
               {:kind :unclosed :line (:line str-open) :col (:col str-open)
                :expected nil :snippet "string"}))
@@ -202,7 +204,7 @@
                     (contains? closers ch)
                     (recur i' line' col' (conj stack [ch line col]) str-open
                            :code)
-                    (contains? (set (vals closers)) ch)
+                    (contains? closer-set ch)
                     (let [[opener _oline _ocol] (first stack)]
                       (if (and opener (= (get closers opener) ch))
                         (recur i' line' col' (rest stack) str-open :code)

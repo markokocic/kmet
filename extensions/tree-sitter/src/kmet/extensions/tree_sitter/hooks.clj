@@ -52,7 +52,9 @@
         (println "tree-sitter hooks:" (some-> e ex-message)))
       nil)))
 
-(defn- hint-for [problem]
+(defn- hint-for
+  "Fix hint matching a problem's kind."
+  [problem]
   (case (:kind problem)
     :error "fix the reported syntax error before writing."
     :missing "add the reported token before writing."
