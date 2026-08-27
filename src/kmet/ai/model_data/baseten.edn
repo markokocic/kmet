@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-26T13:28:26Z"
+ :generated-at "2026-08-27T08:37:06Z"
  :provider {:id :baseten
             :name "Baseten"
             :env-vars ["BASETEN_API_KEY"]
@@ -450,4 +450,29 @@
      :max-tokens-field :max-tokens
      :supports-long-cache-retention false
      :supports-strict-mode true
-     :chat-template-args {:enable_thinking {:var "thinking.enabled"}}}}}}}
+     :chat-template-args {:enable_thinking {:var "thinking.enabled"}}}}
+   "zai-org/GLM-5.3-Flash"
+   {:id "zai-org/GLM-5.3-Flash"
+    :name "GLM 5.3 Flash"
+    :provider :baseten
+    :api :openai-completions
+    :base-url "https://inference.baseten.co/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text :image]
+    :cost {:input 0.15 :output 0.5 :cache-read 0 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 131072
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort true
+             :thinking-format :openai
+             :max-tokens-field :max-tokens
+             :supports-long-cache-retention false
+             :supports-strict-mode true}}}}}

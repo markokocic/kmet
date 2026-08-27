@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-26T13:28:26Z"
+ :generated-at "2026-08-27T08:37:06Z"
  :provider {:id :ant-ling
             :name "Ant Ling"
             :env-vars ["ANT_LING_API_KEY"]

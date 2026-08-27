@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-26T13:28:26Z"
+ :generated-at "2026-08-27T08:37:06Z"
  :provider {:id :together
             :name "Together AI"
             :env-vars ["TOGETHER_API_KEY"]
