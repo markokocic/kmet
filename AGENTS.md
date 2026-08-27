@@ -180,6 +180,9 @@ for a full gate. The default validation loop is the changed-file tasks above.
 - **macOS**: supported too, but no way to test there — expect untested rough edges
 - **Primary dev environment**: Termux on Android — glibc babashka via `ld-linux-aarch64.so.1 --library-path`.
   Do not set `LD_LIBRARY_PATH` globally; use the glibc linker directly when on Termux.
+- **No `/tmp` on Termux**: there is no `/tmp` directory — `$TMPDIR` is `$PREFIX/tmp`
+  (`/data/data/com.termux/files/usr/tmp`). Don't rely on `/tmp` existing in code or scripts;
+  use `$TMPDIR` (or `babashka.fs/temp-dir`, which honors it) instead.
 - **Shell resolution** (`kmet.app.bash-executor`): `/bin/bash` → `which bash` → `sh`.
   On Windows this resolves through Git Bash; under WSL the WSL shell is used.
 
