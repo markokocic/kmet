@@ -67,6 +67,7 @@
             [clojure.string :as str]
             [kmet.ai.llm :as llm]
             [kmet.app.compaction :as compaction]
+            [kmet.app.skills :as skills]
             [kmet.app.tools.core :as tools]
             [kmet.app.tools.bash :as bash-tool]
             [kmet.ai.auth :as auth]
@@ -112,7 +113,9 @@
                        compact-token-threshold ;; int or nil: compact when estimated tokens exceed this
                        keep-recent-tokens     ;; int: cut-point budget in tokens (pi: keepRecentTokens, default 20000)
                        compacting?           ;; atom of bool: a compaction is in progress (escape cancels it)
-                       pending-bash])         ;; atom of vector of bash entries queued while streaming
+                       pending-bash          ;; atom of vector of bash entries queued while streaming
+                       system-prompt-opts    ;; atom of the build-system-prompt options map (pi: _baseSystemPromptOptions)
+                       ])
 
 (defn make-agent-state
   "Create a new agent state.
@@ -122,6 +125,8 @@
          :before-tool-call, :after-tool-call, :system-prompt-override,
          :transform-context, :prepare-next-turn, :should-stop-after-turn,
          :get-api-key, :scoped-models (default []),
+         :system-prompt-opts (build-system-prompt options map, pi:
+         _baseSystemPromptOptions),
          :compact-token-threshold, :auto-compact (default true, pi:
          autoCompact), :context-window, :compact-reserve-tokens (default 16384,
          pi: reserveTokens), :keep-recent-tokens (default 20000, pi:
@@ -130,7 +135,7 @@
          = the idle timeout, pi: timeoutMs ?? httpIdleTimeoutMs — an explicit
          positive number overrides the total request deadline; 0 disables it
          (falls back to idle); nil uses idle)"
-  [& {:keys [model provider system session on-event thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key scoped-models compact-token-threshold context-window compact-reserve-tokens keep-recent-tokens http-idle-timeout-ms http-total-timeout-ms auto-compact]
+  [& {:keys [model provider system session on-event thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key scoped-models system-prompt-opts compact-token-threshold context-window compact-reserve-tokens keep-recent-tokens http-idle-timeout-ms http-total-timeout-ms auto-compact]
       :or {provider :opencode-go
            thinking :off
            steering-mode :all
@@ -183,7 +188,8 @@ Be precise and concise in your responses."}}]
                     :compact-reserve-tokens compact-reserve-tokens
                     :keep-recent-tokens keep-recent-tokens
                     :compacting? (atom false)
-                    :pending-bash (atom [])}))
+                    :pending-bash (atom [])
+                    :system-prompt-opts (atom system-prompt-opts)}))
 
 ;; ─── Active tools (pi: ctx.setActiveTools) ──────────────────────
 
@@ -202,10 +208,41 @@ Be precise and concise in your responses."}}]
 
 (defn set-active-tools!
   "Restrict the tools sent to the LLM to NAMES (a set or seq of tool
-   names); nil restores all tools (pi: setActiveTools)."
+   names); nil restores all tools (pi: setActiveTools). Also rebuilds the
+   system prompt to reflect the new tool set (pi: setActiveToolsByName —
+   only tools in the registry can be enabled; unknown names are ignored).
+   Validation runs against the LIVE tool registry, and the base prompt
+   options captured at build time (:system-prompt-opts, pi:
+   _baseSystemPromptOptions) are re-applied with the filtered set, so the
+   prompt's Available tools list and tool-derived guidelines stay in sync
+   with what the model can actually call.
+   Changes take effect on the next agent turn."
   [agent names]
-  (reset! (:enabled-tools agent) (when names (set names)))
-  nil)
+  (let [names (cond
+                (nil? names) nil
+                (sequential? names) names
+                ;; a bare string is a single tool name (extensions pass
+                ;; through untyped; pi's string[] is enforced by TS)
+                (string? names) [names]
+                :else names)
+        enabled (when names (set names))
+        ;; validation source: the LIVE registry (pi: setActiveToolsByName
+        ;; validates against the tool registry) — captures extension tools
+        ;; registered after the system prompt was built
+        valid (if enabled
+                (filterv #(contains? enabled (:name %))
+                         (vals (tools/get-all-tools)))
+                (vals (tools/get-all-tools)))
+        ;; pi filters unknown names out of the enabled set itself (only
+        ;; registry tools are stored); the prompt is built from VALID, so
+        ;; the two can never diverge
+        enabled (when enabled (into #{} (map :name) valid))
+        opts (assoc @(:system-prompt-opts agent) :tools valid)]
+    (reset! (:enabled-tools agent) enabled)
+    (when (seq @(:system-prompt-opts agent))
+      (reset! (:system agent)
+              (apply skills/build-system-prompt (mapcat identity opts))))
+    nil))
 ;; ─── Helpers ───────────────────────────────────────────────────────────────
 
 (defn- emit

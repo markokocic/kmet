@@ -3,6 +3,7 @@
             [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
+            [babashka.process :as proc]
             [kmet.libs.context :as context]))
 
 (defn- tmp-dir
@@ -15,6 +16,77 @@
   "True when a path string is inside the temp tree."
   [tmp p]
   (str/starts-with? (str p) (str tmp "/")))
+
+(defn- git!
+  "Run a git command inside DIR. Returns trimmed stdout."
+  [dir & args]
+  (str/trim (:out (apply proc/shell {:out :string :err :string :continue true}
+                         "git" "-C" dir args))))
+
+(t/deftest test-agents-override-precedence
+  (t/testing "AGENTS.override.md wins over AGENTS.md in the same directory"
+    (let [tmp (tmp-dir "override")
+          agent-dir (str tmp "/agent")]
+      (try
+        (io/make-parents (str agent-dir "/AGENTS.md"))
+        (io/make-parents (str agent-dir "/AGENTS.override.md"))
+        (spit (str agent-dir "/AGENTS.md") "# base rules")
+        (spit (str agent-dir "/AGENTS.override.md") "# override rules")
+        (let [files (context/load-project-context-files agent-dir agent-dir)
+              mine (filter #(under-tmp? tmp (:path %)) files)
+              f (first mine)]
+          (t/is (= 1 (count mine)))
+          (t/is (str/ends-with? (:path f) "AGENTS.override.md"))
+          (t/is (= "# override rules" (:content f))))
+        (finally (fs/delete-tree tmp))))))
+
+(t/deftest ^:slow test-worktree-shadow-detection
+  (t/testing "nested linked worktree: main repo's AGENTS.md not double-loaded"
+    (let [tmp (tmp-dir "worktree")]
+      (try
+        (fs/create-dirs tmp)
+        (git! tmp "init" "-q")
+        (git! tmp "config" "user.email" "test@test")
+        (git! tmp "config" "user.name" "Test")
+        (spit (str tmp "/AGENTS.md") "# main rules")
+        (git! tmp "add" "AGENTS.md")
+        (git! tmp "commit" "-q" "-m" "init")
+        (let [wt (str tmp "/wt")]
+          (git! tmp "worktree" "add" "-q" "-b" "feature" wt)
+          (spit (str wt "/AGENTS.md") "# worktree rules")
+          (let [files (context/load-project-context-files (str tmp "/agent") wt)
+                mine (filter #(under-tmp? tmp (:path %)) files)
+                paths (map :path mine)]
+            (t/is (= 1 (count mine)))
+            (t/is (= (str wt "/AGENTS.md") (first paths)))
+            (t/is (= "# worktree rules" (:content (first mine))))))
+        (finally (fs/delete-tree tmp)))))
+  (t/testing "sibling worktree (not nested): both context files load"
+    (let [tmp (tmp-dir "sibling")
+          sibling (str tmp "-sib")]
+      (try
+        (fs/create-dirs tmp)
+        (git! tmp "init" "-q")
+        (git! tmp "config" "user.email" "test@test")
+        (git! tmp "config" "user.name" "Test")
+        (spit (str tmp "/AGENTS.md") "# main rules")
+        (git! tmp "add" "AGENTS.md")
+        (git! tmp "commit" "-q" "-m" "init")
+        ;; a SIBLING worktree lives OUTSIDE the main repo dir (pi:
+        ;; `git worktree add ../feat`) — findShadowedContextFile returns
+        ;; undefined (the main repo's .git is not the common git dir), and
+        ;; the main repo is not an ancestor of the sibling's cwd anyway, so
+        ;; only the sibling's own context file loads
+        (git! tmp "worktree" "add" "-q" "-b" "feature" sibling)
+        (spit (str sibling "/AGENTS.md") "# worktree rules")
+        (let [files (context/load-project-context-files (str sibling "/agent") sibling)
+              under? #(str/starts-with? (str (:path %)) (str sibling "/"))
+              mine (filter under? files)]
+          (t/is (= [(str sibling "/AGENTS.md")]
+                   (mapv :path mine))
+                "only the sibling's own AGENTS.md loads (no shadow, no main-repo ancestor)"))
+        (finally (fs/delete-tree tmp)
+                 (fs/delete-tree sibling))))))
 
 (t/deftest test-load-project-context-files
   (t/testing "agent dir file first, then nearest ancestor first (pi order)"
@@ -56,3 +128,7 @@
           (t/is (= f (first (map :path files))))
           (t/is (= 1 (count (filter #(under-tmp? tmp %) (map :path files))))))
         (finally (fs/delete-tree tmp))))))
+
+;; NOTE: git worktree tests spawn git (slow) — they live in test_context.clj
+;; because they exercise context.clj directly; keep them ^:slow so the
+;; default `bb test` run stays fast.

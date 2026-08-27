@@ -6,6 +6,7 @@
             [kmet.app.loop :as agent]
             [kmet.ai.models :as models]
             [kmet.app.skills :as skills]
+            [kmet.app.tools.core :as tools]
             [kmet.libs.context :as context]
             [kmet.app.prompts :as prompts]
             [kmet.app.extensions :as extensions]
@@ -60,17 +61,20 @@
             (skills/load-skills-from-dir d))
         _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
             (prompts/load-prompt-templates-from-dir d))
-        system-prompt (skills/build-system-prompt
-                       :custom-prompt (cfg/get-custom-prompt config)
-                       :append-prompt (cfg/get-append-system-prompt config)
-                       :context-files (context/load-project-context-files
-                                       (cfg/get-agent-dir) (str (fs/cwd))))
+        system-prompt-opts {:custom-prompt (cfg/get-custom-prompt config)
+                            :append-prompt (cfg/get-append-system-prompt config)
+                            :context-files (context/load-project-context-files
+                                            (cfg/get-agent-dir) (str (fs/cwd)))
+                            :tools (vals (tools/get-all-tools))}
+        system-prompt (apply skills/build-system-prompt
+                             (mapcat identity system-prompt-opts))
         resolved-provider (or provider (cfg/get-provider config))
         resolved-model (or model (models/resolve-config-model config))
         ag (agent/make-agent-state
             :model resolved-model
             :provider resolved-provider
             :system system-prompt
+            :system-prompt-opts system-prompt-opts
             :before-tool-call extension-before-tool-call
             :after-tool-call extension-after-tool-call
             ;; pi: retry settings (settings.edn :retry block — enabled gates

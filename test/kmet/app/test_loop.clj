@@ -9,6 +9,8 @@
             [kmet.ai.google-adc :as google-adc]
             [kmet.libs.usage :as usage]
             [kmet.app.tools.core :as tools]
+            [kmet.app.skills :as skills]
+            [kmet.app.tools.registry :as tools-registry]
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
             [kmet.app.session :as session]
@@ -49,6 +51,62 @@
     (t/is (= "custom prompt" @(:system agent)))
     (t/is (= session (:session agent)))
     (t/is (fn? (:on-event agent)))))
+
+(t/deftest test-loop-set-active-tools-rebuilds-system-prompt
+  (let [all-tools (vals (tools-registry/get-all-tools))
+        opts {:tools all-tools}
+        prompt (skills/build-system-prompt :tools all-tools)
+        agent (loop/make-agent-state
+               :model "m"
+               :system prompt
+               :system-prompt-opts opts)]
+    ;; initial prompt advertises bash
+    (t/is (str/includes? @(:system agent) "- bash:"))
+    (t/is (str/includes? @(:system agent) "Use bash for file operations"))
+    ;; disable bash
+    (loop/set-active-tools! agent (mapv :name (remove #(= "bash" (:name %)) all-tools)))
+    (t/is (= #{"read" "edit" "write"} @(:enabled-tools agent)))
+    (t/is (not (str/includes? @(:system agent) "- bash:")))
+    (t/is (not (str/includes? @(:system agent) "Use bash for file operations")))
+    ;; restore all
+    (loop/set-active-tools! agent nil)
+    (t/is (nil? @(:enabled-tools agent)))
+    (t/is (str/includes? @(:system agent) "- bash:"))
+    (t/is (str/includes? @(:system agent) "Use bash for file operations"))
+    ;; unknown tool names are filtered out of the enabled set (pi)
+    (loop/set-active-tools! agent ["read" "nonexistent-tool"])
+    (t/is (= #{"read"} @(:enabled-tools agent)))
+    (t/is (str/includes? @(:system agent) "- read:"))
+    (t/is (not (str/includes? @(:system agent) "nonexistent-tool")))
+    ;; a bare string is treated as a single tool name (untyped extensions)
+    (loop/set-active-tools! agent "write")
+    (t/is (= #{"write"} @(:enabled-tools agent)))
+    (t/is (str/includes? @(:system agent) "- write:"))))
+
+(t/deftest test-loop-reload-keeps-tools-reenableable
+  ;; pi: reload rebuilds the prompt over the ACTIVE tool set — a tool
+  ;; disabled before the reload must be re-enableable afterwards (the
+  ;; reload handler in interactive.clj rebuilds opts over the active set;
+  ;; set-active-tools! always validates against the live registry).
+  (let [all-tools (vals (tools-registry/get-all-tools))
+        opts {:tools all-tools}
+        agent (loop/make-agent-state
+               :model "m"
+               :system (skills/build-system-prompt :tools all-tools)
+               :system-prompt-opts opts)]
+    ;; restrict to read (as an extension would)
+    (loop/set-active-tools! agent ["read"])
+    (t/is (= #{"read"} @(:enabled-tools agent)))
+    ;; reload: prompt rebuilt over active set, opts updated
+    (let [read-tool (first (filter #(= "read" (:name %)) all-tools))]
+      (reset! (:system-prompt-opts agent) (assoc opts :tools [read-tool]))
+      (reset! (:system agent) (skills/build-system-prompt :tools [read-tool]))
+      (t/is (str/includes? @(:system agent) "- read:"))
+      (t/is (not (str/includes? @(:system agent) "- bash:"))))
+    ;; re-enable bash after the reload — must work (sources = full registry)
+    (loop/set-active-tools! agent ["read" "bash"])
+    (t/is (= #{"read" "bash"} @(:enabled-tools agent)))
+    (t/is (str/includes? @(:system agent) "- bash:"))))
 
 ;; ─── State helpers ───────────────────────────────────────────────────────
 

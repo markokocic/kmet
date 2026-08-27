@@ -1196,12 +1196,22 @@
               _ (prompts/clear-prompt-templates!)
               _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
                   (prompts/load-prompt-templates-from-dir d))
-              ;; pi: _rebuildSystemPrompt with new sources
-              system-prompt (skills/build-system-prompt
-                             :custom-prompt (cfg/get-custom-prompt config)
-                             :append-prompt (cfg/get-append-system-prompt config)
-                             :context-files (context/load-project-context-files
-                                             (cfg/get-agent-dir) (str (fs/cwd))))]
+              ;; pi: _rebuildSystemPrompt with new sources — the prompt is
+              ;; built over the CURRENTLY active tool set (pi:
+              ;; getActiveToolNames), so a pre-reload set-active-tools
+              ;; restriction survives the reload.
+              active-names @(:enabled-tools agent-state)
+              active-tools (if active-names
+                             (filterv #(contains? active-names (:name %))
+                                      (vals (tools/get-all-tools)))
+                             (vals (tools/get-all-tools)))
+              system-prompt-opts {:custom-prompt (cfg/get-custom-prompt config)
+                                  :append-prompt (cfg/get-append-system-prompt config)
+                                  :context-files (context/load-project-context-files
+                                                  (cfg/get-agent-dir) (str (fs/cwd)))
+                                  :tools active-tools}
+              system-prompt (apply skills/build-system-prompt
+                                   (mapcat identity system-prompt-opts))]
           (reset! global-config config)
           (theme-ctrl/set-config! (:theme-controller cs) config)
           ;; pi: restoreChatBeforeSessionStart — re-apply hideThinkingBlock
@@ -1209,6 +1219,7 @@
           (ui/chat-history-set-thinking-hidden! chat-history
                                                 (cfg/get-hide-thinking-block config))
           (reset! (:system agent-state) system-prompt)
+          (reset! (:system-prompt-opts agent-state) system-prompt-opts)
           (ui/loaded-resources-set-sections!
            (:loaded-resources-comp cs) (build-loaded-resource-sections))
           (update-footer! cs)
@@ -2744,11 +2755,13 @@
             (skills/load-skills-from-dir d))
         _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
             (prompts/load-prompt-templates-from-dir d))
-        system-prompt (skills/build-system-prompt
-                       :custom-prompt (cfg/get-custom-prompt config)
-                       :append-prompt (cfg/get-append-system-prompt config)
-                       :context-files (context/load-project-context-files
-                                       (cfg/get-agent-dir) (str (fs/cwd))))
+        system-prompt-opts {:custom-prompt (cfg/get-custom-prompt config)
+                            :append-prompt (cfg/get-append-system-prompt config)
+                            :context-files (context/load-project-context-files
+                                            (cfg/get-agent-dir) (str (fs/cwd)))
+                            :tools (vals (tools/get-all-tools))}
+        system-prompt (apply skills/build-system-prompt
+                             (mapcat identity system-prompt-opts))
 
         ;; Migrate legacy keybinding ids in keybindings.edn (pi: migrations
         ;; runner calls migrateKeybindingsConfigFile at startup)
@@ -2783,6 +2796,7 @@
             :model model
             :provider provider
             :system system-prompt
+            :system-prompt-opts system-prompt-opts
             :session session
             :context-window ctx-window
             :compact-reserve-tokens (or (:compact-reserve-tokens config) 16384)
