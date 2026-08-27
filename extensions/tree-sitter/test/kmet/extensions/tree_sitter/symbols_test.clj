@@ -1,118 +1,76 @@
 (ns kmet.extensions.tree-sitter.symbols-test
-  "Walker + rules tests run on hand-written XML fixtures mirroring the
-   CLI's `parse -x` output; the integration test at the bottom exercises
-   the real CLI only when binary+grammar are already cached (never
-   downloads)."
+  "Walker + rules tests run on hand-written sexp fixtures mirroring the
+   CLI's default `parse` output; the integration test at the bottom
+   exercises the real CLI only when binary+grammar are already cached
+   (never downloads)."
   (:require [babashka.fs :as fs]
-            [clojure.data.xml :as xml]
             [clojure.test :refer [deftest is testing]]
             [kmet.extensions.tree-sitter.grammars :as grammars]
             [kmet.extensions.tree-sitter.paths :as paths]
+            [kmet.extensions.tree-sitter.sexp :as sexp]
             [kmet.extensions.tree-sitter.symbols :as symbols]
             [kmet.extensions.tree-sitter.test-util :as tu]))
 
-(def clj-xml
-  "<?xml version=\"1.0\"?>
-<sources>
-  <source name=\"t.clj\">
-    <source srow=\"0\" scol=\"0\" erow=\"3\" ecol=\"0\">
-      <list_lit srow=\"0\" scol=\"0\" erow=\"1\" ecol=\"19\">
-        (
-        <sym_lit field=\"value\" srow=\"0\" scol=\"1\" erow=\"0\" ecol=\"5\">
-          <sym_name field=\"name\" srow=\"0\" scol=\"1\" erow=\"0\" ecol=\"5\">defn</sym_name>
-        </sym_lit>
-        <sym_lit field=\"value\" srow=\"0\" scol=\"6\" erow=\"0\" ecol=\"11\">
-          <sym_name field=\"name\" srow=\"0\" scol=\"6\" erow=\"0\" ecol=\"11\">greet</sym_name>
-        </sym_lit>
-        <vec_lit field=\"value\" srow=\"0\" scol=\"12\" erow=\"0\" ecol=\"18\">[</vec_lit>
-        <list_lit field=\"value\" srow=\"1\" scol=\"2\" erow=\"1\" ecol=\"18\">
-          (
-          <sym_lit field=\"value\" srow=\"1\" scol=\"3\" erow=\"1\" ecol=\"6\">
-            <sym_name field=\"name\" srow=\"1\" scol=\"3\" erow=\"1\" ecol=\"6\">str</sym_name>
-          </sym_lit>
-          )
-        </list_lit>
-      </list_lit>
-      <list_lit srow=\"2\" scol=\"0\" erow=\"2\" ecol=\"9\">
-        (
-        <sym_lit field=\"value\" srow=\"2\" scol=\"1\" erow=\"2\" ecol=\"8\">
-          <sym_name field=\"name\" srow=\"2\" scol=\"1\" erow=\"2\" ecol=\"8\">greet</sym_name>
-        </sym_lit>
-        )
-      </list_lit>
-    </source>
-  </source>
-</sources>")
+(def clj-sexp
+  "(source [0, 0] - [3, 0]
+  (list_lit [0, 0] - [1, 19]
+    value: (sym_lit [0, 1] - [0, 5]
+      name: (sym_name [0, 1] - [0, 5]))
+    value: (sym_lit [0, 6] - [0, 11]
+      name: (sym_name [0, 6] - [0, 11]))
+    value: (vec_lit [0, 12] - [0, 18]
+      value: (sym_lit [0, 13] - [0, 17]
+        name: (sym_name [0, 13] - [0, 17])))
+    value: (list_lit [1, 2] - [1, 18]
+      value: (sym_lit [1, 3] - [1, 6]
+        name: (sym_name [1, 3] - [1, 6]))
+      value: (str_lit [1, 7] - [1, 12])
+      value: (sym_lit [1, 13] - [1, 17]
+        name: (sym_name [1, 13] - [1, 17]))))
+  (list_lit [2, 0] - [2, 11]
+    value: (sym_lit [2, 1] - [2, 6]
+      name: (sym_name [2, 1] - [2, 6]))
+    value: (str_lit [2, 7] - [2, 10])))")
 
-(def py-xml
-  "<?xml version=\"1.0\"?>
-<sources>
-  <source name=\"t.py\">
-    <module srow=\"0\" scol=\"0\" erow=\"2\" ecol=\"0\">
-      <class_definition srow=\"0\" scol=\"0\" erow=\"2\" ecol=\"20\">
-        class
-        <identifier field=\"name\" srow=\"0\" scol=\"6\" erow=\"0\" ecol=\"9\">Foo</identifier>
-        :
-        <block field=\"body\" srow=\"1\" scol=\"4\" erow=\"1\" ecol=\"26\">
-          <function_definition srow=\"1\" scol=\"4\" erow=\"1\" ecol=\"26\">
-            def
-            <identifier field=\"name\" srow=\"1\" scol=\"8\" erow=\"1\" ecol=\"11\">bar</identifier>
-            (
-            <parameters field=\"parameters\" srow=\"1\" scol=\"12\" erow=\"1\" ecol=\"18\">self</parameters>
-            ):
-            <block field=\"body\" srow=\"1\" scol=\"24\" erow=\"1\" ecol=\"26\">
-              <call field=\"body\" srow=\"1\" scol=\"11\" erow=\"1\" ecol=\"26\">
-                <identifier field=\"function\" srow=\"1\" scol=\"11\" erow=\"1\" ecol=\"17\">helper</identifier>
-                (
-                <argument_list field=\"arguments\" srow=\"1\" scol=\"18\" erow=\"1\" ecol=\"25\">1</argument_list>
-                )
-              </call>
-            </block>
-          </function_definition>
-        </block>
-      </class_definition>
-    </module>
-  </source>
-</sources>")
+(def py-sexp
+  "(module [0, 0] - [2, 0]
+  (class_definition [0, 0] - [1, 35]
+    name: (identifier [0, 6] - [0, 9])
+    body: (block [1, 4] - [1, 35]
+      (function_definition [1, 4] - [1, 35]
+        name: (identifier [1, 8] - [1, 11])
+        parameters: (parameters [1, 11] - [1, 17]
+          (identifier [1, 12] - [1, 16]))
+        body: (block [1, 19] - [1, 35]
+          (return_statement [1, 19] - [1, 35]
+            (call [1, 26] - [1, 35]
+              function: (identifier [1, 26] - [1, 32])
+              arguments: (argument_list [1, 32] - [1, 35]
+                (integer [1, 33] - [1, 34])))))))))")
 
-(def ts-xml
-  "<?xml version=\"1.0\"?>
-<sources>
-  <source name=\"t.ts\">
-    <program srow=\"0\" scol=\"0\" erow=\"2\" ecol=\"0\">
-      <function_declaration srow=\"0\" scol=\"0\" erow=\"1\" ecol=\"40\">
-        export function
-        <identifier field=\"name\" srow=\"0\" scol=\"16\" erow=\"0\" ecol=\"19\">top</identifier>
-        {
-        <return_statement field=\"body\" srow=\"0\" scol=\"36\" erow=\"0\" ecol=\"39\">
-          <call_expression field=\"body\" srow=\"0\" scol=\"9\" erow=\"0\" ecol=\"39\">
-            <member_expression field=\"function\" srow=\"0\" scol=\"9\" erow=\"0\" ecol=\"17\">
-              obj
-              <identifier field=\"property\" srow=\"0\" scol=\"13\" erow=\"0\" ecol=\"17\">meth</identifier>
-            </member_expression>
-            ()
-          </call_expression>
-        </return_statement>
-        }
-      </function_declaration>
-    </program>
-  </source>
-</sources>")
+(def ts-sexp
+  "(program [0, 0] - [1, 0]
+  (export_statement [0, 0] - [0, 44]
+    declaration: (function_declaration [0, 7] - [0, 44]
+      name: (identifier [0, 16] - [0, 19])
+      parameters: (formal_parameters [0, 19] - [0, 21])
+      body: (statement_block [0, 22] - [0, 44]
+        (return_statement [0, 24] - [0, 42]
+          (call_expression [0, 31] - [0, 41]
+            function: (member_expression [0, 31] - [0, 39]
+              object: (identifier [0, 31] - [0, 34])
+              property: (property_identifier [0, 35] - [0, 39]))
+            arguments: (arguments [0, 39] - [0, 41])))))))")
 
 (def ^:private clj-src ["(defn greet [name]" "  (str \"hi \" name))" "(greet \"x\")"])
 (def ^:private py-src ["class Foo:" "    def bar(self): return helper(1)"])
 (def ^:private ts-src ["export function top() { return obj.meth(); }"])
 
 (defn- parse-el [s]
-  (->> (:content (xml/parse-str s))
-       (filter #(= :source (:tag %)))
-       first
-       :content
-       (filter map?)
-       first))
+  (sexp/parse-tree s))
 
 (deftest collect-clojure-test
-  (let [el (parse-el clj-xml)
+  (let [el (parse-el clj-sexp)
         {:keys [symbols calls]} (symbols/collect el clj-src (symbols/rules "clojure"))]
     (testing "defs found with kinds and ranges"
       (is (= [{:name "greet" :kind "function"}]
@@ -126,7 +84,7 @@
              calls)))))
 
 (deftest collect-python-test
-  (let [el (parse-el py-xml)
+  (let [el (parse-el py-sexp)
         {:keys [symbols calls]} (symbols/collect el py-src (symbols/rules "python"))]
     (testing "class + method defs"
       (is (= [["Foo" "class"] ["bar" "function"]]
@@ -135,7 +93,7 @@
       (is (= [{:name "helper" :line 2 :enclosing "bar"}] calls)))))
 
 (deftest collect-typescript-test
-  (let [el (parse-el ts-xml)
+  (let [el (parse-el ts-sexp)
         {:keys [symbols calls]} (symbols/collect el ts-src (symbols/rules "typescript"))]
     (testing "function declaration captured"
       (is (= [["top" "function"]] (mapv (juxt :name :kind) symbols))))
@@ -144,32 +102,74 @@
              (mapv #(select-keys % [:name :enclosing]) calls))))))
 
 (deftest body-lines-test
-  ;; parse-el returns the tree-root <source> node; its first element child
-  ;; is the defn list_lit
-  (let [defn-el (first (filter map? (:content (parse-el clj-xml))))]
+  ;; first element child of the source root is the defn list_lit
+  (let [defn-el (first (sexp/children (parse-el clj-sexp)))]
     (testing "node range slice incl. both endpoints"
       (is (= ["(defn greet [name]" "  (str \"hi \" name))"]
              (symbols/body-lines clj-src defn-el))))))
 
+(defn- var-kind-sexp []
+  "(source [0, 0] - [5, 0]
+  (list_lit [0, 0] - [0, 6]
+    value: (sym_lit [0, 1] - [0, 3]
+      name: (sym_name [0, 1] - [0, 3]))
+    value: (sym_lit [0, 4] - [0, 5]
+      name: (sym_name [0, 4] - [0, 5])))
+  (list_lit [2, 0] - [2, 15]
+    value: (sym_lit [2, 1] - [2, 4]
+      name: (sym_name [2, 1] - [2, 4]))
+    value: (sym_lit [2, 5] - [2, 11]
+      name: (sym_name [2, 5] - [2, 11]))
+    value: (num_lit [2, 12] - [2, 14]))
+  (list_lit [4, 0] - [4, 22]
+    value: (sym_lit [4, 1] - [4, 5]
+      name: (sym_name [4, 1] - [4, 5]))
+    value: (sym_lit [4, 6] - [4, 15]
+      name: (sym_name [4, 6] - [4, 15]))
+    value: (vec_lit [4, 16] - [4, 19]
+      value: (sym_lit [4, 17] - [4, 18]
+        name: (sym_name [4, 17] - [4, 18])))
+    value: (sym_lit [4, 20] - [4, 21]
+      name: (sym_name [4, 20] - [4, 21]))))")
+
+(defn- def-forms-sexp []
+  "(source [0, 0] - [5, 0]
+  (list_lit [0, 0] - [0, 6]
+    value: (sym_lit [0, 1] - [0, 3]
+      name: (sym_name [0, 1] - [0, 3]))
+    value: (sym_lit [0, 4] - [0, 5]
+      name: (sym_name [0, 4] - [0, 5])))
+  (list_lit [1, 0] - [1, 23]
+    value: (sym_lit [1, 1] - [1, 10]
+      name: (sym_name [1, 1] - [1, 10]))
+    value: (sym_lit [1, 11] - [1, 16]
+      name: (sym_name [1, 11] - [1, 16]))
+    value: (vec_lit [1, 17] - [1, 22]
+      value: (sym_lit [1, 18] - [1, 19]
+        name: (sym_name [1, 18] - [1, 19]))
+      value: (sym_lit [1, 20] - [1, 21]
+        name: (sym_name [1, 20] - [1, 21]))))
+  (list_lit [2, 0] - [2, 15]
+    value: (sym_lit [2, 1] - [2, 12]
+      name: (sym_name [2, 1] - [2, 12]))
+    value: (sym_lit [2, 13] - [2, 14]
+      name: (sym_name [2, 13] - [2, 14])))
+  (list_lit [3, 0] - [3, 15]
+    value: (sym_lit [3, 1] - [3, 9]
+      name: (sym_name [3, 1] - [3, 9]))
+    value: (sym_lit [3, 10] - [3, 14]
+      name: (sym_name [3, 10] - [3, 14])))
+  (list_lit [4, 0] - [4, 9]
+    value: (sym_lit [4, 1] - [4, 4]
+      name: (sym_name [4, 1] - [4, 4]))
+    value: (sym_lit [4, 5] - [4, 6]
+      name: (sym_name [4, 5] - [4, 6]))
+    value: (num_lit [4, 7] - [4, 8])))")
+
 (deftest collect-clojure-var-kind-test
   ;; regression: several defs share the list_lit node type — each symbol's
   ;; kind must come from ITS matching rule, not the first rule of that type
-  (let [xml "<?xml version=\"1.0\"?>
-<sources>
-  <source name=\"v.clj\">
-    <source srow=\"0\" scol=\"0\" erow=\"4\" ecol=\"0\">
-      <list_lit srow=\"2\" scol=\"0\" erow=\"2\" ecol=\"14\">
-        (<sym_lit><sym_name>def</sym_name></sym_lit>
-         <sym_lit><sym_name>answer</sym_name></sym_lit>)
-      </list_lit>
-      <list_lit srow=\"4\" scol=\"0\" erow=\"5\" ecol=\"20\">
-        (<sym_lit><sym_name>defn</sym_name></sym_lit>
-         <sym_lit><sym_name>double-it</sym_name></sym_lit>)
-      </list_lit>
-    </source>
-  </source>
-</sources>"
-        el (parse-el xml)
+  (let [el (parse-el (var-kind-sexp))
         src ["(ns v)" "" "(def answer 42)" "" "(defn double-it [x] x)"]
         syms (:symbols (symbols/collect el src (symbols/rules "clojure")))]
     (is (= [["answer" "var"] ["double-it" "function"]]
@@ -178,23 +178,7 @@
 (deftest collect-clojure-def-forms-test
   ;; defrecord/defprotocol/defmulti are symbols with their own kinds — and
   ;; defining heads must never leak through as bogus calls
-  (let [xml "<?xml version=\"1.0\"?>
-<sources>
-  <source name=\"r.clj\">
-    <source srow=\"0\" scol=\"0\" erow=\"5\" ecol=\"9\">
-      <list_lit srow=\"0\" scol=\"0\" erow=\"0\" ecol=\"7\">(<sym_lit><sym_name>ns</sym_name></sym_lit>)</list_lit>
-      <list_lit srow=\"1\" scol=\"0\" erow=\"1\" ecol=\"24\">(<sym_lit><sym_name>defrecord</sym_name></sym_lit>
-        <sym_lit><sym_name>Point</sym_name></sym_lit>)</list_lit>
-      <list_lit srow=\"2\" scol=\"0\" erow=\"2\" ecol=\"15\">(<sym_lit><sym_name>defprotocol</sym_name></sym_lit>
-        <sym_lit><sym_name>P</sym_name></sym_lit>)</list_lit>
-      <list_lit srow=\"3\" scol=\"0\" erow=\"3\" ecol=\"17\">(<sym_lit><sym_name>defmulti</sym_name></sym_lit>
-        <sym_lit><sym_name>area</sym_name></sym_lit>)</list_lit>
-      <list_lit srow=\"4\" scol=\"0\" erow=\"4\" ecol=\"9\">(<sym_lit><sym_name>def</sym_name></sym_lit>
-        <sym_lit><sym_name>x</sym_name></sym_lit>)</list_lit>
-    </source>
-  </source>
-</sources>"
-        el (parse-el xml)
+  (let [el (parse-el (def-forms-sexp))
         src ["(ns r)" "(defrecord Point [x y])" "(defprotocol P)" "(defmulti area)" "(def x 1)"]
         res (symbols/collect el src (symbols/rules "clojure"))]
     (is (= [["Point" "type"] ["P" "protocol"] ["area" "multimethod"] ["x" "var"]]
@@ -204,28 +188,18 @@
 
 (deftest collect-ts-binding-filter-test
   ;; const bindings count only when function-valued
-  (let [xml "<?xml version=\"1.0\"?>
-<sources>
-  <source name=\"t.ts\">
-    <program srow=\"0\" scol=\"0\" erow=\"2\" ecol=\"0\">
-      <lexical_declaration srow=\"0\" scol=\"0\" erow=\"0\" ecol=\"11\">
-        const
-        <variable_declarator srow=\"0\" scol=\"6\" erow=\"0\" ecol=\"11\">
-          <identifier field=\"name\">n</identifier>
-          <number field=\"value\">5</number>
-        </variable_declarator>
-      </lexical_declaration>
-      <lexical_declaration srow=\"1\" scol=\"0\" erow=\"1\" ecol=\"22\">
-        const
-        <variable_declarator srow=\"1\" scol=\"6\" erow=\"1\" ecol=\"22\">
-          <identifier field=\"name\">f</identifier>
-          <arrow_function field=\"value\">() =&gt; 1</arrow_function>
-        </variable_declarator>
-      </lexical_declaration>
-    </program>
-  </source>
-</sources>"
-        el (parse-el xml)
+  (let [sexp "(program [0, 0] - [2, 0]
+  (lexical_declaration [0, 0] - [0, 12]
+    (variable_declarator [0, 6] - [0, 11]
+      name: (identifier [0, 6] - [0, 7])
+      value: (number [0, 10] - [0, 11])))
+  (lexical_declaration [1, 0] - [1, 18]
+    (variable_declarator [1, 6] - [1, 17]
+      name: (identifier [1, 6] - [1, 7])
+      value: (arrow_function [1, 10] - [1, 17]
+        parameters: (formal_parameters [1, 10] - [1, 12])
+        body: (number [1, 16] - [1, 17])))))"
+        el (parse-el sexp)
         src ["const n = 5;" "const f = () => 1;"]
         syms (:symbols (symbols/collect el src (symbols/rules "typescript")))]
     (is (= [["f" "binding"]] (mapv (juxt :name :kind) syms)))))
@@ -274,3 +248,23 @@
                             (mapv #(select-keys % [:name :enclosing]) calls))))))
         (finally
           (fs/delete-tree dir))))))
+
+;; ─── split-trees unit tests (no CLI needed) ───────────────────────────────
+
+(deftest split-trees-test
+  (testing "pairs trees to paths in order"
+    (let [out "(source [0,0]-[1,0])\n(source [0,0]-[1,0])\n"
+          pairs (#'symbols/split-trees ["/a.clj" "/b.clj"] out)]
+      (is (= {"/a.clj" "(source [0,0]-[1,0])"
+              "/b.clj" "(source [0,0]-[1,0])"}
+             pairs))))
+  (testing "stats lines (problem files) are dropped, not paired"
+    (let [out "(source [0,0]-[1,0])\n/some/bad.py\tParse: 0.1 ms\t1 bytes/ms\t(ERROR [0, 0] - [1, 0])\n(source [0,0]-[1,0])\n"
+          pairs (#'symbols/split-trees ["/a.py" "/b.py"] out)]
+      (is (= {"/a.py" "(source [0,0]-[1,0])"
+              "/b.py" "(source [0,0]-[1,0])"}
+             pairs))))
+  (testing "empty files (no tree output) are skipped"
+    (let [out "(source [0,0]-[1,0])\n"
+          pairs (#'symbols/split-trees ["/a.clj" "/empty.clj"] out)]
+      (is (= {"/a.clj" "(source [0,0]-[1,0])"} pairs)))))

@@ -1,7 +1,6 @@
 {:paths ["src" "test" "resources"]
  ;; babashka.fs / babashka.process / babashka.http-client are bb-bundled;
  ;; http-client is declared so non-bb consumers resolve the same API.
- ;; clojure.data.xml (parse --wasm -x trees) is NOT declared: bb ships an
- ;; adapted copy that the host injects into extension contexts by
- ;; reference — its Maven jar fails under SCI (definline).
+ ;; The CLI's default s-expr output is parsed by a hand-rolled parser
+ ;; (sexp.clj) — no XML dependency at all.
  :deps {org.babashka/http-client {:mvn/version "0.4.24"}}}

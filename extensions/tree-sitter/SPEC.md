@@ -153,18 +153,28 @@ wins), and **a throwing hook becomes a block** (fail-closed) — see
 
 ## Tools
 
-All five parse on demand via short-lived CLI invocations (`parse --wasm -x`,
-ms-scale; the CLI has no server mode — do not build one). Language support =
-languages whose grammar is in the pinned manifest AND which ship an
-extraction-rule set (`queries/<lang>.edn`; start: clojure, python,
-typescript/tsx — grow by authoring rules).
+All five parse on demand via short-lived CLI invocations (`parse --wasm`,
+ms-scale; the CLI has no server mode — do not build one). The CLI's
+**default s-expression output** is used (not `-x` XML): named nodes with
+byte ranges and `field:` prefixes, roughly half the size of the XML form.
+Language support = languages whose grammar is in the pinned manifest AND
+which ship an extraction-rule set (`queries/<lang>.edn`; start: clojure,
+python, typescript/tsx — grow by authoring rules).
+
+Trees are parsed in Clojure by `sexp.clj` (tokenize + recursive descent;
+positions are BYTE offsets, so names are recovered by slicing source at
+byte ranges with an ASCII fast path). Symbols/calls are extracted by a
+per-language rule walk over the tree; every call records its nearest
+enclosing def, which is what makes find_callers/find_callees work.
+Per-process caches keyed by file size+mtime make repeated project-wide
+queries near-instant.
 
 | Tool | Implementation |
 |---|---|
-| `list_symbols` | walk parsed XML tree for def nodes (name/kind/range/signature) |
+| `list_symbols` | walk parsed sexp tree for def nodes (name/kind/range/signature) |
 | `find_definition` | name-filtered defs over tracked project files |
 | `get_symbol_body` | def node range → source slice |
-| `find_callers` / `find_callees` | callee/caller `.scm` queries, range-scoped |
+| `find_callers` / `find_callees` | call records with nearest enclosing def, range-scoped |
 
 Guidelines text steers agents away from grep for structure questions
 (same wording spirit as rab/pi-tree-sitter).

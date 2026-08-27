@@ -42,8 +42,10 @@
         :tree-sitter (when-some [r (validate/parse-problems! path content
                                                              nil opts)]
                        (assoc r :via :tree-sitter))
-        :delimiter {:problems (validate/delimiter-problems content)
-                    :via :delimiter}
+        :delimiter (let [problems (validate/delimiter-problems content)]
+                     ;; nil when clean — non-nil results block writes
+                     (when (seq problems)
+                       {:problems problems :via :delimiter}))
         nil))
     (catch Exception e
       (binding [*out* *err*]

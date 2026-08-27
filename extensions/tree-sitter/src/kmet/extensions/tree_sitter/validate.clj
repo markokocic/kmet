@@ -1,12 +1,15 @@
 (ns kmet.extensions.tree-sitter.validate
   "Turn file content into a syntax-problem report.
 
-   Two backends behind the dispatch routes:
+   Backends behind the dispatch routes:
 
-   - tree-sitter: `parse --wasm -x`, walk the parsed tree and collect
-     ERROR / MISSING nodes (capped). Note that error-TOLERANT recovery can
-     mask some mistakes entirely (python's `def f(:` recovers without an
-     ERROR node) — the hook catches most, not all, mistakes. Same
+   - tree-sitter: `parse --wasm`, walk the sexp tree for ERROR nodes and
+     zero-width named nodes (missing), plus the trailing per-file stats
+     line which carries MISSING records for tokens that never made it
+     into the tree (`def f(:` → `(MISSING \") …)`). Capped. Note that
+     error-TOLERANT recovery can mask some mistakes entirely (python's
+     `def f(:` recovers to a clean tree and the MISSING record is the
+     only signal) — the hook catches most, not all, mistakes. Same
      trade-off rab / pi-tree-sitter make.
    - delimiter: comment/string-aware bracket-balance scan (clojure flavor:
      ; line comments, backslash escapes, multi-line strings), reporting
@@ -15,10 +18,10 @@
    A problem is {:kind :error|:missing|:unclosed|:stray-closer
                  :line :col :expected :snippet} — lines/cols are 1-based."
   (:require [babashka.fs :as fs]
-            [clojure.data.xml :as xml]
             [clojure.string :as str]
             [kmet.extensions.tree-sitter.cli :as cli]
-            [kmet.extensions.tree-sitter.paths :as paths]))
+            [kmet.extensions.tree-sitter.paths :as paths]
+            [kmet.extensions.tree-sitter.sexp :as sexp]))
 
 (def ^:private max-problems 10)
 
@@ -26,37 +29,91 @@
 
 ;; ─── tree-sitter backend ──────────────────────────────────────────────────
 
-(defn- tag-of [el] (some-> (:tag el) name))
+(defn- pos->line-col
+  "1-based line/col from a CLI [row col] position."
+  [[row col]]
+  [(inc row) (inc col)])
 
-(defn- problem-node?
-  [el]
-  (let [t (tag-of el)]
-    (and t (or (= "ERROR" t) (str/starts-with? t "MISSING")))))
+(defn stats-record
+  "The (ERROR …) / (MISSING …) record on a file's stats line, parsed into
+   {:kind :line :col :expected}, or nil when the line carries none."
+  [stats-line]
+  (when-let [m (re-find #"\((ERROR|MISSING) (.*)\)$" (str/trim (str stats-line)))]
+    (let [[_ kind detail] m
+          kind-kw (if (= "ERROR" kind) :error :missing)
+          pos (re-find #"\[(\d+),\s*(\d+)\]" detail)
+          expected (when (and (= :missing kind-kw) pos)
+                     (let [tok (subs detail 0 (str/index-of detail "["))
+                           tok (str/trim tok)
+                           tok (if (str/starts-with? tok "\"")
+                                 (subs tok 1)
+                                 tok)
+                           tok (if (str/ends-with? tok "\"")
+                                 (subs tok 0 (dec (count tok)))
+                                 tok)]
+                       (not-empty tok)))]
+      {:kind kind-kw
+       :line (inc (Long/parseLong (nth pos 1)))
+       :col (inc (Long/parseLong (nth pos 2)))
+       :expected expected})))
 
-(defn- problem-from
-  "One problem map from an ERROR/MISSING element + source lines."
-  [src-lines el]
-  (let [tag (tag-of el)
-        kind (if (= "ERROR" tag) :error :missing)
-        expected (when (= :missing kind)
-                   (some-> tag
-                           (str/replace #"^MISSING" "")
-                           (str/replace #"^:" "")
-                           str/trim
-                           not-empty))
-        line (inc (Long/parseLong (str (get (:attrs el) :srow))))
-        col (inc (Long/parseLong (str (get (:attrs el) :scol))))]
-    {:kind kind :line line :col col :expected expected
-     :snippet (not-empty (str/trim (str (nth src-lines (dec line) nil))))}))
+(defn- zero-width?
+  "Missing nodes surface as zero-width named children (e.g.
+   `condition: (identifier [1, 6] - [1, 6])`). Only real nodes — field
+   wrappers are not nodes."
+  [node]
+  (and (sexp/node? node)
+       (= (sexp/start-pos node) (sexp/end-pos node))))
+
+(defn- tree-problems
+  "ERROR nodes + zero-width (missing) nodes from a parsed tree, capped."
+  [tree]
+  (letfn [(children-nodes [node]
+            (keep #(if (map? %) (:node %) %) (sexp/children node)))
+          (walk [node]
+            (if-not (sexp/node? node)
+              nil
+              (cond
+                (= "ERROR" (sexp/node-type node))
+                (let [[l c] (pos->line-col (sexp/start-pos node))]
+                  (cons {:kind :error :line l :col c :expected nil :snippet nil}
+                        (mapcat walk (children-nodes node))))
+                (zero-width? node)
+                (let [[l c] (pos->line-col (sexp/start-pos node))]
+                  (cons {:kind :missing :line l :col c
+                         :expected (sexp/node-type node) :snippet nil}
+                        (mapcat walk (children-nodes node))))
+                :else (mapcat walk (children-nodes node)))))]
+    (take max-problems (walk tree))))
 
 (defn problems-from-tree
-  "Collect ERROR/MISSING problems (capped) from a parsed <source> element."
-  [source-el src-lines]
-  (->> (tree-seq #(and (map? %) (:tag %)) :content source-el)
-       (filter problem-node?)
-       (map #(problem-from src-lines %))
-       (take max-problems)
-       vec))
+  "ERROR + zero-width (missing) problems from a parsed tree, with
+   snippet text from SRC-LINES. Capped."
+  [tree src-lines]
+  (mapv #(assoc % :snippet
+                (not-empty (str/trim (str (nth src-lines (dec (:line %)) nil)))))
+        (tree-problems tree)))
+
+(defn- problems-from-output
+  "Problems from a file's tree + stats line, with snippet text from
+   SRC-LINES. The stats MISSING record is the ONLY signal for some
+   recoverable errors (python `def f(:`) — include it when the tree walk
+   didn't already flag the same position."
+  [tree stats-line src-lines]
+  (let [tree-ps (tree-problems tree)
+        stats-p (when stats-line (stats-record stats-line))
+        stats-p (when (and stats-p
+                           (not-any? #(and (= (:kind %) (:kind stats-p))
+                                           (= (:line %) (:line stats-p)))
+                                     tree-ps))
+                  stats-p)
+        all (concat tree-ps (when stats-p [stats-p]))
+        with-snippet (map (fn [p]
+                            (assoc p :snippet
+                                   (not-empty
+                                    (str/trim (str (nth src-lines (dec (:line p)) nil))))))
+                          all)]
+    (vec (take max-problems with-snippet))))
 
 (defn parse-problems!
   "Tree-sitter backend: write CONTENT to a temp file with PATH's extension,
@@ -68,21 +125,38 @@
   ([path content lang] (parse-problems! path content lang nil))
   ([path content _lang {:keys [base] :as opts}]
    (let [ext (last (str/split (str path) #"\."))
-         tmp (fs/path (paths/root base) (str "validate." ext))]
+         ;; unique per invocation: hooks run in parallel tool calls and a
+         ;; fixed name would race on the same temp file
+         tmp (fs/path (paths/root base)
+                      (str "validate-" (System/nanoTime) "." ext))]
      (spit (str tmp) content)
      (try
        (let [res ((or (:parse-runner opts) cli/exec!)
                   ["parse" "--wasm"
                    "--config-path" (str (paths/config-path base))
-                   "-x" (str tmp)]
+                   (str tmp)]
                   {:base base
                    :env {"TREE_SITTER_LIBDIR" (str (paths/libs-dir base))}})
-             root (xml/parse-str (str/trim (str (:out res)))
-                                 :namespace-aware false)
-             src-el (first (filter #(= :source (:tag %)) (:content root)))
-             tree (or src-el root)
-             src-lines (str/split-lines (str content))]
-         {:problems (problems-from-tree tree src-lines) :via :tree-sitter})
+             out (str (:out res))
+             ;; the tree is the leading '('... form; the stats line (with a
+             ;; tab) trails it when the file has problems — keep only the
+             ;; tree portion for sexp parsing
+             tree-text (first (str/split out #"\n(?=[^\s])"))
+             tree-text (if (str/starts-with? (str/trim tree-text) "(")
+                         tree-text
+                         (first (str/split-lines (str tree-text))))
+             stats-line (some #(when (str/includes? % "\t") %)
+                              (str/split-lines out))
+             tree (sexp/parse-tree tree-text)
+             src-lines (str/split-lines (str content))
+             problems (if tree
+                        (problems-from-output tree stats-line src-lines)
+                        ;; no tree at all (empty content?) — nothing to report
+                        [])]
+         ;; nil when clean — hooks treat any non-nil result as a block,
+         ;; so an empty problem vector must not flow on
+         (when (seq problems)
+           {:problems problems :via :tree-sitter}))
        (finally (fs/delete-if-exists tmp))))))
 
 ;; ─── delimiter backend (clojure family fallback) ──────────────────────────

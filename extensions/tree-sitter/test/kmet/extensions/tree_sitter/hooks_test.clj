@@ -63,7 +63,11 @@
     (with-stub [{:kind :unclosed :line 1 :col 1 :expected ")" :snippet "("}]
       (let [r (call-write {:path "/tmp/broken.clj" :content "(defn f [x]"})]
         (is (:block r))
-        (is (str/includes? (:reason r) "never closed"))))))
+        (is (str/includes? (:reason r) "never closed")))))
+  (testing "balanced clojure content passes the delimiter fallback"
+    (dispatch/set-api! {:get-all-tools (fn [])})
+    (is (nil? (call-write {:path "/tmp/ok.clj"
+                           :content "(defn f [x]\n  (inc x))\n"})))))
 
 (deftest never-throw-test
   (with-redefs [validate/parse-problems!

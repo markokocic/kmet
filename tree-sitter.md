@@ -104,15 +104,20 @@ Files: `symbols.clj`, `tools.clj`, query resources + tests.
 **Deviation from the original plan (validated):** the CLI's `query`
 subcommand cannot load WASM grammars (native-dlopen only — SPEC fact 8),
 so instead of `.scm` queries we ship per-language EDN rule sets
-(`queries/<lang>.edn`) and walk `parse --wasm -x` XML trees in Clojure.
-The walker records every call's nearest enclosing def, which is what makes
-find_callers/find_callees work without query-engine support.
+(`queries/<lang>.edn`) and walk the CLI's **default s-expr output**
+(`parse --wasm`, not `-x`) in Clojure with a hand-rolled parser
+(`sexp.clj`). The walker records every call's nearest enclosing def,
+which is what makes find_callers/find_callees work without query-engine
+support. Names are recovered from source via the trees' BYTE ranges
+(positions are byte offsets, ASCII fast path). Per-process tree+result
+caches (keyed by file size+mtime) make repeat project-wide queries
+near-instant.
 
 1. Rule sets for clojure / python / typescript / tsx: defs matched by node
    type (+ name-field, or leading head-symbol for clojure), calls by call
    node with field-descend for attribute/member invocations (`obj.meth` →
    `meth`).
-2. `symbols.clj`: batched `parse --wasm -x` over files; capture walk →
+2. `symbols.clj`: batched `parse --wasm` over files; capture walk →
    unified symbol maps `{:name :kind :line :end-line :signature}` + calls
    `{:name :line :enclosing}`; project-wide variant walks tracked files
    (git ls-files inside a repo, skip-list walk otherwise).
@@ -153,19 +158,20 @@ Files: `validate.clj`, `dispatch.clj`, `hooks.clj` + tests. DONE.
 Implementation notes: dispatch routes clojure-family files to defer/
 delimiter and grammar langs to tree-sitter; unknown extensions are never
 validated. validate's delimiter backend is a clojure-flavored scanner; the
-tree backend walks `parse --wasm -x` trees for ERROR/MISSING nodes (capped,
-with snippet + expected token). Hooks mirror paren_repair's write-block /
-edit-warn shapes and never throw — infra failures pass through. Known
-limitation: tolerant recovery can mask some mistakes (e.g. python
-`def f(:` parses without an ERROR node).
+tree backend walks `parse --wasm` trees for ERROR nodes and zero-width
+named children (missing), plus the trailing per-file stats line whose
+(MISSING …) record is the ONLY signal for some recoverable errors (e.g.
+python `def f(:` parses to a clean tree). Capped, with snippet + expected
+token. Hooks mirror paren_repair's write-block / edit-warn shapes and
+never throw — infra failures pass through. Known limitation: tolerant
+recovery can still mask some mistakes entirely.
 
 1. `validate.clj`:
-   - `parse-errors` — run `parse --wasm --format json -` (stdin content),
-     collect ERROR/MISSING nodes capped at 10 → report lines with
-     line/col/snippet; MISSING includes expected-token text.
-     (If JSON node walk proves awkward via CLI output, fall back to sexp
-     walk over `--format sexp` — decided during implementation, contract
-     stays `{:problems [{:kind :error/:missing :line :col :snippet :expected}]}`.)
+   - `parse-errors` — run `parse --wasm` (sexp output), collect ERROR +
+     zero-width nodes from the tree and the (MISSING …) record from the
+     stats line, capped at 10 → report lines with line/col/snippet;
+     MISSING includes expected-token text. Contract stays
+     `{:problems [{:kind :error/:missing :line :col :snippet :expected}]}`.
    - `delimiter-balance` — comment/string-aware scanner port
      (pi-tree-sitter `delimiter.ts` logic) for languages without grammar.
 2. `dispatch.clj`: extension → route:

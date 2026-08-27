@@ -78,19 +78,18 @@
 
 (defn- analyze-chunks
   "Run symbols/file-symbols-and-calls over every file in paths, batching
-   parses. Yields [path src-el src-lines lang] tuples; unreadable files are
+   parses. Yields [path tree src-lines lang] tuples; unreadable files are
    skipped rather than failing the whole batch."
   [paths lang opts]
   (for [chunk (partition-all symbols/batch-size paths)
-        :let [sources (symbols/sources-by-path
-                       (symbols/parse-files! chunk lang opts))]
+        :let [trees (symbols/parse-files! chunk lang opts)]
         p chunk
-        :let [src-el (get sources p)
-              lines (when src-el
+        :let [tree (get trees p)
+              lines (when tree
                       (try (str/split-lines (slurp p))
                            (catch Exception _ ::unreadable)))]
-        :when (and src-el (not= ::unreadable lines))]
-    [p src-el lines lang]))
+        :when (and tree (not= ::unreadable lines))]
+    [p tree lines lang]))
 
 ;; ─── formatting ───────────────────────────────────────────────────────────
 
@@ -143,13 +142,13 @@
          (err (str "no supported source files under " root))
          (let [by-lang (group-by (fn [f] (grammars/resolve-lang (ext-of f))) files)
                hits (mapcat (fn [[lang paths]]
-                              (for [[p src-el lines] (analyze-chunks paths lang opts)
+                              (for [[p tree lines] (analyze-chunks paths lang opts)
                                     sym (:symbols (symbols/file-symbols-and-calls
-                                                   src-el lines lang))
+                                                   tree lines lang p))
                                     :when (= symbol (:name sym))]
                                 (fmt-hit p sym)))
                             by-lang)
-               hits (vec (take 20 hits))]
+               hits (vec hits)]
            (if (seq hits)
              {:content (str/join "\n" hits)
               :details (details-common "definitions" (count hits) nil symbol)}
@@ -191,14 +190,15 @@
          (let [by-lang (group-by (fn [f] (grammars/resolve-lang (ext-of f))) files)
                sites (->> by-lang
                           (mapcat (fn [[lang paths]]
-                                    (for [[p src-el lines] (analyze-chunks paths lang opts)
+                                    (for [[p tree lines] (analyze-chunks paths lang opts)
                                           c (:calls (symbols/file-symbols-and-calls
-                                                     src-el lines lang))
+                                                     tree lines lang p))
                                           :when (= symbol (:name c))]
-                                      {:file p :enclosing (:enclosing c)
+                                      {:file p :name (:name c)
+                                       :enclosing (:enclosing c)
                                        :line (:line c)})))
                           vec)
-               sites (->> sites (sort-by (juxt :file :line)) (take 30) vec)
+               sites (->> sites (sort-by (juxt :file :line)) vec)
                callers (distinct (map :enclosing sites))]
            (if (seq sites)
              {:content (str/join "\n" (map fmt-call-site sites))
