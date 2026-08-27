@@ -236,6 +236,11 @@
 (t/deftest language-resolution
   (t/is (hl/supports-language? "clojure"))
   (t/is (hl/supports-language? "clj"))
+  (t/is (hl/supports-language? "bb"))
+  (t/is (hl/supports-language? "edn"))
+  (t/is (hl/supports-language? "lpy"))
+  (t/is (= (toks "clojure" "(defn f [x] (* x 2))") (toks "bb" "(defn f [x] (* x 2))")))
+  (t/is (= (toks "clojure" "(defn f [x] (* x 2))") (toks "lpy" "(defn f [x] (* x 2))")))
   (t/is (hl/supports-language? "c++"))
   (t/is (hl/supports-language? "C#"))
   (t/is (hl/supports-language? "Clojure"))

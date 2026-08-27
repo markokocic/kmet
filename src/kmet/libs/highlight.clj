@@ -1287,7 +1287,7 @@
    "diff" diff-config})
 
 (def ^:private aliases
-  {"clj" "clojure" "cljs" "clojure"
+  {"clj" "clojure" "cljs" "clojure" "bb" "clojure" "lpy" "clojure"
    "lisp" "common-lisp" "cl" "common-lisp" "commonlisp" "common-lisp"
    "emacs-lisp" "elisp" "emacslisp" "elisp" "el" "elisp"
    "objc" "objective-c" "objectivec" "objective-c"
