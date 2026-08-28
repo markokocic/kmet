@@ -188,7 +188,8 @@
 
 (defn session
   "The live session facades: :append-entry! :append-message! :get-entries
-   :set-label! :get-label :set-name! :get-name."
+   :get-branch :get-leaf-id :get-entry :set-label! :get-label :set-name!
+   :get-name (pi: ctx.sessionManager)."
   [api]
   (:session api))
 
@@ -307,6 +308,9 @@
                        :append-message! (fn [custom-type _content display _details]
                                           (swap! state update :ui-calls conj [:append-message custom-type display]))
                        :get-entries (fn [_custom-type] [])
+                       :get-branch (fn [] [])
+                       :get-leaf-id (fn [] nil)
+                       :get-entry (fn [_id] nil)
                        :set-label! (fn [id label] (swap! state assoc-in [:labels id] label))
                        :get-label (fn [id] (get-in @state [:labels id]))
                        :set-name! (fn [name] (swap! state assoc :session-name name))

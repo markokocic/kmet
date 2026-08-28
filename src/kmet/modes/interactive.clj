@@ -1602,8 +1602,11 @@
   "Run the LLM branch summarization (pi: navigateTree summarize) with the
    BranchSummaryStatusIndicator and editor-escape abort, then branch with
    the summary. On abort/failure the branch is unchanged. PREP is the
-   :session-before-tree preparation map; ABORT-ATOM cancels the call."
-  [cs sess old-leaf target-leaf user-msg-text prep abort-atom custom-instructions]
+   :session-before-tree preparation map (now carrying the effective :label
+   and :replace-instructions after :session-before-tree overrides); ABORT-ATOM
+   cancels the call."
+  [cs sess old-leaf target-leaf user-msg-text prep abort-atom
+   custom-instructions replace-instructions?]
   (let [ag @(:agent-state cs)
         ed (:editor cs)
         prev-interrupt (get @(:action-handlers ed) "app.interrupt")
@@ -1622,7 +1625,8 @@
     (future
       (try
         (deliver done (agent/generate-branch-summary
-                       ag (:entries-to-summarize prep) custom-instructions abort-atom))
+                       ag (:entries-to-summarize prep) custom-instructions
+                       abort-atom replace-instructions?))
         (catch Exception e
           (debug/log "branch summarization failed: " e)
           (deliver done nil))))
@@ -1648,7 +1652,8 @@
 
           :else
           (complete-tree-navigation! cs sess old-leaf target-leaf
-                                     result user-msg-text false nil))
+                                     result user-msg-text false
+                                     (:label prep)))
         (tui/tui-request-render (:tui cs))))))
 
 (defn- navigate-tree!
@@ -1656,9 +1661,9 @@
    selecting a user message re-opens it in the editor (leaf = its parent),
    any other entry becomes the new leaf. Emits :session-before-tree
    (extensions may cancel, supply the summary, or override
-   custom-instructions/label), optionally summarizes the abandoned path,
-   branches, and emits :session-tree."
-  [cs sess entry wants-summary custom-instructions]
+   custom-instructions/replace-instructions/label), optionally summarizes
+   the abandoned path, branches, and emits :session-tree."
+  [cs sess entry wants-summary custom-instructions replace-instructions? label]
   (let [old-leaf @(:leaf-id sess)
         target-leaf (if (= :user (:role entry)) (:parent-id entry) (:id entry))
         entries (session/branch-summary-entries sess old-leaf (:id entry))
@@ -1670,17 +1675,27 @@
               :entries-to-summarize entries
               :user-wants-summary (boolean wants-summary)
               :custom-instructions custom-instructions
-              :replace-instructions false
-              :label nil}
+              :replace-instructions (boolean replace-instructions?)
+              :label label}
         ext-result (event-bus/emit-event! {:type :session-before-tree
                                            :preparation prep
                                            :signal abort-atom})
-        custom-instructions (or (:custom-instructions ext-result) custom-instructions)]
+        custom-instructions (or (:custom-instructions ext-result) custom-instructions)
+        replace-instructions? (if (contains? (or ext-result {}) :replace-instructions)
+                                (:replace-instructions ext-result)
+                                replace-instructions?)
+        effective-label (if (contains? (or ext-result {}) :label)
+                          (:label ext-result)
+                          label)
+        prep (assoc prep
+                    :custom-instructions custom-instructions
+                    :replace-instructions replace-instructions?
+                    :label effective-label)]
     (cond
       (and wants-summary (empty? entries))
       ;; nothing abandoned to summarize — branch without a summary
       (complete-tree-navigation! cs sess old-leaf target-leaf nil user-msg-text
-                                 false (:label ext-result))
+                                 false effective-label)
 
       (:cancel ext-result)
       (ui/chat-history-add-message! (:chat-history cs)
@@ -1692,15 +1707,16 @@
                                  (when-let [s (:summary ext-result)]
                                    {:summary s :usage (:usage ext-result)})
                                  user-msg-text true
-                                 (:label ext-result))
+                                 effective-label)
 
       (not wants-summary)
       (complete-tree-navigation! cs sess old-leaf target-leaf nil user-msg-text
-                                 false (:label ext-result))
+                                 false effective-label)
 
       :else
       (branch-summarize-and-apply! cs sess old-leaf target-leaf user-msg-text
-                                   prep abort-atom custom-instructions))))
+                                   prep abort-atom custom-instructions
+                                   replace-instructions?))))
 
 (defn- prompt-custom-summary!
   "Ask for custom summarization instructions, then navigate with them
@@ -1713,7 +1729,7 @@
     "Custom branch summarization instructions"
     (fn [instructions]
       (tui/tui-hide-overlay (:tui cs))
-      (navigate-tree! cs sess entry true (str/trim instructions)))
+      (navigate-tree! cs sess entry true (str/trim instructions) false nil))
     (fn []
       (tui/tui-hide-overlay (:tui cs))
       (ask-branch-summary cs sess entry))
@@ -1732,8 +1748,8 @@
                     (when-let [sel (select-list/select-list-get-selected @sl-ref)]
                       (tui/tui-hide-overlay (:tui cs))
                       (case (:value sel)
-                        "none" (navigate-tree! cs sess entry false nil)
-                        "summarize" (navigate-tree! cs sess entry true nil)
+                        "none" (navigate-tree! cs sess entry false nil false nil)
+                        "summarize" (navigate-tree! cs sess entry true nil false nil)
                         "custom" (prompt-custom-summary! cs sess entry))))
         on-escape (fn []
                     (tui/tui-hide-overlay (:tui cs))
@@ -3773,13 +3789,17 @@
                                        (do (fork-at! cs entry-id) {:cancelled false})
                                        {:cancelled true}))
                              :navigate-tree (fn [target-id & [{:keys [summarize
-                                                                      custom-instructions]}]]
+                                                                      custom-instructions
+                                                                      replace-instructions
+                                                                      label]}]]
                                               (if-let [sess @(:session-atom cs)]
                                                 (if-let [entry (session/get-entry sess
                                                                                   target-id)]
                                                   (do (navigate-tree! cs sess entry
                                                                       (boolean summarize)
-                                                                      custom-instructions)
+                                                                      custom-instructions
+                                                                      (boolean replace-instructions)
+                                                                      label)
                                                       {:cancelled false})
                                                   {:cancelled true})
                                                 {:cancelled true}))

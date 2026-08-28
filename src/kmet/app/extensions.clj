@@ -504,6 +504,24 @@
     (session/get-custom-entries sess custom-type)
     []))
 
+(defn get-branch-entries
+  ([]
+   (if-let [sess @session-atom]
+     (session/get-branch sess)
+     []))
+  ([from-id]
+   (if-let [sess @session-atom]
+     (session/get-branch sess from-id)
+     [])))
+
+(defn get-leaf-id []
+  (when-let [sess @session-atom]
+    @(:leaf-id sess)))
+
+(defn get-entry [entry-id]
+  (when-let [sess @session-atom]
+    (session/get-entry sess entry-id)))
+
 (defn set-label! [entry-id label]
   (when-let [sess @session-atom]
     (session/set-label! sess entry-id label)))
@@ -567,11 +585,15 @@
    :unregister-provider! unregister-provider!})
 
 (defn- api-session
-  "The :session capability map — live session facades."
+  "The :session capability map — live session facades (pi:
+   ctx.sessionManager — getBranch/getLeafId/getEntry included)."
   []
   {:append-entry! append-custom-entry!
    :append-message! append-custom-message!
    :get-entries get-custom-entries
+   :get-branch get-branch-entries
+   :get-leaf-id get-leaf-id
+   :get-entry get-entry
    :set-label! set-label!
    :get-label get-label
    :set-name! (fn [name]

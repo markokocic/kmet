@@ -593,9 +593,46 @@
     (try
       (let [id (extensions/append-custom-entry! "st" {:n 1})]
         (t/is (some? id)))
+      (t/testing "ctx/sessionManager facades (review extension needs them)"
+        (let [_u1 (session/append-entry sess {:role :user :content [{:type :text :text "hi"}]})
+              a1 (session/append-entry sess {:role :assistant :content [{:type :text :text "ok"}]})
+              ctx (extensions/build-extension-context)
+              sess-api (:session ctx)]
+          (t/is (= (:id a1) ((:get-leaf-id sess-api)))
+                "get-leaf-id returns the active leaf")
+          (t/is (= (:id a1) (:id ((:get-entry sess-api) (:id a1))))
+                "get-entry finds by id")
+          (t/is (nil? ((:get-entry sess-api) "missing"))
+                "get-entry returns nil for unknown id")
+          (t/is (= (:id a1) (:id (last ((:get-branch sess-api)))))
+                "get-branch returns root→leaf with no args")
+          (t/is (= (:id a1) (:id (last ((:get-branch sess-api) (:id a1)))))
+                "get-branch respects from-id (pi parity) delegates to session")
+          (t/is (= (:id a1) (:id (last (extensions/get-branch-entries))))
+                "direct extensions/get-branch-entries also available")
+          (t/is (nil? (extensions/get-entry "missing")))))
+      (t/testing "headless direct facades return nil/[] when no session"
+        (extensions/set-session! nil)
+        (t/is (nil? (extensions/get-leaf-id)))
+        (t/is (nil? (extensions/get-entry "x")))
+        (t/is (= [] (extensions/get-branch-entries)))
+        (extensions/set-session! sess))
       (finally
         (extensions/set-session! nil)
-        (fs/delete-tree dir)))))
+        (fs/delete-tree dir))))
+  (testing "nullable api carries the new session facades"
+    (let [{:keys [api state]} (ext/create-nullable-api)
+          sess-api (:session api)]
+      (t/is (= [] ((:get-branch sess-api))) "nullable get-branch → empty branch")
+      (t/is (nil? ((:get-leaf-id sess-api))) "nullable get-leaf-id → nil")
+      (t/is (nil? ((:get-entry sess-api) "any")) "nullable get-entry → nil")
+      (t/is (= [] ((:get-entries sess-api) "x")))
+      ((:set-label! sess-api) "id1" "bookmark")
+      (t/is (= "bookmark" ((:get-label sess-api) "id1")))
+      ((:set-name! sess-api) "hello")
+      (t/is (= "hello" ((:get-name sess-api)))
+            "nullable carry still records name")
+      (t/is (contains? (get-in @state [:labels]) "id1")))))
 
 (t/deftest test-markdown-transformers
   (testing "applied in registration order, last wins per position"

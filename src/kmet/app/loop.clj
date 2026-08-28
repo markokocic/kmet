@@ -1128,8 +1128,10 @@ Be precise and concise in your responses."}}]
    include it — pi: BranchSummaryEntry.usage), {:aborted true} when the
    signal fired mid-call, or nil when no API key is available or the call
    fails/times out/returns empty. SIGNAL (optional, defaults to the agent's
-   cancel signal) aborts the call."
-  [agent entries & [custom-instructions signal]]
+   cancel signal) aborts the call. REPLACE-INSTRUCTIONS? (pi:
+   replaceInstructions) makes CUSTOM-INSTRUCTIONS replace the builtin
+   branch-summary prompt instead of being appended."
+  [agent entries & [custom-instructions signal replace-instructions?]]
   (let [provider @(:provider agent)
         ep (resolve-endpoint agent)
         api-key (resolve-api-key agent)]
@@ -1142,7 +1144,8 @@ Be precise and concise in your responses."}}]
             signal (or signal (:signal agent))
             msgs (compaction/branch-summary-messages
                   (vec (mapcat session/context-messages entries))
-                  custom-instructions)]
+                  custom-instructions
+                  replace-instructions?)]
         (llm/send-message
          {:provider provider
           :api-type (:api-type ep)

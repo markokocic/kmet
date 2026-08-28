@@ -413,14 +413,26 @@ Keep each section concise. Preserve exact file paths, function names, and error 
    generateBranchSummary): the summarization system prompt + a single user
    message carrying the serialized abandoned-branch entries in
    <conversation> tags and the structured-summary prompt, with optional
-   custom instructions appended."
-  [entries custom-instructions]
-  [{:role :system :content [{:type :text :text summarization-system-prompt}]}
-   {:role :user
-    :content [{:type :text
-               :text (str "<conversation>\n"
-                          (serialize-conversation entries)
-                          "\n</conversation>\n\n"
-                          (if (seq custom-instructions)
-                            (str branch-summary-prompt "\n\nAdditional focus: " custom-instructions)
-                            branch-summary-prompt))}]}])
+   custom instructions appended. REPLACE-INSTRUCTIONS? (pi:
+   replaceInstructions) makes CUSTOM-INSTRUCTIONS replace the builtin
+   branch-summary prompt entirely instead of being appended as
+   \"Additional focus\" — used by extensions (e.g. /end-review) that ship
+   their own complete summary format."
+  ([entries custom-instructions]
+   (branch-summary-messages entries custom-instructions false))
+  ([entries custom-instructions replace-instructions?]
+   [{:role :system :content [{:type :text :text summarization-system-prompt}]}
+    {:role :user
+     :content [{:type :text
+                :text (str "<conversation>\n"
+                           (serialize-conversation entries)
+                           "\n</conversation>\n\n"
+                           (cond
+                             (and replace-instructions? (seq custom-instructions))
+                             custom-instructions
+
+                             (seq custom-instructions)
+                             (str branch-summary-prompt "\n\nAdditional focus: " custom-instructions)
+
+                             :else
+                             branch-summary-prompt))}]}]))

@@ -171,6 +171,50 @@
 
 ;; ─── Context token measurement (pi: estimateContextTokens) ────────────────
 
+(t/deftest test-branch-summary-messages
+  (t/testing "custom instructions without replace — appended as Additional focus"
+    (let [msgs (compaction/branch-summary-messages
+                [{:role :user :content [{:type :text :text "hello"}]}]
+                "focus on fallbacks" false)
+          text (-> msgs second :content first :text)]
+      (t/is (str/includes? text "Additional focus: focus on fallbacks"))))
+  (t/testing "replaceInstructions true — custom replaces builtin prompt"
+    (let [custom "Custom summary format: Section A, Section B."
+          msgs (compaction/branch-summary-messages
+                [{:role :user :content [{:type :text :text "hello"}]}]
+                custom true)
+          text (-> msgs second :content first :text)]
+      (t/is (str/includes? text custom))
+      (t/is (not (str/includes? text "Create a structured summary of this conversation branch"))
+            "builtin prompt replaced — not appended")
+      (t/is (not (str/includes? text "Additional focus"))
+            "no Additional focus wrapper when replacing")))
+  (t/testing "replaceInstructions with no custom → still builtin"
+    (let [msgs (compaction/branch-summary-messages
+                [{:role :user :content [{:type :text :text "hello"}]}]
+                nil true)
+          text (-> msgs second :content first :text)]
+      (t/is (str/includes? text "Create a structured summary")
+            "empty custom with replace=true falls back to builtin")
+      (t/is (not (str/includes? text "Additional focus")))))
+  (t/testing "two-arity overload still appends (BC)"
+    (let [msgs (compaction/branch-summary-messages
+                [{:role :user :content [{:type :text :text "hello"}]}]
+                "focus on tests")
+          text (-> msgs second :content first :text)]
+      (t/is (str/includes? text "Additional focus: focus on tests"))))
+  (t/testing "empty custom never adds Additional focus"
+    (let [msgs (compaction/branch-summary-messages
+                [{:role :user :content [{:type :text :text "hello"}]}]
+                "" false)
+          text (-> msgs second :content first :text)]
+      (t/is (not (str/includes? text "Additional focus"))))
+    (let [msgs (compaction/branch-summary-messages
+                [{:role :user :content [{:type :text :text "hello"}]}]
+                nil false)
+          text (-> msgs second :content first :text)]
+      (t/is (not (str/includes? text "Additional focus"))))))
+
 (t/deftest test-context-tokens
   (t/testing "measured usage of the latest assistant + estimate of trailing entries"
     (let [entries [{:role :assistant :content [{:type :text :text "a"}]
