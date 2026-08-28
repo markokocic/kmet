@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-27T08:37:06Z"
+ :generated-at "2026-08-28T07:11:40Z"
  :provider {:id :qwen-token-plan
             :name "Qwen Token Plan"
             :env-vars ["QWEN_TOKEN_PLAN_API_KEY"]
@@ -287,6 +287,27 @@
     :compat {:supports-store false
              :supports-developer-role false
              :supports-reasoning-effort false
+             :thinking-format :qwen}}
+   "qwen3.8-flash"
+   {:id "qwen3.8-flash"
+    :name "Qwen3.8 Flash"
+    :provider :qwen-token-plan
+    :api :openai-completions
+    :base-url "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :xhigh nil}
+    :input [:text :image]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 131072
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort true
              :thinking-format :qwen}}
    "qwen3.8-max"
    {:id "qwen3.8-max"

@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-26T22:02:02Z"
+ :generated-at "2026-08-28T07:11:40Z"
  :provider {:id :cloudflare-ai-gateway
             :name "Cloudflare AI Gateway"
             :env-vars ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID" "CLOUDFLARE_GATEWAY_ID"]

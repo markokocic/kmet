@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-26T22:02:02Z"
+ :generated-at "2026-08-28T07:11:40Z"
  :provider {:id :vercel-ai-gateway
             :name "Vercel AI Gateway"
             :env-vars ["AI_GATEWAY_API_KEY"]
@@ -901,6 +901,28 @@
     :reasoning true
     :input [:text]
     :cost {:input 0.06 :output 0.18 :cache-read 0.012 :cache-write 0}
+    :context-window 256000
+    :max-tokens 32000}
+   "inclusionai/ling-3.0-flash-fin"
+   {:id "inclusionai/ling-3.0-flash-fin"
+    :name "Ling 3.0 Flash Fin"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 256000
+    :max-tokens 32000}
+   "inclusionai/ling-3.0-flash-fin-free"
+   {:id "inclusionai/ling-3.0-flash-fin-free"
+    :name "Ling 3.0 Flash Fin (Free)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 256000
     :max-tokens 32000}
    "interfaze/interfaze-beta"

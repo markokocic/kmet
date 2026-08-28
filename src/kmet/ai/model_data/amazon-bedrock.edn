@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-26T22:02:02Z"
+ :generated-at "2026-08-28T07:11:40Z"
  :provider {:id :amazon-bedrock
             :name "Amazon Bedrock"
             :env-vars []
