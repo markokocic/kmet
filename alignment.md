@@ -14,9 +14,9 @@ framework, agent loop, tools, provider/auth subsystem (kmet.ai), sessions (EDNL)
 compaction, skills, prompt templates, themes, and the extension API (hooks,
 events, commands, tools, flags, renderers, agent control, tool hooks) are
 functionally aligned. The remaining gaps cluster in the CLI surface, rendering
-(mermaid/latex/search/images), the settings surface, and a few extension items
-(registerShortcut, registerMarkdownTransformer, registerProvider streamSimple/
-refreshModels, the provider/session-before-* events).
+(mermaid/latex/search/images), the settings surface, and the extension
+`registerProvider` `streamSimple`/`refreshModels` (wire-layer custom
+provider streaming + dynamic model refresh).
 
 ## Deliberately out of scope (locked decisions)
 
@@ -93,7 +93,7 @@ Missing (pi `docs/settings.md`):
 |---|---|
 | `enableInstallTelemetry`, `enableAnalytics`, `trackingId` | anonymous install/analytics pings (pi.dev infrastructure) |
 | `doubleEscapeAction` | double-escape behavior: `tree` / `fork` / `none` |
-| `treeFilterMode` | default `/tree` filter (kmet hardcodes `:default` in `interactive.clj` `tree-filter-modes`) |
+| `treeFilterMode` | Done — `:tree-filter-mode` setting + `get-tree-filter-mode` (with validation; invalid values fall back to `:default`); consumed by `app/ui/tree_selector.clj` `:initial-filter-mode` |
 | `editorPaddingX`, `outputPad` | editor/message padding |
 | `autocompleteMaxVisible` | autocomplete dropdown size (kmet constant) |
 | `showHardwareCursor` | hardware cursor for IME support |
@@ -138,7 +138,7 @@ Full extension API surface (pi `core/extensions/types.ts`) — one remaining gap
 | `registerProvider` `streamSimple`/`refreshModels` | Partial — `registerProvider` config registration is done (`extensions/register-provider!` / `models/register-provider-config!`); `streamSimple`/`refreshModels` (wire-layer custom provider streaming + dynamic model refresh) still missing |
 | Events: `resources_discover`, `session_before_switch`, `session_before_fork`, `session_before_compact`, `context`, `before_provider_request`, `before_provider_headers`, `after_provider_response` | **Done** — see Appendix (all ✅) |
 | Events: `session_info_changed`, `thinking_level_select` | **Done** — emitted by `/name` and `set-thinking-level!` |
-| Events: `tool_call`/`tool_result` (transform) | **Done** — `extensions/register-tool-call-hook!`/`register-tool-result-hook!` chained as the agent's before/after-tool-call hooks (block / arg-rewrite / result-rewrite) |
+| Events: `tool_call`/`tool_result` (transform) | **Done** — `extensions/register-tool-call-hook!`/`register-tool-result-hook!` chained as the agent's `:before-tool-call`/`:after-tool-call` callbacks (block / arg-rewrite / result-rewrite). Note: the transform chain is wired into the agent callbacks rather than fired as event-bus events; the event bus still carries the execution lifecycle via `:tool-execution-start`/`:tool-execution-update`/`:tool-execution-end` (see Appendix) |
 
 ### 6. Smaller gaps
 
@@ -172,7 +172,7 @@ pi events (`core/extensions/types.ts`) → kmet status (`app/event_bus.clj` `eve
 | `turn_start` / `turn_end` | ✅ `:turn-start` / `:turn-end` | |
 | `message_start` / `message_update` / `message_end` | ✅ | kmet `:message-update` carries `:delta` incl. tool-call |
 | `tool_execution_start` / `_update` / `_end` | ✅ | |
-| `tool_call` / `tool_result` | ~ | kmet emits execution events but no call/result with result-transform |
+| `tool_call` / `tool_result` | ~ (mechanism differs) | kmet does **not** emit `:tool-call`/`:tool-result` events on the event bus; the transform chain (block / arg-rewrite / result-rewrite) is wired into the agent's `:before-tool-call`/`:after-tool-call` callbacks via `register-tool-call-hook!`/`register-tool-result-hook!` instead. See §5. Event-bus execution lifecycle events are `:tool-execution-start`/`:tool-execution-update`/`:tool-execution-end` |
 | `model_select` | ✅ `:model-select` | kmet adds `:source` (:set/:cycle) |
 | `thinking_level_select` | ✅ `:thinking-level-select` | emitted by `set-thinking-level!` on actual change |
 | `user_bash` | ✅ `:user-bash` | |

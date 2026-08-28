@@ -5,19 +5,25 @@ Port [`~/src/cvstree/pi-review`](https://github.com/earendil-works/pi-review)
 kmet as a shipped opt-in extension, with the review rubric made
 **language-agnostic** (the pi original is JS-flavored).
 
-Status: **investigation complete — implementation pending**.
+Status: **shipped**. All 5 execution steps landed across
+`72091ce` (host plumbing), `df6b0ae` (extension), `4881904`
+(alignment.md sync), and `5f6aae9` (test fix). The review extension
+test suite passes (`bb test` in `extensions/review/`: 39 tests,
+87 assertions, 0 failures).
 
-## What we're porting
+## What we ported
 
 `pi-review/review.ts` (~1600 lines) provides:
 
-- `/review` with modes: **uncommitted**, **base branch**, **commit**, **pull
-  request** (checks out locally via `gh`), **folder(s)** (snapshot, not diff)
+- `/review` with modes: **uncommitted**, **base branch**, **commit**,
+  **folder(s)** (snapshot, not diff). **PR mode was dropped** — see
+  [Deviations](#deviations-from-pi-review) below.
 - Interactive preset selector with smart default (uncommitted → feature
   branch → commit), branch/commit pickers with fuzzy filter, custom shared
   review instructions (add/remove, persisted per session)
-- `/review pr 123` / `pr https://github.com/o/r/pull/123`, `branch main`,
-  `commit abc123`, `folder src docs`, `--extra "..."` (any mode)
+- `/review branch <name>`, `commit <sha>`, `folder <paths>`, `--extra "..."`
+  (any mode). **`/review pr …` was dropped — see
+  [Deviations](#deviations-from-pi-review).**
 - Fresh-session review: branches the session tree at the first user message,
   labels it "code-review", shows a "review active" widget, returns via
   `/end-review` with three actions: **Return only** / **Return and fix
@@ -36,35 +42,40 @@ Status: **investigation complete — implementation pending**.
 
 Mirrors the `extensions/clojure/` manifest-dir layout (own `bb.edn` + tests):
 
-| File | Contents |
-|---|---|
-| `extension.edn` | `{:name "review" :entry "src/kmet/extensions/review/review.clj"}` |
-| `src/kmet/extensions/review/review.clj` | `/review` + `/end-review` commands, session state (custom entries), widget, restore on `:session-start`/`:session-tree`, PR checkout flow, fresh-session orchestration |
-| `src/kmet/extensions/review/prompts.clj` | REVIEW_RUBRIC (generalized), REVIEW_SUMMARY_PROMPT, REVIEW_FIX_FINDINGS_PROMPT, per-target prompts |
-| `src/kmet/extensions/review/git.clj` | `ext/exec` git/gh helpers: merge-base, local branches, recent commits, pending-changes, PR info/checkout, default branch |
-| `src/kmet/extensions/review/dialogs.clj` | Selector / input dialogs built on `kmet.tui.*` + `ui-custom` (kmet has no host `ctx.ui.select`/`editor`; pi does — we compose the equivalents) |
-| `test/…` + `bb.edn` | Unit tests: arg tokenize/parse, prompt assembly, git output parsing, rubric content assertions |
-| `README.md` | Port of pi-review's README |
+| File | Contents | Shipped in |
+|---|---|---|
+| `extension.edn` | `{:name "review" :entry "src/kmet/extensions/review/core.clj"}` | `df6b0ae` |
+| `src/kmet/extensions/review/core.clj` | `/review` + `/end-review` commands, session state (custom entries), widget, restore on `:session-start`/`:session-tree`, fresh-session orchestration (no PR checkout — see [Deviations](#deviations-from-pi-review)) | `df6b0ae` |
+| `src/kmet/extensions/review/prompts.clj` | `REVIEW_RUBRIC` (generalized), `REVIEW_SUMMARY_PROMPT`, `REVIEW_FIX_FINDINGS_PROMPT`, per-target prompts | `df6b0ae` |
+| `src/kmet/extensions/review/git.clj` | `ext/exec` git helpers: merge-base, local branches, recent commits, pending-changes, default branch (no `gh` — see [Deviations](#deviations-from-pi-review)) | `df6b0ae` |
+| `src/kmet/extensions/review/dialogs.clj` | Selector / input dialogs built on `kmet.tui.*` + `ui-custom` (kmet has no host `ctx.ui.select`/`editor`; pi does — we compose the equivalents) | `df6b0ae` |
+| `test/…` + `bb.edn` | Unit tests: arg tokenize/parse, prompt assembly, git output parsing, rubric content assertions (39 tests, 87 assertions, 0 failures) | `df6b0ae` + `5f6aae9` |
+| `README.md` | Port of pi-review's README | `df6b0ae` |
 
 ### 2. Host changes (pi-parity gaps the port needs)
 
-Three small changes to kmet core (with tests):
+Three small changes to kmet core (with tests) — all shipped in `72091ce`:
 
-1. **`kmet.app.extensions` `api-session` facades** — add `:get-branch`,
+1. **`kmet.app.extensions` `api-session` facades** — added `:get-branch`,
    `:get-leaf-id`, `:get-entry` (pi `SessionManager.getBranch/getLeafId/
-   getEntry`). The port needs the branch entries (first user message,
-   message count) and the origin leaf id.
+   getEntry`). Plus a `from-id` overload on `get-branch-entries` and
+   nullable api stubs so extension tests can run isolated.
 2. **`kmet.modes.interactive` `:navigate-tree` — accept `:label`** — pi's
    `navigateTree(..., {label})` tags the review branch "code-review"; kmet's
-   tree-navigation prep already carries label, the extension-context fn just
-   drops it.
-3. **Thread `:replace-instructions`** — pi's summary navigation replaces the
-   default summary prompt with custom instructions (`replaceInstructions:
-   true`); kmet always appends "Additional focus:". Thread the flag through
-   `navigate-tree!` → `branch-summarize-and-apply!` →
-   `generate-branch-summary` → `compaction/branch-summary-messages`. Without
-   it the structured REVIEW_SUMMARY_PROMPT would be mashed into the builtin
-   summary format.
+   tree-navigation prep already carried label, the extension-context fn
+   was dropping it. Also fixed a fallback bug where a missing extension
+   result dropped the fresh-review "code-review" label and any
+   extension-provided label override (effective-label handling).
+3. **Thread `:replace-instructions`** — pi's summary navigation replaces
+   the default summary prompt with custom instructions
+   (`replaceInstructions: true`); kmet always appended "Additional focus:".
+   Threaded the flag through `navigate-tree!` →
+   `branch-summarize-and-apply!` → `generate-branch-summary` →
+   `compaction/branch-summary-messages`. Added a 2-arity BC overload on
+   `branch-summary-messages` and a 3-arg `replaceInstructions` branch
+   (replace vs append "Additional focus"). Without this the structured
+   `REVIEW_SUMMARY_PROMPT` would have been mashed into the builtin summary
+   format.
 
 ## Key design decisions (kmet differences, pi-equivalent behavior)
 
@@ -88,14 +99,37 @@ Three small changes to kmet core (with tests):
   wording → language-agnostic parsing/decoding, `null`/`[]`/`false` fallback
   examples → generic "silent fallback values".
 
+## Deviations from pi-review
+
+- **PR mode dropped** (`/review pr <number|url>`, `gh pr checkout`,
+  `gh pr view`, `gh pr diff`). The pi flow requires a `gh` CLI binary in
+  PATH and a clean work tree to `gh pr checkout`, both
+  environment-fragile. The same review is reachable via
+  `/review branch <remote-branch>` once a PR's head is fetched
+  (`git fetch origin pull/<n>/head:<branch>` then review the local
+  branch). `git.clj` ships no `gh`-related helpers.
+- **Entry file renamed** to `core.clj` (matches the `clojure` extension's
+  convention; the plan listed `review.clj`).
+
 ## Execution order
 
+Done.
+
 1. Host changes (facades + navigate-tree opts + replace-instructions
-   threading) with tests → `bb test-changed` / `bb lint-changed` /
-   `bb format-changed`
-2. `prompts.clj` (the generalized rubric)
-3. `git.clj` → `dialogs.clj` → `review.clj` wiring
+   threading) with tests → `72091ce`
+2. `prompts.clj` (the generalized rubric) → `df6b0ae`
+3. `git.clj` → `dialogs.clj` → `core.clj` wiring → `df6b0ae`
 4. Extension tests (`bb test` inside `extensions/review/`), README,
-   `extensions.md` doc updates
-5. Final: `bb test-changed` + `bb lint-changed` + `bb format-changed`; full
-   gates only on explicit request
+   `extensions/README.md` registration → `df6b0ae`; follow-up test fix
+   `5f6aae9`; `alignment.md` event/API appendix sync `4881904`
+5. Final validation: changed-file gates passed per commit; full gates were
+   not requested.
+
+## Validation snapshot
+
+- `bb test` in `extensions/review/`: 39 tests, 87 assertions, 0 failures
+- `bb lint` in `extensions/review/`: 0 errors / 0 warnings / 0 info (per
+  step-2 commit message)
+- `bb format-check` in `extensions/review/`: clean (per step-2 commit
+  message)
+- Working tree: clean (`git status` empty)
