@@ -1,0 +1,10 @@
+{:paths ["src" "test" "../../src"]
+ :tasks
+ {test {:doc "Run review extension tests (args: test namespace names)"
+        :task (let [nss (or (some->> *command-line-args* (map symbol))
+                            '[prompts-test git-test review-test])]
+                (doseq [ns-sym nss]
+                  (require ns-sym))
+                (let [summary (apply clojure.test/run-tests nss)]
+                  (when (pos? (+ (:fail summary) (:error summary)))
+                    (System/exit 1))))}}}
