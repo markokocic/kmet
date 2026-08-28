@@ -71,6 +71,9 @@
   fork the mechanism (see the tool renderer registry)
 - **Private vars**: use `defn-` / `def-` for implementation details not part of public API
 
+### Git
+- Do not add `Co-authored-by` trailers to commit messages.
+
 ## Editing
 - For Clojure, Babashka and EDN files (`.clj` `.cljs` `.cljc` `.bb` `.edn`), prefer the
   structure-aware extension tools over the generic `write`/`edit` tools:
