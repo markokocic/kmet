@@ -1,6 +1,7 @@
 {:paths ["src" "test" "resources"]
- ;; babashka.fs / babashka.process / babashka.http-client are bb-bundled;
- ;; http-client is declared so non-bb consumers resolve the same API.
+ ;; babashka.fs / babashka.process / babashka.http-client are all bb-bundled
+ ;; — the extension runs inside kmet's SCI host which provides them natively,
+ ;; so no external Maven deps are needed at runtime or under `bb test`.
  ;; The CLI's default s-expr output is parsed by a hand-rolled parser
  ;; (sexp.clj) — no XML dependency at all.
- :deps {org.babashka/http-client {:mvn/version "0.4.24"}}}
+ :deps {}}
