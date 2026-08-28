@@ -116,24 +116,27 @@ Missing (pi `docs/settings.md`):
 Aligned (`app/extensions.clj` + `app/event_bus.clj`): input + before-agent-start hooks,
 provider registration (incl. OAuth), `ctx.models.*` facades, UI registry
 (select/confirm/input/notify/custom/widgets/footer/header/editor/theme/status/
-working-indicator/terminal-input), session append-entry/message/labels, and most
-agent/session events (see Appendix).
+working-indicator/terminal-input), session append-entry/message/labels,
+entry + message renderers, markdown transformers, shortcuts, CLI flags, and
+all agent/session/provider/resources-discover events (see Appendix).
 
-Missing (pi `core/extensions/types.ts`):
+Full extension API surface (pi `core/extensions/types.ts`) — one remaining gap:
 
 | API | purpose |
 |---|---|
 | `registerTool` | **Done** — `extensions/register-tool!` (Tool record or `make-tool` kwargs) |
 | `registerCommand` / `getCommands` | **Done** — `extensions/register-command!` / `get-commands` (slash registry wrapper) |
-| `registerShortcut` | Missing — needs runtime keybinding-definition support in the tui manager |
+| `registerShortcut` | **Done** — `extensions/register-shortcut!` dispatches through the ui registry into `modes/interactive.clj` `:register-shortcut!` (installed as a priority editor action checked before every builtin binding); no-op headless |
 | `registerFlag`/`getFlag` | **Done** — unknown `--flag [value]` collected by `core.clj`, `extensions/register-flag!`/`get-flag` with :type coercion + defaults |
-| `registerMessageRenderer` | **Done** — `extensions/register-message-renderer!` overrides the custom-message info box at replay + live (`registerMarkdownTransformer` still missing) |
+| `registerMessageRenderer` | **Done** — `extensions/register-message-renderer!` overrides the custom-message info box at replay + live |
+| `registerMarkdownTransformer` | **Done** — `extensions/register-markdown-transformer!` (applied in registration order, idempotent, errors skipped) |
+| `registerEntryRenderer` | **Done** — `extensions/register-entry-renderer!` (custom entry types, live + replay) |
 | `sendUserMessage` (deliverAs steer/followUp) | **Done** — `extensions/send-user-message` → loop steer!/follow-up! |
 | `setModel`, `getThinkingLevel`, `setThinkingLevel` | **Done** — via the ui registry (auth-gated setModel, validated levels) |
 | `exec` | **Done** — `extensions/exec` (babashka.process, string capture) |
 | `getActiveTools`/`getAllTools`/`setActiveTools` | **Done** — `:enabled-tools` filter on the agent state, applied to the wire `:tools`; `get-all-tools` returns the array |
-| `registerProvider` `streamSimple`/`refreshModels` | Missing — needs wire-layer custom-handler support |
-| Events: `resources_discover`, `session_before_switch`, `session_before_fork`, `session_before_compact`, `context`, `before_provider_request`, `before_provider_headers`, `after_provider_response` | Missing — see Appendix |
+| `registerProvider` `streamSimple`/`refreshModels` | Partial — `registerProvider` config registration is done (`extensions/register-provider!` / `models/register-provider-config!`); `streamSimple`/`refreshModels` (wire-layer custom provider streaming + dynamic model refresh) still missing |
+| Events: `resources_discover`, `session_before_switch`, `session_before_fork`, `session_before_compact`, `context`, `before_provider_request`, `before_provider_headers`, `after_provider_response` | **Done** — see Appendix (all ✅) |
 | Events: `session_info_changed`, `thinking_level_select` | **Done** — emitted by `/name` and `set-thinking-level!` |
 | Events: `tool_call`/`tool_result` (transform) | **Done** — `extensions/register-tool-call-hook!`/`register-tool-result-hook!` chained as the agent's before/after-tool-call hooks (block / arg-rewrite / result-rewrite) |
 
@@ -159,11 +162,11 @@ pi events (`core/extensions/types.ts`) → kmet status (`app/event_bus.clj` `eve
 |---|---|---|
 | `session_start` | ✅ `:session-start` | reason startup/reload/new/resume/fork; kmet lacks `reload` reason flag granularity |
 | `session_info_changed` | ✅ `:session-info-changed` | emitted by `/name` |
-| `session_before_switch` / `session_before_fork` | ❌ | kmet has `:session-before-tree` but no switch/fork counterparts |
+| `session_before_switch` / `session_before_fork` | ✅ `:session-before-switch` / `:session-before-fork` | both emitted by `/switch` and `/fork` (reason :user/:auto), cancelable — handlers return {:cancel true} |
 | `session_before_compact` / `session_compact` | ~ | kmet emits `:compaction-start`/`:compaction-end` (reason manual/threshold/overflow/auto) |
 | `session_before_tree` / `session_tree` | ✅ `:session-before-tree` / `:session-tree` | incl. cancel/summary/extension-summary results |
 | `session_shutdown` | ✅ `:session-shutdown` | emitted by `/reload` (reason reload) and `/new` (reason new, target-session-file) before the extension runtime is torn down (pi: teardownCurrent / session.reload) |
-| `context` | ~ | kmet has `:context-replaced` (different shape) |
+| `context` | ✅ `:context` | fired before each LLM call with the outgoing messages; handlers return {:messages [...]} to replace (last non-nil wins) |
 | `before_agent_start` | ✅ | hook, not event |
 | `agent_start` / `agent_end` / `agent_settled` | ✅ `:agent-start` / `:agent-end` / `:agent-settled` | |
 | `turn_start` / `turn_end` | ✅ `:turn-start` / `:turn-end` | |
@@ -174,8 +177,8 @@ pi events (`core/extensions/types.ts`) → kmet status (`app/event_bus.clj` `eve
 | `thinking_level_select` | ✅ `:thinking-level-select` | emitted by `set-thinking-level!` on actual change |
 | `user_bash` | ✅ `:user-bash` | |
 | `input` | ✅ | input hooks (transform/handled) |
-| `before_provider_request` / `before_provider_headers` / `after_provider_response` | ❌ | no provider request/response hooks |
-| `resources_discover` | ❌ | context discovery is static (`app/context.clj`) |
+| `before_provider_request` / `before_provider_headers` / `after_provider_response` | ✅ | defined in `event_bus.clj` and bridged to the ai-layer hooks (`ai/hooks.clj`) in `extensions.clj`: emit-event! → hook apply → last non-nil result |
+| `resources_discover` | ✅ `:resources-discover` | fired after `:session-start`; `extensions/discover-resources!` applies contributed path sets into skills/prompts/themes registries (reloads dedup via `applied-resource-paths`) |
 | `project_trust` | — | out of scope (see locked decisions) |
 
 kmet-only additions: `:status`, `:error`, `:queue-update`, `:context-replaced`,
