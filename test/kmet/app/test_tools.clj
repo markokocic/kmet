@@ -244,16 +244,18 @@
 ;; ─── Unknown tool ─────────────────────────────────────────────────────────
 
 (t/deftest test-truncate-tail-surrogate-boundary
-  (t/testing "byte-cut landing mid-surrogate keeps the whole char (no lone surrogate)"
+  (t/testing "byte-cut landing mid-UTF8 keeps whole char boundary (pi truncateStringToBytesFromEnd)"
     (let [s (str (apply str (repeat 9 "x")) "😀" (apply str (repeat 9 "y")))
-          ;; count = 9 + 2 + 9 = 20; max-bytes 10 → start lands on the low
-          ;; surrogate of the emoji
+          ;; UTF-8 bytes = 9 + 4 + 9 = 22; max-bytes 10 → pi slices last 10 bytes
+          ;; skipping the partial emoji bytes at the boundary (byte 10 is inside emoji)
           result (bash-exec/truncate-tail s :max-bytes 10)
           content (:content result)]
       (t/is (:truncated result))
       (t/is (not (re-find #"[\udc00-\udfff]" content))
             "no lone low surrogate in truncated output")
-      (t/is (str/includes? content "😀") "the full emoji survives"))))
+      ;; pi skips the incomplete UTF-8 char, so emoji is dropped
+      (t/is (not (str/includes? content "\uFFFD")) "no replacement char")
+      (t/is (<= (bash-exec/byte-length content) 10) "output fits byte limit"))))
 
 (t/deftest test-tool-unknown
   (let [result (tools/execute-tool "unknown-tool" {})]
@@ -439,7 +441,16 @@
     (t/is (.contains (:content result) "beyond end of file"))))
 
 (t/deftest test-tool-read-image
-  (spit "target/test-tools-read.png" "fake-png-bytes")
-  (let [result (tools/execute-tool "read" {:path "target/test-tools-read.png"})]
-    (t/is (some? (:images result)))
-    (t/is (.contains (:content result) "Read image file"))))
+  ;; Pi detects images by magic bytes (mime.ts), not extension — fake bytes are text
+  (let [png-bytes (byte-array [(unchecked-byte 0x89) 0x50 0x4E 0x47 0x0D 0x0A 0x1A 0x0A
+                               0 0 0 0x0D  0x49 0x48 0x44 0x52
+                               0 0 0 16  0 0 0 16  8 2 0 0 0
+                               0 0 0 0  0 0 0 16  0x49 0x44 0x41 0x54 0 0])]
+    (java.nio.file.Files/write (.toPath (java.io.File. "target/test-tools-read.png")) png-bytes
+                               (into-array java.nio.file.OpenOption
+                                           [java.nio.file.StandardOpenOption/CREATE
+                                            java.nio.file.StandardOpenOption/TRUNCATE_EXISTING]))
+    (let [result (tools/execute-tool "read" {:path "target/test-tools-read.png"})]
+      (t/is (some? (:images result)))
+      (t/is (.contains (:content result) "Read image file"))
+      (t/is (.contains (:content result) "image/png")))))

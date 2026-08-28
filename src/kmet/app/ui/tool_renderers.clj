@@ -124,7 +124,7 @@
 ;; ─── Compact read classification (pi: read.ts getCompactReadClassification) ─
 
 (def ^:private compact-resource-file-names
-  #{"AGENTS.md" "AGENTS.MD" "CLAUDE.md" "CLAUDE.MD"})
+  #{"AGENTS.override.md" "AGENTS.md" "AGENTS.MD" "CLAUDE.md" "CLAUDE.MD"})
 
 (defn- path-relative-to-cwd-or-absolute
   "Pi: formatPathRelativeToCwdOrAbsolute — path relative to cwd when inside
@@ -138,21 +138,53 @@
         (subs abs (count (str cwd-abs "/")))
         abs))))
 
+(defn- get-pi-docs-classification
+  "Pi: getPiDocsClassification — README.md and docs/* / examples/* inside the
+   package root render as 'read docs'. In kmet the package root is the repo
+   root that contains README.md; walk up from cwd to find it. Returns
+   {:kind :docs :label str} or nil."
+  [absolute-path]
+  (try
+    (let [;; Find repo root by walking up from cwd until README.md is found
+          cwd (str (fs/cwd))
+          repo-root (loop [d (str (fs/absolutize cwd))]
+                      (cond
+                        (fs/exists? (str (fs/path d "README.md"))) d
+                        (= d (str (fs/parent d))) nil
+                        :else (recur (str (fs/parent d)))))]
+      (when repo-root
+        (let [rel (try (str (fs/relativize (fs/path repo-root) (fs/path absolute-path)))
+                       (catch Exception _ nil))]
+          (when (and rel
+                     (not (str/blank? rel))
+                     (not= rel "..")
+                     (not (str/starts-with? rel (str ".." fs/file-separator)))
+                     (not (fs/absolute? rel)))
+            (let [label (str/replace rel fs/file-separator "/")]
+              (when (or (= label "README.md")
+                        (str/starts-with? label "docs/")
+                        (str/starts-with? label "examples/"))
+                {:kind :docs :label label}))))))
+    (catch Exception _ nil)))
+
 (defn- compact-read-classification
-  "Pi: getCompactReadClassification — SKILL.md and AGENTS.md/CLAUDE.md files
-   render as compact labels instead of paths. Returns
-   {:kind :skill|:resource :label str} or nil."
+  "Pi: getCompactReadClassification — SKILL.md, AGENTS.md/CLAUDE.md, and pi-docs
+   files render as compact labels instead of paths. Returns
+   {:kind :skill|:resource|:docs :label str} or nil."
   [raw-path cwd]
   (when (and (string? raw-path) (pos? (count raw-path)))
-    (let [file-name (fs/file-name raw-path)]
+    (let [absolute (resolve-path raw-path cwd)
+          file-name (fs/file-name absolute)]
       (cond
         (= file-name "SKILL.md")
         {:kind :skill
-         :label (or (some-> (fs/parent raw-path) fs/file-name str) file-name)}
-        (contains? compact-resource-file-names file-name)
-        {:kind :resource
-         :label (path-relative-to-cwd-or-absolute raw-path cwd)}
-        :else nil))))
+         :label (or (some-> (fs/parent absolute) fs/file-name str) file-name)}
+        :else
+        (if-let [docs (get-pi-docs-classification absolute)]
+          docs
+          (when (contains? compact-resource-file-names file-name)
+            {:kind :resource
+             :label (path-relative-to-cwd-or-absolute absolute cwd)}))))))
 
 (defn- read-line-range
   "Pi: formatReadLineRange — ':start-end' warning suffix when offset/limit given."

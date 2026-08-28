@@ -598,10 +598,10 @@
           (extensions/set-session! sess)
           (with-redefs [event-bus/emit-event! (fn [ev] (reset! seen ev) nil)]
             ((:navigate-tree ctx) (:id u1)
-             {:summarize true
-              :custom-instructions "ci"
-              :replace-instructions true
-              :label "my-label"})
+                                  {:summarize true
+                                   :custom-instructions "ci"
+                                   :replace-instructions true
+                                   :label "my-label"})
             (t/is (= (:id u1) (:target-id (:preparation @seen))))
             (t/is (= "ci" (:custom-instructions (:preparation @seen))))
             (t/is (true? (:replace-instructions (:preparation @seen))))

@@ -14,10 +14,10 @@
   {"read"  (tool/make-tool
             :name "read"
             :label "Read file"
-            :description "Read the contents of a file. Supports offset/limit for large files. Output is truncated to 2000 lines or 50KB (whichever is hit first)."
+            :description "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete."
             :prompt-snippet "Read file contents"
             :prompt-guidelines ["Use read to examine files instead of cat or sed."]
-            :params {:path   {:type :string :description "File path to read (relative or absolute)"}
+            :params {:path   {:type :string :description "Path to the file to read (relative or absolute)"}
                      :offset {:type :number :description "Line number to start reading from (1-indexed)" :optional? true}
                      :limit  {:type :number :description "Maximum number of lines to read" :optional? true}}
             :execute read/execute)
