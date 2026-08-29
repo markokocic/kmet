@@ -5,59 +5,66 @@
    IME candidate window follows the cursor). Used by the
    interactive mode's OAuth/API-key/auth-method prompts and the /tree
    flow. The app's own kit: extensions build their own dialogs with
-   kmet.tui.* and mount them via ui-custom (kmet.extension docstring)."
+   kmet.tui.* and mount them via ui-custom (kmet.extension docstring).
+
+   The frame is a compiled hiccup tree (dsl.md): the border/spacer/title/
+   hint chrome is DSL-owned and disposed with the frame; the interactive
+   content (SelectList/Input) splices foreign — the dialog disposes the
+   frame, whose cascade reaches the inner comp."
   (:require [clojure.string :as str]
+            [kmet.tui.hiccup :as h]
             [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.keybindings :as kb]
-            [kmet.tui.components.container :as container]
-            [kmet.tui.components.text :as text]
-            [kmet.tui.components.spacer :as spacer]
-            [kmet.tui.components.dynamic-border :as db]
             [kmet.tui.components.select-list :as select-list]
             [kmet.tui.components.input :as input]))
 
 ;; ─── Shared frame helpers ──────────────────────────────────────────────────
 
-(defn- title-text
-  "Bold accent title line (pi: theme.fg('accent', theme.bold(title)))."
+(defn- title-str
+  "Bold accent title (pi: theme.fg('accent', theme.bold(title)))."
   [th title]
-  (text/make-text (theme/fg th :accent (theme/bold title)) 1 0))
+  (theme/fg th :accent (theme/bold title)))
 
-(defn- hint-text
-  "Dim keybinding hint line built from the global keybindings
-   (pi: keyHint/rawKeyHint)."
-  [th & [key-ids]]
-  (let [kmgr (kb/get-global-keybindings)
-        hint (str/join " • "
-                       (keep (fn [[k desc]]
-                               (when-let [ktext (kb/key-text kmgr k)]
-                                 (str ktext " " desc)))
-                             key-ids))]
-    (text/make-text (theme/fg th :dim hint) 1 0)))
+(defn- hint-str
+  "Keybinding hint string built from the global keybindings
+   (pi: keyHint/rawKeyHint); styled dim at the call site."
+  [& [key-ids]]
+  (let [kmgr (kb/get-global-keybindings)]
+    (str/join " • "
+              (keep (fn [[k desc]]
+                      (when-let [ktext (kb/key-text kmgr k)]
+                        (str ktext " " desc)))
+                    key-ids))))
 
 (defn- frame
-  "Container framing the CONTENT component with DynamicBorder + title."
+  "The dialog frame as a compiled hiccup tree: a top/bottom DynamicBorder,
+   a bold accent title, the interactive CONTENT spliced foreign (a
+   SelectList/Input record the dialog owns), and a dim keybinding hint.
+   Returns the frame's root component (a Container) — its dispose cascades
+   to the DSL-owned chrome AND the spliced content, so the dialog disposes
+   the frame once and the inner comp goes with it."
   [th title content & [{:keys [hint-keys]}]]
-  (let [c (container/make-container)]
-    (container/container-add-child c (db/make-dynamic-border #(theme/fg th :accent %)))
-    (container/container-add-child c (spacer/make-spacer 1))
-    (container/container-add-child c (title-text th title))
-    (container/container-add-child c (spacer/make-spacer 1))
-    (container/container-add-child c content)
-    (container/container-add-child c (spacer/make-spacer 1))
-    (container/container-add-child c (hint-text th hint-keys))
-    (container/container-add-child c (spacer/make-spacer 1))
-    (container/container-add-child c (db/make-dynamic-border #(theme/fg th :accent %)))
-    c))
+  (h/compile-tree
+   [:container {}
+    [:dynamic-border {:color-fn #(theme/fg th :accent %)}]
+    [:spacer {:lines 1}]
+    [:text {:padding-x 1 :padding-y 0} (title-str th title)]
+    [:spacer {:lines 1}]
+    content
+    [:spacer {:lines 1}]
+    [:text {:padding-x 1 :padding-y 0} (theme/fg th :dim (hint-str hint-keys))]
+    [:spacer {:lines 1}]
+    [:dynamic-border {:color-fn #(theme/fg th :accent %)}]]))
 
 ;; ─── Selector (pi: ExtensionSelectorComponent) ─────────────────────────────
 
 (defcomponent SelectorDialog nil [container select-list focused?-atom]
   (render [this width] (protocols/render (:container this) width))
   (handle-input [this data] (protocols/handle-input (:select-list this) data))
-  (invalidate [this] (protocols/invalidate (:container this))))
+  (invalidate [this] (protocols/invalidate (:container this)))
+  (dispose [this] (protocols/dispose (:container this))))
 
 (extend-type SelectorDialog
   protocols/IFocusable
@@ -91,7 +98,8 @@
 (defcomponent InputDialog nil [container input-comp focused?-atom]
   (render [this width] (protocols/render (:container this) width))
   (handle-input [this data] (protocols/handle-input (:input-comp this) data))
-  (invalidate [this] (protocols/invalidate (:container this))))
+  (invalidate [this] (protocols/invalidate (:container this)))
+  (dispose [this] (protocols/dispose (:container this))))
 
 (extend-type InputDialog
   protocols/IFocusable
