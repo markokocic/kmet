@@ -248,6 +248,18 @@ trees) re-run on every pass — batched semantics, uncached, never stale.
 Mixed bodies must read reactive inputs through component-body derefs,
 `tracked-deref`, computes or cursors (the coverage contract, §3.1).
 
+**Choosing the form** — the uncached (bare `@`/untracked) form is the safe
+default whenever state mutates asynchronously in multi-swap sequences
+(a `future`/timer clearing one key then setting another, e.g. a
+delete-confirm + status flow): the memoized `tracked-deref` form caches the
+body's tree on `:idle` and coalesces changes behind a dirty gate, so a body
+run that reads the state between two swaps can cache a tree stale relative
+to the atom — and the second swap's watch may be swallowed, so it never
+re-derives. The untracked form re-reads per pass, so it cannot cache stale
+output (this is also why the old `track!` renders were immune). Only adopt
+`tracked-deref` when a body is expensive enough to need narrow memoization
+and its state changes are single swaps the reaction can observe.
+
 **Granularity guidance** — don't build one giant screen component reading
 all app state: any change then re-runs the entire body, tracked reads of
 large collections pay a structural equality walk per change, and mapping a
