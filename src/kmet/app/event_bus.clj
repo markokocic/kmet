@@ -119,7 +119,9 @@
     Payload: :session-file, :name."
 
    :context-replaced
-   "Fired when prepareNextTurn replaces the conversation context.
+   "Fired when the conversation context is replaced: prepareNextTurn's
+    :context update, or a compaction (auto or manual) rebuilding the context
+    from the compacted session (pi: compaction_end re-renders the chat).
     Payload: :messages — the new conversation messages."
 
    :auto-retry-start

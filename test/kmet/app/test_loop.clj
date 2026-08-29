@@ -567,8 +567,8 @@
       @(loop/run-agent-turn agent
                             {:message "fix the bug"
                              :on-error (fn [_])})
-      (t/is (= :error @(:status agent))
-            "run ends in :error after the network failure")
+      (t/is (= :idle @(:status agent))
+            "run settles idle after the terminal error — /continue and /compact stay usable")
       (t/is (= 1 (count (filter #(= :user (:role %)) (loop/get-context agent))))
             "the user message stays in context after the error")
       ;; Turn 2: /continue — no new user message, the model picks up
@@ -1513,7 +1513,8 @@
       (t/is (false? (:success (first ends))))
       (t/is (= 1 (:attempt (first ends))))
       (t/is (= "503 service unavailable" (:final-error (first ends)))))
-    (t/is (= :error @(:status agent)))
+    (t/is (= :idle @(:status agent))
+          "status returns to :idle after retries are exhausted (pi: agent_settled)")
     (t/is (some #(= :error (:type %)) @events) "terminal :error event emitted")
     ;; Every failed attempt is recorded — one :message-end per LLM call that
     ;; errored (pi: message_end persists each stopReason-error partial, even
@@ -1700,7 +1701,8 @@
     (t/is (= 1 @calls) "no auto-retry (max-retries 0)")
     (t/is (= 1 (count @errors)) "the error surfaces to the UI")
     (t/is (= "Provider stopped with: error" (first @errors)))
-    (t/is (= :error @(:status agent)) "the run ends in :error")
+    (t/is (= :idle @(:status agent))
+          "run ends idle — a terminal error settles the agent (pi: agent_settled)")
     (t/is (empty? (filterv #(= :assistant (:role %)) (loop/get-context agent)))
           "the errored attempt is excluded from the live context")))
 
@@ -2274,6 +2276,9 @@
                         (= "recovered" (get-in % [:message :content 0 :text])))
                   @events)
             "retried call succeeds after compaction")
+      (t/is (some #(= :context-replaced (:type %)) @events)
+            "overflow compaction mirrors the new context to the UI (pi: compaction_end re-renders)")
+      (t/is (= :idle @(:status agent)) "run settles idle after the overflow recovery")
       (finally
         (fs/delete-tree dir)))))
 
@@ -2351,9 +2356,11 @@
 
 (t/deftest test-loop-token-threshold-compaction
   (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
+        events (atom [])
         sess (session/create-session (str dir))
         agent (loop/make-agent-state
                :session sess
+               :on-event (fn [e] (swap! events conj e))
                :compact-token-threshold 10
                :keep-recent-tokens 40)]
     (try
@@ -2377,6 +2384,10 @@
       (t/is (< (count @(:messages agent)) 10) "in-memory context aligned with session")
       (t/is (= (count @(:messages agent)) (count (session/build-context sess)))
             "messages mirror the compacted session context (compaction + kept tail)")
+      (t/is (some #(and (= :context-replaced (:type %))
+                        (= (count @(:messages agent)) (count (:messages %))))
+                  @events)
+            "auto-compaction mirrors the new context to the UI (pi: compaction_end re-renders the chat)")
       (finally
         (fs/delete-tree dir)))))
 
@@ -2947,5 +2958,5 @@
     (let [starts (filter #(= :auto-retry-start (:type %)) @events)]
       (t/is (= 1 (count starts)) "the timeout is retried once (retryable)")
       (t/is (= "LLM call timed out after 10ms" (:error-message (first starts)))))
-    (t/is (= :error @(:status agent)) "run ends errored after retries exhausted")
+    (t/is (= :idle @(:status agent)) "run settles idle after retries exhausted")
     (t/is (some #(= :error (:type %)) @events) "terminal :error event emitted")))

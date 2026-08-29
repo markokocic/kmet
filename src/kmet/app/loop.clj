@@ -1237,6 +1237,12 @@ Be precise and concise in your responses."}}]
                                                                  (:usage summary-result)
                                                                  (assoc :usage (:usage summary-result))))
                                 (sync-context-after-compaction! agent)
+                                ;; Mirror the new context into the UI (pi: compaction_end → the
+                                ;; interactive mode clears the chat and re-renders the compacted
+                                ;; context, showing the compaction summary entry). Without this the
+                                ;; transcript keeps the pre-compaction messages and the compaction is
+                                ;; invisible until the session is reloaded.
+                                (emit agent {:type :context-replaced :messages @(:messages agent)})
                                 (debug/log "compacted session with LLM summary")
                                 true))
                           (if @(:signal agent)
@@ -1455,7 +1461,11 @@ Be precise and concise in your responses."}}]
 
 (defn- terminal-error!
   "Non-retryable error or exhausted budget: close out any open retry span,
-   surface to UI + bus, mark errored, end the run."
+   surface to UI + bus, mark errored, end the run. The status atom returns
+   to :idle — the run is fully over (pi: agent_settled fires in a finally
+   after every run, success or error, and the session is idle); a sticky
+   :error would make /compact, /reload and the extension :is-idle check
+   refuse until the next successful run."
   [agent err on-error agent-end]
   (when (pos? @(:retry-count agent))
     (let [n @(:retry-count agent)]
@@ -1468,6 +1478,8 @@ Be precise and concise in your responses."}}]
   (reset! (:status agent) :error)
   (emit agent {:type :error :message err})
   (agent-end err)
+  (reset! (:status agent) :idle)
+  (emit agent {:type :status :status :idle})
   {:aborted true})
 
 (defn- tools-phase!
@@ -1762,7 +1774,12 @@ Be precise and concise in your responses."}}]
               ;; extension event bus, which must not be able to skip the
               ;; user-visible error path.
               (when on-error (on-error (ex-message e)))
-              (emit agent {:type :error :message (ex-message e)}))
+              (emit agent {:type :error :message (ex-message e)})
+              ;; Same settle rule as terminal-error!: an unhandled exception
+              ;; ends the run, and the agent is idle afterwards (pi:
+              ;; agent_settled).
+              (reset! (:status agent) :idle)
+              (emit agent {:type :status :status :idle}))
             (finally
               ;; pi: _flushPendingBashMessages — bash results recorded while
               ;; streaming are queued to preserve tool_use/tool_result ordering
