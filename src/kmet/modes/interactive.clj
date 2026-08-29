@@ -68,7 +68,8 @@
          build-loaded-resource-sections start-agent-run!
          show-status-indicator! clear-status-indicator! stop-anim-timer!
          maybe-show-cache-miss-notice!
-         make-widget-area-above make-widget-area-below)
+         make-widget-area-above make-widget-area-below
+         send-message)
 
 ;; ─── Global config ref ────────────────────────────────────────────────────
 
@@ -125,6 +126,7 @@
                       pending-messages-comp
                       session-atom
                       running-turn?
+                      compaction-queued
                       config
                       pending-tool-comps
                       bash-running?
@@ -1498,6 +1500,9 @@
           (debug/log "new session created: " (:id new-session))
           (ui/chat-history-clear! (:chat-history cs))
           (container/container-clear (:pending-messages-container cs))
+          ;; pi: a session switch drops the compaction queue
+          ;; (compactionQueuedMessages = [])
+          (reset! (:compaction-queued cs) [])
           ;; Re-attach the PendingMessages component — container-clear removes
           ;; every child (queued steering/follow-up display included), and the
           ;; display must keep rendering for messages queued after /new
@@ -1998,13 +2003,126 @@
 
 (defn- update-pending-messages!
   "Refresh the queued steering/follow-up display (pi:
-   updatePendingMessagesDisplay)."
+   updatePendingMessagesDisplay). Combines the agent's steering/follow-up
+   queues with the compaction queue (pi: getAllQueuedMessages — messages
+   queued during compaction display alongside the session queue)."
   [cs]
-  (let [{:keys [steering follow-up]} (agent/queued-messages @(:agent-state cs))]
+  (let [{:keys [steering follow-up]} (agent/queued-messages @(:agent-state cs))
+        cq @(:compaction-queued cs)
+        c-steer (mapv :text (filter #(= :steer (:mode %)) cq))
+        c-follow (mapv :text (filter #(= :follow-up (:mode %)) cq))]
     ;; set-queues! swaps track!-watched atoms — the watch invalidates the
     ;; component and schedules the frame (§3.4); no manual poke.
     (ui/pending-messages-set-queues! (:pending-messages-comp cs)
-                                     steering follow-up)))
+                                     (into (vec steering) c-steer)
+                                     (into (vec follow-up) c-follow))))
+
+(defn- queue-compaction-message!
+  "Queue a message typed during compaction (pi: queueCompactionMessage —
+   non-extension input is queued for after compaction; extension commands
+   execute immediately and never reach here). The message displays in the
+   pending area and is flushed by the :compaction-end handler."
+  [cs text mode]
+  (swap! (:compaction-queued cs) conj {:text text :mode mode})
+  (update-pending-messages! cs)
+  (ui/chat-history-show-status!
+   (:chat-history cs) "Queued message for after compaction")
+  (tui/tui-request-render (:tui cs)))
+
+(defn- compaction-queued?
+  "True when the compaction queue holds any message."
+  [cs]
+  (seq @(:compaction-queued cs)))
+
+(defn- clear-compaction-queue!
+  "Drop all compaction-queued messages (pi: session switch clears the
+   compaction queue). Returns the dropped messages."
+  [cs]
+  (let [q @(:compaction-queued cs)]
+    (reset! (:compaction-queued cs) [])
+    q))
+
+(defn- split-command
+  "Split a slash-command line into [name args]. Non-command text returns
+   [nil nil]."
+  [text]
+  (when (str/starts-with? text "/")
+    (let [sp (str/index-of text " ")]
+      (if sp
+        [(subs text 1 sp) (subs text (inc sp))]
+        [(subs text 1) ""]))))
+
+(defn- extension-command?
+  "True when TEXT is a registered extension command (pi: isExtensionCommand)."
+  [text]
+  (some? (some-> (split-command text) first commands/find-command :extension-handler)))
+
+(defn- execute-extension-command!
+  "Run a registered extension command with the extension context (pi:
+   prompt() → _tryExecuteExtensionCommand → handler(args, ctx))."
+  [text]
+  (let [[name args] (split-command text)
+        c (commands/find-command name)]
+    ((:extension-handler c) (extensions/build-extension-context) (or args ""))))
+
+(defn- deliver-compaction-message!
+  "Deliver one compaction-queued message: extension commands execute
+   immediately; otherwise the message queues into the running turn
+   (steer/follow-up per its mode) or starts a run when idle (pi:
+   session.prompt / steer / followUp)."
+  [cs m]
+  (if (extension-command? (:text m))
+    (execute-extension-command! (:text m))
+    (if @(:running-turn? cs)
+      (if (= :follow-up (:mode m))
+        (agent/follow-up! @(:agent-state cs) (:text m))
+        (agent/steer! @(:agent-state cs) (:text m)))
+      (send-message cs (:text m)))))
+
+(defn- flush-compaction-queue!
+  "Deliver messages queued during compaction (pi: flushCompactionQueue —
+   runs on every compaction_end). With WILL-RETRY (overflow compaction: the
+   interrupted turn continues), every message queues into the running turn
+   via steer/follow-up per its mode. Otherwise the first non-extension
+   message becomes a prompt (starts a run when idle), extension commands
+   execute immediately, and the rest queue per mode. A failure restoring the
+   queue re-queues the messages so they are not lost."
+  [cs will-retry]
+  (when (compaction-queued? cs)
+    (let [msgs (clear-compaction-queue! cs)
+          restore! (fn []
+                     (reset! (:compaction-queued cs) msgs)
+                     (update-pending-messages! cs))]
+      (try
+        (if will-retry
+          ;; Overflow compaction: the turn retries — queue everything into it
+          (doseq [m msgs] (deliver-compaction-message! cs m))
+          ;; Normal completion: first non-extension message prompts, the
+          ;; rest queue per mode
+          (let [first-idx (first (keep-indexed
+                                  (fn [i m] (when-not (extension-command? (:text m)) i))
+                                  msgs))]
+            (if first-idx
+              (do
+                ;; extension commands before the first prompt execute now
+                (doseq [m (take first-idx msgs)]
+                  (execute-extension-command! (:text m)))
+                ;; the first message: prompt when idle, else queue per mode
+                (deliver-compaction-message! cs (nth msgs first-idx))
+                ;; remaining messages queue per mode
+                (doseq [m (drop (inc first-idx) msgs)]
+                  (deliver-compaction-message! cs m)))
+              ;; all extension commands — execute them all
+              (doseq [m msgs] (execute-extension-command! (:text m))))))
+        (update-pending-messages! cs)
+        (catch Exception e
+          (restore!)
+          (ui/chat-history-show-status!
+           (:chat-history cs)
+           (str "Failed to send queued message"
+                (when (> (count msgs) 1) "s")
+                ": " (ex-message e)))
+          (debug/log "compaction queue flush failed: " e))))))
 
 (defn- compaction-status-message
   "Pi: CompactionStatusIndicator label — reason-specific, with the cancel
@@ -2366,7 +2484,13 @@
         ;; whether the agent is running (input will be steered). Slash and
         ;; bash commands are native UI features and bypass the hooks.
         :else
-        (submit-message cs trimmed)))))
+        ;; Queue input during compaction (pi: onSubmit → isCompacting →
+        ;; queueCompactionMessage(text, "steer"); extension commands and
+        ;; builtins already dispatched above, so only plain messages land
+        ;; here). Flushed by the :compaction-end handler.
+        (if @(:compacting? @(:agent-state cs))
+          (queue-compaction-message! cs trimmed :steer)
+          (submit-message cs trimmed))))))
 
 (defn- handle-follow-up
   "Pi: handleFollowUp — Alt+Enter. While the agent is running, queue the
@@ -2378,29 +2502,41 @@
     (when (seq text)
       (editor/editor-push-history! ed text)
       (editor-text-set! ed "")
-      (if @(:running-turn? cs)
+      (cond
+        ;; Queue input during compaction (pi: handleFollowUp → isCompacting
+        ;; → queueCompactionMessage(text, "followUp"); extension commands
+        ;; execute immediately via handle-submit).
+        @(:compacting? @(:agent-state cs))
+        (queue-compaction-message! cs text :follow-up)
+
+        @(:running-turn? cs)
         ;; Pi: handleFollowUp queues a follow-up (processed after the run
         ;; settles). Not added to the chat here — like steering, it appears
         ;; as a user message when the loop consumes it (:message-start,
         ;; pi: message_start → addMessageToChat).
         (do (agent/follow-up! @(:agent-state cs) text)
             (update-pending-messages! cs))
+
+        :else
         (handle-submit cs text))
       (tui/tui-request-render (:tui cs)))))
 
 (defn- restore-queued-messages!
   "Restore queued steering/follow-up messages to the editor, combined with
-   the current text, and clear the queues (pi: restoreQueuedMessagesToEditor).
-   Returns the number of messages restored."
+   the current text, and clear the queues (pi: restoreQueuedMessagesToEditor
+   → clearAllQueues — the compaction queue is restored alongside the session
+   queues). Returns the number of messages restored."
   [cs]
   (let [{:keys [steering follow-up]} (agent/queued-messages @(:agent-state cs))
-        all (into (vec steering) follow-up)]
+        cq @(:compaction-queued cs)
+        all (into (vec steering) (concat follow-up (map :text cq)))]
     (when (seq all)
       (let [ed @(:current-editor-atom cs)
             current (editor-text-get ed)
             queued-text (str/join "\n\n" all)
             combined (str/join "\n\n" (remove str/blank? [queued-text current]))]
         (agent/clear-queues! @(:agent-state cs))
+        (reset! (:compaction-queued cs) [])
         (editor-text-set! ed combined)))
     (count all)))
 
@@ -2663,7 +2799,11 @@
             (when (and (:aborted evt)
                        (= :manual (:reason evt)))
               (ui/chat-history-show-status!
-               chat-history "Compaction cancelled")))
+               chat-history "Compaction cancelled"))
+            ;; pi: compaction_end → flushCompactionQueue — messages queued
+            ;; during compaction are delivered now (queued into the retrying
+            ;; turn when will-retry, else the first prompts a fresh run).
+            (flush-compaction-queue! cs (:will-retry evt)))
           (tui/tui-request-render tui))
       :context-replaced
       ;; Rebuild the chat history to mirror the replaced
@@ -2942,6 +3082,7 @@
                             :pending-messages-comp pm
                             :session-atom (atom session)
                             :running-turn? (atom false)
+                            :compaction-queued (atom [])
                             :config config
                             :pending-tool-comps pending-tool-comps
                             :bash-running? (atom false)
@@ -3646,6 +3787,12 @@
                                @(:thinking @(:agent-state cs)))
          :send-user-message (fn [text & [{:keys [deliver-as expand-prompt-templates?]}]]
                               (let [ag @(:agent-state cs)
+                                    ;; pi: prompt() throws while compaction is
+                                    ;; in progress — extension messages cannot
+                                    ;; queue into the UI compaction queue.
+                                    _ (when @(:compacting? ag)
+                                        (throw (ex-info "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry."
+                                                        {:type :compaction-in-progress})))
                                     ;; pi: prompt() with expandPromptTemplates —
                                     ;; extension commands execute immediately
                                     ;; (consuming the message), then skill
@@ -3676,6 +3823,12 @@
          ;; anything else defers to the next turn).
          :send-message! (fn [message & [opts]]
                           (let [ag @(:agent-state cs)
+                                ;; pi: sendMessage → prompt — custom messages
+                                ;; cannot be submitted while compaction is in
+                                ;; progress (the compaction queue is UI-only).
+                                _ (when @(:compacting? ag)
+                                    (throw (ex-info "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry."
+                                                    {:type :compaction-in-progress})))
                                 custom-type (or (:custom-type message) :custom)
                                 display (if (nil? (:display message)) true (:display message))
                                 msg {:role :custom

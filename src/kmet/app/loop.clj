@@ -1257,7 +1257,10 @@ Be precise and concise in your responses."}}]
                        :result (and (not= result :aborted)
                                     (not= result ::cancelled)
                                     result)
-                       :will-retry false})
+                       ;; Overflow compaction retries the interrupted turn
+                       ;; (pi: _runAutoCompaction willRetry — compaction_end
+                       ;; carries whether the run continues).
+                       :will-retry (= reason :overflow)})
           (if (= result ::cancelled) false result))
         (finally
           (reset! (:compacting? agent) false))))))

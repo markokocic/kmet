@@ -747,3 +747,141 @@
             text lines"
     (t/is (thrown? Exception
                    ((var inter/make-extension-widget-component) nil ["just" "lines"])))))
+
+;; ─── Compaction queue (pi: queueCompactionMessage / flushCompactionQueue) ──
+
+(defn- compaction-cs
+  "A CoreState-like map for compaction-queue tests."
+  []
+  (let [ag (agent/make-agent-state)
+        ch (ui/make-chat-history)
+        si (ui/make-status-indicator :text "Working...")
+        cur (atom nil)]
+    {:tui {:render-requested? (atom false)}
+     :agent-state (atom ag)
+     :chat-history ch
+     :current-editor-atom (atom (editor/make-editor))
+     :compaction-queued (atom [])
+     :running-turn? (atom false)
+     :status-indicator si
+     :status-current cur
+     :status-root (hiccup/root (ui/make-status-area cur si))
+     :footer-comp nil
+     :footer-provider nil
+     :pending-messages-comp (ui/make-pending-messages)
+     :session-atom (atom (session/create-session
+                          (str "target/test-compaction-queue-" (System/currentTimeMillis))))}))
+
+(deftest test-submit-queues-during-compaction
+  (testing "a plain message submitted during compaction queues as steer
+            (pi: onSubmit → isCompacting → queueCompactionMessage(text, steer))"
+    (let [cs (compaction-cs)]
+      (reset! (:compacting? @(:agent-state cs)) true)
+      (with-redefs [tui/tui-request-render (fn [_] nil)]
+        ((var inter/handle-submit) cs "hello during compaction"))
+      (t/is (= [{:text "hello during compaction" :mode :steer}]
+               @(:compaction-queued cs))
+            "message queued with steer mode")
+      (t/is (empty? @(:messages @(:agent-state cs)))
+            "message NOT sent to the agent"))))
+
+(deftest test-follow-up-queues-during-compaction
+  (testing "Alt+Enter during compaction queues as follow-up
+            (pi: handleFollowUp → queueCompactionMessage(text, followUp))"
+    (let [cs (compaction-cs)
+          ed @(:current-editor-atom cs)]
+      (editor/editor-set-text! ed "later message")
+      (reset! (:compacting? @(:agent-state cs)) true)
+      (with-redefs [tui/tui-request-render (fn [_] nil)]
+        ((var inter/handle-follow-up) cs))
+      (t/is (= [{:text "later message" :mode :follow-up}]
+               @(:compaction-queued cs))
+            "message queued with follow-up mode"))))
+
+(deftest test-flush-compaction-queue-prompts-when-idle
+  (testing "compaction_end flushes the queue: the first non-extension message
+            starts a run when idle, the rest queue (pi: flushCompactionQueue)"
+    (let [cs (compaction-cs)
+          started (atom [])]
+      (reset! (:compaction-queued cs)
+              [{:text "first" :mode :steer}
+               {:text "second" :mode :follow-up}])
+      (with-redefs [agent/run-agent-turn (fn [a opts] (reset! started [a opts]) (future))
+                    inter/activate-working-indicator! (fn [_] nil)
+                    inter/start-anim-timer! (fn [_] nil)
+                    inter/update-footer! (fn [_] nil)
+                    tui/tui-request-render (fn [_] nil)
+                    ui/chat-history-start-streaming! (fn [_] nil)]
+        ((var inter/flush-compaction-queue!) cs false))
+      (t/is (seq @started) "a run started for the first message")
+      (t/is (= "first" (get-in @started [1 :message])) "run carries the first message")
+      (t/is (empty? @(:compaction-queued cs)) "queue drained")
+      (let [{:keys [steering follow-up]} (agent/queued-messages @(:agent-state cs))]
+        (t/is (= [] steering) "second (follow-up) not steered")
+        (t/is (= ["second"] follow-up) "second queued as follow-up into the run")))))
+
+(deftest test-flush-compaction-queue-queues-when-running
+  (testing "compaction_end during a running turn (overflow retry) queues every
+            message into the turn (pi: flushCompactionQueue willRetry)"
+    (let [cs (compaction-cs)]
+      (reset! (:running-turn? cs) true)
+      (reset! (:compaction-queued cs)
+              [{:text "steer-msg" :mode :steer}
+               {:text "follow-msg" :mode :follow-up}])
+      (with-redefs [tui/tui-request-render (fn [_] nil)]
+        ((var inter/flush-compaction-queue!) cs true))
+      (let [{:keys [steering follow-up]} (agent/queued-messages @(:agent-state cs))]
+        (t/is (= ["steer-msg"] steering) "steer-mode queued into steering")
+        (t/is (= ["follow-msg"] follow-up) "follow-up-mode queued into follow-up"))
+      (t/is (empty? @(:compaction-queued cs)) "queue drained"))))
+
+(deftest test-extension-command-during-compaction-executes
+  (testing "extension commands execute immediately during compaction
+            (pi: isExtensionCommand → prompt() executes)"
+    (commands/clear-commands!)
+    (let [cs (compaction-cs)
+          ran (atom nil)]
+      (commands/register-command!
+       {:name "my-ext-cmd"
+        :description "test"
+        :extension-handler (fn [_ctx args] (reset! ran args))})
+      (reset! (:compacting? @(:agent-state cs)) true)
+      (with-redefs [tui/tui-request-render (fn [_] nil)
+                    inter/update-footer! (fn [_] nil)]
+        ((var inter/handle-submit) cs "/my-ext-cmd arg1"))
+      (t/is (= "arg1" @ran) "extension command executed immediately")
+      (t/is (empty? @(:compaction-queued cs)) "not queued")
+      (commands/clear-commands!))))
+
+(deftest test-restore-queued-includes-compaction-queue
+  (testing "Alt+Up / cancel restores the compaction queue alongside the
+            session queues (pi: restoreQueuedMessagesToEditor → clearAllQueues)"
+    (let [cs (compaction-cs)
+          ed @(:current-editor-atom cs)]
+      (agent/steer! @(:agent-state cs) "steer-msg")
+      (reset! (:compaction-queued cs) [{:text "compact-msg" :mode :steer}])
+      (editor/editor-set-text! ed "draft")
+      (let [n ((var inter/restore-queued-messages!) cs)]
+        (t/is (= 2 n) "both queues restored")
+        (t/is (= "steer-msg\n\ncompact-msg\n\ndraft" (editor/editor-get-text ed))
+              "messages combined with current editor text")
+        (t/is (empty? @(:compaction-queued cs)) "compaction queue cleared")))))
+
+(deftest test-compaction-end-handler-flushes
+  (testing "the :compaction-end event handler flushes the queue"
+    (let [cs (compaction-cs)
+          h ((var inter/make-agent-event-handler)
+             {:chat-history (:chat-history cs)
+              :tui {:render-requested? (atom false)}
+              :cs-ref (atom cs)
+              :pending-tool-comps (atom {})})
+          started (atom [])]
+      (reset! (:compaction-queued cs) [{:text "after" :mode :steer}])
+      (with-redefs [agent/run-agent-turn (fn [a opts] (reset! started [a opts]) (future))
+                    inter/activate-working-indicator! (fn [_] nil)
+                    inter/start-anim-timer! (fn [_] nil)
+                    inter/update-footer! (fn [_] nil)
+                    tui/tui-request-render (fn [_] nil)
+                    ui/chat-history-start-streaming! (fn [_] nil)]
+        (h {:type :compaction-end :reason :threshold :result true :will-retry false}))
+      (t/is (seq @started) "queued message prompted a run after compaction"))))
