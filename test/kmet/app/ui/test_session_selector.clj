@@ -139,10 +139,14 @@
     (swap! (:state-atom sel) assoc :progress nil)
     (t/is (str/includes? (nth (render-text sel 100) 3) "Loading ..."))))
 
-(t/deftest every-line-padded-to-width
+(t/deftest non-blank-lines-span-panel-width
+  "The DSL frame does not full-width-pad blank lines (spacers render empty;
+   trailing spaces are invisible). What matters visually — the border, the
+   selected row's background bar, and every content line — spans the panel."
   (let [sel (new-sel :current [(info "/tmp/s/a.ednl")])]
     (doseq [line (protocols/render sel 80)]
-      (t/is (= 80 (u/visible-width line))))))
+      (when (pos? (u/visible-width line))
+        (t/is (= 80 (u/visible-width line)))))))
 
 ;; ─── Selection ──────────────────────────────────────────────────────────────
 

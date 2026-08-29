@@ -27,8 +27,9 @@
             [kmet.tui.components.input :as input]
             [kmet.tui.core :as tui]
             [kmet.tui.fuzzy :as fuzzy]
+            [kmet.tui.hiccup :as hiccup]
             [kmet.tui.keybindings :as kb]
-            [kmet.tui.macros :refer [defcomponent track-deps track!]]
+            [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.utils :as u]))
@@ -584,13 +585,6 @@
 
 ;; ─── Rendering ─────────────────────────────────────────────────────────────
 
-(defn- pad-line
-  "Truncate LINE to WIDTH and right-pad with spaces, so every row — the
-   selectedBg background included — spans the full panel width (pi:
-   spacing fills to width before theme.bg wraps the line)."
-  [line width]
-  (u/truncate-to-width (str line) width "" true))
-
 (defn- header-line
   "pi: SessionSelectorHeader.render line 1 — bold title left; scope ◉/○
    indicator, Name and Sort filters right (Loading N/M replaces the scope
@@ -726,42 +720,10 @@
 (defcomponent SessionSelector nil
               [state-atom search-input rename-input loaders current-session-file
                rename-session-fn delete-session-fn request-render on-select-atom
-               on-cancel-atom timer-atom seq-atom hide-fn-atom focused? cache-atom]
+               on-cancel-atom timer-atom seq-atom hide-fn-atom focused? cache-atom
+               root]
 
-  (render [this width]
-    (track! this width
-      (let [st @state-atom
-            th (theme/get-current-theme)]
-        (track-deps @(:value-atom search-input) @(:cursor-atom search-input)
-                    @(:focused? search-input)
-                    @(:value-atom rename-input) @(:cursor-atom rename-input)
-                    @(:focused? rename-input))
-        (let [border (theme/fg th :accent (apply str (repeat (max 1 width) "─")))]
-          (->> (if (:rename-mode st)
-                 ["" border ""
-                  (str " " (theme/bold "Rename Session"))
-                  ""
-                  (protocols/render rename-input width)
-                  ""
-                  (str " "
-                       (theme/fg th :muted
-                                 (str (app-kb/key-text "tui.select.confirm")
-                                      " to save · "
-                                      (app-kb/key-text "tui.select.cancel")
-                                      " to cancel")))
-                  "" border]
-                 (let [hints (hint-lines th st width)]
-                   ["" border ""
-                    (header-line th st width)
-                    (hints 0)
-                    (hints 1)
-                    ""
-                    (protocols/render search-input width)
-                    ""
-                    (content-lines this th st width)
-                    "" border]))
-               flatten
-               (mapv #(pad-line % width)))))))
+  (render [this width] (protocols/render (:root this) width))
 
   (handle-input [this data]
     (let [kmgr (kb/get-global-keybindings)
@@ -846,7 +808,11 @@
               nil)
 
           :else
-          (do (forward-to-search! this data) nil))))))
+          (do (forward-to-search! this data) nil)))))
+  (dispose [this]
+    ;; unwind the content tree's reaction (watch on the state atom) with the
+    ;; selector — show-session-selector's done disposes it on editor restore
+    (protocols/dispose (:root this))))
 
 ;; ─── IFocusable — forward to the inputs (IME cursor positioning) ───────────
 
@@ -917,9 +883,58 @@
               :seq-atom (atom 0)
               :hide-fn-atom (atom nil)
               :focused? (atom false)
-              :cache-atom (atom nil)})]
+              :cache-atom (atom nil)})
+        ;; The panel frame as a mounted hiccup root (dsl.md): the border,
+        ;; header and hint lines and the width-dependent rows re-derive from
+        ;; the state atom and the render width; the search/rename input
+        ;; splices foreign (lifecycle owned by the selector). Blank lines are
+        ;; spacers — the DSL does not full-width-pad blanks (only the bg'd
+        ;; selection row and the border span the panel; :text and
+        ;; dynamic-border provide that).
+        root (hiccup/root
+              (fn [_props]
+                (let [w hiccup/*width*
+                      th (theme/get-current-theme)
+                      st @(:state-atom sel)
+                      border-fn #(theme/fg th :accent %)
+                      tree (if (:rename-mode st)
+                             [:container {}
+                              [:spacer {:lines 1}]
+                              [:dynamic-border {:color-fn border-fn}]
+                              [:spacer {:lines 1}]
+                              [:text {:text (str " " (theme/bold "Rename Session"))
+                                      :padding-x 0 :padding-y 0}]
+                              [:spacer {:lines 1}]
+                              (:rename-input sel)
+                              [:spacer {:lines 1}]
+                              [:text {:text (str " "
+                                                 (theme/fg th :muted
+                                                           (str (app-kb/key-text "tui.select.confirm")
+                                                                " to save · "
+                                                                (app-kb/key-text "tui.select.cancel")
+                                                                " to cancel")))
+                                      :padding-x 0 :padding-y 0}]
+                              [:spacer {:lines 1}]
+                              [:dynamic-border {:color-fn border-fn}]]
+                             (let [hints (hint-lines th st w)]
+                               [:container {}
+                                [:spacer {:lines 1}]
+                                [:dynamic-border {:color-fn border-fn}]
+                                [:spacer {:lines 1}]
+                                [:text {:text (header-line th st w) :padding-x 0 :padding-y 0}]
+                                [:text {:text (hints 0) :padding-x 0 :padding-y 0}]
+                                [:text {:text (hints 1) :padding-x 0 :padding-y 0}]
+                                [:spacer {:lines 1}]
+                                (:search-input sel)
+                                [:spacer {:lines 1}]
+                                (map (fn [row]
+                                       [:text {:text row :padding-x 0 :padding-y 0}])
+                                     (content-lines sel th st w))
+                                [:spacer {:lines 1}]
+                                [:dynamic-border {:color-fn border-fn}]]))]
+                  tree)))]
     (input/input-set-on-submit! rename-input (fn [value] (confirm-rename! sel value)))
-    sel))
+    (assoc sel :root root)))
 
 (defn show-session-selector
   "Open the session resume selector in place of the editor (pi:
