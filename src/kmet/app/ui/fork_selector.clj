@@ -11,10 +11,7 @@
             [kmet.app.session :as session]
             [kmet.app.ui :as ui]
             [kmet.app.ui.dock :as dock]
-            [kmet.tui.components.container :as container]
-            [kmet.tui.components.dynamic-border :as db]
-            [kmet.tui.components.spacer :as spacer]
-            [kmet.tui.components.text :as text]
+            [kmet.tui.hiccup :as h]
             [kmet.tui.keybindings :as kb]
             [kmet.tui.macros :refer [defcomponent track!]]
             [kmet.tui.theme :as theme]
@@ -135,16 +132,20 @@
                        :on-select-atom on-select-atom
                        :on-cancel-atom on-cancel-atom
                        :cache-atom (atom nil)})
-                panel (container/make-container
-                       [(spacer/make-spacer)
-                        (text/make-text (theme/bold "Fork from Message") 1 0)
-                        (text/make-text (theme/fg th :muted description) 1 0)
-                        (spacer/make-spacer)
-                        (db/make-dynamic-border #(theme/fg th :accent %))
-                        (spacer/make-spacer)
+                ;; The panel is a compiled hiccup tree (dsl.md): the
+                ;; spacer/title/border chrome is DSL-owned; the message list
+                ;; splices foreign (the focus target).
+                panel (h/compile-tree
+                       [:container {}
+                        [:spacer {:lines 1}]
+                        [:text {:padding-x 1 :padding-y 0} (theme/bold "Fork from Message")]
+                        [:text {:padding-x 1 :padding-y 0} (theme/fg th :muted description)]
+                        [:spacer {:lines 1}]
+                        [:dynamic-border {:color-fn #(theme/fg th :accent %)}]
+                        [:spacer {:lines 1}]
                         list
-                        (spacer/make-spacer)
-                        (db/make-dynamic-border #(theme/fg th :accent %))])
+                        [:spacer {:lines 1}]
+                        [:dynamic-border {:color-fn #(theme/fg th :accent %)}]])
                 ;; late binding: the list callbacks reach done via this atom
                 sel-atom (atom nil)]
             (reset! on-select-atom

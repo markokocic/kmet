@@ -14,8 +14,8 @@
             [kmet.app.ui.dock :as dock]
             [kmet.app.ui.model-catalog :as model-catalog]
             [kmet.config :as cfg]
+            [kmet.tui.hiccup :as h]
             [kmet.tui.components.container :as container]
-            [kmet.tui.components.dynamic-border :as db]
             [kmet.tui.components.input :as input]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.text :as text]
@@ -355,37 +355,39 @@
         search-input (input/make-input)
         rows-container (container/make-container)
         footer-text (text/make-text "" 1 0)
-        c (container/make-container)
-        add (fn [child] (container/container-add-child c child))]
-    (add (db/make-dynamic-border #(theme/fg th :accent %)))
-    (add (spacer/make-spacer 1))
-    (add (text/make-text (theme/fg th :accent (theme/bold "Model Configuration")) 1 0))
-    (add (text/make-text
-          (theme/fg th :muted
-                    (str "Session-only. " (key-or "app.models.save" "ctrl+s")
-                         " to save to settings."))
-          1 0))
-    (add (spacer/make-spacer 1))
-    (add search-input)
-    (add (spacer/make-spacer 1))
-    (add rows-container)
-    (add (spacer/make-spacer 1))
-    (add footer-text)
-    (add (spacer/make-spacer 1))
-    (add (db/make-dynamic-border #(theme/fg th :accent %)))
-    (let [sel (map->ScopedModelsSelector
-               {:container c
-                :rows-container rows-container
-                :search-input search-input
-                :state-atom st
-                :footer-text footer-text
-                :on-change-atom (atom on-change)
-                :on-persist-atom (atom on-persist)
-                :on-cancel-atom (atom on-cancel)
-                :focused? (atom false)
-                :cache-atom (atom nil)})]
-      (scoped-models-refresh! sel)
-      sel)))
+        ;; The frame is a compiled hiccup tree (dsl.md): the border/spacer/
+        ;; title chrome is DSL-owned; the search input, rebuilt rows, and
+        ;; footer text splice foreign (imperative, updated via setters).
+        c (h/compile-tree
+           [:container {}
+            [:dynamic-border {:color-fn #(theme/fg th :accent %)}]
+            [:spacer {:lines 1}]
+            [:text {:padding-x 1 :padding-y 0} (theme/fg th :accent (theme/bold "Model Configuration"))]
+            [:text {:padding-x 1 :padding-y 0}
+             (theme/fg th :muted
+                       (str "Session-only. " (key-or "app.models.save" "ctrl+s")
+                            " to save to settings."))]
+            [:spacer {:lines 1}]
+            search-input
+            [:spacer {:lines 1}]
+            rows-container
+            [:spacer {:lines 1}]
+            footer-text
+            [:spacer {:lines 1}]
+            [:dynamic-border {:color-fn #(theme/fg th :accent %)}]])
+        sel (map->ScopedModelsSelector
+             {:container c
+              :rows-container rows-container
+              :search-input search-input
+              :state-atom st
+              :footer-text footer-text
+              :on-change-atom (atom on-change)
+              :on-persist-atom (atom on-persist)
+              :on-cancel-atom (atom on-cancel)
+              :focused? (atom false)
+              :cache-atom (atom nil)})]
+    (scoped-models-refresh! sel)
+    sel))
 
 ;; ─── Public helpers ────────────────────────────────────────────────────────
 

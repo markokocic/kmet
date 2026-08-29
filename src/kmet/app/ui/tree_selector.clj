@@ -23,10 +23,7 @@
             [kmet.app.ui.dock :as dock]
             [kmet.config :as cfg]
             [kmet.libs.clipboard :as clipboard]
-            [kmet.tui.components.container :as container]
-            [kmet.tui.components.dynamic-border :as db]
-            [kmet.tui.components.spacer :as spacer]
-            [kmet.tui.components.text :as text]
+            [kmet.tui.hiccup :as h]
             [kmet.tui.core :as tui]
             [kmet.tui.keys :as keys]
             [kmet.tui.keybindings :as tui-kb]
@@ -1096,17 +1093,21 @@
                              (tui/tui-request-render (:tui cs)))
                            (th/get-current-theme)
                            current-label))))
-             panel (container/make-container
-                    [(spacer/make-spacer 1)
-                     (db/make-dynamic-border #(th/fg panel-theme :accent %))
-                     (text/make-text (th/bold "  Session Tree") 0 0)
+             ;; The panel is a compiled hiccup tree (dsl.md): the
+             ;; spacer/border/title/help/search chrome is DSL-owned; the
+             ;; session tree (TreeList) splices foreign (the focus target).
+             panel (h/compile-tree
+                    [:container {}
+                     [:spacer {:lines 1}]
+                     [:dynamic-border {:color-fn #(th/fg panel-theme :accent %)}]
+                     [:text {:padding-x 0 :padding-y 0} (th/bold "  Session Tree")]
                      (map->TreeHelpLine {:cache-atom (atom nil)})
                      (map->TreeSearchLine {:state-atom (:state-atom tl)
                                            :cache-atom (atom nil)})
-                     (db/make-dynamic-border #(th/fg panel-theme :accent %))
-                     (spacer/make-spacer 1)
+                     [:dynamic-border {:color-fn #(th/fg panel-theme :accent %)}]
+                     [:spacer {:lines 1}]
                      tl
-                     (spacer/make-spacer 1)
-                     (db/make-dynamic-border #(th/fg panel-theme :accent %))])]
+                     [:spacer {:lines 1}]
+                     [:dynamic-border {:color-fn #(th/fg panel-theme :accent %)}]])]
          (reset! sel-ref {:done (dock/mount! cs panel tl)})
          (tui/tui-request-render (:tui cs)))))))

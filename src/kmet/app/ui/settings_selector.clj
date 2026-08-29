@@ -14,11 +14,10 @@
             [kmet.app.ui.dock :as dock]
             [kmet.app.ui.model-selector :as model-selector]
             [kmet.config :as cfg]
+            [kmet.tui.hiccup :as h]
             [kmet.tui.core :as tui]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as th]
-            [kmet.tui.components.container :as container]
-            [kmet.tui.components.dynamic-border :as db]
             [kmet.tui.components.settings-list :as settings-list]))
 
 ;; pi: HTTP_IDLE_TIMEOUT_CHOICES (http-dispatcher.ts)
@@ -248,10 +247,13 @@
     ;; SettingsList + DynamicBorder); the list is the focus target (pi:
     ;; showSelector's focus) since the frame container is inert chrome.
     (let [th (th/get-current-theme)
-          frame (container/make-container
-                 [(db/make-dynamic-border #(th/fg th :accent %))
+          ;; The frame is a compiled hiccup tree (dsl.md): the border chrome
+          ;; is DSL-owned; the SettingsList splices foreign (the focus target).
+          frame (h/compile-tree
+                 [:container {}
+                  [:dynamic-border {:color-fn #(th/fg th :accent %)}]
                   sl
-                  (db/make-dynamic-border #(th/fg th :accent %))])]
+                  [:dynamic-border {:color-fn #(th/fg th :accent %)}]])]
       ;; pi: showSelector — mount the framed panel, focus the list
       ;; (focus: the interactive child)
       (reset! sel-atom {:done (dock/mount! cs frame sl)}))))

@@ -7,10 +7,9 @@
    [subscription]/[API key] type labels when both types are listed."
   (:require [clojure.string :as str]
             [kmet.app.keybindings :as app-kb]
+            [kmet.tui.hiccup :as h]
             [kmet.tui.components.container :as container]
-            [kmet.tui.components.dynamic-border :as db]
             [kmet.tui.components.input :as input]
-            [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.truncated-text :as truncated-text]
             [kmet.tui.fuzzy :as fuzzy]
@@ -179,11 +178,23 @@
         entries (vec entries)
         search-input (input/make-input)
         list-container (container/make-container)
-        c (container/make-container)
-        add (fn [child] (container/container-add-child c child))
         title (if (= :login mode)
                 "Select provider to configure:"
                 "Select provider to logout:")
+        ;; The frame is a compiled hiccup tree (dsl.md): the border/spacer
+        ;; chrome is DSL-owned; the search input and the rebuilt list splice
+        ;; foreign (imperative, updated via setters).
+        c (h/compile-tree
+           [:container {}
+            [:dynamic-border {:color-fn #(theme/fg th :accent %)}]
+            [:spacer {:lines 1}]
+            [:text {:padding-x 1 :padding-y 0} (theme/fg th :accent (theme/bold title))]
+            [:spacer {:lines 1}]
+            search-input
+            [:spacer {:lines 1}]
+            list-container
+            [:spacer {:lines 1}]
+            [:dynamic-border {:color-fn #(theme/fg th :accent %)}]])
         sel (map->AuthSelector
              {:container c
               :search-input search-input
@@ -197,15 +208,6 @@
               :on-cancel-atom (atom on-cancel)
               :focused? (atom false)
               :cache-atom (atom nil)})]
-    (add (db/make-dynamic-border #(theme/fg th :accent %)))
-    (add (spacer/make-spacer 1))
-    (add (text/make-text (theme/fg th :accent (theme/bold title)) 1 0))
-    (add (spacer/make-spacer 1))
-    (add search-input)
-    (add (spacer/make-spacer 1))
-    (add list-container)
-    (add (spacer/make-spacer 1))
-    (add (db/make-dynamic-border #(theme/fg th :accent %)))
     (when (seq search)
       (input/input-set-value! search-input search))
     (refresh-list! sel)
@@ -308,9 +310,21 @@
    escape."
   [title options on-select on-cancel]
   (let [th (theme/get-current-theme)
-        c (container/make-container)
         list-container (container/make-container)
-        add (fn [child] (container/container-add-child c child))
+        hint (method-hint-text)
+        ;; The frame is a compiled hiccup tree (dsl.md): the border/spacer/
+        ;; title/hint chrome is DSL-owned; the rebuilt list splices foreign.
+        c (h/compile-tree
+           [:container {}
+            [:dynamic-border {:color-fn #(theme/fg th :accent %)}]
+            [:spacer {:lines 1}]
+            [:text {:padding-x 1 :padding-y 0} (theme/fg th :accent (theme/bold title))]
+            [:spacer {:lines 1}]
+            list-container
+            [:spacer {:lines 1}]
+            hint
+            [:spacer {:lines 1}]
+            [:dynamic-border {:color-fn #(theme/fg th :accent %)}]])
         sel (map->AuthMethodSelector
              {:container c
               :list-container list-container
@@ -320,14 +334,5 @@
               :on-cancel-atom (atom on-cancel)
               :focused? (atom false)
               :cache-atom (atom nil)})]
-    (add (db/make-dynamic-border #(theme/fg th :accent %)))
-    (add (spacer/make-spacer 1))
-    (add (text/make-text (theme/fg th :accent (theme/bold title)) 1 0))
-    (add (spacer/make-spacer 1))
-    (add list-container)
-    (add (spacer/make-spacer 1))
-    (add (method-hint-text))
-    (add (spacer/make-spacer 1))
-    (add (db/make-dynamic-border #(theme/fg th :accent %)))
     (refresh-rows! sel)
     sel))

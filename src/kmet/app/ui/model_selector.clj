@@ -14,8 +14,8 @@
             [kmet.app.ui.footer-data-provider :as fdp]
             [kmet.app.ui.model-catalog :as model-catalog]
             [kmet.config :as cfg]
+            [kmet.tui.hiccup :as h]
             [kmet.tui.components.container :as container]
-            [kmet.tui.components.dynamic-border :as db]
             [kmet.tui.components.input :as input]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.components.text :as text]
@@ -266,7 +266,6 @@
                   :search (or search "")})
         search-input (input/make-input)
         list-container (container/make-container)
-        c (container/make-container)
         scope-text (when (seq scoped-models) (text/make-text "" 1 0))
         scope-hint-text (when (seq scoped-models) (text/make-text "" 1 0))
         hint-text (when-not (seq scoped-models)
@@ -274,41 +273,45 @@
                      (theme/fg th :warning
                                "Only showing models from configured providers. Use /login to add providers.")
                      1 0))
-        add (fn [child] (container/container-add-child c child))]
-    (add (db/make-dynamic-border #(theme/fg th :accent %)))
-    (add (spacer/make-spacer 1))
-    (when hint-text (add hint-text))
-    (when scope-text (add scope-text))
-    (when scope-hint-text (add scope-hint-text))
-    (add (spacer/make-spacer 1))
-    (add search-input)
-    (add (spacer/make-spacer 1))
-    (add list-container)
-    (add (spacer/make-spacer 1))
-    (add (db/make-dynamic-border #(theme/fg th :accent %)))
-    (let [sel (map->ModelSelector
-               {:container c
-                :search-input search-input
-                :list-container list-container
-                :state-atom st
-                :scope-text scope-text
-                :scope-hint-text scope-hint-text
-                :on-select-atom (atom on-select)
-                :on-cancel-atom (atom on-cancel)
-                :focused? (atom false)
-                :cache-atom (atom nil)})]
-      (when (seq search)
-        (input/input-set-value! search-input search))
-      ;; initial selection: the current model when present, else the top row
-      ;; (pi loadModelsFromSnapshot — the index comes from the ACTIVE list:
-      ;; the scoped models when scoped, else all models); a pre-filled
-      ;; search moves to the top
-      (let [active (if (seq scoped-models) (vec scoped-models) sorted)
-            idx (first (keep-indexed (fn [i m] (when (models-equal? current-model m) i))
-                                     active))]
-        (swap! st assoc :selected-idx (if (seq search) 0 (or idx 0))))
-      (model-refresh! sel)
-      sel)))
+        ;; The frame is a compiled hiccup tree (dsl.md): the border/spacer
+        ;; chrome is DSL-owned; the search input, the rebuilt list, and the
+        ;; scope/hint texts splice foreign (imperative, updated via setters).
+        c (h/compile-tree
+           [:container {}
+            [:dynamic-border {:color-fn #(theme/fg th :accent %)}]
+            [:spacer {:lines 1}]
+            hint-text
+            scope-text
+            scope-hint-text
+            [:spacer {:lines 1}]
+            search-input
+            [:spacer {:lines 1}]
+            list-container
+            [:spacer {:lines 1}]
+            [:dynamic-border {:color-fn #(theme/fg th :accent %)}]])
+        sel (map->ModelSelector
+             {:container c
+              :search-input search-input
+              :list-container list-container
+              :state-atom st
+              :scope-text scope-text
+              :scope-hint-text scope-hint-text
+              :on-select-atom (atom on-select)
+              :on-cancel-atom (atom on-cancel)
+              :focused? (atom false)
+              :cache-atom (atom nil)})]
+    (when (seq search)
+      (input/input-set-value! search-input search))
+    ;; initial selection: the current model when present, else the top row
+    ;; (pi loadModelsFromSnapshot — the index comes from the ACTIVE list:
+    ;; the scoped models when scoped, else all models); a pre-filled
+    ;; search moves to the top
+    (let [active (if (seq scoped-models) (vec scoped-models) sorted)
+          idx (first (keep-indexed (fn [i m] (when (models-equal? current-model m) i))
+                                   active))]
+      (swap! st assoc :selected-idx (if (seq search) 0 (or idx 0))))
+    (model-refresh! sel)
+    sel))
 
 ;; ─── IFocusable — forward to the search input (IME cursor positioning) ─────
 
