@@ -11,6 +11,12 @@
 (def ^:private DEFAULT-FRAMES
   ["⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"])
 
+(def default-frames
+  "The default braille indicator frames — the :frames default of
+   make-spinner, public so the hiccup :spinner tag can apply it
+   explicitly (an explicit nil prop bypasses make-spinner's :or)."
+  DEFAULT-FRAMES)
+
 (def ^:private CYN "\u001b[36m")
 (def ^:private RST "\u001b[0m")
 

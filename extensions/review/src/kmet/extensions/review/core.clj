@@ -20,7 +20,8 @@
             [kmet.extensions.review.dialogs :as dlg]
             [kmet.extensions.review.git :as git]
             [kmet.extensions.review.prompts :as prompts]
-            [kmet.tui.hiccup :as h]))
+            [kmet.tui.hiccup :as h]
+            [kmet.tui.theme :as theme]))
 
 ;; -- Constants ------------------------------------------------------------
 
@@ -97,11 +98,11 @@
   (when active?
     (ext/ui-set-widget
      api "review"
-     (fn [_tui _th]
+     (fn [_tui th]
        (h/compile-tree
         [:container {}
-         [:text {:padding-x 1 :padding-y 0 :fg :warning}
-          "Review session active, return with /end-review"]]))
+         [:text {:padding-x 1 :padding-y 0}
+          (theme/fg th :warning "Review session active, return with /end-review")]]))
      {:placement :above-editor})))
 
 ;; -- Settings persistence ------------------------------------------------

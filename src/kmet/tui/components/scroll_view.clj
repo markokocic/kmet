@@ -25,11 +25,13 @@
   (set-scrollbar-active! [this active?])
   (is-scrollbar-visible? [this]))
 
-(def ^:private default-scrollbar-style
-  "Pi default: bright-black background (\\u001b[100m ... \\u001b[49m)."
+(def default-scrollbar-style
+  "Pi default: bright-black background (\\u001b[100m ... \\u001b[49m) — the
+   :scrollbar-style default of make-scroll-view, public so the hiccup
+   :scroll-view tag can apply it explicitly."
   (fn [text] (str "\u001b[100m" text "\u001b[49m")))
 
-(defcomponent ScrollView nil [child follow-end? primary? overscroll
+(defcomponent ScrollView nil [child-atom follow-end? primary? overscroll
                               scrollbar-atom scrollbar-style-atom scrollbar-hide-delay-ms-atom
                               last-width-atom scroll-top-atom content-height-atom viewport-height-atom
                               following-end-atom request-render-fn-atom
@@ -38,9 +40,12 @@
   (render [this width]
     ;; Render the child's FULL content — the caller windows it via
     ;; update-layout! + render-window (render itself never clips).
-    (protocols/render child (get-content-width this width)))
+    (if-let [child @child-atom]
+      (protocols/render child (get-content-width this width))
+      []))
   (invalidate [_this]
-    (protocols/invalidate child))
+    (when-let [child @child-atom]
+      (protocols/invalidate child)))
   (dispose [this]
     ;; cancel our own transient-scrollbar timer BEFORE delegating — a
     ;; disposed scroll-view must not fire a zombie render-request when the
@@ -48,7 +53,7 @@
     (when-let [t @(:scrollbar-hide-timer-atom this)]
       (future-cancel t)
       (reset! (:scrollbar-hide-timer-atom this) nil))
-    (when child
+    (when-let [child @child-atom]
       (protocols/dispose child))))
 
 ;; ─── Scrollbar state (pi: markScrollbarActivity / hideTransientScrollbar) ──
@@ -280,7 +285,7 @@
   [child & {:keys [follow-end primary overscroll scrollbar scrollbar-style scrollbar-hide-delay-ms]
             :or {follow-end true primary false overscroll :chain
                  scrollbar :hidden scrollbar-hide-delay-ms 1000}}]
-  (map->ScrollView {:child child
+  (map->ScrollView {:child-atom (atom child)
                     :follow-end? follow-end
                     :primary? primary
                     :overscroll overscroll

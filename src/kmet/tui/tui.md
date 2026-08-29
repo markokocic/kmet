@@ -128,13 +128,37 @@ extensions never add host elements. Tags and props:
 | `:text` | `:text` (primary), `:padding-x` `:padding-y` (default 1), `:bg-fn` | none (leaf) |
 | `:markdown` | `:text` (primary), `:theme`, `:padding-x`, `:default-style`, `:transform` | none (leaf) |
 | `:spacer` | `:lines` (default 1) | none (leaf) |
+| `:dynamic-border` | `:color-fn` (primary; default: theme `:border` color) | none (leaf) |
+| `:truncated-text` | `:text` (primary), `:padding-x` `:padding-y` (default 0) | none (leaf) |
+| `:spinner` | `:text` (primary), `:active`, `:prefix`, `:frames`, `:interval-ms`, `:spinner-color-fn`, `:message-color-fn` | none (leaf) |
+| `:input` | `:value` (primary), `:on-submit`, `:on-escape` | none (leaf) |
+| `:expandable-text` | `:collapsed-fn`, `:expanded-fn` (both required), `:expanded?`, `:padding-x` `:padding-y` | none (leaf) |
+| `:image` | `:base64-data`, `:mime-type` (both required), `:theme`, `:max-width-cells` (default 60), `:max-height-cells`, `:filename`, `:image-id` | none (leaf) |
+| `:select-list` | `:items` (primary), `:height` (default 10), `:theme`, `:header`, `:no-match-text`, `:min-primary-column-width` `:max-primary-column-width`, `:truncate-primary`, `:on-select`, `:on-escape`, `:on-selection-change`, `:on-key` | none (leaf) |
+| `:settings-list` | `:items` (primary), `:theme`, `:on-change`, `:on-escape`, `:enable-search`, `:max-visible` (default 10) | none (leaf) |
+| `:editor` | `:text` (primary), `:height` (default 12), `:padding-x`, `:border-fn`, `:keybindings`, `:terminal-rows`, `:on-submit`, `:on-change` | none (leaf) |
+| `:cancellable-loader` | `:spinner` (defaults to a fresh active Spinner), `:on-abort`, `:text` (message for the default spinner) | none (leaf) |
 | `:box` | `:padding-x` `:padding-y` (default 1), `:bg-fn` | yes |
 | `:container` | — | yes |
 | `:v-stack` | `:gap` | yes (entry maps allowed: `{:component c}`) |
 | `:h-stack` | `:gap`, `:align` (`:stretch` default) | yes (entry maps allowed) |
+| `:scroll-view` | `:follow-end` (default true), `:primary`, `:overscroll` (`:chain` default), `:scrollbar` (`:hidden` default), `:scrollbar-style`, `:scrollbar-hide-delay-ms` | yes — exactly ONE (more throws) |
 
 `:primary` names the positional shorthand: `[:text "hi"]` compiles to props
 `{:text "hi"}` merged over defaults.
+
+**Stateful leaves** (`:input` `:select-list` `:settings-list` `:editor`
+`:spinner` `:cancellable-loader` `:expandable-text`): their props are
+create-time — while the props map stays `=`-equal the instance (and its
+state) is kept, but a CHANGED prop rebuilds the component fresh. Live
+updates go through `:ref` plus the component's setters (e.g.
+`(input/input-set-value! (deref r) "x")`), the same contract the
+spliced-record pattern always used. Focus is a host concern — mount the
+component, then `tui-set-focus` on the ref'd instance.
+
+**Host-internal components without a tag**: `alt_screen_flash` — it needs
+the TUI's own request-render callback (`kmet.tui.core/tui-flash!` owns its
+single instance), so it cannot be constructed from a tree.
 
 Fn heads are fn **values**, never symbols — trees are built at runtime and
 symbol resolution would couple the DSL to caller namespaces.

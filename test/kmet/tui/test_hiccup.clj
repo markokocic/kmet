@@ -8,6 +8,7 @@
    memoization/idle invariant."
   (:require [clojure.string :as str]
             [clojure.test :as t]
+            [kmet.tui.components.input :as input]
             [kmet.tui.components.text :as text]
             [kmet.tui.core :as core]
             [kmet.tui.hiccup :as h]
@@ -198,6 +199,133 @@
 (t/deftest children-on-leaf-tags-throw
   (t/is (thrown? Exception (h/render-lines [:text "a" "b"] 10)))
   (t/is (thrown? Exception (h/render-lines [:spacer 2 [:text "x"]] 10))))
+
+(t/deftest dynamic-border-leaf-renders-colored-rules
+  ;; :color-fn as prop map or primary shorthand; the rule fills the width
+  (let [marker (fn [s] (str "<b>" s "</b>"))
+        lines (h/render-lines
+               [:container {}
+                [:dynamic-border {:color-fn marker}]
+                [:text {:padding-x 0 :padding-y 0} "x"]
+                [:dynamic-border marker]] 40)]
+    (t/is (= 3 (count lines)))
+    (t/is (= (first lines) (str "<b>" (apply str (repeat 40 "─")) "</b>")))
+    (t/is (= (last lines) (first lines)))))
+
+(t/deftest dynamic-border-default-color-fn-renders
+  ;; no :color-fn → the component's own default (theme border color)
+  (let [lines (h/render-lines [:container {} [:dynamic-border]] 40)]
+    (t/is (= 1 (count lines)))
+    (t/is (str/includes? (first lines) "─"))))
+
+;; ── full tag coverage: every component has a tag (React parity) ─────────
+
+(t/deftest truncated-text-tag
+  ;; truncates to the width; :padding-x insets
+  (let [wide (h/render-lines [:truncated-text {:padding-x 0} "abcdefghijklmnop"] 10)]
+    (t/is (= 1 (count wide)))
+    (t/is (= 10 (count (first wide))))
+    (t/is (str/ends-with? (first wide) "...")))
+  (let [primary (h/render-lines [:truncated-text "hi"] 12)]
+    (t/is (str/includes? (first primary) "hi"))))
+
+(t/deftest spinner-tag
+  ;; inactive by default (invisible); active shows prefix + frame + text
+  (t/is (empty? (h/render-lines [:spinner "Lazy"] 20)))
+  (let [lines (h/render-lines [:spinner {:text "Work" :active true :prefix ""}] 20)]
+    (t/is (= 2 (count lines)) "leading blank line (pi Loader shape)")
+    (t/is (str/includes? (last lines) "Work"))))
+
+(t/deftest input-tag
+  ;; :value pre-fills; :on-submit is wired; live updates go through
+  ;; :ref + the setter (the create-time props contract)
+  (let [r (h/ref)
+        submitted (atom nil)
+        on-submit (fn [v] (reset! submitted v))
+        r2 (h/root (fn [_]
+                     [:input {:value "abc" :on-submit on-submit :ref r}]))]
+    (core/render r2 20)
+    (let [i (deref r)]
+      (t/is (some? i) ":ref points at the Input instance")
+      (t/is (= "abc" (input/input-get-value i)) ":value pre-filled")
+      (input/input-set-value! i "xyz")
+      (t/is (= "xyz" (input/input-get-value i)) "setter updates the instance")
+      (protocols/handle-input i "\r")
+      (t/is (= "xyz" @submitted) "enter fires :on-submit with the value"))))
+
+(t/deftest expandable-text-tag
+  (let [mk (fn [expanded?] [:expandable-text {:collapsed-fn (fn [] "COLLAPSED")
+                                              :expanded-fn (fn [] "EXPANDED")
+                                              :expanded? expanded?}])]
+    (t/is (str/includes? (str/join "\n" (h/render-lines (mk false) 30)) "COLLAPSED"))
+    (t/is (str/includes? (str/join "\n" (h/render-lines (mk true) 30)) "EXPANDED"))))
+
+(t/deftest image-tag-renders-fallback
+  ;; no Kitty protocol in the test terminal → the text fallback line
+  (let [lines (h/render-lines [:image {:base64-data "AAA=" :mime-type "image/png"}] 40)]
+    (t/is (str/includes? (str/join "\n" lines) "image/png"))))
+
+(t/deftest select-list-tag
+  ;; primary :items; callbacks wired on the instance
+  (let [chosen (atom nil)
+        on-select (fn [item] (reset! chosen item))
+        r (h/ref)
+        lines (h/render-lines
+               [:select-list [{:label "one" :value 1} {:label "two" :value 2}]]
+               20)
+        r2 (h/root (fn [_]
+                     [:select-list {:items [{:label "a" :value :a}]
+                                    :on-select on-select :ref r}]))]
+    (t/is (str/includes? (str/join "\n" lines) "one"))
+    (core/render r2 20)
+    (let [sl (deref r)]
+      (t/is (some? sl))
+      (protocols/handle-input sl "\r")
+      (t/is (some? @chosen) "enter fires :on-select with the item"))))
+
+(t/deftest settings-list-tag
+  (let [lines (h/render-lines
+               [:settings-list [{:id :a :label "A" :value "x" :values ["x" "y"]}]]
+               30)]
+    (t/is (str/includes? (str/join "\n" lines) "A"))))
+
+(t/deftest editor-tag
+  ;; :text pre-fills the editor
+  (let [lines (h/render-lines [:editor {:text "hi there" :height 3}] 40)]
+    (t/is (str/includes? (str/join "\n" lines) "hi there"))))
+
+(t/deftest cancellable-loader-tag
+  ;; default spinner is active and shows :text; a :spinner prop wins
+  (let [lines (h/render-lines [:cancellable-loader {:text "Loading"}] 20)]
+    (t/is (str/includes? (str/join "\n" lines) "Loading"))))
+
+(t/deftest scroll-view-tag
+  ;; single child rendered inside the viewport
+  (let [lines (h/render-lines
+               [:scroll-view {:scrollbar :always} [:text {:padding-x 0} "inner"]] 20)]
+    (t/is (str/includes? (str/join "\n" lines) "inner")))
+  ;; more than one child is a bug — throw loudly
+  (t/is (thrown? Exception
+                 (h/render-lines [:scroll-view {} [:text "a"] [:text "b"]] 10)))
+  ;; child swap across reconcile passes keeps the scroll-view instance
+  (let [state (atom "v1")
+        r (h/root (fn [_] [:scroll-view {} [:text {:padding-x 0} @state]]))]
+    (t/is (str/includes? (str/join "\n" (core/render r 20)) "v1"))
+    (reset! state "v2")
+    (protocols/invalidate r)
+    (t/is (str/includes? (str/join "\n" (core/render r 20)) "v2"))))
+
+(t/deftest stateful-leaf-identity-stable-props
+  ;; a stateful host leaf keeps its instance (and state) across passes
+  ;; while its props stay =-equal — a fresh closure prop would rebuild it
+  (let [r (h/ref)
+        r2 (h/root (fn [_] [:select-list {:items [{:label "a" :value :a}]
+                                          :ref r}]))]
+    (core/render r2 20)
+    (let [first (deref r)]
+      (t/is (some? first))
+      (core/render r2 20)
+      (t/is (identical? first (deref r)) "same props → same instance"))))
 
 ;; ── root mounting (dsl.md §2.6) ──────────────────────────────────────────
 

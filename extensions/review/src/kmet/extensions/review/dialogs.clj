@@ -31,7 +31,7 @@
     [:spacer {:lines 1}]
     body-element
     [:spacer {:lines 1}]
-    [:text {:padding-x 1 :padding-y 0 :fg :dim} hint-element]
+    [:text {:padding-x 1 :padding-y 0} (theme/fg th :dim hint-element)]
     [:dynamic-border {:color-fn (fn [s] (theme/fg th :accent s))}]]))
 
 (defn- run-dialog
@@ -223,7 +223,8 @@
                  [:spacer {:lines 1}]
                  inp
                  [:spacer {:lines 1}]
-                 [:text {:padding-x 1 :padding-y 0 :fg :dim} "Enter to confirm · esc to cancel"]]
+                 [:text {:padding-x 1 :padding-y 0}
+                  (theme/fg th :dim "Enter to confirm · esc to cancel")]]
            overlay (framed-overlay th title body
                                    "Enter to confirm · esc to cancel")]
        {:render (fn [w] (protocols/render overlay w))

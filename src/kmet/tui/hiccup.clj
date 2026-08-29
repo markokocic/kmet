@@ -37,12 +37,23 @@
   (:refer-clojure :exclude [ref])
   (:require
    [kmet.tui.components.box :as box]
+   [kmet.tui.components.cancellable-loader :as cancellable-loader]
    [kmet.tui.components.container :as container]
+   [kmet.tui.components.dynamic-border :as dynamic-border]
+   [kmet.tui.components.editor :as editor]
+   [kmet.tui.components.expandable-text :as expandable-text]
    [kmet.tui.components.h-stack :as h-stack]
+   [kmet.tui.components.image :as image]
+   [kmet.tui.components.input :as input]
    [kmet.tui.components.markdown :as markdown]
+   [kmet.tui.components.scroll-view :as scroll-view]
+   [kmet.tui.components.select-list :as select-list]
+   [kmet.tui.components.settings-list :as settings-list]
    [kmet.tui.components.spacer :as spacer]
+   [kmet.tui.components.spinner :as spinner]
    [kmet.tui.components.stack :as stack]
    [kmet.tui.components.text :as text]
+   [kmet.tui.components.truncated-text :as truncated-text]
    [kmet.tui.components.v-stack :as v-stack]
    [kmet.tui.fuzzy :as fuzzy]
    [kmet.tui.macros :as macros :refer [defcomponent]]
@@ -145,6 +156,99 @@
                                                :transform transform))
                :primary :text}
    :spacer    {:ctor (fn [{:keys [lines]}] (spacer/make-spacer (or lines 1)))}
+   :dynamic-border {:ctor (fn [{:keys [color-fn]}]
+                            (if color-fn
+                              (dynamic-border/make-dynamic-border color-fn)
+                              (dynamic-border/make-dynamic-border)))
+                    :primary :color-fn}
+   :truncated-text {:ctor (fn [{:keys [text padding-x padding-y]}]
+                            (truncated-text/make-truncated-text text
+                                                                :padding-x (or padding-x 0)
+                                                                :padding-y (or padding-y 0)))
+                    :primary :text}
+   :spinner      {:ctor (fn [{:keys [text active prefix frames interval-ms
+                                     spinner-color-fn message-color-fn]}]
+                          (spinner/make-spinner :text (or text "")
+                                                :active (boolean active)
+                                                :prefix (or prefix "  ")
+                                                :frames (or frames spinner/default-frames)
+                                                :interval-ms (or interval-ms 100)
+                                                :spinner-color-fn spinner-color-fn
+                                                :message-color-fn message-color-fn))
+                  :primary :text}
+   :input        {:ctor (fn [{:keys [value on-submit on-escape]}]
+                          (let [i (input/make-input)]
+                            (when value (input/input-set-value! i value))
+                            (when on-submit (input/input-set-on-submit! i on-submit))
+                            (when on-escape (input/input-set-on-escape! i on-escape))
+                            i))
+                  :primary :value}
+   :expandable-text {:ctor (fn [{:keys [collapsed-fn expanded-fn
+                                        expanded? padding-x padding-y]}]
+                             (expandable-text/make-expandable-text
+                              collapsed-fn expanded-fn
+                              :expanded? (boolean expanded?)
+                              :padding-x (or padding-x 0)
+                              :padding-y (or padding-y 0)))}
+   :image        {:ctor (fn [{:keys [base64-data mime-type theme
+                                     max-width-cells max-height-cells
+                                     filename image-id]}]
+                          (image/make-image base64-data mime-type theme
+                                            :max-width-cells max-width-cells
+                                            :max-height-cells max-height-cells
+                                            :filename filename
+                                            :image-id image-id))}
+   :select-list  {:ctor (fn [{:keys [items height theme header no-match-text
+                                     min-primary-column-width
+                                     max-primary-column-width truncate-primary
+                                     on-select on-escape on-selection-change
+                                     on-key]}]
+                          (select-list/make-select-list
+                           (or items [])
+                           :height (or height 10)
+                           :theme (or theme select-list/default-theme)
+                           :header header
+                           :no-match-text (or no-match-text "  No matching commands")
+                           :min-primary-column-width min-primary-column-width
+                           :max-primary-column-width max-primary-column-width
+                           :truncate-primary truncate-primary
+                           :on-select on-select
+                           :on-escape on-escape
+                           :on-selection-change on-selection-change
+                           :on-key on-key))
+                  :primary :items}
+   :settings-list {:ctor (fn [{:keys [items theme on-change on-escape
+                                      enable-search max-visible]}]
+                           (let [sl (settings-list/make-settings-list
+                                     (or items [])
+                                     :theme (or theme settings-list/default-theme)
+                                     :on-change on-change
+                                     :enable-search (boolean enable-search)
+                                     :max-visible (or max-visible 10))]
+                             (when on-escape
+                               (settings-list/settings-list-set-on-escape! sl
+                                                                           on-escape))
+                             sl))
+                   :primary :items}
+   :editor       {:ctor (fn [{:keys [text height padding-x border-fn
+                                     keybindings terminal-rows
+                                     on-submit on-change]}]
+                          (let [ed (editor/make-editor :height (or height 12)
+                                                       :padding-x (or padding-x 0)
+                                                       :border-fn border-fn
+                                                       :keybindings keybindings
+                                                       :terminal-rows terminal-rows)]
+                            (when text (editor/editor-set-text! ed text))
+                            (when on-submit (editor/editor-set-on-submit! ed on-submit))
+                            (when on-change (editor/editor-set-on-change! ed on-change))
+                            ed))
+                  :primary :text}
+   :cancellable-loader {:ctor (fn [{:keys [spinner on-abort text]}]
+                                (cancellable-loader/make-cancellable-loader
+                                 :spinner (or spinner
+                                              (spinner/make-spinner :text text
+                                                                    :active true))
+                                 :on-abort on-abort))}
    :box       {:ctor (fn [{:keys [padding-x padding-y bg-fn]}]
                        (box/make-box
                         (or padding-x 1) (or padding-y 1) bg-fn))
@@ -169,7 +273,29 @@
                :lens {:get (fn [c] (vec @(:entries-atom c)))
                       :put (fn [c items]
                              (reset! (:entries-atom c)
-                                     (mapv #(or (:item %) (:c %)) items)))}}})
+                                     (mapv #(or (:item %) (:c %)) items)))}}
+   ;; Single-child container — the lens keeps exactly one child; more than
+   ;; one throws loudly (a scroll view over several roots is a bug, not a
+   ;; layout).
+   :scroll-view {:ctor (fn [{:keys [follow-end primary overscroll scrollbar
+                                    scrollbar-style scrollbar-hide-delay-ms]}]
+                         (scroll-view/make-scroll-view
+                          nil
+                          :follow-end (or follow-end true)
+                          :primary (boolean primary)
+                          :overscroll (or overscroll :chain)
+                          :scrollbar (or scrollbar :hidden)
+                          :scrollbar-style (or scrollbar-style
+                                               scroll-view/default-scrollbar-style)
+                          :scrollbar-hide-delay-ms (or scrollbar-hide-delay-ms 1000)))
+                 :lens {:get (fn [c] (if-let [ch @(:child-atom c)] [ch] []))
+                        :put (fn [c items]
+                               (when (> (count items) 1)
+                                 (throw (ex-info
+                                         ":scroll-view takes exactly one child"
+                                         {:count (count items)})))
+                               (reset! (:child-atom c)
+                                       (when (seq items) (:c (first items)))))}}})
 
 (defn- known-tags [] (vec (sort (keys tags))))
 
