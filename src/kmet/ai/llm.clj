@@ -53,6 +53,9 @@
                      params for openai-responses (pi CacheRetention; :none
                      disables the cache key + affinity headers — compaction
                      summaries pass it); ignored by the other apis
+     :max-tokens  — per-call output token cap; overrides the model's
+                     configured :max-tokens for this request (pi caps the
+                     compaction summary output at 0.8 * reserveTokens)
      :on-text     — (fn [text-delta])
      :on-tool-call — (fn [{:keys [id name arguments]}])
      :on-done     — (fn [stop-reason])
@@ -91,6 +94,12 @@
       (let [m (models/get-model provider model)
             m (if (and m (:base-url auth) (nil? (:base-url opts)))
                 (assoc m :base-url (:base-url auth))
+                m)
+            ;; per-call max-tokens override (pi: compaction caps the
+            ;; summarization output at 0.8 * reserveTokens) — applied to the
+            ;; model record so every API builder picks it up
+            m (if-let [mt (:max-tokens opts)]
+                (assoc m :max-tokens mt)
                 m)]
         (cond
           ;; Catalog provider with an unknown model id → error

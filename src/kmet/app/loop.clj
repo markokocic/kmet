@@ -1084,7 +1084,14 @@ Be precise and concise in your responses."}}]
   [agent prep & [custom-instructions]]
   (let [provider @(:provider agent)
         ep (resolve-endpoint agent)
-        api-key (resolve-api-key agent)]
+        api-key (resolve-api-key agent)
+        ;; pi: the summarization call caps its output at
+        ;; min(floor(0.8 * reserveTokens), model.maxTokens) — the summary
+        ;; must never consume the context budget or overflow the window
+        max-tokens (let [reserve (or (:compact-reserve-tokens agent) 16384)]
+                     (when-let [mrec (models/get-model provider @(:model agent))]
+                       (min (long (Math/floor (* 0.8 reserve)))
+                            (or (:max-tokens mrec) (long (Math/floor (* 0.8 reserve)))))))]
     ;; ambient-auth providers (google-vertex ADC, amazon-bedrock AWS
     ;; credentials) resolve no api-key — configured? covers them
     (when (or api-key (auth/configured? provider))
@@ -1105,6 +1112,7 @@ Be precise and concise in your responses."}}]
           :idle-timeout-ms (:http-idle-timeout-ms @(:cfg agent))
           :session-id (some-> (:session agent) :id)
           :cache-retention :none
+          :max-tokens max-tokens
           :on-text (fn [t] (swap! text-buf str t))
           :on-usage (fn [u] (reset! usage-buf u))
           :on-done (fn [_] (deliver done @text-buf))
@@ -1134,7 +1142,14 @@ Be precise and concise in your responses."}}]
   [agent entries & [custom-instructions signal replace-instructions?]]
   (let [provider @(:provider agent)
         ep (resolve-endpoint agent)
-        api-key (resolve-api-key agent)]
+        api-key (resolve-api-key agent)
+        ;; pi: the branch/turn-prefix summarization caps its output at
+        ;; min(floor(0.5 * reserveTokens), model.maxTokens) — a smaller
+        ;; budget than context compaction
+        max-tokens (let [reserve (or (:compact-reserve-tokens agent) 16384)]
+                     (when-let [mrec (models/get-model provider @(:model agent))]
+                       (min (long (Math/floor (* 0.5 reserve)))
+                            (or (:max-tokens mrec) (long (Math/floor (* 0.5 reserve)))))))]
     ;; ambient-auth providers (google-vertex ADC, amazon-bedrock AWS
     ;; credentials) resolve no api-key — configured? covers them
     (when (or api-key (auth/configured? provider))
@@ -1157,6 +1172,7 @@ Be precise and concise in your responses."}}]
           :idle-timeout-ms (:http-idle-timeout-ms @(:cfg agent))
           :session-id (some-> (:session agent) :id)
           :cache-retention :none
+          :max-tokens max-tokens
           :on-text (fn [t] (swap! text-buf str t))
           :on-usage (fn [u] (reset! usage-buf u))
           :on-done (fn [_] (deliver done @text-buf))

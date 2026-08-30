@@ -2949,3 +2949,38 @@
                 "gemini-3.1-pro at :high → includeThoughts + thinkingLevel HIGH")))
       (finally
         (.close ss)))))
+
+(t/deftest test-llm-max-tokens-override
+  ;; pi: compaction caps the summarization output at 0.8 * reserveTokens —
+  ;; the per-call :max-tokens opt must reach every API builder via the
+  ;; model record.
+  (m/load-catalogs!)
+  (let [request (atom nil)]
+    (with-redefs [auth/resolve-provider-auth (fn [_] {:api-key "test-key"})
+                  responses/responses-request
+                  (fn [opts]
+                    (reset! request opts)
+                    (future nil))]
+      @(llm/send-message {:provider :openai
+                          :model "gpt-5.4"
+                          :messages []
+                          :max-tokens 13107}))
+    (t/is (= 13107 (:max-tokens (:model-record @request)))
+          "per-call max-tokens overrides the model's configured value")
+    (t/is (not= 13107 (:max-tokens (m/get-model :openai "gpt-5.4")))
+          "the catalog model record is untouched")))
+
+(t/deftest test-llm-max-tokens-absent-keeps-model-value
+  (m/load-catalogs!)
+  (let [request (atom nil)]
+    (with-redefs [auth/resolve-provider-auth (fn [_] {:api-key "test-key"})
+                  responses/responses-request
+                  (fn [opts]
+                    (reset! request opts)
+                    (future nil))]
+      @(llm/send-message {:provider :openai
+                          :model "gpt-5.4"
+                          :messages []}))
+    (t/is (= (:max-tokens (m/get-model :openai "gpt-5.4"))
+             (:max-tokens (:model-record @request)))
+          "no override → the model's configured max-tokens")))
