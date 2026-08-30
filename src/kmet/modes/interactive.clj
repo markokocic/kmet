@@ -69,7 +69,7 @@
          show-status-indicator! clear-status-indicator! stop-anim-timer!
          maybe-show-cache-miss-notice!
          make-widget-area-above make-widget-area-below
-         send-message)
+         send-message submit-message apply-hooks)
 
 ;; ─── Global config ref ────────────────────────────────────────────────────
 
@@ -2082,19 +2082,55 @@
         c (commands/find-command name)]
     ((:extension-handler c) (extensions/build-extension-context) (or args ""))))
 
+(defn- expand-compaction-text
+  "Expand a compaction-queued message's skill commands and prompt templates
+   (pi: steer/followUp expand skill+template before queueing; prompt applies
+   the full chain). Queued text is raw (pre-hook); the flush applies input
+   hooks first (idle path) and expansion here matches pi's steer/followUp
+   for the running-turn path."
+  [text]
+  (-> text
+      (skills/expand-skill-command)
+      (prompts/expand-prompt-template (prompts/get-prompt-templates))))
+
 (defn- deliver-compaction-message!
   "Deliver one compaction-queued message: extension commands execute
    immediately; otherwise the message queues into the running turn
-   (steer/follow-up per its mode) or starts a run when idle (pi:
-   session.prompt / steer / followUp)."
+   (steer/follow-up per its mode, with skill/template expansion) or, when
+   idle, runs the full submit chain — input hooks, then expansion, then
+   the run with editor history — like a normal submit (pi:
+   flushCompactionQueue → session.prompt runs the input event +
+   skill/template expansion)."
   [cs m]
   (if (extension-command? (:text m))
     (execute-extension-command! (:text m))
     (if @(:running-turn? cs)
+      ;; running turn: expand skill/template and queue per mode (pi:
+      ;; steer/followUp expand; no input event)
+      (let [text (expand-compaction-text (:text m))]
+        (if (= :follow-up (:mode m))
+          (agent/follow-up! @(:agent-state cs) text)
+          (agent/steer! @(:agent-state cs) text)))
+      ;; idle: full submit chain — input hooks FIRST, then skill/template
+      ;; expansion, then the run (pi: flushCompactionQueue → prompt runs
+      ;; input event → expansion; editor history like any submit)
+      (when-let [text (apply-hooks cs (:text m))]
+        (editor/editor-push-history! (:editor cs) text)
+        (send-message cs (expand-compaction-text text))))))
+
+(defn- queue-compaction-message-into-turn!
+  "Queue one compaction-queued message into the (possibly not yet started)
+   run without ever starting a new one: extension commands execute
+   immediately, everything else goes to the steering/follow-up queue per
+   its mode with skill/template expansion (pi: flushCompactionQueue
+   willRetry — every message queues via steer/followUp, never a prompt)."
+  [cs m]
+  (if (extension-command? (:text m))
+    (execute-extension-command! (:text m))
+    (let [text (expand-compaction-text (:text m))]
       (if (= :follow-up (:mode m))
-        (agent/follow-up! @(:agent-state cs) (:text m))
-        (agent/steer! @(:agent-state cs) (:text m)))
-      (send-message cs (:text m)))))
+        (agent/follow-up! @(:agent-state cs) text)
+        (agent/steer! @(:agent-state cs) text)))))
 
 (defn- flush-compaction-queue!
   "Deliver messages queued during compaction (pi: flushCompactionQueue —
@@ -2108,12 +2144,18 @@
   (when (compaction-queued? cs)
     (let [msgs (clear-compaction-queue! cs)
           restore! (fn []
+                     ;; pi: restoreQueue — the session queue is cleared too,
+                     ;; so messages already delivered by the failed flush are
+                     ;; not delivered again when the queue is re-flushed
+                     (agent/clear-queues! @(:agent-state cs))
                      (reset! (:compaction-queued cs) msgs)
                      (update-pending-messages! cs))]
       (try
         (if will-retry
           ;; Overflow compaction: the turn retries — queue everything into it
-          (doseq [m msgs] (deliver-compaction-message! cs m))
+          ;; (pi: flushCompactionQueue willRetry — steer/followUp only, never
+          ;; a fresh prompt)
+          (doseq [m msgs] (queue-compaction-message-into-turn! cs m))
           ;; Normal completion: first non-extension message prompts, the
           ;; rest queue per mode
           (let [first-idx (first (keep-indexed
@@ -2474,16 +2516,18 @@
                 (update-footer! cs))
             ;; pi: input hooks → skill command → prompt template → fall
             ;; through to the agent (unknown /cmd is sent as a message).
-            ;; During compaction the expanded text queues like a plain
-            ;; message (pi: unknown commands fall through to the compaction
-            ;; check and queue).
-            (when-let [text (apply-hooks cs trimmed)]
-              (let [text (-> text
-                             (skills/expand-skill-command)
-                             (prompts/expand-prompt-template (prompts/get-prompt-templates)))]
-                (if @(:compacting? @(:agent-state cs))
-                  (queue-compaction-message! cs text :steer)
-                  (send-message cs text))))))
+            ;; During compaction the raw text queues like a plain message —
+            ;; the flush applies hooks + skill/template expansion at
+            ;; delivery like a normal submit (pi: unknown commands fall
+            ;; through to the compaction check and queue raw text).
+            (if @(:compacting? @(:agent-state cs))
+              (do (editor/editor-push-history! (:editor cs) trimmed)
+                  (queue-compaction-message! cs trimmed :steer))
+              (when-let [text (apply-hooks cs trimmed)]
+                (send-message cs
+                              (-> text
+                                  (skills/expand-skill-command)
+                                  (prompts/expand-prompt-template (prompts/get-prompt-templates))))))))
 
         ;; Bash command (! or !!) — single-line like slash commands
         (and (str/starts-with? trimmed "!")
@@ -2507,11 +2551,13 @@
         ;; bash commands are native UI features and bypass the hooks.
         :else
         ;; Queue input during compaction (pi: onSubmit → isCompacting →
-        ;; queueCompactionMessage(text, "steer"); extension commands and
-        ;; builtins already dispatched above, so only plain messages land
-        ;; here). Flushed by the :compaction-end handler.
+        ;; queueCompactionMessage(text, "steer") — addToHistory + queue;
+        ;; extension commands and builtins already dispatched above, so
+        ;; only plain messages land here). Flushed by the :compaction-end
+        ;; handler.
         (if @(:compacting? @(:agent-state cs))
-          (queue-compaction-message! cs trimmed :steer)
+          (do (editor/editor-push-history! (:editor cs) trimmed)
+              (queue-compaction-message! cs trimmed :steer))
           (submit-message cs trimmed))))))
 
 (defn- handle-follow-up
@@ -2823,21 +2869,26 @@
       ;; report.
       (do (when-let [cs @cs-ref]
             (clear-status-indicator! cs :compaction)
-            (when (and (:aborted evt)
-                       (= :manual (:reason evt)))
-              (ui/chat-history-show-status!
-               chat-history "Compaction cancelled"))
-            ;; pi: compaction_end → flushCompactionQueue — messages queued
-            ;; during compaction are delivered now (queued into the retrying
-            ;; turn when will-retry, else the first prompts a fresh run).
-            (flush-compaction-queue! cs (:will-retry evt))
+            (when (:aborted evt)
+              ;; pi: compaction_end aborted — manual: error line; auto:
+              ;; dim status
+              (if (= :manual (:reason evt))
+                (ui/chat-history-show-status!
+                 chat-history "Compaction cancelled")
+                (ui/chat-history-show-status!
+                 chat-history "Auto-compaction cancelled")))
             ;; pi: compaction_end errorMessage — a failed summarization is
-            ;; surfaced (manual: error line; auto: dim status).
+            ;; surfaced BEFORE the queue flush (manual: error line; auto:
+            ;; dim status), so the error precedes any run the flush starts.
             (when-let [err (:error-message evt)]
               (if (= :manual (:reason evt))
                 (ui/chat-history-add-message!
                  chat-history {:role :error :content err})
-                (ui/chat-history-show-status! chat-history err))))
+                (ui/chat-history-show-status! chat-history err)))
+            ;; pi: compaction_end → flushCompactionQueue — messages queued
+            ;; during compaction are delivered now (queued into the retrying
+            ;; turn when will-retry, else the first prompts a fresh run).
+            (flush-compaction-queue! cs (:will-retry evt)))
           (tui/tui-request-render tui))
       :context-replaced
       ;; Rebuild the chat history to mirror the replaced

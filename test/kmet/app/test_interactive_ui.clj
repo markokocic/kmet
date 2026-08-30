@@ -755,12 +755,14 @@
   []
   (let [ag (agent/make-agent-state)
         ch (ui/make-chat-history)
+        ed (editor/make-editor)
         si (ui/make-status-indicator :text "Working...")
         cur (atom nil)]
     {:tui {:render-requested? (atom false)}
      :agent-state (atom ag)
      :chat-history ch
-     :current-editor-atom (atom (editor/make-editor))
+     :editor ed
+     :current-editor-atom (atom ed)
      :compaction-queued (atom [])
      :running-turn? (atom false)
      :status-indicator si
