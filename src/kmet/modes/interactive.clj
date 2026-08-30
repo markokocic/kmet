@@ -2195,6 +2195,15 @@
       :overflow (str "Context overflow detected, auto-compacting..." cancel)
       (str "Auto-compacting..." cancel))))
 
+(defn- set-terminal-progress!
+  "Show/clear the OSC 9;4 terminal progress indicator when the
+   show-terminal-progress setting is on (pi: showTerminalProgress —
+   getShowTerminalProgress gates setProgress; default off)."
+  [cs active?]
+  (when (and cs (cfg/get-show-terminal-progress (:config cs)))
+    (when-let [term @(:terminal (:tui cs))]
+      (term/set-progress! term active?))))
+
 ;; ─── Agent response handler ────────────────────────────────────────────────
 
 (defn- on-agent-text
@@ -2803,6 +2812,7 @@
       ;; message — a failed run must not re-show the
       ;; previous turn's miss)
       (do (when-let [cs @cs-ref]
+            (set-terminal-progress! cs false)
             (maybe-show-cache-miss-notice! cs (:messages evt)))
           (tui/tui-request-render tui))
       :queue-update
@@ -2851,9 +2861,10 @@
         (clear-status-indicator! cs :retry))
       :compaction-start
       ;; Session compaction in progress (pi:
-      ;; compaction_start → CompactionStatusIndicator);
+      ;; compaction_start → CompactionStatusIndicator + terminal progress);
       ;; the hint is truthful — escape aborts it
       (do (when-let [cs @cs-ref]
+            (set-terminal-progress! cs true)
             (show-status-indicator!
              cs :compaction
              (ui/make-compaction-status-indicator
@@ -2869,6 +2880,7 @@
       ;; full turn cancel ("(cancelled)") — no double
       ;; report.
       (do (when-let [cs @cs-ref]
+            (set-terminal-progress! cs false)
             (clear-status-indicator! cs :compaction)
             (when (:aborted evt)
               ;; pi: compaction_end aborted — manual: error line; auto:
@@ -2970,7 +2982,10 @@
       ;; exception is swallowed by the run future, leaving
       ;; the UI stuck on "Working..." forever.
 
-      :agent-start nil
+      :agent-start
+      ;; Pi: agent_start → setProgress(true) (showTerminalProgress gated)
+      (when-let [cs @cs-ref]
+        (set-terminal-progress! cs true))
       :message-update nil
       :message-end nil
       :turn-end nil

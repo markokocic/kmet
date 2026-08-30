@@ -256,6 +256,21 @@
   [enabled?]
   (save-setting! [:show-hardware-cursor] (boolean enabled?)))
 
+(defn get-show-terminal-progress
+  "Whether to show the OSC 9;4 terminal progress indicator (pi:
+   showTerminalProgress — default false). An unset setting falls back to
+   the KMET_TERMINAL_PROGRESS=1 env default."
+  [config]
+  (if (nil? (:show-terminal-progress config))
+    (= (System/getenv "KMET_TERMINAL_PROGRESS") "1")
+    (boolean (:show-terminal-progress config))))
+
+(defn set-show-terminal-progress!
+  "Persist the terminal-progress flag (pi: settingsManager
+   setShowTerminalProgress)."
+  [enabled?]
+  (save-setting! [:show-terminal-progress] (boolean enabled?)))
+
 (defn get-enabled-models-live
   "Live :enabled-models patterns from the global settings file (pi: the
    SettingsManager holds mutable settings — kmet's in-memory config is a

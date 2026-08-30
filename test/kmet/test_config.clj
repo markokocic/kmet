@@ -365,3 +365,16 @@
           (t/is (= {:hide-thinking-block true :provider :anthropic}
                    (edn/read-string (slurp settings-file)))))
         (finally (fs/delete-tree tmp))))))
+
+(t/deftest test-show-terminal-progress-setting
+  (t/testing "show-terminal-progress defaults off (pi: showTerminalProgress
+             default false), env-overridable, and settable"
+    (t/is (false? (cfg/get-show-terminal-progress
+                   (assoc cfg/default-config :show-terminal-progress nil)))
+          "unset → false")
+    (t/is (true? (cfg/get-show-terminal-progress
+                  (assoc cfg/default-config :show-terminal-progress true)))
+          "explicit true")
+    (t/is (false? (cfg/get-show-terminal-progress
+                   (assoc cfg/default-config :show-terminal-progress false)))
+          "explicit false")))
