@@ -2960,3 +2960,45 @@
       (t/is (= "LLM call timed out after 10ms" (:error-message (first starts)))))
     (t/is (= :idle @(:status agent)) "run settles idle after retries exhausted")
     (t/is (some #(= :error (:type %)) @events) "terminal :error event emitted")))
+
+(t/deftest test-loop-compaction-failure-reports-failed
+  ;; pi: a summarization failure surfaces via compaction_end errorMessage and
+  ;; session_compact_failed — kmet returns :failed (distinct from false =
+  ;; nothing to compact) so the manual /compact path can show the real error
+  ;; instead of "Nothing to compact".
+  (let [dir (fs/create-temp-dir {:dir (System/getProperty "user.home")})
+        sess (session/create-session (str dir))
+        events (atom [])
+        agent (loop/make-agent-state :session sess
+                                     :on-event (fn [e] (swap! events conj e))
+                                     :keep-recent-tokens 40)]
+    (try
+      (doseq [i (range 6)]
+        (let [m {:role :user :content [{:type :text :text
+                                        (str "This is message body number " i
+                                             " with plenty of words so the estimated token count "
+                                             "easily exceeds the small test threshold.")}]}]
+          (swap! (:messages agent) conj m)
+          (session/append-entry sess m)))
+      (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                    ;; summarization call errors out — no summary delivered
+                    llm/send-message (fn [opts]
+                                       (future
+                                         (when-let [on-error (:on-error opts)]
+                                           (on-error "upstream failure"))
+                                         :done))]
+        (let [result (binding [*err* (java.io.StringWriter.)]
+                       (loop/compact-context! agent nil :threshold))]
+          (t/is (= :failed result) "summarization failure reports :failed")
+          (let [end (first (filter #(= :compaction-end (:type %)) @events))
+                failed (first (filter #(= :session-compact-failed (:type %)) @events))]
+            (t/is (some? end) "compaction-end emitted")
+            (t/is (false? (:result end)) "no compaction happened")
+            (t/is (some? (:error-message end)) "compaction-end carries the error")
+            (t/is (= :threshold (:reason end)) "reason preserved")
+            (t/is (some? failed) "session-compact-failed emitted (pi: session_compact_failed)")
+            (t/is (= :threshold (:reason failed)) "failure event carries the reason")
+            (t/is (some? (:error-message failed)) "failure event carries the error"))))
+      (t/is (= 6 (count @(:entries sess))) "session untouched by failed compaction")
+      (finally
+        (fs/delete-tree dir)))))

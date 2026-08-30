@@ -141,8 +141,14 @@
    "Fired when compaction finishes (pi: compaction_end).
     Payload: :reason, :result (true when compaction happened), :aborted
     (true when the user cancelled mid-compaction — session untouched),
-    :will-retry (true for overflow compaction — the interrupted turn
-    retries; pi: compaction_end willRetry)."
+    :error-message (set when the summarization call failed), :will-retry
+    (true for overflow compaction — the interrupted turn retries; pi:
+    compaction_end willRetry)."
+
+   :session-compact-failed
+   "Fired after context compaction fails or is aborted (pi:
+    session_compact_failed). Payload: :reason (:manual | :threshold |
+    :overflow), :error-message (when a non-abort failure), :aborted."
 
    :agent-settled
    "Fired when the agent run is fully settled — immediately after :agent-end

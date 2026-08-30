@@ -1248,7 +1248,7 @@ Be precise and concise in your responses."}}]
                           (if @(:signal agent)
                             :aborted
                             (do (debug/log "Warning: summarization failed; compaction skipped")
-                                false)))))))
+                                :failed)))))))
                 false)]
           (emit agent {:type :compaction-end
                        :reason reason
@@ -1256,11 +1256,26 @@ Be precise and concise in your responses."}}]
                                     (= result ::cancelled))
                        :result (and (not= result :aborted)
                                     (not= result ::cancelled)
+                                    (not= result :failed)
                                     result)
+                       :error-message (when (= result :failed)
+                                        "Context compaction failed: the summarization call did not return a summary.")
                        ;; Overflow compaction retries the interrupted turn
                        ;; (pi: _runAutoCompaction willRetry — compaction_end
                        ;; carries whether the run continues).
                        :will-retry (= reason :overflow)})
+          ;; pi: session_compact_failed — fired when compaction fails or is
+          ;; aborted (the summarization errored, or the run's cancel signal
+          ;; fired mid-compaction).
+          (when (or (= result :failed)
+                    (= result :aborted)
+                    (= result ::cancelled))
+            (emit agent {:type :session-compact-failed
+                         :reason reason
+                         :error-message (when (= result :failed)
+                                          "Context compaction failed: the summarization call did not return a summary.")
+                         :aborted (or (= result :aborted)
+                                      (= result ::cancelled))}))
           (if (= result ::cancelled) false result))
         (finally
           (reset! (:compacting? agent) false))))))

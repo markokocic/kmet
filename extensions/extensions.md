@@ -329,7 +329,8 @@ Event types: `:agent-start` `:agent-end` `:agent-settled` `:turn-start`
 `:session-before-tree` `:session-before-switch` `:session-before-fork`
 `:session-before-compact` `:session-tree` `:queue-update` `:model-select`
 `:thinking-level-select` `:context-replaced` `:auto-retry-start`
-`:auto-retry-end` `:compaction-start` `:compaction-end` `:context`
+`:auto-retry-end` `:compaction-start` `:compaction-end`
+`:session-compact-failed` `:context`
 `:before-provider-request` `:before-provider-headers`
 `:after-provider-response`.
 

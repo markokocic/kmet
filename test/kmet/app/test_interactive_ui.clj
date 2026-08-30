@@ -885,3 +885,30 @@
                     ui/chat-history-start-streaming! (fn [_] nil)]
         (h {:type :compaction-end :reason :threshold :result true :will-retry false}))
       (t/is (seq @started) "queued message prompted a run after compaction"))))
+
+(deftest test-cancel-during-compaction-keeps-turn
+  (testing "escape during compaction aborts ONLY the compaction — a running
+            turn is not cancelled (pi: compaction_start swaps the escape
+            handler to abortCompaction; abortCompaction touches only the
+            compaction controllers, never the agent run)"
+    (let [cs (compaction-cs)]
+      (reset! (:compacting? @(:agent-state cs)) true)
+      (reset! (:signal @(:agent-state cs)) false)
+      (reset! (:running-turn? cs) true)
+      (with-redefs [inter/stop-anim-timer! (fn [_] nil)
+                    inter/clear-status-indicator! (fn [_] nil)
+                    inter/update-footer! (fn [_] nil)
+                    agent/cancel-turn (fn [_] (throw (ex-info "must not cancel the turn" {})))]
+        ((var inter/handle-cancel) cs))
+      (t/is (true? @(:signal @(:agent-state cs))) "compaction aborted via signal")
+      (t/is (true? @(:running-turn? cs)) "the turn is NOT cancelled"))))
+
+(deftest test-cancel-idle-compaction-keeps-turn
+  (testing "escape during compaction when no turn is running"
+    (let [cs (compaction-cs)]
+      (reset! (:compacting? @(:agent-state cs)) true)
+      (reset! (:signal @(:agent-state cs)) false)
+      (reset! (:running-turn? cs) false)
+      (with-redefs [inter/update-footer! (fn [_] nil)]
+        ((var inter/handle-cancel) cs))
+      (t/is (true? @(:signal @(:agent-state cs))) "compaction aborted"))))

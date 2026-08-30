@@ -1104,7 +1104,11 @@
                    ;; aborted compaction; only the result replies go here.
                    (future
                      (let [result (agent/compact-context! agent-state instructions)]
-                       (when-not (= :aborted result)
+                       (when-not (or (= :aborted result) (= :failed result))
+                         ;; pi: handleCompactCommand ignores the thrown
+                         ;; compaction error — compaction_end surfaces it
+                         ;; (showError for manual); the future only replies
+                         ;; for success and nothing-to-compact.
                          (ui/chat-history-add-message!
                           chat-history
                           {:role :info :label "Compact"
@@ -1427,6 +1431,9 @@
   [cs sess apply-settings?]
   (reset! (:session-atom cs) sess)
   (extensions/set-session! sess)
+  ;; pi: renderCurrentSessionState — a session switch drops the compaction
+  ;; queue (compactionQueuedMessages = [])
+  (reset! (:compaction-queued cs) [])
   (let [new-ag (assoc @(:agent-state cs) :session sess)]
     (reset! (:agent-state cs) new-ag))
   (agent/restore-session-context! @(:agent-state cs))
@@ -1564,6 +1571,9 @@
    BranchSummaryEntry.usage)."
   [cs sess old-leaf target-leaf summary-result user-msg-text from-extension? label]
   (try
+    ;; pi: renderCurrentSessionState on session rebind — the compaction
+    ;; queue does not survive navigation
+    (reset! (:compaction-queued cs) [])
     (let [summary-entry (if summary-result
                           (session/branch-with-summary!
                            sess target-leaf (:summary summary-result)
@@ -2456,12 +2466,17 @@
                   ((:handler c) cs args))
                 (update-footer! cs))
             ;; pi: input hooks → skill command → prompt template → fall
-            ;; through to the agent (unknown /cmd is sent as a message)
+            ;; through to the agent (unknown /cmd is sent as a message).
+            ;; During compaction the expanded text queues like a plain
+            ;; message (pi: unknown commands fall through to the compaction
+            ;; check and queue).
             (when-let [text (apply-hooks cs trimmed)]
-              (send-message cs
-                            (-> text
-                                (skills/expand-skill-command)
-                                (prompts/expand-prompt-template (prompts/get-prompt-templates)))))))
+              (let [text (-> text
+                             (skills/expand-skill-command)
+                             (prompts/expand-prompt-template (prompts/get-prompt-templates)))]
+                (if @(:compacting? @(:agent-state cs))
+                  (queue-compaction-message! cs text :steer)
+                  (send-message cs text))))))
 
         ;; Bash command (! or !!) — single-line like slash commands
         (and (str/starts-with? trimmed "!")
@@ -2556,47 +2571,52 @@
 (defn- handle-cancel
   "Cancel the current agent turn, bash command, or in-progress compaction."
   [cs]
-  (when @(:compacting? @(:agent-state cs))
-    ;; Escape during compaction aborts the summarization (pi: onEscape →
-    ;; abortCompaction). The compaction-end event clears the indicator and
-    ;; reports the cancellation.
-    (debug/log "compaction cancelled by user")
-    ;; no visual change here — compaction-end's clear-status-indicator!
-    ;; schedules the frame when the abort lands
-    (reset! (:signal @(:agent-state cs)) true))
-  (when @(:bash-running? cs)
-    (debug/log "bash command cancelled by user")
-    (reset! (:bash-signal cs) true)
-    (reset! (:bash-running? cs) false)
-    (update-footer! cs))
-  (when @(:running-turn? cs)
-    (debug/log "agent turn cancelled by user")
-    (stop-anim-timer! cs)
-    (clear-status-indicator! cs)
+  (if @(:compacting? @(:agent-state cs))
+    ;; Escape during compaction aborts ONLY the summarization (pi: onEscape
+    ;; → abortCompaction — the compaction_start handler swaps the escape
+    ;; handler to abortCompaction, restored at compaction_end). A running
+    ;; turn is NOT cancelled: an aborted mid-run compaction leaves the turn
+    ;; to continue on the pre-compaction context. The compaction-end event
+    ;; clears the indicator and reports the cancellation.
+    (do
+      (debug/log "compaction cancelled by user")
+      ;; no visual change here — compaction-end's clear-status-indicator!
+      ;; schedules the frame when the abort lands
+      (reset! (:signal @(:agent-state cs)) true))
+    (do
+      (when @(:bash-running? cs)
+        (debug/log "bash command cancelled by user")
+        (reset! (:bash-signal cs) true)
+        (reset! (:bash-running? cs) false)
+        (update-footer! cs))
+      (when @(:running-turn? cs)
+        (debug/log "agent turn cancelled by user")
+        (stop-anim-timer! cs)
+        (clear-status-indicator! cs)
     ;; pi: restoreQueuedMessagesToEditor({abort: true}) — queued steering/
     ;; follow-up messages return to the editor instead of vanishing when
     ;; cancel-turn clears the queues (they reach the chat only once the
     ;; loop consumes them, so cancel would otherwise lose them entirely).
-    (let [restored (restore-queued-messages! cs)]
-      (agent/cancel-turn @(:agent-state cs))
+        (let [restored (restore-queued-messages! cs)]
+          (agent/cancel-turn @(:agent-state cs))
       ;; Remove empty streaming placeholder if present — by identity, so
       ;; an entry appended after it (steered/follow-up message, tool
       ;; execution) is never popped in its place
-      (let [ch (:chat-history cs)]
-        (when-let [s @(:streaming-atom ch)]
-          (if (and (empty? @(:text-atom (:component s)))
-                   (empty? @(:thinking-text-atom (:component s))))
-            (ui/chat-history-remove-streaming-placeholder! ch)
-            (do (ui/chat-history-finalize-streaming! ch) (ui/chat-history-finalize-thinking! ch)))))
-      (ui/chat-history-add-message! (:chat-history cs)
-                                    {:role :assistant :content (th/dim "(cancelled)")})
-      (when (pos? restored)
-        (ui/chat-history-show-status!
-         (:chat-history cs)
-         (str "Restored " restored " queued message"
-              (when (> restored 1) "s") " to editor"))))
-    (reset! (:running-turn? cs) false)
-    (update-footer! cs)))
+          (let [ch (:chat-history cs)]
+            (when-let [s @(:streaming-atom ch)]
+              (if (and (empty? @(:text-atom (:component s)))
+                       (empty? @(:thinking-text-atom (:component s))))
+                (ui/chat-history-remove-streaming-placeholder! ch)
+                (do (ui/chat-history-finalize-streaming! ch) (ui/chat-history-finalize-thinking! ch)))))
+          (ui/chat-history-add-message! (:chat-history cs)
+                                        {:role :assistant :content (th/dim "(cancelled)")})
+          (when (pos? restored)
+            (ui/chat-history-show-status!
+             (:chat-history cs)
+             (str "Restored " restored " queued message"
+                  (when (> restored 1) "s") " to editor"))))
+        (reset! (:running-turn? cs) false)
+        (update-footer! cs)))))
 
 ;; ─── External editor (pi: handleOpenExternalEditor) ────────────────────────
 
@@ -2803,7 +2823,14 @@
             ;; pi: compaction_end → flushCompactionQueue — messages queued
             ;; during compaction are delivered now (queued into the retrying
             ;; turn when will-retry, else the first prompts a fresh run).
-            (flush-compaction-queue! cs (:will-retry evt)))
+            (flush-compaction-queue! cs (:will-retry evt))
+            ;; pi: compaction_end errorMessage — a failed summarization is
+            ;; surfaced (manual: error line; auto: dim status).
+            (when-let [err (:error-message evt)]
+              (if (= :manual (:reason evt))
+                (ui/chat-history-add-message!
+                 chat-history {:role :error :content err})
+                (ui/chat-history-show-status! chat-history err))))
           (tui/tui-request-render tui))
       :context-replaced
       ;; Rebuild the chat history to mirror the replaced
@@ -2889,6 +2916,7 @@
       :message-end nil
       :turn-end nil
       :agent-settled nil
+      :session-compact-failed nil
       :error nil
       :model-select nil
       :thinking-level-select nil
@@ -3912,7 +3940,13 @@
                                           (try
                                             (let [r (agent/compact-context!
                                                      @ag-atom custom-instructions)]
-                                              (when on-complete (on-complete {:result r})))
+                                              (if (and (= :failed r) on-error)
+                                                ;; pi: compact() throws on
+                                                ;; summarization failure →
+                                                ;; onError fires
+                                                (on-error (ex-info "Context compaction failed: the summarization call did not return a summary."
+                                                                   {:type :compaction-failed}))
+                                                (when on-complete (on-complete {:result r}))))
                                             (catch Exception e
                                               (when on-error (on-error e))))))
                              :get-system-prompt (fn [] @(:system @ag-atom))
