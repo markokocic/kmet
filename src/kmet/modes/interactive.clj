@@ -1413,9 +1413,16 @@
                 :details (:details e)})))
 
           :else
-          (ui/chat-history-add-message! (:chat-history cs)
-                                        (cond-> {:role role :content (content-of e)}
-                                          (= role :info) (assoc :label (:label e)))))))))
+          (ui/chat-history-add-message!
+           (:chat-history cs)
+           (cond-> {:role role :content (content-of e)}
+             (= role :info) (assoc :label (:label e))
+             ;; pi: CompactionSummaryMessageComponent — compaction and
+             ;; branch-summary entries render as labeled boxes
+             (contains? #{:compaction :branch-summary} role)
+             (assoc :role :info
+                    :label (if (= role :compaction) "Compaction" "Branch summary")
+                    :content (content-of e)))))))))
 
 (defn- restore-session!
   "Restore a session into the UI and the agent: swap the active session,
