@@ -2168,9 +2168,10 @@
                   (execute-extension-command! (:text m)))
                 ;; the first message: prompt when idle, else queue per mode
                 (deliver-compaction-message! cs (nth msgs first-idx))
-                ;; remaining messages queue per mode
+                ;; remaining messages queue per mode — never a fresh prompt
+                ;; (pi: the rest go through steer/followUp)
                 (doseq [m (drop (inc first-idx) msgs)]
-                  (deliver-compaction-message! cs m)))
+                  (queue-compaction-message-into-turn! cs m)))
               ;; all extension commands — execute them all
               (doseq [m msgs] (execute-extension-command! (:text m))))))
         (update-pending-messages! cs)
