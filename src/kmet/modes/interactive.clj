@@ -2582,10 +2582,12 @@
       (editor-text-set! ed "")
       (cond
         ;; Queue input during compaction (pi: handleFollowUp → isCompacting
-        ;; → queueCompactionMessage(text, "followUp"); extension commands
-        ;; execute immediately via handle-submit).
+        ;; → extension commands execute immediately via prompt(), everything
+        ;; else queues as followUp).
         @(:compacting? @(:agent-state cs))
-        (queue-compaction-message! cs text :follow-up)
+        (if (extension-command? text)
+          (execute-extension-command! text)
+          (queue-compaction-message! cs text :follow-up))
 
         @(:running-turn? cs)
         ;; Pi: handleFollowUp queues a follow-up (processed after the run
@@ -2615,7 +2617,8 @@
             combined (str/join "\n\n" (remove str/blank? [queued-text current]))]
         (agent/clear-queues! @(:agent-state cs))
         (reset! (:compaction-queued cs) [])
-        (editor-text-set! ed combined)))
+        (editor-text-set! ed combined)
+        (update-pending-messages! cs)))
     (count all)))
 
 (defn- handle-dequeue

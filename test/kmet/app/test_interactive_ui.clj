@@ -765,6 +765,8 @@
      :current-editor-atom (atom ed)
      :compaction-queued (atom [])
      :running-turn? (atom false)
+     :bash-running? (atom false)
+     :bash-signal (atom false)
      :status-indicator si
      :status-current cur
      :status-root (hiccup/root (ui/make-status-area cur si))
@@ -914,3 +916,51 @@
       (with-redefs [inter/update-footer! (fn [_] nil)]
         ((var inter/handle-cancel) cs))
       (t/is (true? @(:signal @(:agent-state cs))) "compaction aborted"))))
+
+(deftest test-follow-up-extension-command-executes-during-compaction
+  (testing "Alt+Enter with an extension command during compaction executes
+            immediately (pi: handleFollowUp → isExtensionCommand → prompt)"
+    (commands/clear-commands!)
+    (let [cs (compaction-cs)
+          ed @(:current-editor-atom cs)
+          ran (atom nil)]
+      (commands/register-command!
+       {:name "my-fu-cmd"
+        :description "test"
+        :extension-handler (fn [_ctx args] (reset! ran args))})
+      (editor/editor-set-text! ed "/my-fu-cmd arg")
+      (reset! (:compacting? @(:agent-state cs)) true)
+      (with-redefs [tui/tui-request-render (fn [_] nil)]
+        ((var inter/handle-follow-up) cs))
+      (t/is (= "arg" @ran) "extension command executed immediately")
+      (t/is (empty? @(:compaction-queued cs)) "not queued")
+      (commands/clear-commands!))))
+
+(deftest test-cancel-two-step-during-midrun-compaction
+  (testing "escape during a mid-run compaction aborts the compaction first;
+            a second escape then cancels the turn (pi: compaction_start
+            swaps the escape handler to abortCompaction, restored at
+            compaction_end — two-step escape)"
+    (let [cs (compaction-cs)
+          cancelled (atom 0)]
+      (reset! (:compacting? @(:agent-state cs)) true)
+      (reset! (:signal @(:agent-state cs)) false)
+      (reset! (:running-turn? cs) true)
+      (with-redefs [inter/stop-anim-timer! (fn [_] nil)
+                    inter/clear-status-indicator! (fn [_] nil)
+                    inter/update-footer! (fn [_] nil)
+                    ui/chat-history-add-message! (fn [_ _] nil)
+                    ui/chat-history-show-status! (fn [_ _] nil)
+                    ui/chat-history-finalize-streaming! (fn [_] nil)
+                    ui/chat-history-finalize-thinking! (fn [_] nil)
+                    ui/chat-history-remove-streaming-placeholder! (fn [_] nil)
+                    agent/cancel-turn (fn [_] (swap! cancelled inc))]
+        ;; first escape: compaction aborted only
+        ((var inter/handle-cancel) cs)
+        (t/is (true? @(:signal @(:agent-state cs))) "compaction aborted")
+        (t/is (true? @(:running-turn? cs)) "turn still running")
+        (t/is (zero? @cancelled) "turn not cancelled")
+        ;; compaction-end resets the flag; second escape cancels the turn
+        (reset! (:compacting? @(:agent-state cs)) false)
+        ((var inter/handle-cancel) cs)
+        (t/is (= 1 @cancelled) "second escape cancels the turn")))))
