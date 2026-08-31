@@ -8,8 +8,8 @@
                          stdout/stdin, core.async response channel, bounded
                          stderr tail for diagnostics, process-tree kill on
                          close (kmet.libs.process).
-     :streamable-http — per-request POST (babashka.http-client, :as
-                         :stream); initialize captures Mcp-Session-Id;
+     :streamable-http — per-request POST (kmet.libs.http, :as :stream);
+                         initialize captures Mcp-Session-Id;
                          responses parsed by content type (application/json
                          or text/event-stream).
      :sse             — GET stream with a background reader (endpoint +
@@ -25,12 +25,12 @@
    tool-call progress); stale responses (non-matching :id) are dropped and
    the wait loop continues. Every request!/notify! touches :last-used so
    the idle reaper can disconnect unused servers."
-  (:require [babashka.http-client :as http]
-            [babashka.process :as proc]
+  (:require [babashka.process :as proc]
             [cheshire.core :as json]
             [clojure.core.async :as async]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [kmet.libs.http :as http]
             [kmet.libs.process :as process]
             [kmet.libs.sse :as sse]))
 
@@ -142,7 +142,6 @@
   [url opts]
   {:transport :streamable-http
    :url url
-   :client (http/client {})
    :session-id (atom nil)
    :id-counter (atom 0)
    :closed (atom false)
@@ -201,9 +200,8 @@
                              {:headers hs
                               :body body
                               :as :stream
-                              :client (:client conn)
-                              :throw false
-                              :timeout timeout-ms}))
+                              :throw? false
+                              :timeout-ms timeout-ms}))
         response (attempt headers)]
     (if (and (= 401 (:status response)) (:on-401 conn))
       (attempt (merge (base-http-headers conn) (or ((:on-401 conn)) {})))
@@ -288,23 +286,30 @@
       (async/close! ch))))
 
 (defn- open-sse-stream!
-  "(Re)open the SSE GET stream; resets the response channel."
+  "(Re)open the SSE GET stream; resets the response channel and stores the
+   active response on the conn (:response) so close! can abort it (the
+   reader thread releases on disconnect)."
   [conn]
   (let [headers (merge {"Accept" "text/event-stream"}
                        (or (when-let [auth (:auth-headers conn)] (auth)) {}))
         response (http/get (:url conn)
                            {:headers headers
                             :as :stream
-                            :client (:client conn)
-                            :throw false
-                            :timeout 30000})]
+                            :throw? false
+                            :timeout-ms 30000})]
     (when-not (<= 200 (:status response) 299)
       (throw (mcp-error (str "MCP connect failed: HTTP " (:status response)
                              " opening SSE stream")
                         {:status (:status response)})))
+    ;; an earlier stream (reconnect) is abandoned — the reader thread is
+    ;; gone with the old channel; a mid-stream transport failure there is
+    ;; stale noise, not the reconnect's problem
+    (when-let [prev @(:response conn)]
+      (try (http/close! prev) (catch Exception _ nil)))
     (let [ch (async/chan 128)]
       (spawn #(drain-sse-stream (:body response) ch (:endpoint-atom conn) (:url conn)))
       (reset! (:ch conn) ch)
+      (reset! (:response conn) response)
       (reset! (:stream-open conn) true))))
 
 (defn- connect-sse
@@ -312,9 +317,9 @@
   [url opts]
   {:transport :sse
    :url url
-   :client (http/client {})
    :endpoint-atom (atom nil)
    :ch (atom nil)
+   :response (atom nil)
    :stream-open (atom false)
    :session-id (atom nil)
    :id-counter (atom 0)
@@ -528,8 +533,8 @@
     nil))
 
 (defn close!
-  "Close a connection: kill the stdio process tree, close the HTTP client.
-   Idempotent."
+  "Close a connection: kill the stdio process tree, abort the active SSE
+   stream (releases the blocked reader + reaps the transport). Idempotent."
   [conn]
   (case (:transport conn)
     :stdio
@@ -541,11 +546,9 @@
     (do
       (reset! (:closed conn) true)
       (when (= :sse (:transport conn))
-        (reset! (:stream-open conn) false)))
-    ;; babashka.http-client clients are not closeable (no http/close) —
-    ;; they are GC'd; the :closed flag makes alive? false so the next use
-    ;; reconnects with a fresh client.
-    nil)
+        (reset! (:stream-open conn) false)
+        (when-let [r @(:response conn)]
+          (try (http/close! r) (catch Exception _ nil))))))
   nil)
 
 (defn alive?

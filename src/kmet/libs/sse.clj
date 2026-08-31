@@ -533,7 +533,7 @@
             ;; A transport read failure (RST_STREAM, connection reset, ...)
             ;; surfaces immediately — cancel wins if it raced with the error.
             ;; abort-fn kills a possibly-still-alive curl transport so
-            ;; finish-curl!'s process deref doesn't block on it.
+            ;; close!'s process deref doesn't block on it.
             (instance? Exception line)
             (do ((:stop idle))
                 (when abort-fn (abort-fn))

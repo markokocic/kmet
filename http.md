@@ -13,53 +13,62 @@ Build in three phases:
   and every remaining `babashka.http-client` require; the boundary guard
   then flips from advisory to enforced.
 
-## Current status (phase 0 — library created, tests green, gaps closed)
+## Current status (phase 1 — migration complete, old namespaces kept)
 
-Done (committed):
+Done:
 
-- `src/kmet/libs/http.clj` — the unified transport:
-  - `request` / `get` / `post` / `request-json` with `:as` (:string/:bytes/
-    :stream), `:timeout-ms` (babashka's `:timeout` key, ms), `:throw?`,
-    `:follow-redirects`, `:signal`, `:proxy` (:env/:none/explicit map)
-  - responses always `{:status n :headers {...} :body ...}` (lowercased
-    headers), both transports
-  - errors: `{:type :http-error :status :headers :body}` for HTTP >= 400;
-    `{:type :transport-error :cause}` wrapping raw JVM exceptions;
-    `transport-error-message` gives the retry classifier's stable
-    "network error" token (ConnectException/UnknownHost/timeout/RST)
-  - proxy parsing ported from kmet.libs.proxy (HTTPS/HTTP/ALL/SOCKS_PROXY,
-    NO_PROXY host/subdomain/port/CIDR/IPv4/IPv6) + fixed bracketed-IPv6
-    entries ([::1] / [::1]:8080)
-  - plain http proxies → java.net.http via a per-proxy cached client;
-    SOCKS/https proxies → curl with status/header parity (--dump-header
-    temp file, --fail-with-body, -L, --compressed)
-  - curl path: credentials/headers in a protected temp config file, never
-    argv; `abort!` kills the tree; `close!` reaps the process, deletes
-    temp files, reports mid-stream transport failures
-  - `:timeout` maps to babashka's `:timeout` (ms) — NOT `:request-timeout`
-    (which is ineffective; verified empirically)
-- `test/kmet/libs/test_http.clj` — 28 tests / 66 assertions, all green:
-  proxy parsing (incl. lowercase env, socks5h default, NO_PROXY variants),
-  native transport (get/headers/method+body/json-encode/request-json/
-  throw-true/throw-false/bytes/stream/transport-error/timeout-ms/
-  follow-redirects), curl transport via a real in-test SOCKS5 proxy
-  (RFC 1928 server: handshake + bidirectional pump) — stream,
-  throw-false, direct `:proxy` map, bytes, follow-redirects (the proxy
-  serves redirect hops on fresh connections), timeout-ms, gzip
-  compression, abort!, close-early (truncated body → transport failure),
-  no-credentials-in-argv, missing-curl
-- `kmet.libs.proxy` / `kmet.ai.proxy` untouched and still passing their
-  tests (phase 0 is additive; no caller changed)
-- the self-contained libs guard passes (http.clj only requires
-  kmet.libs.process)
-- `test_http.clj` is in `kmet.runner/all-namespaces` (`bb test` includes
-  it: full suite 1900 tests / 12120 assertions, all green)
-- `bb lint` and `bb format-check` pass on the new files (0 findings)
+- Phase 0 (committed): `src/kmet/libs/http.clj` + `test/kmet/libs/test_http.clj`
+  (the unified transport, see below), `kmet.libs.proxy` / `kmet.ai.proxy`
+  untouched and still passing their tests.
+- Phase 1 (this change): every internal caller migrated to `kmet.libs.http`.
+  - `src/kmet/ai/http.clj` — the provider decorator (before-provider-headers
+    hook → `kmet.libs.http/request` → after-provider-response hook);
+    re-exports `close!` / `abort!`. All 9 wire APIs
+    (anthropic-messages, azure-openai-responses, bedrock-converse-stream,
+    google-generative-ai, google-vertex, mistral-conversations,
+    openai-codex-responses, openai-completions, openai-responses) call
+    `ai-http/request` with `:as :stream` and `ai-http/close!` after the
+    stream is consumed; the anthropic curl-backed detection reads
+    `:http/curl` instead of `:proc`.
+  - error classification moved: `network-exception-classes` /
+    `http2-stream-reset-regex` / `transport-error-message` are re-exported
+    from `kmet.libs.http` by `kmet.ai.api.shared` (single source of truth;
+    the old private `http-error-message` copy is deleted).
+  - `ai/oauth.clj`, `ai/google_adc.clj`, `ai/image_models.clj` →
+    `http/request-json`; `ai/model_gen.clj`, `libs/oauth.clj`, `build.clj`
+    (curl helper replaced by streamed `http/get`), tree-sitter
+    `fetch.clj` (`:request-timeout` → `:timeout-ms`, stream closed via
+    `http/close!`), mcp-adapter `client.clj` (no raw clients; SSE stream
+    stored and aborted on disconnect), `scripts/generate_image_models.clj`,
+    `test_oauth.clj` / `test_google_adc.clj` / `test_image_models.clj`.
+  - `kmet.app.extensions`: `kmet.libs.http` (+ `kmet.libs.oauth`) in
+    `libs-library-namespaces`; direct `babashka.http-client` requires
+    rejected with an actionable message; every internal extension namespace
+    is now require-validated via the load-fn (this exposed that
+    `kmet.app.keybindings` was missing from `shared-tui-namespaces` —
+    fixed). `watch-cancel!` uses a daemon Thread (not `future`) so the curl
+    path also works from extension SCI contexts.
+  - phase-1 inventory guard: `test/kmet/test_http_boundary.clj` (registered
+    in the runner) fails when a NEW namespace requires
+    `babashka.http-client` / `kmet.*.proxy` or spawns `curl`; the only
+    allowed legacy users are `kmet.libs.proxy`, `kmet.ai.proxy` and their
+    tests (deleted in phase 2).
+- Gates: `bb test` / `bb test-ext` (incl. the 7 end-to-end provider stream
+  tests), `bb lint` (0 findings on changed files), `bb format-check`,
+  tree-sitter `bb test` (59 tests), mcp-adapter validate-client/oauth/config
+  scripts — all green.
 
-Known remaining issues before phase 1:
+Known remaining issues before phase 2:
 
-- none in the library itself; the remaining gaps are phase-1 items
-  (migration) and phase-2 items (deletion + strict guard)
+- `src/kmet/libs/proxy.clj`, `src/kmet/ai/proxy.clj`, and their tests still
+  exist (zero consumers — the inventory guard allowlist) and still use
+  `babashka.http-client` / `"curl"`.
+- comments/docstrings mentioning `babashka.http-client` remain in
+  `libs/aws_sigv4.clj`, `extensions/tree-sitter/deps.edn`, `test_llm.clj`
+  (the boundary guard ignores comments; they get cleaned in phase 2's doc
+  pass).
+- extension-context SCI test for `kmet.libs.http` landed in
+  `test_extensions.clj` (loads + rejects direct babashka.http-client).
 
 ## 1. Define the public HTTP API
 
@@ -294,7 +303,7 @@ Update (phase 2):
    new namespace. Everything else keeps using the old transport — a green
    full suite proves the library is additive.
 
-### Phase 1 (migration; old namespaces kept)
+### Phase 1 (migration; old namespaces kept) — DONE (see Current status)
 
 4. Add `src/kmet/ai/http.clj` decorator (provider hooks) and move the
    error-classification helpers out of `kmet.ai.api.shared`.

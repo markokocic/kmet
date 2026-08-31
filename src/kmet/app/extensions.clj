@@ -843,8 +843,10 @@
     kmet.libs.edn-store
     kmet.libs.hash
     kmet.libs.highlight
+    kmet.libs.http
     kmet.libs.jsonrpc
     kmet.libs.markdown
+    kmet.libs.oauth
     kmet.libs.process
     kmet.libs.sse
     kmet.libs.terminal
@@ -979,12 +981,15 @@
         clause))
 
 (defn- validate-entry-requires!
-  "Fail fast with an actionable error when the entry ns form requires a
+  "Fail fast with an actionable error when NS-FORM (the entry ns form, or
+   any internal extension ns form validated by the load-fn) requires a
    kmet.* namespace outside the shared set (kmet.extension + kmet.tui.* +
    kmet.libs.*) or the extension's own internal namespaces (NS-FILES, the
    index built from the extension dir — those resolve regardless of their
-   prefix). Without this the error would be silent: sci's require
-   machinery NPEs on a load-fn failure and swallows the original exception."
+   prefix), or requires babashka.http-client directly (outbound HTTP must
+   go through kmet.libs.http). Without this the error would be silent:
+   sci's require machinery NPEs on a load-fn failure and swallows the
+   original exception."
   [ext-name ns-form tui-namespaces libs-namespaces ns-files]
   (doseq [clause-key [:require :require-macros :use]
           lib (require-libspec-libs (ns-clause ns-form clause-key))]
@@ -1013,6 +1018,15 @@
                        " — not part of the kmet.libs.* library shared with extensions")
                   {:extension ext-name :ns lib})))
 
+        ;; direct outbound HTTP is not available to extensions — the
+        ;; proxy-aware kmet.libs.http boundary is shared by reference
+        (= s "babashka.http-client")
+        (throw (ex-info
+                (str "Extension " ext-name " requires babashka.http-client"
+                     " — extensions must use kmet.libs.http (the proxy-aware"
+                     " outbound-HTTP boundary) instead")
+                {:extension ext-name :ns lib}))
+
         (and (str/starts-with? s "kmet.")
              (not= lib 'kmet.extension))
         (throw (ex-info
@@ -1027,7 +1041,8 @@
   (set (keep (fn [ns-obj]
                (let [n (str (ns-name ns-obj))]
                  (when (or (str/starts-with? n "kmet.tui.")
-                           (= n "kmet.app.ui.tool-renderers"))
+                           (= n "kmet.app.ui.tool-renderers")
+                           (= n "kmet.app.keybindings"))
                    (ns-name ns-obj))))
              (all-ns))))
 
@@ -1141,11 +1156,20 @@
    context: own files, declared deps (closure resolved lazily on first
    library require), then bb-bundled classpath namespaces. kmet.* beyond
    the contract and undeclared non-bundled libraries are rejected with
-   actionable errors — extensions must depend only on kmet.extension."
-  [ext-name ns-files deps-resolver]
+   actionable errors — extensions must depend only on kmet.extension.
+
+   Every own file is require-validated on load (not just the entry
+   namespace): a forbidden/misspelled kmet.* require or a direct
+   babashka.http-client require in an internal namespace fails with the
+   same actionable messages as the entry check."
+  [ext-name ns-files deps-resolver tui-namespaces libs-namespaces]
   (fn [{:keys [namespace]}]
     (or (when-let [f (get ns-files namespace)]
-          {:file (str f) :source (slurp f)})
+          (let [source (slurp f)
+                _ (validate-entry-requires! ext-name (read-ns-form f)
+                                            tui-namespaces libs-namespaces
+                                            ns-files)]
+            {:file (str f) :source source}))
         (when-let [jars (and deps-resolver (deps-resolver))]
           (some (fn [j] (when-let [s (jar-source j namespace)]
                           {:file (str j) :source s}))
@@ -1201,7 +1225,9 @@
              :imports bb-imports
              :features #{:bb :clj}
              :namespaces (build-context-namespaces)
-             :load-fn (make-load-fn ext-name ns-files deps-resolver)}))
+             :load-fn (make-load-fn ext-name ns-files deps-resolver
+                                    (shared-tui-namespaces)
+                                    (shared-libs-namespaces))}))
 
 (defn- eval-forms!
   "Evaluate every top-level form of FILE in CTX. *ns* is bound around the

@@ -954,8 +954,8 @@ Be precise and concise in your responses."}}]
                              :stop-reason reason})))
       :on-error (fn [e]
                   ;; Guard against double delivery: on the curl path the
-                  ;; stream error and finish-curl!'s exit-code report can both
-                  ;; fire for one failure (e.g. abort-stream! on idle timeout)
+                  ;; stream error and close!'s transport-failure report can
+                  ;; both fire for one failure (e.g. abort! on idle timeout)
                   (when-not (realized? done-promise)
                     (deliver done-promise
                              {:error e

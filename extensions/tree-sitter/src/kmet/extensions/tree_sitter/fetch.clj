@@ -10,8 +10,8 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [babashka.http-client :as http]
-            [kmet.extensions.tree-sitter.paths :as paths])
+            [kmet.extensions.tree-sitter.paths :as paths]
+            [kmet.libs.http :as http])
   (:import [java.security MessageDigest]
            [java.util.zip ZipFile]))
 
@@ -116,13 +116,16 @@
    ::download-failed on non-200 and ::sha-mismatch on hash mismatch;
    returns dest."
   [url dest expected-sha256]
-  (let [resp (http/get url {:as :stream :request-timeout 120000})]
+  (let [resp (http/get url {:as :stream :throw? false :timeout-ms 120000})]
     (when (not= 200 (:status resp))
       (throw (ex-info (str "download failed with HTTP " (:status resp) " for " url)
                       {:type ::download-failed
                        :url url
                        :status (:status resp)})))
-    (store-and-verify! (:body resp) dest expected-sha256)))
+    (try
+      (store-and-verify! (:body resp) dest expected-sha256)
+      (finally
+        (http/close! resp)))))
 (defn extract-zip!
   "Extract every file entry of zip-path under dest-dir, creating nested dirs
    as needed. Rejects absolute or parent-traversing entry names (::unsafe-zip-

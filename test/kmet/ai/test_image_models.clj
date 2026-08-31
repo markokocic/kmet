@@ -7,7 +7,7 @@
             [clojure.test :as t :refer [testing]]
             [kmet.ai.auth :as auth]
             [kmet.ai.image-models :as im]
-            [kmet.ai.proxy :as proxy]))
+            [kmet.libs.http :as http]))
 
 (defn- validate-committed!
   "Run the generator script's offline validation over the committed catalog."
@@ -118,8 +118,8 @@
         context {:input [{:type :text :text "a red cube"}
                          {:type :image :mime-type "image/png" :data "BASE64"}]}
         captured (atom nil)]
-    (with-redefs [proxy/request-json
-                  (fn [url opts _]
+    (with-redefs [http/request-json
+                  (fn [url opts]
                     (reset! captured [url opts])
                     ;; request-json parses with keyword keys (json/parse-string
                     ;; body true), so the mock body is keyword-keyed.

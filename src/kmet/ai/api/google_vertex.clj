@@ -1,10 +1,11 @@
 (ns kmet.ai.api.google-vertex
-  "Google Vertex AI wire API (pi: api/google-vertex.ts)."
+  "Google Vertex AI wire API (pi: api/google-vertex.ts — gemini-2.5+ style
+   streamGenerateContent via the regional endpoint)."
   (:require
-   [kmet.ai.auth :as auth]
-   [kmet.ai.google-adc :as google-adc]
    [cheshire.core :as json]
-   [kmet.ai.proxy :as proxy]
+   [kmet.ai.http :as ai-http]
+   [kmet.ai.google-adc :as google-adc]
+   [kmet.ai.auth :as auth]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
    [kmet.ai.constrained-sampling :as cs]
@@ -73,32 +74,32 @@
           (on-error (str "No API key for google-vertex. Set GOOGLE_CLOUD_API_KEY "
                          "or configure Application Default Credentials.")))
         (try
-          (let [response (proxy/post-stream (or base-url (vertex-endpoint-url (:base-url model-record) model-id))
-                                            {:headers (request-headers
-                                                       {auth-header (str (when-not api-key "Bearer ") auth-value)
-                                                        "Content-Type" "application/json"}
-                                                       model-record provider-record api-key session-id)
-                                             :body (json/generate-string payload)
-                                             :as :stream
+          (let [response (ai-http/request (or base-url (vertex-endpoint-url (:base-url model-record) model-id))
+                                          {:headers (request-headers
+                                                     {auth-header (str (when-not api-key "Bearer ") auth-value)
+                                                      "Content-Type" "application/json"}
+                                                     model-record provider-record api-key session-id)
+                                           :body (json/generate-string payload)
+                                           :as :stream
                                              ;; Total request deadline (pi: SDK timeoutMs ??
                                              ;; httpIdleTimeoutMs); explicit total wins, else
                                              ;; the idle timeout (compaction/summarization), nil
                                              ;; when both disabled.
-                                             :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
-                                                                         total-timeout-ms)
-                                                                       (when (pos? (or idle-timeout-ms 0))
-                                                                         idle-timeout-ms))]
-                                                        t)}
-                                            signal)]
+                                           :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
+                                                                       total-timeout-ms)
+                                                                     (when (pos? (or idle-timeout-ms 0))
+                                                                       idle-timeout-ms))]
+                                                      t)}
+                                          signal)]
             (let [[dispatch finalize] (responses-events-handler opts model-record)]
               (sse/process-google-stream response
                                          dispatch
                                          signal
                                          idle-timeout-ms
-                                         (fn [] (proxy/abort-stream! response)))
+                                         (fn [] (ai-http/abort! response)))
               ;; the stream is fully consumed — a trailing usage chunk (if
               ;; any) is dispatched; emit the deferred terminal done now
               (finalize (some-> signal deref)))
-            (proxy/finish-curl! response signal on-error))
+            (ai-http/close! response))
           (catch Exception e
             (when on-error (on-error (transport-error-message e)))))))))

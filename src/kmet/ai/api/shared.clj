@@ -8,6 +8,7 @@
    [kmet.ai.auth :as auth]
    [kmet.libs.dynamic-value :as dynamic-value]
    [cheshire.core :as json]
+   [kmet.libs.http :as lib-http]
    [kmet.ai.models :as models]
    [kmet.libs.usage :as usage]
    [kmet.ai.constrained-sampling :as cs]
@@ -15,9 +16,10 @@
    [clojure.string :as str]))
 
 ;; ─── Provider-event hooks (pi: context / before_provider_request) ────────
-;; Re-exported from kmet.ai.hooks (the slots live there so kmet.ai.proxy can
-;; reach them without a require cycle); the context hook fires here (applied
-;; by kmet.ai.llm per call) and the request hook in each api builder.
+;; Re-exported from kmet.ai.hooks (the slots live there so the provider
+;; HTTP decorator kmet.ai.http can reach them without a require cycle); the
+;; context hook fires here (applied by kmet.ai.llm per call) and the
+;; request hook in each api builder.
 
 (def set-context-hook! hooks/set-context-hook!)
 (def apply-context-hook hooks/apply-context-hook)
@@ -27,6 +29,15 @@
 (def apply-before-provider-headers-hook hooks/apply-before-provider-headers-hook)
 (def set-after-provider-response-hook! hooks/set-after-provider-response-hook!)
 (def apply-after-provider-response-hook hooks/apply-after-provider-response-hook)
+
+;; ─── Transport error classification ───────────────────────────────────────
+;; Moved into kmet.libs.http (the single HTTP boundary owns the transport
+;; error contract); re-exported here so every caller gets the stable
+;; retryable error tokens regardless of transport.
+
+(def network-exception-classes lib-http/network-exception-classes)
+(def http2-stream-reset-regex lib-http/http2-stream-reset-regex)
+(def transport-error-message lib-http/transport-error-message)
 
 (def getenv
   "Process env lookup (System/getenv returns nil for unset vars)."
@@ -720,99 +731,6 @@
                     (not @errored?)
                     (not cancelled?))
            (on-done sr))))]))
-
-(def network-exception-classes
-  "JVM exception classes indicating a transport/network failure (connect,
-   DNS, timeout, reset). java.net.http can throw these with a nil message
-   (e.g. ConnectException on this JDK), so they are classified by class."
-  #{"ConnectException" "UnknownHostException" "NoRouteToHostException"
-    "UnresolvedAddressException" "SocketTimeoutException"
-    "HttpTimeoutException" "SocketException"})
-
-(def http2-stream-reset-regex
-  "Message pattern for HTTP/2 stream resets. java.net.http surfaces a server
-   RST_STREAM frame as a plain java.io.IOException whose message is
-   'Received RST_STREAM: <code>' (e.g. 'Protocol error', 'CANCEL') — the
-   class is too broad to add to network-exception-classes, so these are
-   classified by message."
-  (re-pattern "(?i)received rst_stream"))
-
-(def ^:private max-error-body-chars 2000)
-
-(defn- http-error-message
-  "Best-effort extraction of a provider's error message from a
-   babashka.http-client exceptional-status exception (pi: undici surfaces the
-   parsed error body to the caller — 'Exceptional status code: 400' alone
-   matches no overflow/retry pattern, which silently kills auto-compaction
-   and auto-retry on 400/413/429-style provider errors).
-
-   OpenAI-compatible providers send {\"error\": {\"message\": ...}} (Anthropic
-   and Gemini use the same shape); the :msg alias covers the rest. A plain
-   text body passes through trimmed (capped); nil keeps the caller's fallback
-   when the body is unreadable or unparseable.
-
-   429/5xx messages are prefixed with 'HTTP <status>: ' — opaque bodies (a
-   gateway's 500 'ext_proc failed: no more response messages' carries no
-   status token) rely on the retry classifier's '429'/'500'/... patterns to
-   auto-retry transient failures. 4xx stays unprefixed so overflow/quota
-   classification (incl. the anchored '413 (no body)' pattern) is untouched."
-  [e]
-  (let [d (ex-data e)
-        status (:status d)
-        body (:body d)]
-    (when (and (integer? status) (>= status 400))
-      (let [text (cond
-                   (string? body) body
-                   ;; babashka.http-client :as :stream responses carry the
-                   ;; unconsumed HttpResponseInputStream here
-                   (instance? java.io.InputStream body)
-                   (try (slurp body) (catch Exception _ nil))
-                   :else nil)
-            parsed (try (json/parse-string text true) (catch Exception _ nil))
-            trimmed (some-> text str str/trim)
-            pick (fn [s] (let [t (some-> s str str/trim)] (when (seq t) t)))
-            msg (or (pick (some-> parsed :error :message))
-                    (pick (some-> parsed :error :msg))
-                    (when (seq trimmed)
-                      (subs trimmed 0 (min max-error-body-chars (count trimmed)))))]
-        (when msg
-          (if (or (= status 429) (>= status 500))
-            (str "HTTP " status ": " msg)
-            msg))))))
-
-(defn transport-error-message
-  "Message for a transport-layer exception. Network failures carry a stable
-   'network error' token so the loop's retry classifier (retryable-error?)
-   recognizes them even when the JVM message is nil — 'Request failed:
-   ConnectException' matches no retryable pattern, which silently kills
-   auto-retry on connect/DNS failures (pi's undici always reports transport
-   failures as 'fetch failed'). HTTP error responses (babashka's
-   'Exceptional status code: N') surface the provider's message from the
-   response body so overflow/throttle classifiers see the real error —
-   prefixed with 'HTTP <status>: ' on 429/5xx so the classifier's
-   status-code patterns match even opaque bodies. Non-network exceptions
-   keep their message."
-  [e]
-  (let [msg (ex-message e)
-        cls (some-> (class e) .getSimpleName)
-        http-msg (http-error-message e)]
-    (cond
-      http-msg http-msg
-
-      (contains? network-exception-classes cls)
-      (str "network error: " (if (str/blank? msg) cls msg))
-
-      ;; HTTP/2 RST_STREAM arrives as a plain IOException — same class of
-      ;; transport reset as SocketException "Connection reset", so it gets
-      ;; the same stable retryable token (pi: undici reports these as
-      ;; 'fetch failed').
-      (re-find http2-stream-reset-regex (or msg ""))
-      (str "network error: " (or msg cls))
-
-      (str/blank? msg)
-      (str "Request failed: " cls)
-
-      :else msg)))
 
 ;; ─── Tool schema conversion (pi convertTools — moved from app.tools.registry) ──
 

@@ -1,8 +1,8 @@
 (ns kmet.ai.api.google-generative-ai
-  "Google Generative AI wire API (pi: api/google-generative-ai.ts)."
+  "Google Generative AI (Gemini) wire API (pi: api/google-generative-ai.ts)."
   (:require
    [cheshire.core :as json]
-   [kmet.ai.proxy :as proxy]
+   [kmet.ai.http :as ai-http]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
    [kmet.ai.constrained-sampling :as cs]
@@ -173,24 +173,24 @@
                            tools)
                      (assoc :toolConfig {:functionCallingConfig {:mode "VALIDATED"}})))]
       (try
-        (let [response (proxy/post-stream (or base-url (endpoint-url :google-generative-ai (:base-url model-record) model-id))
-                                          {:headers (request-headers
-                                                     {"x-goog-api-key" api-key
-                                                      "Content-Type" "application/json"}
-                                                     model-record provider-record api-key
-                                                     session-id)
-                                           :body (json/generate-string payload)
-                                           :as :stream
+        (let [response (ai-http/request (or base-url (endpoint-url :google-generative-ai (:base-url model-record) model-id))
+                                        {:headers (request-headers
+                                                   {"x-goog-api-key" api-key
+                                                    "Content-Type" "application/json"}
+                                                   model-record provider-record api-key
+                                                   session-id)
+                                         :body (json/generate-string payload)
+                                         :as :stream
                                            ;; Total request deadline (pi: SDK timeoutMs ??
                                            ;; httpIdleTimeoutMs); explicit total wins, else
                                            ;; the idle timeout (compaction/summarization), nil
                                            ;; when both disabled.
-                                           :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
-                                                                       total-timeout-ms)
-                                                                     (when (pos? (or idle-timeout-ms 0))
-                                                                       idle-timeout-ms))]
-                                                      t)}
-                                          signal)]
+                                         :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
+                                                                     total-timeout-ms)
+                                                                   (when (pos? (or idle-timeout-ms 0))
+                                                                     idle-timeout-ms))]
+                                                    t)}
+                                        signal)]
           (sse/process-google-stream response
                                      (fn [event]
                                        (case (:type event)
@@ -208,7 +208,7 @@
                                          nil))
                                      signal
                                      idle-timeout-ms
-                                     (fn [] (proxy/abort-stream! response)))
-          (proxy/finish-curl! response signal on-error))
+                                     (fn [] (ai-http/abort! response)))
+          (ai-http/close! response))
         (catch Exception e
           (when on-error (on-error (transport-error-message e))))))))

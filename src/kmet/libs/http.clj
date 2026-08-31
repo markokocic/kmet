@@ -356,17 +356,22 @@
   "Kill a process tree within ~200ms of the cancel signal firing mid-stream
    (the bash tool's signal-poller pattern — the sse read loop itself only
    stops *processing* lines on signal and keeps reading until EOF). Exits
-   without killing when the process has already finished."
+   without killing when the process has already finished. A plain daemon
+   thread (not future) so the curl path also works from extension SCI
+   contexts."
   [{:keys [proc pid]} signal]
   (when (and signal pid)
     (let [alive? #(-> proc :proc .isAlive)]
-      (future
-        (loop []
-          (when (and (not @signal) (alive?))
-            (Thread/sleep 200)
-            (recur)))
-        (when (and @signal (alive?))
-          (process/kill-process-tree! pid))))))
+      (doto (Thread.
+             (fn []
+               (loop []
+                 (when (and (not @signal) (alive?))
+                   (Thread/sleep 200)
+                   (recur)))
+               (when (and @signal (alive?))
+                 (process/kill-process-tree! pid))))
+        (.setDaemon true)
+        (.start)))))
 
 (defn- temp-dir
   "A writable temp directory for curl's config/header files: $TMPDIR when

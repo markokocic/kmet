@@ -1,11 +1,11 @@
 (ns kmet.ai.api.bedrock-converse-stream
-  "AWS Bedrock Converse stream wire API (pi: api/bedrock-converse-stream.ts)."
+  "AWS Bedrock ConverseStream wire API (pi: api/bedrock-converse-stream.ts)."
   (:require
-   [kmet.libs.aws-sigv4 :as aws-sigv4]
    [cheshire.core :as json]
-   [kmet.ai.proxy :as proxy]
+   [kmet.ai.http :as ai-http]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
+   [kmet.libs.aws-sigv4 :as aws-sigv4]
    [kmet.ai.constrained-sampling :as cs]
    [kmet.ai.api.shared :refer [anthropic-adaptive-effort bash-execution-text content-text getenv image-block? min-answer-tokens apply-before-provider-request-hook request-headers responses-events-handler thinking-budgets transport-error-message]]))
 
@@ -305,29 +305,29 @@
                                                           :session-token (:session-token creds)
                                                           :headers {"Content-Type" "application/json"}
                                                           :payload-hash sha})))
-                response (proxy/post-stream url
-                                            {:headers headers
-                                             :body payload
-                                             :as :stream
+                response (ai-http/request url
+                                          {:headers headers
+                                           :body payload
+                                           :as :stream
                                              ;; Total request deadline (pi: SDK timeoutMs ??
                                              ;; httpIdleTimeoutMs); explicit total wins, else
                                              ;; the idle timeout (compaction/summarization), nil
                                              ;; when both disabled.
-                                             :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
-                                                                         total-timeout-ms)
-                                                                       (when (pos? (or idle-timeout-ms 0))
-                                                                         idle-timeout-ms))]
-                                                        t)}
-                                            signal)]
+                                           :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
+                                                                       total-timeout-ms)
+                                                                     (when (pos? (or idle-timeout-ms 0))
+                                                                       idle-timeout-ms))]
+                                                      t)}
+                                          signal)]
             (let [[dispatch finalize] (responses-events-handler opts model-record)]
               (sse/process-bedrock-stream response
                                           dispatch
                                           signal
                                           idle-timeout-ms
-                                          (fn [] (proxy/abort-stream! response)))
+                                          (fn [] (ai-http/abort! response)))
               ;; the stream is fully consumed — the usage metadata frame (if
               ;; any) is dispatched; emit the deferred terminal done now
               (finalize (some-> signal deref)))
-            (proxy/finish-curl! response signal on-error))))
+            (ai-http/close! response))))
       (catch Exception e
         (when on-error (on-error (transport-error-message e)))))))

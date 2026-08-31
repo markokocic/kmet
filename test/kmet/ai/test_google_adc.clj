@@ -7,7 +7,7 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [kmet.ai.google-adc :as adc]
-            [kmet.ai.proxy :as proxy]))
+            [kmet.libs.http :as http]))
 
 (defn- generate-keypair
   "A fresh RSA keypair (PEM private key like a service-account file)."
@@ -66,30 +66,30 @@
         (with-redefs [adc/credentials-path (constantly path)]
           (t/is (adc/configured?)))
         (with-redefs [adc/credentials-path (constantly path)
-                      proxy/request-json (fn [url opts _]
-                                           (t/is (= "https://oauth2.googleapis.com/token" url))
-                                           (let [form (:body opts)]
-                                             (t/is (str/includes? form "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer"))
-                                             (t/is (str/includes? form "assertion="))
-                                             (let [assertion (subs form (+ (count "assertion=")
-                                                                           (str/index-of form "assertion=")))
-                                                   parsed (verify-jwt assertion public-key)]
-                                               (t/is (= "RS256" (:alg (:header parsed))))
-                                               (t/is (= email (:iss (:claims parsed))))
-                                               (t/is (= "https://oauth2.googleapis.com/token" (:aud (:claims parsed))))
-                                               (t/is (str/includes? (:scope (:claims parsed))
-                                                                    "cloud-platform"))
-                                               (t/is (:valid? parsed) "JWT signature verifies with the public key"))
-                                             {:status 200
-                                              :body {:access_token "tok-1" :expires_in 3600}}))]
+                      http/request-json (fn [url opts]
+                                          (t/is (= "https://oauth2.googleapis.com/token" url))
+                                          (let [form (:body opts)]
+                                            (t/is (str/includes? form "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer"))
+                                            (t/is (str/includes? form "assertion="))
+                                            (let [assertion (subs form (+ (count "assertion=")
+                                                                          (str/index-of form "assertion=")))
+                                                  parsed (verify-jwt assertion public-key)]
+                                              (t/is (= "RS256" (:alg (:header parsed))))
+                                              (t/is (= email (:iss (:claims parsed))))
+                                              (t/is (= "https://oauth2.googleapis.com/token" (:aud (:claims parsed))))
+                                              (t/is (str/includes? (:scope (:claims parsed))
+                                                                   "cloud-platform"))
+                                              (t/is (:valid? parsed) "JWT signature verifies with the public key"))
+                                            {:status 200
+                                             :body {:access_token "tok-1" :expires_in 3600}}))]
           (t/is (= "tok-1" (adc/access-token!))))
         (t/testing "tokens are cached until the expiry window"
           (adc/clear-token-cache!)
           (let [calls (atom 0)]
             (with-redefs [adc/credentials-path (constantly path)
-                          proxy/request-json (fn [& _] (swap! calls inc)
-                                               {:status 200
-                                                :body {:access_token "tok-2" :expires_in 3600}})]
+                          http/request-json (fn [& _] (swap! calls inc)
+                                              {:status 200
+                                               :body {:access_token "tok-2" :expires_in 3600}})]
               (t/is (= "tok-2" (adc/access-token!)))
               (t/is (= "tok-2" (adc/access-token!)) "second call hits the cache")
               (t/is (= 1 @calls)))))
@@ -107,14 +107,14 @@
                                         :refresh_token "refresh-1"}))
       (adc/clear-token-cache!)
       (with-redefs [adc/credentials-path (constantly path)
-                    proxy/request-json (fn [url opts _]
-                                         (t/is (= "https://oauth2.googleapis.com/token" url))
-                                         (let [form (:body opts)]
-                                           (t/is (str/starts-with? form "grant_type=refresh_token"))
-                                           (t/is (str/includes? form "client_id=client-1"))
-                                           (t/is (str/includes? form "refresh_token=refresh-1")))
-                                         {:status 200
-                                          :body {:access_token "user-tok" :expires_in 1800}})]
+                    http/request-json (fn [url opts]
+                                        (t/is (= "https://oauth2.googleapis.com/token" url))
+                                        (let [form (:body opts)]
+                                          (t/is (str/starts-with? form "grant_type=refresh_token"))
+                                          (t/is (str/includes? form "client_id=client-1"))
+                                          (t/is (str/includes? form "refresh_token=refresh-1")))
+                                        {:status 200
+                                         :body {:access_token "user-tok" :expires_in 1800}})]
         (t/is (= "user-tok" (adc/access-token!))))
       (finally
         (fs/delete-tree tmp)))))

@@ -3,7 +3,7 @@
   (:require
    [kmet.ai.auth :as auth]
    [cheshire.core :as json]
-   [kmet.ai.proxy :as proxy]
+   [kmet.ai.http :as ai-http]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
    [kmet.ai.api.shared :refer [anthropic-thinking bash-execution-text endpoint-url image-block? apply-before-provider-request-hook request-headers tool->anthropic-schema transport-error-message usage-with-cost]]))
@@ -219,29 +219,29 @@
                     ;; output_config effort rides alongside the thinking block
                      (:output_config thinking) (assoc :output_config (:output_config thinking))))]
       (try
-        (let [response (proxy/post-stream (or base-url (endpoint-url :anthropic-messages (:base-url model-record) model-id))
-                                          {:headers (request-headers
-                                                     (merge {"anthropic-version" default-anthropic-version
-                                                             "Content-Type" "application/json"}
-                                                            (anthropic-auth-headers (:id provider-record) api-key))
-                                                     model-record provider-record api-key
-                                                     session-id)
-                                           :body (json/generate-string payload)
-                                           :as :stream
+        (let [response (ai-http/request (or base-url (endpoint-url :anthropic-messages (:base-url model-record) model-id))
+                                        {:headers (request-headers
+                                                   (merge {"anthropic-version" default-anthropic-version
+                                                           "Content-Type" "application/json"}
+                                                          (anthropic-auth-headers (:id provider-record) api-key))
+                                                   model-record provider-record api-key
+                                                   session-id)
+                                         :body (json/generate-string payload)
+                                         :as :stream
                                            ;; Total request deadline (pi: SDK timeoutMs ??
                                            ;; httpIdleTimeoutMs); explicit total wins, else
                                            ;; the idle timeout (compaction/summarization), nil
                                            ;; when both disabled.
-                                           :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
-                                                                       total-timeout-ms)
-                                                                     (when (pos? (or idle-timeout-ms 0))
-                                                                       idle-timeout-ms))]
-                                                      t)}
-                                          signal)
+                                         :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
+                                                                     total-timeout-ms)
+                                                                   (when (pos? (or idle-timeout-ms 0))
+                                                                     idle-timeout-ms))]
+                                                    t)}
+                                        signal)
               ;; curl-backed (SOCKS) responses: EOF without a message_stop is
-              ;; a transport failure reported by finish-curl! — don't let it
+              ;; a transport failure reported by close! — don't let it
               ;; surface as a fake :connection-closed success.
-              curl-backed (some? (:proc response))]
+              curl-backed (some? (:http/curl response))]
           (sse/process-anthropic-stream response
                                         (fn [event]
                                           (case (:type event)
@@ -266,7 +266,7 @@
                                             nil))
                                         signal
                                         idle-timeout-ms
-                                        (fn [] (proxy/abort-stream! response)))
-          (proxy/finish-curl! response signal on-error))
+                                        (fn [] (ai-http/abort! response)))
+          (ai-http/close! response))
         (catch Exception e
           (when on-error (on-error (transport-error-message e))))))))

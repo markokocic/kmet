@@ -2,7 +2,7 @@
   "OpenAI Completions wire API (pi: api/openai-completions.ts)."
   (:require
    [cheshire.core :as json]
-   [kmet.ai.proxy :as proxy]
+   [kmet.ai.http :as ai-http]
    [kmet.libs.sse :as sse]
    [kmet.ai.api.shared :refer [endpoint-url max-tokens-key openai-messages openai-messages-with-reasoning openai-thinking-params resolved-openai-compat apply-before-provider-request-hook request-headers tool->openai-schema transport-error-message usage-with-cost]]))
 
@@ -51,26 +51,26 @@
             url (or base-url (endpoint-url :openai-completions (:base-url model-record) model-id))
             payload (apply-before-provider-request-hook
                      (openai-payload model-record effort messages tools model-id))
-            response (proxy/post-stream url
-                                        {:headers (request-headers
-                                                   {"Authorization" (str "Bearer " api-key)
-                                                    "Content-Type" "application/json"}
-                                                   model-record provider-record api-key
-                                                   session-id)
-                                         :body (json/generate-string payload)
-                                         :as :stream
+            response (ai-http/request url
+                                      {:headers (request-headers
+                                                 {"Authorization" (str "Bearer " api-key)
+                                                  "Content-Type" "application/json"}
+                                                 model-record provider-record api-key
+                                                 session-id)
+                                       :body (json/generate-string payload)
+                                       :as :stream
                                          ;; Total request deadline (pi: SDK timeoutMs ??
                                          ;; httpIdleTimeoutMs — the whole-request wall-clock
                                          ;; the transport enforces). Explicit total wins;
                                          ;; fall back to the idle timeout for callers that
                                          ;; only set that (compaction/summarization); nil
                                          ;; when both disabled.
-                                         :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
-                                                                     total-timeout-ms)
-                                                                   (when (pos? (or idle-timeout-ms 0))
-                                                                     idle-timeout-ms))]
-                                                    t)}
-                                        signal)
+                                       :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
+                                                                   total-timeout-ms)
+                                                                 (when (pos? (or idle-timeout-ms 0))
+                                                                   idle-timeout-ms))]
+                                                  t)}
+                                      signal)
             ;; The terminal :done is deferred until the whole stream is
             ;; consumed: openai-completions sends the usage-only chunk AFTER
             ;; the finish_reason chunk, so an on-done fired at the first
@@ -107,7 +107,7 @@
                                        nil))
                                    signal
                                    idle-timeout-ms
-                                   (fn [] (proxy/abort-stream! response)))
+                                   (fn [] (ai-http/abort! response)))
         ;; stream fully consumed — the trailing usage chunk (if any) was
         ;; dispatched; emit the deferred terminal done now (unless the run
         ;; was cancelled or an error already surfaced). An :error
@@ -125,6 +125,6 @@
                      (not @errored?)
                      (not (and signal @signal)))
             (on-done sr)))
-        (proxy/finish-curl! response signal on-error))
+        (ai-http/close! response))
       (catch Exception e
         (when on-error (on-error (transport-error-message e)))))))

@@ -12,7 +12,7 @@
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
             [clojure.string :as str]
-            [kmet.ai.proxy :as proxy]))
+            [kmet.libs.http :as http]))
 
 (def ^:private token-url "https://oauth2.googleapis.com/token")
 (def ^:private cloud-platform-scope "https://www.googleapis.com/auth/cloud-platform")
@@ -59,11 +59,10 @@
    (the request reports the standard no-auth error)."
   [form]
   (try
-    (let [resp (proxy/request-json token-url
-                                   {:method :post
-                                    :headers {"Content-Type" "application/x-www-form-urlencoded"}
-                                    :body form}
-                                   nil)]
+    (let [resp (http/request-json token-url
+                                  {:method :post
+                                   :headers {"Content-Type" "application/x-www-form-urlencoded"}
+                                   :body form})]
       (when-let [token (:access_token (:body resp))]
         {:token token
          :expires-ms (+ (System/currentTimeMillis)

@@ -41,6 +41,7 @@
     kmet.ai.test-api-tools
     kmet.app.test-loop
     kmet.test-theme kmet.test-config
+    kmet.test-http-boundary
     kmet.build-test
     kmet.app.test-skills
 

@@ -15,7 +15,7 @@
             [clojure.string :as str]
             [kmet.ai.auth :as auth]
             [kmet.ai.models :as models]
-            [kmet.ai.proxy :as proxy]))
+            [kmet.libs.http :as http]))
 
 ;; ─── Records (pi types.ts ImagesModel / images-models.ts ImagesProvider) ──
 
@@ -142,7 +142,7 @@
    data:-URL images under choices[0].message. Returns an AssistantImages
    map with :stop-reason :stop."
   [model context api-key]
-  (let [{:keys [body]} (proxy/request-json
+  (let [{:keys [body]} (http/request-json
                         (str (:base-url model) "/chat/completions")
                         {:method :post
                          :headers {"Authorization" (str "Bearer " api-key)
@@ -154,8 +154,7 @@
                                 "modalities" (if (some #{:text} (:output model))
                                                ["image" "text"]
                                                ["image"])}
-                         :timeout images-request-timeout-ms}
-                        nil)
+                         :timeout-ms images-request-timeout-ms})
         output (atom [])
         choice (first (:choices body))]
     (when choice

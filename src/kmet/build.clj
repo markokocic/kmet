@@ -16,7 +16,8 @@
             [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [kmet.libs.http :as http]))
 
 (def ^:private gh-api-url
   "https://api.github.com/repos/babashka/babashka/releases/latest")
@@ -111,26 +112,10 @@
   (format "https://github.com/babashka/babashka/releases/download/v%s/babashka-%s-%s.%s"
           version version slug (name ext)))
 
-(defn- curl
-  "curl -f fails on HTTP errors, -sS stays quiet, -L follows the redirects
-   GitHub release assets are served through. curl ships with Termux, macOS,
-   Linux and Windows 10+. opts is a babashka.process options map (must come
-   first in the command vector) or nil; returns the process result map."
-  [opts & args]
-  (let [cmd (cond-> ["curl" "-fsSL"]
-              (seq args) (into args))]
-    (if opts
-      (apply p/shell opts cmd)
-      (apply p/shell cmd))))
-
-(defn latest-bb-version
+(defn- latest-bb-version
   "Latest babashka release version from the GitHub API, e.g. \"1.13.219\"."
   []
-  (let [res (curl {:out :string} gh-api-url)
-        out (:out res)
-        _ (when-not (string? out)
-            (throw (ex-info (str "GitHub API request failed (exit " (:exit res) "): " (:err res))
-                            {:type ::gh-api-failed})))
+  (let [out (:body (http/get gh-api-url {}))
         tag (:tag_name (json/parse-string out true))
         v (str/replace (str tag) #"^v" "")]
     (when-not (seq v)
@@ -150,12 +135,15 @@
     (->> (.digest md) (map #(format "%02x" %)) (str/join))))
 
 (defn- download!
-  "Download url to dest via curl (temp file, then atomic move)."
+  "Download url to dest via streamed http/get (temp file, then atomic
+   move — GitHub release assets are served through redirects, which the
+   wrapper follows by default)."
   [url dest]
   (fs/create-dirs (fs/parent dest))
   (let [tmp (str dest ".part")]
     (try
-      (curl nil "-o" tmp url)
+      (with-open [in (:body (http/get url {:as :stream}))]
+        (io/copy in (fs/file tmp)))
       (fs/move (fs/path tmp) (fs/path dest) {:replace-existing true})
       (finally
         (when (fs/exists? tmp) (fs/delete tmp))))))

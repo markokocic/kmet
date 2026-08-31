@@ -8,7 +8,7 @@
             [clojure.test :as t :refer [testing]]
             [clojure.edn :as edn]
             [babashka.fs :as fs]
-            [babashka.http-client :as http]
+            [kmet.libs.http :as http]
             [kmet.ai.auth :as auth]
             [kmet.app.commands :as commands]
             [kmet.app.ui.dock :as dock]
@@ -775,7 +775,7 @@
                   {:status 200 :body "<html>ok</html>"}))]
     (try
       (let [resp (http/get (str "http://127.0.0.1:" (:port server) "/path?code=abc&state=xyz")
-                           {:throw false})]
+                           {:throw? false})]
         (t/is (= 200 (:status resp)))
         (t/is (str/includes? (:body resp) "ok")))
       (let [{:keys [method path query-params]} @received]
@@ -825,19 +825,19 @@
     (try
       (let [base "http://127.0.0.1:54603"]
         (testing "wrong path → 404"
-          (t/is (= 404 (:status (http/get (str base "/nope") {:throw false})))))
+          (t/is (= 404 (:status (http/get (str base "/nope") {:throw? false})))))
         (testing "error param → 400"
-          (t/is (= 400 (:status (http/get (str base "/callback?error=denied") {:throw false})))))
+          (t/is (= 400 (:status (http/get (str base "/callback?error=denied") {:throw? false})))))
         (testing "missing code → 400"
-          (t/is (= 400 (:status (http/get (str base "/callback?state=x") {:throw false})))))
+          (t/is (= 400 (:status (http/get (str base "/callback?state=x") {:throw? false})))))
         (testing "state mismatch → 400"
           (t/is (= 400 (:status (http/get (str base "/callback?code=c&state=wrong")
-                                          {:throw false})))))
+                                          {:throw? false})))))
         (testing "bad requests never settle the code promise"
           (t/is (= :pending (deref (:code-p server) 50 :pending))))
         (testing "valid callback → 200 + code/state delivered"
           (let [resp (http/get (str base "/callback?code=the-code&state=exp-state")
-                               {:throw false})]
+                               {:throw? false})]
             (t/is (= 200 (:status resp)))
             (t/is (= {:code "the-code" :state "exp-state"}
                      (deref (:code-p server) 100 :timeout))))))
@@ -890,7 +890,7 @@
       (let [state (second (re-find #"state=([^&]+)" @auth-url))]
         (t/is (some? state) "state = PKCE verifier, present in the authorize URL")
         (let [resp (http/get (str "http://127.0.0.1:" test-port "/callback?code=the-code&state=" state)
-                             {:throw false})]
+                             {:throw? false})]
           (t/is (= 200 (:status resp))))
         (let [credential (deref result-p 5000 :timeout)]
           (t/is (map? credential) "no exception — a credential")
@@ -934,7 +934,7 @@
         (t/is (some? state))
         (t/is (re-find #"codex_cli_simplified_flow=true" @auth-url))
         (let [resp (http/get (str "http://127.0.0.1:" test-port "/auth/callback?code=cx&state=" state)
-                             {:throw false})]
+                             {:throw? false})]
           (t/is (= 200 (:status resp))))
         (let [credential (deref result-p 5000 :timeout)]
           (t/is (= "acc" (:access credential))))))))
@@ -1004,22 +1004,22 @@
       (try
         (let [base (str/replace (:callback-url server) "/oauth/callback/abc" "")]
           (testing "wrong path → 404"
-            (t/is (= 404 (:status (http/get (str base "/other") {:throw false})))))
+            (t/is (= 404 (:status (http/get (str base "/other") {:throw? false})))))
           (testing "no code → 400"
-            (t/is (= 400 (:status (http/get (:callback-url server) {:throw false})))))
+            (t/is (= 400 (:status (http/get (:callback-url server) {:throw? false})))))
           (testing "valid callback → 200 + credential delivered by the handler"
-            (let [resp (http/get (str (:callback-url server) "?code=xyz") {:throw false})]
+            (let [resp (http/get (str (:callback-url server) "?code=xyz") {:throw? false})]
               (t/is (= 200 (:status resp)))
               (t/is (str/includes? (:body resp) "Signed in"))
               (t/is (= "key" (:access (deref (:code-p server) 100 :timeout))))))
           (testing "already-claimed callback → 409"
             (t/is (= 409 (:status (http/get (str (:callback-url server) "?code=again")
-                                            {:throw false}))))))
+                                            {:throw? false}))))))
         (finally ((:close server))))))
   (let [server (@#'oauth/start-openrouter-callback-server "/oauth/callback/err" "v")]
     (try
       (let [resp (http/get (str (:callback-url server) "?error=access_denied&error_description=nope")
-                           {:throw false})]
+                           {:throw? false})]
         (t/is (= 400 (:status resp)))
         (let [v (deref (:code-p server) 100 :timeout)]
           (t/is (instance? Exception v))
@@ -1045,7 +1045,7 @@
                        (try ((:login (oauth/make-open-router-oauth)) interaction)
                             (catch Exception e e))))
       (t/is (some? (wait-for (fn [] @callback-url) 5000)) "callback URL notified")
-      (let [resp (http/get (str @callback-url "?code=xyz") {:throw false})]
+      (let [resp (http/get (str @callback-url "?code=xyz") {:throw? false})]
         (t/is (= 200 (:status resp)))
         (t/is (str/includes? (:body resp) "Signed in")))
       (let [credential (deref result-p 5000 :timeout)]

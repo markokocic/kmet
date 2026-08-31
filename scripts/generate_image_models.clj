@@ -11,11 +11,10 @@
 
 (ns generate-image-models
   (:require [babashka.fs :as fs]
-            [babashka.http-client :as http]
             [cheshire.core :as json]
             [clojure.edn :as edn]
-            [clojure.string :as str]
-            [kmet.libs.edn-writer :as edn-w]))
+            [kmet.libs.edn-writer :as edn-w]
+            [kmet.libs.http :as http]))
 
 (def openrouter-base-url "https://openrouter.ai/api/v1")
 (def catalog-path
@@ -72,7 +71,7 @@
   "GET the image-capable model list (pi fetchOpenRouterImageModels)."
   [strict]
   (let [response (http/get (str openrouter-base-url "/models?output_modalities=image")
-                           {:throw false :timeout 30000})]
+                           {:throw? false :timeout-ms 30000})]
     (when-not (<= 200 (:status response) 299)
       (throw (ex-info (str "OpenRouter API returned " (:status response))
                       {:type :images-generation-failed})))

@@ -546,7 +546,15 @@
         (t/is (nil? (:error result)) (str "loaded: " (:error result)))))
     (testing "the whitelisted built-in renderer namespace loads and shares direct vars"
       (let [result (load "renderer" "(ns good-renderer\n  (:require [kmet.app.ui.tool-renderers :as renderers]))\n(defn init [_api]\n  (when-not (fn? renderers/render-edit-call)\n    (throw (ex-info \"renderer failed\" {}))))\n")]
-        (t/is (nil? (:error result)) (str "loaded: " (:error result)))))))
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))))
+    (testing "kmet.libs.http loads and works from SCI (the outbound-HTTP boundary)"
+      (let [result (load "http-lib" "(ns good-http-lib\n  (:require [kmet.libs.http :as http]))\n(defn init [api]\n  (when-not (fn? http/request)\n    (throw (ex-info \"http failed\" {}))))\n")]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))))
+    (testing "direct babashka.http-client requires are rejected with an actionable error"
+      (let [result (load "http-direct" "(ns bad-http-direct\n  (:require [babashka.http-client :as http]))\n(defn init [api] nil)\n")]
+        (t/is (some? (:error result)))
+        (t/is (str/includes? (:error result) "kmet.libs.http")
+              "the rejection names the proxy-aware boundary")))))
 
 (t/deftest ^:slow test-extension-bad-deps-fails-load
   (extensions/clear-extensions!)

@@ -28,7 +28,7 @@
    tests with-redef)."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
-            [kmet.ai.proxy :as proxy]
+            [kmet.libs.http :as http]
             [kmet.libs.oauth :as oauth-lib]))
 
 ;; ─── Records (pi: types.ts OAuthAuth) ──────────────────────────────────────
@@ -157,11 +157,11 @@
        "https://api.individual.githubcopilot.com")))
 
 (defn- fetch-json
-  "HTTP request expecting JSON (pi fetchJson) via proxy/request-json, which
+  "HTTP request expecting JSON (pi fetchJson) via http/request-json, which
    throws ex-info on non-2xx; returns the parsed JSON body (pi returns
    response.json() — callers read payload fields, not the status envelope)."
   [url opts]
-  (:body (proxy/request-json url opts nil)))
+  (:body (http/request-json url opts)))
 
 (defn- start-device-flow
   "Start a device-code flow for a GitHub domain (pi startDeviceFlow):
@@ -317,7 +317,7 @@
   (let [base-url (get-github-copilot-base-url token enterprise-domain)
         url (str base-url "/models/" model-id "/policy")]
     (try
-      (let [response (proxy/request-json
+      (let [response (http/request-json
                       url
                       {:method :post
                        :headers (assoc copilot-headers
@@ -326,8 +326,7 @@
                                        "openai-intent" "chat-policy"
                                        "x-interaction-type" "chat-policy")
                        :body (json/generate-string {:state "enabled"})
-                       :timeout 15000}
-                      nil)]
+                       :timeout-ms 15000})]
         (<= 200 (:status response) 299))
       (catch Exception _ false))))
 

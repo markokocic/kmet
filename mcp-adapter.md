@@ -151,9 +151,9 @@ Plus two new core files (outside the extension dir):
 `src/kmet/libs/oauth.clj` — generic OAuth machinery extracted from
 `kmet.ai.oauth` (device-code poll, PKCE, loopback callback server), extended
 with RFC 8414 discovery + RFC 7591 DCR + token exchange/refresh + the
-machine grants (client-credentials, jwt-bearer); transport-agnostic (plain
-`babashka.http-client`, no `kmet.ai.proxy`); the caller supplies the token
-store and interaction fns.
+machine grants (client-credentials, jwt-bearer); the transport is
+`kmet.libs.http` (the single outbound-HTTP boundary, proxy-aware); the
+caller supplies the token store and interaction fns.
 `src/kmet/libs/crypto.clj` — generic crypto for bb (no bundled crypto
 lib): base64url, a minimal DER reader/writer, private-key parsing (PEM
 PKCS#8/PKCS#1, JWK RSA/EC) and JWT signing (RS256/ES256); used by
@@ -161,10 +161,11 @@ PKCS#8/PKCS#1, JWK RSA/EC) and JWT signing (RS256/ES256); used by
 Unlike the extension files both sit inside the `bb lint` / `bb test` gates
 and must satisfy `kmet.libs.test-self-contained`.
 
-Dependencies allowed: `kmet.extension`, `kmet.tui.*`, `kmet.libs.*`,
-`clojure.*`, `babashka.*`, bundled `cheshire.core` + `clojure.core.async` +
-`babashka.http-client`. **No `deps.edn` needed** (all libs are bb-bundled and
-resolved from the bb classpath). Reused existing libs:
+Dependencies allowed: `kmet.extension`, `kmet.tui.*`, `kmet.libs.*`
+(including `kmet.libs.http` — the outbound-HTTP boundary; direct
+`babashka.http-client` requires are rejected), `clojure.*`, `babashka.*`,
+`cheshire.core` + `clojure.core.async`. **No `deps.edn` needed** (all libs
+are bb-bundled and resolved from the bb classpath). Reused existing libs:
 `kmet.libs.process` (stdio spawn + tree-kill), `kmet.libs.sse` (SSE parsing,
 both transports), `kmet.libs.file-lock` conventions (atomic cache/token
 writes).
@@ -312,7 +313,7 @@ Notifications received mid-request are consumed/dropped; stale responses
 
 ### 7.3 streamable-http transport
 
-- Per-request POST via `babashka.http-client`:
+- Per-request POST via `kmet.libs.http`:
   `{:headers {"Content-Type" "application/json" "Accept" "application/json, text/event-stream"
               (+ "Mcp-Session-Id" after initialize) (+ auth headers)}
     :body (json/generate-string msg) :as :stream}`.
@@ -378,7 +379,7 @@ pi's `mcp-auth.ts` / `mcp-oauth-provider.ts` / `oauth-handler.ts` /
 `kmet.libs.oauth` — extracted from `kmet.ai.oauth` (device-code poll, PKCE,
 loopback callback server, existing raw `java.net.ServerSocket` design) and
 extended with RFC 8414 discovery, RFC 7591 DCR and token
-exchange/refresh; transport-agnostic, plain `babashka.http-client`.
+exchange/refresh; transport via `kmet.libs.http`.
 `kmet.ai.oauth` is refactored onto the same lib (single implementation).
 The extension's `auth.clj` is a thin adapter: server config → lib calls,
 token-store file wiring, browser open, status text.
@@ -746,9 +747,9 @@ landed and every deliberate deviation from the text above.
 1. **`kmet.libs.oauth`** (`src/kmet/libs/oauth.clj`) — the generic machinery
    (device-code poll, PKCE, loopback callback server, parse/wait helpers,
    RFC 8414 discovery, RFC 7591 DCR, token exchange/refresh, RFC 8628
-   device start) plus a transport-agnostic `fetch-json` (plain
-   `babashka.http-client`). `kmet.ai.oauth` was refactored onto it: the
-   provider flows keep their own `kmet.ai.proxy` transport; the poll fn
+   device start) plus a `fetch-json` delegating the transport to
+   `kmet.libs.http` (proxy-aware). `kmet.ai.oauth` was refactored onto it:
+   the provider flows use `kmet.libs.http` directly; the poll fn
    gained a `:sleep` option so `kmet.ai.oauth`'s `abortable-sleep` var
    (with-redef'd by tests) stays effective through its wrapper — the
    existing `kmet.ai.test-oauth` suite passes unchanged.

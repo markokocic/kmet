@@ -2,7 +2,7 @@
   "OpenAI Responses wire API (pi: api/openai-responses.ts + openai-responses-shared.ts)."
   (:require
    [cheshire.core :as json]
-   [kmet.ai.proxy :as proxy]
+   [kmet.ai.http :as ai-http]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
    [kmet.ai.constrained-sampling :as cs]
@@ -284,29 +284,29 @@
                                         retention session-id))
             headers (responses-request-headers model-record provider-record api-key
                                                session-id retention messages)
-            response (proxy/post-stream url
-                                        {:headers headers
-                                         :body (json/generate-string payload)
-                                         :as :stream
+            response (ai-http/request url
+                                      {:headers headers
+                                       :body (json/generate-string payload)
+                                       :as :stream
                                          ;; Total request deadline (pi: SDK timeoutMs ??
                                          ;; httpIdleTimeoutMs); explicit total wins, else
                                          ;; the idle timeout (compaction/summarization), nil
                                          ;; when both disabled.
-                                         :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
-                                                                     total-timeout-ms)
-                                                                   (when (pos? (or idle-timeout-ms 0))
-                                                                     idle-timeout-ms))]
-                                                    t)}
-                                        signal)]
+                                       :timeout (when-let [t (or (when (and total-timeout-ms (pos? total-timeout-ms))
+                                                                   total-timeout-ms)
+                                                                 (when (pos? (or idle-timeout-ms 0))
+                                                                   idle-timeout-ms))]
+                                                  t)}
+                                      signal)]
         (let [[dispatch finalize] (responses-events-handler opts model-record)]
           (sse/process-responses-stream response
                                         dispatch
                                         signal
                                         idle-timeout-ms
-                                        (fn [] (proxy/abort-stream! response)))
+                                        (fn [] (ai-http/abort! response)))
           ;; the stream is fully consumed — a trailing usage chunk (if any)
           ;; is dispatched; emit the deferred terminal done now
           (finalize (some-> signal deref)))
-        (proxy/finish-curl! response signal on-error))
+        (ai-http/close! response))
       (catch Exception e
         (when on-error (on-error (transport-error-message e)))))))

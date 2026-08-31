@@ -182,8 +182,34 @@ evaluation context**. Every extension runs in its own isolated context:
 - kmet core and `clojure.*` / `babashka.*` namespaces are shared references
   (never re-evaluated), so extension registrations always reach the real
   kmet registries. Extensions may depend only on `kmet.extension` plus the
-  shared `kmet.tui.*` library; other kmet internals are not resolvable from
-  an extension context (the load fails with an explicit error).
+  shared `kmet.tui.*` / `kmet.libs.*` libraries; other kmet internals are
+  not resolvable from an extension context (the load fails with an explicit
+  error).
+
+### Outbound HTTP (`kmet.libs.http`)
+
+All outbound HTTP from an extension goes through `kmet.libs.http` — the
+single proxy-aware boundary shared by reference with the host. Requiring
+`babashka.http-client` directly fails the load with an actionable error.
+
+```clojure
+(ns my-ext.main
+  (:require [kmet.libs.http :as http]))
+
+(http/get "https://api.example.com/status" {:timeout-ms 5000})
+;; => {:status 200 :headers {...} :body "..."}
+```
+
+- `request` / `get` / `post` / `request-json` with `:as` (:string/:bytes/
+  :stream), `:timeout-ms`, `:throw?` (default true — HTTP >= 400 throws
+  `{:type :http-error :status :headers :body}`), `:follow-redirects`,
+  `:signal` (cancel atom, curl transport) and `:proxy` (:env by default —
+  HTTPS_PROXY/HTTP_PROXY/SOCKS_PROXY/ALL_PROXY/NO_PROXY are honored
+  automatically, curl semantics; `:proxy :none` forces a direct
+  connection). Stream responses (`:as :stream`) must be finished with
+  `http/close!`.
+- Transport failures throw `{:type :transport-error}`; errors carry stable
+  retryable message tokens ("network error" for connect/DNS/timeout/RST).
 
 Dep resolution happens **in-process** (via `borkdude.deps`, the tools.deps
 port kmet depends on) — no subprocess, and nothing is written outside the

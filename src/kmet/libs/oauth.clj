@@ -17,14 +17,14 @@
      JWT-bearer (JWT signing lives in kmet.libs.crypto — PEM/JWK key
      parsing + RS256/ES256).
 
-   Transport-agnostic: plain babashka.http-client (no kmet.ai.proxy — the
-   caller routes through its own transport). The caller supplies token
-   storage, browser opening and interaction fns; this namespace never
-   touches the TUI or credential stores."
-  (:require [babashka.http-client :as http]
-            [cheshire.core :as json]
+   HTTP goes through kmet.libs.http (the single outbound-HTTP boundary) —
+   proxy selection (:env by default) applies automatically. The caller
+   supplies token storage, browser opening and interaction fns; this
+   namespace never touches the TUI or credential stores."
+  (:require [cheshire.core :as json]
             [clojure.string :as str]
-            [kmet.libs.crypto :as crypto]))
+            [kmet.libs.crypto :as crypto]
+            [kmet.libs.http :as http]))
 
 ;; ─── Device-code polling (pi: auth/oauth/device-code.ts) ──────────────────
 
@@ -343,17 +343,18 @@
       (finally (deliver code-p nil)))))
 
 ;; ─── HTTP (RFC 8414 discovery / RFC 7591 DCR / token endpoints) ───────────
-;; Plain babashka.http-client — transport-agnostic (no kmet.ai.proxy). The
-;; caller supplies proxy routing if needed.
+;; Transport via kmet.libs.http (proxy-aware; :env selection by default).
+;; fetch-json keeps OAuth-specific parsing/error mapping — the transport is
+;; delegated.
 
 (defn fetch-json
-  "HTTP request expecting JSON via plain babashka.http-client. OPTS:
+  "HTTP request expecting JSON via kmet.libs.http. OPTS:
    :method (default :post), :headers, :body — a string, or a map that is
-   JSON-encoded; :timeout ms. Returns {:status n :body parsed-map-or-nil}:
+   JSON-encoded; :timeout-ms ms. Returns {:status n :body parsed-map-or-nil}:
    non-2xx responses throw ex-info '<status>: <body>' with the raw response
    body in the message."
   [url opts]
-  (let [opts (cond-> (assoc opts :url url :throw false)
+  (let [opts (cond-> (assoc opts :url url :throw? false)
                (map? (:body opts)) (update :body json/generate-string))
         response (http/request opts)
         status (:status response)
@@ -382,7 +383,7 @@
                        (fetch-json candidate
                                    {:method :get
                                     :headers headers
-                                    :timeout (or (:timeout-ms opts) 5000)})
+                                    :timeout-ms (or (:timeout-ms opts) 5000)})
                        (catch Exception _ nil))]
           (if (and result (map? (:body result)))
             (:body result)
@@ -422,7 +423,7 @@
                                      :response_types response-types}
                               client-uri (assoc :client_uri client-uri)
                               scope (assoc :scope scope))
-                      :timeout (or timeout-ms 15000)})))
+                      :timeout-ms (or timeout-ms 15000)})))
 
 (defn- token-response
   "Parse a token endpoint response into the normalized
@@ -460,7 +461,7 @@
                                            "application/x-www-form-urlencoded"
                                            "Accept" "application/json"}
                                  :body (form-encode body)
-                                 :timeout (or (:timeout-ms opts) 15000)}))]
+                                 :timeout-ms (or (:timeout-ms opts) 15000)}))]
     (token-response "exchange" data)))
 
 (defn refresh-access-token
