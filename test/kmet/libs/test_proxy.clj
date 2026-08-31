@@ -34,6 +34,35 @@
     (t/is (= "socks5://localhost:2080"
              (:url (proxy/proxy-for-url "http://example.com" env))))))
 
+(t/deftest test-proxy-socks-env
+  ;; SOCKS_PROXY (upper- and lowercase) routes both http and https URLs,
+  ;; falling back to ALL_PROXY only when unset
+  (let [env {"socks_proxy" "localhost:2080"}]
+    (t/is (= "socks5h"
+             (:scheme (proxy/proxy-for-url "https://api.deepseek.com" env)))
+          "scheme-less SOCKS_PROXY defaults to socks5h (local DNS)")
+    (t/is (= 2080 (:port (proxy/proxy-for-url "https://api.deepseek.com" env))))
+    (t/is (= "socks5h://localhost:2080"
+             (:url (proxy/proxy-for-url "https://api.deepseek.com" env))))
+    (t/is (= "socks5h://localhost:2080"
+             (:url (proxy/proxy-for-url "http://example.com" env)))))
+  (t/is (= "socks5" (:scheme (proxy/proxy-for-url "https://x.com"
+                                                  {"SOCKS_PROXY" "socks5://localhost:2080"}))))
+  ;; scheme-specific proxies win over SOCKS_PROXY
+  (let [env {"HTTPS_PROXY" "http://hp:8080"
+             "socks_proxy" "localhost:2080"}]
+    (t/is (= "http://hp:8080" (:url (proxy/proxy-for-url "https://x.com" env))))
+    (t/is (= "socks5h://localhost:2080" (:url (proxy/proxy-for-url "http://x.com" env)))))
+  ;; SOCKS_PROXY wins over ALL_PROXY
+  (t/is (= "socks5h://localhost:2080"
+           (:url (proxy/proxy-for-url "https://x.com"
+                                      {"socks_proxy" "localhost:2080"
+                                       "ALL_PROXY" "http://all:8080"}))))
+  ;; NO_PROXY still applies
+  (t/is (nil? (proxy/proxy-for-url "https://intra"
+                                   {"socks_proxy" "localhost:2080"
+                                    "NO_PROXY" "intra"}))))
+
 (t/deftest test-proxy-parse
   (t/is (= "socks5" (:scheme (proxy/proxy-for-url "https://x.com"
                                                   {"ALL_PROXY" "socks5://localhost:2080"}))))
@@ -42,9 +71,11 @@
   ;; scheme-less proxy defaults to http
   (t/is (= "http" (:scheme (proxy/proxy-for-url "https://x.com"
                                                 {"HTTPS_PROXY" "proxy.corp:8080"}))))
-  ;; bare "socks" scheme normalized to socks5
-  (t/is (= "socks5" (:scheme (proxy/proxy-for-url "https://x.com"
-                                                  {"ALL_PROXY" "socks://localhost:2080"}))))
+  ;; bare "socks" scheme normalized to socks5h (local DNS resolution —
+  ;; socks5 would send the hostname to the proxy for remote resolution,
+  ;; which many SOCKS servers reject with curl 97)
+  (t/is (= "socks5h" (:scheme (proxy/proxy-for-url "https://x.com"
+                                                   {"ALL_PROXY" "socks://localhost:2080"}))))
   ;; credentials are parsed
   (let [p (proxy/proxy-for-url "https://x.com"
                                {"ALL_PROXY" "socks5://u:pw@localhost:2080"})]

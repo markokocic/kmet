@@ -1,8 +1,8 @@
 (ns kmet.libs.proxy
   "Proxy support for HTTP calls. Reads the standard proxy environment
-   variables (HTTPS_PROXY / HTTP_PROXY / ALL_PROXY / NO_PROXY, upper- and
-   lowercase) and routes requests accordingly, with curl's no_proxy semantics
-   (subdomains, host:port entries, CIDR blocks).
+   variables (HTTPS_PROXY / HTTP_PROXY / SOCKS_PROXY / ALL_PROXY /
+   NO_PROXY, upper- and lowercase) and routes requests accordingly, with
+   curl's no_proxy semantics (subdomains, host:port entries, CIDR blocks).
    java.net.http — the engine under babashka.http-client — supports only plain
    HTTP proxies, so SOCKS (socks4/4a/5/5h) and https-scheme (TLS-speaking)
    proxies are transported via curl."
@@ -24,7 +24,12 @@
           s (if (re-find #"^[a-zA-Z][a-zA-Z0-9+.-]*://" s) s (str "http://" s))
           uri (java.net.URI. s)
           scheme (or (.getScheme uri) "http")
-          scheme (if (= scheme "socks") "socks5" scheme)
+          ;; bare "socks" normalizes to socks5h (local DNS resolution), not
+          ;; socks5: socks5 sends the target hostname to the proxy for remote
+          ;; resolution, which many SOCKS servers refuse (curl 97 "Failed to
+          ;; receive SOCKS response") — socks5h resolves locally and connects
+          ;; by IP, so it works with any resolver, local or remote.
+          scheme (if (= scheme "socks") "socks5h" scheme)
           host (.getHost uri)
           port (let [p (.getPort uri)]
                  (or (when (pos? p) p)
@@ -50,11 +55,21 @@
   [env & names]
   (some (fn [n] (let [v (get env n)] (when (seq v) v))) names))
 
+(defn- parse-socks-proxy-url
+  "Parse a SOCKS proxy URL; a missing scheme defaults to socks5h — the
+   SOCKS_PROXY var usually carries a bare host:port (unlike the http(s)
+   vars' scheme-less http default)."
+  [s]
+  (if (re-find #"^[a-zA-Z][a-zA-Z0-9+.-]*://" (str/trim s))
+    (parse-proxy-url s)
+    (parse-proxy-url (str "socks5h://" s))))
+
 (defn- proxy-config
   [env]
   {:https (some-> (env-first env "HTTPS_PROXY" "https_proxy") parse-proxy-url)
    :http (some-> (env-first env "HTTP_PROXY" "http_proxy") parse-proxy-url)
    :all (some-> (env-first env "ALL_PROXY" "all_proxy") parse-proxy-url)
+   :socks (some-> (env-first env "SOCKS_PROXY" "socks_proxy") parse-socks-proxy-url)
    :no-proxy (when-let [v (env-first env "NO_PROXY" "no_proxy")]
                (mapv str/trim (str/split v #",")))})
 
@@ -111,8 +126,9 @@
 
 (defn proxy-for-url
   "The proxy to use for a URL, from the environment (curl semantics):
-   HTTPS_PROXY / HTTP_PROXY, falling back to ALL_PROXY, honoring NO_PROXY.
-   Returns a parsed proxy map {:scheme :host :port :url :user :pass} or nil.
+   HTTPS_PROXY / HTTP_PROXY, falling back to SOCKS_PROXY then ALL_PROXY,
+   honoring NO_PROXY. Returns a parsed proxy map
+   {:scheme :host :port :url :user :pass} or nil.
    env — an env map (defaults to System/getenv; pass a map in tests)."
   ([url] (proxy-for-url url (System/getenv)))
   ([url env]
@@ -124,8 +140,8 @@
                 (if (pos? p) p (if (= "https" scheme) 443 80)))]
      (when (and host (not (no-proxy-match? (:no-proxy cfg) host port)))
        (if (= "https" scheme)
-         (or (:https cfg) (:all cfg))
-         (or (:http cfg) (:all cfg)))))))
+         (or (:https cfg) (:socks cfg) (:all cfg))
+         (or (:http cfg) (:socks cfg) (:all cfg)))))))
 
 (defn curl-proxy?
   "True when the proxy needs curl: java.net.http supports only plain HTTP
