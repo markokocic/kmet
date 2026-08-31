@@ -168,11 +168,17 @@
   (fs/create-dirs dir)
   (case ext
     :tar.gz (p/shell "tar" "xzf" (str archive) "-C" (str dir))
-    :zip (let [dest-dir (fs/canonicalize dir {:nofollow-links true})]
+    :zip (let [dest-dir (fs/canonicalize dir {:nofollow-links true})
+               ;; zip entries may use \ as a separator (the spec allows both);
+               ;; normalize so the containment check catches Windows-style
+               ;; "..\evil" escapes on every platform (canonicalize only
+               ;; resolves "/"-separated ".." on unix, where \ is a plain
+               ;; filename char)
+               name (fn [entry] (str/replace (.getName entry) "\\" "/"))]
            (with-open [zf (java.util.zip.ZipFile. (fs/file archive))]
              (doseq [entry (enumeration-seq (.entries zf))
                      :when (not (.isDirectory entry))]
-               (let [out (fs/canonicalize (fs/path dest-dir (.getName entry))
+               (let [out (fs/canonicalize (fs/path dest-dir (name entry))
                                           {:nofollow-links true})]
                  ;; component-aware guard against "../" style escapes:
                  ;; canonicalize resolves ".." lexically, so the containment
