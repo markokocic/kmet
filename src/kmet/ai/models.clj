@@ -322,7 +322,7 @@
    appended jar IS its classpath. Returns [] when nothing matches, which is
    the normal case in a dev checkout: there the catalogs load from disk."
   [dir ext]
-  (->> (str/split (bcp/get-classpath) #"::?")
+  (->> (str/split (bcp/get-classpath) (re-pattern (System/getProperty "path.separator")))
        (remove fs/directory?)
        (mapcat (fn [cp]
                  (try
@@ -359,7 +359,7 @@
   []
   (if (fs/exists? model-data-dir)
     (newest-mtime-ms model-data-dir)
-    (->> (str/split (bcp/get-classpath) #"::?")
+    (->> (str/split (bcp/get-classpath) (re-pattern (System/getProperty "path.separator")))
          (remove fs/directory?)
          (keep (fn [cp]
                  (try

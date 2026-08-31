@@ -1,5 +1,7 @@
 (ns kmet.build-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [babashka.fs :as fs]
+            [clojure.java.io :as io]
+            [clojure.test :refer [deftest is testing]]
             [kmet.build :as build]))
 
 (deftest slug-for-maps-os-arch-to-release-assets
@@ -36,3 +38,40 @@
                         (build/parse-args ["plan9"])))
   (is (thrown-with-msg? Exception #"unknown option"
                         (build/parse-args ["--wat"]))))
+
+(deftest extract-archive-zip-slip-guard
+  ;; The containment check must reject entries that escape the destination
+  ;; dir and accept legitimate ones (regression: the guard was inverted —
+  ;; fs/starts-with? takes (path prefix) — so the real bb.exe release zip
+  ;; was rejected with ::zip-slip while "../evil" style entries were let
+  ;; through, writing outside the destination). canonicalize resolves ".."
+  ;; lexically so the check is effective.
+  (let [tmp (str (fs/create-dirs "target/test-build-extract") "")]
+    (try
+      (let [make-zip! (fn [entry]
+                        (let [zip (str (fs/path tmp "evil.zip"))]
+                          (with-open [zos (java.util.zip.ZipOutputStream.
+                                           (io/output-stream (fs/file zip)))]
+                            (.putNextEntry zos (java.util.zip.ZipEntry. entry))
+                            (.write zos (.getBytes "x" "UTF-8"))
+                            (.closeEntry zos))
+                          zip))
+            extract! (fn [entry]
+                       (@#'build/extract-archive!
+                        {:ext :zip :bin-name "bb.exe"}
+                        (make-zip! entry)
+                        (fs/path tmp (str "dest-" (count entry)))))]
+        (testing "legitimate top-level entries extract"
+          (is (fs/exists? (extract! "bb.exe")) "bb.exe lands in dest"))
+        (testing "escape attempts are rejected before writing"
+          (doseq [entry [(str ".." (char 92) "evil")
+                         (str "sub" (char 92) ".." (char 92) ".." (char 92) "evil")]]
+            (let [dest (fs/path tmp (str "dest-" (count entry)))]
+              (fs/create-dirs dest)
+              (is (thrown-with-msg? Exception #"zip entry escapes target dir"
+                                    (extract! entry))
+                  (str "entry " (pr-str entry) " throws ::zip-slip"))
+              (is (empty? (filter #(not (fs/directory? %)) (fs/list-dir dest)))
+                  (str "no file written for " (pr-str entry)))))))
+      (finally
+        (fs/delete-tree tmp)))))

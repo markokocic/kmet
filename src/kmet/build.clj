@@ -172,9 +172,12 @@
            (with-open [zf (java.util.zip.ZipFile. (fs/file archive))]
              (doseq [entry (enumeration-seq (.entries zf))
                      :when (not (.isDirectory entry))]
-               (let [out (fs/path dest-dir (.getName entry))]
-                 ;; component-aware guard against "../" style escapes
-                 (when-not (fs/starts-with? dest-dir out)
+               (let [out (fs/canonicalize (fs/path dest-dir (.getName entry))
+                                          {:nofollow-links true})]
+                 ;; component-aware guard against "../" style escapes:
+                 ;; canonicalize resolves ".." lexically, so the containment
+                 ;; check is effective (fs/starts-with? path prefix)
+                 (when-not (fs/starts-with? out dest-dir)
                    (throw (ex-info (str "zip entry escapes target dir: " (.getName entry))
                                    {:type ::zip-slip :entry (.getName entry)})))
                  (fs/create-dirs (fs/parent out))
@@ -225,7 +228,12 @@
   (fs/create-dirs (fs/parent jar-path))
   (let [tmp (str jar-path ".part")
         seen (volatile! #{})
-        dep-jars (->> (str/split (bcp/get-classpath) #"::?")
+        ;; path.separator is ";" on Windows and ":" on Unix — the old
+        ;; #"::?" split only worked on Unix and glued all Windows
+        ;; classpath entries into one string, so no dep jar ever landed in
+        ;; the uberjar (borkdude/deps.clj etc. were missing)
+        dep-jars (->> (str/split (bcp/get-classpath)
+                                 (re-pattern (System/getProperty "path.separator")))
                       (filter #(and (str/ends-with? % ".jar")
                                     (not (fs/directory? %)))))]
     (with-open [zos (java.util.zip.ZipOutputStream. (io/output-stream tmp))]
@@ -235,11 +243,16 @@
       (.closeEntry zos)
       (doseq [p (sort-by str (fs/glob "src" "**.{clj,cljc,edn}"))]
         ;; the builder itself isn't runtime code — keep it out of artifacts
-        (when-not (= "kmet/build.clj" (str (fs/relativize "src" p)))
-          (.putNextEntry zos (java.util.zip.ZipEntry. (str (fs/relativize "src" p))))
-          (with-open [in (io/input-stream (fs/file p))]
-            (io/copy in zos))
-          (.closeEntry zos)))
+        (let [rel (str (fs/relativize "src" p))
+              ;; jar entries must use / separators — fs/relativize yields \ on
+              ;; Windows, which breaks bb's classpath lookup (kmet/core.clj
+              ;; would not resolve from the appended jar)
+              entry (str/replace rel "\\" "/")]
+          (when-not (= "kmet/build.clj" entry)
+            (.putNextEntry zos (java.util.zip.ZipEntry. entry))
+            (with-open [in (io/input-stream (fs/file p))]
+              (io/copy in zos))
+            (.closeEntry zos))))
       (doseq [j dep-jars]
         (with-open [zf (java.util.zip.ZipFile. (fs/file j))]
           (doseq [e (enumeration-seq (.entries zf))
