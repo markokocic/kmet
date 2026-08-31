@@ -601,7 +601,7 @@
     (try
       (let [id (extensions/append-custom-entry! "st" {:n 1})]
         (t/is (some? id)))
-      (t/testing "ctx/sessionManager facades (review extension needs them)"
+      (testing "ctx/sessionManager facades (review extension needs them)"
         (let [_u1 (session/append-entry sess {:role :user :content [{:type :text :text "hi"}]})
               a1 (session/append-entry sess {:role :assistant :content [{:type :text :text "ok"}]})
               ctx (extensions/build-extension-context)
@@ -619,7 +619,7 @@
           (t/is (= (:id a1) (:id (last (extensions/get-branch-entries))))
                 "direct extensions/get-branch-entries also available")
           (t/is (nil? (extensions/get-entry "missing")))))
-      (t/testing "headless direct facades return nil/[] when no session"
+      (testing "headless direct facades return nil/[] when no session"
         (extensions/set-session! nil)
         (t/is (nil? (extensions/get-leaf-id)))
         (t/is (nil? (extensions/get-entry "x")))
