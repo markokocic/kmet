@@ -204,38 +204,49 @@
                               :timeout-ms timeout-ms}))
         response (attempt headers)]
     (if (and (= 401 (:status response)) (:on-401 conn))
-      (attempt (merge (base-http-headers conn) (or ((:on-401 conn)) {})))
+      (do
+        ;; the discarded 401 body is never read — reap its transport
+        (http/close! response)
+        (attempt (merge (base-http-headers conn) (or ((:on-401 conn)) {}))))
       response)))
 
 (defn- parse-http-response
   "Parse an HTTP response by content type into the JSON-RPC response map
    (or nil when the body is empty — a 202-accepted without a direct
-   response). SSE bodies are read until the message with :id = ID arrives."
+   response). SSE bodies are read until the message with :id = ID arrives.
+   The transport is closed on every path — by the time this returns (or
+   throws) the body has been fully read or abandoned, so the curl process
+   is reaped and its temp files deleted (a stream that must stay open
+   beyond this call is only used by the sse GET, which manages it
+   separately)."
   [response id on-notification]
-  (let [status (:status response)
-        content-type (or (header-value (:headers response) "Content-Type") "")]
-    (cond
-      (<= 200 status 299)
+  (try
+    (let [status (:status response)
+          content-type (or (header-value (:headers response) "Content-Type") "")]
       (cond
-        (str/includes? content-type "text/event-stream")
-        (read-sse-response (:body response) id on-notification)
+        (<= 200 status 299)
+        (cond
+          (str/includes? content-type "text/event-stream")
+          (read-sse-response (:body response) id on-notification)
 
-        (str/includes? content-type "application/json")
-        (let [text (read-stream (:body response))]
-          (when (seq (str/trim text))
-            (json/parse-string text true)))
+          (str/includes? content-type "application/json")
+          (let [text (read-stream (:body response))]
+            (when (seq (str/trim text))
+              (json/parse-string text true)))
+
+          :else
+          (throw (mcp-error (str "MCP connect failed: unexpected response content type "
+                                 content-type " (status " status ")")
+                            {:status status})))
 
         :else
-        (throw (mcp-error (str "MCP connect failed: unexpected response content type "
-                               content-type " (status " status ")")
-                          {:status status})))
-
-      :else
-      (throw (mcp-error (str "MCP connect failed: HTTP " status
-                             (when-let [b (:body response)]
-                               (let [text (str/trim (read-stream b))]
-                                 (when (seq text) (str ": " text)))))
-                        {:status status})))))
+        (throw (mcp-error (str "MCP connect failed: HTTP " status
+                               (when-let [b (:body response)]
+                                 (let [text (str/trim (read-stream b))]
+                                   (when (seq text) (str ": " text)))))
+                          {:status status}))))
+    (finally
+      (try (http/close! response) (catch Exception _ nil)))))
 
 ;; ─── legacy SSE transport (§7.4) ──────────────────────────────────────────
 
@@ -298,6 +309,9 @@
                             :throw? false
                             :timeout-ms 30000})]
     (when-not (<= 200 (:status response) 299)
+      ;; close the failed stream (reap curl / release the body) before
+      ;; surfacing the MCP error
+      (http/close! response)
       (throw (mcp-error (str "MCP connect failed: HTTP " (:status response)
                              " opening SSE stream")
                         {:status (:status response)})))
@@ -525,10 +539,13 @@
                          (or @(:endpoint-atom conn)
                              (throw (mcp-error "MCP connect failed: no SSE endpoint received"
                                                {:transport :sse})))
-                         (:url conn))]
-          (http-post! conn endpoint (http-request-headers conn) body 30000))
-        ;; fire-and-forget: a notification that cannot be delivered is
-        ;; dropped, never surfaced (pi parity — notifications are best-effort)
+                         (:url conn))
+              response (http-post! conn endpoint (http-request-headers conn) body 30000)]
+          ;; fire-and-forget: the body is never read — reap the transport
+          ;; (curl: untrack pid + delete temp files) right away
+          (http/close! response))
+        ;; a notification that cannot be delivered is dropped, never
+        ;; surfaced (pi parity — notifications are best-effort)
         (catch Exception _ nil)))
     nil))
 

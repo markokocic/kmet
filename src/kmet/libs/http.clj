@@ -520,20 +520,21 @@
             as (or (:as opts) :string)]
         (if (and throw? (>= status 400))
           ;; HTTP error up front (native parity): read the error body
-          ;; (--fail-with-body put it on stdout) and throw.
-          (let [text (slurp (:body st))
+          ;; (--fail-with-body put it on stdout) and throw. The slurp can
+          ;; throw on a mid-body I/O failure — cleanup must still run.
+          (let [text (try (slurp (:body st))
+                          (finally (cleanup-curl! pid header-file config-file)))
                 result @proc-map
                 exit (:exit result)]
-            (cleanup-curl! pid header-file config-file)
             (if (and (not (zero? exit)) (not= 22 exit))
               (throw (curl-transport-error proc-map))
               (throw (http-error status headers text))))
           (if (= :stream as)
             st
-            (let [text (slurp (:body st))
+            (let [text (try (slurp (:body st))
+                            (finally (cleanup-curl! pid header-file config-file)))
                   result @proc-map
                   exit (:exit result)]
-              (cleanup-curl! pid header-file config-file)
               (cond
                 (zero? exit)
                 {:status status :headers headers

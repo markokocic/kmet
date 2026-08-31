@@ -140,13 +140,17 @@
    wrapper follows by default)."
   [url dest]
   (fs/create-dirs (fs/parent dest))
-  (let [tmp (str dest ".part")]
+  (let [tmp (str dest ".part")
+        resp (http/get url {:as :stream})]
     (try
-      (with-open [in (:body (http/get url {:as :stream}))]
+      (with-open [in (:body resp)]
         (io/copy in (fs/file tmp)))
       (fs/move (fs/path tmp) (fs/path dest) {:replace-existing true})
       (finally
-        (when (fs/exists? tmp) (fs/delete tmp))))))
+        (when (fs/exists? tmp) (fs/delete tmp))
+        ;; reap the transport (curl: untrack pid + delete temp files) —
+        ;; a mid-stream cut surfaces here as a transport error
+        (http/close! resp)))))
 
 (defn- extract-archive!
   "Extract a .tar.gz (tar CLI) or .zip (java.util.zip, so windows targets

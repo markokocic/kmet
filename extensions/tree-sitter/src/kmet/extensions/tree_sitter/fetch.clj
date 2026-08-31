@@ -117,12 +117,12 @@
    returns dest."
   [url dest expected-sha256]
   (let [resp (http/get url {:as :stream :throw? false :timeout-ms 120000})]
-    (when (not= 200 (:status resp))
-      (throw (ex-info (str "download failed with HTTP " (:status resp) " for " url)
-                      {:type ::download-failed
-                       :url url
-                       :status (:status resp)})))
     (try
+      (when (not= 200 (:status resp))
+        (throw (ex-info (str "download failed with HTTP " (:status resp) " for " url)
+                        {:type ::download-failed
+                         :url url
+                         :status (:status resp)})))
       (store-and-verify! (:body resp) dest expected-sha256)
       (finally
         (http/close! resp)))))
