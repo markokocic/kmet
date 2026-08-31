@@ -1,8 +1,23 @@
 Agreed. `kmet.libs.http` should be the only outbound HTTP boundary. Neither `babashka.http-client`, `kmet.libs.proxy`, nor direct `curl` invocation should appear in consumers.
 
+Build in three phases:
+
+- **Phase 0** — create `src/kmet/libs/http.clj` (ns `kmet.libs.http`): the
+  unified request API + folded-in proxy/curl transport, fully implemented
+  and tested (native/curl parity). No caller changes; `kmet.libs.proxy` /
+  `kmet.ai.proxy` keep working unchanged.
+- **Phase 1** — migrate every internal caller (app, ai, libs, scripts,
+  tests, shipped extensions) to `kmet.libs.http`. The old namespaces still
+  exist during the migration but end the phase with zero consumers.
+- **Phase 2** — delete `src/kmet/libs/proxy.clj`, `src/kmet/ai/proxy.clj`,
+  and every remaining `babashka.http-client` require; the boundary guard
+  then flips from advisory to enforced.
+
 ## 1. Define the public HTTP API
 
-Create `src/kmet/libs/http.clj` with a transport-neutral API:
+Create `src/kmet/libs/http.clj` with a transport-neutral API (the
+ns docstring marks it the single outbound-HTTP boundary; the API stays
+close to babashka.http-client's so migration is mostly mechanical):
 
 ```clojure
 (http/request {:url ...
@@ -32,7 +47,13 @@ Responses should consistently expose:
  :body ...}
 ```
 
-Transport details such as curl processes, PIDs, and Java clients remain private. The wrapper should cache/reuse Java clients internally rather than expose `babashka.http-client/client`.
+Transport details such as curl processes, PIDs, and Java clients remain
+private. The wrapper caches/reuses one `babashka.http-client` client per
+proxy configuration (direct, and per HTTP-proxy host/port/credentials)
+inside an atom keyed by config — it must not expose `babashka.http-client/client`
+or accept `:client` in opts. `:proxy` accepts `:env` (default) | `:none` | an
+explicit parsed-proxy map. One deliberate spec deviation: `:timeout` is
+accepted as ms but `:timeout-ms` is the canonical key (see §3).
 
 ## 2. Fold proxy handling into `kmet.libs.http`
 
@@ -57,7 +78,16 @@ Then delete `kmet.libs.proxy`; do not retain `proxy-for-url`, `curl-post`, `fini
 
 ## 3. Make curl behavior equivalent to the native transport
 
-This needs more than moving the current implementation. Today the curl path loses headers/status and `request-json` hardcodes status 200, which would break MCP authentication and content-type handling.
+This needs more than moving the current implementation. Today the curl path
+loses headers/status and `request-json` hardcodes status 200, which would
+break MCP authentication and content-type handling. The curl adapter is
+implemented inside `kmet.libs.http` and must match the native path's
+contract: `--fail-with-body` + `--dump-header` to a temp file (read back
+for `:headers`; status parsed from the header block — curl uses `-w
+%{http_code}` as a fallback seam), `-L` when `:follow-redirects` is set,
+`--compressed` for transparent gzip, and `-w %{http_code}` (or header
+inspection) so a non-2xx with `:throw? false` still returns
+`{:status n :headers ... :body ...}` instead of throwing.
 
 The curl adapter should:
 
@@ -78,7 +108,9 @@ This should eliminate the transport-specific `finish-curl!` protocol entirely.
 
 ## 4. Preserve AI provider hooks without preserving `ai.proxy`
 
-Replace `src/kmet/ai/proxy.clj` with a thin `src/kmet/ai/http.clj` decorator:
+Replace `src/kmet/ai/proxy.clj` with a thin `src/kmet/ai/http.clj` decorator
+(provider hooks stay in `kmet.ai.hooks`, which must stop depending on
+`kmet.ai.proxy` — its current re-exports collapse once `post-stream` moves):
 
 1. apply `before-provider-headers`
 2. delegate to `kmet.libs.http/request`
@@ -86,7 +118,9 @@ Replace `src/kmet/ai/proxy.clj` with a thin `src/kmet/ai/http.clj` decorator:
 
 It contains no networking itself. Provider implementations then use `kmet.ai.http`, while OAuth, model generation, and other ordinary calls use `kmet.libs.http` directly.
 
-Migrate these provider files:
+Migrate these provider files (all 9 currently call `proxy/post-stream`;
+each switches to `kmet.ai.http/request` with `:as :stream` and drops the
+now-unneeded `:client` handling):
 
 - `src/kmet/ai/api/anthropic_messages.clj`
 - `azure_openai_responses.clj`
@@ -98,23 +132,25 @@ Migrate these provider files:
 - `openai_completions.clj`
 - `openai_responses.clj`
 
-Replace `abort-stream!` with `http/abort!`; remove `finish-curl!` and checks such as `(:proc response)`.
+Replace `abort-stream!` with `http/abort!`; remove `finish-curl!` and checks such as `(:proc response)`. The `network-exception-classes` / `http2-stream-reset-regex` / `http-error-message` / `transport-error-message` classification in `kmet.ai.api.shared` (currently read off babashka exceptions) moves into `kmet.libs.http` so every caller gets stable retryable error tokens regardless of transport — the shared ns re-exports them.
 
 ## 5. Migrate every other outbound HTTP caller
 
 ### Core/AI/library code
 
 - `src/kmet/libs/oauth.clj`
-  - use `kmet.libs.http`
-  - retain OAuth-specific parsing/error mapping here, not in the generic HTTP layer
-- `src/kmet/ai/oauth.clj`
-- `src/kmet/ai/google_adc.clj`
-- `src/kmet/ai/image_models.clj`
-- `src/kmet/ai/model_gen.clj`
-- `scripts/generate_image_models.clj`
+  - use `kmet.libs.http` (its `fetch-json` keeps OAuth-specific parsing/error mapping, delegating the transport)
+  - extensions reach proxy support transitively through this — today the lib is deliberately transport-agnostic, so this is a behavior change for the mcp-adapter's OAuth (see §6)
+- `src/kmet/ai/oauth.clj` — `proxy/request-json` → `http/request-json` (the new lib)
+- `src/kmet/ai/google_adc.clj` — same
+- `src/kmet/ai/image_models.clj` — same
+- `src/kmet/ai/model_gen.clj` — `http/get` with `:throw false` → `http/get` on the new lib; error mapping stays in the callers
+- `src/kmet/libs/aws_sigv4.clj` — only signs; no transport change
+- `scripts/generate_image_models.clj` — `kmet.ai.model-gen` covers the generation path
 - `src/kmet/build.clj`
-  - replace its direct curl helper with streamed `http/get`
+  - replace its direct curl helper with streamed `http/get` (follows redirects by default)
   - preserve GitHub redirect and atomic-download behavior
+  - keep the release-binary download path; the `-o` temp-file + atomic move stays
 
 ### Shipped extensions
 
@@ -129,7 +165,7 @@ Replace `abort-stream!` with `http/abort!`; remove `finish-curl!` and checks suc
   - use streamed `http/get`
   - replace the currently ineffective `:request-timeout` option with the wrapperΓÇÖs `:timeout-ms`
 
-Also migrate test-only `babashka.http-client` calls so the boundary can be enforced repository-wide.
+Also migrate test-only `babashka.http-client` calls (`test/kmet/ai/test_llm.clj` error-message test, `test/kmet/ai/test_oauth.clj`) so the boundary can be enforced repository-wide.
 
 ## 6. Expose the wrapper to extensions
 
@@ -151,11 +187,20 @@ Add an architecture test that fails when:
 - anything requires `kmet.libs.proxy` or `kmet.ai.proxy`
 - source outside `kmet.libs.http` directly invokes `"curl"`
 
+Land the strict guard in phase 2, once every internal caller is migrated —
+during phase 1 the not-yet-migrated `kmet.libs.proxy`, `kmet.ai.proxy`,
+`kmet.build` and the two extensions still legitimately use the raw
+transport. To prevent drift during the migration, phase 1 adds an
+inventory test that lists the remaining `babashka.http-client`/
+`kmet.*.proxy` users and fails when a *new* one appears.
+
 This prevents the abstraction from eroding later.
 
 ## 8. Tests
 
-Create `test/kmet/libs/test_http.clj`, replacing the proxy-focused suite. Cover:
+Create `test/kmet/libs/test_http.clj` (the proxy-focused
+`test/kmet/libs/test_proxy.clj` stays until phase 2; the new suite is a
+superset). Cover:
 
 - proxy env precedence and lowercase variants
 - `NO_PROXY` exact host, subdomain, port, CIDR, wildcard, IPv6
@@ -164,18 +209,19 @@ Create `test/kmet/libs/test_http.clj`, replacing the proxy-focused suite. Cover:
 - string/bytes/stream response parity
 - status and response headers on the curl path
 - `:throw? false`
-- structured HTTP and transport errors
-- timeout conversion
-- cancellation and PID cleanup
-- closing a stream early
+- structured HTTP and transport errors — `ex-data` carries `:status`/`:headers`/`:body` for HTTP errors; curl failures are distinguishable from HTTP errors (see §3)
+- timeout conversion (`:timeout` ms → curl `--max-time` seconds, native `:request-timeout` ms)
+- cancellation and PID cleanup (watch-cancel pattern, `abort!` kills the tree)
+- closing a stream early (reaps + untracks the curl pid)
 - missing curl
-- no credentials in argv
+- no credentials in argv (auth header/proxy creds via a protected temp curl config/header file, removed on cleanup)
+- env-map injection seam (proxy parsing must stay testable without touching the process env)
 
-Add local-server integration tests for both ordinary and streaming responses, plus an extension-context test proving `kmet.libs.http` works from SCI and direct `babashka.http-client` is rejected.
+Add local-server integration tests for both ordinary and streaming responses, plus an extension-context test proving `kmet.libs.http` works from SCI and direct `babashka.http-client` is rejected (the SCI-context part lands with the phase-1 `extensions.clj` exposure, §6).
 
 ## 9. Documentation
 
-Update:
+Update (phase 2):
 
 - `AGENTS.md`: outbound HTTP must go through `kmet.libs.http`
 - `README.md`: replace the `ai/proxy.clj` layout entry
@@ -184,15 +230,51 @@ Update:
 - MCP and tree-sitter READMEs/comments
 - `extensions/tree-sitter/deps.edn` comment
 
+`http.md` itself becomes the design contract for `kmet.libs.http` and is updated as the design changes.
+
 ## Suggested implementation order
 
-1. Add `kmet.libs.http` and its unit/integration tests.
-2. Add the AI hook decorator.
-3. Migrate AI and library callers.
-4. Migrate MCP and tree-sitter extensions.
-5. Migrate build/generator scripts.
-6. Delete both proxy namespaces.
-7. Add the architectural guard and update docs.
-8. Run changed-file gates plus the tree-sitter tests and MCP validation scripts.
+### Phase 0 (library lands; no callers change)
+
+1. Add `src/kmet/libs/http.clj` + `test/kmet/libs/test_http.clj` (unit +
+   local-server integration tests), porting `kmet.libs.proxy`'s logic
+   behind the private boundary.
+2. Curl-adapter parity (§3): status/headers/redirects/bytes/streams/
+   timeouts/structured errors; client caching + env-map seam; no
+   credentials in argv.
+3. Run `bb lint-changed` / `bb format-changed` / `bb test-changed` on the
+   new namespace. Everything else keeps using the old transport — a green
+   full suite proves the library is additive.
+
+### Phase 1 (migration; old namespaces kept)
+
+4. Add `src/kmet/ai/http.clj` decorator (provider hooks) and move the
+   error-classification helpers out of `kmet.ai.api.shared`.
+5. Migrate AI callers: the 9 wire APIs (`post-stream` →
+   `ai.http/request :as :stream`), `ai/oauth.clj`, `ai/google_adc.clj`,
+   `ai/image_models.clj`, `ai/model_gen.clj`.
+6. Migrate library callers: `libs/oauth.clj`, `test_llm.clj`'s error test,
+   `test_oauth.clj`.
+7. Migrate extensions: `mcp-adapter/client.clj` (+ `auth.clj`
+   transitively), `tree-sitter/fetch.clj`; expose `kmet.libs.http` in
+   `extensions.clj`.
+8. Migrate `src/kmet/build.clj` curl helper.
+9. Add the phase-1 inventory guard (§7) — fails when a *new*
+   `babashka.http-client` / `kmet.*.proxy` user appears.
+10. Run changed-file gates (`bb test-changed`, `bb lint-changed`,
+    `bb format-changed`) + tree-sitter extension tests + MCP validation
+    scripts.
+
+### Phase 2 (old boundary removed)
+
+11. Delete `src/kmet/libs/proxy.clj`, `src/kmet/ai/proxy.clj`, and
+    `test/kmet/libs/test_proxy.clj` (its coverage moved into
+    `test_http.clj`); delete the `post-stream`/`finish-curl!`/
+    `abort-stream!` machinery everywhere.
+12. Flip the architecture guard from inventory to strict (any require of
+    `babashka.http-client`, `kmet.libs.proxy`, `kmet.ai.proxy`, or a
+    direct `"curl"` invocation outside `kmet.libs.http` fails the build).
+13. Update docs (AGENTS.md, README.md, extensions docs).
+14. Full gates: `bb lint`, `bb format-check`, `bb test`, `bb test-ext`.
 
 Scope-wise, this covers outbound HTTP(S) initiated by kmet and shipped extensions. Inbound OAuth callback sockets, Maven traffic internal to `borkdude.deps`, and arbitrary user-launched subprocesses are separate boundaries.
