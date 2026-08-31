@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-27T08:37:06Z"
+ :generated-at "2026-08-31T06:35:53Z"
  :provider {:id :opencode
             :name "OpenCode (Zen)"
             :env-vars ["OPENCODE_API_KEY"]
@@ -360,27 +360,6 @@
     :compat {:supports-store false
              :supports-developer-role false
              :max-tokens-field :max-tokens}}
-   "hy3-free"
-   {:id "hy3-free"
-    :name "Hy3 Free"
-    :provider :opencode
-    :api :openai-completions
-    :base-url "https://opencode.ai/zen/v1"
-    :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max nil
-                         :medium "medium"
-                         :minimal nil
-                         :off nil
-                         :xhigh nil}
-    :input [:text]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 190000
-    :max-tokens 64000
-    :compat {:supports-store false
-             :supports-developer-role false
-             :max-tokens-field :max-tokens}}
    "kimi-k2.5"
    {:id "kimi-k2.5"
     :name "Kimi K2.5"
@@ -443,6 +422,20 @@
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 0}
     :context-window 1048576
     :max-tokens 131072
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
+   "ling-3.0-flash-fin-free"
+   {:id "ling-3.0-flash-fin-free"
+    :name "Ling 3.0 Flash Fin Free"
+    :provider :opencode
+    :api :openai-completions
+    :base-url "https://opencode.ai/zen/v1"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 262144
+    :max-tokens 32768
     :compat {:supports-store false
              :supports-developer-role false
              :max-tokens-field :max-tokens}}

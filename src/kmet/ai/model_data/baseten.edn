@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-27T08:37:06Z"
+ :generated-at "2026-08-31T06:35:53Z"
  :provider {:id :baseten
             :name "Baseten"
             :env-vars ["BASETEN_API_KEY"]
@@ -451,6 +451,31 @@
      :supports-long-cache-retention false
      :supports-strict-mode true
      :chat-template-args {:enable_thinking {:var "thinking.enabled"}}}}
+   "zai-org/GLM-5.3"
+   {:id "zai-org/GLM-5.3"
+    :name "GLM 5.3"
+    :provider :baseten
+    :api :openai-completions
+    :base-url "https://inference.baseten.co/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text]
+    :cost {:input 1.4 :output 4.4 :cache-read 0.14 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 262144
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort true
+             :thinking-format :openai
+             :max-tokens-field :max-tokens
+             :supports-long-cache-retention false
+             :supports-strict-mode true}}
    "zai-org/GLM-5.3-Flash"
    {:id "zai-org/GLM-5.3-Flash"
     :name "GLM 5.3 Flash"

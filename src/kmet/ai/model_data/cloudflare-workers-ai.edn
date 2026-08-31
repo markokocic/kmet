@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-28T07:11:40Z"
+ :generated-at "2026-08-31T06:35:53Z"
  :provider {:id :cloudflare-workers-ai
             :name "Cloudflare Workers AI"
             :env-vars ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"]
@@ -320,6 +320,28 @@
              :supports-developer-role false
              :supports-long-cache-retention false
              :send-session-affinity-headers true}}
+   "@cf/zai-org/glm-5.3"
+   {:id "@cf/zai-org/glm-5.3"
+    :name "Glm 5.3"
+    :provider :cloudflare-workers-ai
+    :api :openai-completions
+    :base-url "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text]
+    :cost {:input 1.4 :output 4.4 :cache-read 0.26 :cache-write 0}
+    :context-window 1310720
+    :max-tokens 1310720
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-long-cache-retention false
+             :send-session-affinity-headers true}}
    "@cf/zai-org/glm-5.3-flash"
    {:id "@cf/zai-org/glm-5.3-flash"
     :name "Glm 5.3 Flash"
@@ -330,7 +352,7 @@
     :input [:text :image]
     :cost {:input 0.15 :output 0.5 :cache-read 0.03 :cache-write 0}
     :context-window 1310720
-    :max-tokens 1310720
+    :max-tokens 1048576
     :compat {:supports-store false
              :supports-developer-role false
              :supports-long-cache-retention false

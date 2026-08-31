@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-27T08:37:06Z"
+ :generated-at "2026-08-31T06:35:53Z"
  :provider {:id :commandcode
             :name "Command Code"
             :env-vars ["CMD_API_KEY"]
@@ -341,7 +341,7 @@
     :reasoning true
     :thinking-level-map {:off nil}
     :input [:text :image]
-    :cost {:input 0.75 :output 3.75 :cache-read 0.075 :cache-write 0.04167}
+    :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 0.08334}
     :context-window 1048576
     :max-tokens 65536}
    "gpt-5.3-codex"
@@ -672,6 +672,17 @@
     :input [:text]
     :cost {:input 0.14 :output 0.58 :cache-read 0.035 :cache-write 0}
     :context-window 262144
+    :max-tokens 32768}
+   "tencent/hy4-preview"
+   {:id "tencent/hy4-preview"
+    :name "Tencent Hy4 Preview"
+    :provider :commandcode
+    :api :openai-completions
+    :base-url "https://api.commandcode.ai/provider/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.834 :output 2.501 :cache-read 0.042 :cache-write 0}
+    :context-window 1048576
     :max-tokens 32768}
    "thinkingmachines/inkling"
    {:id "thinkingmachines/inkling"

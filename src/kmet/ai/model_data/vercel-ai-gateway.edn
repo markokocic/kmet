@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-28T07:11:40Z"
+ :generated-at "2026-08-31T06:35:53Z"
  :provider {:id :vercel-ai-gateway
             :name "Vercel AI Gateway"
             :env-vars ["AI_GATEWAY_API_KEY"]
@@ -289,9 +289,9 @@
     :base-url "https://ai-gateway.vercel.sh"
     :reasoning true
     :input [:text :image]
-    :cost {:input 2 :output 6 :cache-read 0.2 :cache-write 0}
+    :cost {:input 2 :output 6 :cache-read 0.25 :cache-write 0}
     :context-window 262144
-    :max-tokens 131072}
+    :max-tokens 128000}
    "alibaba/qwen3.8-27b"
    {:id "alibaba/qwen3.8-27b"
     :name "Qwen3.8 27B"
@@ -300,7 +300,7 @@
     :base-url "https://ai-gateway.vercel.sh"
     :reasoning true
     :input [:text :image]
-    :cost {:input 0.55 :output 3.3 :cache-read 0.11 :cache-write 0}
+    :cost {:input 0.5 :output 3 :cache-read 0.1 :cache-write 0.625}
     :context-window 1000000
     :max-tokens 131072}
    "alibaba/qwen3.8-flash"
@@ -314,6 +314,17 @@
     :cost {:input 0.16 :output 0.47 :cache-read 0.016 :cache-write 0.2}
     :context-window 991000
     :max-tokens 128000}
+   "alibaba/qwen3.8-flash-next"
+   {:id "alibaba/qwen3.8-flash-next"
+    :name "Qwen 3.8 Flash Next"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.12 :output 0.4 :cache-read 0.01 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 1048576}
    "alibaba/qwen3.8-max"
    {:id "alibaba/qwen3.8-max"
     :name "Qwen 3.8 Max"
@@ -703,9 +714,9 @@
     :base-url "https://ai-gateway.vercel.sh"
     :reasoning true
     :input [:text]
-    :cost {:input 1.74 :output 3.48 :cache-read 0.14 :cache-write 0}
-    :context-window 1048600
-    :max-tokens 1048600}
+    :cost {:input 0.66 :output 1.98 :cache-read 0.022 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 384000}
    "deepseek/deepseek-v4-pro-0813"
    {:id "deepseek/deepseek-v4-pro-0813"
     :name "DeepSeek V4 Pro 0813"
@@ -1136,7 +1147,7 @@
     :max-tokens 131000}
    "minimax/minimax-m2.7"
    {:id "minimax/minimax-m2.7"
-    :name "Minimax M2.7"
+    :name "MiniMax M2.7"
     :provider :vercel-ai-gateway
     :api :anthropic-messages
     :base-url "https://ai-gateway.vercel.sh"
@@ -1147,7 +1158,7 @@
     :max-tokens 131000}
    "minimax/minimax-m2.7-free"
    {:id "minimax/minimax-m2.7-free"
-    :name "Minimax M2.7 (Free)"
+    :name "MiniMax M2.7 (Free)"
     :provider :vercel-ai-gateway
     :api :anthropic-messages
     :base-url "https://ai-gateway.vercel.sh"
@@ -1176,8 +1187,8 @@
     :reasoning true
     :input [:text :image]
     :cost {:input 0.3 :output 1.2 :cache-read 0.06 :cache-write 0}
-    :context-window 1000000
-    :max-tokens 1000000}
+    :context-window 512000
+    :max-tokens 512000}
    "minimax/minimax-m3-free"
    {:id "minimax/minimax-m3-free"
     :name "MiniMax M3 (Free)"
@@ -1373,7 +1384,7 @@
     :base-url "https://ai-gateway.vercel.sh"
     :reasoning true
     :input [:text :image]
-    :cost {:input 0.95 :output 4 :cache-read 0.19 :cache-write 0}
+    :cost {:input 0.95 :output 4 :cache-read 0.16 :cache-write 0}
     :context-window 256000
     :max-tokens 32768}
    "moonshotai/kimi-k2.7-code-highspeed"
@@ -1450,7 +1461,7 @@
     :base-url "https://ai-gateway.vercel.sh"
     :reasoning true
     :input [:text]
-    :cost {:input 0.05 :output 0.15 :cache-read 0.05 :cache-write 0}
+    :cost {:input 0.05 :output 0.2 :cache-read 0.01 :cache-write 0}
     :context-window 262144
     :max-tokens 131072}
    "nvidia/nemotron-nano-12b-v2-vl"
@@ -2318,9 +2329,20 @@
     :base-url "https://ai-gateway.vercel.sh"
     :reasoning true
     :input [:text]
-    :cost {:input 0.132 :output 0.528 :cache-read 0.033 :cache-write 0}
-    :context-window 256000
-    :max-tokens 128000}
+    :cost {:input 0.14 :output 0.58 :cache-read 0.035 :cache-write 0}
+    :context-window 262144
+    :max-tokens 262144}
+   "tencent/hy4-preview"
+   {:id "tencent/hy4-preview"
+    :name "Tencent Hy4 Preview"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0.834 :output 2.501 :cache-read 0.042 :cache-write 0}
+    :context-window 1024000
+    :max-tokens 64000}
    "thinkingmachines/inkling"
    {:id "thinkingmachines/inkling"
     :name "Inkling"
@@ -2505,9 +2527,9 @@
     :base-url "https://ai-gateway.vercel.sh"
     :reasoning true
     :input [:text]
-    :cost {:input 1.4 :output 4.4 :cache-read 0.26 :cache-write 0}
+    :cost {:input 1.4 :output 4.4 :cache-read 0.14 :cache-write 0}
     :context-window 1000000
-    :max-tokens 12800}
+    :max-tokens 1000000}
    "zai/glm-5.3-flash"
    {:id "zai/glm-5.3-flash"
     :name "GLM 5.3 Flash"

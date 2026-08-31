@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-27T08:37:06Z"
+ :generated-at "2026-08-31T06:35:53Z"
  :provider {:id :xiaomi-token-plan-cn
             :name "Xiaomi MiMo Token Plan (CN)"
             :env-vars ["XIAOMI_TOKEN_PLAN_CN_API_KEY"]

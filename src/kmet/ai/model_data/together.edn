@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-28T07:11:40Z"
+ :generated-at "2026-08-31T06:35:53Z"
  :provider {:id :together
             :name "Together AI"
             :env-vars ["TOGETHER_API_KEY"]
@@ -376,6 +376,25 @@
     :cost {:input 1.4 :output 4.4 :cache-read 0.26 :cache-write 0}
     :context-window 512000
     :max-tokens 164000
+    :compat {:supports-store false
+             :supports-developer-role false
+             :supports-reasoning-effort false
+             :thinking-format :together
+             :max-tokens-field :max-tokens
+             :supports-long-cache-retention false
+             :supports-strict-mode false}}
+   "zai-org/GLM-5.3"
+   {:id "zai-org/GLM-5.3"
+    :name "GLM-5.3"
+    :provider :together
+    :api :openai-completions
+    :base-url "https://api.together.ai/v1"
+    :reasoning true
+    :thinking-level-map {:low nil :medium nil :minimal nil}
+    :input [:text]
+    :cost {:input 1.4 :output 4.4 :cache-read 0.26 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 262144
     :compat {:supports-store false
              :supports-developer-role false
              :supports-reasoning-effort false

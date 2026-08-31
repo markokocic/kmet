@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-28T07:11:40Z"
+ :generated-at "2026-08-31T06:35:53Z"
  :provider {:id :huggingface
             :name "Hugging Face"
             :env-vars ["HF_TOKEN"]
@@ -937,6 +937,25 @@
     :context-window 262144
     :max-tokens 131072
     :compat {:supports-developer-role false}}
+   "zai-org/GLM-5.3"
+   {:id "zai-org/GLM-5.3"
+    :name "GLM-5.3"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text]
+    :cost {:input 1.4 :output 4.4 :cache-read 0 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 131072
+    :compat {:supports-developer-role false}}
    "zai-org/GLM-5.3-Flash"
    {:id "zai-org/GLM-5.3-Flash"
     :name "GLM-5.3-Flash"
@@ -951,7 +970,7 @@
                          :minimal nil
                          :off nil
                          :xhigh nil}
-    :input [:text]
+    :input [:text :image]
     :cost {:input 0.15 :output 0.5 :cache-read 0 :cache-write 0}
     :context-window 1048576
     :max-tokens 131072
