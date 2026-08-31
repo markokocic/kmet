@@ -184,8 +184,28 @@ for a full gate. The default validation loop is the changed-file tasks above.
 - **Primary dev environment**: Termux on Android — glibc babashka via `ld-linux-aarch64.so.1 --library-path`.
   Do not set `LD_LIBRARY_PATH` globally; use the glibc linker directly when on Termux.
 - **No `/tmp` on Termux**: there is no `/tmp` directory — `$TMPDIR` is `$PREFIX/tmp`
-  (`/data/data/com.termux/files/usr/tmp`). Don't rely on `/tmp` existing in code or scripts;
-  use `$TMPDIR` (or `babashka.fs/temp-dir`, which honors it) instead.
+  (`/data/data/com.termux/files/usr/tmp`). Don't rely on `/tmp` existing in code or scripts.
+- **`java.io.tmpdir` is unreliable on Termux**: this babashka hardcodes the
+  `java.io.tmpdir` system property to `/tmp` at startup, ignoring `$TMPDIR` — so
+  `java.io.File/createTempFile` (no dir arg) fails with "No such file or
+  directory", and `babashka.fs/temp-dir` resolves to the same bogus `/tmp`
+  (it does NOT honor `$TMPDIR` here). Pass an explicit dir built from
+  `(or (System/getenv "TMPDIR") (System/getProperty "java.io.tmpdir"))` — the
+  `kmet.libs.http/temp-dir` pattern — or use `babashka.fs/create-temp-file`
+  with an explicit `:dir`.
+- **Zip entries may use `\` as a path separator** (zip spec allows both). On
+  Unix, `babashka.fs/canonicalize` resolves only `/`-separated `..` — `\` is a
+  plain filename char, so `..\evil` is written as a literal filename and
+  passes `starts-with?` containment checks. Normalize entry names (`\` → `/`)
+  before containment checks (see `kmet.build/extract-archive!`).
+- **clj-kondo `--config` on the CLI works** (e.g. `--config
+  '{:linters {:namespace-name-mismatch {:level :off}}}'`), but there is no
+  blanket `:all` linter key, and the finding type for "X already refers to
+  #'clojure.core/get" is `:redefined-var` (not `:shadowed-var`) — get the
+  exact type from `--config '{:output {:format :json}}'`. Scope a suppression
+  to one defn with `#_{:clj-kondo/ignore [:redefined-var]}` on the line before
+  the form; only add it for deliberate API-name collisions, not to silence
+  code smells.
 - **Shell resolution** (`kmet.app.bash-executor`): `/bin/bash` → `which bash` → `sh`.
   On Windows this resolves through Git Bash; under WSL the WSL shell is used.
 
