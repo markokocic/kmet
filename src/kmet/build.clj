@@ -114,15 +114,24 @@
 (defn- curl
   "curl -f fails on HTTP errors, -sS stays quiet, -L follows the redirects
    GitHub release assets are served through. curl ships with Termux, macOS,
-   Linux and Windows 10+."
-  [& args]
-  (apply p/shell "curl" "-fsSL" args))
+   Linux and Windows 10+. opts is a babashka.process options map (must come
+   first in the command vector) or nil; returns the process result map."
+  [opts & args]
+  (let [cmd (cond-> ["curl" "-fsSL"]
+              (seq args) (into args))]
+    (if opts
+      (apply p/shell opts cmd)
+      (apply p/shell cmd))))
 
 (defn latest-bb-version
   "Latest babashka release version from the GitHub API, e.g. \"1.13.219\"."
   []
   (let [res (curl {:out :string} gh-api-url)
-        tag (:tag_name (json/parse-string (:out res) true))
+        out (:out res)
+        _ (when-not (string? out)
+            (throw (ex-info (str "GitHub API request failed (exit " (:exit res) "): " (:err res))
+                            {:type ::gh-api-failed})))
+        tag (:tag_name (json/parse-string out true))
         v (str/replace (str tag) #"^v" "")]
     (when-not (seq v)
       (throw (ex-info "GitHub API returned no tag_name" {:type ::bad-release})))
@@ -146,7 +155,7 @@
   (fs/create-dirs (fs/parent dest))
   (let [tmp (str dest ".part")]
     (try
-      (curl "-o" tmp url)
+      (curl nil "-o" tmp url)
       (fs/move (fs/path tmp) (fs/path dest) {:replace-existing true})
       (finally
         (when (fs/exists? tmp) (fs/delete tmp))))))
