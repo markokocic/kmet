@@ -237,11 +237,7 @@
                                                                    (when (pos? (or idle-timeout-ms 0))
                                                                      idle-timeout-ms))]
                                                     t)}
-                                        signal)
-              ;; curl-backed (SOCKS) responses: EOF without a message_stop is
-              ;; a transport failure reported by close! — don't let it
-              ;; surface as a fake :connection-closed success.
-              curl-backed (some? (:http/curl response))]
+                                        signal)]
           (sse/process-anthropic-stream response
                                         (fn [event]
                                           (case (:type event)
@@ -257,10 +253,7 @@
                                                               (on-tool-call {:id (:id event)
                                                                              :arguments (:arguments event)
                                                                              :index (:index event)}))
-                                            :done (when (and on-done
-                                                             (or (not curl-backed)
-                                                                 (not= :connection-closed (:stop-reason event))))
-                                                    (on-done (:stop-reason event)))
+                                            :done (when on-done (on-done (:stop-reason event)))
                                             :usage (when on-usage (on-usage (usage-with-cost model-record (:usage event))))
                                             :error (when on-error (on-error (:message event)))
                                             nil))
