@@ -368,13 +368,23 @@
         (when (and @signal (alive?))
           (process/kill-process-tree! pid))))))
 
+(defn- temp-dir
+  "A writable temp directory for curl's config/header files: $TMPDIR when
+   set, else java.io.tmpdir. createTempFile without an explicit dir uses
+   java.io.tmpdir, which this babashka hardcodes to /tmp even when TMPDIR
+   is set — and there is no /tmp on Termux (AGENTS.md), so the curl path
+   would fail there without the explicit dir."
+  []
+  (java.io.File. (or (System/getenv "TMPDIR")
+                     (System/getProperty "java.io.tmpdir"))))
+
 (defn- curl-config-file
   "A temp curl --config file carrying the sensitive request parts — headers
    (Authorization, proxy credentials) must never appear in process argv
    (visible via ps on shared hosts). The file is owner-only (Java's
    createTempFile default) and deleted by close!/the sync path."
   [headers p]
-  (let [f (java.io.File/createTempFile "kmet-curl-" ".conf")
+  (let [f (java.io.File/createTempFile "kmet-curl-" ".conf" (temp-dir))
         escape (fn [s] (str/replace s #"([\\\"])" "\\\\$1"))
         lines (concat
                (map (fn [[k v]] (str "header = \"" (escape (str k ": " v)) "\"")) headers)
@@ -428,7 +438,7 @@
         status (when-let [i (last status-idxs)]
                  (some-> (second (re-find #"^HTTP/\S+\s+(\d{3})" (nth lines i)))
                          Long/parseLong))
-        headers (if status-idxs
+        headers (if (seq status-idxs)
                   (reduce (fn [m l]
                             (if-let [[_ k v] (re-matches #"^([^:]+):\s*(.*)" l)]
                               (let [k (str/lower-case k)]
@@ -445,7 +455,7 @@
    path. curl creates it (empty) at startup, so 'has content' is the
    headers-arrived signal."
   []
-  (let [f (java.io.File/createTempFile "kmet-curl-" ".hdrs")]
+  (let [f (java.io.File/createTempFile "kmet-curl-" ".hdrs" (temp-dir))]
     (.deleteOnExit f)
     f))
 
@@ -580,6 +590,7 @@
       (curl-request (:url opts) opts p throw?)
       (native-request opts throw? p))))
 
+#_{:clj-kondo/ignore [:redefined-var]}
 (defn get
   "GET url (see request for OPTS)."
   [url opts]

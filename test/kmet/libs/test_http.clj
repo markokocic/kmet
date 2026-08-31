@@ -4,9 +4,7 @@
    structured errors, cancellation)."
   (:require [clojure.string :as str]
             [clojure.test :as t]
-            [babashka.process :as proc]
-            [kmet.libs.http :as http]
-            [kmet.libs.process :as process]))
+            [kmet.libs.http :as http]))
 
 ;; ─── Local test server (java.net.ServerSocket, no external deps) ──────────
 
@@ -16,7 +14,7 @@
   (let [b (.getBytes body)
         h (apply str (map (fn [[k v]] (str k ": " v "\r\n")) hdrs))
         head (str "HTTP/1.1 " status " X\r\n" h
-                  (str "Content-Length: " (count b) "\r\n\r\n"))]
+                  "Content-Length: " (count b) "\r\n\r\n")]
     (.write (.getOutputStream s) (.getBytes head))
     (.write (.getOutputStream s) b)
     (.flush (.getOutputStream s))))
@@ -45,16 +43,16 @@
   [handler]
   (let [ss (java.net.ServerSocket. 0)
         port (.getLocalPort ss)
-        t (doto (Thread.
-                  (fn []
-                    (try
-                      (loop []
-                        (let [s (.accept ss)
-                              [req-line headers rdr] (read-request s)]
-                          (handler s req-line headers rdr)
-                          (try (.close s) (catch Exception _ nil)))
-                        (when-not (.isClosed ss) (recur)))
-                      (catch Exception _ nil))))
+        _ (doto (Thread.
+                 (fn []
+                   (try
+                     (loop []
+                       (let [s (.accept ss)
+                             [req-line headers rdr] (read-request s)]
+                         (handler s req-line headers rdr)
+                         (try (.close s) (catch Exception _ nil)))
+                       (when-not (.isClosed ss) (recur)))
+                     (catch Exception _ nil))))
             (.setDaemon true)
             (.start))]
     [(str "http://127.0.0.1:" port)
@@ -96,7 +94,7 @@
     (t/is (= "socks5h://localhost:2080"
              (:url (http/proxy-for-url "http://example.com" env)))))
   (t/is (= "socks5" (:scheme (http/proxy-for-url "https://x.com"
-                                                  {"SOCKS_PROXY" "socks5://localhost:2080"})))))
+                                                 {"SOCKS_PROXY" "socks5://localhost:2080"})))))
 
 (t/deftest test-no-proxy
   (t/is (http/no-proxy-match? ["localhost"] "localhost" 80))
@@ -143,7 +141,7 @@
 
 (t/deftest test-native-json-body-encoding
   (let [[base close] (start-server
-                      (fn [s req-line headers rdr]
+                      (fn [s _ headers rdr]
                         (let [len (Long/parseLong (get headers "content-length" "0"))
                               buf (char-array len)]
                           (.read rdr buf)
@@ -246,15 +244,15 @@
   [dis atyp]
   (case atyp
     1 (let [b (byte-array 4)] (.readFully dis b)
-       (str/join "." (map #(bit-and % 0xff) b)))
+           (str/join "." (map #(bit-and % 0xff) b)))
     3 (let [len (.read dis)
-           b (byte-array len)] (.readFully dis b)
-       (String. b "UTF-8"))
+            b (byte-array len)] (.readFully dis b)
+           (String. b "UTF-8"))
     4 (let [b (byte-array 16)
-           words (map (fn [i]
-                        (+ (* (bit-and (nth b (* 2 i)) 0xff) 256)
-                           (bit-and (nth b (inc (* 2 i))) 0xff)))
-                      (range 8))]
+            words (map (fn [i]
+                         (+ (* (bit-and (nth b (* 2 i)) 0xff) 256)
+                            (bit-and (nth b (inc (* 2 i))) 0xff)))
+                       (range 8))]
         (.readFully dis b)
         (str/join ":" (map #(format "%02x" %) words)))
     (throw (Exception. "bad atyp"))))
@@ -305,17 +303,16 @@
   []
   (let [ss (java.net.ServerSocket. 0)
         port (.getLocalPort ss)
-        t (doto (Thread.
-                  (fn []
-                    (try
-                      (loop []
-                        (let [s (.accept ss)]
-                          (let [h (Thread.
-                                  (fn [] (socks5-handshake s)))]
-                            (.setDaemon h true)
-                            (.start h)))
-                        (when-not (.isClosed ss) (recur)))
-                      (catch Exception _ nil))))
+        _ (doto (Thread.
+                 (fn []
+                   (try
+                     (loop []
+                       (let [s (.accept ss)]
+                         (doto (Thread. (fn [] (socks5-handshake s)))
+                           (.setDaemon true)
+                           (.start)))
+                       (when-not (.isClosed ss) (recur)))
+                     (catch Exception _ nil))))
             (.setDaemon true)
             (.start))]
     [port (fn [] (try (.close ss) (catch Exception _ nil)))]))
@@ -328,8 +325,8 @@
   (let [[port stop] (start-socks-proxy)]
     (try
       (with-redefs [http/proxy-for-url
-                    (fn [url] {:scheme "socks5h" :host "127.0.0.1" :port port
-                               :url (str "socks5h://127.0.0.1:" port)})]
+                    (fn [_] {:scheme "socks5h" :host "127.0.0.1" :port port
+                             :url (str "socks5h://127.0.0.1:" port)})]
         (f))
       (finally (stop)))))
 
