@@ -13,7 +13,7 @@ Build in three phases:
   and every remaining `babashka.http-client` require; the boundary guard
   then flips from advisory to enforced.
 
-## Current status (phase 0 — library created, tests green)
+## Current status (phase 0 — library created, tests green, gaps closed)
 
 Done (committed):
 
@@ -38,29 +38,28 @@ Done (committed):
     temp files, reports mid-stream transport failures
   - `:timeout` maps to babashka's `:timeout` (ms) — NOT `:request-timeout`
     (which is ineffective; verified empirically)
-- `test/kmet/libs/test_http.clj` — 19 tests / 49 assertions, all green:
+- `test/kmet/libs/test_http.clj` — 28 tests / 66 assertions, all green:
   proxy parsing (incl. lowercase env, socks5h default, NO_PROXY variants),
   native transport (get/headers/method+body/json-encode/request-json/
-  throw-true/throw-false/bytes/stream/transport-error/timeout-ms),
-  curl transport via a real in-test SOCKS5 proxy (RFC 1928 server:
-  handshake + bidirectional pump) — stream, throw-false, missing-curl
+  throw-true/throw-false/bytes/stream/transport-error/timeout-ms/
+  follow-redirects), curl transport via a real in-test SOCKS5 proxy
+  (RFC 1928 server: handshake + bidirectional pump) — stream,
+  throw-false, direct `:proxy` map, bytes, follow-redirects (the proxy
+  serves redirect hops on fresh connections), timeout-ms, gzip
+  compression, abort!, close-early (truncated body → transport failure),
+  no-credentials-in-argv, missing-curl
 - `kmet.libs.proxy` / `kmet.ai.proxy` untouched and still passing their
   tests (phase 0 is additive; no caller changed)
 - the self-contained libs guard passes (http.clj only requires
   kmet.libs.process)
+- `test_http.clj` is in `kmet.runner/all-namespaces` (`bb test` includes
+  it: full suite 1900 tests / 12120 assertions, all green)
+- `bb lint` and `bb format-check` pass on the new files (0 findings)
 
 Known remaining issues before phase 1:
 
-- `request` passes `:proxy` to `native-request` and `curl-request` but the
-  curl path's `:proxy` handling and the explicit-proxy-map branch are
-  exercised only through the test redefs; a direct `(http/request {:proxy
-  {...}})` integration test is still missing
-- `curl-request`'s `:throw? false` on HTTP >= 400 returns
-  `{:status :headers :body}` but the `:as :bytes` curl branch is untested
-- `http/abort!` (kill the tree) has no test yet — only `close!` is covered
-- `test_http.clj` is NOT yet in `kmet.runner/all-namespaces` (so `bb test`
-  full runs skip it); add it when the suite is stable
-- `bb lint` (clj-kondo) was not run (clj-kondo not installed here)
+- none in the library itself; the remaining gaps are phase-1 items
+  (migration) and phase-2 items (deletion + strict guard)
 
 ## 1. Define the public HTTP API
 

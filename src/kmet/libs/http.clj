@@ -623,17 +623,22 @@
     (process/kill-process-tree! pid)))
 
 (defn close!
-  "Reap a response's transport. For curl-backed responses: closes the body
-   stream (releases the pipe so curl exits), waits for the process,
-   untracks the pid and deletes the temp files, then reports transport
-   failures (curl exit not in 0/22, unless the cancel signal fired) by
-   throwing {:type :transport-error} — callers that consumed a stream must
-   call this before reporting success so a mid-stream cut surfaces as an
+  "Reap a response's transport. For curl-backed responses: kills the
+   process tree (abandon semantics — the caller is done with the body),
+   closes the body stream, waits for the process, untracks the pid and
+   deletes the temp files, then reports transport failures (curl exit not
+   in 0/22, unless the cancel signal fired) by throwing
+   {:type :transport-error} — callers that consumed a stream must call
+   this before reporting success so a mid-stream cut surfaces as an
    error instead of a false clean EOF. For native responses: closes the
    body stream if closeable. Idempotent."
   [response]
   (if-let [st (:http/curl response)]
     (let [{:keys [proc pid header-file config-file signal]} st]
+      ;; kill first: curl may be blocked reading the socket (server never
+      ;; finishes the body), so closing the pipe alone would not make it
+      ;; exit and @proc would block forever
+      (when pid (process/kill-process-tree! pid))
       (when-let [b (:body response)]
         (try (.close ^java.io.InputStream b) (catch Exception _ nil)))
       (let [result @proc

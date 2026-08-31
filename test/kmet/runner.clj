@@ -99,6 +99,7 @@
     kmet.libs.test-oauth
     kmet.libs.test-edn-store
     kmet.libs.test-jsonrpc
+    kmet.libs.test-http
     kmet.libs.test-proxy
     kmet.libs.test-aws-sigv4
     kmet.libs.test-context

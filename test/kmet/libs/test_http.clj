@@ -214,6 +214,26 @@
         (t/is (str/includes? (ex-message e) "network error")))
       (finally (close)))))
 
+(t/deftest test-native-follow-redirects
+  ;; one server: /start → 302 Location: /final; /final → 200 with the
+  ;; request line echoed. A followed redirect issues both requests.
+  (let [[base close] (start-server
+                      (fn [s req-line _ _]
+                        (if (str/includes? req-line "/start")
+                          (let [b (.getBytes "moved")
+                                head (str "HTTP/1.1 302 Found\r\n"
+                                          "Location: /final\r\n"
+                                          "Content-Length: " (count b) "\r\n\r\n")]
+                            (.write (.getOutputStream s) (.getBytes head))
+                            (.write (.getOutputStream s) b)
+                            (.flush (.getOutputStream s)))
+                          (respond s "200 OK" req-line {}))))]
+    (try
+      (let [r (http/get (str base "/start") {:follow-redirects :normal})]
+        (t/is (= 200 (:status r)))
+        (t/is (str/includes? (:body r) "/final")))
+      (finally (close)))))
+
 ;; ─── Curl transport (SOCKS/https proxies) — needs curl on PATH ─────────────
 
 ;; ─── Local SOCKS5 proxy (minimal RFC 1928 server) ─────────────────────────
@@ -258,41 +278,52 @@
     (throw (Exception. "bad atyp"))))
 
 (defn- socks5-handshake
-  "Serve one SOCKS5 connect request on CLIENT: performs the no-auth
-   handshake, connects to the requested target, replies success, and pumps
-   bytes both ways until both sides close. Returns nil on protocol failure."
+  "Serve SOCKS5 connect requests on CLIENT: performs the no-auth handshake,
+   connects to the requested target, replies success, and pumps bytes both
+   ways until both sides close. Loops for the next request on the same
+   connection (curl reuses the proxy connection across redirect hops).
+   Returns nil on protocol failure."
   [client]
   (let [dis (java.io.DataInputStream. (.getInputStream client))
         out (.getOutputStream client)]
     (try
-      (let [v (.read dis)]
-        (when (not= 5 v) (throw (Exception. "bad version")))
-        (let [nmethods (.read dis)]
-          (dotimes [_ nmethods] (.read dis))
-          (.write out (byte-array [5 0]))
-          (.flush out)
-          (let [v (.read dis)
-                _ (when (not= 5 v) (throw (Exception. "bad version")))
-                cmd (.read dis)
-                _ (.read dis) ;; reserved
-                atyp (.read dis)
-                host (read-addr dis atyp)
-                port (let [hi (.read dis) lo (.read dis)]
-                       (+ (* hi 256) lo))]
-            (when (not= 1 cmd) (throw (Exception. "not a connect")))
-            (let [target (java.net.Socket. host port)
-                  t-in (.getInputStream target)
-                  t-out (.getOutputStream target)
-                  c-in (.getInputStream client)]
-              (.write out (byte-array [5 0 0 1 127 0 0 1 0 0]))
+      (loop []
+        (let [v (.read dis)]
+          (when-not (or (neg? v) (not= 5 v))
+            (let [nmethods (.read dis)]
+              (dotimes [_ nmethods] (.read dis))
+              (.write out (byte-array [5 0]))
               (.flush out)
-              (let [p1 (doto (Thread. #(pump c-in t-out)) (.setDaemon true))
-                    p2 (doto (Thread. #(pump t-in out)) (.setDaemon true))]
-                (.start p1)
-                (.start p2)
-                (.join p1)
-                (.join p2)
-                (try (.close target) (catch Exception _ nil)))))))
+              (let [v (.read dis)
+                    _ (when (and (not (neg? v)) (not= 5 v))
+                        (throw (Exception. "bad version")))
+                    cmd (.read dis)
+                    _ (.read dis) ;; reserved
+                    atyp (.read dis)
+                    host (read-addr dis atyp)
+                    port (let [hi (.read dis) lo (.read dis)]
+                           (+ (* hi 256) lo))]
+                (when (not= 1 cmd) (throw (Exception. "not a connect")))
+                (let [target (java.net.Socket. host port)
+                      t-in (.getInputStream target)
+                      t-out (.getOutputStream target)
+                      c-in (.getInputStream client)]
+                  (.write out (byte-array [5 0 0 1 127 0 0 1 0 0]))
+                  (.flush out)
+                  (let [p1 (doto (Thread. #(pump c-in t-out)) (.setDaemon true))
+                        p2 (doto (Thread. #(pump t-in out)) (.setDaemon true))]
+                    (.start p1)
+                    (.start p2)
+                    ;; wait only for the target→client direction: when the
+                    ;; target closes (response done), kill the client side
+                    ;; too — curl sees the tunnel die and opens a fresh
+                    ;; proxy connection for the next hop (redirect), which
+                    ;; the accept loop serves. Joining p1 would block
+                    ;; forever: curl keeps the connection open for reuse.
+                    (.join p2)
+                    (try (.close client) (catch Exception _ nil))
+                    (try (.close target) (catch Exception _ nil)))
+                  (recur)))))))
       (catch Exception _ nil)
       (finally (try (.close client) (catch Exception _ nil))))))
 
@@ -359,3 +390,154 @@
             (t/is (= 400 (:status r)))
             (t/is (= "oops" (:body r))))))
       (finally (close)))))
+
+(t/deftest test-curl-direct-proxy-map
+  ;; an explicit parsed-proxy map routes through curl directly (no env)
+  (let [[base close] (start-server
+                      (fn [s _ _ _] (respond s "200 OK" "via-proxy" {})))
+        [port stop] (start-socks-proxy)]
+    (try
+      (let [r (http/get (str base "/")
+                        {:proxy {:scheme "socks5h" :host "127.0.0.1" :port port
+                                 :url (str "socks5h://127.0.0.1:" port)}})]
+        (t/is (= 200 (:status r)))
+        (t/is (= "via-proxy" (:body r))))
+      (finally (stop) (close)))))
+
+(t/deftest test-curl-bytes
+  (let [[base close] (start-server
+                      (fn [s _ _ _] (respond s "200 OK" "ABCDEFGHIJKLMNOP" {})))]
+    (try
+      (with-socks-proxy
+        (fn []
+          (let [r (http/get (str base "/") {:as :bytes})
+                expected (.getBytes "ABCDEFGHIJKLMNOP" "UTF-8")]
+            (t/is (= 200 (:status r)))
+            (t/is (java.util.Arrays/equals expected (:body r))))))
+      (finally (close)))))
+
+(t/deftest test-curl-follow-redirects
+  (let [[base close] (start-server
+                      (fn [s req-line _ _]
+                        (if (str/includes? req-line "/start")
+                          (let [b (.getBytes "moved")
+                                head (str "HTTP/1.1 302 Found\r\n"
+                                          "Location: /final\r\n"
+                                          "Content-Length: " (count b) "\r\n\r\n")]
+                            (.write (.getOutputStream s) (.getBytes head))
+                            (.write (.getOutputStream s) b)
+                            (.flush (.getOutputStream s)))
+                          (respond s "200 OK" req-line {}))))]
+    (try
+      (with-socks-proxy
+        (fn []
+          (let [r (http/get (str base "/start") {:follow-redirects :normal})]
+            (t/is (= 200 (:status r)))
+            (t/is (str/includes? (:body r) "/final")))))
+      (finally (close)))))
+
+(t/deftest test-curl-timeout-ms
+  (let [[base close] (start-server
+                      (fn [s _ _ _]
+                        (Thread/sleep 5000)
+                        (respond s "200 OK" "late" {})))]
+    (try
+      (with-socks-proxy
+        (fn []
+          (let [e (try (http/get (str base "/") {:timeout-ms 300}) (catch Exception e e))]
+            (t/is (= :transport-error (:type (ex-data e)))))))
+      (finally (close)))))
+
+(t/deftest test-curl-compression
+  ;; --compressed: a gzip Content-Encoding response arrives decompressed
+  (let [[base close] (start-server
+                      (fn [s _ _ _]
+                        (let [body "hello gzip world"
+                              bos (java.io.ByteArrayOutputStream.)]
+                          (with-open [gz (java.util.zip.GZIPOutputStream. bos)]
+                            (.write gz (.getBytes body "UTF-8")))
+                          (let [b (.toByteArray bos)
+                                head (str "HTTP/1.1 200 OK\r\n"
+                                          "Content-Encoding: gzip\r\n"
+                                          "Content-Length: " (count b) "\r\n\r\n")]
+                            (.write (.getOutputStream s) (.getBytes head "ISO-8859-1"))
+                            (.write (.getOutputStream s) b)
+                            (.flush (.getOutputStream s))))))]
+    (try
+      (with-socks-proxy
+        (fn []
+          (let [r (http/get (str base "/") {})]
+            (t/is (= "hello gzip world" (:body r))))))
+      (finally (close)))))
+
+(t/deftest test-curl-abort
+  ;; abort! must kill the curl process tree (the sse read loop's cancel
+  ;; path); close! then reaps/untracks. With the cancel signal fired,
+  ;; close! skips the mid-stream transport-error report.
+  (let [[base close] (start-server
+                      (fn [s _ _ _]
+                        (Thread/sleep 10000)
+                        (respond s "200 OK" "never" {})))]
+    (try
+      (with-socks-proxy
+        (fn []
+          (let [signal (atom false)
+                r (http/get (str base "/") {:as :stream :signal signal})]
+            (t/is (= 200 (:status r)))
+            (reset! signal true)
+            (http/abort! r)
+            (http/close! r) ;; must not throw (signal fired)
+            (t/is (nil? (http/close! r)) "close! returns nil"))))
+      (finally (close)))))
+
+(t/deftest test-curl-close-early
+  ;; a stream whose body is truncated mid-transfer must surface as a
+  ;; transport failure from close! (not a false clean EOF): the server
+  ;; sends Content-Length: 100 but only 10 bytes, then keeps the socket
+  ;; open (never completes the body). The client closes the stream early;
+  ;; curl's stdout write fails → exit 23 → close! reports it. The server
+  ;; thread stays blocked but is a daemon.
+  (let [[base close] (start-server
+                      (fn [s _ _ _]
+                        (let [b (.getBytes "streamed")
+                              head (str "HTTP/1.1 200 OK\r\n"
+                                        "Content-Length: 100\r\n\r\n")]
+                          (.write (.getOutputStream s) (.getBytes head))
+                          (.write (.getOutputStream s) b)
+                          (.flush (.getOutputStream s))
+                          (Thread/sleep 60000))))]
+    (try
+      (with-socks-proxy
+        (fn []
+          (let [r (http/get (str base "/") {:as :stream})]
+            (t/is (= 200 (:status r)))
+            (t/is (thrown-with-msg? Exception #"Proxy request failed"
+                                    (http/close! r))
+                  "truncated body reported as transport failure"))))
+      (finally (close)))))
+
+(t/deftest test-curl-no-credentials-in-argv
+  ;; Authorization and proxy credentials must live in the temp config
+  ;; file, never in curl's argv (visible via ps). Capture the argv via
+  ;; the private curl-argv builder and assert no secret appears.
+  (let [captured (atom nil)
+        orig-curl-argv @#'http/curl-argv
+        [base close] (start-server
+                      (fn [s _ _ _] (respond s "200 OK" "ok" {})))
+        [port stop] (start-socks-proxy)]
+    (try
+      (with-redefs [http/curl-argv (fn [url opts config-file header-file]
+                                     (reset! captured
+                                             (orig-curl-argv url opts config-file header-file))
+                                     @captured)]
+        (http/get (str base "/")
+                  {:proxy {:scheme "socks5h" :host "127.0.0.1" :port port
+                           :url (str "socks5h://user:secret@127.0.0.1:" port)}
+                   :headers {"Authorization" "Bearer topsecret"}}))
+      (let [argv @captured]
+        (t/is (some? argv) "curl-argv was called")
+        (t/is (not-any? #(str/includes? (str %) "topsecret") argv)
+              "Authorization header not in argv")
+        (t/is (not-any? #(str/includes? (str %) "secret") argv)
+              "proxy credentials not in argv"))
+      (finally (stop) (close)))))
