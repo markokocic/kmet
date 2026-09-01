@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-31T06:35:53Z"
+ :generated-at "2026-09-01T08:18:52Z"
  :provider {:id :openrouter
             :name "OpenRouter"
             :env-vars ["OPENROUTER_API_KEY"]
@@ -697,7 +697,7 @@
                          :minimal nil
                          :xhigh "xhigh"}
     :input [:text]
-    :cost {:input 0.088606 :output 0.177212 :cache-read 0.017721 :cache-write 0}
+    :cost {:input 0.08092 :output 0.16184 :cache-read 0.016184 :cache-write 0}
     :context-window 1024000
     :max-tokens 384000
     :compat {:supports-developer-role false
@@ -797,8 +797,8 @@
                          :minimal nil
                          :xhigh "xhigh"}
     :input [:text]
-    :cost {:input 1.32 :output 3.96 :cache-read 0.044 :cache-write 0}
-    :context-window 1048576
+    :cost {:input 1.1154 :output 3.3462 :cache-read 0.03718 :cache-write 0}
+    :context-window 1024000
     :max-tokens 384000
     :compat {:supports-developer-role false
              :requires-reasoning-content-on-assistant-messages true
@@ -1292,6 +1292,18 @@
     :context-window 131072
     :max-tokens 117964
     :compat {:supports-developer-role false :thinking-format :openrouter}}
+   "ibm-granite/granite-4.2-8b"
+   {:id "ibm-granite/granite-4.2-8b"
+    :name "IBM: Granite 4.2 8B"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0.1 :output 0.15 :cache-read 0.05 :cache-write 0}
+    :context-window 131072
+    :max-tokens 117964
+    :compat {:supports-developer-role false :thinking-format :openrouter}}
    "inception/mercury-2"
    {:id "inception/mercury-2"
     :name "Inception: Mercury 2"
@@ -1329,18 +1341,6 @@
     :context-window 262144
     :max-tokens 32768
     :compat {:supports-developer-role false :thinking-format :openrouter}}
-   "kwaipilot/kat-coder-air-v2.5"
-   {:id "kwaipilot/kat-coder-air-v2.5"
-    :name "Kwaipilot: KAT-Coder-Air V2.5"
-    :provider :openrouter
-    :api :openai-completions
-    :base-url "https://openrouter.ai/api/v1"
-    :reasoning false
-    :input [:text]
-    :cost {:input 0.15 :output 0.6 :cache-read 0.03 :cache-write 0}
-    :context-window 256000
-    :max-tokens 80000
-    :compat {:supports-developer-role false :thinking-format :openrouter}}
    "kwaipilot/kat-coder-pro-v2"
    {:id "kwaipilot/kat-coder-pro-v2"
     :name "Kwaipilot: KAT-Coder-Pro V2"
@@ -1350,8 +1350,8 @@
     :reasoning false
     :input [:text]
     :cost {:input 0.3 :output 1.2 :cache-read 0.06 :cache-write 0}
-    :context-window 256000
-    :max-tokens 80000
+    :context-window 262144
+    :max-tokens 144000
     :compat {:supports-developer-role false :thinking-format :openrouter}}
    "kwaipilot/kat-coder-pro-v2.5"
    {:id "kwaipilot/kat-coder-pro-v2.5"
@@ -1362,8 +1362,8 @@
     :reasoning false
     :input [:text]
     :cost {:input 0.74 :output 2.96 :cache-read 0.15 :cache-write 0}
-    :context-window 256000
-    :max-tokens 80000
+    :context-window 262144
+    :max-tokens 235929
     :compat {:supports-developer-role false :thinking-format :openrouter}}
    "liquid/lfm-2.5-2.6b:free"
    {:id "liquid/lfm-2.5-2.6b:free"
@@ -1445,9 +1445,9 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
     :input [:text :image]
-    :cost {:input 0.11 :output 0.34 :cache-read 0.055 :cache-write 0}
-    :context-window 131072
-    :max-tokens 8192
+    :cost {:input 0.1 :output 0.3 :cache-read 0 :cache-write 0}
+    :context-window 327680
+    :max-tokens 16384
     :compat {:supports-developer-role false :thinking-format :openrouter}}
    "meta/muse-glimmer-30b"
    {:id "meta/muse-glimmer-30b"
@@ -1629,18 +1629,6 @@
     :context-window 256000
     :max-tokens 204800
     :compat {:supports-developer-role false :thinking-format :openrouter}}
-   "mistralai/codestral-2508:batch"
-   {:id "mistralai/codestral-2508:batch"
-    :name "Mistral: Codestral 2508 (batch)"
-    :provider :openrouter
-    :api :openai-completions
-    :base-url "https://openrouter.ai/api/v1"
-    :reasoning false
-    :input [:text]
-    :cost {:input 0.3 :output 0.9 :cache-read 0.03 :cache-write 0}
-    :context-window 256000
-    :max-tokens 204800
-    :compat {:supports-developer-role false :thinking-format :openrouter}}
    "mistralai/devstral-2512"
    {:id "mistralai/devstral-2512"
     :name "Mistral: Devstral 2 2512"
@@ -1689,18 +1677,6 @@
     :context-window 262144
     :max-tokens 209715
     :compat {:supports-developer-role false :thinking-format :openrouter}}
-   "mistralai/ministral-8b-2512:batch"
-   {:id "mistralai/ministral-8b-2512:batch"
-    :name "Mistral: Ministral 3 8B 2512 (batch)"
-    :provider :openrouter
-    :api :openai-completions
-    :base-url "https://openrouter.ai/api/v1"
-    :reasoning false
-    :input [:text :image]
-    :cost {:input 0.15 :output 0.15 :cache-read 0.015 :cache-write 0}
-    :context-window 262144
-    :max-tokens 209715
-    :compat {:supports-developer-role false :thinking-format :openrouter}}
    "mistralai/mistral-large"
    {:id "mistralai/mistral-large"
     :name "Mistral Large"
@@ -1728,18 +1704,6 @@
    "mistralai/mistral-large-2512"
    {:id "mistralai/mistral-large-2512"
     :name "Mistral: Mistral Large 3 2512"
-    :provider :openrouter
-    :api :openai-completions
-    :base-url "https://openrouter.ai/api/v1"
-    :reasoning false
-    :input [:text :image]
-    :cost {:input 0.5 :output 1.5 :cache-read 0.05 :cache-write 0}
-    :context-window 262144
-    :max-tokens 209715
-    :compat {:supports-developer-role false :thinking-format :openrouter}}
-   "mistralai/mistral-large-2512:batch"
-   {:id "mistralai/mistral-large-2512:batch"
-    :name "Mistral: Mistral Large 3 2512 (batch)"
     :provider :openrouter
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
@@ -1797,18 +1761,6 @@
     :context-window 131072
     :max-tokens 104857
     :compat {:supports-developer-role false :thinking-format :openrouter}}
-   "mistralai/mistral-medium-3.1:batch"
-   {:id "mistralai/mistral-medium-3.1:batch"
-    :name "Mistral: Mistral Medium 3.1 (batch)"
-    :provider :openrouter
-    :api :openai-completions
-    :base-url "https://openrouter.ai/api/v1"
-    :reasoning false
-    :input [:text :image]
-    :cost {:input 0.4 :output 2 :cache-read 0.04 :cache-write 0}
-    :context-window 131072
-    :max-tokens 104857
-    :compat {:supports-developer-role false :thinking-format :openrouter}}
    "mistralai/mistral-nemo"
    {:id "mistralai/mistral-nemo"
     :name "Mistral: Mistral Nemo"
@@ -1836,18 +1788,6 @@
    "mistralai/mistral-small-2603"
    {:id "mistralai/mistral-small-2603"
     :name "Mistral: Mistral Small 4"
-    :provider :openrouter
-    :api :openai-completions
-    :base-url "https://openrouter.ai/api/v1"
-    :reasoning true
-    :input [:text :image]
-    :cost {:input 0.15 :output 0.6 :cache-read 0.015 :cache-write 0}
-    :context-window 262144
-    :max-tokens 209715
-    :compat {:supports-developer-role false :thinking-format :openrouter}}
-   "mistralai/mistral-small-2603:batch"
-   {:id "mistralai/mistral-small-2603:batch"
-    :name "Mistral: Mistral Small 4 (batch)"
     :provider :openrouter
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
@@ -2157,6 +2097,18 @@
     :context-window 16385
     :max-tokens 4096
     :compat {:thinking-format :openrouter}}
+   "openai/gpt-3.5-turbo:batch"
+   {:id "openai/gpt-3.5-turbo:batch"
+    :name "OpenAI: GPT-3.5 Turbo (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.25 :output 0.75 :cache-read 0 :cache-write 0}
+    :context-window 16385
+    :max-tokens 4096
+    :compat {:thinking-format :openrouter}}
    "openai/gpt-4"
    {:id "openai/gpt-4"
     :name "OpenAI: GPT-4"
@@ -2193,6 +2145,18 @@
     :context-window 128000
     :max-tokens 4096
     :compat {:thinking-format :openrouter}}
+   "openai/gpt-4-turbo:batch"
+   {:id "openai/gpt-4-turbo:batch"
+    :name "OpenAI: GPT-4 Turbo (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 5 :output 15 :cache-read 0 :cache-write 0}
+    :context-window 128000
+    :max-tokens 4096
+    :compat {:thinking-format :openrouter}}
    "openai/gpt-4.1"
    {:id "openai/gpt-4.1"
     :name "OpenAI: GPT-4.1"
@@ -2217,6 +2181,18 @@
     :context-window 1047576
     :max-tokens 32768
     :compat {:thinking-format :openrouter}}
+   "openai/gpt-4.1-mini:batch"
+   {:id "openai/gpt-4.1-mini:batch"
+    :name "OpenAI: GPT-4.1 Mini (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.2 :output 0.8 :cache-read 0.05 :cache-write 0}
+    :context-window 1047576
+    :max-tokens 32768
+    :compat {:thinking-format :openrouter}}
    "openai/gpt-4.1-nano"
    {:id "openai/gpt-4.1-nano"
     :name "OpenAI: GPT-4.1 Nano"
@@ -2226,6 +2202,30 @@
     :reasoning false
     :input [:text :image]
     :cost {:input 0.1 :output 0.4 :cache-read 0.025 :cache-write 0}
+    :context-window 1047576
+    :max-tokens 32768
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-4.1-nano:batch"
+   {:id "openai/gpt-4.1-nano:batch"
+    :name "OpenAI: GPT-4.1 Nano (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.05 :output 0.2 :cache-read 0.0125 :cache-write 0}
+    :context-window 1047576
+    :max-tokens 32768
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-4.1:batch"
+   {:id "openai/gpt-4.1:batch"
+    :name "OpenAI: GPT-4.1 (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 1 :output 4 :cache-read 0.25 :cache-write 0}
     :context-window 1047576
     :max-tokens 32768
     :compat {:thinking-format :openrouter}}
@@ -2301,6 +2301,30 @@
     :context-window 128000
     :max-tokens 16384
     :compat {:thinking-format :openrouter}}
+   "openai/gpt-4o-mini:batch"
+   {:id "openai/gpt-4o-mini:batch"
+    :name "OpenAI: GPT-4o-mini (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.075 :output 0.3 :cache-read 0.0375 :cache-write 0}
+    :context-window 128000
+    :max-tokens 16384
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-4o:batch"
+   {:id "openai/gpt-4o:batch"
+    :name "OpenAI: GPT-4o (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 1.25 :output 5 :cache-read 0.625 :cache-write 0}
+    :context-window 128000
+    :max-tokens 16384
+    :compat {:thinking-format :openrouter}}
    "openai/gpt-5"
    {:id "openai/gpt-5"
     :name "OpenAI: GPT-5"
@@ -2325,6 +2349,18 @@
     :context-window 400000
     :max-tokens 128000
     :compat {:thinking-format :openrouter}}
+   "openai/gpt-5-mini:batch"
+   {:id "openai/gpt-5-mini:batch"
+    :name "OpenAI: GPT-5 Mini (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.125 :output 1 :cache-read 0.0125 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
    "openai/gpt-5-nano"
    {:id "openai/gpt-5-nano"
     :name "OpenAI: GPT-5 Nano"
@@ -2337,6 +2373,18 @@
     :context-window 400000
     :max-tokens 128000
     :compat {:thinking-format :openrouter}}
+   "openai/gpt-5-nano:batch"
+   {:id "openai/gpt-5-nano:batch"
+    :name "OpenAI: GPT-5 Nano (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.025 :output 0.2 :cache-read 0.0025 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
    "openai/gpt-5-pro"
    {:id "openai/gpt-5-pro"
     :name "OpenAI: GPT-5 Pro"
@@ -2346,6 +2394,18 @@
     :reasoning true
     :input [:text :image]
     :cost {:input 15 :output 120 :cache-read 0 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-5-pro:batch"
+   {:id "openai/gpt-5-pro:batch"
+    :name "OpenAI: GPT-5 Pro (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 7.5 :output 60 :cache-read 0 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
     :compat {:thinking-format :openrouter}}
@@ -2394,6 +2454,18 @@
     :reasoning true
     :input [:text :image]
     :cost {:input 0.25 :output 2 :cache-read 0.03 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.1:batch"
+   {:id "openai/gpt-5.1:batch"
+    :name "OpenAI: GPT-5.1 (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.625 :output 5 :cache-read 0.0625 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
     :compat {:thinking-format :openrouter}}
@@ -2449,6 +2521,32 @@
     :context-window 400000
     :max-tokens 128000
     :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.2-pro:batch"
+   {:id "openai/gpt-5.2-pro:batch"
+    :name "OpenAI: GPT-5.2 Pro (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 10.5 :output 84 :cache-read 0 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.2:batch"
+   {:id "openai/gpt-5.2:batch"
+    :name "OpenAI: GPT-5.2 (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 0.875 :output 7 :cache-read 0.0875 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
    "openai/gpt-5.3-codex"
    {:id "openai/gpt-5.3-codex"
     :name "OpenAI: GPT-5.3-Codex"
@@ -2488,6 +2586,19 @@
     :context-window 400000
     :max-tokens 128000
     :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.4-mini:batch"
+   {:id "openai/gpt-5.4-mini:batch"
+    :name "OpenAI: GPT-5.4 Mini (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 0.375 :output 2.25 :cache-read 0.0375 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
    "openai/gpt-5.4-nano"
    {:id "openai/gpt-5.4-nano"
     :name "OpenAI: GPT-5.4 Nano"
@@ -2501,6 +2612,19 @@
     :context-window 400000
     :max-tokens 128000
     :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.4-nano:batch"
+   {:id "openai/gpt-5.4-nano:batch"
+    :name "OpenAI: GPT-5.4 Nano (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 0.1 :output 0.625 :cache-read 0.01 :cache-write 0}
+    :context-window 400000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
    "openai/gpt-5.4-pro"
    {:id "openai/gpt-5.4-pro"
     :name "OpenAI: GPT-5.4 Pro"
@@ -2511,6 +2635,32 @@
     :thinking-level-map {:xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 30 :output 180 :cache-read 0 :cache-write 0}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.4-pro:batch"
+   {:id "openai/gpt-5.4-pro:batch"
+    :name "OpenAI: GPT-5.4 Pro (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 15 :output 90 :cache-read 0 :cache-write 0}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.4:batch"
+   {:id "openai/gpt-5.4:batch"
+    :name "OpenAI: GPT-5.4 (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 1.25 :output 7.5 :cache-read 0.125 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
     :compat {:thinking-format :openrouter}}
@@ -2540,6 +2690,32 @@
     :context-window 1050000
     :max-tokens 128000
     :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.5-pro:batch"
+   {:id "openai/gpt-5.5-pro:batch"
+    :name "OpenAI: GPT-5.5 Pro (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 15 :output 90 :cache-read 0 :cache-write 0}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.5:batch"
+   {:id "openai/gpt-5.5:batch"
+    :name "OpenAI: GPT-5.5 (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 2.5 :output 15 :cache-read 0.25 :cache-write 0}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
    "openai/gpt-5.6-luna"
    {:id "openai/gpt-5.6-luna"
     :name "OpenAI: GPT-5.6 Luna"
@@ -2563,6 +2739,32 @@
     :thinking-level-map {:max "max" :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.2 :output 1.2 :cache-read 0.02 :cache-write 0.25}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.6-luna-pro:batch"
+   {:id "openai/gpt-5.6-luna-pro:batch"
+    :name "OpenAI: GPT-5.6 Luna Pro (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 0.1 :output 0.6 :cache-read 0.01 :cache-write 0}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.6-luna:batch"
+   {:id "openai/gpt-5.6-luna:batch"
+    :name "OpenAI: GPT-5.6 Luna (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 0.1 :output 0.6 :cache-read 0.01 :cache-write 0}
     :context-window 1050000
     :max-tokens 128000
     :compat {:thinking-format :openrouter}}
@@ -2592,6 +2794,32 @@
     :context-window 1050000
     :max-tokens 128000
     :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.6-sol-pro:batch"
+   {:id "openai/gpt-5.6-sol-pro:batch"
+    :name "OpenAI: GPT-5.6 Sol Pro (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 1 :output 5 :cache-read 0.1 :cache-write 1.25}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.6-sol:batch"
+   {:id "openai/gpt-5.6-sol:batch"
+    :name "OpenAI: GPT-5.6 Sol (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 1 :output 5 :cache-read 0.1 :cache-write 1.25}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
    "openai/gpt-5.6-terra"
    {:id "openai/gpt-5.6-terra"
     :name "OpenAI: GPT-5.6 Terra"
@@ -2616,6 +2844,44 @@
     :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 2.5}
     :context-window 1050000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.6-terra-pro:batch"
+   {:id "openai/gpt-5.6-terra-pro:batch"
+    :name "OpenAI: GPT-5.6 Terra Pro (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 1 :output 6 :cache-read 0.1 :cache-write 0}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-5.6-terra:batch"
+   {:id "openai/gpt-5.6-terra:batch"
+    :name "OpenAI: GPT-5.6 Terra (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 1 :output 6 :cache-read 0.1 :cache-write 0}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:thinking-format :openrouter}}
+   "openai/gpt-5:batch"
+   {:id "openai/gpt-5:batch"
+    :name "OpenAI: GPT-5 (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.625 :output 5 :cache-read 0.0625 :cache-write 0}
+    :context-window 400000
     :max-tokens 128000
     :compat {:thinking-format :openrouter}}
    "openai/gpt-audio"
@@ -2750,6 +3016,18 @@
     :context-window 200000
     :max-tokens 100000
     :compat {:thinking-format :openrouter}}
+   "openai/o3-mini:batch"
+   {:id "openai/o3-mini:batch"
+    :name "OpenAI: o3 Mini (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0.55 :output 2.2 :cache-read 0.275 :cache-write 0}
+    :context-window 200000
+    :max-tokens 100000
+    :compat {:thinking-format :openrouter}}
    "openai/o3-pro"
    {:id "openai/o3-pro"
     :name "OpenAI: o3 Pro"
@@ -2759,6 +3037,18 @@
     :reasoning true
     :input [:text :image]
     :cost {:input 20 :output 80 :cache-read 0 :cache-write 0}
+    :context-window 200000
+    :max-tokens 100000
+    :compat {:thinking-format :openrouter}}
+   "openai/o3:batch"
+   {:id "openai/o3:batch"
+    :name "OpenAI: o3 (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 1 :output 4 :cache-read 0.25 :cache-write 0}
     :context-window 200000
     :max-tokens 100000
     :compat {:thinking-format :openrouter}}
@@ -2783,6 +3073,18 @@
     :reasoning true
     :input [:text :image]
     :cost {:input 1.1 :output 4.4 :cache-read 0.275 :cache-write 0}
+    :context-window 200000
+    :max-tokens 100000
+    :compat {:thinking-format :openrouter}}
+   "openai/o4-mini:batch"
+   {:id "openai/o4-mini:batch"
+    :name "OpenAI: o4 Mini (batch)"
+    :provider :openrouter
+    :api :openai-completions
+    :base-url "https://openrouter.ai/api/v1"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 0.55 :output 2.2 :cache-read 0.1375 :cache-write 0}
     :context-window 200000
     :max-tokens 100000
     :compat {:thinking-format :openrouter}}
@@ -3130,9 +3432,9 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning false
     :input [:text]
-    :cost {:input 0.09 :output 1.1 :cache-read 0 :cache-write 0}
+    :cost {:input 0.1 :output 1.1 :cache-read 0.07 :cache-write 0}
     :context-window 262144
-    :max-tokens 16384
+    :max-tokens 235929
     :compat {:supports-developer-role false :thinking-format :openrouter}}
    "qwen/qwen3-next-80b-a3b-thinking"
    {:id "qwen/qwen3-next-80b-a3b-thinking"
@@ -4061,7 +4363,7 @@
                          :minimal nil
                          :xhigh "xhigh"}
     :input [:text]
-    :cost {:input 0.03 :output 0.16 :cache-read 0.013 :cache-write 0}
+    :cost {:input 0.05 :output 0.16 :cache-read 0.013 :cache-write 0}
     :context-window 1048576
     :max-tokens 393216
     :compat {:supports-developer-role false
@@ -4147,7 +4449,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :input [:text]
-    :cost {:input 1.1875 :output 4.18 :cache-read 0.247 :cache-write 0}
-    :context-window 262144
-    :max-tokens 131072
+    :cost {:input 1.17 :output 3.96 :cache-read 0.234 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 943718
     :compat {:supports-developer-role false :thinking-format :openrouter}}}}}

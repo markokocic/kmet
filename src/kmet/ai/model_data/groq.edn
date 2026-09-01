@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-31T06:35:53Z"
+ :generated-at "2026-09-01T08:18:52Z"
  :provider {:id :groq
             :name "Groq"
             :env-vars ["GROQ_API_KEY"]
@@ -99,4 +99,22 @@
     :input [:text :image]
     :cost {:input 0.6 :output 3 :cache-read 0.3 :cache-write 0}
     :context-window 131072
+    :max-tokens 16384}
+   "qwen/qwen3.8-27b"
+   {:id "qwen/qwen3.8-27b"
+    :name "Qwen3.8 27B"
+    :provider :groq
+    :api :openai-completions
+    :base-url "https://api.groq.com/openai/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
+    :input [:text :image]
+    :cost {:input 0.8 :output 4 :cache-read 0 :cache-write 0}
+    :context-window 131042
     :max-tokens 16384}}}}

@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-31T06:35:53Z"
+ :generated-at "2026-09-01T08:18:52Z"
  :provider {:id :vercel-ai-gateway
             :name "Vercel AI Gateway"
             :env-vars ["AI_GATEWAY_API_KEY"]
@@ -2387,6 +2387,17 @@
     :cost {:input 0.435 :output 0.87 :cache-read 0.0036 :cache-write 0}
     :context-window 1050000
     :max-tokens 131000}
+   "xiaomi/mimo-v2.5-pro-ultraspeed"
+   {:id "xiaomi/mimo-v2.5-pro-ultraspeed"
+    :name "MiMo V2.5 Pro UltraSpeed"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text]
+    :cost {:input 1.305 :output 2.61 :cache-read 0.0108 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 131072}
    "zai/glm-4.5"
    {:id "zai/glm-4.5"
     :name "GLM 4.5"

@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-31T06:35:53Z"
+ :generated-at "2026-09-01T08:18:52Z"
  :provider {:id :google
             :name "Google"
             :env-vars ["GEMINI_API_KEY"]
@@ -259,17 +259,6 @@
     :input [:text :image]
     :cost {:input 0.25 :output 1.5 :cache-read 0.025 :cache-write 0}
     :context-window 1048576
-    :max-tokens 65536}
-   "gemini-robotics-er-1.6-preview"
-   {:id "gemini-robotics-er-1.6-preview"
-    :name "Gemini Robotics-ER 1.6 Preview"
-    :provider :google
-    :api :google-generative-ai
-    :base-url "https://generativelanguage.googleapis.com/v1beta"
-    :reasoning true
-    :input [:text :image]
-    :cost {:input 1 :output 5 :cache-read 0 :cache-write 0}
-    :context-window 131072
     :max-tokens 65536}
    "gemma-4-26b-a4b-it"
    {:id "gemma-4-26b-a4b-it"
