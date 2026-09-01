@@ -5,7 +5,9 @@
    steering/follow-up queue modes, HTTP idle timeout, cache-miss notices,
    tree filter mode, editor/output padding, autocomplete max items, hardware
    cursor, the retry block (settings.edn :retry — enabled / max-retries /
-   base-delay-ms, applied live to the agent), and a theme row."
+   base-delay-ms, applied live to the agent), the repeat-loop guard
+   (settings.edn :loop-guard — enabled / threshold, plus the thinking
+   repeat guard toggle), and a theme row."
   (:require [kmet.app.loop :as agent]
             [kmet.app.theme-controller :as theme-ctrl]
             [kmet.ai.api.shared :as shared]
@@ -81,6 +83,16 @@
         current (or (some #{(keyword @(:thinking ag))} levels) (first levels))
         config (:config cs)
         retry-atom (atom (cfg/get-retry-settings-live config))
+        ;; Repeat-loop guard (kmet-specific): settings.edn :loop-guard block
+        lg-atom (atom (cfg/get-loop-guard-settings-live config))
+        apply-lg! (fn []
+                    (let [lg @lg-atom]
+                      (swap! (:cfg ag) assoc :loop-guard-enabled (:enabled lg))
+                      (swap! (:cfg ag) assoc :loop-guard-threshold (:threshold lg))))
+        save-lg! (fn [path value]
+                   (cfg/save-setting! path value)
+                   (apply-lg!))
+
         ;; or-guard: an explicit nil in settings.edn must not reach quot
         idle-ms (or (cfg/get-setting-live config :http-idle-timeout-ms 300000)
                     300000)
@@ -149,7 +161,19 @@
                     {:id :base-delay-ms
                      :label "Base delay (ms)"
                      :value (:base-delay-ms @retry-atom)
-                     :values [500 1000 2000 4000 8000]}]
+                     :values [500 1000 2000 4000 8000]}
+                    {:id :loop-guard-enabled
+                     :label "Repeat guard"
+                     :value (:loop-guard-enabled @(:cfg ag))
+                     :values [true false]}
+                    {:id :loop-guard-threshold
+                     :label "Repeat threshold"
+                     :value (:loop-guard-threshold @(:cfg ag))
+                     :values [2 3 4 5]}
+                    {:id :thinking-loop-guard-enabled
+                     :label "Thinking repeat guard"
+                     :value (:thinking-loop-guard-enabled @(:cfg ag))
+                     :values [true false]}]
         ;; hardware-cursor row needs the live tui, theme row the theme
         ;; controller (tests build a minimal cs without them)
         items (cond-> (if (:tui cs)
@@ -238,7 +262,16 @@
                                (save-retry! [:retry :max-retries] value))
                            :base-delay-ms
                            (do (swap! retry-atom assoc :base-delay-ms value)
-                               (save-retry! [:retry :base-delay-ms] value)))))]
+                               (save-retry! [:retry :base-delay-ms] value))
+                           :loop-guard-enabled
+                           (do (swap! lg-atom assoc :enabled (boolean value))
+                               (save-lg! [:loop-guard :enabled] (boolean value)))
+                           :loop-guard-threshold
+                           (do (swap! lg-atom assoc :threshold value)
+                               (save-lg! [:loop-guard :threshold] value))
+                           :thinking-loop-guard-enabled
+                           (do (swap! (:cfg ag) assoc :thinking-loop-guard-enabled (boolean value))
+                               (cfg/save-setting! [:thinking-loop-guard-enabled] (boolean value))))))]
     (settings-list/settings-list-set-on-escape!
      sl (fn []
           ((:done @sel-atom))

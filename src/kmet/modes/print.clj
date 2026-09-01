@@ -81,7 +81,12 @@
             ;; max-retries to 0)
             :max-retries (let [retry (cfg/get-retry-settings config)]
                            (if (:enabled retry) (:max-retries retry) 0))
-            :base-delay-ms (:base-delay-ms (cfg/get-retry-settings config)))
+            :base-delay-ms (:base-delay-ms (cfg/get-retry-settings config))
+            ;; Repeat-loop guard (kmet-specific): settings.edn :loop-guard
+            ;; block — enabled gates threshold to 0 (off)
+            :loop-guard-enabled (:enabled (cfg/get-loop-guard-settings config))
+            :loop-guard-threshold (:threshold (cfg/get-loop-guard-settings config))
+            :thinking-loop-guard-enabled (get config :thinking-loop-guard-enabled true))
         _ (agent/init-scoped-models! ag config)
         result-promise (promise)
         ;; pi: session.prompt expands skill commands + prompt templates

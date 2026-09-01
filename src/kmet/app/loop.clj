@@ -21,6 +21,15 @@
    :auto-retry-start / :auto-retry-end events; cancellation during backoff
    aborts the run quietly.
 
+   Repeat-loop guard (kmet-specific circuit breaker): a model stuck issuing
+   identical tool calls (or repeating its reasoning) is detected via a
+   sliding window of canonical (tool, args) signatures — the threshold-th
+   identical call is suppressed, and an all-suppressed batch (or cumulative
+   suppressions) stops the run with a :loop-guard event and a plain
+   explanation. Read-only tools (read) never trip it. Tunable via
+   settings.edn :loop-guard {:enabled bool :threshold n} and
+   :thinking-loop-guard-enabled.
+
    Tool hooks (pi: beforeToolCall / afterToolCall): registered via
    set-before-tool-call! / set-after-tool-call!. The before hook can block
    execution ({:block true :reason ...}); the after hook can rewrite the
@@ -115,6 +124,8 @@
                        compacting?           ;; atom of bool: a compaction is in progress (escape cancels it)
                        pending-bash          ;; atom of vector of bash entries queued while streaming
                        system-prompt-opts    ;; atom of the build-system-prompt options map (pi: _baseSystemPromptOptions)
+                       loop-guard            ;; atom of per-run repeat-loop guard state:
+                                             ;;   {:window [signature...] :suppressed n}
                        ])
 
 (defn make-agent-state
@@ -135,7 +146,7 @@
          = the idle timeout, pi: timeoutMs ?? httpIdleTimeoutMs — an explicit
          positive number overrides the total request deadline; 0 disables it
          (falls back to idle); nil uses idle)"
-  [& {:keys [model provider system session on-event thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key scoped-models system-prompt-opts compact-token-threshold context-window compact-reserve-tokens keep-recent-tokens http-idle-timeout-ms http-total-timeout-ms auto-compact]
+  [& {:keys [model provider system session on-event thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key scoped-models system-prompt-opts compact-token-threshold context-window compact-reserve-tokens keep-recent-tokens http-idle-timeout-ms http-total-timeout-ms auto-compact loop-guard-enabled loop-guard-threshold thinking-loop-guard-enabled]
       :or {provider :opencode-go
            thinking :off
            steering-mode :all
@@ -148,6 +159,9 @@
            keep-recent-tokens 20000
            http-idle-timeout-ms 300000
            http-total-timeout-ms nil
+           loop-guard-enabled true
+           loop-guard-threshold 3
+           thinking-loop-guard-enabled true
            system "You are kmet, a minimal coding agent. Help the user with their tasks.
 Use the available tools to read, write, edit files, and execute commands.
 Be precise and concise in your responses."}}]
@@ -173,7 +187,10 @@ Be precise and concise in your responses."}}]
                                 :steering-mode steering-mode
                                 :follow-up-mode follow-up-mode
                                 :auto-compact (boolean auto-compact)
-                                :context-window context-window})
+                                :context-window context-window
+                                :loop-guard-enabled (boolean loop-guard-enabled)
+                                :loop-guard-threshold (max 2 (long loop-guard-threshold))
+                                :thinking-loop-guard-enabled (boolean thinking-loop-guard-enabled)})
                     :retry-count (atom 0)
                     :before-tool-call (atom before-tool-call)
                     :after-tool-call (atom after-tool-call)
@@ -189,7 +206,8 @@ Be precise and concise in your responses."}}]
                     :keep-recent-tokens keep-recent-tokens
                     :compacting? (atom false)
                     :pending-bash (atom [])
-                    :system-prompt-opts (atom system-prompt-opts)}))
+                    :system-prompt-opts (atom system-prompt-opts)
+                    :loop-guard (atom {:window [] :suppressed 0})}))
 
 ;; ─── Active tools (pi: ctx.setActiveTools) ──────────────────────
 
@@ -476,6 +494,138 @@ Be precise and concise in your responses."}}]
        (not (re-find non-overflow-error-regex error-message))
        (re-find overflow-error-regex error-message)))
 
+;; ─── Repeat-loop guard (circuit breaker) ────────────────────────────────────
+;; Detects a model stuck emitting identical tool calls (or repeating its
+;; reasoning) and stops the run instead of burning tokens on a dead end.
+;; kmet-specific — no pi counterpart (dirge has a StormBreaker; research:
+;; MukundaKatta/tool-loop-guard, isr4el-silv4/loop-guard).
+
+(def ^:private loop-guard-exempt-tools
+  "Tools that never trip the repeat-loop guard regardless of repetition
+   count. Read-only inspectors are cheap and harmless — re-reading the same
+   file (or read → edit → read verify patterns) is legitimate work."
+  #{"read"})
+
+(declare canonical-json)
+
+(defn loop-guard-signature
+  "Canonical repeat-loop key for a tool call: `name \\0 key-sorted JSON
+   args`. Argument maps differing only in key order count as identical
+   (deep key-sort, pi/dirge canonical_json). Returns nil for exempt tools
+   (read) — they never enter the window."
+  [tool-name args]
+  (when-not (contains? loop-guard-exempt-tools tool-name)
+    (let [args (if (string? args)
+                 ;; OpenAI wire format: the whole args arrive as a JSON string
+                 (let [parsed (try (json/parse-string args true) (catch Exception _ nil))]
+                   (if (map? parsed) parsed args))
+                 args)]
+      (str tool-name "\u0000" (canonical-json args)))))
+
+(defn- canonical-json
+  "Canonical JSON for repeat-loop comparison: keys recursively sorted, so
+   {:a 1 :b 2} and {:b 2 :a 1} compare equal. Args may be a map (Anthropic/
+   Google), a string (OpenAI raw JSON — parsed ONLY at the top level, since
+   only the whole args string arrives as JSON from the provider), or a
+   vector (nested arrays — key-sorted recursively so edit batches with
+   reordered maps still match). Values keep their JSON types (a string
+   \"5\" never collides with the number 5; a nested string containing JSON
+   text stays a string and never collides with a real nested map)."
+  [args]
+  (cond
+    (map? args)
+    (json/generate-string
+     (into (sorted-map)
+           (map (fn [[k v]] [(name k) (canonical-json v)]))
+           args))
+    (vector? args)
+    (json/generate-string (mapv canonical-json args))
+    (string? args)
+    (pr-str args)
+    :else (pr-str args)))
+
+(def ^:private thinking-loop-error
+  "Error message used when the thinking-loop guard cuts a stream. A
+   distinct sentinel so the loop's error path can recognize it without
+   string-matching a provider error."
+  "thinking-loop guard: repeated reasoning detected")
+
+(def ^:private thinking-loop-min-span
+  "Minimum length (chars) of a repeated thinking segment before the guard
+   considers it a loop. Below this, short repeated phrases in normal
+   reasoning pass. Mirrors ollama-loop-guard's repeat-span-min (24)."
+  24)
+
+(def ^:private thinking-loop-delimiter-re
+  "Segment delimiters for thinking-loop detection: ASCII sentence/line ends
+   plus CJK full stops (。！？) — a multilingual reasoning loop (e.g. Chinese)
+   repeats with 。-terminated segments and would otherwise be invisible
+   (ollama-loop-guard / llama.cpp use \".!?\\n\"; the CJK additions cover
+   the other major script)."
+  #"(?<=[.!?\n。！？])\s*")
+
+(defn thinking-loop?
+  "True when the recent THINKING text contains a repeated segment: the same
+   segment (split on sentence/line delimiters, incl. CJK full stops)
+   appearing >= 3 times within the trailing MAX-CHARS window. Catches
+   degenerate reasoning loops where the model repeats the same analysis
+   without producing content (research: ollama-loop-guard, llama.cpp
+   line-level repetition). Pure and total (nil/empty → false)."
+  [thinking & {:keys [max-chars] :or {max-chars 4000}}]
+  (when (string? thinking)
+    (let [tail (subs thinking (max 0 (- (count thinking) max-chars)))
+          segments (->> (str/split tail thinking-loop-delimiter-re)
+                        (map str/trim)
+                        (remove #(or (empty? %) (< (count %) thinking-loop-min-span))))
+          counts (frequencies segments)]
+      (boolean (some #(>= % 3) (vals counts))))))
+
+(defn loop-guard-filter
+  "Pure repeat-loop detection for one tool-call batch.
+   STATE — {:window [signature...] :suppressed n} (window is newest-last,
+   capped at 4×threshold+1).
+   Returns {:suppressed [tool-call...] :survivors [tool-call...]
+            :state next-state}.
+   A call is suppressed when its signature already appears (threshold-1)
+   times in the window — i.e. the threshold-th identical call. The window
+   is big enough (4×threshold+1) that alternating/cyclic patterns
+   (1,2,1,2,1,2 / 1,2,3,1,2,3 / up to 2×threshold distinct calls) also
+   trip: each signature's occurrences accumulate in the window until one
+   reaches threshold. Exempt tools (read) never count."
+  [{:keys [window suppressed]} threshold tool-calls]
+  (let [window-size (inc (* 4 threshold))
+        result (reduce (fn [{:keys [window suppressed-calls] :as acc} tc]
+                         (if-let [sig (loop-guard-signature (:name tc) (:arguments tc))]
+                           (let [count-in-window (count (filter #(= sig %) window))]
+                             (if (>= count-in-window (dec threshold))
+                               (assoc acc :suppressed-calls (conj suppressed-calls tc))
+                               (assoc acc :window (conj window sig))))
+                           acc))
+                       {:window window :suppressed-calls []}
+                       tool-calls)
+        ;; window trimmed to window-size (drop oldest)
+        window (let [w (:window result)]
+                 (if (> (count w) window-size) (subvec w (- (count w) window-size)) w))
+        ;; survivors are the non-suppressed calls in source order — rebuild
+        ;; from the input so :survivors stays in original order
+        suppressed-calls (:suppressed-calls result)
+        suppressed-set (set (map :id suppressed-calls))
+        survivors (into [] (remove #(contains? suppressed-set (:id %))) tool-calls)]
+    {:suppressed suppressed-calls
+     :survivors survivors
+     :state {:window window
+             :suppressed (+ suppressed (count suppressed-calls))}}))
+
+(defn loop-guard-give-up!
+  "Settle the run after the repeat-loop guard trips: set the explanation as
+   the final text (delivered via on-done) and reset the per-run guard state
+   for the next run. Emits the :loop-guard event (the UI shows a warning
+   line). Pure state mutation on the agent."
+  [agent text-buf reason details]
+  (reset! text-buf details)
+  (reset! (:loop-guard agent) {:window [] :suppressed 0})
+  (emit agent {:type :loop-guard :reason reason :details details}))
+
 ;; ─── Queue helpers ─────────────────────────────────────────────────────────
 
 (defn- drain-queue!
@@ -670,7 +820,7 @@ Be precise and concise in your responses."}}]
    Preparation (start events + before hooks) is sequential; execution is
    concurrent; tool-execution-end events fire in completion order; results
    are appended to context in source order. Returns results in source order."
-  [agent tool-calls assistant-msg]
+  [agent tool-calls assistant-msg & [append?]]
   (let [prepared (mapv (fn [tc]
                          (let [tc-id (:id tc)
                                tc-name (:name tc)
@@ -738,13 +888,15 @@ Be precise and concise in your responses."}}]
                      :args (:arguments tc)
                      :result result
                      :is-error (:is-error result false)})))
-    ;; context + session in source order
-    (doseq [tc prepared]
-      (let [result (get finalized (:id tc))
-            result-msg (tool-result-message (:id tc) (:name tc) result)]
-        (swap! (:messages agent) conj result-msg)
-        (when (:session agent)
-          (session/append-entry (:session agent) result-msg))))
+    ;; context + session in source order (skipped when the caller appends —
+    ;; the repeat-loop guard path appends everything itself in source order)
+    (when (not= false append?)
+      (doseq [tc prepared]
+        (let [result (get finalized (:id tc))
+              result-msg (tool-result-message (:id tc) (:name tc) result)]
+          (swap! (:messages agent) conj result-msg)
+          (when (:session agent)
+            (session/append-entry (:session agent) result-msg)))))
     ;; pi: terminate stops the run after this batch — only when EVERY
     ;; finalized call (blocked ones carry the hint, executed ones don't)
     {:results (mapv #(get finalized (:id %)) tool-calls)
@@ -754,7 +906,7 @@ Be precise and concise in your responses."}}]
 (defn- execute-tool-calls-sequential!
   "Execute tool calls one at a time (pi: executeToolCallsSequential).
    Same hooks and events as the parallel path; results in source order."
-  [agent tool-calls assistant-msg]
+  [agent tool-calls assistant-msg & [append?]]
   (let [tool-results (atom [])]
     (doseq [tc tool-calls]
       (let [tc-id (:id tc)
@@ -776,9 +928,10 @@ Be precise and concise in your responses."}}]
                                                      :ctx (extensions/build-extension-context)}))))
               result (after-tool-hook-result agent tc-id tc-name tc-args result assistant-msg)
               result-msg (tool-result-message tc-id tc-name result)]
-          (swap! (:messages agent) conj result-msg)
-          (when (:session agent)
-            (session/append-entry (:session agent) result-msg))
+          (when (not= false append?)
+            (swap! (:messages agent) conj result-msg)
+            (when (:session agent)
+              (session/append-entry (:session agent) result-msg)))
           (swap! tool-results conj result)
           (emit agent {:type :tool-execution-end
                        :tool-call-id tc-id
@@ -795,11 +948,16 @@ Be precise and concise in your responses."}}]
 (defn- execute-tool-calls!
   "Execute tool calls. If any target tool is :sequential the whole batch runs
    sequentially; otherwise tools run in parallel (pi: toolExecution mode).
-   Runs before/after-tool-call hooks and returns results in source order."
-  [agent tool-calls assistant-msg]
+   Runs before/after-tool-call hooks and returns results in source order.
+   APPEND? — whether the executor appends results to the context/session
+   itself (true by default). The repeat-loop guard path passes false and
+   appends ALL results (suppressed + survivor) in source order itself, so a
+   batch with suppressed calls keeps tool_use/tool_result ordering (strict
+   providers reject misordered results)."
+  [agent tool-calls assistant-msg & [append?]]
   (if (has-sequential-tool-call? tool-calls)
-    (execute-tool-calls-sequential! agent tool-calls assistant-msg)
-    (execute-tool-calls-parallel! agent tool-calls assistant-msg)))
+    (execute-tool-calls-sequential! agent tool-calls assistant-msg append?)
+    (execute-tool-calls-parallel! agent tool-calls assistant-msg append?)))
 
 ;; ─── Tool call accumulator ─────────────────────────────────────────────────
 
@@ -928,7 +1086,23 @@ Be precise and concise in your responses."}}]
                                   :message {:role :assistant
                                             :content []
                                             :thinking @thinking-buf}
-                                  :delta {:type :thinking :content t}}))
+                                  :delta {:type :thinking :content t}})
+                     ;; Thinking-loop guard: a repeated reasoning segment
+                     ;; (>= 3× within the recent buffer) means the model is
+                     ;; stuck in a degenerate reasoning loop — cut the stream
+                     ;; instead of burning tokens. Delivered as an error so
+                     ;; the loop's retry classifier sees it; it must NOT be
+                     ;; retryable (terminal-error! path).
+                     (when (and (:thinking-loop-guard-enabled @(:cfg agent))
+                                (not (realized? done-promise))
+                                (thinking-loop? @thinking-buf))
+                       (deliver done-promise
+                                {:error thinking-loop-error
+                                 :text @text-buf
+                                 :thinking (str/trim @thinking-buf)
+                                 :tool-calls (tc-flush)
+                                 :usage @usage-buf
+                                 :thinking-signature @sig-buf})))
       ;; signatures arrive as whole blobs (possibly repeated across deltas) —
       ;; last-wins, never concatenated
       :on-signature (fn [sig]
@@ -1483,6 +1657,9 @@ Be precise and concise in your responses."}}]
   [agent message images]
   (reset! (:system-prompt-override agent) nil)
   (reset! (:overflow-recovered agent) false)
+  ;; Repeat-loop guard is per-run: a legit bash ls x2 in run 1 must not
+  ;; count toward a trip in run 2
+  (reset! (:loop-guard agent) {:window [] :suppressed 0})
   (when message
     (add-user-message! agent message images))
   (let [bas (extensions/apply-before-agent-start-hooks
@@ -1518,15 +1695,78 @@ Be precise and concise in your responses."}}]
 
 (defn- tools-phase!
   "Execute a turn's tool calls (pi: assistant message → executing status →
-   results → thinking → turn-end → mid-run compaction). Returns whether an
-   after-turn hook stopped the continuation."
+   results → thinking → turn-end → mid-run compaction). Returns:
+     false      — continue the inner loop
+     :terminate — stop after this batch (every call blocked with :terminate)
+     :loop-guard— repeat-loop guard tripped (caller settles the run)
+     true       — an after-turn hook stopped the continuation
+
+   Repeat-loop guard (kmet-specific): the batch is filtered through
+   loop-guard-filter first. Suppressed calls get a synthetic guard result
+   (transcript stays coherent — no dangling tool ids, and the user sees why
+   in the tool box); survivors execute normally. When a batch is ALL
+   suppressed — or cumulative suppressions reach 2×threshold (mixed
+   alternating batches) — the guard trips."
   [agent t result]
   (let [assistant-msg (add-assistant-message! agent result)
         tool-calls (:tool-calls result)]
     (reset! (:status agent) :executing)
     (emit agent {:type :status :status :executing
                  :tool-calls tool-calls})
-    (let [{:keys [results terminate]} (execute-tool-calls! agent tool-calls assistant-msg)]
+    (let [threshold (:loop-guard-threshold @(:cfg agent))
+          {:keys [suppressed survivors state]}
+          (if (:loop-guard-enabled @(:cfg agent))
+            (loop-guard-filter @(:loop-guard agent) threshold tool-calls)
+            {:suppressed [] :survivors tool-calls :state @(:loop-guard agent)})
+          _ (reset! (:loop-guard agent) state)
+          suppressed? (seq suppressed)
+          give-up? (or (and suppressed? (empty? survivors))
+                       (>= (:suppressed state) (* 2 threshold)))
+          guard-result (fn [tc]
+                         {:content (str "Repeat-loop guard: " (:name tc)
+                                        " called with identical args "
+                                        threshold " times — suppressed.")
+                          :is-error false})
+          ;; Suppressed calls become synthetic results; survivors run through
+          ;; the normal execution path (parallel/sequential). Results are
+          ;; returned in source order: walk the original tool-calls and pick
+          ;; the guard result for suppressed ones, the exec result for the
+          ;; rest (exec-results is in the survivors' source order).
+          ;; Executor does NOT append to context (append? false) — the guard
+          ;; path appends ALL results (suppressed + survivor) in source order
+          ;; below so tool_use/tool_result ordering stays strict-provider-safe
+          exec-result (when (seq survivors)
+                        (execute-tool-calls! agent survivors assistant-msg false))
+          exec-results (or (:results exec-result) [])
+          terminate? (:terminate exec-result)
+          suppressed-by-id (into {} (map (fn [tc] [(:id tc) (guard-result tc)]))
+                                 suppressed)
+          ;; exec-results corresponds to SURVIVORS positionally (the
+          ;; executor returns results in source order)
+          results-by-id (merge suppressed-by-id
+                               (into {} (map (fn [tc res] [(:id tc) res])
+                                             survivors exec-results)))
+          results (mapv #(get results-by-id (:id %)) tool-calls)
+          ;; Append ALL results to context/session in source order (the
+          ;; executor skipped appends). Suppressed calls also get their
+          ;; tool-execution start/end events here (the executor never saw
+          ;; them); survivor events were already emitted by the executor —
+          ;; only the context append is repeated here, in the right order.
+          _ (doseq [tc tool-calls]
+              (let [tc-id (:id tc) tc-name (:name tc) tc-args (:arguments tc)
+                    res (get results-by-id (:id tc))
+                    suppressed? (contains? suppressed-by-id tc-id)
+                    result-msg (tool-result-message tc-id tc-name res)]
+                (when suppressed?
+                  (emit agent {:type :tool-execution-start
+                               :tool-call-id tc-id :tool-name tc-name :args tc-args})
+                  (emit agent {:type :tool-execution-end
+                               :tool-call-id tc-id :tool-name tc-name :args tc-args
+                               :result res
+                               :is-error (:is-error res false)}))
+                (swap! (:messages agent) conj result-msg)
+                (when (:session agent)
+                  (session/append-entry (:session agent) result-msg))))]
       (reset! (:status agent) :thinking)
       (emit agent {:type :status :status :thinking})
       (emit agent {:type :turn-end
@@ -1537,7 +1777,11 @@ Be precise and concise in your responses."}}]
       ;; pi: after-turn hooks (prepareNextTurn/shouldStopAfterTurn) run
       ;; unconditionally — even when terminate stops the tool-call continuation
       (let [stop? (after-turn! agent t assistant-msg results)]
-        (or terminate stop?)))))
+        (cond
+          give-up? :loop-guard
+          terminate? :terminate
+          stop? true
+          :else false)))))
 
 (defn- final-phase!
   "Settle a final response (no tool calls): assistant message + turn-end.
@@ -1706,55 +1950,65 @@ Be precise and concise in your responses."}}]
                                               (terminal-error! agent err on-error agent-end))))
 
                                         (:error result)
-                                        (let [err (:error result)
+                                        (if (= thinking-loop-error (:error result))
+                                          ;; Thinking-loop guard tripped: not a transient
+                                          ;; error — settle the run with the explanation
+                                          ;; (no auto-retry, no red error line; the
+                                          ;; :loop-guard event shows a warning)
+                                          (do (record-abandoned-attempt! agent result :error)
+                                              (loop-guard-give-up!
+                                               agent text-buf :thinking
+                                               "Stopped: repeated reasoning detected (thinking-loop guard)")
+                                              {:settled (inc t)})
+                                          (let [err (:error result)
                                               ;; Persist the failed attempt before
                                               ;; classifying — session history only,
                                               ;; never the live context (pi:
                                               ;; _prepareRetry drops the errored
                                               ;; message from agent state while
                                               ;; keeping it in the file)
-                                              _ (record-abandoned-attempt! agent result :error)
-                                              {:keys [kind] :as action}
-                                              (retry-decision
-                                               {:err err
-                                                :retry-count @(:retry-count agent)
-                                                :max-retries (:max-retries @(:cfg agent))
-                                                :base-delay-ms (:base-delay-ms @(:cfg agent))
-                                                :overflow-recovered @(:overflow-recovered agent)
-                                                :has-session (some? (:session agent))})]
-                                          (case kind
+                                                _ (record-abandoned-attempt! agent result :error)
+                                                {:keys [kind] :as action}
+                                                (retry-decision
+                                                 {:err err
+                                                  :retry-count @(:retry-count agent)
+                                                  :max-retries (:max-retries @(:cfg agent))
+                                                  :base-delay-ms (:base-delay-ms @(:cfg agent))
+                                                  :overflow-recovered @(:overflow-recovered agent)
+                                                  :has-session (some? (:session agent))})]
+                                            (case kind
                                             ;; Context overflow → compact once, then retry
                                             ;; (pi: overflow is compaction territory, not auto-retry)
-                                            :overflow-recover
-                                            (do (reset! (:overflow-recovered agent) true)
-                                                (compact-for-overflow! agent)
-                                                (recur t prev-tool-calls must-run))
+                                              :overflow-recover
+                                              (do (reset! (:overflow-recovered agent) true)
+                                                  (compact-for-overflow! agent)
+                                                  (recur t prev-tool-calls must-run))
 
                                             ;; Auto-retry with exponential backoff (pi: _prepareRetry)
-                                            :backoff
-                                            (let [{:keys [attempt delay-ms max-attempts]} action]
-                                              (reset! (:retry-count agent) attempt)
-                                              (emit agent {:type :auto-retry-start
-                                                           :attempt attempt
-                                                           :max-attempts max-attempts
-                                                           :delay-ms delay-ms
-                                                           :error-message err})
-                                              (if (backoff-sleep! agent delay-ms)
+                                              :backoff
+                                              (let [{:keys [attempt delay-ms max-attempts]} action]
+                                                (reset! (:retry-count agent) attempt)
+                                                (emit agent {:type :auto-retry-start
+                                                             :attempt attempt
+                                                             :max-attempts max-attempts
+                                                             :delay-ms delay-ms
+                                                             :error-message err})
+                                                (if (backoff-sleep! agent delay-ms)
                                                 ;; Same turn, same context — no new user message
-                                                (recur t prev-tool-calls must-run)
+                                                  (recur t prev-tool-calls must-run)
                                                 ;; Cancelled during backoff
-                                                (do (emit agent {:type :auto-retry-end
-                                                                 :success false
-                                                                 :attempt attempt
-                                                                 :final-error "Retry cancelled"})
-                                                    (reset! (:retry-count agent) 0)
-                                                    (reset! (:status agent) :idle)
-                                                    (emit agent {:type :status :status :idle})
-                                                    (agent-end)
-                                                    {:aborted true})))
+                                                  (do (emit agent {:type :auto-retry-end
+                                                                   :success false
+                                                                   :attempt attempt
+                                                                   :final-error "Retry cancelled"})
+                                                      (reset! (:retry-count agent) 0)
+                                                      (reset! (:status agent) :idle)
+                                                      (emit agent {:type :status :status :idle})
+                                                      (agent-end)
+                                                      {:aborted true})))
 
                                             ;; Terminal error (non-retryable or retries exhausted)
-                                            :terminal (terminal-error! agent err on-error agent-end)))
+                                              :terminal (terminal-error! agent err on-error agent-end))))
 
                                         :else
                                         (let [retried @(:retry-count agent)]
@@ -1769,9 +2023,19 @@ Be precise and concise in your responses."}}]
                                             (reset! (:overflow-recovered agent) false))
                                           (let [tool-calls (:tool-calls result)]
                                             (if (seq tool-calls)
-                                              (let [stop? (tools-phase! agent t result)]
-                                                (if stop?
+                                              (let [phase (tools-phase! agent t result)]
+                                                (cond
+                                                  (= :loop-guard phase)
+                                                  ;; Repeat-loop guard tripped: settle the run
+                                                  ;; with the explanation as the final text
+                                                  (do (loop-guard-give-up!
+                                                       agent text-buf :tool-calls
+                                                       (str "Stopped: repeated identical tool calls "
+                                                            "(threshold " (:loop-guard-threshold @(:cfg agent)) ")"))
+                                                      {:settled (inc t)})
+                                                  phase
                                                   {:settled (inc t)}
+                                                  :else
                                                   (recur (inc t) tool-calls false)))
                                               (let [stop? (final-phase! agent t result)]
                                                 (if stop?

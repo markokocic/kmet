@@ -1300,6 +1300,239 @@
   (t/is (not (loop/context-overflow? "Throttling error: Too many tokens, please wait")))
   (t/is (not (loop/context-overflow? nil))))
 
+;; ─── Repeat-loop guard (circuit breaker) ────────────────────────────────
+
+(defn- loop-guard-tc
+  "A tool-call map shaped like the loop's accumulator output."
+  [name args]
+  {:id (str (gensym "tc")) :name name :arguments args})
+
+(t/deftest test-loop-guard-filter-same-call
+  ;; The 3rd identical call (threshold 3) is suppressed.
+  (let [r (reduce (fn [st _]
+                    (:state (loop/loop-guard-filter st 3 [(loop-guard-tc "bash" {:command "ls"})])))
+                  {:window [] :suppressed 0} (range 3))]
+    (t/is (= 1 (:suppressed r)) "3rd identical call suppressed")))
+
+(t/deftest test-loop-guard-filter-alternating
+  ;; 1,2,1,2,1,2 → the 3rd "1" (call 5) is suppressed — alternation is
+  ;; caught by the per-signature window count, not just consecutive runs.
+  (let [r (reduce (fn [st i]
+                    (:state (loop/loop-guard-filter
+                             st 3 [(loop-guard-tc "bash" {:command (str "cmd" (inc (mod i 2)))})])))
+                  {:window [] :suppressed 0} (range 6))]
+    (t/is (= 2 (:suppressed r)) "1,2,1,2,1,2 trips at the 3rd occurrence of each sig")))
+
+(t/deftest test-loop-guard-filter-cycle
+  ;; 1,2,3,1,2,3 → the 3rd "1" (call 7) is suppressed.
+  (let [r (reduce (fn [st i]
+                    (:state (loop/loop-guard-filter
+                             st 3 [(loop-guard-tc "bash" {:command (str "c" (inc (mod i 3)))})])))
+                  {:window [] :suppressed 0} (range 7))]
+    (t/is (= 1 (:suppressed r)) "1,2,3,1,2,3 trips at call 7"))
+  ;; 1,2,3,4 ×3 → window 13 catches the 3rd "1" at call 9.
+  (let [r (reduce (fn [st i]
+                    (:state (loop/loop-guard-filter
+                             st 3 [(loop-guard-tc "bash" {:command (str "c" (inc (mod i 4)))})])))
+                  {:window [] :suppressed 0} (range 9))]
+    (t/is (= 1 (:suppressed r)) "4-cycle trips at call 9")))
+
+(t/deftest test-loop-guard-filter-read-exempt
+  ;; read never trips the guard — re-reading a file is legitimate work.
+  (let [r (reduce (fn [st _]
+                    (:state (loop/loop-guard-filter st 3 [(loop-guard-tc "read" {:path "a"})])))
+                  {:window [] :suppressed 0} (range 10))]
+    (t/is (= 0 (:suppressed r)) "read is exempt")
+    (t/is (= 0 (count (:window r))) "read never enters the window")))
+
+(t/deftest test-loop-guard-filter-key-order-canonical
+  ;; Argument maps differing only in key order count as identical.
+  (t/is (= (loop/loop-guard-signature "edit" {:path "x" :edits [{:oldText "a" :newText "b"}]})
+           (loop/loop-guard-signature "edit" {:edits [{:newText "b" :oldText "a"}] :path "x"}))
+        "key-sorted canonical JSON ignores key order"))
+
+(t/deftest test-loop-thinking-loop-detection
+  (t/is (loop/thinking-loop? "Let me analyze this problem carefully. Let me analyze this problem carefully. Let me analyze this problem carefully."))
+  (t/is (not (loop/thinking-loop? "First check the file. Then read imports. Then run tests.")))
+  (t/is (not (loop/thinking-loop? "ok. ok. ok. ok."))
+        "segments below the min span don't trip")
+  (t/is (not (loop/thinking-loop? nil)) "nil is total — no NPE")
+  (t/is (not (loop/thinking-loop? "")) "empty is false")
+  (t/is (loop/thinking-loop? (str (apply str (repeat 3 "我们需要继续深入分析这个问题的根本原因和潜在影响。"))))
+        "CJK full-stop delimiters trip — multilingual reasoning loops are caught"))
+
+(t/deftest test-loop-guard-mixed-batch-source-order
+  ;; A batch with one suppressed + one surviving call returns results in
+  ;; source order — the suppressed call's synthetic guard result first, the
+  ;; survivor's real result second (regression: map-over-map produced
+  ;; garbage entries).
+  (let [events (atom [])
+        executed (atom [])
+        calls (atom 0)
+        agent (loop/make-agent-state
+               :loop-guard-threshold 3
+               :on-event (fn [e] (swap! events conj e)))]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (let [n (swap! calls inc)]
+                        (cond
+                          (= 1 n)
+                          (do (when-let [on-tc (:on-tool-call opts)]
+                                (on-tc {:id "s1" :name "bash" :arguments "{\"command\":\"ls\"}" :index 0}))
+                              (when-let [on-done (:on-done opts)] (on-done :tool-calls)))
+                          (= 2 n)
+                          (do (when-let [on-tc (:on-tool-call opts)]
+                                (on-tc {:id "s2" :name "bash" :arguments "{\"command\":\"ls\"}" :index 0})
+                                (on-tc {:id "s3" :name "bash" :arguments "{\"command\":\"ls\"}" :index 1})
+                                (on-tc {:id "w1" :name "bash" :arguments "{\"command\":\"pwd\"}" :index 2}))
+                              (when-let [on-done (:on-done opts)] (on-done :tool-calls)))
+                          :else
+                          (do (when-let [on-text (:on-text opts)]
+                                (on-text "done"))
+                              (when-let [on-done (:on-done opts)] (on-done :stop)))))
+                      :done))
+                  tools/execute-tool
+                  (fn [_ args _] (swap! executed conj (:command args))
+                    {:content "ran" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    ;; turn 2: s2 (2nd identical) runs, s3 (3rd identical) suppressed, w1 runs
+    (t/is (= 3 (count @executed)) "three tool executions total (turn 1 + turn 2)")
+    ;; the turn-2 turn-end is the one with 3 tool results (turn 1 has 1,
+    ;; the "done" reply has 0); results are in SOURCE order [s2 s3 w1] →
+    ;; [ran guard ran]
+    (let [te (first (filter #(and (= :turn-end (:type %))
+                                  (= 3 (count (:tool-results %))))
+                            @events))]
+      (t/is (= ["ran" "Repeat-loop guard: bash called with identical args 3 times — suppressed." "ran"]
+               (mapv :content (:tool-results te)))
+            "turn-end carries results in source order, suppressed call carries guard text"))))
+
+(t/deftest test-loop-run-agent-turn-loop-guard-terminates
+  ;; End-to-end: the model keeps issuing the same bash call; the guard
+  ;; suppresses the 3rd, then the run gives up (all-suppressed batch →
+  ;; :loop-guard), settles idle, and delivers the explanation via on-done.
+  (let [events (atom [])
+        calls (atom 0)
+        done-text (atom nil)
+        agent (loop/make-agent-state
+               :on-event (fn [e] (swap! events conj e)))]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (swap! calls inc)
+                      (when-let [on-tc (:on-tool-call opts)]
+                        (on-tc {:id (str "tc" @calls) :name "bash" :arguments "{\"command\":\"ls\"}" :index 0}))
+                      (when-let [on-done (:on-done opts)]
+                        (on-done :tool-calls))
+                      :done))
+                  tools/execute-tool
+                  (fn [_ _ _] {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent
+                            {:message "run"
+                             :on-done (fn [t] (reset! done-text t))
+                             :on-error (fn [_])}))
+    (t/is (>= @calls 3) "the guard gave up after the 3rd identical call")
+    (t/is (some #(= :loop-guard (:type %)) @events)
+          ":loop-guard event emitted")
+    (t/is (= :idle @(:status agent)) "run settles idle")
+    (t/is (str/includes? (or @done-text "") "repeated identical tool calls")
+          "on-done carries the guard explanation")))
+
+(t/deftest test-loop-run-agent-turn-thinking-loop-guard-terminates
+  ;; End-to-end: the model streams the same reasoning segment repeatedly;
+  ;; the thinking-loop guard cuts the stream and settles the run with the
+  ;; explanation (no auto-retry, no red error line).
+  (let [events (atom [])
+        done-text (atom nil)
+        agent (loop/make-agent-state
+               :on-event (fn [e] (swap! events conj e)))]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (when-let [on-thinking (:on-thinking opts)]
+                        (dotimes [_ 4]
+                          (on-thinking "Let me analyze this problem carefully. ")))
+                      (Thread/sleep 30)
+                      (when-let [on-done (:on-done opts)]
+                        (on-done :stop))
+                      :done))]
+      @(loop/run-agent-turn agent
+                            {:message "run"
+                             :on-done (fn [t] (reset! done-text t))
+                             :on-error (fn [e] (reset! done-text (str "ERR:" e)))}))
+    (t/is (some #(= :loop-guard (:type %)) @events)
+          ":loop-guard event emitted")
+    (t/is (= :idle @(:status agent)) "run settles idle")
+    (t/is (str/includes? (or @done-text "") "repeated reasoning detected")
+          "on-done carries the thinking-guard explanation")
+    (t/is (not (str/starts-with? (or @done-text "") "ERR:"))
+          "not routed through the red error path")))
+
+(t/deftest test-loop-run-agent-turn-loop-guard-followup-retrips
+  ;; A follow-up queued before the run gives the model a fresh guard window:
+  ;; after the first trip the follow-up's turn re-runs, and a still-stuck
+  ;; model trips again — each segment gets its own threshold (the follow-up
+  ;; is a new directive, not a continuation of the loop).
+  (let [events (atom [])
+        calls (atom 0)
+        agent (loop/make-agent-state
+               :loop-guard-threshold 3
+               :on-event (fn [e] (swap! events conj e)))]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (let [n (swap! calls inc)]
+                        (when-let [on-tc (:on-tool-call opts)]
+                          (on-tc {:id (str "t" n) :name "bash"
+                                  :arguments "{\"command\":\"ls\"}" :index 0}))
+                        (when-let [on-done (:on-done opts)]
+                          (on-done :tool-calls))
+                        :done)))
+                  tools/execute-tool
+                  (fn [_ _ _] {:content "ok" :is-error false})]
+      (loop/follow-up! agent "continue please")
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (t/is (= 2 (count (filter #(= :loop-guard (:type %)) @events)))
+          "each loop segment (initial run + follow-up) trips once")
+    (t/is (= 6 (count (filter #(= :tool (:role %)) (loop/get-context agent))))
+          "two segments x 3 tool entries (2 real + 1 suppressed each)")
+    (t/is (= :idle @(:status agent)) "run settles idle")))
+
+(t/deftest test-loop-run-agent-turn-loop-guard-disabled
+  ;; Guard off → the loop runs without suppression: same calls repeat past
+  ;; the threshold without any :loop-guard event, and the run settles
+  ;; normally once the stub produces a plain reply.
+  (let [events (atom [])
+        calls (atom 0)
+        agent (loop/make-agent-state
+               :loop-guard-enabled false
+               :on-event (fn [e] (swap! events conj e)))]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (let [n (swap! calls inc)]
+                        (when (<= n 3)
+                          (when-let [on-tc (:on-tool-call opts)]
+                            (on-tc {:id (str "tc" n) :name "bash" :arguments "{}" :index 0})))
+                        (when-let [on-done (:on-done opts)]
+                          (on-done (if (<= n 3) :tool-calls :stop)))
+                        (when (and (> n 3) (:on-text opts))
+                          ((:on-text opts) "done")))
+                      :done))
+                  tools/execute-tool
+                  (fn [_ _ _] {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (t/is (nil? (some #(= :loop-guard (:type %)) @events))
+          "no :loop-guard event when disabled")
+    (t/is (>= @calls 3) "the same call repeated past the threshold")
+    (t/is (= :idle @(:status agent)))))
+
 ;; ─── Tool hooks (before/after tool-call) ─────────────────────────────────
 
 (defn- stub-llm-tool-then-text

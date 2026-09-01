@@ -312,6 +312,44 @@
                    (cfg/get-retry-settings-live {:retry {:max-retries 5}})))))
       (finally (fs/delete-tree tmp)))))
 
+;; ─── Loop guard (repeat-loop circuit breaker) ─────────────────────────────
+
+(t/deftest test-get-loop-guard-settings
+  (t/testing "defaults when :loop-guard is absent"
+    (t/is (= {:enabled true :threshold 3}
+             (cfg/get-loop-guard-settings {}))))
+  (t/testing "partial :loop-guard maps merge with defaults"
+    (t/is (= {:enabled false :threshold 3}
+             (cfg/get-loop-guard-settings {:loop-guard {:enabled false}})))
+    (t/is (= {:enabled true :threshold 5}
+             (cfg/get-loop-guard-settings {:loop-guard {:threshold 5}}))
+          "threshold passes through"))
+  (t/testing "threshold clamps to >= 2"
+    (t/is (= {:enabled true :threshold 2}
+             (cfg/get-loop-guard-settings {:loop-guard {:threshold 1}}))
+          "a 1-call threshold is too aggressive — clamped")))
+
+(t/deftest test-get-loop-guard-settings-live
+  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-lg-live-" (System/currentTimeMillis)))))
+        settings-file (str tmp "/settings.edn")]
+    (fs/create-dirs tmp)
+    (try
+      (with-redefs [cfg/global-settings-path (fn [] settings-file)]
+        (t/testing "reads the file :loop-guard block"
+          (spit settings-file "{:loop-guard {:enabled false :threshold 5}}\n")
+          (t/is (= {:enabled false :threshold 5}
+                   (cfg/get-loop-guard-settings-live {:loop-guard {:threshold 3}}))))
+        (t/testing "missing file falls back to the config value"
+          (fs/delete-tree tmp)
+          (t/is (= {:enabled true :threshold 3}
+                   (cfg/get-loop-guard-settings-live {:loop-guard {:threshold 3}}))))
+        (t/testing "file without :loop-guard falls back to the config (project override)"
+          (fs/create-dirs tmp)
+          (spit settings-file "{:provider :opencode-go}\n")
+          (t/is (= {:enabled true :threshold 3}
+                   (cfg/get-loop-guard-settings-live {:loop-guard {:threshold 3}})))))
+      (finally (fs/delete-tree tmp)))))
+
 (t/deftest test-set-enabled-models!
   (let [tmp (str (fs/absolutize (fs/file "target" (str "test-enabled-models-" (System/currentTimeMillis)))))
         settings-file (str tmp "/settings.edn")]

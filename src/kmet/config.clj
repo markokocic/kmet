@@ -25,6 +25,9 @@
    :compact-reserve-tokens 16384
    :keep-recent-tokens 20000
    :retry {:enabled true :max-retries 3 :base-delay-ms 2000}
+   ;; loop guard: repeat-loop circuit breaker (tool-call + thinking)
+   :loop-guard {:enabled true :threshold 3}
+   :thinking-loop-guard-enabled true
    :models []
    :http-idle-timeout-ms 300000
    ;; pi: timeoutMs ?? httpIdleTimeoutMs — the whole-request deadline the
@@ -321,6 +324,32 @@
                         ;; :retry falls back to the config (project override)
                         (assoc config :retry (get settings :retry (:retry config)))
                         config)))
+
+;; ─── Loop guard (repeat-loop circuit breaker) ────────────────────────────
+
+(defn get-loop-guard-settings
+  "Loop-guard settings (pi: no counterpart — kmet's repeat-loop circuit
+   breaker; mirrors the :retry block shape). Returns {:enabled bool
+   :threshold n}; the deep-merged config may carry a partial :loop-guard
+   map. Threshold is clamped to >= 2 (a 1-call threshold would suppress
+   the second occurrence of any repeated call — too aggressive)."
+  [config]
+  (let [lg (:loop-guard config)]
+    {:enabled (if (contains? lg :enabled) (:enabled lg) true)
+     :threshold (max 2 (or (:threshold lg) 3))}))
+
+(defn get-loop-guard-settings-live
+  "Live :loop-guard settings from the global settings file (the in-memory
+   config is a startup snapshot — /settings re-reads after a same-session
+   change, like get-retry-settings-live). Falls back to the CONFIG value
+   when the file is missing, unreadable, or lacks :loop-guard (project
+   overrides)."
+  [config]
+  (get-loop-guard-settings (if-let [settings (read-global-settings)]
+                             ;; the file wins only for keys it has — an absent
+                             ;; :loop-guard falls back to the config
+                             (assoc config :loop-guard (get settings :loop-guard (:loop-guard config)))
+                             config)))
 
 ;; ─── System prompt sources (pi: resolvePromptInput + discoverSystemPromptFile) ──
 

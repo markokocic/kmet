@@ -2808,6 +2808,14 @@
       ;; schedules the frame)
       (when-let [cs @cs-ref]
         (update-footer! cs))
+      :loop-guard
+      ;; Repeat-loop guard tripped (kmet-specific): show a warning line in
+      ;; the transcript — the run has already settled (the final text
+      ;; carries the explanation)
+      (ui/chat-history-add-message!
+       chat-history
+       {:role :warning
+        :content (or (:details evt) "Stopped: repeat-loop guard tripped")})
       :agent-end
       ;; Pi: maybeShowCacheMissNotice — a significant
       ;; prompt-cache miss on the completed turn (only
@@ -3080,6 +3088,11 @@
             :max-retries (let [retry (cfg/get-retry-settings config)]
                            (if (:enabled retry) (:max-retries retry) 0))
             :base-delay-ms (:base-delay-ms (cfg/get-retry-settings config))
+            ;; Repeat-loop guard (kmet-specific): settings.edn :loop-guard
+            ;; block — enabled gates threshold to 0 (off)
+            :loop-guard-enabled (:enabled (cfg/get-loop-guard-settings config))
+            :loop-guard-threshold (:threshold (cfg/get-loop-guard-settings config))
+            :thinking-loop-guard-enabled (get config :thinking-loop-guard-enabled true)
             ;; Extension tool hooks (pi: tool_call / tool_result transforms):
             ;; chained in registration order; later hooks see earlier
             ;; rewrites. Captured at layout build — extensions register at

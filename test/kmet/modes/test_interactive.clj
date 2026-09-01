@@ -53,6 +53,8 @@
     :compaction-end {:type :compaction-end :reason :threshold :result true}
     :context-replaced {:type :context-replaced :messages []}
     :auto-retry-end {:type :auto-retry-end :success true :attempt 1}
+    :loop-guard {:type :loop-guard :reason :tool-calls
+                 :details "Stopped: repeated identical tool calls"}
     ;; the remaining vocabulary events carry only :type
     {:type type}))
 

@@ -64,6 +64,13 @@
    "Unhandled error inside the agent loop.
     Payload: :message."
 
+   :loop-guard
+   "Repeat-loop circuit breaker tripped: the model kept issuing identical
+    tool calls (or repeating its reasoning), so the run was stopped early
+    to avoid burning tokens on a dead end (kmet-specific — no pi
+    counterpart). Payload: :reason (:tool-calls | :thinking),
+    :details (human-readable explanation)."
+
    ;; ─── App-level events (emitted by the interactive mode, not the loop) ──
    :session-start
    "Fired once after the interactive TUI is built and the extension UI
