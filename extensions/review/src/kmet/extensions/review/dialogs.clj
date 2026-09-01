@@ -6,10 +6,10 @@
    SelectList inside an overlay dialog.
 
    Each dialog returns a result via the ui-custom `close` callback.
-   Cancel = `close nil` (or a tab/escape key)."
+   Cancel = `close nil` (or escape)."
   (:require [clojure.string :as str]
             [kmet.extension :as ext]
-            [kmet.tui.keys :as keys]
+            [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.hiccup :as h]
@@ -36,17 +36,54 @@
 
 (defn- run-dialog
   "Mount FACTORY via (ext/ui-custom) and deref the resulting promise,
-   defaulting to DEFAULT on nil. FACTORY is a (fn [tui th kb close] ...)
-   that returns a component (or a duck-typed map) and calls CLOSE with
-   the result. OVERLAY-OPTS are forwarded to ui-custom."
+   defaulting to DEFAULT on nil or when no UI is available (headless).
+   FACTORY is a (fn [tui th kb close] ...) that returns a component and
+   calls CLOSE with the result. OVERLAY-OPTS are forwarded to ui-custom."
   [api factory default & [overlay-opts]]
-  (let [result (atom default)
-        close-promise (ext/ui-custom
-                       api factory
-                       (merge {:overlay true
-                               :overlay-options {:anchor :center :width 82}}
-                              overlay-opts))]
-    (or @result (deref close-promise 60000 default))))
+  (if-let [p (ext/ui-custom
+              api factory
+              (merge {:overlay true
+                      :overlay-options {:anchor :center :width 82}}
+                     overlay-opts))]
+    (try (deref p 60000 default)
+         (catch Exception _ default))
+    default))
+
+;; ─── Dialog components (IFocusable forwarding) ─────────────────────────
+
+(defcomponent ReviewSelectDialog nil [overlay select-list focused?-atom]
+  (render [this width] (protocols/render (:overlay this) width))
+  (handle-input [this data] (protocols/handle-input (:select-list this) data))
+  (invalidate [this]
+    (protocols/invalidate (:overlay this))
+    (protocols/invalidate (:select-list this)))
+  (dispose [this]
+    (protocols/dispose (:select-list this))
+    (h/dispose-tree! (:overlay this))))
+
+(extend-type ReviewSelectDialog
+  protocols/IFocusable
+  (focused [this] @(:focused?-atom this))
+  (set-focused! [this val]
+    (reset! (:focused?-atom this) val)
+    (protocols/set-focused! (:select-list this) val)))
+
+(defcomponent ReviewInputDialog nil [overlay input-comp focused?-atom]
+  (render [this width] (protocols/render (:overlay this) width))
+  (handle-input [this data] (protocols/handle-input (:input-comp this) data))
+  (invalidate [this]
+    (protocols/invalidate (:overlay this))
+    (protocols/invalidate (:input-comp this)))
+  (dispose [this]
+    (protocols/dispose (:input-comp this))
+    (h/dispose-tree! (:overlay this))))
+
+(extend-type ReviewInputDialog
+  protocols/IFocusable
+  (focused [this] @(:focused?-atom this))
+  (set-focused! [this val]
+    (reset! (:focused?-atom this) val)
+    (protocols/set-focused! (:input-comp this) val)))
 
 ;; ─── Preset selector (pi: showReviewSelector) ──────────────────────────
 
@@ -88,46 +125,41 @@
    `:toggle-custom-instructions`), or nil on cancel/timeout.
 
    CUSTOM-INSTRUCTIONS-SET? — true when the custom-instructions row
-   should read \"Remove ...\" instead of \"Add ...\"."
-  [api custom-instructions-set?]
-  (let [items (conj (vec preset-items)
-                    {:value toggle-custom-value
-                     :label (if custom-instructions-set?
-                              "Remove custom review instructions"
-                              "Add custom review instructions")
-                     :description (if custom-instructions-set?
-                                    "(currently set)"
-                                    "(applies to all review modes)")})
-        initial (smart-default false false)]
-    (run-dialog
-     api
-     (fn [_tui th _kb close]
-       (let [sl (select-list/make-select-list
-                 items
-                 :height (min 10 (count items))
-                 :theme (theme/get-select-list-theme th)
-                 :no-match-text "  No matching presets"
-                 :on-select (fn [item] (close (:value item)))
-                 :on-escape (fn [] (close nil)))
-             _ (select-list/select-list-set-selected! sl initial)
-             overlay (framed-overlay
-                      th "Select a review preset"
-                      [:container {} sl]
-                      "Type to filter · enter to confirm · esc to cancel")]
-         {:render (fn [w] (protocols/render overlay w))
-          :handle-input (fn [data]
-                          (cond
-                            (keys/matches-key? data "escape")
-                            (close nil)
-                            :else
-                            (protocols/handle-input sl data)))
-          :invalidate (fn []
-                        (protocols/invalidate sl)
-                        (protocols/invalidate overlay))
-          :dispose (fn []
-                     (protocols/dispose sl)
-                     (h/dispose-tree! overlay))}))
-     nil)))
+   should read \"Remove ...\" instead of \"Add ...\".
+   INITIAL-IDX — optional preselected index (pi smart default)."
+  ([api custom-instructions-set?]
+   (show-preset-selector! api custom-instructions-set? (smart-default false false)))
+  ([api custom-instructions-set? initial-idx]
+   (let [items (conj (vec preset-items)
+                     {:value toggle-custom-value
+                      :label (if custom-instructions-set?
+                               "Remove custom review instructions"
+                               "Add custom review instructions")
+                      :description (if custom-instructions-set?
+                                     "(currently set)"
+                                     "(applies to all review modes)")})
+         initial (or initial-idx (smart-default false false))]
+     (run-dialog
+      api
+      (fn [_tui th _kb close]
+        (let [sl (select-list/make-select-list
+                  items
+                  :height (min 10 (count items))
+                  :theme (theme/get-select-list-theme th)
+                  :no-match-text "  No matching presets"
+                  :on-select (fn [item] (close (:value item)))
+                  :on-escape (fn [] (close nil)))
+              _ (select-list/select-list-set-selected! sl initial)
+              overlay (framed-overlay
+                       th "Select a review preset"
+                       [:container {} sl]
+                       "Type to filter · enter to confirm · esc to cancel")]
+          (map->ReviewSelectDialog
+           {:kind nil
+            :overlay overlay
+            :select-list sl
+            :focused?-atom (atom false)})))
+      nil))))
 
 ;; ─── Branch selector (pi: showBranchSelector) ──────────────────────────
 
@@ -152,19 +184,11 @@
                     th title
                     [:container {} sl]
                     "Type to filter · enter to select · esc to cancel")]
-       {:render (fn [w] (protocols/render overlay w))
-        :handle-input (fn [data]
-                        (cond
-                          (keys/matches-key? data "escape")
-                          (close nil)
-                          :else
-                          (protocols/handle-input sl data)))
-        :invalidate (fn []
-                      (protocols/invalidate sl)
-                      (protocols/invalidate overlay))
-        :dispose (fn []
-                   (protocols/dispose sl)
-                   (h/dispose-tree! overlay))}))
+       (map->ReviewSelectDialog
+        {:kind nil
+         :overlay overlay
+         :select-list sl
+         :focused?-atom (atom false)})))
    nil))
 
 ;; ─── Commit selector (pi: showCommitSelector) ──────────────────────────
@@ -188,19 +212,11 @@
                     th "Select commit to review"
                     [:container {} sl]
                     "Type to filter · enter to select · esc to cancel")]
-       {:render (fn [w] (protocols/render overlay w))
-        :handle-input (fn [data]
-                        (cond
-                          (keys/matches-key? data "escape")
-                          (close nil)
-                          :else
-                          (protocols/handle-input sl data)))
-        :invalidate (fn []
-                      (protocols/invalidate sl)
-                      (protocols/invalidate overlay))
-        :dispose (fn []
-                   (protocols/dispose sl)
-                   (h/dispose-tree! overlay))}))
+       (map->ReviewSelectDialog
+        {:kind nil
+         :overlay overlay
+         :select-list sl
+         :focused?-atom (atom false)})))
    nil))
 
 ;; ─── Text input dialogs (pi: ctx.ui.editor) ────────────────────────────
@@ -214,6 +230,7 @@
    (fn [_tui th _kb close]
      (let [inp (input/make-input)
            _ (input/input-set-value! inp initial)
+           _ (reset! (:cursor-atom inp) (count (or initial "")))
            _ (input/input-set-on-submit!
               inp (fn [v] (close (str/trim v))))
            _ (input/input-set-on-escape!
@@ -227,19 +244,11 @@
                   (theme/fg th :dim "Enter to confirm · esc to cancel")]]
            overlay (framed-overlay th title body
                                    "Enter to confirm · esc to cancel")]
-       {:render (fn [w] (protocols/render overlay w))
-        :handle-input (fn [data]
-                        (cond
-                          (keys/matches-key? data "escape")
-                          (close nil)
-                          :else
-                          (protocols/handle-input inp data)))
-        :invalidate (fn []
-                      (protocols/invalidate inp)
-                      (protocols/invalidate overlay))
-        :dispose (fn []
-                   (protocols/dispose inp)
-                   (h/dispose-tree! overlay))}))
+       (map->ReviewInputDialog
+        {:kind nil
+         :overlay overlay
+         :input-comp inp
+         :focused?-atom (atom false)})))
    nil))
 
 (defn show-folder-input!
