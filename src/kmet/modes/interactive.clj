@@ -107,6 +107,77 @@
   []
   (session/find-most-recent-session (ensure-cwd-session-dir) (str (fs/cwd))))
 
+(defn- quote-if-needed
+  "pi quoteIfNeeded — leave safe shell tokens bare, else single-quote with
+   escaped single quotes."
+  [value]
+  (if (and (seq value)
+           (every? (fn [c]
+                     (or (Character/isLetterOrDigit ^char c)
+                         (contains? #{\_ \- \. \/ \~ \: \@} c)))
+                   value))
+    value
+    (str "'" (str/replace value "'" "'\\''") "'")))
+
+(defn- format-resume-command
+  "pi formatResumeCommand — build 'kmet --session <id>' (with --session-dir
+   when non-default) or nil when stdout is not a tty, the session is not
+   persisted (no file yet), or the file is missing."
+  [sess config]
+  (when (and sess (:file sess) (fs/exists? (:file sess)))
+    (when (some? (System/console))
+      (let [base-dir (cfg/get-session-dir config)
+            default-base (cfg/expand-path "~/.kmet/sessions")
+            base-is-default? (try
+                               (= (str (fs/canonicalize base-dir))
+                                  (str (fs/canonicalize default-base)))
+                               (catch Exception _
+                                 (= base-dir default-base)))
+            actual-dir (str (fs/parent (:file sess)))
+            sess-cwd (or (get-in sess [:header :cwd]) (str (fs/cwd)))
+            expected-dir (session/session-dir-for-cwd base-dir sess-cwd)
+            ;; Pi's usesDefaultSessionDir: true only when sessionDir equals
+            ;; the encoded default for its cwd. For kmet that is actual-dir
+            ;; == expected-dir *and* the base itself is the default base.
+            ;; A custom base is always non-default even when the per-cwd
+            ;; dir matches. An out-of-tree file (absolute --session path)
+            ;; is also non-default.
+            uses-default? (and base-is-default?
+                               (try
+                                 (= (str (fs/canonicalize actual-dir))
+                                    (str (fs/canonicalize expected-dir)))
+                                 (catch Exception _
+                                   (= actual-dir expected-dir))))
+            session-dir-arg (when-not uses-default?
+                              (if (not base-is-default?)
+                                base-dir
+                                actual-dir))
+            args (cond-> ["kmet"]
+                   session-dir-arg (into ["--session-dir" (quote-if-needed session-dir-arg)])
+                   true (into ["--session" (:id sess)]))]
+        (str/join " " args)))))
+
+(defn- resolve-session-arg
+  "Resolve a --session arg to a session file path. Path-like values
+   (containing / \\ or ending with .ednl/.jsonl) resolve relative to cwd;
+   otherwise the arg is treated as a session id or id prefix and searched
+   among all sessions under BASE-DIR (pi: resolveSessionPath). Returns the
+   canonical path or nil when not found."
+  [arg base-dir]
+  (let [arg (cfg/expand-path (str arg))
+        cwd (str (fs/cwd))]
+    (if (or (str/includes? arg "/")
+            (str/includes? arg "\\")
+            (str/ends-with? arg ".ednl")
+            (str/ends-with? arg ".jsonl"))
+      (let [p (if (fs/absolute? arg) arg (str (fs/path cwd arg)))]
+        (when (fs/exists? p)
+          (str (fs/canonicalize p))))
+      (let [infos (session/list-sessions-info base-dir)
+            exact (some #(when (= (:id %) arg) (:path %)) infos)
+            prefix (some #(when (str/starts-with? (:id %) arg) (:path %)) infos)]
+        (or exact prefix)))))
+
 ;; ─── Core state ────────────────────────────────────────────────────────────
 
 (defrecord CoreState [tui
@@ -4202,6 +4273,14 @@
       (let [config (cfg/apply-cli-overrides config opts)
             _ (reset! global-config config)
             session (cond
+                      (:session opts)
+                      (let [base-dir (cfg/get-session-dir config)
+                            path (resolve-session-arg (:session opts) base-dir)]
+                        (if path
+                          (session/load-session path)
+                          (do (binding [*out* *err*]
+                                (println (str "No session found matching '" (:session opts) "'")))
+                              (System/exit 1))))
                       (:resume opts) nil
                       (:continue opts) (if-let [path (find-session)]
                                          ;; find-session returns the session
@@ -4292,7 +4371,8 @@
               (debug/log "terminal title: " e))))
         (tui/tui-start (:tui cs))
         (process/kill-tracked-children!)
-        (println "kmet session ended.")
+        (when-let [resume (format-resume-command @(:session-atom cs) config)]
+          (println (str (th/dim "To resume this session:") " " resume)))
         (:tui cs))
       (catch Exception e
         ;; Restore terminal if TUI was started, then rethrow for -main

@@ -25,6 +25,8 @@
                :continue false
                :resume false
                :debug false
+               :session nil
+               :session-dir nil
                :messages []
                :ext-flags {}}]
     (if (empty? args)
@@ -49,6 +51,16 @@
 
           (#{"-r" "--resume"} arg)
           (recur rest-args (assoc opts :resume true))
+
+          (#{"--session"} arg)
+          (if (seq rest-args)
+            (recur (rest rest-args) (assoc opts :session (first rest-args)))
+            (recur rest-args opts))
+
+          (#{"--session-dir"} arg)
+          (if (seq rest-args)
+            (recur (rest rest-args) (assoc opts :session-dir (first rest-args)))
+            (recur rest-args opts))
 
           (#{"--model"} arg)
           (if (seq rest-args)
@@ -131,6 +143,8 @@
   (println "  -p, --print           Print response and exit (non-interactive)")
   (println "  -c, --continue        Continue most recent session")
   (println "  -r, --resume          Browse sessions")
+  (println "  --session <id|path>   Resume session by id/prefix or file path")
+  (println "  --session-dir <dir>   Session storage directory")
   (println "  --model <id>          Model to use (pattern: provider/model[:thinking])")
   (println "  --provider <name>     Provider (opencode-go, opencode, deepseek,\n                        github-copilot, openai, xai, openai-codex,\n                        azure-openai-responses, anthropic, google, groq,\n                        cerebras, huggingface, moonshotai, xiaomi, qwen-token-plan,\n                        minimax, nvidia, openrouter, fireworks, ...)")
   (println "  --models <patterns>   Comma-separated model patterns for Ctrl+P cycling")
