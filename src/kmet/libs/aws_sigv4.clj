@@ -1,8 +1,7 @@
 (ns kmet.libs.aws-sigv4
   "AWS Signature Version 4 request signing (the SigV4 side of pi's
    amazon-bedrock provider — pi uses the AWS SDK's default credential chain
-   + SigV4; Babashka has no AWS SDK, so the signing is done here over
-   babashka.http-client).
+   + SigV4; Babashka has no AWS SDK, so the signing is done here).
 
    One public fn: sign-request. The canonical request / string-to-sign /
    signing-key chain follow the AWS docs; the tests pin the intermediate

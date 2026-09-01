@@ -766,7 +766,7 @@
     ;; Non-network exceptions keep their message / legacy fallback
     (t/is (= "Invalid API key" (te (ex-info "Invalid API key" {}))))
     (t/is (= "Request failed: ExceptionInfo" (te (ex-info nil {}))))
-    ;; babashka.http-client throw-on-error: 'Exceptional status code: N' with
+    ;; HTTP error responses: 'Exceptional status code: N' with
     ;; the full response in ex-data — the provider's error message must
     ;; surface so overflow/throttle classifiers see the real error
     (let [overflow "{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"This model's maximum context length is 1048576 tokens. However, you requested 1048586 tokens. Please reduce the length of the messages or completion.\"}}"

@@ -728,7 +728,7 @@ them in that order.
 - `kmet.libs.oauth` sits inside the `bb lint` / `bb test` gates and must
   pass `kmet.libs.test-self-contained` (no kmet.* requires) — unlike the
   extension files. The extraction must be behavior-neutral for
-  `kmet.ai.oauth`'s provider flows (they keep `kmet.ai.proxy` transport;
+  `kmet.ai.oauth`'s provider flows (they go through `kmet.libs.http`;
   the lib is transport-agnostic).
 - Some servers negotiate an older protocol version — accept the server's
   response version; never send `notifications/initialized` before

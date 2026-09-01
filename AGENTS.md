@@ -56,6 +56,12 @@
 - `clojure.java.io`  over `java.io.*`
 - Avoid `^String`, `^java.io.File`, `^java.io.Reader` etc. type hints — stay Babashka-compatible.
 - No `java.io.*` or `java.nio.file.*` imports — everything is available via `babashka.fs` and `slurp`/`spit`
+- **All outbound HTTP goes through `kmet.libs.http`** — the single
+  transport-neutral boundary (babashka.http-client + curl, proxy env vars).
+  No other namespace may require `babashka.http-client` or spawn `curl`;
+  the retired `kmet.libs.proxy` / `kmet.ai.proxy` are deleted (enforced by
+  `kmet.test-http-boundary`). Provider streams use the `kmet.ai.http`
+  decorator on top.
 
 ### Code Style
 - **Records, not deftype**: use `defrecord` + `map->` constructors

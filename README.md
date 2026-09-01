@@ -151,7 +151,9 @@ src/kmet/
 │   ├── image_models.clj — image-generation registry + :openrouter-images
 │   │                     wire (image_model_data/ catalog)
 │   ├── aws_sigv4.clj / google_adc.clj — bedrock SigV4 + vertex ADC auth
-│   └── proxy.clj       — proxy env vars + curl transport
+│   ├── http.clj       — the single outbound-HTTP boundary (proxy env
+│   │                     vars + curl transport; libs/http.clj is the
+│   │                     shared transport)
 ├── app/                — App business logic (pi: dist/core/)
 │   ├── model_resolver.clj — model pattern/CLI resolution
 │   ├── tools/          — read/write/edit/bash tools (grep/find/ls disabled)

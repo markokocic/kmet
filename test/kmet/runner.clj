@@ -35,7 +35,6 @@
     kmet.ai.test-oauth
     kmet.ai.test-image-models
     kmet.ai.test-model-data
-    kmet.ai.test-proxy
     kmet.ai.test-self-contained
     kmet.ai.test-constrained-sampling
     kmet.ai.test-api-tools
@@ -101,7 +100,6 @@
     kmet.libs.test-edn-store
     kmet.libs.test-jsonrpc
     kmet.libs.test-http
-    kmet.libs.test-proxy
     kmet.libs.test-aws-sigv4
     kmet.libs.test-context
     kmet.app.ui.test-chat-history
