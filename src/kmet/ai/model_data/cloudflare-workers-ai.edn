@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-31T06:35:53Z"
+ :generated-at "2026-09-02T23:43:15Z"
  :provider {:id :cloudflare-workers-ai
             :name "Cloudflare Workers AI"
             :env-vars ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID"]

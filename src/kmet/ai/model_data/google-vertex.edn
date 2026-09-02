@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-31T06:35:53Z"
+ :generated-at "2026-09-02T23:43:15Z"
  :provider {:id :google-vertex
             :name "Google Vertex AI"
             :env-vars ["GOOGLE_CLOUD_API_KEY"]
@@ -146,6 +146,18 @@
    "gemini-3.7-flash"
    {:id "gemini-3.7-flash"
     :name "Gemini 3.7 Flash"
+    :provider :google-vertex
+    :api :google-vertex
+    :base-url "https://{location}-aiplatform.googleapis.com"
+    :reasoning true
+    :thinking-level-map {:off nil}
+    :input [:text :image]
+    :cost {:input 0.75 :output 3.75 :cache-read 0.075 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 65536}
+   "gemini-3.8-flash"
+   {:id "gemini-3.8-flash"
+    :name "Gemini 3.8 Flash"
     :provider :google-vertex
     :api :google-vertex
     :base-url "https://{location}-aiplatform.googleapis.com"

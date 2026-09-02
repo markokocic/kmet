@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-31T06:35:53Z"
+ :generated-at "2026-09-02T23:43:15Z"
  :provider {:id :huggingface
             :name "Hugging Face"
             :env-vars ["HF_TOKEN"]
@@ -784,7 +784,7 @@
     :input [:text]
     :cost {:input 0.14 :output 0.58 :cache-read 0 :cache-write 0}
     :context-window 262144
-    :max-tokens 64000
+    :max-tokens 128000
     :compat {:supports-developer-role false}}
    "thinkingmachines/Inkling"
    {:id "thinkingmachines/Inkling"

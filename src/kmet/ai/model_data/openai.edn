@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-01T08:18:52Z"
+ :generated-at "2026-09-02T23:43:15Z"
  :provider {:id :openai
             :name "OpenAI"
             :env-vars ["OPENAI_API_KEY"]
@@ -205,25 +205,6 @@
     :context-window 400000
     :max-tokens 128000
     :compat {:supports-strict-mode true :supports-openai-grammar-tools true}}
-   "gpt-5.2-chat-latest"
-   {:id "gpt-5.2-chat-latest"
-    :name "GPT-5.2 Chat"
-    :provider :openai
-    :api :openai-responses
-    :base-url "https://api.openai.com/v1"
-    :reasoning true
-    :thinking-level-map {:high nil
-                         :low nil
-                         :max nil
-                         :medium "medium"
-                         :minimal nil
-                         :off nil
-                         :xhigh "xhigh"}
-    :input [:text :image]
-    :cost {:input 1.75 :output 14 :cache-read 0.175 :cache-write 0}
-    :context-window 128000
-    :max-tokens 16384
-    :compat {:supports-strict-mode true :supports-openai-grammar-tools true}}
    "gpt-5.2-pro"
    {:id "gpt-5.2-pro"
     :name "GPT-5.2 Pro"
@@ -242,19 +223,6 @@
     :cost {:input 21 :output 168 :cache-read 0 :cache-write 0}
     :context-window 400000
     :max-tokens 128000
-    :compat {:supports-strict-mode true :supports-openai-grammar-tools true}}
-   "gpt-5.3-chat-latest"
-   {:id "gpt-5.3-chat-latest"
-    :name "GPT-5.3 Chat (latest)"
-    :provider :openai
-    :api :openai-responses
-    :base-url "https://api.openai.com/v1"
-    :reasoning false
-    :thinking-level-map {:off nil :xhigh "xhigh"}
-    :input [:text :image]
-    :cost {:input 1.75 :output 14 :cache-read 0.175 :cache-write 0}
-    :context-window 128000
-    :max-tokens 16384
     :compat {:supports-strict-mode true :supports-openai-grammar-tools true}}
    "gpt-5.3-codex"
    {:id "gpt-5.3-codex"

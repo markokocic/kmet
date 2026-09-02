@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-08-31T06:35:53Z"
+ :generated-at "2026-09-02T23:43:15Z"
  :provider {:id :opencode-go
             :name "OpenCode Go"
             :env-vars ["OPENCODE_API_KEY"]
@@ -196,7 +196,7 @@
     :input [:text]
     :cost {:input 0.14 :output 0.58 :cache-read 0.035 :cache-write 0}
     :context-window 256000
-    :max-tokens 64000
+    :max-tokens 128000
     :compat {:supports-store false
              :supports-developer-role false
              :max-tokens-field :max-tokens}}
@@ -451,6 +451,25 @@
    "muse-spark-1.2-contributor"
    {:id "muse-spark-1.2-contributor"
     :name "Muse Spark 1.2 Contributor"
+    :provider :opencode-go
+    :api :openai-responses
+    :base-url "https://opencode.ai/zen/go/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 0.1 :output 0.2 :cache-read 0.002 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 131072
+    :compat {:session-affinity-format :openai-nosession}}
+   "muse-spark-1.3-contributor"
+   {:id "muse-spark-1.3-contributor"
+    :name "Muse Spark 1.3 Contributor"
     :provider :opencode-go
     :api :openai-responses
     :base-url "https://opencode.ai/zen/go/v1"
