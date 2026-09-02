@@ -30,6 +30,7 @@
             [clojure.core.async :as async]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [kmet.libs.concurrent :as concurrent]
             [kmet.libs.http :as http]
             [kmet.libs.process :as process]
             [kmet.libs.sse :as sse]))
@@ -47,14 +48,7 @@
 
 (def ^:private eof-marker ::eof)
 
-(defn- spawn
-  "Start a daemon thread running F (future is not available in the
-   extension sci context). Exceptions in F are dropped."
-  [f]
-  (let [t (Thread. (fn [] (try (f) (catch Throwable _ nil))))]
-    (.setDaemon t true)
-    (.start t)
-    t))
+(def ^:private spawn concurrent/spawn)
 
 (defn- read-stream
   "Read an InputStream fully as text."

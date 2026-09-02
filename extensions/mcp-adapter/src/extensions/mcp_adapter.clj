@@ -19,18 +19,12 @@
             [extensions.mcp-adapter.script :as script]
             [extensions.mcp-adapter.setup :as setup]
             [kmet.extension :as ext]
+            [kmet.libs.concurrent :as concurrent]
             [kmet.tui.theme :as theme]))
 
 (def ^:private state-atom (atom nil))
 
-(defn- spawn
-  "Start a daemon thread running F (future is not available in the
-   extension sci context). Exceptions in F are dropped."
-  [f]
-  (let [t (Thread. (fn [] (try (f) (catch Throwable _ nil))))]
-    (.setDaemon t true)
-    (.start t)
-    t))
+(def ^:private spawn concurrent/spawn)
 
 (declare ensure-connected! disconnect-server! sync-direct-tools!
          sync-prompt-commands! register-proxy-tool!

@@ -32,18 +32,12 @@
             [clojure.string :as str]
             [extensions.mcp-adapter.output-guard :as guard]
             [extensions.mcp-adapter.tool-proxy :as proxy]
+            [kmet.libs.concurrent :as concurrent]
             [kmet.libs.process :as process]))
 
 (def default-timeout-ms 30000)
 
-(defn- spawn
-  "Start a daemon thread running F (future is not available in the
-   extension sci context). Exceptions in F are dropped."
-  [f]
-  (let [t (Thread. (fn [] (try (f) (catch Throwable _ nil))))]
-    (.setDaemon t true)
-    (.start t)
-    t))
+(def ^:private spawn concurrent/spawn)
 
 ;; ─── The embedded child runtime ───────────────────────────────────────────
 ;; Evaluated by a fresh `bb` subprocess (full Clojure — no sci restrictions

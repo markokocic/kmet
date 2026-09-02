@@ -217,6 +217,20 @@ normal Maven/Git caches (`~/.m2`, `~/.gitlibs`). A library an extension
 requires without declaring it in `deps.edn` fails with a clear error unless
 it is babashka-bundled.
 
+### Background work (`kmet.libs.concurrent/spawn`)
+
+Extension code runs in an isolated SCI context without `future`/`pmap`/`pcalls` — SCI is a pure interpreter with no bundled `Executor`, while `babashka` injects `future` only at the host level (`sci/init {:namespaces {'clojure.core {'future …}}}`). `kmet` deliberately does **not** forward it; use the whitelisted helper `kmet.libs.concurrent/spawn` (the same daemon-`Thread` helper the shipped adapters already copied):
+
+```clojure
+(ns my-ext.main
+  (:require [kmet.libs.concurrent :as concurrent]))
+
+(concurrent/spawn (fn [] (try (do-work) (catch Throwable _ nil))))
+;; => Thread (started, daemon=true); exceptions swallowed, interrupt/join via the returned Thread
+```
+
+- Whitelisting `future` would pull in an implicit global pool, let extension work survive `unload-extension!`/`reload-extensions!` and keep `kmet` alive past shutdown, enable unbounded submission with no backpressure, and need the rest of the family (`future-call`/`future-cancel`/`pmap`/`pcalls`) for consistency. An explicit daemon `Thread` keeps the lifecycle obvious and keeps unload/reload clean. Keep `Thread` use through `kmet.libs.concurrent/spawn` — don't construct `Thread.` directly in extensions.
+
 #### Limits (inherent to Babashka)
 
 - Babashka only runs libraries it supports: pure-Clojure code using classes

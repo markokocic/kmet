@@ -837,7 +837,8 @@
    per-extension context is built — injection is by reference, never
    re-evaluated, so any protocols they define keep their identity. Keep in
    sync with src/kmet/libs/ when a lib is added or removed."
-  '[kmet.libs.diff
+  '[kmet.libs.concurrent
+    kmet.libs.diff
     kmet.libs.edit-diff
     kmet.libs.dynamic-value
     kmet.libs.edn-store

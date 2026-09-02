@@ -20,17 +20,11 @@
             [kmet.extensions.review.dialogs :as dlg]
             [kmet.extensions.review.git :as git]
             [kmet.extensions.review.prompts :as prompts]
+            [kmet.libs.concurrent :as concurrent]
             [kmet.tui.hiccup :as h]
             [kmet.tui.theme :as theme]))
 
-(defn- spawn
-  "Start a daemon thread running F (future is not available in the
-   extension sci context). Exceptions in F are dropped."
-  [f]
-  (let [t (Thread. (fn [] (try (f) (catch Throwable _ nil))))]
-    (.setDaemon t true)
-    (.start t)
-    t))
+(def ^:private spawn concurrent/spawn)
 
 ;; -- Constants ------------------------------------------------------------
 

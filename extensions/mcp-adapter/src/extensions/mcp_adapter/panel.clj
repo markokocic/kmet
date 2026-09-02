@@ -11,6 +11,7 @@
    TextDialog — scrollable text output for search/list (the flash is a
    single line). make-prompt-dialog — the OAuth flow's input prompt."
   (:require [clojure.string :as str]
+            [kmet.libs.concurrent :as concurrent]
             [kmet.tui.core :as tui]
             [kmet.tui.keys :as keys]
             [kmet.tui.keybindings :as kb]
@@ -85,14 +86,7 @@
         desc-len (count (str (or (:description tool) "")))]
     (+ 10 (long (Math/ceil (/ (+ (count (str (:name tool))) desc-len schema-len) 4.0))))))
 
-(defn- spawn
-  "Daemon thread running F (future is not available in the extension sci
-   context). Exceptions in F are dropped."
-  [f]
-  (let [t (Thread. (fn [] (try (f) (catch Throwable _ nil))))]
-    (.setDaemon t true)
-    (.start t)
-    t))
+(def ^:private spawn concurrent/spawn)
 
 (declare rebuild-server-tools! handle-discard-input)
 
@@ -356,14 +350,13 @@
 (defn- reset-inactivity! [panel]
   (cancel-inactivity! panel)
   (let [gen @(:inactivity-gen-atom panel)
-        t (Thread. (fn []
-                     (try (Thread/sleep inactivity-ms)
-                          (catch InterruptedException _ nil))
-                     (when (= gen @(:inactivity-gen-atom panel))
-                       (try ((:done-fn panel) {:cancelled true :changes {}})
-                            (catch Exception _ nil)))))]
-    (.setDaemon t true)
-    (.start t)
+        t (concurrent/spawn
+           (fn []
+             (try (Thread/sleep inactivity-ms)
+                  (catch InterruptedException _ nil))
+             (when (= gen @(:inactivity-gen-atom panel))
+               (try ((:done-fn panel) {:cancelled true :changes {}})
+                    (catch Exception _ nil)))))]
     (reset! (:inactivity-timer-atom panel) t)))
 
 (defn- finish!

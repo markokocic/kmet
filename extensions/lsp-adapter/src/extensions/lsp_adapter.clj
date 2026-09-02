@@ -13,6 +13,7 @@
             [extensions.lsp-adapter.runtime :as runtime]
             [extensions.lsp-adapter.tools :as tools]
             [kmet.extension :as ext]
+            [kmet.libs.concurrent :as concurrent]
             [kmet.libs.edn-store :as edn-store]
             [kmet.tui.theme :as theme]))
 
@@ -20,14 +21,7 @@
 
 (def ^:private home-str (str (fs/home)))
 
-(defn- spawn
-  "Daemon thread running F (futures don't exist in extension sci contexts);
-   exceptions swallowed by design."
-  [f]
-  (let [t (Thread. (fn [] (try (f) (catch Throwable _ nil))))]
-    (.setDaemon t true)
-    (.start t)
-    t))
+(def ^:private spawn concurrent/spawn)
 
 (defn- project-config-path []
   (str (fs/path (str (fs/cwd)) ".kmet" "lsp.edn")))
