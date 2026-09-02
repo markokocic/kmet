@@ -63,7 +63,13 @@
         (cond
           found?
           (let [content (when (fs/exists? guidelines)
-                          (try (slurp guidelines) (catch Exception _ nil)))]
+                          (try (slurp guidelines)
+                               (catch Exception e
+                                 (try
+                                   (when-let [log-fn (resolve 'kmet.debug/log)]
+                                     (log-fn "Failed to read REVIEW_GUIDELINES.md" e))
+                                   (catch Throwable _ nil))
+                                 nil)))]
             (when (and content (seq (str/trim content)))
               (str/trim content)))
 
@@ -202,7 +208,7 @@
           [args pre-extra] (let [trimmed (str/trim args)
                                  m (re-matches #"(?s)(.*?)--extra=(.*)" trimmed)]
                              (if m
-                               [(str (str/trim (second m)) " " (str/trim (nth m 2)))
+                               [(str/trim (second m))
                                 (str/trim (nth m 2))]
                                [trimmed nil]))
           raw (tokenize-args args)
@@ -398,35 +404,38 @@
               (let [leaf2 ((:get-leaf-id (ext/session api)))]
                 (when leaf2 (reset! review-origin-id leaf2)))))))
       (let [origin @review-origin-id]
-        (when (or (not use-fresh-session) origin)
-          (when (and use-fresh-session origin)
-            (let [entries ((:get-branch (ext/session api)))
-                  first-user (some (fn [e]
-                                     (when (and (= :message (:type e))
-                                                (= "user" (:role (:message e))))
-                                       e))
-                                   entries)]
-              (when first-user
-                (try
-                  (let [result (ctx :navigate-tree (:id first-user)
-                                    {:summarize false :label "code-review"})]
-                    (when (:cancelled result)
+        (if (and use-fresh-session (nil? origin))
+          (do (ext/ui-notify api "Failed to create review anchor — not in a session" :error)
+              false)
+          (when (or (not use-fresh-session) origin)
+            (when (and use-fresh-session origin)
+              (let [entries ((:get-branch (ext/session api)))
+                    first-user (some (fn [e]
+                                       (when (and (= :message (:type e))
+                                                  (= "user" (:role (:message e))))
+                                         e))
+                                     entries)]
+                (when first-user
+                  (try
+                    (let [result (ctx :navigate-tree (:id first-user)
+                                      {:summarize false :label "code-review"})]
+                      (when (:cancelled result)
+                        (reset! review-origin-id nil)
+                        (throw (ex-info "navigate-tree cancelled" {}))))
+                    (catch Exception _
                       (reset! review-origin-id nil)
-                      (throw (ex-info "navigate-tree cancelled" {}))))
-                  (catch Exception _
-                    (reset! review-origin-id nil)
-                    (throw (ex-info "navigate-tree failed" {}))))
-                (ctx :set-editor-text "")))
-            (set-review-widget! api true)
-            ((:append-entry! (ext/session api))
-             review-state-type
-             {:active true :origin-id origin}))
-          (let [prompt (assemble-review-prompt api (or (:cwd ctx) (System/getProperty "user.dir")) target extra-instruction)
-                hint (prompts/user-facing-hint target)
-                mode-hint (when use-fresh-session " (fresh session)")]
-            (ext/ui-notify api (str "Starting review: " hint mode-hint) :info)
-            (ext/send-user-message api prompt)
-            true))))))
+                      (throw (ex-info "navigate-tree failed" {}))))
+                  (ctx :set-editor-text "")))
+              (set-review-widget! api true)
+              ((:append-entry! (ext/session api))
+               review-state-type
+               {:active true :origin-id origin}))
+            (let [prompt (assemble-review-prompt api (or (:cwd ctx) (System/getProperty "user.dir")) target extra-instruction)
+                  hint (prompts/user-facing-hint target)
+                  mode-hint (when use-fresh-session " (fresh session)")]
+              (ext/ui-notify api (str "Starting review: " hint mode-hint) :info)
+              (ext/send-user-message api prompt)
+              true)))))))
 
 ;; -- /review command -----------------------------------------------------
 

@@ -836,7 +836,7 @@
   []
   (let [resp (http/get (str nvidia-base-url "/models")
                        {:headers {"User-Agent" "kmet-generate-models"}
-                        :timeout-ms 60000})]
+                        :timeout 60000})]
     (when-not (= 200 (:status resp))
       (throw (ex-info (str "NVIDIA NIM API returned HTTP " (:status resp))
                       {:type :http-error :status (:status resp)})))
@@ -871,7 +871,7 @@
   []
   (let [resp (http/get "https://openrouter.ai/api/v1/models"
                        {:headers {"User-Agent" "kmet-generate-models"}
-                        :timeout-ms 60000})]
+                        :timeout 60000})]
     (when-not (= 200 (:status resp))
       (throw (ex-info (str "OpenRouter API returned HTTP " (:status resp))
                       {:type :http-error :status (:status resp)})))
@@ -978,7 +978,7 @@
   []
   (let [resp (http/get (str ai-gateway-models-url "/models")
                        {:headers {"User-Agent" "kmet-generate-models"}
-                        :timeout-ms 60000})]
+                        :timeout 60000})]
     (when-not (= 200 (:status resp))
       (throw (ex-info (str "Vercel AI Gateway API returned HTTP " (:status resp))
                       {:type :http-error :status (:status resp)})))
@@ -1807,7 +1807,7 @@
                        (when-some [key (not-empty (System/getenv "CMD_API_KEY"))]
                          {"Authorization" (str "Bearer " key)}))
         resp (http/get (str commandcode-base-url "/models")
-                       {:headers headers :timeout-ms 60000})]
+                       {:headers headers :timeout 60000})]
     (when-not (= 200 (:status resp))
       (throw (ex-info (str "CommandCode API returned HTTP " (:status resp))
                       {:type :http-error :status (:status resp)})))
@@ -1828,7 +1828,7 @@
   (try
     (let [resp (http/get "https://commandcode.ai/models"
                          {:headers {"User-Agent" "kmet-generate-models"}
-                          :timeout-ms 60000})]
+                          :timeout 60000})]
       (when-not (= 200 (:status resp))
         (throw (ex-info (str "commandcode.ai/models returned HTTP " (:status resp))
                         {:type :http-error :status (:status resp)})))
@@ -2016,7 +2016,7 @@
   []
   (let [resp (http/get "https://models.dev/api.json"
                        {:headers {"User-Agent" "kmet-generate-models"}
-                        :timeout-ms 60000})]
+                        :timeout 60000})]
     (when-not (= 200 (:status resp))
       (throw (ex-info (str "models.dev returned HTTP " (:status resp))
                       {:type :http-error :status (:status resp)})))

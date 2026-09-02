@@ -116,7 +116,7 @@
    ::download-failed on non-200 and ::sha-mismatch on hash mismatch;
    returns dest."
   [url dest expected-sha256]
-  (let [resp (http/get url {:as :stream :throw? false :timeout-ms 120000})]
+  (let [resp (http/get url {:as :stream :throw? false :timeout 120000})]
     (try
       (when (not= 200 (:status resp))
         (throw (ex-info (str "download failed with HTTP " (:status resp) " for " url)

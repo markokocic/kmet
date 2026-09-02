@@ -195,7 +195,7 @@
                               :body body
                               :as :stream
                               :throw? false
-                              :timeout-ms timeout-ms}))
+                              :timeout timeout-ms}))
         response (attempt headers)]
     (if (and (= 401 (:status response)) (:on-401 conn))
       (do
@@ -301,7 +301,7 @@
                            {:headers headers
                             :as :stream
                             :throw? false
-                            :timeout-ms 30000})]
+                            :timeout 30000})]
     (when-not (<= 200 (:status response) 299)
       ;; close the failed stream (reap curl / release the body) before
       ;; surfacing the MCP error

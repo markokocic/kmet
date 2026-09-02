@@ -326,7 +326,7 @@
                                        "openai-intent" "chat-policy"
                                        "x-interaction-type" "chat-policy")
                        :body (json/generate-string {:state "enabled"})
-                       :timeout-ms 15000})]
+                       :timeout 15000})]
         (<= 200 (:status response) 299))
       (catch Exception _ false))))
 

@@ -8,7 +8,7 @@
 
      (http/request {:url ... :method :get :headers {...} :body ...
                     :as :string          ;; :string | :bytes | :stream
-                    :timeout-ms 30000    ;; ms (:timeout accepted as legacy)
+                    :timeout 30000       ;; ms (nil disables, default 120s on curl path)
                     :throw? true         ;; throw on HTTP >= 400
                     :follow-redirects :normal
                     :signal cancel-atom  ;; curl path only
@@ -131,8 +131,12 @@
   (try
     (let [[net prefix] (str/split cidr #"/" 2)
           prefix (Integer/parseInt prefix)
-          mask (if (>= prefix 32) -1 (bit-shift-left -1 (- 32 prefix)))]
+          mask (cond
+                 (>= prefix 32) -1
+                 (zero? prefix) 0
+                 :else (bit-shift-left -1 (- 32 prefix)))]
       (and (<= prefix 32)
+           (>= prefix 0)
            (== (bit-and (ipv4->int ip) mask)
                (bit-and (ipv4->int net) mask))))
     (catch Exception _ false)))
@@ -321,9 +325,8 @@
    P is the resolved proxy (nil = direct) — the request routes through the
    cached client for that proxy."
   [opts throw? p]
-  (let [native-opts (cond-> (dissoc opts :url :timeout-ms :throw? :signal :proxy)
-                      true (assoc :throw false)
-                      (:timeout-ms opts) (assoc :timeout (:timeout-ms opts)))]
+  (let [native-opts (cond-> (dissoc opts :url :throw? :signal :proxy)
+                      true (assoc :throw false))]
     (try
       (let [resp (http/request (cond-> (assoc native-opts :url (:url opts))
                                  (some? p) (assoc :client (client-for p))))
@@ -380,8 +383,13 @@
    is set — and there is no /tmp on Termux (AGENTS.md), so the curl path
    would fail there without the explicit dir."
   []
-  (java.io.File. (or (System/getenv "TMPDIR")
-                     (System/getProperty "java.io.tmpdir"))))
+  (let [dir (or (System/getenv "TMPDIR")
+                (System/getProperty "java.io.tmpdir")
+                "/data/data/com.termux/files/usr/tmp")
+        f (java.io.File. dir)]
+    (when-not (.exists f)
+      (.mkdirs f))
+    f))
 
 (defn- curl-config-file
   "A temp curl --config file carrying the sensitive request parts — headers
@@ -401,16 +409,14 @@
 (defn- curl-argv
   "Full curl argv. Prefixed with setsid when available so the process is its
    own group leader — kill-process-tree!'s group kill then works reliably.
-   --max-time follows :timeout-ms (ms → s, min 1) when set; an explicitly
+   --max-time follows :timeout (ms → s, min 1) when set; an explicitly
    nil timeout (disabled) omits it; absent gets the curl-timeout-seconds
    default. -L when follow-redirects (default :normal); --compressed for
    transparent gzip (babashka parity); --fail-with-body so HTTP >= 400 exits
    22 with the error body on stdout. Sensitive bits live in the config
    file, never argv."
   [url opts config-file header-file]
-  (let [timeout-ms (if (contains? opts :timeout-ms)
-                     (:timeout-ms opts)
-                     (:timeout opts))
+  (let [timeout-ms (:timeout opts)
         max-time (cond
                    (nil? timeout-ms) nil
                    (pos? timeout-ms) (max 1 (quot (+ timeout-ms 999) 1000))
@@ -572,8 +578,7 @@
      :headers          — map (string or keyword keys)
      :body             — string / bytes / InputStream; a map is JSON-encoded
      :as               — :string (default) | :bytes | :stream
-     :timeout-ms       — total timeout in ms (:timeout accepted as legacy;
-                          nil disables, default 120s on the curl path)
+     :timeout          — total timeout in ms (nil disables, default 120s on the curl path)
      :throw?           — true (default): HTTP >= 400 throws
                           {:type :http-error}; false returns the response
      :follow-redirects — :normal (default) | :always | true | false

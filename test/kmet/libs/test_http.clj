@@ -209,7 +209,7 @@
                         (Thread/sleep 5000)
                         (respond s "200 OK" "late" {})))]
     (try
-      (let [e (try (http/get (str base "/") {:timeout-ms 200}) (catch Exception e e))]
+      (let [e (try (http/get (str base "/") {:timeout 200}) (catch Exception e e))]
         (t/is (= :transport-error (:type (ex-data e))))
         (t/is (str/includes? (ex-message e) "network error")))
       (finally (close)))))
@@ -444,7 +444,7 @@
     (try
       (with-socks-proxy
         (fn []
-          (let [e (try (http/get (str base "/") {:timeout-ms 300}) (catch Exception e e))]
+          (let [e (try (http/get (str base "/") {:timeout 300}) (catch Exception e e))]
             (t/is (= :transport-error (:type (ex-data e)))))))
       (finally (close)))))
 

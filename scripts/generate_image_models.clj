@@ -71,7 +71,7 @@
   "GET the image-capable model list (pi fetchOpenRouterImageModels)."
   [strict]
   (let [response (http/get (str openrouter-base-url "/models?output_modalities=image")
-                           {:throw? false :timeout-ms 30000})]
+                           {:throw? false :timeout 30000})]
     (when-not (<= 200 (:status response) 299)
       (throw (ex-info (str "OpenRouter API returned " (:status response))
                       {:type :images-generation-failed})))

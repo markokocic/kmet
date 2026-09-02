@@ -154,7 +154,7 @@
                                 "modalities" (if (some #{:text} (:output model))
                                                ["image" "text"]
                                                ["image"])}
-                         :timeout-ms images-request-timeout-ms})
+                         :timeout images-request-timeout-ms})
         output (atom [])
         choice (first (:choices body))]
     (when choice

@@ -350,7 +350,7 @@
 (defn fetch-json
   "HTTP request expecting JSON via kmet.libs.http. OPTS:
    :method (default :post), :headers, :body — a string, or a map that is
-   JSON-encoded; :timeout-ms ms. Returns {:status n :body parsed-map-or-nil}:
+   JSON-encoded; :timeout ms. Returns {:status n :body parsed-map-or-nil}:
    non-2xx responses throw ex-info '<status>: <body>' with the raw response
    body in the message."
   [url opts]
@@ -371,7 +371,7 @@
    <url>/.well-known/oauth-protected-resource. Returns the metadata map
    (keys as received) or nil when neither endpoint answers (non-2xx or
    transport error — pi's probe returns {} on failure). OPTS: :headers
-   (static headers to send), :timeout-ms (default 5000)."
+   (static headers to send), :timeout (default 5000)."
   [url & [opts]]
   (let [base (str/replace url #"/+$" "")
         candidates [(str base "/.well-known/oauth-authorization-server")
@@ -383,7 +383,7 @@
                        (fetch-json candidate
                                    {:method :get
                                     :headers headers
-                                    :timeout-ms (or (:timeout-ms opts) 5000)})
+                                    :timeout (or (:timeout opts) 5000)})
                        (catch Exception _ nil))]
           (if (and result (map? (:body result)))
             (:body result)
@@ -401,10 +401,10 @@
                                       \"refresh_token\"]
      :response-types               — default [\"code\"]
      :scope                        — optional scope hint
-     :timeout-ms                   — default 15000"
+     :timeout                      — default 15000"
   [registration-endpoint {:keys [redirect-uris client-name client-uri
                                  token-endpoint-auth-method grant-types
-                                 response-types scope timeout-ms]
+                                 response-types scope timeout]
                           :or {client-name "kmet"
                                token-endpoint-auth-method "none"
                                grant-types ["authorization_code" "refresh_token"]
@@ -423,7 +423,7 @@
                                      :response_types response-types}
                               client-uri (assoc :client_uri client-uri)
                               scope (assoc :scope scope))
-                      :timeout-ms (or timeout-ms 15000)})))
+                      :timeout (or timeout 15000)})))
 
 (defn- token-response
   "Parse a token endpoint response into the normalized
@@ -445,7 +445,7 @@
   "Exchange an authorization code at TOKEN-ENDPOINT (grant_type
    authorization_code + PKCE verifier). OPTS: :client-id (required unless
    the endpoint authenticates the client another way), :code, :code-verifier,
-   :redirect-uri, :scope, :timeout-ms. Returns the normalized token map
+   :redirect-uri, :scope, :timeout. Returns the normalized token map
    {:access :refresh :expires-in :scope}."
   [token-endpoint {:keys [client-id code code-verifier redirect-uri scope]
                    :as opts}]
@@ -461,14 +461,14 @@
                                            "application/x-www-form-urlencoded"
                                            "Accept" "application/json"}
                                  :body (form-encode body)
-                                 :timeout-ms (or (:timeout-ms opts) 15000)}))]
+                                 :timeout (or (:timeout opts) 15000)}))]
     (token-response "exchange" data)))
 
 (defn refresh-access-token
   "Refresh tokens at TOKEN-ENDPOINT (grant_type refresh_token). OPTS:
-   :client-id, :refresh-token (required), :scope, :timeout-ms. Returns the
+   :client-id, :refresh-token (required), :scope, :timeout. Returns the
    normalized token map {:access :refresh :expires-in :scope}."
-  [token-endpoint {:keys [client-id refresh-token scope timeout-ms]}]
+  [token-endpoint {:keys [client-id refresh-token scope timeout]}]
   (when-not (seq refresh-token)
     (throw (ex-info "OAuth refresh requires a refresh token"
                     {:type :oauth-invalid-config})))
@@ -482,16 +482,16 @@
                                            "application/x-www-form-urlencoded"
                                            "Accept" "application/json"}
                                  :body (form-encode body)
-                                 :timeout (or timeout-ms 15000)}))]
+                                 :timeout (or timeout 15000)}))]
     (token-response "refresh" data)))
 
 (defn start-device-authorization
   "Start an RFC 8628 device flow at DEVICE-ENDPOINT. OPTS: :client-id
-   (required), :scope, :timeout-ms. Validates the response fields and that
+   (required), :scope, :timeout. Validates the response fields and that
    the verification URI is http(s) — it is opened in the user's browser, so
    `open` must never run an executable or similar (pi). Returns
    {:device-code :user-code :verification-uri :interval :expires-in}."
-  [device-endpoint {:keys [client-id scope timeout-ms]}]
+  [device-endpoint {:keys [client-id scope timeout]}]
   (when-not (seq client-id)
     (throw (ex-info "OAuth device flow requires a client id"
                     {:type :oauth-invalid-config})))
@@ -503,7 +503,7 @@
                                            "Content-Type"
                                            "application/x-www-form-urlencoded"}
                                  :body (form-encode body)
-                                 :timeout (or timeout-ms 15000)}))
+                                 :timeout (or timeout 15000)}))
         device-code (:device_code data)
         user-code (:user_code data)
         verification-uri (:verification_uri data)
@@ -541,12 +541,12 @@
        :client-secret-post (secret in the form body), or :none (client_id
        in the body only — public clients / DCR'd clients with
        token_endpoint_auth_method \"none\").
-     :scope, :timeout-ms.
+     :scope, :timeout.
    Returns the normalized token map {:access :refresh :expires-in :scope}
    (a refresh token is kept when the server returns one, but none is
    expected)."
   [token-endpoint {:keys [client-id client-secret token-endpoint-auth-method
-                          scope timeout-ms]}]
+                          scope timeout]}]
   (when-not (seq client-id)
     (throw (ex-info "OAuth client-credentials grant requires a client id"
                     {:type :oauth-invalid-config})))
@@ -570,7 +570,7 @@
                                 {:method :post
                                  :headers headers
                                  :body (form-encode form)
-                                 :timeout (or timeout-ms 15000)}))]
+                                 :timeout (or timeout 15000)}))]
     (token-response "client-credentials" data)))
 
 (defn jwt-bearer-token
@@ -584,10 +584,10 @@
      :subject     — sub claim (defaults to :issuer)
      :audience    — aud claim (defaults to the token endpoint URL)
      :client-id   — optional, sent in the form body (RFC 7523 §2.2)
-     :scope, :timeout-ms
+     :scope, :timeout
    Returns the normalized token map."
   [token-endpoint {:keys [private-key algorithm issuer subject audience
-                          client-id scope timeout-ms]}]
+                          client-id scope timeout]}]
   (when-not (seq issuer)
     (throw (ex-info "OAuth jwt-bearer grant requires :issuer"
                     {:type :oauth-invalid-config})))
@@ -607,5 +607,5 @@
                                            "application/x-www-form-urlencoded"
                                            "Accept" "application/json"}
                                  :body (form-encode form)
-                                 :timeout (or timeout-ms 15000)}))]
+                                 :timeout (or timeout 15000)}))]
     (token-response "jwt-bearer" data)))

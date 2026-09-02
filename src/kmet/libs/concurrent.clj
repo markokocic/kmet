@@ -26,11 +26,17 @@
   "Start a daemon thread running `(f)` — the extension-SCI replacement
    for `future` (which is not available in extension contexts).
 
-   Exceptions in `f` are swallowed (extension background work must never
-   kill the host). Returns the `Thread` (already started, daemon=true)
+   Exceptions in `f` are logged via `kmet.debug/log` and otherwise
+   swallowed (extension background work must never kill the host).
+   Returns the `Thread` (already started, daemon=true)
    so callers that need to `.interrupt` / `.join` it can."
   [f]
-  (let [t (Thread. (fn [] (try (f) (catch Throwable _ nil))))]
+  (let [t (Thread. (fn [] (try (f) (catch Throwable e
+                                     (try
+                                       (requiring-resolve 'kmet.debug/log)
+                                       (when-let [log-fn (resolve 'kmet.debug/log)]
+                                         (log-fn "spawn failed" e))
+                                       (catch Throwable _ nil))))))]
     (.setDaemon t true)
     (.start t)
     t))
