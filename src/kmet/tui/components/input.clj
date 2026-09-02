@@ -365,6 +365,9 @@
   (reset! (:value-atom input) value)
   (reset! (:cursor-atom input) (min (count value) @(:cursor-atom input))))
 
+(defn input-set-cursor! [input pos]
+  (reset! (:cursor-atom input) (max 0 (min (count @(:value-atom input)) pos))))
+
 (defn input-get-value [input]
   @(:value-atom input))
 

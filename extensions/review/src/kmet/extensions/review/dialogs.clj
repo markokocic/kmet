@@ -55,10 +55,8 @@
   (render [this width] (protocols/render (:overlay this) width))
   (handle-input [this data] (protocols/handle-input (:select-list this) data))
   (invalidate [this]
-    (protocols/invalidate (:overlay this))
-    (protocols/invalidate (:select-list this)))
+    (protocols/invalidate (:overlay this)))
   (dispose [this]
-    (protocols/dispose (:select-list this))
     (h/dispose-tree! (:overlay this))))
 
 (extend-type ReviewSelectDialog
@@ -72,10 +70,8 @@
   (render [this width] (protocols/render (:overlay this) width))
   (handle-input [this data] (protocols/handle-input (:input-comp this) data))
   (invalidate [this]
-    (protocols/invalidate (:overlay this))
-    (protocols/invalidate (:input-comp this)))
+    (protocols/invalidate (:overlay this)))
   (dispose [this]
-    (protocols/dispose (:input-comp this))
     (h/dispose-tree! (:overlay this))))
 
 (extend-type ReviewInputDialog
@@ -230,7 +226,7 @@
    (fn [_tui th _kb close]
      (let [inp (input/make-input)
            _ (input/input-set-value! inp initial)
-           _ (reset! (:cursor-atom inp) (count (or initial "")))
+           _ (input/input-set-cursor! inp (count (or initial "")))
            _ (input/input-set-on-submit!
               inp (fn [v] (close (str/trim v))))
            _ (input/input-set-on-escape!

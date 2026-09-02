@@ -90,13 +90,9 @@
       (is (contains? r :error)))))
 
 (deftest parse-args-quoted-paths-test
-  ;; pi semantics: the folder case joins all trailing args with a
-  ;; space and re-splits on whitespace (parse-paths). Quoted paths
-  ;; are kept as one token by the tokenizer, but parse-paths splits
-  ;; on whitespace again, so multi-word paths are not supported
-  ;; through the simple CLI path. This is the same behavior as
-  ;; pi-review.
-  (is (= {:target {:type :folder :paths ["src/My" "File.clj" "docs"]}
+  ;; Folder preserves spaces inside quotes (tokenizer keeps them as one
+  ;; token; previously the join/split in parse-args dropped them).
+  (is (= {:target {:type :folder :paths ["src/My File.clj" "docs"]}
           :extra-instruction nil}
          (parse "folder \"src/My File.clj\" docs"))))
 

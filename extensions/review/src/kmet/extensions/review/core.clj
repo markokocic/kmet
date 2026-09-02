@@ -23,6 +23,15 @@
             [kmet.tui.hiccup :as h]
             [kmet.tui.theme :as theme]))
 
+(defn- spawn
+  "Start a daemon thread running F (future is not available in the
+   extension sci context). Exceptions in F are dropped."
+  [f]
+  (let [t (Thread. (fn [] (try (f) (catch Throwable _ nil))))]
+    (.setDaemon t true)
+    (.start t)
+    t))
+
 ;; -- Constants ------------------------------------------------------------
 
 (def ^:private review-state-type "review-session")
@@ -48,10 +57,11 @@
    covers projects that still use the upstream pi monorepo convention
    (kmet already swaps its marker to .kmet)."
   [cwd]
-  (let [current (atom (str cwd))]
-    (loop []
-      (let [dir @current
-            kmet-dir (str dir "/.kmet")
+  (let [start (try (str (fs/canonicalize (str cwd)))
+                   (catch Exception _ (str cwd)))]
+    (loop [dir start
+           visited #{}]
+      (let [kmet-dir (str dir "/.kmet")
             pi-dir (str dir "/.pi")
             guidelines (str dir "/REVIEW_GUIDELINES.md")
             found? (or (and (fs/exists? kmet-dir) (fs/directory? kmet-dir))
@@ -63,11 +73,14 @@
             (when (and content (seq (str/trim content)))
               (str/trim content)))
 
+          (contains? visited dir) nil
+
           :else
-          (let [parent (fs/parent dir)]
-            (if (= parent dir)
+          (let [parent (try (str (fs/canonicalize (str (fs/parent dir))))
+                            (catch Exception _ (str (fs/parent dir))))]
+            (if (or (= parent dir) (contains? visited parent))
               nil
-              (do (reset! current (str parent)) (recur)))))))))
+              (recur parent (conj visited dir)))))))))
 
 ;; -- Session state read/write --------------------------------------------
 
@@ -173,12 +186,6 @@
           :else
           (recur tokens (str current char) nil (inc i)))))))
 
-(defn- parse-paths [value]
-  (->> (str/split (or value "") #"\s+")
-       (map str/trim)
-       (remove str/blank?)
-       vec))
-
 (def ^:private target-types
   "Valid /review subcommand values (pi: switch cases). Note: pi
    dispatches on the subcommand string directly (\"branch\" /\"
@@ -252,7 +259,10 @@
                         {:target {:type :commit :sha sha :title title}
                          :extra-instruction (or extra pre-extra)})
                       {:target nil :extra-instruction (or extra pre-extra)}))
-          :folder (let [paths (parse-paths (str/join " " (rest parts)))]
+          :folder (let [paths (->> (rest parts)
+                                   (map str/trim)
+                                   (remove str/blank?)
+                                   vec)]
                     (if (seq paths)
                       {:target {:type :folder :paths paths}
                        :extra-instruction (or extra pre-extra)}
@@ -283,8 +293,8 @@
    arrive at a target map. Returns nil on cancel."
   [api]
   (loop []
-    (let [{:keys [custom-set?]} (preset-state api)
-          picked (dlg/show-preset-selector! api custom-set?)]
+    (let [{:keys [smart-default custom-set?]} (preset-state api)
+          picked (dlg/show-preset-selector! api custom-set? smart-default)]
       (cond
         (nil? picked) nil
 
@@ -445,12 +455,26 @@
                  {:error (ex-message e)}))]
       (if error
         (ext/ui-notify api error :error)
-        (when-let [target (or target
-                              (show-target-dialog! api))]
+        (if target
           (let [entries ((:get-branch (ext/session api)))
                 message-count (count (filter #(= :message (:type %)) entries))
                 use-fresh? (zero? message-count)]
-            (execute-review api ctx target use-fresh? extra-instruction)))))))
+            (execute-review api ctx target use-fresh? extra-instruction))
+          ;; No target from args — walk the dialog off the dispatch thread
+          ;; so the reader loop keeps draining keys into the overlay
+          ;; (tui.md §7: input is focused-leaf only; blocking the
+          ;; dispatch thread stalls process-input-buffer! and close
+          ;; never fires).
+          (spawn
+           (fn []
+             (try
+               (when-let [picked (show-target-dialog! api)]
+                 (let [entries ((:get-branch (ext/session api)))
+                       message-count (count (filter #(= :message (:type %)) entries))
+                       use-fresh? (zero? message-count)]
+                   (execute-review api ctx picked use-fresh? extra-instruction)))
+               (catch Exception e
+                 (ext/ui-notify api (str "Review failed: " (or (ex-message e) (str e))) :error))))))))))
 
 ;; -- End review ----------------------------------------------------------
 
@@ -543,28 +567,33 @@
                     :ok))))))))
 
 (defn- handle-end-review-command [api ctx]
-  (if @end-review-in-progress
+  (if-not (compare-and-set! end-review-in-progress false true)
     (ext/ui-notify api "/end-review is already running" :info)
-    (do (reset! end-review-in-progress true)
-        (try
-          (let [choice (dlg/show-text-input!
-                        api
-                        "Finish review (return only | return and fix | return and summarize)"
-                        "return only"
-                        "type the action")]
-            (when choice
-              (let [c (str/lower-case (str/trim choice))]
-                (cond
-                  (or (str/includes? c "summariz") (str/includes? c "summary"))
-                  (end-review! api ctx :return-and-summarize)
+    ;; Dialog blocks on its ui-custom promise — run off the
+    ;; dispatch thread like /review above.
+    (spawn
+     (fn []
+       (try
+         (let [choice (dlg/show-text-input!
+                       api
+                       "Finish review (return only | return and fix | return and summarize)"
+                       "return only"
+                       "type the action")]
+           (when choice
+             (let [c (str/lower-case (str/trim choice))]
+               (cond
+                 (or (str/includes? c "summariz") (str/includes? c "summary"))
+                 (end-review! api ctx :return-and-summarize)
 
-                  (or (str/includes? c "fix") (str/includes? c "find"))
-                  (end-review! api ctx :return-and-fix)
+                 (or (str/includes? c "fix") (str/includes? c "find"))
+                 (end-review! api ctx :return-and-fix)
 
-                  :else
-                  (end-review! api ctx :return-only)))))
-          (finally
-            (reset! end-review-in-progress false))))))
+                 :else
+                 (end-review! api ctx :return-only)))))
+         (catch Exception e
+           (ext/ui-notify api (str "Review failed: " (or (ex-message e) (str e))) :error))
+         (finally
+           (reset! end-review-in-progress false)))))))
 
 ;; -- Init / shutdown -----------------------------------------------------
 
