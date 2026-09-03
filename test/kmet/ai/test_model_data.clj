@@ -130,6 +130,24 @@
           "model-bound compat keys must transfer")
     (t/is (= "deepseek/deepseek-v4-flash" (:id out)))))
 
+(t/deftest ^:slow test-commandcode-prices-timeout-proceeds
+  "A stalled CommandCode price fetch must not block generation: the bounded
+   fetch-commandcode-prices wrapper gives up after the cap and returns nil,
+   so generation proceeds with zero rates. Drives the real wrapper with a
+   stubbed inner fetch (fast path asserts no regression on the happy path)."
+  (with-redefs [mg/fetch-commandcode-prices*
+                (fn [] {"x" {:input 1 :output 2 :cache-read 0 :cache-write 0}})]
+    (t/is (= {"x" {:input 1 :output 2 :cache-read 0 :cache-write 0}}
+             (mg/fetch-commandcode-prices))
+          "fast inner fetch passes through"))
+  (with-redefs [mg/fetch-commandcode-prices* (fn [] (Thread/sleep 300000))
+                mg/commandcode-prices-timeout-ms 500]
+    (let [t0 (System/currentTimeMillis)
+          res (mg/fetch-commandcode-prices)
+          dt (- (System/currentTimeMillis) t0)]
+      (t/is (nil? res) "stalled fetch yields nil (zero rates downstream)")
+      (t/is (< dt 30000) (str "wrapper must give up at the cap, took " dt "ms")))))
+
 (t/deftest test-write-catalogs-skips-unchanged
   (let [dir (str (fs/create-temp-dir {:dir "target" :prefix "model-gen-test-"}))
         catalogs {:gen-alpha [(gen-model :gen-alpha "a1")]

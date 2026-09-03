@@ -1816,7 +1816,7 @@
         (throw (ex-info "Invalid CommandCode models response" {:type :http-error})))
       models)))
 
-(defn- fetch-commandcode-prices
+(defn- fetch-commandcode-prices*
   "CommandCode's published per-model rates ($/M), decoded from the
    commandcode.ai /models page payload — the provider API itself carries no
    rate fields (billing goes through plans and credits). The page embeds a
@@ -1866,6 +1866,31 @@
       (println (str "Warning: CommandCode price fetch failed ("
                     (ex-message e) ") — models will carry zero rates."))
       nil)))
+
+(def ^:private commandcode-prices-timeout-ms
+  "Wall-clock cap (ms) for the CommandCode price fetch. On timeout
+   generation proceeds with zero rates (like any other price-fetch
+   failure)."
+  90000)
+
+(defn fetch-commandcode-prices
+  "Bounded wrapper over fetch-commandcode-prices*: the rates map, or nil
+   when the fetch fails or exceeds commandcode-prices-timeout-ms —
+   generation then proceeds with zero rates instead of blocking."
+  []
+  (let [f (future (fetch-commandcode-prices*))
+        ;; :timeout bounds the wait for response HEADERS only — the body
+        ;; read below it is unbounded, so this deref cap is the backstop
+        ;; that keeps a stalled body from blocking generation forever.
+        res (deref f commandcode-prices-timeout-ms ::timeout)]
+    (if (= ::timeout res)
+      (do (future-cancel f)
+          (println (str "Warning: CommandCode price fetch timed out after "
+                        (quot commandcode-prices-timeout-ms 1000)
+                        "s — models will carry zero rates."))
+          nil)
+      res)))
+
 (def ^:private commandcode-canonical-refs
   "CommandCode id -> [provider-id canonical-model-id]: the SAME WEIGHTS as
    kmet's curated catalogs list them, so :reasoning/:input/
