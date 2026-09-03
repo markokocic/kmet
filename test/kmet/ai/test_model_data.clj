@@ -61,7 +61,9 @@
    :context-window 1000 :max-tokens 100})
 
 (defn- dir-mtimes
-  "File name -> last-modified string for DIR's top level (stable ordering)."
+  "File name -> last-modified string for DIR's top level (stable ordering).
+   Callers sleep past the filesystem mtime granularity before rewriting, so
+   a rewritten file observably moves."
   [dir]
   (into (sorted-map)
         (for [f (fs/list-dir dir)]
@@ -161,16 +163,56 @@
         (t/is (= before (dir-mtimes dir))
               "an unchanged regeneration touches no file"))
       ;; changing ONE provider rewrites just its file + the manifest
-      (let [before (dir-mtimes dir)
+      (let [before-bytes (into (sorted-map)
+                               (for [f (fs/list-dir dir)]
+                                 [(fs/file-name f) (slurp (str f))]))
+            before-mtimes (dir-mtimes dir)
             bumped (update-in catalogs [:gen-alpha 0 :context-window] inc)
             n (mg/write-catalogs! dir bumped)]
         (t/is (= 2 n) "only the changed catalog + manifest")
-        (let [after (dir-mtimes dir)]
-          (t/is (not= (get before "gen-alpha.edn") (get after "gen-alpha.edn")))
-          (t/is (= (get before "gen-beta.edn") (get after "gen-beta.edn"))
-                "unchanged provider keeps its bytes/mtime")
-          (t/is (not= (get before "manifest.edn") (get after "manifest.edn"))))
+        (let [after-bytes (into (sorted-map)
+                                (for [f (fs/list-dir dir)]
+                                  [(fs/file-name f) (slurp (str f))]))
+              after-mtimes (dir-mtimes dir)]
+          (t/is (not= (get before-bytes "gen-alpha.edn") (get after-bytes "gen-alpha.edn"))
+                "changed provider rewrites")
+          (t/is (= (get before-bytes "gen-beta.edn") (get after-bytes "gen-beta.edn"))
+                "unchanged provider keeps its bytes")
+          (t/is (= (get before-mtimes "gen-beta.edn") (get after-mtimes "gen-beta.edn"))
+                "unchanged provider is not rewritten (mtime untouched)")
+          (t/is (not= (get before-bytes "manifest.edn") (get after-bytes "manifest.edn"))
+                "manifest follows the change"))
         ;; the result still passes the committed-data gate
         (t/is (empty? (mg/validate-committed! dir))))
+      (finally
+        (fs/delete-tree dir)))))
+
+(t/deftest test-write-catalogs-keeps-per-file-timestamps
+  (let [dir (str (fs/create-temp-dir {:dir "target" :prefix "model-gen-test-"}))
+        catalogs {:gen-alpha [(gen-model :gen-alpha "a1")]
+                  :gen-beta [(gen-model :gen-beta "b1")]}
+        gen-at (atom "2026-08-08T00:00:01Z")]
+    (try
+      (with-redefs [mg/generated-at (fn [] @gen-at)]
+        ;; initial generation writes both catalogs + the manifest
+        (t/is (= 3 (mg/write-catalogs! dir catalogs)))
+        ;; partial change at a later timestamp: only alpha + manifest rewrite
+        (reset! gen-at "2026-08-08T00:00:02Z")
+        (let [bumped (update-in catalogs [:gen-alpha 0 :context-window] inc)]
+          (t/is (= 2 (mg/write-catalogs! dir bumped)))
+          ;; identical rerun at a still-later timestamp: nothing is written —
+          ;; beta keeps its original timestamp instead of being restamped
+          ;; with a timestamp-only diff
+          (reset! gen-at "2026-08-08T00:00:03Z")
+          (let [before (dir-mtimes dir)]
+            (t/is (zero? (mg/write-catalogs! dir bumped))
+                  "unchanged files keep their own timestamps (no timestamp-only diffs)")
+            (t/is (= before (dir-mtimes dir))
+                  "an unchanged regeneration touches no file"))
+          (t/is (str/includes? (slurp (str dir "/gen-beta.edn")) "2026-08-08T00:00:01Z")
+                "unchanged provider keeps its original timestamp")
+          (t/is (str/includes? (slurp (str dir "/gen-alpha.edn")) "2026-08-08T00:00:02Z")
+                "changed provider carries the update timestamp")
+          (t/is (empty? (mg/validate-committed! dir)))))
       (finally
         (fs/delete-tree dir)))))

@@ -2308,41 +2308,52 @@
 (defn write-catalogs!
   "Write DIR's per-provider catalog files + manifest.edn, then run the same
    offline validation gate as CI over what was written (throws on failure).
-   Content-sensitive: pass 1 renders every catalog with the PREVIOUS
-   generation's timestamp, so a catalog whose data didn't change renders
+   Content-sensitive: each catalog is first rendered with its OWN on-disk
+   :generated-at, so a catalog whose data didn't change renders
    byte-identical to the file on disk and is not rewritten — rerunning the
    generator without upstream changes leaves every file (and mtime)
    untouched instead of stamping timestamp-only diffs into git. Only the
-   catalogs that really changed are re-rendered with the fresh timestamp;
-   the manifest follows suit. Returns the number of files written (0 =
-   nothing changed)."
+   catalogs whose data really changed are re-rendered with the fresh
+   timestamp; the manifest follows suit. Returns the number of files written
+   (0 = nothing changed)."
   [dir catalogs]
   (fs/create-dirs dir)
   (let [existing (into {} (catalog-file-contents dir))
         ;; catalog-file-contents excludes the manifest — read it raw for
-        ;; both the previous timestamp and the no-op comparison
+        ;; the no-op comparison
         manifest-on-disk (try (slurp (str dir "/manifest.edn"))
                               (catch Exception _ nil))
-        prev-generated (or (:generated-at (read-edn-file (str dir "/manifest.edn")))
-                           (generated-at))
-        rendered (into (array-map)
-                       (for [[pid models] catalogs]
-                         [(name pid)
-                          (str (edn-w/render (catalog-blob pid models prev-generated)) "\n")]))
-        changed-names (vec (for [[name content] rendered
-                                 :when (not= content (get existing (str name ".edn")))]
-                             name))
-        ;; pass 2 — the catalogs that really changed get the fresh timestamp
         generated (generated-at)
+        prev-manifest-generated (or (:generated-at (read-edn-file (str dir "/manifest.edn")))
+                                    generated)
+        ;; Per-file decision: render with the file's own timestamp so an
+        ;; unchanged catalog compares equal. A single global timestamp (e.g.
+        ;; the manifest's) would diverge from unchanged files after any
+        ;; partial update and flag every file as changed on the next run.
         file-contents (into (array-map)
                             (for [[pid models] catalogs]
-                              (let [name (name pid)]
-                                [(str name ".edn")
-                                 (if (some #{name} changed-names)
-                                   (str (edn-w/render (catalog-blob pid models generated)) "\n")
-                                   (get rendered name))])))
+                              (let [fname (str (name pid) ".edn")
+                                    old-content (get existing fname)
+                                    old-generated (or (:generated-at
+                                                       (when old-content
+                                                         (try (edn/read-string old-content)
+                                                              (catch Exception _ nil))))
+                                                      prev-manifest-generated)
+                                    unchanged? (and old-content
+                                                    (= (str (edn-w/render
+                                                             (catalog-blob pid models old-generated))
+                                                            "\n")
+                                                       old-content))]
+                                [fname (if unchanged?
+                                         old-content
+                                         (str (edn-w/render
+                                               (catalog-blob pid models generated))
+                                              "\n"))])))
+        changed-names (vec (for [[fname content] file-contents
+                                 :when (not= content (get existing fname))]
+                             fname))
         manifest (array-map :schema-version 1
-                            :generated-at (if (seq changed-names) generated prev-generated)
+                            :generated-at (if (seq changed-names) generated prev-manifest-generated)
                             :structure-hash (structure-hash catalogs)
                             :files (into (sorted-map)
                                          (for [[fname content] file-contents]

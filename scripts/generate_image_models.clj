@@ -81,14 +81,31 @@
   "Deterministic EDN for the committed catalog via kmet.libs.edn-writer —
    the same canonical key order / normalized numbers / escaping as the
    provider catalogs (no hand-built string buffer). Sorted by id, one
-   :generated-at timestamp."
+   :generated-at timestamp. Content-sensitive: when only the timestamp
+   would change, the file is left untouched (bytes + mtime) instead of
+   stamping a timestamp-only diff."
   [models]
-  (let [blob {:schema-version 1
-              :generated-at (str (java.time.Instant/now))
-              :provider {:id :openrouter :name "OpenRouter"}
-              :models (into (sorted-map) (map (fn [m] [(:id m) m]) models))}]
-    (spit catalog-path (str (edn-w/render blob) "\n")))
-  (println (str "Generated " catalog-path " (" (count models) " models)")))
+  (let [sorted-models (into (sorted-map) (map (fn [m] [(:id m) m]) models))
+        existing (try (slurp catalog-path)
+                      (catch Exception _ nil))
+        old-generated (or (try (:generated-at (edn/read-string existing))
+                               (catch Exception _ nil))
+                          (str (java.time.Instant/now)))
+        unchanged? (and existing
+                        (= existing
+                           (str (edn-w/render {:schema-version 1
+                                               :generated-at old-generated
+                                               :provider {:id :openrouter :name "OpenRouter"}
+                                               :models sorted-models})
+                                "\n")))]
+    (if unchanged?
+      (println (str catalog-path " already up to date — nothing written."))
+      (let [blob {:schema-version 1
+                  :generated-at (str (java.time.Instant/now))
+                  :provider {:id :openrouter :name "OpenRouter"}
+                  :models sorted-models}]
+        (spit catalog-path (str (edn-w/render blob) "\n"))
+        (println (str "Generated " catalog-path " (" (count models) " models)"))))))
 
 (defn validate-committed!
   "Offline validation of the committed catalog (used by the offline test):
