@@ -13,7 +13,7 @@
            :requires ([kmet.build :as build])
            :task (build/uberjar*)
            :override-builtin true}
-  build   {:doc "Build self-contained executable(s) in dist/ (babashka binary + appended uberjar). Usage: bb build [target ...|--all] [--force] [--no-smoke]. Targets: linux-aarch64-static, linux-amd64[-static], macos-aarch64, macos-amd64, windows-amd64; default: current platform."
+  build   {:doc "Build self-contained executable(s) in dist/ (rebuilds target/kmet.jar first, then babashka binary + appended uberjar). Usage: bb build [target ...|--all] [--force] [--no-smoke]. Artifacts: dist/kmet-<ver>-bb<bb-ver>-<slug>. Targets: linux-aarch64-static, linux-amd64[-static], macos-aarch64, macos-amd64, windows-amd64; default: current platform."
            :requires ([kmet.build :as build])
            :task (apply build/-main *command-line-args*)}
   test    {:doc "Run fast test suites (excludes ^:slow tests). Args: test var names (plain name or ns/var) to run only those, e.g. `bb test test-tool-bash`."

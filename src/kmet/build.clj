@@ -100,12 +100,21 @@
 
 (defn version
   "Artifact version string: tag pointing at HEAD if any (`v` prefix
-   stripped), else short commit hash, else \"dev\" outside a git repo."
+   stripped), else <YYYYMMDD>-<short-hash> from the HEAD commit date,
+   else \"dev\" outside a git repo."
   []
   (or (some-> (git-out "describe" "--tags" "--exact-match" "HEAD")
               (str/replace #"^v" ""))
-      (git-out "rev-parse" "--short" "HEAD")
+      (when-some [hash (git-out "rev-parse" "--short" "HEAD")]
+        (if-some [date (git-out "log" "-1" "--format=%cs" "HEAD")]
+          (str (str/replace date "-" "") "-" hash)
+          hash))
       "dev"))
+
+(defn artifact-base
+  "Dist artifact base name without extension: kmet-<ver>-bb<bb-ver>-<slug>."
+  [ver bb-ver slug]
+  (str "kmet-" ver "-bb" bb-ver "-" slug))
 
 ;; ─── Downloading & extraction ──────────────────────────────────────────────
 
@@ -275,12 +284,13 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
           bin-name linker))
 
 (defn assemble-one!
-  "Produce dist/kmet-<version>-<slug>[.exe]: the official babashka binary for
-   slug with kmet.jar appended. On a termux host, slugs that need the glibc
-   linker also get a matching .sh launcher script. Returns the artifact path."
+  "Produce dist/kmet-<ver>-bb<bb-ver>-<slug>[.exe]: the official babashka
+   binary for slug with kmet.jar appended. On a termux host, slugs that need
+   the glibc linker also get a matching .sh launcher script. Returns the
+   artifact path."
   [ver slug {:keys [linker] :as target} bb-ver]
   (let [bb-bin (ensure-bb-binary! bb-ver slug target)
-        base (str "kmet-" ver "-" slug)
+        base (artifact-base ver bb-ver slug)
         windows? (str/starts-with? slug "windows")
         artifact (fs/path dist-dir (cond-> base windows? (str ".exe")))]
     (println "building" (str artifact))
@@ -342,7 +352,8 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
    windows-amd64); they default to the current platform. --all builds every
    published platform, --force re-downloads cached babashka binaries, and
    --no-smoke skips running the current-host artifact after building (saves
-   memory on constrained devices)."
+   memory on constrained devices). A fresh uberjar (target/kmet.jar) is
+   always rebuilt first so artifacts never bundle stale sources."
   [& args]
   (let [{:keys [targets all? force? no-smoke? help?]} (parse-args args)]
     (when help?
@@ -352,6 +363,8 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
       (when (fs/exists? cache-dir)
         (fs/delete-tree cache-dir)))
     (let [ver (version)
+          _ (do (println "building uberjar" jar-path)
+                (uberjar*))
           bb-ver (latest-bb-version)
           targets (cond
                     all? (sort (keys target-table))

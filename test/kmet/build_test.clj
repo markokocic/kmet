@@ -39,6 +39,30 @@
   (is (thrown-with-msg? Exception #"unknown option"
                         (build/parse-args ["--wat"]))))
 
+(deftest version-prefers-tag-then-date-hash-then-dev
+  (testing "tag pointing at HEAD wins (v prefix stripped)"
+    (with-redefs [build/git-out (fn [& args]
+                                  (if (= (take 2 args) (list "describe" "--tags"))
+                                    "v1.2.3"
+                                    "abc1234"))]
+      (is (= "1.2.3" (build/version)))))
+  (testing "missing tag falls back to date plus short hash"
+    (with-redefs [build/git-out (fn [& args]
+                                  (cond
+                                    (= (first args) "describe") nil
+                                    (= (first args) "log") "2026-09-03"
+                                    :else "abc1234"))]
+      (is (= "20260903-abc1234" (build/version)))))
+  (testing "outside a git repo falls back to dev"
+    (with-redefs [build/git-out (constantly nil)]
+      (is (= "dev" (build/version))))))
+
+(deftest artifact-base-includes-bb-version-before-slug
+  (is (= "kmet-1.2.3-bb1.13.219-linux-aarch64-static"
+         (build/artifact-base "1.2.3" "1.13.219" "linux-aarch64-static")))
+  (is (= "kmet-20260903-abc1234-bb1.13.219-windows-amd64"
+         (build/artifact-base "20260903-abc1234" "1.13.219" "windows-amd64"))))
+
 (deftest extract-archive-zip-slip-guard
   ;; The containment check must reject entries that escape the destination
   ;; dir and accept legitimate ones (regression: the guard was inverted —
