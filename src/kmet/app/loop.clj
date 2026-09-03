@@ -506,6 +506,17 @@ Be precise and concise in your responses."}}]
    file (or read → edit → read verify patterns) is legitimate work."
   #{"read"})
 
+(def ^:private loop-guard-reset-tools
+  "Tools whose successful execution resets the repeat-loop guard's memory of
+   other calls. Writes change the world, so a repeated call afterwards (e.g.
+   re-running a test after an edit) observes new state and is not a loop.
+   Only successful (non-error) executions reset; failed or blocked writes
+   change nothing and keep the history. Each writer's own signature is kept,
+   so repeating the identical write itself still trips. Accepted evasion:
+   alternating a repeat with a novel successful write never trips — each
+   successful write counts as progress."
+  #{"write" "edit"})
+
 (declare canonical-json)
 
 (defn loop-guard-signature
@@ -1706,7 +1717,10 @@ Be precise and concise in your responses."}}]
    (transcript stays coherent — no dangling tool ids, and the user sees why
    in the tool box); survivors execute normally. When a batch is ALL
    suppressed — or cumulative suppressions reach 2×threshold (mixed
-   alternating batches) — the guard trips."
+   alternating batches) — the guard trips. A successful write/edit resets
+   the guard's memory of other calls (the world changed, so a repeated
+   call observes new state); failed, blocked, or suppressed writes reset
+   nothing, and each writer's own signature is kept."
   [agent t result]
   (let [assistant-msg (add-assistant-message! agent result)
         tool-calls (:tool-calls result)]
@@ -1714,14 +1728,12 @@ Be precise and concise in your responses."}}]
     (emit agent {:type :status :status :executing
                  :tool-calls tool-calls})
     (let [threshold (:loop-guard-threshold @(:cfg agent))
+          guard-enabled? (:loop-guard-enabled @(:cfg agent))
           {:keys [suppressed survivors state]}
-          (if (:loop-guard-enabled @(:cfg agent))
+          (if guard-enabled?
             (loop-guard-filter @(:loop-guard agent) threshold tool-calls)
             {:suppressed [] :survivors tool-calls :state @(:loop-guard agent)})
-          _ (reset! (:loop-guard agent) state)
           suppressed? (seq suppressed)
-          give-up? (or (and suppressed? (empty? survivors))
-                       (>= (:suppressed state) (* 2 threshold)))
           guard-result (fn [tc]
                          {:content (str "Repeat-loop guard: " (:name tc)
                                         " called with identical args "
@@ -1739,6 +1751,30 @@ Be precise and concise in your responses."}}]
                         (execute-tool-calls! agent survivors assistant-msg false))
           exec-results (or (:results exec-result) [])
           terminate? (:terminate exec-result)
+          ;; Successful writes change the world, so earlier repeats observed
+          ;; stale state: keep only the writers' own signatures (repeating
+          ;; the identical write still trips) and clear the cumulative
+          ;; count, so a test -> edit(ok) -> test cycle doesn't false-positive.
+          ;; Failed, blocked, or suppressed writes change nothing.
+          reset-sigs (if guard-enabled?
+                       (into #{}
+                             (keep (fn [[tc res]]
+                                     (when (and (contains? loop-guard-reset-tools (:name tc))
+                                                (not (:is-error res)))
+                                       (loop-guard-signature (:name tc) (:arguments tc)))))
+                             (map vector survivors exec-results))
+                       #{})
+          ;; Single state write: the pre-exec intermediate is unobservable
+          ;; (nothing during execution reads the guard atom), so persist the
+          ;; pruned-or-original state once.
+          _ (reset! (:loop-guard agent)
+                    (if (seq reset-sigs)
+                      {:window (filterv reset-sigs (:window state))
+                       :suppressed 0}
+                      state))
+          give-up? (and (empty? reset-sigs)
+                        (or (and suppressed? (empty? survivors))
+                            (>= (:suppressed state) (* 2 threshold))))
           suppressed-by-id (into {} (map (fn [tc] [(:id tc) (guard-result tc)]))
                                  suppressed)
           ;; exec-results corresponds to SURVIVORS positionally (the

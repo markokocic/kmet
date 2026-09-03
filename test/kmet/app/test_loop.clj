@@ -1533,6 +1533,154 @@
     (t/is (>= @calls 3) "the same call repeated past the threshold")
     (t/is (= :idle @(:status agent)))))
 
+(t/deftest test-loop-run-agent-turn-write-resets-guard
+  ;; bash -> edit(ok) -> bash -> edit(ok) -> ... never trips: each successful
+  ;; edit clears the guard's memory of other calls (the world changed, so a
+  ;; repeated bash observes new state). Without the reset the 3rd bash (call
+  ;; 5) would be suppressed and the run would give up.
+  (let [events (atom [])
+        calls (atom 0)
+        done-text (atom nil)
+        agent (loop/make-agent-state
+               :loop-guard-threshold 3
+               :on-event (fn [e] (swap! events conj e)))]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (let [n (swap! calls inc)]
+                        (if (> n 7)
+                          (do (when-let [on-text (:on-text opts)]
+                                (on-text "done"))
+                              (when-let [on-done (:on-done opts)] (on-done :stop)))
+                          (do (when-let [on-tc (:on-tool-call opts)]
+                                (if (odd? n)
+                                  (on-tc {:id (str "b" n) :name "bash"
+                                          :arguments "{\"command\":\"ls\"}" :index 0})
+                                  ;; Distinct edit args per turn — required:
+                                  ;; identical edits would trip on their own
+                                  ;; signature (see identical-write-trips).
+                                  (on-tc {:id (str "e" n) :name "edit"
+                                          :arguments (str "{\"path\":\"f.clj\",\"edits\":[{\"oldText\":\"a" n "\",\"newText\":\"b" n "\"}]}")
+                                          :index 0})))
+                              (when-let [on-done (:on-done opts)]
+                                (on-done :tool-calls)))))
+                      :done))
+                  tools/execute-tool
+                  (fn [_ _ _] {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent
+                            {:message "run"
+                             :on-done (fn [t] (reset! done-text t))
+                             :on-error (fn [_])}))
+    (t/is (>= @calls 8) "run continued past the 3rd bash without tripping")
+    (t/is (nil? (some #(= :loop-guard (:type %)) @events))
+          "no :loop-guard event — successful edits reset the guard")
+    (t/is (= "done" @done-text) "run settles normally")))
+
+(t/deftest test-loop-run-agent-turn-write-tool-resets-guard
+  ;; Same contract as the edit reset, through the write tool: bash ->
+  ;; write(ok, novel content) -> ... never trips.
+  (let [events (atom [])
+        calls (atom 0)
+        done-text (atom nil)
+        agent (loop/make-agent-state
+               :loop-guard-threshold 3
+               :on-event (fn [e] (swap! events conj e)))]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (let [n (swap! calls inc)]
+                        (if (> n 7)
+                          (do (when-let [on-text (:on-text opts)]
+                                (on-text "done"))
+                              (when-let [on-done (:on-done opts)] (on-done :stop)))
+                          (do (when-let [on-tc (:on-tool-call opts)]
+                                (if (odd? n)
+                                  (on-tc {:id (str "b" n) :name "bash"
+                                          :arguments "{\"command\":\"ls\"}" :index 0})
+                                  ;; Distinct content per turn — required:
+                                  ;; identical writes trip on their own
+                                  ;; signature (see identical-write-trips).
+                                  (on-tc {:id (str "w" n) :name "write"
+                                          :arguments (str "{\"path\":\"f.clj\",\"content\":\"v" n "\"}")
+                                          :index 0})))
+                              (when-let [on-done (:on-done opts)]
+                                (on-done :tool-calls)))))
+                      :done))
+                  tools/execute-tool
+                  (fn [_ _ _] {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent
+                            {:message "run"
+                             :on-done (fn [t] (reset! done-text t))
+                             :on-error (fn [_])}))
+    (t/is (>= @calls 8) "run continued past the 3rd bash without tripping")
+    (t/is (nil? (some #(= :loop-guard (:type %)) @events))
+          "no :loop-guard event — successful writes reset the guard")
+    (t/is (= "done" @done-text) "run settles normally")))
+
+(t/deftest test-loop-run-agent-turn-failed-write-keeps-guard
+  ;; edit failures change nothing: bash -> edit(fail) -> bash ... still trips
+  ;; on the 3rd identical bash.
+  (let [events (atom [])
+        calls (atom 0)
+        agent (loop/make-agent-state
+               :loop-guard-threshold 3
+               :on-event (fn [e] (swap! events conj e)))]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (let [n (swap! calls inc)]
+                        (when-let [on-tc (:on-tool-call opts)]
+                          (if (odd? n)
+                            (on-tc {:id (str "b" n) :name "bash"
+                                    :arguments "{\"command\":\"ls\"}" :index 0})
+                            (on-tc {:id (str "e" n) :name "edit"
+                                    :arguments "{\"path\":\"f.clj\",\"edits\":[{\"oldText\":\"a\",\"newText\":\"b\"}]}"
+                                    :index 0})))
+                        (when-let [on-done (:on-done opts)]
+                          (on-done :tool-calls)))
+                      :done))
+                  tools/execute-tool
+                  (fn [tool-name _ _]
+                    (if (= "edit" tool-name)
+                      {:content "edit failed" :is-error true}
+                      {:content "ok" :is-error false}))]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (t/is (= 5 @calls) "the guard gave up on the 3rd identical bash")
+    (t/is (some #(= :loop-guard (:type %)) @events)
+          ":loop-guard event emitted — failed edits don't reset")))
+
+(t/deftest test-loop-run-agent-turn-identical-write-trips
+  ;; Repeating the identical edit itself still trips — the reset keeps each
+  ;; writer's own signature.
+  (let [events (atom [])
+        calls (atom 0)
+        executed (atom 0)
+        agent (loop/make-agent-state
+               :loop-guard-threshold 3
+               :on-event (fn [e] (swap! events conj e)))]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [opts]
+                    (future
+                      (swap! calls inc)
+                      (when-let [on-tc (:on-tool-call opts)]
+                        (on-tc {:id (str "e" @calls) :name "edit"
+                                :arguments "{\"path\":\"f.clj\",\"edits\":[{\"oldText\":\"a\",\"newText\":\"b\"}]}"
+                                :index 0}))
+                      (when-let [on-done (:on-done opts)]
+                        (on-done :tool-calls))
+                      :done))
+                  tools/execute-tool
+                  (fn [_ _ _] (swap! executed inc) {:content "ok" :is-error false})]
+      @(loop/run-agent-turn agent {:message "run" :on-error (fn [_])}))
+    (t/is (= 3 @calls) "the guard gave up on the 3rd identical edit")
+    (t/is (= 2 @executed) "only the first two edits executed")
+    (t/is (some #(= :loop-guard (:type %)) @events)
+          ":loop-guard event emitted")))
+
 ;; ─── Tool hooks (before/after tool-call) ─────────────────────────────────
 
 (defn- stub-llm-tool-then-text
