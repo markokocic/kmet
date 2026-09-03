@@ -1328,14 +1328,24 @@
 ;; Public API
 ;; ═══════════════════════════════════════════════════════════════════════════
 
+(defn canonical-language
+  "Canonical language name for LANG-or-alias, or nil when unsupported. Names are
+   trimmed and lower-cased so fences like 'Clojure', 'c++', 'C#' resolve;
+   aliases collapse to their canonical key ('clj' → 'clojure')."
+  [lang]
+  (when (seq lang)
+    (let [name (str/lower-case (str/trim lang))]
+      (cond
+        (contains? languages name) name
+        (contains? aliases name) (get aliases name)
+        :else nil))))
+
 (defn resolve-language
   "Config for a fence language name/alias, or nil when unsupported. Names are
    trimmed and lower-cased so fences like 'Clojure', 'c++', 'C#' resolve."
   [lang]
-  (when (seq lang)
-    (let [name (str/lower-case (str/trim lang))]
-      (or (get languages name)
-          (get languages (get aliases name))))))
+  (when-let [name (canonical-language lang)]
+    (get languages name)))
 
 (defn supports-language? [lang]
   (boolean (resolve-language lang)))

@@ -459,13 +459,41 @@
         (str (theme/fg theme :tool-title (theme/bold (str name " ")))
              (render-tool-path raw-path theme (:cwd context))
              range-str))))))
+
+;; Shared path→language mapping (pi: getLanguageFromPath): the read result
+;; uses it for highlightCode-on-expanded-output and the write cache helpers
+;; below reuse it — one definition, declared before both call sites.
+(defn- lang-from-path
+  "Pi: getLanguageFromPath — path → language name, or nil when the extension
+   is missing or unsupported. Returns the canonical language key
+   ('clj' → 'clojure'); basename languages (Dockerfile, Makefile) resolve
+   directly."
+  [raw-path]
+  (when (and (string? raw-path) (seq raw-path))
+    (let [basename (fs/file-name raw-path)
+          ext (fs/extension raw-path)]
+      (cond
+        (seq ext) (hl/canonical-language ext)
+        ;; no dot-extension: try the basename itself (Dockerfile, Makefile)
+        (seq basename) (hl/canonical-language basename)
+        :else nil))))
+
 (defn render-read-result
-  "Collapsed: spacer + up to 10 output lines + expand hint + truncation warn."
-  [content is-error theme _width expanded? _started-at _ended-at truncation _context]
+  "Collapsed: spacer + up to 10 output lines + expand hint + truncation warn.
+   Pi: formatReadResult — when expanded, content is syntax-highlighted
+   by path language (highlightCode); unknown languages and errors fall back
+   to toolOutput color."
+  [content is-error theme _width expanded? _started-at _ended-at truncation context]
   (if (and (not expanded?) (not is-error))
     nil
-    (let [lines (trim-trailing-empty-lines
-                 (str/split-lines (sanitize-display-text (or content ""))))
+    (let [args (:args context)
+          raw-path (:file_path args (:path args))
+          lang (when-not is-error (lang-from-path raw-path))
+          normalized (replace-tabs (sanitize-display-text (or content "")))
+          lines (if lang
+                  (trim-trailing-empty-lines
+                   (theme/render-highlighted theme normalized lang))
+                  (trim-trailing-empty-lines (str/split-lines normalized)))
           n (count lines)
           max-lines (if expanded? n 10)
           show (take max-lines lines)
@@ -488,7 +516,7 @@
           kids (concat
                 (when (seq lines)
                   (concat
-                   (mapv #(tool-text (theme/fg theme :tool-output (replace-tabs %))) show)
+                   (mapv tool-text (if lang show (mapv #(theme/fg theme :tool-output %) show)))
                    (when (pos? more)
                      [(tool-text
                        (str (theme/fg theme :muted (str "... (" more " more lines,"))
@@ -556,20 +584,6 @@
 ;; (pi: the cache field on WriteCallRenderComponent).
 
 (def ^:private write-partial-full-highlight-lines 50)
-
-(defn- lang-from-path
-  "Pi: getLanguageFromPath — path → language name, or nil when the extension
-   is missing or unsupported. Uses hl/aliases (extension-keyed) for most
-   files; basename languages (Dockerfile, Makefile) resolve directly."
-  [raw-path]
-  (when (and (string? raw-path) (seq raw-path))
-    (let [basename (fs/file-name raw-path)
-          ext (some-> (fs/extension raw-path) str/lower-case)]
-      (cond
-        (seq ext) (when (hl/resolve-language ext) ext)
-        ;; no dot-extension: try the basename itself (Dockerfile, Makefile)
-        (seq basename) (when (hl/resolve-language basename) basename)
-        :else nil))))
 
 (defn- write-highlight-cache
   "Pi: rebuildWriteHighlightCacheFull — fresh cache, nil when the path has no

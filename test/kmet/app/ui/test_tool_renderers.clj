@@ -51,6 +51,37 @@
           lines (plain (r/render-read-result content true th 60 false nil nil truncation {}) 60)]
       (is (some #(str/includes? % "[Truncated: showing 5 of 99") lines)))))
 
+(deftest test-read-result-highlight
+  (testing "expanded read highlights by path language (pi: highlightCode)"
+    (let [content "(defn foo [x] (+ x 1))"
+          render (fn [path is-error ctx-extra]
+                   (-> (r/render-read-result content is-error th 60 true
+                                             nil nil nil
+                                             (merge {:args {:path path}} ctx-extra))
+                       (core/render 60)
+                       (->> (apply str))))
+          gray-esc (theme/get-fg-ansi th :tool-output)
+          kw-esc (theme/get-fg-ansi th :syntax-keyword)]
+      (testing "known language uses syntax colors, not toolOutput gray"
+        (let [s (render "a.clj" false {})]
+          (is (str/includes? s kw-esc) ".clj output is syntax-highlighted")
+          (is (not (str/includes? s gray-esc)) ".clj output skips toolOutput gray")))
+      (testing "extension case does not matter (canonical language key)"
+        (let [s (render "a.CLJ" false {})]
+          (is (str/includes? s kw-esc) ".CLJ output is syntax-highlighted")))
+      (testing "unknown language falls back to toolOutput gray"
+        (let [s (render "a.txt" false {})]
+          (is (str/includes? s gray-esc) ".txt output is toolOutput gray")))
+      (testing "errors fall back to toolOutput even with a known language"
+        (let [s (render "a.clj" true {})]
+          (is (str/includes? s gray-esc) "error output is toolOutput gray")
+          (is (not (str/includes? s kw-esc)) "error output is not highlighted")))
+      (testing "missing path falls back to toolOutput (backward compat)"
+        (let [s (-> (r/render-read-result content false th 60 true nil nil nil {})
+                    (core/render 60)
+                    (->> (apply str)))]
+          (is (str/includes? s gray-esc)))))))
+
 (deftest test-write-call-and-result
   (testing "invalid content arg surfaces error text"
     (let [lines (plain (r/render-write-call "write" {:file_path "f" :content :bad} th 40 {}) 40)]
@@ -72,8 +103,7 @@
                              (subvec 3)))
           clj-lines (render "a.clj")
           txt-lines (render "a.txt")
-          ;; tool-output gray = 38;2;128;128;128; syntax colors differ
-          gray-esc "\u001b[38;2;128;128;128m"]
+          gray-esc (theme/get-fg-ansi th :tool-output)]
       (is (some #(str/includes? % gray-esc) txt-lines) ".txt content is toolOutput gray")
       (is (not-any? #(str/includes? % gray-esc) clj-lines) ".clj content uses syntax colors, not toolOutput"))))
 
