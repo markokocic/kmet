@@ -436,6 +436,113 @@
             (t/is (str/includes? (:body r) "/final")))))
       (finally (close)))))
 
+(t/deftest test-native-follow-redirects-default
+  ;; Absent :follow-redirects follows (the documented default).
+  (let [[base close] (start-server
+                      (fn [s req-line _ _]
+                        (if (str/includes? req-line "/start")
+                          (let [b (.getBytes "moved")
+                                head (str "HTTP/1.1 302 Found\r\n"
+                                          "Location: /final\r\n"
+                                          "Content-Length: " (count b) "\r\n\r\n")]
+                            (.write (.getOutputStream s) (.getBytes head))
+                            (.write (.getOutputStream s) b)
+                            (.flush (.getOutputStream s)))
+                          (respond s "200 OK" req-line {}))))]
+    (try
+      (let [r (http/get (str base "/start") {})]
+        (t/is (= 200 (:status r)))
+        (t/is (str/includes? (:body r) "/final")))
+      (finally (close)))))
+
+(t/deftest test-native-no-follow
+  ;; Explicit disable is honored on the native path (per-mode clients).
+  (let [[base close] (start-server
+                      (fn [s req-line _ _]
+                        (if (str/includes? req-line "/start")
+                          (let [b (.getBytes "moved")
+                                head (str "HTTP/1.1 302 Found\r\n"
+                                          "Location: /final\r\n"
+                                          "Content-Length: " (count b) "\r\n\r\n")]
+                            (.write (.getOutputStream s) (.getBytes head))
+                            (.write (.getOutputStream s) b)
+                            (.flush (.getOutputStream s)))
+                          (respond s "200 OK" req-line {}))))]
+    (try
+      (doseq [fr [:never false]]
+        (let [r (http/get (str base "/start") {:throw? false :follow-redirects fr})]
+          (t/is (= 302 (:status r)) (str "expected no follow for " (pr-str fr)))))
+      (finally (close)))))
+
+(t/deftest test-curl-follow-redirects-default
+  ;; Absent :follow-redirects must follow, per the documented default
+  ;; (regression: curl-argv only sent -L when the key was present, so proxied
+  ;; downloads of redirecting URLs failed with the 302 status).
+  (let [[base close] (start-server
+                      (fn [s req-line _ _]
+                        (if (str/includes? req-line "/start")
+                          (let [b (.getBytes "moved")
+                                head (str "HTTP/1.1 302 Found\r\n"
+                                          "Location: /final\r\n"
+                                          "Content-Length: " (count b) "\r\n\r\n")]
+                            (.write (.getOutputStream s) (.getBytes head))
+                            (.write (.getOutputStream s) b)
+                            (.flush (.getOutputStream s)))
+                          (respond s "200 OK" req-line {}))))]
+    (try
+      (with-socks-proxy
+        (fn []
+          (let [r (http/get (str base "/start") {})]
+            (t/is (= 200 (:status r)))
+            (t/is (str/includes? (:body r) "/final")))))
+      (finally (close)))))
+
+(t/deftest test-curl-redirect-slow-second-hop
+  ;; Hop 1's 302 sits alone in the dump-header file while a slow hop 2 is
+  ;; still in flight (GitHub releases behind a proxy behave exactly like
+  ;; this): the reported status must be the FINAL hop's. Without the
+  ;; wait-for-final-headers loop this returns 302.
+  (let [[base close] (start-server
+                      (fn [s req-line _ _]
+                        (if (str/includes? req-line "/start")
+                          (let [b (.getBytes "moved")
+                                head (str "HTTP/1.1 302 Found\r\n"
+                                          "Location: /final\r\n"
+                                          "Content-Length: " (count b) "\r\n\r\n")]
+                            (.write (.getOutputStream s) (.getBytes head))
+                            (.write (.getOutputStream s) b)
+                            (.flush (.getOutputStream s)))
+                          (do (Thread/sleep 2000)
+                              (respond s "200 OK" "final-body" {})))))]
+    (try
+      (with-socks-proxy
+        (fn []
+          (let [r (http/get (str base "/start") {})]
+            (t/is (= 200 (:status r)))
+            (t/is (str/includes? (:body r) "final-body")))))
+      (finally (close)))))
+
+(t/deftest test-curl-no-follow
+  ;; Explicit disable is honored on the curl path (no -L).
+  (let [[base close] (start-server
+                      (fn [s req-line _ _]
+                        (if (str/includes? req-line "/start")
+                          (let [b (.getBytes "moved")
+                                head (str "HTTP/1.1 302 Found\r\n"
+                                          "Location: /final\r\n"
+                                          "Content-Length: " (count b) "\r\n\r\n")]
+                            (.write (.getOutputStream s) (.getBytes head))
+                            (.write (.getOutputStream s) b)
+                            (.flush (.getOutputStream s)))
+                          (respond s "200 OK" req-line {}))))]
+    (try
+      (with-socks-proxy
+        (fn []
+          (doseq [fr [:never false]]
+            (let [r (http/get (str base "/start") {:throw? false :follow-redirects fr})]
+              (t/is (= 302 (:status r)) (str "expected no follow for " (pr-str fr)))))))
+      (finally (close)))))
+
 (t/deftest test-curl-timeout-ms
   (let [[base close] (start-server
                       (fn [s _ _ _]

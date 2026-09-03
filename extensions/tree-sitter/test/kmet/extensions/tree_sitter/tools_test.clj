@@ -38,7 +38,10 @@
 (deftest never-throw-test
   ;; an infrastructure blow-up surfaces as a normal error result
   (with-redefs [symbols/analyze-file! (fn [& _] (throw (ex-info "boom" {})))
-                grammars/resolve-lang (constantly "clojure")]
+                grammars/resolve-lang (constantly "clojure")
+                ;; provisioning must stay stubbed: the real ensure-grammar!
+                ;; downloads the CLI into the user cache on a cold machine
+                grammars/ensure-grammar! (constantly {:lang "clojure" :status :cached})]
     (let [dir (tu/temp-dir! "ts-throw")
           f (fs/path dir "x.clj")]
       (spit (str f) "(def x 1)")

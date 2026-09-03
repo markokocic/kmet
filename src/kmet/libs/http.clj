@@ -295,26 +295,32 @@
 ;; ─── Transport: java.net.http (babashka.http-client) ─────────────────────
 
 (def ^:private client-cache
-  "babashka.http-client clients keyed by proxy config (nil = direct), so
-   repeated requests reuse connections instead of rebuilding a client per
-   call. Private — callers never see clients."
+  "babashka.http-client clients keyed by [proxy mode], so repeated requests
+   reuse connections instead of rebuilding a client per call. Private —
+   callers never see clients."
   (atom {}))
 
 (defn- java-client
   "A babashka.http-client client routing through an HTTP proxy (used for
    http/https proxies; SOCKS goes through curl instead)."
-  [p]
-  (http/client (cond-> {:proxy {:type :http :host (:host p) :port (:port p)}}
+  [p mode]
+  (http/client (cond-> {:proxy {:type :http :host (:host p) :port (:port p)}
+                        :follow-redirects mode}
                  (:user p) (assoc :authenticator
                                   (cond-> {:user (:user p)}
                                     (:pass p) (assoc :pass (:pass p)))))))
 
 (defn- client-for
-  "The cached client for a proxy map (nil = direct connection)."
-  [p]
-  (let [key (when p [(:url p) (:scheme p) (:user p) (:pass p)])]
+  "The cached client for a proxy map (nil = direct connection) and follow
+   mode. Direct clients start from http/default-client-opts so they keep
+   the implicit default's headers (accept, gzip, user-agent)."
+  [p mode]
+  (let [key [(when p [(:url p) (:scheme p) (:user p) (:pass p)]) mode]]
     (or (get @client-cache key)
-        (let [c (if p (java-client p) (http/client {}))]
+        (let [c (if p
+                  (java-client p mode)
+                  (http/client (assoc http/default-client-opts
+                                      :follow-redirects mode)))]
           (swap! client-cache assoc key c)
           c))))
 
@@ -325,11 +331,12 @@
    P is the resolved proxy (nil = direct) — the request routes through the
    cached client for that proxy."
   [opts throw? p]
-  (let [native-opts (cond-> (dissoc opts :url :throw? :signal :proxy)
+  (let [native-opts (cond-> (dissoc opts :url :throw? :signal :proxy :follow-redirects)
                       true (assoc :throw false))]
     (try
-      (let [resp (http/request (cond-> (assoc native-opts :url (:url opts))
-                                 (some? p) (assoc :client (client-for p))))
+      (let [resp (http/request (assoc native-opts
+                                      :url (:url opts)
+                                      :client (client-for p (:follow-redirects opts))))
             status (:status resp)]
         (if (and throw? (>= status 400))
           (throw (http-error status (:headers resp) (:body resp)))
@@ -406,12 +413,31 @@
     (spit f (str/join "\n" lines))
     f))
 
+(defn- follow-redirects?
+  "True unless the caller explicitly disabled following (:never or false).
+   The default is to follow, so an absent key follows too. Single source
+   of truth for curl-argv (-L) and the header-wait loop."
+  [opts]
+  (not (contains? #{false :never} (:follow-redirects opts))))
+
+(defn- normalize-follow-redirects
+  "Canonical :follow-redirects for the transports: true follows by default
+   (:normal), false never follows (:never), an absent key defaults to
+   :normal. Keywords pass through. Normalized once in request so both
+   transports see the same mode."
+  [opts]
+  (update opts :follow-redirects
+          (fn [fr] (cond (true? fr) :normal
+                         (false? fr) :never
+                         (nil? fr) :normal
+                         :else fr))))
+
 (defn- curl-argv
   "Full curl argv. Prefixed with setsid when available so the process is its
    own group leader — kill-process-tree!'s group kill then works reliably.
    --max-time follows :timeout (ms → s, min 1) when set; an explicitly
    nil timeout (disabled) omits it; absent gets the curl-timeout-seconds
-   default. -L when follow-redirects (default :normal); --compressed for
+   default. -L unless :never (default :normal); --compressed for
    transparent gzip (babashka parity); --fail-with-body so HTTP >= 400 exits
    22 with the error body on stdout. Sensitive bits live in the config
    file, never argv."
@@ -427,7 +453,8 @@
                             "-K" (.getPath config-file)
                             "--dump-header" (.getPath header-file)]
                      max-time (conj "--max-time" (str max-time))
-                     (:follow-redirects opts) (conj "-L")
+                     ;; -L unless explicitly disabled (see follow-redirects?).
+                     (follow-redirects? opts) (conj "-L")
                      true (conj "--compressed"))
                    (concat
                     (when-not get?
@@ -460,6 +487,35 @@
                                       (drop (inc (last status-idxs)) lines)))
                   {})]
     [status headers]))
+
+(defn- redirect-so-far?
+  "True when the headers parsed so far end in a redirect with a Location:
+   with -L curl will still follow it, so these are not the final headers."
+  [status headers]
+  (and (integer? status) (<= 300 status 399) (contains? headers "location")))
+
+(defn- wait-for-final-headers
+  "Re-parse the dump-header file until its trailing status is usable: a nil
+   status (torn first write) or a redirect curl -L would still follow (a
+   slow second hop otherwise surfaces as the first hop's 3xx — e.g. GitHub
+   release downloads, where hop 2 can lag hop 1 by minutes behind a proxy).
+   Gives up when the curl process died or the timeout budget ran out, and
+   returns [status headers] as-is. The budget follows :timeout (an explicitly
+   nil timeout still caps this loop at the curl default so a stalled redirect
+   cannot hang the caller forever — curl itself stays unlimited)."
+  [header-file proc-map opts]
+  (let [t (:timeout opts)
+        budget-ms (if (and (number? t) (pos? t)) t (* curl-timeout-seconds 1000))
+        deadline (+ (System/currentTimeMillis) budget-ms)]
+    (loop []
+      (let [[status headers] (parse-dump-header header-file)
+            pending? (or (nil? status)
+                          (and (redirect-so-far? status headers)
+                               (follow-redirects? opts)))
+            alive? (try (-> proc-map :proc .isAlive) (catch Exception _ true))]
+        (if (and pending? alive? (< (System/currentTimeMillis) deadline))
+          (do (Thread/sleep 100) (recur))
+          [status headers])))))
 
 (defn- curl-header-file
   "A temp file for curl's --dump-header output; deleted by close!/the sync
@@ -521,7 +577,7 @@
                         :header-file header-file :config-file config-file
                         :signal (:signal opts)}}]
     (if (wait-for-headers header-file proc-map)
-      (let [[status headers] (parse-dump-header header-file)
+      (let [[status headers] (wait-for-final-headers header-file proc-map opts)
             st (assoc st :status status :headers headers)
             as (or (:as opts) :string)]
         (if (and throw? (>= status 400))
@@ -581,7 +637,8 @@
      :timeout          — total timeout in ms (nil disables, default 120s on the curl path)
      :throw?           — true (default): HTTP >= 400 throws
                           {:type :http-error}; false returns the response
-     :follow-redirects — :normal (default) | :always | true | false
+     :follow-redirects — :normal (default, follow) | :always | :never
+                          (true follows, false never follows)
      :signal           — cancel atom (curl path only: kills the process
                           tree mid-stream)
      :proxy            — :env (default) | :none | explicit proxy map
@@ -595,7 +652,9 @@
                (and (map? (:body opts)) (not (instance? java.io.InputStream (:body opts))))
                (update :body json/generate-string))
         throw? (if (contains? opts :throw?) (:throw? opts) true)
-        opts (assoc opts :throw? nil) ;; strip, normalized below
+        opts (-> opts
+                 (assoc :throw? nil) ;; strip, normalized below
+                 (normalize-follow-redirects))
         p (resolve-proxy (:url opts) (:proxy opts))]
     (if (and p (curl-proxy? p))
       (curl-request (:url opts) opts p throw?)
