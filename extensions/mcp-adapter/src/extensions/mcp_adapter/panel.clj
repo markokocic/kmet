@@ -514,7 +514,7 @@
                   (vswap! lines conj (row t (render-tool-row tool is-cursor inner-w) inner-w))))))
           (vswap! lines conj (empty-row t inner-w))
           (when (> total max-visible)
-            (let [prog (Math/round (* (/ (inc cursor) total) 10))]
+            (let [prog (Math/round (double (* (/ (inc cursor) total) 10)))]
               (vswap! lines conj
                       (row t (str (rainbow-progress prog 10) " "
                                   (fg (:hint t) (str (inc cursor) "/" total)))

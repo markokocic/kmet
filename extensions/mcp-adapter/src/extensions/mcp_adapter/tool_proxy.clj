@@ -280,7 +280,7 @@
                              (= coverage 1)
                              (>= coverage 0.6))]
           (when (or @phrase-matched? coverage-ok?)
-            (swap! score + (if (= coverage 1) 25 (Math/round (* coverage 10))))
+            (swap! score + (if (= coverage 1) 25 (Math/round (double (* coverage 10)))))
             (when (some #{(first query-tokens)} (tokenize (:name fields)))
               (swap! score + 8))
             (when @whole-field-exact? (swap! score + 20))
