@@ -17,6 +17,7 @@
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [kmet.libs.archive :as archive]
             [kmet.libs.http :as http]))
 
 (def ^:private gh-api-url
@@ -153,35 +154,14 @@
         (http/close! resp)))))
 
 (defn- extract-archive!
-  "Extract a .tar.gz (tar CLI) or .zip (java.util.zip, so windows targets
-   unpack without unzip installed) into dir; returns path of the bb executable
-   inside."
+  "Extract a .tar.gz (tar CLI) or .zip (kmet.libs.archive, so windows
+   targets unpack without unzip installed) into dir; returns path of the bb
+   executable inside."
   [{:keys [ext bin-name]} archive dir]
   (fs/create-dirs dir)
   (case ext
     :tar.gz (p/shell "tar" "xzf" (str archive) "-C" (str dir))
-    :zip (let [dest-dir (fs/canonicalize dir {:nofollow-links true})
-               ;; zip entries may use \ as a separator (the spec allows both);
-               ;; normalize so the containment check catches Windows-style
-               ;; "..\evil" escapes on every platform (canonicalize only
-               ;; resolves "/"-separated ".." on unix, where \ is a plain
-               ;; filename char)
-               name (fn [entry] (str/replace (.getName entry) "\\" "/"))]
-           (with-open [zf (java.util.zip.ZipFile. (fs/file archive))]
-             (doseq [entry (enumeration-seq (.entries zf))
-                     :when (not (.isDirectory entry))]
-               (let [out (fs/canonicalize (fs/path dest-dir (name entry))
-                                          {:nofollow-links true})]
-                 ;; component-aware guard against "../" style escapes:
-                 ;; canonicalize resolves ".." lexically, so the containment
-                 ;; check is effective (fs/starts-with? path prefix)
-                 (when-not (fs/starts-with? out dest-dir)
-                   (throw (ex-info (str "zip entry escapes target dir: " (.getName entry))
-                                   {:type ::zip-slip :entry (.getName entry)})))
-                 (fs/create-dirs (fs/parent out))
-                 (with-open [in (.getInputStream zf entry)
-                             out-stream (io/output-stream (fs/file out))]
-                   (io/copy in out-stream)))))))
+    :zip (archive/extract-zip! archive dir))
   (let [bin (fs/path dir bin-name)]
     (when-not (fs/exists? bin)
       (throw (ex-info (str "archive did not contain " bin-name)

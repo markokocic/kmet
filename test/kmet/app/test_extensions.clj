@@ -544,6 +544,21 @@
     (testing "valid kmet.libs.* requires load and share the real library"
       (let [result (load "lib" "(ns good-lib\n  (:require [kmet.libs.hash :as hash]\n            [kmet.libs.yaml :as yaml]))\n(defn init [api]\n  (let [s (hash/short-hash \"hi\")]\n    (when-not (string? s)\n      (throw (ex-info \"hash failed\" {})))))\n")]
         (t/is (nil? (:error result)) (str "loaded: " (:error result)))))
+    (testing "kmet.libs.archive loads from SCI and extracts zips (no ZipFile interop in extensions)"
+      (let [result (load "archive" (str "(ns good-archive\n  (:require [babashka.fs :as fs]\n"
+                                        "            [clojure.java.io :as io]\n"
+                                        "            [kmet.libs.archive :as archive]))\n"
+                                        "(defn init [_api]\n"
+                                        "  (let [zip (str (fs/path (fs/temp-dir) \"arc-test.zip\"))\n"
+                                        "        out (str (fs/path (fs/temp-dir) \"arc-out\"))]\n"
+                                        "    (with-open [zos (java.util.zip.ZipOutputStream. (io/output-stream zip))]\n"
+                                        "      (.putNextEntry zos (java.util.zip.ZipEntry. \"a.txt\"))\n"
+                                        "      (.write zos (.getBytes \"hi\" \"UTF-8\"))\n"
+                                        "      (.closeEntry zos))\n"
+                                        "    (let [extracted (archive/extract-zip! zip out)]\n"
+                                        "      (when-not (= \"hi\" (slurp (str (first extracted))))\n"
+                                        "        (throw (ex-info \"archive failed\" {}))))))\n"))]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))))
     (testing "the whitelisted built-in renderer namespace loads and shares direct vars"
       (let [result (load "renderer" "(ns good-renderer\n  (:require [kmet.app.ui.tool-renderers :as renderers]))\n(defn init [_api]\n  (when-not (fn? renderers/render-edit-call)\n    (throw (ex-info \"renderer failed\" {}))))\n")]
         (t/is (nil? (:error result)) (str "loaded: " (:error result)))))

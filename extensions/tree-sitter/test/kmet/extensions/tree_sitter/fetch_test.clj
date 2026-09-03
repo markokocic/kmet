@@ -81,7 +81,7 @@
                   nil
                   (catch Exception e e))]
       (is (some? ex) (str "expected rejection for entry " name))
-      (is (= ::fetch/unsafe-zip-entry (:type (ex-data ex))))
+      (is (= :kmet.libs.archive/zip-slip (:type (ex-data ex))))
       (is (not (fs/exists? (fs/path tmp "evil.txt")))))))
 
 (deftest binary-release-test

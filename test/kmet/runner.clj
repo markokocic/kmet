@@ -100,6 +100,7 @@
     kmet.libs.test-edn-store
     kmet.libs.test-jsonrpc
     kmet.libs.test-http
+    kmet.libs.test-archive
     kmet.libs.test-aws-sigv4
     kmet.libs.test-context
     kmet.app.ui.test-chat-history

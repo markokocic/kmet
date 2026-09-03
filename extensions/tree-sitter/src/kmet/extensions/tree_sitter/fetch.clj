@@ -2,18 +2,19 @@
   "Download + verify primitives for the tree-sitter extension.
    All remote artifacts are sha256-checked against the shipped manifest
    before they land at their destination (temp file -> atomic move).
-   Release assets are zips; extraction is in-process via java.util.zip
-   (available under babashka) so no external tar/unzip is needed on any
-   target platform."
+   Release assets are zips; extraction is kmet.libs.archive (shared by
+   reference from the host, so no Java interop — unavailable in the
+   extension SCI context — and no external tar/unzip is needed on any
+   target platform)."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [kmet.extensions.tree-sitter.paths :as paths]
+            [kmet.libs.archive :as archive]
             [kmet.libs.http :as http])
-  (:import [java.security MessageDigest]
-           [java.util.zip ZipFile]))
+  (:import [java.security MessageDigest]))
 
 (defn binary-release
   "Pinned CLI release from the shipped manifest:
@@ -119,7 +120,7 @@
   (let [resp (http/get url {:as :stream :throw? false :timeout 120000
                              ;; release/registry URLs always redirect (e.g. github.com
                              ;; -> objects.githubusercontent.com); require following.
-                             :follow-redirects true})]
+                            :follow-redirects true})]
     (try
       (when (not= 200 (:status resp))
         (throw (ex-info (str "download failed with HTTP " (:status resp) " for " url)
@@ -130,27 +131,9 @@
       (finally
         (http/close! resp)))))
 (defn extract-zip!
-  "Extract every file entry of zip-path under dest-dir, creating nested dirs
-   as needed. Rejects absolute or parent-traversing entry names (::unsafe-zip-
-   entry) and re-checks each target stays inside dest-dir. Returns the seq of
-   extracted paths (no permission preservation — callers chmod as needed)."
+  "Extract every file entry of zip-path under dest-dir via the shared
+   kmet.libs.archive (no Java interop in the extension SCI context).
+   Returns the seq of extracted paths (no permission preservation —
+   callers chmod as needed)."
   [zip-path dest-dir]
-  (let [dest (fs/absolutize dest-dir)]
-    (fs/create-dirs dest)
-    (with-open [zf (ZipFile. (str (fs/file zip-path)))]
-      (doall
-       (for [entry (enumeration-seq (.entries zf))
-             :when (not (.isDirectory entry))
-             :let [name (.getName entry)]]
-         (do (when (or (str/starts-with? name "/")
-                       (some #{".."} (str/split name #"/")))
-               (throw (ex-info (str "unsafe zip entry: " name)
-                               {:type ::unsafe-zip-entry :entry name})))
-             (let [target (reduce fs/path dest (str/split name #"/"))]
-               (when-not (fs/starts-with? (fs/absolutize target) dest)
-                 (throw (ex-info (str "zip entry escapes destination: " name)
-                                 {:type ::unsafe-zip-entry :entry name})))
-               (fs/create-dirs (fs/parent target))
-               (with-open [in (.getInputStream zf entry)]
-                 (io/copy in (fs/file target)))
-               target)))))))
+  (archive/extract-zip! zip-path dest-dir))
