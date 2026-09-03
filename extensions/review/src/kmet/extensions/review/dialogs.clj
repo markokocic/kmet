@@ -149,7 +149,7 @@
               overlay (framed-overlay
                        th "Select a review preset"
                        [:container {} sl]
-                       "Type to filter · enter to confirm · esc to cancel")]
+                       "Press enter to confirm or esc to go back")]
           (map->ReviewSelectDialog
            {:kind nil
             :overlay overlay
@@ -179,7 +179,7 @@
            overlay (framed-overlay
                     th title
                     [:container {} sl]
-                    "Type to filter · enter to select · esc to cancel")]
+                    "Type to filter • enter to select • esc to cancel")]
        (map->ReviewSelectDialog
         {:kind nil
          :overlay overlay
@@ -207,7 +207,7 @@
            overlay (framed-overlay
                     th "Select commit to review"
                     [:container {} sl]
-                    "Type to filter · enter to select · esc to cancel")]
+                    "Type to filter • enter to select • esc to cancel")]
        (map->ReviewSelectDialog
         {:kind nil
          :overlay overlay
@@ -231,14 +231,7 @@
               inp (fn [v] (close (str/trim v))))
            _ (input/input-set-on-escape!
               inp (fn [] (close nil)))
-           body [:container {}
-                 [:text {:padding-x 1 :padding-y 0} "│"]
-                 [:spacer {:lines 1}]
-                 inp
-                 [:spacer {:lines 1}]
-                 [:text {:padding-x 1 :padding-y 0}
-                  (theme/fg th :dim "Enter to confirm · esc to cancel")]]
-           overlay (framed-overlay th title body
+           overlay (framed-overlay th title inp
                                    "Enter to confirm · esc to cancel")]
        (map->ReviewInputDialog
         {:kind nil
@@ -273,3 +266,63 @@
                               ""
                               "type then enter")]
     (when (and raw (not (str/blank? raw))) raw)))
+
+(defn show-review-location-selector!
+  "Ask where to start the review: empty branch vs current session
+   (pi: \"Start review in:\" selector). Returns :empty-branch or
+   :current-session, or nil on cancel/timeout."
+  [api]
+  (let [items [{:value :empty-branch :label "Empty branch" :description ""}
+               {:value :current-session :label "Current session" :description ""}]
+        height (count items)]
+    (run-dialog
+     api
+     (fn [_tui th _kb close]
+       (let [sl (select-list/make-select-list
+                 items
+                 :height height
+                 :theme (theme/get-select-list-theme th)
+                 :no-match-text "  No matching options"
+                 :on-select (fn [item] (close (:value item)))
+                 :on-escape (fn [] (close nil)))
+             overlay (framed-overlay
+                      th "Start review in:"
+                      [:container {} sl]
+                      "↑↓ navigate • enter to select • esc to cancel")]
+         (map->ReviewSelectDialog
+          {:kind nil
+           :overlay overlay
+           :select-list sl
+           :focused?-atom (atom false)})))
+     nil)))
+
+(defn show-end-review-selector!
+  "Mount the end-review action selector (pi: ctx.ui.select \"Finish
+   review:\", [\"Return only\" \"Return and fix findings\"
+   \"Return and summarize\"]). Returns one of :return-only
+   :return-and-fix :return-and-summarize, or nil on cancel/timeout."
+  [api]
+  (let [items [{:value :return-only :label "Return only" :description ""}
+               {:value :return-and-fix :label "Return and fix findings" :description ""}
+               {:value :return-and-summarize :label "Return and summarize" :description ""}]
+        height (count items)]
+    (run-dialog
+     api
+     (fn [_tui th _kb close]
+       (let [sl (select-list/make-select-list
+                 items
+                 :height height
+                 :theme (theme/get-select-list-theme th)
+                 :no-match-text "  No matching options"
+                 :on-select (fn [item] (close (:value item)))
+                 :on-escape (fn [] (close nil)))
+             overlay (framed-overlay
+                      th "Finish review:"
+                      [:container {} sl]
+                      "↑↓ navigate • enter to select • esc to cancel")]
+         (map->ReviewSelectDialog
+          {:kind nil
+           :overlay overlay
+           :select-list sl
+           :focused?-atom (atom false)})))
+     nil)))

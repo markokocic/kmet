@@ -32,9 +32,6 @@
 (def ^:private review-anchor-type "review-anchor")
 (def ^:private review-settings-type "review-settings")
 
-(def ^:private pending-changes-message
-  "Cannot switch branches with uncommitted changes. Please commit or stash them first.")
-
 ;; -- Module-local state ---------------------------------------------------
 
 (defonce ^:private review-origin-id (atom nil))
@@ -89,7 +86,7 @@
   [api]
   (let [entries ((:get-branch (ext/session api)))]
     (some (fn [entry]
-            (when (and (= "custom" (:type entry))
+            (when (and (= :custom (:role entry))
                        (= review-state-type (:custom-type entry)))
               (:data entry)))
           (reverse entries))))
@@ -99,7 +96,7 @@
    {:custom-instructions nil}."
   [api]
   (let [entries ((:get-entries (ext/session api)) review-settings-type)]
-    (if-let [entry (last (sort-by :created-at entries))]
+    (if-let [entry (last entries)]
       (let [data (:data entry)]
         {:custom-instructions (some-> data :custom-instructions str/trim not-empty)})
       {:custom-instructions nil})))
@@ -322,7 +319,7 @@
                                (str "No other branches found"
                                     (when current (str " (current branch: " current ")")))
                                :error)
-                nil)
+                (recur))
             (let [sorted (vec (sort-by (fn [b]
                                          [(not= b default) (str/lower-case b)])
                                        candidates))
@@ -333,13 +330,14 @@
                               sorted)
                   picked-item (dlg/show-branch-selector! api items
                                                          "Select base branch")]
-              (when picked-item
-                {:type :base-branch :branch (:value picked-item)}))))
+              (if picked-item
+                {:type :base-branch :branch (:value picked-item)}
+                (recur)))))
 
         (= :commit picked)
         (let [commits (git/recent-commits api 20)]
           (if (empty? commits)
-            (do (ext/ui-notify api "No commits found" :error) nil)
+            (do (ext/ui-notify api "No commits found" :error) (recur))
             (let [items (mapv (fn [c]
                                 {:value (:sha c)
                                  :label (str (subs (:sha c) 0 (min 7 (count (:sha c))))
@@ -347,14 +345,16 @@
                                  :description ""})
                               commits)
                   picked-item (dlg/show-commit-selector! api items)]
-              (when picked-item
+              (if picked-item
                 {:type :commit
                  :sha (:value picked-item)
-                 :title (:title picked-item)}))))
+                 :title (:title picked-item)}
+                (recur)))))
 
         (= :folder picked)
-        (when-let [paths (dlg/show-folder-input! api)]
-          {:type :folder :paths paths})
+        (if-let [paths (dlg/show-folder-input! api)]
+          {:type :folder :paths paths}
+          (recur))
 
         :else nil))))
 
@@ -386,56 +386,68 @@
                        :warning)
         false)
 
-    (git/pending-changes? api)
-    (do (ext/ui-notify api pending-changes-message :error) false)
-
     :else
     (let [merge-base (when (= :base-branch (:type target))
                        (resolve-merge-base api (:branch target)))
           target (assoc target :merge-base merge-base)]
-      (when use-fresh-session
-        (let [leaf ((:get-leaf-id (ext/session api)))]
-          (if leaf
-            (reset! review-origin-id leaf)
-            (do
-              ((:append-entry! (ext/session api))
-               review-anchor-type
-               {:created-at (str (java.util.Date.))})
-              (let [leaf2 ((:get-leaf-id (ext/session api)))]
-                (when leaf2 (reset! review-origin-id leaf2)))))))
-      (let [origin @review-origin-id]
-        (if (and use-fresh-session (nil? origin))
-          (do (ext/ui-notify api "Failed to create review anchor — not in a session" :error)
-              false)
-          (when (or (not use-fresh-session) origin)
-            (when (and use-fresh-session origin)
-              (let [entries ((:get-branch (ext/session api)))
-                    first-user (some (fn [e]
-                                       (when (and (= :message (:type e))
-                                                  (= "user" (:role (:message e))))
-                                         e))
-                                     entries)]
-                (when first-user
-                  (try
-                    (let [result (ctx :navigate-tree (:id first-user)
-                                      {:summarize false :label "code-review"})]
-                      (when (:cancelled result)
-                        (reset! review-origin-id nil)
-                        (throw (ex-info "navigate-tree cancelled" {}))))
-                    (catch Exception _
-                      (reset! review-origin-id nil)
-                      (throw (ex-info "navigate-tree failed" {}))))
-                  (ctx :set-editor-text "")))
-              (set-review-widget! api true)
-              ((:append-entry! (ext/session api))
-               review-state-type
-               {:active true :origin-id origin}))
-            (let [prompt (assemble-review-prompt api (or (:cwd ctx) (System/getProperty "user.dir")) target extra-instruction)
-                  hint (prompts/user-facing-hint target)
-                  mode-hint (when use-fresh-session " (fresh session)")]
-              (ext/ui-notify api (str "Starting review: " hint mode-hint) :info)
-              (ext/send-user-message api prompt)
-              true)))))))
+      (if use-fresh-session
+        (let [leaf ((:get-leaf-id (ext/session api)))
+              origin (if leaf
+                       (do (reset! review-origin-id leaf) leaf)
+                       (do ((:append-entry! (ext/session api))
+                            review-anchor-type
+                            {:created-at (str (java.util.Date.))})
+                           (let [leaf2 ((:get-leaf-id (ext/session api)))]
+                             (when leaf2 (reset! review-origin-id leaf2))
+                             leaf2)))]
+          (if (nil? origin)
+            (do (ext/ui-notify api "Failed to create review anchor - not in a session" :error)
+                false)
+            (let [entries ((:get-branch (ext/session api)))
+                  first-user (some (fn [e]
+                                     (when (= :user (:role e))
+                                       e))
+                                   entries)]
+              (if first-user
+                (let [nav-result (try
+                                   ((:navigate-tree ctx) (:id first-user)
+                                                         {:summarize false :label "code-review"})
+                                   (catch Exception _ {:error true}))]
+                  (cond
+                    (:error nav-result)
+                    (do (reset! review-origin-id nil)
+                        (ext/ui-notify api "Failed to start review: navigate-tree failed" :error)
+                        false)
+
+                    (:cancelled nav-result)
+                    (do (reset! review-origin-id nil) false)
+
+                    :else
+                    (do (ext/ui-set-editor-text api "")
+                        (set-review-widget! api true)
+                        ((:append-entry! (ext/session api))
+                         review-state-type
+                         {:active true :origin-id origin})
+                        (let [prompt (assemble-review-prompt api (or (:cwd ctx) (System/getProperty "user.dir")) target extra-instruction)
+                              hint (prompts/user-facing-hint target)]
+                          (ext/ui-notify api (str "Starting review: " hint " (fresh session)") :info)
+                          (ext/send-user-message api prompt)
+                          true))))
+                (do (set-review-widget! api true)
+                    ((:append-entry! (ext/session api))
+                     review-state-type
+                     {:active true :origin-id origin})
+                    (let [prompt (assemble-review-prompt api (or (:cwd ctx) (System/getProperty "user.dir")) target extra-instruction)
+                          hint (prompts/user-facing-hint target)]
+                      (ext/ui-notify api (str "Starting review: " hint " (fresh session)") :info)
+                      (ext/send-user-message api prompt)
+                      true))))))
+        ;; non-fresh session: just send the review prompt in place
+        (let [prompt (assemble-review-prompt api (or (:cwd ctx) (System/getProperty "user.dir")) target extra-instruction)
+              hint (prompts/user-facing-hint target)]
+          (ext/ui-notify api (str "Starting review: " hint) :info)
+          (ext/send-user-message api prompt)
+          true)))))
 
 ;; -- /review command -----------------------------------------------------
 
@@ -459,10 +471,21 @@
       (if error
         (ext/ui-notify api error :error)
         (if target
+          ;; Direct invocation with parsed target — still needs the
+          ;; "Empty branch / Current session" choice when the session
+          ;; already has messages (pi parity).
           (let [entries ((:get-branch (ext/session api)))
-                message-count (count (filter #(= :message (:type %)) entries))
-                use-fresh? (zero? message-count)]
-            (execute-review api ctx target use-fresh? extra-instruction))
+                message-count (count (filter #(contains? #{:user :assistant :tool :bash} (:role %)) entries))]
+            (if (zero? message-count)
+              (execute-review api ctx target true extra-instruction)
+              (spawn
+               (fn []
+                 (try
+                   (when-let [choice (dlg/show-review-location-selector! api)]
+                     (let [use-fresh? (= choice :empty-branch)]
+                       (execute-review api ctx target use-fresh? extra-instruction)))
+                   (catch Exception e
+                     (ext/ui-notify api (str "Review failed: " (or (ex-message e) (str e))) :error)))))))
           ;; No target from args — walk the dialog off the dispatch thread
           ;; so the reader loop keeps draining keys into the overlay
           ;; (tui.md §7: input is focused-leaf only; blocking the
@@ -471,11 +494,24 @@
           (spawn
            (fn []
              (try
-               (when-let [picked (show-target-dialog! api)]
-                 (let [entries ((:get-branch (ext/session api)))
-                       message-count (count (filter #(= :message (:type %)) entries))
-                       use-fresh? (zero? message-count)]
-                   (execute-review api ctx picked use-fresh? extra-instruction)))
+               (loop [picked (show-target-dialog! api)]
+                 (if (nil? picked)
+                   (ext/ui-notify api "Review cancelled" :info)
+                   (let [entries ((:get-branch (ext/session api)))
+                         message-count (count (filter #(contains? #{:user :assistant :tool :bash} (:role %)) entries))]
+                     (if (zero? message-count)
+                       (execute-review api ctx picked true extra-instruction)
+                       (let [choice (dlg/show-review-location-selector! api)]
+                         (cond
+                           (nil? choice)
+                           ;; cancelled "Start review in:" — go back to preset picker (pi parity)
+                           (recur (show-target-dialog! api))
+
+                           (= choice :empty-branch)
+                           (execute-review api ctx picked true extra-instruction)
+
+                           (= choice :current-session)
+                           (execute-review api ctx picked false extra-instruction)))))))
                (catch Exception e
                  (ext/ui-notify api (str "Review failed: " (or (ex-message e) (str e))) :error))))))))))
 
@@ -508,12 +544,12 @@
 
 (defn- navigate-back [_api ctx origin summarize?]
   (try
-    (let [result (ctx :navigate-tree origin
-                      (cond-> {:label "code-review"}
-                        true (assoc :summarize (boolean summarize?))
-                        summarize? (assoc :custom-instructions
-                                          prompts/review-summary-prompt
-                                          :replace-instructions true)))]
+    (let [result ((:navigate-tree ctx) origin
+                                       (cond-> {:label "code-review"}
+                                         true (assoc :summarize (boolean summarize?))
+                                         summarize? (assoc :custom-instructions
+                                                           prompts/review-summary-prompt
+                                                           :replace-instructions true)))]
       (cond
         (:cancelled result) {:ok? false :cancelled? true}
         :else {:ok? true}))
@@ -572,27 +608,16 @@
 (defn- handle-end-review-command [api ctx]
   (if-not (compare-and-set! end-review-in-progress false true)
     (ext/ui-notify api "/end-review is already running" :info)
-    ;; Dialog blocks on its ui-custom promise — run off the
+    ;; Selector blocks on its ui-custom promise — run off the
     ;; dispatch thread like /review above.
     (spawn
      (fn []
        (try
-         (let [choice (dlg/show-text-input!
-                       api
-                       "Finish review (return only | return and fix | return and summarize)"
-                       "return only"
-                       "type the action")]
-           (when choice
-             (let [c (str/lower-case (str/trim choice))]
-               (cond
-                 (or (str/includes? c "summariz") (str/includes? c "summary"))
-                 (end-review! api ctx :return-and-summarize)
-
-                 (or (str/includes? c "fix") (str/includes? c "find"))
-                 (end-review! api ctx :return-and-fix)
-
-                 :else
-                 (end-review! api ctx :return-only)))))
+         (when-let [choice (dlg/show-end-review-selector! api)]
+           (case choice
+             :return-and-summarize (end-review! api ctx :return-and-summarize)
+             :return-and-fix (end-review! api ctx :return-and-fix)
+             :return-only (end-review! api ctx :return-only)))
          (catch Exception e
            (ext/ui-notify api (str "Review failed: " (or (ex-message e) (str e))) :error))
          (finally
