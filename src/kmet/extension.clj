@@ -28,11 +28,13 @@
    namespace take api as their first argument and dispatch to the runtime
    implementation, so extensions never require kmet internals.
 
-   Layout: extensions are either single .clj files, or directories
-   containing an extension.edn manifest:
-     {:name \"my-ext\" :entry \"src/my_ext.clj\"}
-   — the manifest lists only the initial namespace; internal namespaces are
-   required from there. An extension directory may also carry a deps.edn
+   Layout: extensions are single .clj files, directories containing an
+   extension.edn manifest, or .jar/.zip archives with the same layout at
+   the archive root:
+     {:name \"my-ext\" :entry my.ext.main}
+   — :entry is a namespace symbol resolved by strict ns-path lookup
+   (namespace a.b/c lives at a/b/c.clj under the root); internal namespaces
+   are required from there. An extension directory may also carry a deps.edn
    declaring library dependencies; kmet serves them to that extension only
    (each extension runs in its own isolated context, so different
    extensions may pin different versions of the same library).

@@ -911,6 +911,38 @@
             (t/is (nil? (:error result)) (str "loaded: " (:error result)))
             (t/is (= "jar-ok|bundled" (:content (tools/execute-tool "jar-ext-tool" {})))))
           (fs/delete-if-exists zip)))
+      (testing "load-extensions-from-dir picks up top-level jars"
+        (let [container "target/test-ext-jar-container"]
+          (fs/delete-tree container)
+          (fs/create-dirs container)
+          (fs/copy jar (str container "/jar-ext.jar"))
+          (extensions/unload-all-extensions!)
+          (let [results (extensions/load-extensions-from-dir container)]
+            (t/is (= 1 (count (filter #(nil? (:error %)) results)))
+                  (str "jar picked up: " (pr-str results)))
+            (t/is (= "jar-ok|bundled" (:content (tools/execute-tool "jar-ext-tool" {})))))
+          (fs/delete-tree container)))
+      (testing "sloppy ns (file declares another namespace) fails with an actionable error"
+        (let [sdir "target/test-ext-jar-sloppy-src"
+              sjar "target/test-ext-jar-sloppy.jar"]
+          (fs/delete-tree sdir)
+          (fs/delete-if-exists sjar)
+          (fs/create-dirs (str sdir "/sloppy"))
+          (spit (str sdir "/extension.edn") "{:name \"jar-sloppy\" :entry sloppy.main}\n")
+          (spit (str sdir "/sloppy/main.clj")
+                "(ns wrong.place)\n(defn init [api] nil)\n")
+          (with-open [zos (java.util.zip.ZipOutputStream. (io/output-stream sjar))]
+            (doseq [rel ["extension.edn" "sloppy/main.clj"]]
+              (.putNextEntry zos (java.util.zip.ZipEntry. rel))
+              (io/copy (io/file (str sdir "/" rel)) zos)
+              (.closeEntry zos)))
+          (extensions/unload-all-extensions!)
+          (let [result (extensions/load-extension! sjar)]
+            (t/is (some? (:error result)))
+            (t/is (str/includes? (:error result) "strict layout violation")
+                  (str "actionable error, got: " (:error result))))
+          (fs/delete-tree sdir)
+          (fs/delete-if-exists sjar)))
       (finally
         (extensions/unload-all-extensions!)
         (t/is (nil? (tools/get-tool "jar-ext-tool")) "unload removes the tool")

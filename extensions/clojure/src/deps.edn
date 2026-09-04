@@ -1,1 +1,7 @@
-{:deps {dev.weavejester/cljfmt {:mvn/version "0.16.5", :exclusions [rewrite-clj/rewrite-clj]}, parinferish/parinferish #:mvn{:version "0.8.0"}}}
+{:deps {dev.weavejester/cljfmt {:mvn/version "0.16.5"
+                        ;; rewrite-clj is bb-bundled (adapted port) — use the
+                        ;; bundled copy, never the Maven lib (which requires
+                        ;; clojure.tools.reader.impl.* that bb does not ship)
+                                :exclusions [rewrite-clj/rewrite-clj]}
+        ;; pure-Clojure delimiter repair (SCI-compatible; parinfer is a JVM lib)
+        parinferish/parinferish {:mvn/version "0.8.0"}}}

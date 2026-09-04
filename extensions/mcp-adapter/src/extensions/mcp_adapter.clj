@@ -5,7 +5,7 @@
    Init/shutdown (§10.2), state (§10.1), proxy + direct tool registration
    (§10.4/§10.5), connection lifecycle (§10.3), the /mcp command (§10.6),
    events (§10.7: :session-start eager/keep-alive connects,
-   :session-shutdown disconnect-all, :resources-discover skill)."
+   :session-shutdown disconnect-all, self-registered skill)."
   (:require [babashka.fs :as fs]
             [babashka.process :as proc]
             [clojure.java.io :as io]

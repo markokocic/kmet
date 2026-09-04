@@ -336,9 +336,9 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
 (defn- pack-verify!
   "Verify SRC-DIR is a packable extension artifact root; throw ex-info
    with :type ::pack-error otherwise. Checks: extension.edn present with
-   :name + symbol :entry; the :entry ns-path file exists; every .clj file's
-   (ns ...) matches its path (strict layout); deps.edn parses and carries
-   only :deps. Returns {:name :entry-ns}."
+   :name + symbol :entry; the :entry ns-path file exists; every .clj/.cljc/.bb
+   file's (ns ...) matches its path (strict layout); deps.edn parses and
+   carries only :deps. Returns {:name :entry-ns}."
   [src-dir]
   (let [root (fs/canonicalize src-dir)
         manifest (io/file (str root) "extension.edn")]
@@ -357,7 +357,7 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
         (when-not entry-file
           (throw (ex-info (str "extension.edn :entry not found: " entry-ns)
                           {:type ::pack-error :entry entry-ns}))))
-      (doseq [f (sort-by str (fs/glob root "**.clj"))]
+      (doseq [f (sort-by str (mapcat #(fs/glob root (str "**." %)) ["clj" "cljc" "bb"]))]
         (let [rel (str/replace (str (fs/relativize root f)) "\\" "/")
               expected (strict-ns-for-path rel)
               actual (with-open [r (java.io.PushbackReader. (io/reader (fs/file f)))]

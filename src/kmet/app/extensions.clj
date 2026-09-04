@@ -621,7 +621,8 @@
     {:extension-name name
      :extension-path (:path ext)
      ;; the extension's own directory (dir ext = the dir itself, file ext
-     ;; = the file's parent) — resource discovery resolves against it
+     ;; = the file's parent) — nil for jar extensions, which have no
+     ;; directory (use io/resource instead)
      :extension-dir (extension-dir-of ext)
      :register-command! (fn [cmd]
                           ;; the handler is stored under :extension-handler so
@@ -926,17 +927,20 @@
             (enumeration-seq (.entries jar)))
       (finally (.close jar)))))
 
-(defn- jar-ns-set
-  "The set of namespace symbols the jar at JAR-PATH provides (reverse-mapped
-   from its safe .clj/.cljc/.bb entry names)."
+(defn- jar-namespaces
+  "The entry-name set + namespace-symbol set of the jar at JAR-PATH,
+   collected once at load: {:entries #{...} :namespaces #{...}}. Namespace
+   symbols reverse-map from the safe .clj/.cljc/.bb entry names."
   [jar-path]
-  (into #{}
-        (comp (filter #(re-find #"\.(cljc|clj|bb)$" %))
-              (map #(str/replace % #"\.(cljc|clj|bb)$" ""))
-              (map #(str/replace % "_" "-"))
-              (map #(str/replace % "/" "."))
-              (map symbol))
-        (jar-entry-names jar-path)))
+  (let [entries (jar-entry-names jar-path)]
+    {:entries entries
+     :namespaces (into #{}
+                       (comp (filter #(re-find #"\.(cljc|clj|bb)$" %))
+                             (map #(str/replace % #"\.(cljc|clj|bb)$" ""))
+                             (map #(str/replace % "_" "-"))
+                             (map #(str/replace % "/" "."))
+                             (map symbol))
+                       entries)}))
 
 (defn- artifact-source
   "The source of NS-SYM in ARTIFACT ({:kind :dir/:jar :root}), or nil.
@@ -960,11 +964,11 @@
 (defn- artifact-owns-ns?
   "True when NS-SYM is one of ARTIFACT's own namespaces. Strict layout, so
    membership derives from paths, never file contents: dirs probe the fs,
-   jars check JAR-NS-SET (the entry-name set collected once at load; nil
-   for dirs)."
-  [{:keys [kind root]} jar-ns-set ns-sym]
+   jars check JAR-INFO (the entry/namespace sets collected once at load;
+   nil for dirs)."
+  [{:keys [kind root]} jar-info ns-sym]
   (if (= :jar kind)
-    (contains? jar-ns-set ns-sym)
+    (contains? (:namespaces jar-info) ns-sym)
     (boolean (some (fn [ext]
                      (.exists (io/file (str root) (str (ns-path ns-sym) ext))))
                    source-extensions))))
@@ -982,13 +986,15 @@
    URL when the entry exists), then the deps.edn closure jars, then the
    host classpath. Both arities ([path] [path loader] — the loader is
    ignored). Host slurp opens file: and jar: URLs via openStream, so
-   extension code reads bundled resources with no extraction."
-  [artifact deps-resolver]
+   extension code reads bundled resources with no extraction. JAR-INFO is
+   the jar-namespaces map collected once at load (nil for dirs) — the zip
+   is never re-enumerated per lookup."
+  [artifact jar-info deps-resolver]
   (let [host-resource (deref #'clojure.java.io/resource)
         own (fn [rel]
               (let [{:keys [kind root]} artifact]
                 (if (= :jar kind)
-                  (when (contains? (jar-entry-names root) rel)
+                  (when (contains? (:entries jar-info) rel)
                     (java.net.URL. (str "jar:" (.toURL (.toURI (io/file root))) "!/" rel)))
                   (let [f (io/file (str root) rel)]
                     (when (.exists f)
@@ -1317,13 +1323,22 @@
    Every own-artifact source is require-validated on load (not just the
    entry namespace): a forbidden/misspelled kmet.* require or a direct
    babashka.http-client require in an internal namespace fails with the
-   same actionable messages as the entry check."
-  [ext-name artifact _jar-ns-set owns-ns? deps-resolver tui-namespaces libs-namespaces]
+   same actionable messages as the entry check. The source's (ns ...)
+   must also match the requested symbol (strict layout is enforced at
+   load, not just pack time) — otherwise the failure surfaces later as
+   a missing init fn."
+  [ext-name artifact owns-ns? deps-resolver tui-namespaces libs-namespaces]
   (fn [{:keys [namespace]}]
     (or (when-let [{:keys [source display]} (and artifact (artifact-source artifact namespace))]
-          (validate-entry-requires! ext-name (ns-form-of-source source)
-                                    tui-namespaces libs-namespaces
-                                    owns-ns?)
+          (let [ns-form (ns-form-of-source source)]
+            (when-not (= namespace (second ns-form))
+              (throw (ex-info (str "Extension " ext-name " strict layout violation: "
+                                   display " declares " (second ns-form)
+                                   ", expected " namespace)
+                              {:extension ext-name :ns namespace})))
+            (validate-entry-requires! ext-name ns-form
+                                      tui-namespaces libs-namespaces
+                                      owns-ns?))
           {:file display :source source})
         (when-let [jars (and deps-resolver (deps-resolver))]
           (some (fn [j] (jar-source j namespace))
@@ -1374,14 +1389,14 @@
    bb-bundled namespaces, with actionable errors for everything else.
    RESOURCE-FN replaces clojure.java.io/resource with an artifact-scoped
    lookup (nil keeps the host resource)."
-  [ext-name artifact jar-ns-set owns-ns? deps-resolver resource-fn]
+  [ext-name artifact owns-ns? deps-resolver resource-fn]
   (apply require (concat tui-library-namespaces libs-library-namespaces
                          spec-port-namespaces bb-shared-namespaces))
   (sci/init {:classes context-classes
              :imports bb-imports
              :features #{:bb :clj}
              :namespaces (build-context-namespaces resource-fn)
-             :load-fn (make-load-fn ext-name artifact jar-ns-set owns-ns?
+             :load-fn (make-load-fn ext-name artifact owns-ns?
                                     deps-resolver
                                     (shared-tui-namespaces)
                                     (shared-libs-namespaces))}))
@@ -1439,14 +1454,14 @@
                      (:deps (edn/read-string
                              (or (jar-entry-source (:root artifact) "deps.edn") "{}")))
                      (deps-of-root (:root artifact))))
-            jar-ns-set (when (= :jar kind) (jar-ns-set (:root artifact)))
+            jar-info (when (= :jar kind) (jar-namespaces (:root artifact)))
             owns-ns? (if artifact
-                       (fn [ns-sym] (artifact-owns-ns? artifact jar-ns-set ns-sym))
+                       (fn [ns-sym] (artifact-owns-ns? artifact jar-info ns-sym))
                        (constantly false))
             deps-resolver (make-deps-resolver deps (:jars ext))
-            ctx (create-context name artifact jar-ns-set owns-ns?
+            ctx (create-context name artifact owns-ns?
                                 deps-resolver
-                                (when artifact (extension-resource-fn artifact deps-resolver)))]
+                                (when artifact (extension-resource-fn artifact jar-info deps-resolver)))]
         (doseq [lib (keys deps)]
           (when (contains? bb-bundled-libs (str lib))
             (binding [*out* *err*]
@@ -1460,11 +1475,19 @@
               (throw (ex-info (str "extension.edn :entry not found: " entry-ns)
                               {:path path :entry entry-ns})))
             ;; fail fast on forbidden/misspelled kmet.* requires — sci's
-            ;; require machinery swallows the load-fn error into an NPE
-            (validate-entry-requires! name (ns-form-of-source source)
-                                      (shared-tui-namespaces)
-                                      (shared-libs-namespaces)
-                                      owns-ns?)
+            ;; require machinery swallows the load-fn error into an NPE.
+            ;; The entry source must also declare :entry-ns itself (strict
+            ;; layout is enforced at load, not just pack time).
+            (let [ns-form (ns-form-of-source source)]
+              (when-not (= entry-ns (second ns-form))
+                (throw (ex-info (str "Extension " name " strict layout violation: "
+                                     display " declares " (second ns-form)
+                                     ", expected " entry-ns)
+                                {:path path :entry entry-ns})))
+              (validate-entry-requires! name ns-form
+                                        (shared-tui-namespaces)
+                                        (shared-libs-namespaces)
+                                        owns-ns?))
             (eval-source! ctx source display)
             (let [init-var (extension-var ext entry-ns 'init)]
               (when-not init-var
