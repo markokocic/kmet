@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-04T16:09:58Z"
+ :generated-at "2026-09-04T16:43:26Z"
  :provider {:id :commandcode
             :name "Command Code"
             :env-vars ["CMD_API_KEY"]
@@ -205,6 +205,13 @@
     :api :openai-completions
     :base-url "https://api.commandcode.ai/provider/v1"
     :reasoning true
+    :thinking-level-map {:high nil
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.4 :output 3 :cache-read 0.04 :cache-write 0}
     :context-window 262144
@@ -534,6 +541,13 @@
     :api :openai-completions
     :base-url "https://api.commandcode.ai/provider/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1.25 :output 4.25 :cache-read 0.15 :cache-write 0}
     :context-window 1048576
@@ -546,6 +560,13 @@
     :api :openai-completions
     :base-url "https://api.commandcode.ai/provider/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1.25 :output 4.25 :cache-read 0.15 :cache-write 0}
     :context-window 1048576
@@ -576,6 +597,13 @@
     :api :openai-completions
     :base-url "https://api.commandcode.ai/provider/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1.25 :output 4.25 :cache-read 0.15 :cache-write 0}
     :context-window 1048576
@@ -588,11 +616,17 @@
     :api :openai-completions
     :base-url "https://api.commandcode.ai/provider/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.1 :output 0.2 :cache-read 0.002 :cache-write 0}
     :context-window 1048576
-    :max-tokens 943718
-    :compat {:thinking-format :openrouter}}
+    :max-tokens 131072}
    "moonshotai/Kimi-K2.5"
    {:id "moonshotai/Kimi-K2.5"
     :name "Kimi K2.5"
@@ -692,6 +726,13 @@
     :api :openai-completions
     :base-url "https://api.commandcode.ai/provider/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 0}
     :context-window 1000000
@@ -704,6 +745,7 @@
     :api :openai-completions
     :base-url "https://api.commandcode.ai/provider/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.1 :output 0.3 :cache-read 0.02 :cache-write 0}
     :context-window 1000000
@@ -716,6 +758,13 @@
     :api :openai-completions
     :base-url "https://api.commandcode.ai/provider/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.2 :output 1.15 :cache-read 0.04 :cache-write 0}
     :context-window 256000
@@ -761,6 +810,13 @@
     :api :openai-completions
     :base-url "https://api.commandcode.ai/provider/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.5 :output 1.2 :cache-read 0.1 :cache-write 0}
     :context-window 1000000

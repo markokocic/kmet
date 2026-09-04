@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-04T16:09:58Z"
+ :generated-at "2026-09-04T16:43:26Z"
  :provider {:id :openrouter
             :name "OpenRouter"
             :env-vars ["OPENROUTER_API_KEY"]
@@ -13,6 +13,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.8 :output 1.6 :cache-read 0.2 :cache-write 0}
     :context-window 131072
@@ -25,6 +26,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 3 :output 6 :cache-read 0.75 :cache-write 0}
     :context-window 131072
@@ -37,6 +39,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.7 :output 1.4 :cache-read 0.18 :cache-write 0}
     :context-window 131072
@@ -121,7 +124,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :off nil :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 10 :output 50 :cache-read 1 :cache-write 12.5}
     :context-window 1000000
@@ -134,7 +143,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :off nil :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 10 :output 50 :cache-read 0.25 :cache-write 12.5}
     :context-window 1000000
@@ -147,7 +162,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :off nil :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.125 :cache-write 6.25}
     :context-window 1000000
@@ -160,7 +181,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :off nil :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -257,7 +284,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -270,7 +303,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 2.5 :output 12.5 :cache-read 0.25 :cache-write 3.125}
     :context-window 1000000
@@ -283,7 +322,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -296,7 +341,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2.5 :output 12.5 :cache-read 0.25 :cache-write 3.125}
     :context-window 1000000
@@ -309,7 +360,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -322,7 +379,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2.5 :output 12.5 :cache-read 0.25 :cache-write 3.125}
     :context-window 1000000
@@ -335,7 +398,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -348,7 +417,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2.5 :output 12.5 :cache-read 0.25 :cache-write 3.125}
     :context-window 1000000
@@ -397,7 +472,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 3.75}
     :context-window 1000000
@@ -410,7 +491,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 1.5 :output 7.5 :cache-read 0.15 :cache-write 1.875}
     :context-window 1000000
@@ -423,7 +510,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 10 :cache-read 0.2 :cache-write 2.5}
     :context-window 1000000
@@ -436,7 +529,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1 :output 5 :cache-read 0.1 :cache-write 1.25}
     :context-window 1000000
@@ -449,6 +548,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.25 :output 0.8 :cache-read 0.06 :cache-write 0}
     :context-window 262144
@@ -509,6 +609,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.5 :output 3 :cache-read 0 :cache-write 0}
     :context-window 262144
@@ -521,6 +628,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.25 :output 2 :cache-read 0 :cache-write 0}
     :context-window 262144
@@ -533,6 +647,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.1 :output 0.4 :cache-read 0 :cache-write 0}
     :context-window 262144
@@ -617,6 +738,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.7 :output 2.5 :cache-read 0 :cache-write 0}
     :context-window 64000
@@ -629,6 +751,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.5 :output 2.15 :cache-read 0.35 :cache-write 0}
     :context-window 163840
@@ -682,6 +805,7 @@
                          :max nil
                          :medium nil
                          :minimal nil
+                         :off "none"
                          :xhigh "xhigh"}
     :input [:text]
     :cost {:input 0.08806 :output 0.17612 :cache-read 0.017612 :cache-write 0}
@@ -702,6 +826,7 @@
                          :max nil
                          :medium nil
                          :minimal nil
+                         :off "none"
                          :xhigh "xhigh"}
     :input [:text]
     :cost {:input 0.065 :output 0.18 :cache-read 0.016 :cache-write 0}
@@ -722,6 +847,7 @@
                          :max nil
                          :medium nil
                          :minimal nil
+                         :off "none"
                          :xhigh "xhigh"}
     :input [:text]
     :cost {:input 0.14 :output 0.28 :cache-read 0.03 :cache-write 0}
@@ -742,6 +868,7 @@
                          :max nil
                          :medium nil
                          :minimal nil
+                         :off "none"
                          :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.22 :output 0.66 :cache-read 0.007 :cache-write 0}
@@ -762,6 +889,7 @@
                          :max nil
                          :medium nil
                          :minimal nil
+                         :off "none"
                          :xhigh "xhigh"}
     :input [:text]
     :cost {:input 1.011984 :output 2.023968 :cache-read 0.084332 :cache-write 0}
@@ -782,6 +910,7 @@
                          :max nil
                          :medium nil
                          :minimal nil
+                         :off "none"
                          :xhigh "xhigh"}
     :input [:text]
     :cost {:input 0.57948 :output 1.73844 :cache-read 0.019316 :cache-write 0}
@@ -802,6 +931,7 @@
                          :max nil
                          :medium nil
                          :minimal nil
+                         :off "none"
                          :xhigh "xhigh"}
     :input [:text]
     :cost {:input 1.32 :output 3.96 :cache-read 0.13 :cache-write 0}
@@ -877,6 +1007,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0.375}
     :context-window 1048576
@@ -889,6 +1020,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0.375}
     :context-window 1048576
@@ -901,6 +1033,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0.375}
     :context-window 1048576
@@ -913,6 +1046,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 0.625 :output 5 :cache-read 0.125 :cache-write 0}
     :context-window 1048576
@@ -925,7 +1059,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.5 :output 3 :cache-read 0.05 :cache-write 0.083333}
     :context-window 1048576
@@ -938,7 +1078,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.25 :output 1.5 :cache-read 0 :cache-write 0}
     :context-window 1048576
@@ -968,7 +1114,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.25 :output 1.5 :cache-read 0.025 :cache-write 0.083333}
     :context-window 1048576
@@ -981,7 +1133,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.25 :output 1.5 :cache-read 0.025 :cache-write 0.083333}
     :context-window 1048576
@@ -994,7 +1152,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.125 :output 0.75 :cache-read 0.0125 :cache-write 0}
     :context-window 1048576
@@ -1009,9 +1173,11 @@
     :reasoning true
     :thinking-level-map {:high "HIGH"
                          :low "LOW"
+                         :max nil
                          :medium nil
                          :minimal nil
-                         :off nil}
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 0.375}
     :context-window 1048576
@@ -1026,9 +1192,11 @@
     :reasoning true
     :thinking-level-map {:high "HIGH"
                          :low "LOW"
+                         :max nil
                          :medium nil
                          :minimal nil
-                         :off nil}
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 0.375}
     :context-window 1048576
@@ -1043,9 +1211,11 @@
     :reasoning true
     :thinking-level-map {:high "HIGH"
                          :low "LOW"
+                         :max nil
                          :medium nil
                          :minimal nil
-                         :off nil}
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 1 :output 6 :cache-read 0 :cache-write 0}
     :context-window 1048576
@@ -1058,7 +1228,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 1.5 :output 9 :cache-read 0.15 :cache-write 0.083333}
     :context-window 1048576
@@ -1071,7 +1247,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.3 :output 2.5 :cache-read 0.03 :cache-write 0.083333}
     :context-window 1048576
@@ -1084,7 +1266,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.15 :output 1.25 :cache-read 0.015 :cache-write 0}
     :context-window 1048576
@@ -1097,7 +1285,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.75 :output 4.5 :cache-read 0.075 :cache-write 0}
     :context-window 1048576
@@ -1110,7 +1304,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.75 :output 3.75 :cache-read 0.075 :cache-write 0.041667}
     :context-window 1048576
@@ -1123,7 +1323,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.375 :output 1.875 :cache-read 0.0375 :cache-write 0.041667}
     :context-window 1048576
@@ -1136,7 +1342,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.75 :output 3.75 :cache-read 0.075 :cache-write 0.041667}
     :context-window 1048576
@@ -1149,7 +1361,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.375 :output 1.875 :cache-read 0.0375 :cache-write 0.041667}
     :context-window 1048576
@@ -1162,7 +1380,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.75 :output 3.75 :cache-read 0.075 :cache-write 0.041667}
     :context-window 1048576
@@ -1175,7 +1399,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.375 :output 1.875 :cache-read 0.0375 :cache-write 0.041667}
     :context-window 1048576
@@ -1290,18 +1520,6 @@
     :context-window 262144
     :max-tokens 32768
     :compat {:supports-developer-role false :thinking-format :openrouter}}
-   "ibm-granite/granite-4.1-8b"
-   {:id "ibm-granite/granite-4.1-8b"
-    :name "IBM: Granite 4.1 8B"
-    :provider :openrouter
-    :api :openai-completions
-    :base-url "https://openrouter.ai/api/v1"
-    :reasoning false
-    :input [:text]
-    :cost {:input 0.05 :output 0.1 :cache-read 0.05 :cache-write 0}
-    :context-window 131072
-    :max-tokens 117964
-    :compat {:supports-developer-role false :thinking-format :openrouter}}
    "ibm-granite/granite-4.2-8b"
    {:id "ibm-granite/granite-4.2-8b"
     :name "IBM: Granite 4.2 8B"
@@ -1309,6 +1527,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.1 :output 0.15 :cache-read 0.05 :cache-write 0}
     :context-window 131072
@@ -1321,7 +1546,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.25 :output 0.75 :cache-read 0.025 :cache-write 0}
     :context-window 128000
@@ -1334,7 +1565,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:off nil}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.04 :output 0.15 :cache-read 0.004 :cache-write 0}
     :context-window 260000
@@ -1407,6 +1644,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 65536
@@ -1491,6 +1729,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.3 :output 1.1 :cache-read 0.04 :cache-write 0}
     :context-window 131072
@@ -1503,6 +1748,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.35 :output 1.5 :cache-read 0.04 :cache-write 0}
     :context-window 131072
@@ -1515,6 +1767,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1.25 :output 4.25 :cache-read 0.15 :cache-write 0}
     :context-window 1048576
@@ -1527,6 +1786,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1.25 :output 4.25 :cache-read 0.15 :cache-write 0}
     :context-window 1048576
@@ -1539,6 +1805,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.1 :output 0.2 :cache-read 0.002 :cache-write 0}
     :context-window 1048576
@@ -1551,6 +1824,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1.25 :output 4.25 :cache-read 0.15 :cache-write 0}
     :context-window 1048576
@@ -1563,6 +1843,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.1 :output 0.2 :cache-read 0.002 :cache-write 0}
     :context-window 1048576
@@ -1587,6 +1874,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.255 :output 1.02 :cache-read 0 :cache-write 0}
     :context-window 204800
@@ -1599,6 +1887,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.3 :output 1.2 :cache-read 0.03 :cache-write 0}
     :context-window 204800
@@ -1611,6 +1900,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.27 :output 1.08 :cache-read 0.027 :cache-write 0}
     :context-window 200000
@@ -1623,6 +1913,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.3 :output 1.2 :cache-read 0.06 :cache-write 0}
     :context-window 204800
@@ -1635,6 +1926,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 196608
@@ -1791,6 +2083,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 1.5 :output 7.5 :cache-read 0 :cache-write 0}
     :context-window 262144
@@ -1803,6 +2102,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.75 :output 3.75 :cache-read 0 :cache-write 0}
     :context-window 32768
@@ -1851,6 +2157,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.15 :output 0.6 :cache-read 0.015 :cache-write 0}
     :context-window 262144
@@ -1923,6 +2236,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.6 :output 2.5 :cache-read 0.15 :cache-write 0}
     :context-window 262144
@@ -1959,6 +2273,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 0.66 :output 3.4 :cache-read 0.18 :cache-write 0}
     :context-window 262144
@@ -1971,6 +2286,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 0}
     :context-window 1048576
@@ -1983,6 +2305,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 3 :output 15 :cache-read 0.3 :cache-write 0}
     :context-window 1048576
@@ -2043,6 +2372,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high nil
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.085 :output 0.4 :cache-read 0 :cache-write 0}
     :context-window 262144
@@ -2055,6 +2391,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high nil
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 262144
@@ -2067,6 +2410,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.625 :output 3.125 :cache-read 0.1875 :cache-write 0}
     :context-window 256000
@@ -2079,6 +2429,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 1000000
@@ -2379,6 +2736,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0}
     :context-window 400000
@@ -2391,6 +2755,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.25 :output 2 :cache-read 0.025 :cache-write 0}
     :context-window 400000
@@ -2403,6 +2774,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.125 :output 1 :cache-read 0.0125 :cache-write 0}
     :context-window 400000
@@ -2415,6 +2793,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.05 :output 0.4 :cache-read 0.005 :cache-write 0}
     :context-window 400000
@@ -2427,6 +2812,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.025 :output 0.2 :cache-read 0.0025 :cache-write 0}
     :context-window 400000
@@ -2439,6 +2831,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 15 :output 120 :cache-read 0 :cache-write 0}
     :context-window 400000
@@ -2451,6 +2850,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 7.5 :output 60 :cache-read 0 :cache-write 0}
     :context-window 400000
@@ -2463,6 +2869,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0}
     :context-window 400000
@@ -2475,6 +2888,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.13 :cache-write 0}
     :context-window 400000
@@ -2487,6 +2907,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1.25 :output 10 :cache-read 0.125 :cache-write 0}
     :context-window 400000
@@ -2499,6 +2926,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.25 :output 2 :cache-read 0.03 :cache-write 0}
     :context-window 400000
@@ -2511,6 +2945,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.625 :output 5 :cache-read 0.0625 :cache-write 0}
     :context-window 400000
@@ -2523,7 +2964,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1.75 :output 14 :cache-read 0.175 :cache-write 0}
     :context-window 400000
@@ -2549,7 +2996,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1.75 :output 14 :cache-read 0.175 :cache-write 0}
     :context-window 400000
@@ -2562,7 +3015,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 21 :output 168 :cache-read 0 :cache-write 0}
     :context-window 400000
@@ -2575,7 +3034,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 10.5 :output 84 :cache-read 0 :cache-write 0}
     :context-window 400000
@@ -2588,7 +3053,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.875 :output 7 :cache-read 0.0875 :cache-write 0}
     :context-window 400000
@@ -2601,7 +3072,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1.75 :output 14 :cache-read 0.175 :cache-write 0}
     :context-window 400000
@@ -2614,7 +3091,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2.5 :output 15 :cache-read 0.25 :cache-write 0}
     :context-window 1050000
@@ -2627,7 +3110,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.75 :output 4.5 :cache-read 0.075 :cache-write 0}
     :context-window 400000
@@ -2640,7 +3129,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.375 :output 2.25 :cache-read 0.0375 :cache-write 0}
     :context-window 400000
@@ -2653,7 +3148,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.2 :output 1.25 :cache-read 0.02 :cache-write 0}
     :context-window 400000
@@ -2666,7 +3167,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.1 :output 0.625 :cache-read 0.01 :cache-write 0}
     :context-window 400000
@@ -2679,7 +3186,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 30 :output 180 :cache-read 0 :cache-write 0}
     :context-window 1050000
@@ -2692,7 +3205,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 15 :output 90 :cache-read 0 :cache-write 0}
     :context-window 1050000
@@ -2705,7 +3224,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1.25 :output 7.5 :cache-read 0.125 :cache-write 0}
     :context-window 1050000
@@ -2718,7 +3243,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 0}
     :context-window 1050000
@@ -2731,7 +3262,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:low nil :minimal nil :off nil :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 30 :output 180 :cache-read 0 :cache-write 0}
     :context-window 1050000
@@ -2744,7 +3281,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 15 :output 90 :cache-read 0 :cache-write 0}
     :context-window 1050000
@@ -2757,7 +3300,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2.5 :output 15 :cache-read 0.25 :cache-write 0}
     :context-window 1050000
@@ -2770,7 +3319,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.2 :output 1.2 :cache-read 0.02 :cache-write 0.25}
     :context-window 1050000
@@ -2783,7 +3338,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.2 :output 1.2 :cache-read 0.02 :cache-write 0.25}
     :context-window 1050000
@@ -2796,7 +3357,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.1 :output 0.6 :cache-read 0.01 :cache-write 0}
     :context-window 1050000
@@ -2809,7 +3376,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.1 :output 0.6 :cache-read 0.01 :cache-write 0}
     :context-window 1050000
@@ -2822,7 +3395,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 10 :cache-read 0.2 :cache-write 2.5}
     :context-window 1050000
@@ -2835,7 +3414,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 10 :cache-read 0.2 :cache-write 2.5}
     :context-window 1050000
@@ -2848,7 +3433,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1 :output 5 :cache-read 0.1 :cache-write 1.25}
     :context-window 1050000
@@ -2861,7 +3452,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1 :output 5 :cache-read 0.1 :cache-write 1.25}
     :context-window 1050000
@@ -2874,7 +3471,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 2.5}
     :context-window 1050000
@@ -2887,7 +3490,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 2.5}
     :context-window 1050000
@@ -2900,7 +3509,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1 :output 6 :cache-read 0.1 :cache-write 0}
     :context-window 1050000
@@ -2913,7 +3528,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:max "max" :xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 1 :output 6 :cache-read 0.1 :cache-write 0}
     :context-window 1050000
@@ -2926,6 +3547,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.625 :output 5 :cache-read 0.0625 :cache-write 0}
     :context-window 400000
@@ -2974,6 +3602,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.037 :output 0.17 :cache-read 0 :cache-write 0}
     :context-window 131072
@@ -2986,6 +3621,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.15 :output 0.6 :cache-read 0 :cache-write 0}
     :context-window 131072
@@ -2998,6 +3640,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.03 :output 0.13 :cache-read 0.03 :cache-write 0}
     :context-window 131072
@@ -3010,6 +3659,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.075 :output 0.3 :cache-read 0.0375 :cache-write 0}
     :context-window 131072
@@ -3058,6 +3708,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text]
     :cost {:input 1.1 :output 4.4 :cache-read 0.55 :cache-write 0}
     :context-window 200000
@@ -3118,6 +3775,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 1.1 :output 4.4 :cache-read 0.275 :cache-write 0}
     :context-window 200000
@@ -3322,6 +3986,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.23 :output 2.3 :cache-read 0 :cache-write 0}
     :context-window 131072
@@ -3358,6 +4023,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.2 :output 2.4 :cache-read 0 :cache-write 0}
     :context-window 81920
@@ -3490,6 +4156,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.15 :output 1.2 :cache-read 0 :cache-write 0}
     :context-window 131072
@@ -3514,6 +4181,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 0.4 :output 4 :cache-read 0 :cache-write 0}
     :context-window 131072
@@ -3538,6 +4206,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 0.2 :output 2.4 :cache-read 0 :cache-write 0}
     :context-window 131072
@@ -3574,6 +4243,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 0.18 :output 2.1 :cache-read 0 :cache-write 0}
     :context-window 131072
@@ -3611,9 +4281,9 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :input [:text :image]
-    :cost {:input 0.25 :output 1.25 :cache-read 0.25 :cache-write 0}
+    :cost {:input 0.08 :output 0.75 :cache-read 0 :cache-write 0}
     :context-window 262144
-    :max-tokens 235929
+    :max-tokens 16384
     :compat {:supports-developer-role false :thinking-format :openrouter}}
    "qwen/qwen3.5-397b-a17b"
    {:id "qwen/qwen3.5-397b-a17b"
@@ -3695,9 +4365,9 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :input [:text :image]
-    :cost {:input 0.6 :output 3.6 :cache-read 0.12 :cache-write 0}
+    :cost {:input 0.3 :output 2 :cache-read 0.03 :cache-write 0}
     :context-window 262144
-    :max-tokens 235929
+    :max-tokens 65536
     :compat {:supports-developer-role false :thinking-format :openrouter}}
    "qwen/qwen3.6-35b-a3b"
    {:id "qwen/qwen3.6-35b-a3b"
@@ -3790,6 +4460,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high nil
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text]
     :cost {:input 2 :output 6 :cache-read 0.25 :cache-write 0}
     :context-window 1000000
@@ -3802,6 +4479,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high nil
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text]
     :cost {:input 2 :output 6 :cache-read 0.25 :cache-write 0}
     :context-window 1010000
@@ -3814,6 +4498,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high nil
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.42 :output 3 :cache-read 0.085 :cache-write 0}
     :context-window 1000000
@@ -3838,6 +4529,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 6 :cache-read 0.25 :cache-write 2.5}
     :context-window 1000000
@@ -3874,6 +4572,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 30 :cache-read 0.5 :cache-write 0}
     :context-window 1000000
@@ -3886,6 +4591,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.95 :output 4 :cache-read 0.15 :cache-write 0}
     :context-window 262144
@@ -3910,6 +4622,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text]
     :cost {:input 0.1 :output 0.3 :cache-read 0 :cache-write 0}
     :context-window 262144
@@ -3922,6 +4635,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.2 :output 1.15 :cache-read 0.04 :cache-write 0}
     :context-window 256000
@@ -3934,6 +4654,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.0825 :output 0.33 :cache-read 0.020625 :cache-write 0}
     :context-window 262144
@@ -3946,6 +4673,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.18 :output 0.6 :cache-read 0.06 :cache-write 0}
     :context-window 262144
@@ -3958,6 +4692,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text]
     :cost {:input 0.834 :output 2.501 :cache-read 0.042 :cache-write 0}
     :context-window 1048576
@@ -3982,6 +4723,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 1 :output 4.05 :cache-read 0.17 :cache-write 0}
     :context-window 524288
@@ -3994,6 +4742,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.45 :output 1.2 :cache-read 0.1 :cache-write 0}
     :context-window 524288
@@ -4006,6 +4761,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.5 :output 1.2 :cache-read 0.1 :cache-write 0}
     :context-window 524288
@@ -4018,6 +4780,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 1048576
@@ -4030,6 +4799,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 1 :output 4.05 :cache-read 0.17 :cache-write 0}
     :context-window 524288
@@ -4042,6 +4818,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 1048576
@@ -4090,6 +4873,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 1.25 :output 2.5 :cache-read 0.2 :cache-write 0}
     :context-window 1000000
@@ -4102,6 +4892,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 1 :output 2 :cache-read 0.16 :cache-write 0}
     :context-window 1000000
@@ -4114,6 +4911,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 2 :output 6 :cache-read 0.3 :cache-write 0}
     :context-window 500000
@@ -4126,6 +4930,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 6 :cache-read 0.5 :cache-write 0}
     :context-window 500000
@@ -4138,6 +4949,7 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:off nil}
     :input [:text :image]
     :cost {:input 1 :output 2 :cache-read 0.2 :cache-write 0}
     :context-window 256000
@@ -4294,7 +5106,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
-    :thinking-level-map {:xhigh "xhigh"}
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text]
     :cost {:input 0.966 :output 3.036 :cache-read 0.1932 :cache-write 0}
     :context-window 1048576
@@ -4307,6 +5125,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max nil
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
     :context-window 256000
@@ -4319,6 +5144,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text]
     :cost {:input 1.4 :output 4.4 :cache-read 0.14 :cache-write 0}
     :context-window 1048576
@@ -4331,6 +5163,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.075 :output 0.25 :cache-read 0.015 :cache-write 0}
     :context-window 1048576
@@ -4343,6 +5182,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.15 :output 0.5 :cache-read 0.03 :cache-write 0}
     :context-window 1048575
@@ -4367,6 +5213,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 10 :output 50 :cache-read 0.25 :cache-write 12.5}
     :context-window 1000000
@@ -4391,6 +5244,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 5 :output 25 :cache-read 0.5 :cache-write 6.25}
     :context-window 1000000
@@ -4403,6 +5263,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 10 :cache-read 0.2 :cache-write 2.5}
     :context-window 1000000
@@ -4420,6 +5287,7 @@
                          :max nil
                          :medium nil
                          :minimal nil
+                         :off "none"
                          :xhigh "xhigh"}
     :input [:text]
     :cost {:input 0.04998 :output 0.09996 :cache-read 0.009996 :cache-write 0}
@@ -4435,6 +5303,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.75 :output 3.75 :cache-read 0.075 :cache-write 0.041667}
     :context-window 1048576
@@ -4447,6 +5322,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 0.375}
     :context-window 1048576
@@ -4459,6 +5341,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 2.5 :output 14 :cache-read 0.29 :cache-write 0}
     :context-window 1048576
@@ -4471,6 +5360,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 10 :cache-read 0.2 :cache-write 2.5}
     :context-window 1050000
@@ -4483,6 +5379,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0.75 :output 4.5 :cache-read 0.075 :cache-write 0}
     :context-window 400000
@@ -4495,6 +5398,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 6 :cache-read 0.5 :cache-write 0}
     :context-window 500000
@@ -4507,6 +5417,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text :image]
     :cost {:input 0.075 :output 0.25 :cache-read 0.015 :cache-write 0}
     :context-window 1048576
@@ -4519,6 +5436,13 @@
     :api :openai-completions
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
     :input [:text]
     :cost {:input 1.15 :output 3.5 :cache-read 0.1 :cache-write 0}
     :context-window 262144
