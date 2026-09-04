@@ -732,7 +732,9 @@
   "Port of pi's setupStdinBuffer negotiation interception: while the Kitty
    protocol query is outstanding, hold response fragments in a separate
    buffer so the response is consumed (never dispatched as input). Returns
-   :consumed / :pending / nil (not negotiation input — proceed normally)."
+   :consumed / :pending / nil (not negotiation input — proceed normally).
+   On nil the input buffer is left UNTOUCHED: blanking it would drop the
+   fragment just examined (see process-input-buffer!)."
   [tui read-fn buf]
   (if-not @(:keyboard-protocol-pushed? tui)
     nil
@@ -833,7 +835,9 @@
    parsing; pi consumes them in handleInput before listeners. Cell size is
    ungated (pi: consumeCellSizeResponse has no pending query); OSC 11 is
    gated on an outstanding query. Returns :consumed (handled), :pending
-   (fragment held), or nil (not a response)."
+   (fragment held), or nil (not a response). On nil the input buffer is left
+   UNTOUCHED: blanking it would drop the fragment just examined (see
+   process-input-buffer!)."
   [tui read-fn buf]
   (let [held @(:terminal-response-buffer tui)
         combined (str held @buf)
@@ -871,6 +875,14 @@
                      (println "color scheme listener:" (ex-message e))))))
           :consumed)
 
+      ;; Prefix hold — only when the fragment is UNAMBIGUOUSLY a response
+      ;; head. A bare "\u001b[" or a lone "\u001b" is also an arrow-key /
+      ;; modifyOtherKeys prefix: holding it while a stalled remainder is in
+      ;; flight (WSL/conpty splits sequences 50ms+ apart) corrupts ctrl+arrow
+      ;; and ctrl+letter keys into escapes + literal text. Only longer,
+      ;; response-shaped fragments are held. (cell-size needs the ';' — a
+      ;; bare "\u001b[6" also prefixes keys; same rule as
+      ;; negotiation-prefix? for the kitty "\u001b[?" introducer.)
       (or (terminal/cell-size-response-prefix? combined)
           (and @(:pending-osc-11? tui) (terminal/osc-11-response-prefix? combined))
           (terminal/color-scheme-report-prefix? combined))
@@ -891,8 +903,14 @@
    (input belongs to the topmost visible capturing overlay), then delivery
    to the focused component. Key release events are filtered unless the
    component opts in via a :wants-key-release? field (pi:
-   Component.wantsKeyRelease)."
-  [tui data]
+   Component.wantsKeyRelease). FLUSH-GEN is the input generation captured when
+   a flush timer armed (nil for reader-path dispatches): a lone ESC armed by
+   a stale timer is dropped when the generation moved on — input arrived after
+   the arm, so the ESC is the head of a stalled key sequence (WSL/conpty
+   splits sequences 50ms+ apart), never an Escape keypress. Checked at
+   delivery, under dispatch-lock: a stale timer racing the reader's own pass
+   must not corrupt the sequence even when it wins the lock."
+  [tui data & [flush-gen]]
   ;; pi: input listeners run as a chain — each may :consume (stop dispatch)
   ;; or return transformed :data for the later listeners and the focused
   ;; component (pi: handleInput listener loop).
@@ -937,7 +955,15 @@
           ;; field (pi: Component.wantsKeyRelease)
           (when (or (not (keys/is-key-release? data))
                     (:wants-key-release? fc))
-            (handle-input fc data)))
+            ;; Stale-timer Escape guard (see docstring): a lone ESC whose
+            ;; arming generation is stale is a split sequence's head whose
+            ;; tail the reader owns — drop it so the tail dispatches whole.
+            ;; Listeners still observe it (it is genuinely ambiguous at
+            ;; dispatch time); only the focused component is shielded.
+            (when-not (and (= data "\u001b")
+                           (some? flush-gen)
+                           (not= flush-gen @(:input-generation tui)))
+              (handle-input fc data))))
         (tui-request-render tui)
         (catch Throwable e
           (binding [*out* *err*]
@@ -955,9 +981,14 @@
 ;; literal text, splitting every bracketed paste whose bytes crossed a stall.
 (def ^:private SEQUENCE-FLUSH-MS 50)
 
-;; pi: DEFAULT_ESCAPE_TIMEOUT_MS — only a lone ESC waits this long before it
-;; is dispatched as the Escape key.
-(def ^:private ESCAPE-FLUSH-MS 10)
+;; Lone-ESC flush timeout. Pi uses 10ms here (DEFAULT_ESCAPE_TIMEOUT_MS), but
+;; WSL/conpty stalls split escape sequences 50ms+ apart — ESC arrives alone
+;; and the rest much later. A 10ms timeout consumes the ESC as an Escape key
+;; before the tail arrives, orphaning the tail ("[27;5;97~" leaks as literal
+;; text instead of ctrl+a). 100ms still feels instant for a genuine Escape
+;; press and covers observed conpty stall gaps; tmux uses 500ms by default
+;; (escape-time) for the same reason.
+(def ^:private ESCAPE-FLUSH-MS 100)
 
 ;; Serializes input dispatch. pi's StdinBuffer timeouts run on the Node main
 ;; thread, so a flush can never interleave with the next key's processing;
@@ -975,46 +1006,55 @@
     (reset! (:incomplete-flush-timer tui) nil)))
 
 (defn- dispatch-buffer!
-  "Dispatch the buffered CONTENT as a single input sequence. Only a lone ESC
-   (the Escape key) or a complete dispatchable sequence is flushed — a partial
-   CSI/mouse prefix stays buffered, waiting for the terminal's next character
-   (dispatching it would leak the fragment as text into the focused editor).
-   Returns true when dispatched (the caller clears the buffer), false when the
-   fragment stays pending."
-  [tui content]
-  (when (seq content)
-    (cond
-      (= content "\u001b")
-      (do (dispatch-input! tui content) true)
+  "Flush-timer dispatch (see schedule-incomplete-flush!).
 
-      (and (or (keys/parse-key content)
-               (keys/mouse-sequence? content)
-               (keys/focus-sequence? content))
-           (keys/complete-sequence? content))
-      (do (dispatch-input! tui content) true)
+   Dispatch input from BUF-ATOM as a single input sequence. The buffer is
+   re-read under dispatch-lock and consumed only when dispatched: flush timers
+   must never blank input another thread owns. A lone ESC always dispatches
+   here (the caller holds dispatch-lock and re-checked idleness under it);
+   the stale-timer guard lives at DELIVERY in dispatch-input!, which drops the
+   ESC from the focused component when the arming generation went stale while
+   the timer raced the lock — a split sequence's head (WSL/conpty stalls split
+   sequences 50ms+ apart) whose tail the reader owns. Dispatching it to the
+   component would corrupt the key (phantom Escape + literal-text leak, e.g.
+   ctrl+a arriving as Esc then \"[27;5;97~\"). Consume only the lone ESC
+   itself: a non-lone buffer is never consumed here (partial CSI/mouse
+   prefixes stay buffered for the remainder; see schedule-incomplete-flush!).
+   A complete dispatchable sequence always dispatches. Returns true when
+   dispatched (the caller clears the buffer), false when the fragment stays
+   pending."
+  [tui buf-atom armed-gen]
+  (let [content @buf-atom]
+    (when (seq content)
+      (cond
+        ;; Lone ESC — see docstring.
+        (= content "\u001b")
+        (do (reset! buf-atom "")
+            (dispatch-input! tui content armed-gen)
+            true)
 
-      ;; Complete but unrecognized ESC sequence — garbage. Returning true
-      ;; makes the caller clear the buffer so it can never grow and swallow
-      ;; subsequent input (see the ESC branch of process-input-buffer!).
-      (and (not= content "\u001b")
-           (keys/complete-sequence? content))
-      true
+        ;; A COMPLETE sequence (structurally finished AND recognized — the
+        ;; structural check comes first so a partial CSI prefix that happens
+        ;; to parse as alt+[ can never dispatch early and swallow the rest).
+        (and (keys/complete-sequence? content)
+             (or (keys/parse-key content)
+                 (keys/mouse-sequence? content)
+                 (keys/focus-sequence? content)))
+        (do (reset! buf-atom "")
+            (dispatch-input! tui content)
+            true)
 
-      :else false)))
+        ;; Complete but unrecognized ESC sequence — garbage. Returning true
+        ;; makes the caller clear the buffer so it can never grow and swallow
+        ;; subsequent input (see the ESC branch of process-input-buffer!).
+        ;; complete-sequence? already excludes partial CSI prefixes (a bare
+        ;; "\u001b[" parses as alt+[ but is structurally incomplete), so
+        ;; they can never take this branch and corrupt a stalled sequence.
+        (and (not= content "\u001b")
+             (keys/complete-sequence? content))
+        true
 
-(defn- claim-flush-content!
-  "Atomically claim BUF for a flush: when it still holds exactly CONTENT,
-  empty it and return true; otherwise return false and leave BUF untouched.
-  The swap fn MUST return cur unchanged on mismatch — returning nil would
-  install nil as the buffer value and wipe whatever the reader had appended
-  in the meantime."
-  [buf content]
-  (let [claimed? (volatile! false)]
-    (swap! buf (fn [cur]
-                 (if (= cur content)
-                   (do (vreset! claimed? true) "")
-                   cur)))
-    @claimed?))
+        :else false))))
 
 (defn- schedule-incomplete-flush!
   "Port of pi's StdinBuffer timeout: when the buffer holds an incomplete
@@ -1023,39 +1063,40 @@
    (pi: escapeTimeout/timeout). On expiry a lone ESC is dispatched as the
    Escape key and a complete sequence is dispatched; a partial CSI/mouse
    fragment stays buffered (it must not leak as text).
-   Re-armed on every accumulation. The future CLAIMS the buffer atomically
-   via claim-flush-content!: a char arriving concurrently from the reader
-   thread makes the claim a no-op, so neither thread can dispatch a stale
-   fragment twice or wipe freshly appended input — unlike pi this timer runs
-   on a separate thread, so it must never race the reader's own handling."
+   The flush is GENERATION-guarded: it fires only when no input arrived while
+   it slept. A stale content claim is racy — the buffer may transiently hold
+   the armed fragment again while the reader owns it — so dispatch-buffer!
+   re-reads and consumes under dispatch-lock instead. Re-armed on every
+   accumulation. Unlike pi this timer runs on a separate thread, so it must
+   never race the reader's own handling."
   [tui buf]
+  ;; Only the LATEST arm owns the timer slot. A stale disowned timer that
+  ;; wakes late must neither dispatch (generation guard) nor disturb the
+  ;; fresh arm — so a fresh schedule cancels the previous timer, and a wakeup
+  ;; clears the slot only when it still holds itself. Two timers can still
+  ;; coexist briefly (fresh arm scheduled while a stale one sleeps); the
+  ;; generation guard disowns all but the latest.
   (clear-incomplete-flush! tui)
   (when (seq @buf)
     (let [escape? (= @buf "\u001b")
+          gen @(:input-generation tui)
           fut-box (atom nil)
           fut (future
                 (try
                   (Thread/sleep (if escape? ESCAPE-FLUSH-MS SEQUENCE-FLUSH-MS))
-                  (let [content @buf]
-                    (when (seq content)
-                      ;; Claim-then-dispatch: only when the buffer STILL holds
-                      ;; exactly what was armed does this flush own the input;
-                      ;; anything else means the reader appended in between and
-                      ;; its own pass handles the buffer.
-                      (when (claim-flush-content! buf content)
-                        (let [dispatched?
-                              (locking dispatch-lock
-                                (dispatch-buffer! tui content))]
-                          ;; A declined fragment (partial CSI/mouse prefix)
-                          ;; stays buffered — put it back ahead of any input
-                          ;; that arrived while dispatching (it is older;
-                          ;; dropping it would break completion of the
-                          ;; sequence by the remaining bytes).
-                          (when-not dispatched?
-                            (swap! buf (fn [cur]
-                                         (if (empty? cur)
-                                           content
-                                           (str content cur)))))))))
+                  ;; Generation check #1 (cheap): skip when input arrived
+                  ;; while sleeping — the reader owns the buffer. The lone-ESC
+                  ;; idleness check itself lives in dispatch-buffer!
+                  ;; (generation check #2 under the lock), closing the race
+                  ;; where input lands between this check and the dispatch.
+                  (when (= gen @(:input-generation tui))
+                    (locking dispatch-lock
+                      ;; Re-check idleness UNDER the lock, then let
+                      ;; dispatch-buffer! re-read + consume under this same
+                      ;; lock, so the buffer can neither be stolen from the
+                      ;; reader nor dispatched twice.
+                      (when (= gen @(:input-generation tui))
+                        (dispatch-buffer! tui buf gen))))
                   (catch Exception _))
                 (when (identical? @fut-box @(:incomplete-flush-timer tui))
                   (reset! (:incomplete-flush-timer tui) nil)))]
@@ -1081,7 +1122,12 @@
   ;; Kitty protocol negotiation responses are intercepted first and never
   ;; reach the normal dispatch path (pi: setupStdinBuffer); terminal query
   ;; responses (cell size / OSC 11 / color scheme) are consumed next (pi:
-  ;; handleInput consumes them before listeners).
+  ;; handleInput consumes them before listeners). NOTE: interceptors that
+  ;; hold a fragment MUST NOT reset BUF to "" on a nil return — the reader
+  ;; appends to BUF across passes, and blanking it drops the fragment the
+  ;; interceptor just examined (stalled split sequences then corrupt into
+  ;; literal text). Only the interceptor that consumed or held the fragment
+  ;; may clear it.
   (locking dispatch-lock
     (when (nil? (intercept-keyboard-negotiation! tui read-fn buf))
       (when (nil? (intercept-terminal-response! tui read-fn buf))
@@ -1131,21 +1177,28 @@
                                 (recur (inc n)))
                               nil))]
               (cond
-                ;; lone ESC — wait for the escape timeout
+                ;; lone ESC — wait for the escape timeout. The flush timer
+                ;; dispatches it as Escape ONLY when the input generation is
+                ;; still idle (no arrival while it slept): a lone ESC that a
+                ;; stalled remainder (WSL/conpty splits sequences 50ms+
+                ;; apart) turns into "\u001b[" or longer before the timer
+                ;; fires is the head of a key sequence, never an Escape key.
                 (= s "\u001b")
                 (schedule-incomplete-flush! tui buf)
 
-                ;; no complete leading sequence — hold for more input
+                ;; no complete leading sequence — hold for more input.
                 (nil? seq-len)
                 (schedule-incomplete-flush! tui buf)
 
-                ;; complete leading sequence
+                ;; complete leading sequence — the structural check ran
+                ;; first, so a partial CSI prefix that happens to parse as
+                ;; alt+[ can never take this branch and swallow the rest.
                 :else
                 (let [seq-str (subs s 0 seq-len)
                       rest-s (subs s seq-len)]
-                  (if (or (keys/parse-key seq-str)
-                          (keys/mouse-sequence? seq-str)
-                          (keys/focus-sequence? seq-str))
+                  (if (or (keys/mouse-sequence? seq-str)
+                          (keys/focus-sequence? seq-str)
+                          (keys/parse-key seq-str))
                     ;; recognized sequence: dispatch it, re-process the rest
                     (do (reset! buf rest-s)
                         (dispatch-input! tui seq-str)
@@ -1160,19 +1213,24 @@
           ;; Non-ESC — dispatch printable runs in bulk.
             :else
             ;; Non-ESC — dispatch printable runs in bulk. A run is everything
-            ;; up to the first control char (<= 31): the editor inserts the
-            ;; whole run at once, so a large paste is ONE insertion instead of
-            ;; n per-char insertions into a growing buffer (O(n^2) for 100K
-            ;; chars — measured ~0.64s per 50K). The remainder is re-processed
-            ;; RECURSIVELY — never dispatched raw, or an ESC sequence (arrow
-            ;; key, paste marker) after the run would be split into literal
-            ;; text (the phantom-ESC class this buffer exists to prevent).
-            (let [ctrl (loop [i 0]
-                         (when (< i (count s))
-                           (if (<= (int (.charAt ^String s i)) 31)
-                             i
-                             (recur (inc i)))))
-                  run-len (or ctrl (count s))
+            ;; up to the first control char (<= 31) or ESC (27): the editor
+            ;; inserts the whole run at once, so a large paste is ONE insertion
+            ;; instead of n per-char insertions into a growing buffer (O(n^2)
+            ;; for 100K chars — measured ~0.64s per 50K). ESC ends the run so a
+            ;; stalled sequence's tail (e.g. "[" after a consumed ESC head)
+            ;; is never dispatched as literal text — it re-processes through
+            ;; the ESC branch where it waits for its remainder. The remainder
+            ;; is re-processed RECURSIVELY — never dispatched raw, or an ESC
+            ;; sequence (arrow key, paste marker) after the run would be split
+            ;; into literal text (the phantom-ESC class this buffer exists to
+            ;; prevent).
+            (let [brk (loop [i 0]
+                        (when (< i (count s))
+                          (let [c (int (.charAt ^String s i))]
+                            (if (or (<= c 31) (= c 27))
+                              i
+                              (recur (inc i))))))
+                  run-len (or brk (count s))
                   run (subs s 0 run-len)
                   rest-s (subs s run-len)]
               (when (seq run)
@@ -1180,6 +1238,16 @@
               (cond
                 (empty? rest-s)
                 (reset! buf "")
+
+                ;; a leading ESC re-processes through the ESC branch (never
+                ;; dispatched as text): it is either a complete sequence or a
+                ;; stalled head waiting for its remainder. MUST NOT consume
+                ;; it here — consuming the ESC then re-processing the tail
+                ;; alone would leak the tail as literal text (WSL/conpty
+                ;; split-sequence corruption).
+                (= \u001b (first rest-s))
+                (do (reset! buf rest-s)
+                    (process-input-buffer! tui read-fn buf))
 
                 ;; a leading control char dispatches alone (CR/LF/Tab need
                 ;; per-char editor handling), then the remainder re-processes.
@@ -1332,6 +1400,20 @@
                                                                  recent-chars
                                                                  swallow-lf)]
                               (when (seq append)
+                                ;; Every read bumps the generation — including
+                                ;; reads that dispatch immediately. The flush
+                                ;; timers (incomplete/negotiation/terminal-
+                                ;; response) may only fire after true input
+                                ;; idleness: any arrival proves the remainder
+                                ;; is still in flight (WSL/conpty stalls split
+                                ;; sequences 50ms+ apart), so a stale timer
+                                ;; must never dispatch a lone ESC early and
+                                ;; corrupt the sequence into literal text.
+                                ;; Bump BEFORE processing: the pass below arms
+                                ;; the fresh flush timer with this generation,
+                                ;; which disowns any stale timer still sleeping
+                                ;; (it can neither dispatch nor clear the fresh
+                                ;; arm — the wakeup only clears its own slot).
                                 (swap! (:input-generation tui) inc)
                                 (swap! buf str append)
                                 (process-input-buffer! tui read-fn buf)))

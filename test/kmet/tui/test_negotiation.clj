@@ -56,8 +56,10 @@
 
 (deftest test-negotiation-prefix
   (testing "fragments that could still become a response"
-    (t/is (true? (lib/negotiation-prefix? "\u001b[")))
-    (t/is (true? (lib/negotiation-prefix? "\u001b[?")))
+    (t/is (false? (lib/negotiation-prefix? "\u001b["))
+          "bare CSI is also an arrow-key prefix — never held")
+    (t/is (false? (lib/negotiation-prefix? "\u001b[?"))
+          "query introducer without digits is held by nothing")
     (t/is (true? (lib/negotiation-prefix? "\u001b[?7")))
     (t/is (true? (lib/negotiation-prefix? "\u001b[?1;2")))
     (t/is (false? (lib/negotiation-prefix? "\u001b[A")) "arrow prefix is not negotiation")
@@ -128,11 +130,11 @@
 (deftest test-intercept-holds-fragments
   (testing "split responses are held across reads, then consumed"
     (let [tui (core/create-tui (recording-terminal))
-          buf (atom "\u001b[?")]
+          buf (atom "\u001b[?7")]
       (reset! (:keyboard-protocol-pushed? tui) true)
       (t/is (= :pending (intercept tui buf)))
       (t/is (= "" @buf) "fragment moved to the negotiation buffer")
-      (reset! buf "7u")
+      (reset! buf "u")
       (t/is (= :consumed (intercept tui buf)))
       (t/is (= "" @buf)))))
 
@@ -140,12 +142,12 @@
   (testing "held fragments flush back into the buffer when input stops
             matching the response shape"
     (let [tui (core/create-tui (recording-terminal))
-          buf (atom "\u001b[?")]
+          buf (atom "\u001b[?7")]
       (reset! (:keyboard-protocol-pushed? tui) true)
       (t/is (= :pending (intercept tui buf)))
       (reset! buf "A")  ;; user pressed up while the response was pending
       (t/is (nil? (intercept tui buf)) "not negotiation input")
-      (t/is (= "\u001b[?A" @buf) "held fragment + new input restored"))))
+      (t/is (= "\u001b[?7A" @buf) "held fragment + new input restored"))))
 
 (deftest test-intercept-inactive-when-not-pushed
   (testing "no interception before the query is sent"

@@ -394,10 +394,12 @@
       (t/is (= "" @buf) "buffer drained"))))
 
 (t/deftest test-incomplete-sequence-flush-timeouts
-  ;; pi parity: a lone ESC fires as Escape quickly (10ms), but a partial CSI
-  ;; sequence waits 50ms — the flat 10ms fired MID-SEQUENCE under ordinary
-  ;; reader stalls (observed at 11-15ms on Android), flushing a phantom
-  ;; Escape and leaking the rest of a bracketed paste as literal text.
+  ;; A lone ESC fires as Escape after ESCAPE-FLUSH-MS (100ms, not pi's 10ms:
+  ;; WSL/conpty stalls split sequences 50ms+ apart, so 10ms consumed a lone
+  ;; ESC head before its tail arrived), but a partial CSI sequence waits
+  ;; SEQUENCE-FLUSH-MS (50ms) — the flat 10ms fired MID-SEQUENCE under
+  ;; ordinary reader stalls (observed at 11-15ms on Android), flushing a
+  ;; phantom Escape and leaking the rest of a bracketed paste as text.
   (testing "a lone ESC dispatches as Escape shortly after"
     (let [tui (core/create-tui nil)
           buf (atom "")
@@ -433,15 +435,85 @@
       ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
       (t/is (= ["\u001b[200~"] @dispatched) "marker completed from restored fragment")
       (t/is (= "" @buf))))
-  (testing "a flush claim that loses the race leaves the buffer untouched"
-    ;; The claim fn must return cur UNCHANGED on mismatch: returning nil used
-    ;; to install nil as the buffer value, wiping whatever the reader had
-    ;; appended in the read->claim window.
-    (let [buf (atom "\u001b[")]
-      (t/is (false? ((var kmet.tui.core/claim-flush-content!) buf "\u001b"))
-            "mismatched content is not claimed")
-      (t/is (= "\u001b[" @buf) "failed claim leaves the buffer intact"))
-    (let [buf (atom "\u001b")]
-      (t/is (true? ((var kmet.tui.core/claim-flush-content!) buf "\u001b"))
-            "matching content is claimed")
-      (t/is (= "" @buf) "claimed content is consumed"))))
+  (testing "a stale flush leaves owned input buffered"
+    ;; dispatch-buffer! consumes only what it dispatches: a lone ESC armed
+    ;; before a read arrived is owned by the reader, not by the stale timer.
+    (let [tui (core/create-tui nil)
+          dispatched (atom [])
+          buf (atom "\u001b[")]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      (swap! (:input-generation tui) inc)
+      (t/is (false? ((var kmet.tui.core/dispatch-buffer!) tui buf 0))
+            "incomplete prefix never dispatches")
+      (t/is (= [] @dispatched))
+      (t/is (= "\u001b[" @buf) "failed flush leaves the buffer intact"))))
+
+(t/deftest test-flush-timer-never-steals-reader-input
+  ;; A stale flush still dispatches the ambiguous byte to listeners, but the
+  ;; delivery guard in dispatch-input! shields the focused component when the
+  ;; arming generation went stale: the ESC is a split sequence's head whose
+  ;; tail the reader owns.
+  (testing "a stale flush never reaches the focused component"
+    (let [tui (core/create-tui nil)
+          dispatched (atom [])
+          buf (atom "\u001b")]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      ;; armed-gen is stale (a read bumped the generation after arming) — the
+      ;; lone ESC is the head of a sequence whose tail is in flight, not an
+      ;; Escape keypress.
+      (swap! (:input-generation tui) inc)
+      (t/is (true? ((var kmet.tui.core/dispatch-buffer!) tui buf 0)))
+      (t/is (= ["\u001b"] @dispatched) "listeners still observe the byte")
+      (t/is (= "" @buf) "buffer consumed — the tail stays whole")))
+  (testing "dispatch-buffer! dispatches a genuinely idle lone ESC"
+    (let [tui (core/create-tui nil)
+          dispatched (atom [])
+          buf (atom "\u001b")]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      (t/is (true? ((var kmet.tui.core/dispatch-buffer!) tui buf @(:input-generation tui))))
+      (t/is (= ["\u001b"] @dispatched) "Escape dispatched")
+      (t/is (= "" @buf) "buffer consumed"))))
+
+(t/deftest test-split-sequence-across-reads-never-corrupts
+  ;; WSL/conpty stalls split escape sequences across reads with 50ms+ gaps:
+  ;; the head arrives, the tail much later. The sequence flush timer (50ms)
+  ;; must NOT dispatch the head as keys while the remainder is in flight — or
+  ;; the head corrupts and the tail leaks as literal text ("27;5;97~" typed
+  ;; into the editor instead of ctrl+a moving to line start). Any input
+  ;; arrival disowns stale flush timers via the input generation guard
+  ;; (checked at delivery in dispatch-input!).
+  (testing "head then tail 50ms+ apart still dispatches one sequence"
+    (let [tui (core/create-tui nil)
+          ed (editor/make-editor)
+          buf (atom "")]
+      (core/tui-add-child tui ed)
+      (core/tui-set-focus tui ed)
+      (doseq [c "hello"] (core/handle-input ed (str c)))
+      ;; read 1: ESC + "[" together (conpty delivers the head in one
+      ;; chunk, the tail after a 50ms+ stall). Schedules the 50ms
+      ;; sequence flush.
+      (swap! (:input-generation tui) inc)
+      (swap! buf str "\u001b[")
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      ;; the stale sequence timer fires here — the delivery guard must drop
+      ;; the phantom Escape; then read 2 completes the sequence after a
+      ;; WSL-style stall
+      (Thread/sleep 80)
+      (swap! (:input-generation tui) inc)
+      (swap! buf str "27;5;97~")
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (Thread/sleep 60)
+      (t/is (= "hello" (editor/editor-get-text ed)) "no literal text leaked")
+      (t/is (= 0 (:cursor-col @(:state-atom ed))) "ctrl+a moved to line start")))
+  (testing "a lone ESC with no follow-up still fires as Escape"
+    (let [tui (core/create-tui nil)
+          dispatched (atom [])
+          buf (atom "")]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      (swap! (:input-generation tui) inc)
+      (swap! buf str "\u001b")
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (let [deadline (+ (System/currentTimeMillis) 600)]
+        (while (and (empty? @dispatched) (< (System/currentTimeMillis) deadline))
+          (Thread/sleep 5)))
+      (t/is (= ["\u001b"] @dispatched) "genuine Escape still works"))))

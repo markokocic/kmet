@@ -162,19 +162,24 @@
 
 (defn negotiation-prefix?
   "True when s could still become a negotiation response (pi:
-   isKeyboardProtocolNegotiationSequencePrefix). Note a bare \"\u001b[\"
-   is also an arrow-key prefix — holding it for negotiation adds at most
-   one char of latency. The \u001b[>...u push form is a prefix too."
+   isKeyboardProtocolNegotiationSequencePrefix). A bare \"\u001b[\" is NOT
+   held: it is also an arrow-key/modifyOtherKeys prefix, and holding it
+   while a stalled remainder is in flight (WSL/conpty splits sequences 50ms+
+   apart) corrupts ctrl+arrow/ctrl+letter keys into escapes + literal text.
+   Only the unambiguous query introducers (\"\u001b[?\" with digits,
+   \"\u001b[>\") are held. The \u001b[>...u push form is a prefix too."
   [s]
-  (or (= s "\u001b[")
-      (boolean (re-matches #"\u001b\[\?[\d;]*" s))
+  (or (boolean (re-matches #"\u001b\[\?[\d;]+" s))
       (boolean (re-matches #"\u001b\[>[\d;]*" s))))
 
 (defn cell-size-response-prefix?
   "True when s could still become a cell size response (\u001b[6;h;wt).
-   \u001b[6~ (PageDown) does not match — the required ';' disambiguates."
+   \u001b[6~ (PageDown) does not match — the required ';' disambiguates.
+   A bare \"\u001b[\" or \"\u001b[6\" also prefixes arrows/keys — only
+   the longer, response-shaped fragments (with ';') are held, so stalled
+   key sequences (WSL/conpty splits) are never swallowed as responses."
   [s]
-  (boolean (re-matches #"\u001b\[6(?:;[\d;]*)?" s)))
+  (boolean (re-matches #"\u001b\[6;[\d;]*" s)))
 
 (defn osc-11-response-prefix?
   "True when s could still become an OSC 11 response."
