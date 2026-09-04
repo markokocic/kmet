@@ -2,13 +2,13 @@
   (:require [clojure.string :as str]
             [clojure.test :as t]
             [kmet.app.ui.bash-execution :as be]
+            [kmet.tui.core :as core]
+            [kmet.tui.macros :as macros]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.utils :as u]))
 
 (t/deftest test-bash-execution-render-no-output
-  ;; Regression: (into [top-border] (mapv ...) [bottom-border]) treated the
-  ;; mapped vector as a transducer → "Key must be integer" on every render.
   (let [c (be/make-bash-execution :command "sleep 1" :exclude-from-context? false)
         lines (protocols/render c 40)]
     (t/is (seq lines))
@@ -17,8 +17,7 @@
     (t/is (some #(clojure.string/includes? % "$ sleep 1") lines) "command header shown")))
 
 (t/deftest test-bash-execution-render-with-output
-  ;; Collapsed preview child must be a real IComponent (was a bare map →
-  ;; "No implementation of IComponent for PersistentArrayMap").
+  ;; Collapsed preview renders the last lines plus the expand hint.
   (let [c (be/make-bash-execution :command "ls" :exclude-from-context? false)
         big (clojure.string/join "\n" (repeat 30 "line"))]
     (be/bash-execution-append-output! c big)
@@ -44,15 +43,15 @@
     (let [lines (protocols/render c 40)]
       (t/is (some #(clojure.string/includes? % "cancelled") lines) "cancelled status shown"))))
 
-(t/deftest test-bash-execution-elapsed-ticker
-  (t/testing "1s ticker drives re-renders while :running; completion cancels it"
+(t/deftest test-bash-execution-frame-driver
+  (t/testing "80ms frame driver (pi Loader setInterval parity) runs while :running; completion cancels it"
     (let [c (be/make-bash-execution :command "sleep 1")
-          ticker @(:ticker-atom c)]
-      (t/is (some? ticker) "ticker starts with the component")
-      (t/is (future? ticker))
+          driver @(:ticker-atom c)]
+      (t/is (some? driver) "driver starts with the component")
+      (t/is (future? driver))
       (be/bash-execution-set-complete! c 0 false)
-      (t/is (nil? @(:ticker-atom c)) "completion clears the ticker")
-      (t/is (future-cancelled? ticker) "ticker future is cancelled"))))
+      (t/is (nil? @(:ticker-atom c)) "completion clears the driver")
+      (t/is (future-cancelled? driver) "driver future is cancelled"))))
 
 (t/deftest test-bash-execution-borders-flush
   ;; Every content line — preview output, blank separator, status — must be
@@ -90,3 +89,52 @@
           (t/is (not= before lines) "styling changed with the theme"))
         (finally
           (reset! theme/theme-atom (theme/get-theme "dark")))))))
+
+(t/deftest ^:slow test-dispose-stops-frame-driver
+  ;; A component dropped from the chat (e.g. /new while a run is in
+  ;; flight) must not keep firing schedule-frame! into the frame hook.
+  ;; Settles 150ms (>80ms period) after dispose, so an in-flight tick past
+  ;; the done check lands inside the settle window, not the assertion window.
+  (let [c (be/make-bash-execution :command "sleep 10")
+        fired (atom 0)]
+    (core/render c 40)
+    (macros/set-frame-hook! #(swap! fired inc))
+    (try
+      (t/is (pos? (do (Thread/sleep 250) @fired)) "driver fires while running")
+      (protocols/dispose c)
+      (t/is (nil? @(:ticker-atom c)) "dispose cleared the driver future")
+      ;; Settle: a tick past the done check before dispose can still fire
+      ;; once — wait it out (>80ms period) before capturing the baseline.
+      (Thread/sleep 150)
+      (let [n @fired]
+        (Thread/sleep 250)
+        (t/is (= n @fired) "no frames scheduled after dispose"))
+      (finally
+        (macros/set-frame-hook! nil)))))
+
+(t/deftest test-append-output-schedules-frame
+  ;; The on-chunk path retired its manual request-render — the state swap
+  ;; must dirty the root's reaction, which schedules the frame (edge-triggered:
+  ;; the first swap schedules; further swaps coalesce until the frame flush
+  ;; re-arms, exactly like chat-history's streaming appends). Requires a
+  ;; rendered-once component so the reaction's watches are installed. The
+  ;; 80ms driver is cancelled first so its ticks can't race the counts.
+  (let [c (be/make-bash-execution :command "sleep 10")
+        fired (atom 0)]
+    (core/render c 40)
+    (when-let [driver @(:ticker-atom c)]
+      (future-cancel driver)
+      (reset! (:ticker-atom c) nil))
+    (macros/set-frame-hook! #(swap! fired inc))
+    (try
+      (be/bash-execution-append-output! c "hello\n")
+      (t/is (= 1 @fired) "first chunk scheduled the frame")
+      (be/bash-execution-append-output! c "world\n")
+      (t/is (= 1 @fired) "coalesced chunk scheduled no extra frame")
+      (let [lines (core/render c 40)]
+        (t/is (some #(clojure.string/includes? % "hello") lines))
+        (t/is (some #(clojure.string/includes? % "world") lines)))
+      (finally
+        (macros/set-frame-hook! nil)
+        (be/bash-execution-set-complete! c 0 false)
+        (protocols/dispose c)))))

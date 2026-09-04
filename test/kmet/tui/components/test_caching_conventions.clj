@@ -52,7 +52,7 @@
    "Input"                      :focused-input
    "Editor"                     :focused-input
    "DynamicBorder"              :stateless-ephemeral
-   "BashPreview"                :stateless-ephemeral})
+   "BashExecutionComponent"     :transparent-parent})
 
 (def ^:private component-dirs
   ["src/kmet/tui/components" "src/kmet/app/ui"])
@@ -134,7 +134,7 @@
    when components are added or removed; a mismatch means the scan below
    silently lost forms (a scanner regression), so the convention checks
    would otherwise pass vacuously."
-  46)
+  45)
 
 (deftest caching-conventions
   (let [checked (atom [])]

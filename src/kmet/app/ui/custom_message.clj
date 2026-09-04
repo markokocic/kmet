@@ -44,7 +44,10 @@
                          (protocols/render b width))))))
   (invalidate [_this]
     (protocols/invalidate @spacer)
-    (protocols/invalidate @box)))
+    (protocols/invalidate @box))
+  (dispose [_this]
+    (protocols/dispose @spacer)
+    (protocols/dispose @box)))
 
 ;; ─── Internal: rebuild the content children ────────────────────────────────
 

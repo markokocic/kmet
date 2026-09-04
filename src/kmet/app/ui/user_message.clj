@@ -36,7 +36,9 @@
         (track-deps @text-atom @output-pad-atom)
         (protocols/render b width))))
   (invalidate [_this]
-    (protocols/invalidate @box)))
+    (protocols/invalidate @box))
+  (dispose [_this]
+    (protocols/dispose @box)))
 
 ;; ─── Theme application (defined before make-user-message; forward-declared
 ;; ─── for the render method's apply-once use)

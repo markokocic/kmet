@@ -70,6 +70,9 @@
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
 
+;; No custom dispose: stores no child components (transient markdown per
+;; render, plain string lines), so the generated dispose (track-watch
+;; teardown) is the complete cleanup.
 (defcomponent AssistantMessageComponent :assistant
               [text-atom thinking-text-atom
                output-pad-atom hide-thinking-atom hidden-label-atom

@@ -145,7 +145,23 @@
       (ch/chat-history-set-info-msg! ch {:label "test" :content "info"})
       (ch/chat-history-clear! ch)
       (is (= [] (ch/chat-history-get-messages ch)))
-      (is (= "" (ch/chat-history-get-streaming-text ch))))))
+      (is (= "" (ch/chat-history-get-streaming-text ch)))))
+  (testing "clear disposes message components so owned drivers stop"
+    (let [ch (ch/make-chat-history)
+          bash-comp (ui/make-bash-execution :command "sleep 10")]
+      ;; Mount through the chat (the production path) so the root reaction
+      ;; owns the state watch. After clear!, the driver is stopped (done set,
+      ;; future cancelled) — assert on those, not on hook traffic, which the
+      ;; test's own mounts also generate.
+      (ch/chat-history-add-message! ch {:role :bash :command "sleep 10"
+                                        :component bash-comp})
+      (core/render ch 40)
+      (is (false? @(:done-atom bash-comp)) "driver armed while mounted")
+      (is (some? @(:ticker-atom bash-comp)) "driver future live while mounted")
+      (ch/chat-history-clear! ch)
+      (is (true? @(:done-atom bash-comp)) "clear tripped the driver done flag")
+      (is (nil? @(:ticker-atom bash-comp)) "clear cancelled the driver future")
+      (is (= [] (ch/chat-history-get-messages ch)) "messages cleared"))))
 
 (deftest test-tool-expanded-toggle
   (testing "toggle tool expanded state"

@@ -158,7 +158,10 @@
                          (protocols/render tt width))))))
   (invalidate [_this]
     (protocols/invalidate @spacer-atom)
-    (protocols/invalidate @text-atom)))
+    (protocols/invalidate @text-atom))
+  (dispose [_this]
+    (protocols/dispose @spacer-atom)
+    (protocols/dispose @text-atom)))
 
 (defn- make-status-line
   "Create a StatusLine for a status message (pi: showStatus — a Spacer(1)
@@ -509,8 +512,15 @@
 ;; ─── Misc ─────────────────────────────────────────────────────────────────
 
 (defn chat-history-clear!
-  "Clear all messages, streaming state, and info."
+  "Clear all messages, streaming state, and info. Disposes message
+   components first so owned resources (e.g. bash frame drivers) stop
+   instead of firing into the cleared frame hook."
   [ch]
+  (doseq [m @(:messages-atom ch)]
+    (when-let [c (:component m)]
+      (try (protocols/dispose c) (catch Exception _))))
+  (when-let [info @(:info-comp-atom ch)]
+    (try (protocols/dispose info) (catch Exception _)))
   (reset! (:messages-atom ch) [])
   (reset! (:info-comp-atom ch) nil)
   (reset! (:streaming-atom ch) nil))

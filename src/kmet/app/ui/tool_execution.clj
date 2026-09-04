@@ -161,7 +161,17 @@
                   (into [""] box-lines)
                   []))))))))
   (invalidate [_this]
-    (protocols/invalidate @box)))
+    (protocols/invalidate @box))
+  (dispose [_this]
+    ;; Idempotent: cancel the bash elapsed ticker (a component dropped from
+    ;; the chat — e.g. /new while a tool runs — must not keep a zombie
+    ;; interval invalidating forever), then cascade to the box children.
+    ;; swap-vals! makes the read+remove atomic: a render racing dispose
+    ;; cannot re-park an interval between the deref and the dissoc.
+    (let [[state] (swap-vals! (:renderer-state-atom _this) dissoc :interval)]
+      (when-let [interval (:interval state)]
+        (future-cancel interval)))
+    (protocols/dispose @box)))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 ;; Pi: component manages timing internally — no started-at/ended-at passed in.

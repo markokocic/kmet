@@ -1584,6 +1584,7 @@
         (let [new-session (session/create-session (ensure-cwd-session-dir))]
           (debug/log "new session created: " (:id new-session))
           (ui/chat-history-clear! (:chat-history cs))
+          (ui/dispose-pending-bash! @(:pending-bash-components cs))
           (container/container-clear (:pending-messages-container cs))
           ;; pi: a session switch drops the compaction queue
           ;; (compactionQueuedMessages = [])

@@ -41,6 +41,7 @@
 (def make-bash-execution bash-execution/make-bash-execution)
 (def bash-execution-append-output! bash-execution/bash-execution-append-output!)
 (def bash-execution-set-complete! bash-execution/bash-execution-set-complete!)
+(def dispose-pending-bash! bash-execution/dispose-pending-bash!)
 
 ;; Footer
 (def make-footer footer/make-footer)

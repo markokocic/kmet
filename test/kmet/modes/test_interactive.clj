@@ -73,6 +73,8 @@
           ftr (ui/make-footer :provider fdp)
           ed (editor/make-editor)
           _ (editor/editor-set-text! ed "draft")
+          parked-bash (ui/make-bash-execution :command "sleep 10")
+          pending-bash (atom [parked-bash])
           cs (inter/map->CoreState
               {:tui tui-stub
                :agent-state (atom ag)
@@ -86,7 +88,8 @@
                :bash-signal (atom false)
                :session-atom (atom old-sess)
                :pending-messages-container (container/make-container)
-               :pending-bash-components (atom [])
+               :pending-bash-components pending-bash
+               :pending-messages-comp (ui/make-pending-messages)
                :status-current (atom nil)
                :status-root nil
                :status-indicator (ui/make-status-indicator)
@@ -110,7 +113,10 @@
           (is (= [{:type :session-shutdown :reason :new
                    :target-session-file (:file old-sess)}]
                  @shutdown-events)
-              "extensions are told the runtime is torn down before the swap (pi: teardownCurrent)"))
+              "extensions are told the runtime is torn down before the swap (pi: teardownCurrent)")
+          (is (true? @(:done-atom parked-bash)) "/new stops the parked bash frame driver")
+          (is (nil? @(:ticker-atom parked-bash)) "/new cancels the parked driver future")
+          (is (empty? @pending-bash) "parked bash refs are dropped"))
         (finally
           (event-bus/clear-event-listeners!)
           (fs/delete-tree sess-dir))))))
