@@ -8,6 +8,7 @@
    :session-shutdown disconnect-all, :resources-discover skill)."
   (:require [babashka.fs :as fs]
             [babashka.process :as proc]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [extensions.mcp-adapter.auth :as auth]
             [extensions.mcp-adapter.client :as client]
@@ -1082,9 +1083,10 @@
                                        (on-session-start state event ctx)))
     (ext/on-event api :session-shutdown (fn [event ctx]
                                           (on-session-shutdown state event ctx)))
-    (ext/on-event api :resources-discover
-                  (fn [_event _ctx]
-                    {:skill-paths [(str (:extension-dir api) "/skills/mcp")]}))))
+    ;; contribute the mcp skill (self-registered content — no host path
+    ;; enumeration, so jar/zip artifacts work unexpanded)
+    (ext/register-skill! api (slurp (io/resource "skills/mcp/SKILL.md"))
+                         {:location "mcp-adapter:skills/mcp/SKILL.md"})))
 
 (defn shutdown
   "Extension shutdown (optional): close all connections, kill process

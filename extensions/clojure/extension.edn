@@ -1,2 +1,0 @@
-{:name "clojure"
- :entry "src/kmet/extensions/clojure/core.clj"}

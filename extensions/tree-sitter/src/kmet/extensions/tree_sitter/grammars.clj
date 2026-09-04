@@ -17,7 +17,7 @@
   "Pinned language table: {lang {:source :id/:url :version :sha256
    :file-types [...] :probe string}}."
   []
-  (let [r (paths/bundled-resource "libs_manifest.edn")]
+  (let [r (paths/bundled-resource "kmet/extensions/tree_sitter/libs_manifest.edn")]
     (edn/read-string (slurp r))))
 
 (defn- normalize-ext

@@ -1,2 +1,0 @@
-{:name "lsp-adapter"
- :entry "src/extensions/lsp_adapter.clj"}

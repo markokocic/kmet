@@ -15,6 +15,7 @@
             [babashka.fs :as fs]
             [babashka.process :as p]
             [cheshire.core :as json]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [kmet.libs.archive :as archive]
@@ -320,6 +321,83 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
         (do (println (:err res))
             (throw (ex-info (str "smoke test failed for " artifact)
                             {:type ::smoke-failed :exit (:exit res)})))))))
+
+;; ─── Extension packaging (jar-ext.md §6) ────────────────────────────────────
+
+(defn- strict-ns-for-path
+  "The namespace symbol a strict-layout .clj file at REL (slash-separated,
+   relative to the artifact root) must declare (dashes, dots for slashes),"
+  [rel]
+  (symbol (-> rel
+              (str/replace #"\.(cljc|clj|bb)$" "")
+              (str/replace "_" "-")
+              (str/replace "/" "."))))
+
+(defn- pack-verify!
+  "Verify SRC-DIR is a packable extension artifact root; throw ex-info
+   with :type ::pack-error otherwise. Checks: extension.edn present with
+   :name + symbol :entry; the :entry ns-path file exists; every .clj file's
+   (ns ...) matches its path (strict layout); deps.edn parses and carries
+   only :deps. Returns {:name :entry-ns}."
+  [src-dir]
+  (let [root (fs/canonicalize src-dir)
+        manifest (io/file (str root) "extension.edn")]
+    (when-not (fs/regular-file? manifest)
+      (throw (ex-info (str "no extension.edn in " src-dir) {:type ::pack-error})))
+    (let [m (edn/read-string (slurp manifest))
+          entry-ns (:entry m)]
+      (when-not (and (:name m) (symbol? entry-ns))
+        (throw (ex-info (str "extension.edn needs :name + symbol :entry, got: " (pr-str m))
+                        {:type ::pack-error :manifest m})))
+      (let [base (str/replace (namespace-munge (str entry-ns)) "." "/")
+            entry-file (some (fn [ext]
+                               (let [f (io/file (str root) (str base ext))]
+                                 (when (.exists f) f)))
+                             [".cljc" ".clj" ".bb"])]
+        (when-not entry-file
+          (throw (ex-info (str "extension.edn :entry not found: " entry-ns)
+                          {:type ::pack-error :entry entry-ns}))))
+      (doseq [f (sort-by str (fs/glob root "**.clj"))]
+        (let [rel (str/replace (str (fs/relativize root f)) "\\" "/")
+              expected (strict-ns-for-path rel)
+              actual (with-open [r (java.io.PushbackReader. (io/reader (fs/file f)))]
+                       (second (read r)))]
+          (when-not (= expected actual)
+            (throw (ex-info (str "strict layout violation: " rel
+                                 " declares " actual ", expected " expected)
+                            {:type ::pack-error :file rel})))))
+      (let [deps-file (io/file (str root) "deps.edn")]
+        (when (fs/regular-file? deps-file)
+          (let [deps (edn/read-string (slurp deps-file))]
+            (when-not (map? deps)
+              (throw (ex-info "deps.edn must be an EDN map" {:type ::pack-error})))
+            (when (seq (dissoc deps :deps))
+              (binding [*out* *err*]
+                (println "Warning: deps.edn keys besides :deps are ignored:"
+                         (pr-str (keys (dissoc deps :deps)))))))))
+      {:name (:name m) :entry-ns entry-ns})))
+
+(defn pack-extension!
+  "Verify SRC-DIR (an extension artifact root) and zip it to OUT-PATH
+   (default <name>.jar in the cwd). Deterministic sorted order, / entry
+   separators, no META-INF. Returns the output path string."
+  [src-dir & [out-path]]
+  (let [{:keys [name]} (pack-verify! src-dir)
+        root (fs/canonicalize src-dir)
+        out (str (or out-path (str name ".jar")))]
+    (fs/create-dirs (fs/parent (fs/canonicalize out)))
+    (with-open [zos (java.util.zip.ZipOutputStream. (io/output-stream out))]
+      (doseq [f (sort-by str (filter #(fs/regular-file? %) (fs/glob root "**")))]
+        (let [rel (str/replace (str (fs/relativize root f)) "\\" "/")]
+          (when (or (str/starts-with? rel "/")
+                    (some #(= ".." %) (str/split rel #"/")))
+            (throw (ex-info (str "unsafe entry name: " rel) {:type ::pack-error})))
+          (.putNextEntry zos (java.util.zip.ZipEntry. rel))
+          (with-open [in (io/input-stream (fs/file f))]
+            (io/copy in zos))
+          (.closeEntry zos))))
+    (println "packed" out)
+    out))
 
 ;; ─── CLI ───────────────────────────────────────────────────────────────────
 

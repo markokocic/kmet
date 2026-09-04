@@ -33,9 +33,9 @@ definition, which is what makes caller/callee queries work.
 | TSX | `.tsx` | Official `tree-sitter-typescript` release (v0.23.2) |
 
 Grow the table by adding an entry to
-`resources/kmet/extensions/tree_sitter/libs_manifest.edn` (pinned URL +
+`src/kmet/extensions/tree_sitter/libs_manifest.edn` (pinned URL +
 sha256 + probe snippet) and a rule set under
-`resources/kmet/extensions/tree_sitter/queries/`.
+`src/kmet/extensions/tree_sitter/queries/`.
 
 ## Auto-download (first use)
 

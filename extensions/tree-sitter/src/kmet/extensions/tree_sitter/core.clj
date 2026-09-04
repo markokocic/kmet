@@ -11,12 +11,11 @@
   (:require [kmet.extension :as ext]
             [kmet.extensions.tree-sitter.dispatch :as dispatch]
             [kmet.extensions.tree-sitter.hooks :as hooks]
-            [kmet.extensions.tree-sitter.paths :as paths]
             [kmet.extensions.tree-sitter.tools :as tools]))
 
 (defn init [api]
-  ;; bundled EDN resources resolve against the installed extension dir
-  (paths/set-extension-dir! (:extension-dir api))
+  ;; bundled EDN resources resolve via the shadowed io/resource (dir, src
+  ;; symlink and unexpanded jar installs alike)
   ;; clojure-extension presence is checked lazily at hook time
   (dispatch/set-api! api)
   (doseq [tool (tools/tool-defs)]

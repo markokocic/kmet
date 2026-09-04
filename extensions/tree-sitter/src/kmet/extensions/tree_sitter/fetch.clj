@@ -20,7 +20,7 @@
   "Pinned CLI release from the shipped manifest:
    {:version string :targets {target {:url string :sha256 string}}}."
   []
-  (let [[version targets] (-> (paths/bundled-resource "bin_manifest.edn")
+  (let [[version targets] (-> (paths/bundled-resource "kmet/extensions/tree_sitter/bin_manifest.edn")
                               slurp
                               edn/read-string
                               first)]
@@ -32,7 +32,7 @@
 (defn manifest-text
   "Raw manifest EDN text, materialized next to the installed binary."
   []
-  (slurp (paths/bundled-resource "bin_manifest.edn")))
+  (slurp (paths/bundled-resource "kmet/extensions/tree_sitter/bin_manifest.edn")))
 
 (defn host-target
   "os-arch slug for the machine we run on (linux-x64, macos-arm64,

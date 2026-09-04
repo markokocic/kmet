@@ -103,22 +103,26 @@ A `.clj` file in the extensions directory:
 ### Directory extensions (multi-file, `extension.edn`)
 
 A directory containing an `extension.edn` manifest supports extensions with
-their own source files:
+their own source files. The directory root is a classpath root: namespace
+`my-ext.main` lives at `my_ext/main.clj` (strict ns-path layout — dashes →
+underscores, dots → slashes; `.clj` → `.cljc` → `.bb` fallback):
 
 ```
 ~/.kmet/agent/extensions/
 └── my-ext/
     ├── extension.edn
     ├── deps.edn          # optional: external library dependencies
-    └── src/
-        ├── main.clj
-        └── helper.clj
+    ├── my_ext/
+    │   ├── main.clj
+    │   └── helper.clj
+    └── skills/           # optional bundled resources (exact-name access)
+        └── my-skill/SKILL.md
 ```
 
 ```clojure
 ;; extension.edn
 {:name  "my-ext"
- :entry "src/main.clj"}
+ :entry my-ext.main}
 ```
 
 ```clojure
@@ -126,23 +130,22 @@ their own source files:
 {:deps {cheshire/cheshire {:mvn/version "11.5.3"}}}
 ```
 
-The manifest lists only the initial namespace — `:entry`, whose namespace must
-define `init`. Everything else is required from there: internal namespaces
-resolve to `.clj` files under the extension directory (indexed by their
-`(ns ...)` form, loaded in dependency order), and declared library
-dependencies resolve to the jars in `deps.edn` (see
-[External library dependencies](#external-library-dependencies-depsedn)).
+The manifest lists only the initial namespace — `:entry`, a namespace symbol
+whose namespace must define `init`. Everything else is required from there:
+internal namespaces resolve by strict ns-path lookup under the extension
+root, and declared library dependencies resolve to the jars in `deps.edn`
+(see [External library dependencies](#external-library-dependencies-depsedn)).
 Internal dependencies are declared in each file's `ns` form:
 
 ```clojure
-;; src/helper.clj
+;; my_ext/helper.clj
 (ns my-ext.helper)
 
 (defn tool-name [] "my-ext-tool")
 ```
 
 ```clojure
-;; src/main.clj
+;; my_ext/main.clj
 (ns my-ext.main
   (:require [my-ext.helper :as helper]   ; internal dependency
             [kmet.extension :as ext]))   ; kmet core, resolved normally
@@ -152,17 +155,29 @@ Internal dependencies are declared in each file's `ns` form:
                            :description "..."}))
 ```
 
-Requires that don't resolve to a file under the extension directory (kmet core
+Requires that don't resolve to a file under the extension root (kmet core
 namespaces, built-ins, declared libraries) are left to the normal classpath.
 
 An extension's **own** namespaces always resolve internally — regardless of
 their prefix. A manifest-dir extension named `tree-sitter` may therefore
 have its entry require `kmet.extensions.tree-sitter.tools`: the loader
-indexes every `.clj` file under the extension directory by its `(ns ...)`
-form and resolves those requires before the shared-namespace allowlist is
-consulted.
+probes the ns path under the extension root and resolves those requires
+before the shared-namespace allowlist is consulted.
 The extension name defaults to the directory name (`:name` in the manifest
 overrides it).
+
+### Jar/zip extensions (no expansion)
+
+A `.jar` (or `.zip` — same bytes, either suffix) with the directory layout
+above at its root loads exactly like the directory: `extension.edn` (+
+optional `deps.edn`) on top, code at ns paths, resources by exact name.
+The archive is **never expanded** — code is served per-call from the zip
+and resources via `io/resource` (see below); nothing is written outside
+`~/.m2`/`~/.gitlibs`. Discovery picks up top-level `*.jar`/`*.zip` files
+alongside `*.clj` files and manifest dirs. Pack one with
+`bb pack-extension <src-dir> [out.jar]` (verify-then-zip: `:entry`
+resolves, every `.clj` ns matches its path, `deps.edn` carries only
+`:deps`).
 
 ### External library dependencies (`deps.edn`)
 
@@ -271,8 +286,9 @@ the wrappers below or directly.
 
 ```clojure
 (:extension-name api)   ; "hello_ext.clj" or the manifest :name
-(:extension-path api)   ; absolute path to the extension file/dir
-(:extension-dir api)    ; directory containing it
+(:extension-path api)   ; absolute path to the extension file/dir/jar
+(:extension-dir api)    ; the extension's own directory — nil for jars
+                        ; (a jar has no directory; use io/resource)
 ```
 
 ### Commands and tools
@@ -374,12 +390,41 @@ Event types: `:agent-start` `:agent-end` `:agent-settled` `:turn-start`
 `:before-provider-request` `:before-provider-headers`
 `:after-provider-response`.
 
-### Contributing resources (`resources_discover`)
+### Bundled resources (`io/resource` + self-registration)
+
+An extension reads its own bundled files through `clojure.java.io/resource`
+(which the host shadows per extension artifact — own artifact first, then
+the `deps.edn` closure jars, then the host classpath), so the same code
+works for dir installs, symlinked checkouts and unexpanded jars:
+
+```clojure
+(ns my-ext.main
+  (:require [clojure.java.io :as io]
+            [kmet.extension :as ext]))
+
+(defn init [api]
+  (ext/register-skill! api (slurp (io/resource "skills/my-skill/SKILL.md"))
+                       {:location "my-ext:skills/my-skill/SKILL.md"})
+  (ext/register-prompt! api {:name "my-prompt"
+                             :content (slurp (io/resource "prompts/my-prompt.md"))
+                             :location "my-ext:prompts/my-prompt.md"}))
+```
+
+Rules: resources are referenced by exact shipped names — directory listing
+inside jars is unsupported. Skills/prompts registered this way are
+self-contained single files (no relative refs); the host stores the body in
+memory and discloses extension skills via `/skill:name` expansion (`name:path`
+locations never go through the `read` tool). Themes need no new api:
+`kmet.tui.theme` is shared by reference — call `make-theme` +
+`register-theme!` in `init` and `unregister-theme!` on unload. Every
+registration returns a deregister fn tracked for automatic unload.
+
+### Contributing resource paths (`resources_discover`)
 
 After `:session-start` (startup, `/new`, `/resume`, `/reload`), kmet fires
 `:resources-discover` (pi: resources_discover — fired after session_start)
-so extensions can contribute skill, prompt-template and theme paths
-(directories):
+so extensions (and user config) can contribute skill, prompt-template and
+theme paths (directories):
 
 ```clojure
 (ext/on-event api :resources-discover

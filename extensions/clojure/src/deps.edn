@@ -1,0 +1,1 @@
+{:deps {dev.weavejester/cljfmt {:mvn/version "0.16.5", :exclusions [rewrite-clj/rewrite-clj]}, parinferish/parinferish #:mvn{:version "0.8.0"}}}

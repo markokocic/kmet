@@ -21,9 +21,9 @@
            :task (apply runner/-main false *command-line-args*)
            :override-builtin true}
   test-ext {:doc "Run ONLY the slow (^:slow) test suites. Args: test var names to run only those (final validation before commit)"
-           :requires ([kmet.runner :as runner])
-           :task (apply runner/-main true *command-line-args*)
-           :override-builtin true}
+            :requires ([kmet.runner :as runner])
+            :task (apply runner/-main true *command-line-args*)
+            :override-builtin true}
   changed {:doc "List files changed since the last commit (git; mtime-since-baseline fallback without git)"
            :requires ([kmet.changed :as changed])
            :task (doseq [f (changed/changed-files)] (println f))}
@@ -93,6 +93,9 @@
                                   (doseq [e errors] (println "  -" e))
                                   (System/exit 1))
                               (println "Committed model data is valid.")))}
+  pack-extension {:doc "Verify an extension artifact root and pack it as .jar (usage: bb pack-extension <src-dir> [out.jar]; src-dir is the artifact root, e.g. extensions/clojure/src)"
+                  :requires ([kmet.build :as build])
+                  :task (apply build/pack-extension! *command-line-args*)}
   lint    {:doc "Lint src/test/extensions with clj-kondo (optionally: specific files/dirs)"
            :requires ([babashka.process :as p])
            :task (let [paths (if (seq *command-line-args*)
@@ -122,5 +125,5 @@
                                          (mapv str)))]
                         (fmt/check {:paths paths}))}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests; args: test names)\n  test-ext      Run ONLY slow (^:slow) test suites (args: test names; pre-commit validation)\n  check         Verify compilation\n  generate-models  Regenerate provider model catalogs from models.dev (network)\n  check-model-data Offline validation of committed provider catalogs + manifest\n  lint          Lint src/test/extensions with clj-kondo (args: files/dirs)\n  format        Format src/test/extensions with cljfmt (fix in place; args: files/dirs)\n  format-check  Check src/test/extensions formatting with cljfmt (no changes; args: files/dirs)\n\n  Changed-file dev loop (validation of the current changes only):\n  changed       List files changed since the last commit (git; mtime fallback)\n  test-changed      Run tests of namespaces affected by changed files\n  test-ext-changed  Run ONLY the slow (^:slow) tests of affected namespaces\n  lint-changed      Lint changed files plus affected dependents\n  format-changed    Format changed files in place\n  format-check-changed  Check formatting of changed files\n  changed-baseline  Reset the mtime baseline after a manual full validation (no-op with git)\n  Extension files (source + their own tests) are covered by lint/format and\n  the changed tasks; extension tests run from inside their directories.")
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests; args: test names)\n  test-ext      Run ONLY slow (^:slow) test suites (args: test names; pre-commit validation)\n  check         Verify compilation\n  generate-models  Regenerate provider model catalogs from models.dev (network)\n  check-model-data Offline validation of committed provider catalogs + manifest\n  lint          Lint src/test/extensions with clj-kondo (args: files/dirs)\n  format        Format src/test/extensions with cljfmt (fix in place; args: files/dirs)\n  format-check  Check src/test/extensions formatting with cljfmt (no changes; args: files/dirs)\n\n  Changed-file dev loop (validation of the current changes only):\n  changed       List files changed since the last commit (git; mtime fallback)\n  test-changed      Run tests of namespaces affected by changed files\n  test-ext-changed  Run ONLY the slow (^:slow) tests of affected namespaces\n  lint-changed      Lint changed files plus affected dependents\n  format-changed    Format changed files in place\n  format-check-changed  Check formatting of changed files\n  changed-baseline  Reset the mtime baseline after a manual full validation (no-op with git)\n  Extension files (source + their own tests) are covered by lint/format and\n  the changed tasks; extension tests run from inside their directories.\n  pack-extension  Verify an extension artifact root and pack it as .jar.")
            :override-builtin true}}}

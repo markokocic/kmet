@@ -14,6 +14,11 @@ a shipped extension by symlinking or copying it into one of those:
 # global (all projects)
 mkdir -p ~/.kmet/agent/extensions
 ln -s "$PWD/extensions/tools.clj" ~/.kmet/agent/extensions/tools.clj
+# directory extension: link its src/ (the artifact root)
+ln -s "$PWD/extensions/clojure/src" ~/.kmet/agent/extensions/clojure
+# ...or install a packed jar instead
+bb pack-extension extensions/clojure/src /tmp/clojure.jar
+cp /tmp/clojure.jar ~/.kmet/agent/extensions/clojure.jar
 
 # or project-local
 mkdir -p .kmet/extensions
@@ -23,6 +28,26 @@ ln -s "$PWD/extensions/tools.clj" .kmet/extensions/tools.clj
 A symlink keeps the shipped copy updated with the repo; a copy is a
 snapshot you can edit locally. Either way, restart kmet or run `/reload`
 to pick it up.
+
+## Repo layout: `src/` is the artifact root
+
+Each shipped extension keeps everything that ships under `src/` — manifests,
+code, skills, merged resources — while dev-only files stay outside:
+
+```
+extensions/clojure/              ; dev wrapper, never packaged
+├── README.md  bb.edn  test/
+└── src/                         ; === artifact root: zip as-is / symlink to install ===
+    ├── extension.edn
+    ├── deps.edn                 ; :deps only
+    ├── edit_tool.clj
+    ├── kmet/extensions/clojure/core.clj
+    └── skills/clojure-edit/SKILL.md
+```
+
+Pack with `bb pack-extension extensions/<name>/src [out.jar]`; install with
+`unzip my-ext.jar` or `ln -s .../src`. `bb.edn`/`test/`/`scripts/`/`README.md`
+never ship.
 
 ## Layout rules
 
@@ -35,10 +60,15 @@ to pick it up.
   stay small and self-contained; validate changes by loading the file
   against `kmet.extension/create-nullable-api` or the real runtime.
 - **Directory-based extensions** (a subdirectory with an `extension.edn`
-  manifest `{:name ... :entry "src/main.clj"}`) — separate projects: they
-  may have their own source layout, a `deps.edn` for library
-  dependencies, and their own tests (run them from inside the directory,
-  e.g. `bb test` against the extension's own deps).
+  manifest `{:name ... :entry my.ext.main}`) — separate projects with a
+  **strict ns-path layout** (namespace `a.b/c` at `a/b/c.clj` under the
+  root). They may carry a `deps.edn` for library dependencies (`:deps`
+  only) and their own tests (run them from inside the directory, e.g.
+  `bb test` against the extension's own deps).
+- **Jar/zip extensions** — the same layout packed as a single archive
+  (`extension.edn` + `deps.edn` at the root, code at ns paths, resources by
+  exact name). The loader serves them unexpanded. See `extensions.md` for
+  the format and `jar-ext.md` for the full plan.
 
 All extension files — source **and any tests they carry** — are covered by
 the repo gates: `bb lint` / `bb format` / `bb format-check` lint and format

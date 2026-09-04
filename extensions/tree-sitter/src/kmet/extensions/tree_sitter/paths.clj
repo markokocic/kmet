@@ -60,23 +60,13 @@
 
 ;; ─── Bundled resources ────
 
-(defonce ^:private extension-dir (atom nil))
-
-(defn set-extension-dir!
-  "Point bundled-resource at the installed extension's own directory.
-   Called from core/init with the api's :extension-dir; the classpath
-   fallback keeps dev/test working (they run with resources/ on the
-   classpath, unlike the extension sandbox, which serves only .clj
-   files)."
-  [dir]
-  (when dir (reset! extension-dir (str dir))))
-
 (defn bundled-resource
-  "Absolute path string of a resource shipped under the extension's
-   resources/ directory (REL is relative to that directory), or nil when
-   neither the configured extension dir nor the classpath provides it."
+  "URL of a resource shipped with the extension (REL is relative to the
+   artifact root, e.g. `kmet/extensions/tree_sitter/bin_manifest.edn`),
+   or nil when absent. Resolves through clojure.java.io/resource, which
+   the host shadows per extension artifact — so this works for dir
+   installs, symlinked src/ checkouts and unexpanded jar/zip archives
+   alike (dev/test run with src/ on the classpath). Callers slurp the URL
+   directly; no filesystem path is involved."
   [rel]
-  (or (when-let [d @extension-dir]
-        (let [p (fs/path d "resources" "kmet" "extensions" "tree_sitter" rel)]
-          (when (fs/exists? p) (str p))))
-      (some-> (io/resource (str "kmet/extensions/tree_sitter/" rel)) str)))
+  (io/resource rel))

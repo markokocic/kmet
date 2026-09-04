@@ -6,7 +6,8 @@
 ;;   clojure_paren_repair      — delimiter repair
 
 (ns kmet.extensions.clojure.core
-  (:require [edit-tool]
+  (:require [clojure.java.io :as io]
+            [edit-tool]
             [paren-repair]
             [sexp-tool]
             [kmet.extension :as ext]))
@@ -15,10 +16,10 @@
   (edit-tool/register! api)
   (sexp-tool/register! api)
   (paren-repair/register! api)
-  ;; contribute the editing-guidelines skill (pi: extendResourcesFromExtensions)
-  (ext/on-event api :resources-discover
-                (fn [_event _ctx]
-                  {:skill-paths [(str (:extension-dir api) "/skills/clojure-edit")]})))
+  ;; contribute the editing-guidelines skill (self-registered content —
+  ;; no host path enumeration, so jar/zip artifacts work unexpanded)
+  (ext/register-skill! api (slurp (io/resource "skills/clojure-edit/SKILL.md"))
+                       {:location "clojure:skills/clojure-edit/SKILL.md"}))
 
 (defn shutdown [_api]
   nil)

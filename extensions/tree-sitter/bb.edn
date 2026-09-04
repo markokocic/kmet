@@ -1,4 +1,4 @@
-{:paths ["src" "test" "resources" "../../src"]
+{:paths ["src" "test" "../../src"]
  :tasks
  {test {:doc "Run tree-sitter extension tests (args: namespace symbols; defaults to the offline set)"
         :task (let [nss (or (some->> *command-line-args* (map symbol))

@@ -958,3 +958,53 @@
         (t/is (nil? (skills/get-skill "selfreg-skill")) "unload removes the skill")
         (t/is (nil? (prompts/get-prompt-template "selfreg-tpl")) "unload removes the template")
         (fs/delete-tree dir)))))
+
+(t/deftest test-shipped-extensions-load-from-src
+  ;; the repo's own extensions restructured to src/-as-artifact-root
+  ;; (jar-ext.md §2): every shipped src/ dir loads through the real runtime.
+  (extensions/clear-extensions!)
+  (doseq [path ["extensions/clojure/src"
+                "extensions/lsp-adapter/src"
+                "extensions/mcp-adapter/src"
+                "extensions/review/src"
+                "extensions/tree-sitter/src"]]
+    (let [result (extensions/load-extension! path)]
+      (t/is (nil? (:error result)) (str path " loaded: " (:error result)))))
+  (testing "tools + skills from the shipped extensions are live"
+    (t/is (some? (tools/get-tool "clojure_edit")))
+    (t/is (some? (tools/get-tool "lsp")))
+    (t/is (some? (tools/get-tool "mcp")))
+    (t/is (some? (skills/get-skill "clojure-edit")))
+    (t/is (some? (skills/get-skill "mcp"))))
+  (testing "extension skills disclose from memory"
+    (t/is (str/includes? (skills/expand-skill-command "/skill:clojure-edit")
+                         "clojure_edit")))
+  (extensions/unload-all-extensions!)
+  (skills/clear-skills!)
+  (prompts/clear-prompt-templates!))
+
+(t/deftest ^:slow test-packed-clojure-jar-roundtrip
+  ;; end-to-end jar distribution for a real shipped extension: pack
+  ;; extensions/clojure/src with plain zip mechanics, load the jar, run a
+  ;; tool, expand its skill, unload. Needs the cljfmt/parinferish closure
+  ;; from the network cache (slow).
+  (extensions/clear-extensions!)
+  (skills/clear-skills!)
+  (let [jar "target/test-packed-clojure.jar"]
+    (fs/delete-if-exists jar)
+    (try
+      (with-open [zos (java.util.zip.ZipOutputStream. (io/output-stream jar))]
+        (doseq [f (sort-by str (filter #(fs/regular-file? %) (fs/glob "extensions/clojure/src" "**")))]
+          (let [rel (str (fs/relativize "extensions/clojure/src" f))]
+            (.putNextEntry zos (java.util.zip.ZipEntry. rel))
+            (io/copy (io/file (str f)) zos)
+            (.closeEntry zos))))
+      (let [result (extensions/load-extension! jar)]
+        (t/is (nil? (:error result)) (str "packed jar loaded: " (:error result)))
+        (t/is (some? (tools/get-tool "clojure_edit")))
+        (t/is (str/includes? (skills/expand-skill-command "/skill:clojure-edit")
+                             "clojure_edit")))
+      (finally
+        (extensions/unload-all-extensions!)
+        (skills/clear-skills!)
+        (fs/delete-if-exists jar)))))

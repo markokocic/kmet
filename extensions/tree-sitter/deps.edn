@@ -1,8 +1,0 @@
-{:paths ["src" "test" "resources"]
- ;; babashka.fs / babashka.process are bb-bundled; outbound HTTP goes
- ;; through kmet.libs.http (the single boundary, shared by reference with
- ;; the SCI host — kmet.libs.http itself requires only bb-bundled libs),
- ;; so no external Maven deps are needed at runtime or under `bb test`.
- ;; The CLI's default s-expr output is parsed by a hand-rolled parser
- ;; (sexp.clj) — no XML dependency at all.
- :deps {}}

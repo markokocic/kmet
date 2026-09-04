@@ -99,3 +99,48 @@
                   (str "no file written for " (pr-str entry)))))))
       (finally
         (fs/delete-tree tmp)))))
+
+(deftest pack-extension-verifies-and-packs
+  (testing "packs the real clojure artifact root"
+    (let [out "target/test-pack-clojure.jar"]
+      (fs/delete-if-exists out)
+      (is (= out (build/pack-extension! "extensions/clojure/src" out)))
+      (is (fs/regular-file? out))
+      (fs/delete-if-exists out)))
+  (testing "rejects a root without extension.edn"
+    (let [dir "target/test-pack-no-manifest"]
+      (fs/create-dirs dir)
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no extension.edn"
+                            (build/pack-extension! dir "target/test-pack-no.jar")))
+      (fs/delete-tree dir)))
+  (testing "rejects strict-layout violations"
+    (let [dir "target/test-pack-sloppy"]
+      (fs/create-dirs (str dir "/sloppy"))
+      (spit (str dir "/extension.edn") "{:name \"sloppy\" :entry sloppy.main}")
+      (spit (str dir "/sloppy/main.clj") "(ns wrong.place)\n(defn init [api] nil)\n")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"strict layout violation"
+                            (build/pack-extension! dir "target/test-pack-sloppy.jar")))
+      (fs/delete-tree dir)))
+  (testing "rejects string :entry manifests"
+    (let [dir "target/test-pack-strentry"]
+      (fs/create-dirs dir)
+      (spit (str dir "/extension.edn") "{:name \"strentry\" :entry \"main.clj\"}")
+      (spit (str dir "/main.clj") "(ns strentry.main)\n(defn init [api] nil)\n")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":entry"
+                            (build/pack-extension! dir "target/test-pack-str.jar")))
+      (fs/delete-tree dir))))
+
+(deftest pack-extension-roundtrip-loads
+  (testing "packed jar of the clojure extension loads (fast: reused closure)"
+    (let [out "target/test-pack-roundtrip.jar"]
+      (fs/delete-if-exists out)
+      (build/pack-extension! "extensions/clojure/src" out)
+      (try
+        (let [entries (with-open [zf (java.util.zip.ZipFile. (io/file out))]
+                        (set (map (fn [e] (.getName ^java.util.zip.ZipEntry e))
+                                  (enumeration-seq (.entries zf)))))]
+          (is (contains? entries "extension.edn"))
+          (is (contains? entries "kmet/extensions/clojure/core.clj"))
+          (is (contains? entries "skills/clojure-edit/SKILL.md"))
+          (is (not (contains? entries "META-INF/MANIFEST.MF")) "no META-INF"))
+        (finally (fs/delete-if-exists out))))))

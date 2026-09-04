@@ -48,7 +48,7 @@
   "Extraction rule set for lang, or nil when the language ships none."
   [lang]
   (or (get @rules-cache lang)
-      (when-let [r (paths/bundled-resource (str "queries/" lang ".edn"))]
+      (when-let [r (paths/bundled-resource (str "kmet/extensions/tree_sitter/queries/" lang ".edn"))]
         (let [parsed (edn/read-string (slurp r))]
           (swap! rules-cache assoc lang parsed)
           parsed))))

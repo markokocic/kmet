@@ -1,0 +1,1 @@
+{:name "clojure", :entry kmet.extensions.clojure.core}
