@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-01T08:18:52Z"
+ :generated-at "2026-09-04T07:41:13Z"
  :provider {:id :qwen-token-plan
             :name "Qwen Token Plan"
             :env-vars ["QWEN_TOKEN_PLAN_API_KEY"]

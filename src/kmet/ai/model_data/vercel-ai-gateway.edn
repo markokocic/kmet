@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-03T16:02:24Z"
+ :generated-at "2026-09-04T07:52:20Z"
  :provider {:id :vercel-ai-gateway
             :name "Vercel AI Gateway"
             :env-vars ["AI_GATEWAY_API_KEY"]

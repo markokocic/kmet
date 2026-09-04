@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-03T16:02:24Z"
+ :generated-at "2026-09-04T07:52:20Z"
  :provider {:id :nvidia
             :name "NVIDIA NIM"
             :env-vars ["NVIDIA_API_KEY"]

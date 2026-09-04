@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-01T08:18:52Z"
+ :generated-at "2026-09-04T07:41:13Z"
  :provider {:id :cloudflare-ai-gateway
             :name "Cloudflare AI Gateway"
             :env-vars ["CLOUDFLARE_API_KEY" "CLOUDFLARE_ACCOUNT_ID" "CLOUDFLARE_GATEWAY_ID"]
@@ -16,6 +16,19 @@
     :thinking-level-map {:max "max" :off nil :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 10 :output 50 :cache-read 1 :cache-write 12.5}
+    :context-window 1000000
+    :max-tokens 128000
+    :compat {:force-adaptive-thinking true :send-session-affinity-headers true}}
+   "claude-fable-5.1"
+   {:id "claude-fable-5.1"
+    :name "Claude Fable 5.1"
+    :provider :cloudflare-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic"
+    :reasoning true
+    :thinking-level-map {:max "max" :off nil :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 10 :output 50 :cache-read 0.25 :cache-write 12.5}
     :context-window 1000000
     :max-tokens 128000
     :compat {:force-adaptive-thinking true :send-session-affinity-headers true}}
