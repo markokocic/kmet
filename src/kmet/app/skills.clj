@@ -53,30 +53,62 @@
 
 ;; ─── Loading (pi: loadSkillFromFile / loadSkillsFromDirInternal) ──────────
 
-(defn- load-skill-from-file
-  "Load a skill from a SKILL.md (or flat .md) file. Name falls back to the
-   parent directory name when frontmatter has no name (pi: frontmatter.name ||
-   parentDirName). Skills with a missing description are not loaded.
-   Returns {:skill map-or-nil :diagnostics [warning-maps]}."
-  [file-path]
+(defn- parse-skill-content
+  "Parse/validate SKILL.md content RAW into a skill map. FALLBACK-NAME is
+   used when frontmatter has no name (file skills: the parent dir name — pi:
+   frontmatter.name || parentDirName). LOCATION is the display locator
+   (a file path, or an `ext-name:relative/path` locator for extension
+   skills). EXTENSION is the owning extension name, or nil. Skills with a
+   missing description are not loaded. Returns {:skill map-or-nil
+   :diagnostics [warning-maps]}."
+  [raw fallback-name location extension]
   (try
-    (let [raw (slurp file-path)
-          {:keys [frontmatter]} (yaml/parse-frontmatter raw)
-          name (str (or (get frontmatter "name") (fs/file-name (fs/parent file-path))))
+    (let [{:keys [frontmatter body]} (yaml/parse-frontmatter raw)
+          name (str (or (get frontmatter "name") fallback-name))
           description (some-> (get frontmatter "description") str str/trim)
           errors (concat (if (str/blank? description)
                            ["description is required"]
                            (validate-description description))
                          (validate-name name))
-          diagnostics (mapv #(hash-map :type "warning" :message % :path (str file-path)) errors)]
+          diagnostics (mapv #(hash-map :type "warning" :message % :path (str location)) errors)]
       (if (str/blank? description)
         {:skill nil :diagnostics diagnostics}
         {:skill {:name name
                  :description description
-                 :file-path (str file-path)
-                 :base-dir (str (fs/parent file-path))
+                 :body body
+                 :location (str location)
+                 :extension extension
+                 :file-path (when (nil? extension) (str location))
+                 :base-dir (when (nil? extension)
+                             (str (fs/parent (str location))))
                  :disable-model-invocation (true? (get frontmatter "disable-model-invocation"))}
          :diagnostics diagnostics}))
+    (catch Exception e
+      {:skill nil
+       :diagnostics [{:type "warning" :message (ex-message e) :path (str location)}]})))
+
+(defn register-skill!
+  "Register a programmatic skill (no backing file, so the model cannot read it
+   on demand — pi has no equivalent; kept for kmet's API and tests)."
+  [name description]
+  (swap! skills conj {:name name
+                      :description description
+                      :body nil
+                      :location nil
+                      :extension nil
+                      :file-path nil
+                      :base-dir nil
+                      :disable-model-invocation false}))
+
+(defn- load-skill-from-file
+  "Load a skill from a SKILL.md (or flat .md) file. Returns {:skill
+   map-or-nil :diagnostics [warning-maps]}."
+  [file-path]
+  (try
+    (parse-skill-content (slurp file-path)
+                         (fs/file-name (fs/parent file-path))
+                         (str file-path)
+                         nil)
     (catch Exception e
       {:skill nil
        :diagnostics [{:type "warning" :message (ex-message e) :path (str file-path)}]})))
@@ -105,6 +137,19 @@
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 
+(defn- add-skill!
+  "Add SKILL to the registry unless its name collides (first wins, pi).
+   Returns a collision diagnostic map, or nil."
+  [skill location]
+  (if-let [existing (first (filter #(= (:name %) (:name skill)) @skills))]
+    {:type "collision"
+     :message (str "name \"" (:name skill) "\" collision")
+     :path (str location)
+     :winner-path (str (or (:location existing) (:file-path existing)))
+     :loser-path (str location)}
+    (do (swap! skills conj skill)
+        nil)))
+
 (defn clear-skills!
   "Remove all loaded skills and reset the registry (pi: resourceLoader.reload
    re-discovers from scratch). Used by /reload."
@@ -124,29 +169,38 @@
             collisions (volatile! [])]
         (doseq [{:keys [skill]} results]
           (when skill
-            (if-let [existing (first (filter #(= (:name %) (:name skill)) @skills))]
-              (vswap! collisions conj
-                      {:type "collision"
-                       :message (str "name \"" (:name skill) "\" collision")
-                       :path (:file-path skill)
-                       :winner-path (:file-path existing)
-                       :loser-path (:file-path skill)})
-              (swap! skills conj skill))))
+            (when-let [collision (add-skill! skill (:file-path skill))]
+              (vswap! collisions conj collision))))
         (let [diagnostics (into (vec (mapcat :diagnostics results)) @collisions)]
           (doseq [{:keys [type message path]} diagnostics]
             (binding [*out* *err*]
               (println (str "Warning: skill " type " at " path ": " message))))
           diagnostics)))))
 
-(defn register-skill!
-  "Register a programmatic skill (no backing file, so the model cannot read it
-   on demand — pi has no equivalent; kept for kmet's API and tests)."
-  [name description]
-  (swap! skills conj {:name name
-                      :description description
-                      :file-path nil
-                      :base-dir nil
-                      :disable-model-invocation false}))
+(defn register-extension-skill!
+  "Register a skill from an extension's bundled SKILL.md content string
+   (jar-ext.md §5 — the extension reads its own resource via io/resource
+   and hands the content over, so jarred skills need no filesystem path).
+   OPTS: :location (display locator, e.g. `my-ext:skills/mcp/SKILL.md`),
+   :fallback-name (when frontmatter has no name), :extension (owner name).
+   Same validation/collision rules as dir loading (first wins). Returns a
+   deregister fn removing exactly this skill."
+  [raw-content {:keys [location fallback-name extension]}]
+  (let [{:keys [skill diagnostics]} (parse-skill-content raw-content
+                                                         (or fallback-name
+                                                             (str (or extension "skill")))
+                                                         (or location
+                                                             (str (or extension "skill")))
+                                                         extension)]
+    (doseq [{:keys [type message path]} diagnostics]
+      (binding [*out* *err*]
+        (println (str "Warning: skill " type " at " path ": " message))))
+    (when skill
+      (when-let [collision (add-skill! skill location)]
+        (binding [*out* *err*]
+          (println (str "Warning: skill collision at " (:path collision) ": "
+                        (:message collision))))))
+    (fn [] (swap! skills (fn [ss] (remove #(identical? % skill) ss))))))
 
 (defn get-skills
   []
@@ -158,8 +212,10 @@
 
 (defn expand-skill-command
   "Expand /skill:name args into the skill body wrapped in a <skill> block
-   (pi: agent-session _expandSkillCommand). Returns text unchanged when not
-   a /skill: command, the skill is unknown, or the file cannot be read."
+   (pi: agent-session _expandSkillCommand). Extension skills disclose from
+   their in-memory body; file skills re-slurp their SKILL.md. Returns text
+   unchanged when not a /skill: command, the skill is unknown, or the file
+   cannot be read."
   [text]
   (if-not (str/starts-with? text "/skill:")
     text
@@ -168,9 +224,15 @@
           args (if (nil? space-idx) "" (str/trim (subs text (inc space-idx))))]
       (if-let [skill (get-skill skill-name)]
         (try
-          (let [body (str/trim (:body (yaml/parse-frontmatter (slurp (:file-path skill)))))
-                block (str "<skill name=\"" (:name skill) "\" location=\"" (:file-path skill) "\">\n"
-                           "References are relative to " (:base-dir skill) ".\n\n"
+          (let [raw-body (or (:body skill)
+                             (:body (yaml/parse-frontmatter (slurp (:file-path skill)))))
+                body (str/trim (or raw-body ""))
+                location (or (:location skill) (:file-path skill))
+                refs-line (if (:extension skill)
+                            "This skill is self-contained; it has no skill directory.\n\n"
+                            (str "References are relative to " (:base-dir skill) ".\n\n"))
+                block (str "<skill name=\"" (:name skill) "\" location=\"" location "\">\n"
+                           refs-line
                            body "\n</skill>")]
             (if (seq args) (str block "\n\n" args) block))
           (catch Exception e
@@ -211,14 +273,15 @@
       (str "\n\nThe following skills provide specialized instructions for specific tasks.\n"
            "Use the read tool to load a skill's file when the task matches its description.\n"
            "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n"
+           "Extension skills (locations like `ext-name:relative/path`) are self-contained — disclose them with `/skill:name` expansion instead of the read tool; they have no skill directory.\n"
            "\n<available_skills>\n"
            (str/join "\n"
                      (map (fn [s]
                             (str "  <skill>\n"
                                  "    <name>" (escape-xml (:name s)) "</name>\n"
                                  "    <description>" (escape-xml (:description s)) "</description>\n"
-                                 (when (:file-path s)
-                                   (str "    <location>" (escape-xml (:file-path s)) "</location>\n"))
+                                 (when (or (:location s) (:file-path s))
+                                   (str "    <location>" (escape-xml (or (:location s) (:file-path s))) "</location>\n"))
                                  "  </skill>"))
                           visible))
            "\n</available_skills>"))))

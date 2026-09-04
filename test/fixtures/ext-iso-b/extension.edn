@@ -1,1 +1,1 @@
-{:name "iso-b" :entry "src/main.clj"}
+{:name "iso-b", :entry iso-b.main}

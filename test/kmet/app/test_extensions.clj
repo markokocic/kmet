@@ -4,6 +4,7 @@
    (kmet.extension/create-nullable-api) for testing extensions in isolation."
   (:require [clojure.test :as t :refer [testing]]
             [clojure.string :as str]
+            [clojure.java.io :as io]
             [babashka.fs :as fs]
             [kmet.extension :as ext]
             [kmet.ai.models :as models]
@@ -213,7 +214,8 @@
 
 (t/deftest test-load-manifest-extension-via-symlink
   ;; extension dirs are commonly installed as symlinks into a repo checkout;
-  ;; the ns-file scan must follow the link or every own-file require fails
+  ;; strict ns-path probes resolve through the linked root or every own-file
+  ;; require fails
   ;; (skipped on Windows: creating symlinks needs SeCreateSymbolicLinkPrivilege)
   (when-not (fs/windows?)
     (extensions/clear-extensions!)
@@ -237,9 +239,9 @@
   (extensions/clear-extensions!)
   (let [dir "target/test-ext-slurp"]
     (fs/delete-tree dir)
-    (fs/create-dirs (str dir "/src"))
-    (spit (str dir "/extension.edn") "{:name \"slurp-ext\" :entry \"src/main.clj\"}\n")
-    (spit (str dir "/src/main.clj")
+    (fs/create-dirs (str dir "/slurp_ext"))
+    (spit (str dir "/extension.edn") "{:name \"slurp-ext\" :entry slurp-ext.main}\n")
+    (spit (str dir "/slurp_ext/main.clj")
           (str "(ns slurp-ext.main\n  (:require [kmet.extension :as ext]))\n"
                "(defn init [api]\n"
                "  (ext/register-tool! api {:name \"slurp-tool\"\n"
@@ -267,9 +269,9 @@
   (extensions/clear-extensions!)
   (let [dir "target/test-ext-tools-reader"]
     (fs/delete-tree dir)
-    (fs/create-dirs (str dir "/src"))
-    (spit (str dir "/extension.edn") "{:name \"tr-ext\" :entry \"src/main.clj\"}\n")
-    (spit (str dir "/src/main.clj")
+    (fs/create-dirs (str dir "/tr_ext"))
+    (spit (str dir "/extension.edn") "{:name \"tr-ext\" :entry tr-ext.main}\n")
+    (spit (str dir "/tr_ext/main.clj")
           (str "(ns tr-ext.main\n  (:require [kmet.extension :as ext]\n            [clojure.tools.reader :as r]\n            [clojure.tools.reader.reader-types :as rt]))\n"
                "(defn init [api]\n"
                "  (ext/register-tool! api {:name \"tr-tool\"\n"
@@ -296,12 +298,12 @@
   (extensions/clear-extensions!)
   (let [dir "target/test-ext-spec-file-seq"]
     (fs/delete-tree dir)
-    (fs/create-dirs (str dir "/src"))
+    (fs/create-dirs (str dir "/spec_ext"))
     (fs/create-dirs (str dir "/data"))
     (spit (str dir "/data/a.clj") "x")
     (spit (str dir "/data/b.clj") "y")
-    (spit (str dir "/extension.edn") "{:name \"spec-ext\" :entry \"src/main.clj\"}\n")
-    (spit (str dir "/src/main.clj")
+    (spit (str dir "/extension.edn") "{:name \"spec-ext\" :entry spec-ext.main}\n")
+    (spit (str dir "/spec_ext/main.clj")
           (str "(ns spec-ext.main\n"
                "  (:require [kmet.extension :as ext]\n"
                "            [clojure.spec.alpha :as s]\n"
@@ -352,9 +354,9 @@
   (extensions/clear-extensions!)
   (let [dir "target/test-ext-missing-req"]
     (fs/delete-tree dir)
-    (fs/create-dirs (str dir "/src"))
-    (spit (str dir "/extension.edn") "{:name \"missing-req\" :entry \"src/main.clj\"}\n")
-    (spit (str dir "/src/main.clj")
+    (fs/create-dirs (str dir "/missing_req"))
+    (spit (str dir "/extension.edn") "{:name \"missing-req\" :entry missing-req.main}\n")
+    (spit (str dir "/missing_req/main.clj")
           "(ns missing-req.main\n  (:require [no.such.namespace]))\n(defn init [api] nil)\n")
     (let [result (extensions/load-extension! dir)]
       (t/is (str/includes? (:error result) "no.such.namespace")
@@ -505,19 +507,19 @@
                    (fs/delete-tree dir)
                    result)))]
     (testing "a manifest-dir extension's own internal namespaces load
-              regardless of prefix (indexed from the extension dir)"
+              regardless of prefix (strict ns-path lookup)"
       (let [dir "target/test-ext-internal-ns"]
-        (fs/create-dirs (str dir "/src/kmet/extensions/myext"))
+        (fs/create-dirs (str dir "/kmet/extensions/myext"))
         (spit (str dir "/extension.edn")
-              "{:name \"internal-ns\" :entry \"src/kmet/extensions/myext/core.clj\"}\n")
-        (spit (str dir "/src/kmet/extensions/myext/core.clj")
+              "{:name \"internal-ns\" :entry kmet.extensions.myext.core}\n")
+        (spit (str dir "/kmet/extensions/myext/core.clj")
               (str "(ns kmet.extensions.myext.core\n"
                    "  (:require [kmet.extension :as ext]\n"
                    "            [kmet.extensions.myext.internal :as internal]))\n"
                    "(defn init [api]\n"
                    "  (when-not (= 42 (internal/answer))\n"
                    "    (throw (ex-info \"internal require failed\" {}))))\n"))
-        (spit (str dir "/src/kmet/extensions/myext/internal.clj")
+        (spit (str dir "/kmet/extensions/myext/internal.clj")
               "(ns kmet.extensions.myext.internal)\n(defn answer [] 42)\n")
         (let [result (extensions/load-extension! dir)]
           (fs/delete-tree dir)
@@ -575,10 +577,10 @@
   (extensions/clear-extensions!)
   (let [dir "target/test-ext-bad-deps"]
     (fs/create-dirs dir)
-    (spit (str dir "/extension.edn") "{:name \"bad-deps\" :entry \"src/main.clj\"}\n")
+    (spit (str dir "/extension.edn") "{:name \"bad-deps\" :entry bad-deps.main}\n")
     (spit (str dir "/deps.edn") "{:deps {org.clojure/does-not-exist {:mvn/version \"9.9.9\"}}}\n")
-    (fs/create-dirs (str dir "/src"))
-    (spit (str dir "/src/main.clj")
+    (fs/create-dirs (str dir "/bad_deps"))
+    (spit (str dir "/bad_deps/main.clj")
           "(ns bad-deps.main (:require [org.clojure.does-not-exist :as bad]))\n(defn init [api] nil)\n")
     (testing "an unresolvable dep fails the load without killing the process"
       (let [result (extensions/load-extension! dir)]
@@ -834,4 +836,125 @@
         (extensions/clear-extensions!)
         (skills/clear-skills!)
         (prompts/clear-prompt-templates!)
+        (fs/delete-tree dir)))))
+
+(t/deftest test-jar-extension-load-resource-unload
+  ;; jar distribution (jar-ext.md §1): code served from the archive without
+  ;; expansion (per-call ZipFile), resources via the shadowed io/resource,
+  ;; :extension-dir nil, unload clean.
+  (extensions/clear-extensions!)
+  (let [dir "target/test-ext-jar-src"
+        jar "target/test-ext-jar.jar"]
+    (fs/delete-tree dir)
+    (fs/delete-if-exists jar)
+    (fs/create-dirs (str dir "/jar_ext"))
+    (spit (str dir "/extension.edn") "{:name \"jar-ext\" :entry jar-ext.main}\n")
+    (spit (str dir "/jar_ext/main.clj")
+          (str "(ns jar-ext.main\n"
+               "  (:require [kmet.extension :as ext]\n"
+               "            [jar-ext.helper :as helper]\n"
+               "            [clojure.java.io :as io]))\n"
+               "(defn init [api]\n"
+               "  (ext/register-tool! api {:name \"jar-ext-tool\"\n"
+               "                           :description \"from a jar\"\n"
+               "                           :execute (fn [_] {:content (str (helper/answer)\n"
+               "                                                          \"|\" (slurp (io/resource \"data.txt\")))})}))\n"))
+    (spit (str dir "/jar_ext/helper.clj")
+          "(ns jar-ext.helper)\n(defn answer [] \"jar-ok\")\n")
+    (spit (str dir "/data.txt") "bundled")
+    (try
+      (with-open [zos (java.util.zip.ZipOutputStream. (io/output-stream jar))]
+        (doseq [rel ["extension.edn" "data.txt" "jar_ext/main.clj" "jar_ext/helper.clj"]]
+          (.putNextEntry zos (java.util.zip.ZipEntry. rel))
+          (io/copy (io/file (str dir "/" rel)) zos)
+          (.closeEntry zos)))
+      (let [result (extensions/load-extension! jar)]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+        (t/is (= "jar-ok|bundled" (:content (tools/execute-tool "jar-ext-tool" {})))
+              "own namespaces resolve + io/resource reads the jar entry")
+        (t/is (= :jar (:kind (first (extensions/get-loaded-extensions)))))
+        (t/is (nil? (:extension-dir (first (extensions/get-loaded-extensions))))
+              ":extension-dir is nil for jars"))
+      (testing ".zip suffix loads identically"
+        (let [zip "target/test-ext-jar.zip"]
+          (fs/copy jar zip)
+          (extensions/unload-all-extensions!)
+          (let [result (extensions/load-extension! zip)]
+            (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+            (t/is (= "jar-ok|bundled" (:content (tools/execute-tool "jar-ext-tool" {})))))
+          (fs/delete-if-exists zip)))
+      (finally
+        (extensions/unload-all-extensions!)
+        (t/is (nil? (tools/get-tool "jar-ext-tool")) "unload removes the tool")
+        (fs/delete-tree dir)
+        (fs/delete-if-exists jar)))))
+
+(t/deftest test-extension-dir-resource-fallback
+  ;; dir extensions keep :extension-dir + a working io/resource file-URL
+  ;; fallback (jar-ext.md §4 — same test jar layout, unpacked).
+  (extensions/clear-extensions!)
+  (let [dir "target/test-ext-dir-resource"]
+    (fs/delete-tree dir)
+    (fs/create-dirs (str dir "/dir_ext"))
+    (spit (str dir "/extension.edn") "{:name \"dir-ext\" :entry dir-ext.main}\n")
+    (spit (str dir "/dir_ext/main.clj")
+          (str "(ns dir-ext.main\n"
+               "  (:require [kmet.extension :as ext]\n"
+               "            [clojure.java.io :as io]))\n"
+               "(defn init [api]\n"
+               "  (ext/register-tool! api {:name \"dir-ext-tool\"\n"
+               "                           :description \"from a dir\"\n"
+               "                           :execute (fn [_] {:content (slurp (io/resource \"data.txt\"))})}))\n"))
+    (spit (str dir "/data.txt") "dir-data")
+    (try
+      (let [result (extensions/load-extension! dir)]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+        (t/is (= "dir-data" (:content (tools/execute-tool "dir-ext-tool" {}))))
+        (t/is (= (str (fs/canonicalize dir))
+                 (str (fs/canonicalize (:extension-dir (first (extensions/get-loaded-extensions))))))))
+      (finally
+        (extensions/unload-all-extensions!)
+        (fs/delete-tree dir)))))
+
+(t/deftest test-extension-self-registers-skill-and-prompt
+  ;; jar-ext.md §5: extensions self-register bundled content through
+  ;; ext/register-skill! / ext/register-prompt! (no host enumeration);
+  ;; unload deregisters exactly what the extension added.
+  (extensions/clear-extensions!)
+  (skills/clear-skills!)
+  (prompts/clear-prompt-templates!)
+  (let [dir "target/test-ext-selfreg"]
+    (fs/delete-tree dir)
+    (fs/create-dirs (str dir "/selfreg"))
+    (spit (str dir "/SKILL.md")
+          "---\nname: selfreg-skill\ndescription: Self-registered skill\n---\nSkill body here")
+    (spit (str dir "/tpl.md")
+          "---\ndescription: Self-registered template\n---\nTemplate body $1")
+    (spit (str dir "/extension.edn") "{:name \"selfreg\" :entry selfreg.main}\n")
+    (spit (str dir "/selfreg/main.clj")
+          (str "(ns selfreg.main\n"
+               "  (:require [kmet.extension :as ext]\n"
+               "            [clojure.java.io :as io]))\n"
+               "(defn init [api]\n"
+               "  (ext/register-skill! api (slurp (io/resource \"SKILL.md\"))\n"
+               "                        {:location \"selfreg:SKILL.md\"})\n"
+               "  (ext/register-prompt! api {:name \"selfreg-tpl\"\n"
+               "                             :content (slurp (io/resource \"tpl.md\"))\n"
+               "                             :location \"selfreg:tpl.md\"}))\n"))
+    (try
+      (let [result (extensions/load-extension! dir)]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+        (t/is (= "Skill body here" (:body (skills/get-skill "selfreg-skill"))))
+        (t/is (= "selfreg:SKILL.md" (:location (skills/get-skill "selfreg-skill"))))
+        (t/is (str/includes? (skills/expand-skill-command "/skill:selfreg-skill")
+                             "Skill body here")
+              "expansion discloses from the in-memory body")
+        (t/is (= "Template body hi" (prompts/expand-prompt-template "/selfreg-tpl hi"
+                                                                    (prompts/get-prompt-templates)))))
+      (finally
+        (skills/clear-skills!)
+        (prompts/clear-prompt-templates!)
+        (extensions/unload-all-extensions!)
+        (t/is (nil? (skills/get-skill "selfreg-skill")) "unload removes the skill")
+        (t/is (nil? (prompts/get-prompt-template "selfreg-tpl")) "unload removes the template")
         (fs/delete-tree dir)))))

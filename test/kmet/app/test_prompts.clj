@@ -178,3 +178,15 @@
       (prompts/clear-prompt-templates!)
       (t/is (nil? (prompts/get-prompt-template "clear-me")))
       (finally (fs/delete-tree tmp-dir)))))
+
+(t/deftest test-register-prompt-template
+  (prompts/clear-prompt-templates!)
+  (let [dereg (prompts/register-prompt-template!
+               {:name "ext-tpl" :content "---\ndescription: Ext template\n---\nHello $1"
+                :location "my-ext:prompts/ext-tpl.md" :extension "my-ext"})]
+    (t/is (some? (prompts/get-prompt-template "ext-tpl")))
+    (t/is (= "Hello hi" (prompts/expand-prompt-template "/ext-tpl hi"
+                                                        (prompts/get-prompt-templates))))
+    (dereg)
+    (t/is (nil? (prompts/get-prompt-template "ext-tpl")) "deregister removes the template"))
+  (prompts/clear-prompt-templates!))

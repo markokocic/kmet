@@ -49,6 +49,8 @@
 ;; ─── API key docs ─────────────────────────────────────────────────────────
 ;; The api map passed to init/shutdown carries:
 ;;   :extension-name, :extension-path, :extension-dir   — identity/context
+;;     (:extension-dir is nil for jar/zip artifacts — a jar has no directory;
+;;     read bundled resources via clojure.java.io/resource instead)
 ;;   :register-command! :unregister-command! :get-commands
 ;;   :register-tool! :unregister-tool! :get-all-tools
 ;;   :get-active-tools :set-active-tools
@@ -58,6 +60,7 @@
 ;;   :register-flag! :get-flag
 ;;   :register-shortcut! :register-markdown-transformer! :send-message!
 ;;   :register-entry-renderer! :register-message-renderer!
+;;   :register-skill! :register-prompt!                 — bundled resources
 ;;   :set-model :get-thinking-level :set-thinking-level :send-user-message
 ;;   :exec
 ;;   :ui      — map of UI capabilities — only host-owned bridges: :custom
@@ -112,6 +115,26 @@
   ((:register-entry-renderer! api) custom-type renderer))
 (defn register-message-renderer! [api custom-type renderer]
   ((:register-message-renderer! api) custom-type renderer))
+
+(defn register-skill!
+  "Register a skill from the extension's bundled SKILL.md content string.
+   Read the resource with clojure.java.io/resource (works for dir and
+   jar/zip artifacts alike) and hand the content over — the host parses,
+   validates and stores the body in memory, so jarred skills need no
+   filesystem path. OPTS: :location (display locator, e.g.
+   `my-ext:skills/mcp/SKILL.md`), :fallback-name (when frontmatter has no
+   name). Jar skills must be self-contained single files (no relative
+   refs). Returns a deregister fn."
+  [api raw-content & [opts]]
+  ((:register-skill! api) raw-content opts))
+
+(defn register-prompt!
+  "Register a prompt template from the extension's bundled .md content.
+   PROMPT: {:name :content ...} (+ optional :location display locator).
+   Same content contract as register-skill!: self-contained, no relative
+   refs for jar/zip artifacts. Returns a deregister fn."
+  [api prompt & [opts]]
+  ((:register-prompt! api) prompt opts))
 
 (defn set-model [api model] ((:set-model api) model))
 (defn get-thinking-level [api] ((:get-thinking-level api)))
@@ -204,6 +227,7 @@
      {:commands {name cmd} :tools {name tool}
       :handlers {event-type [handler ...]} :flags {name opts}
       :entry-renderers {custom-type renderer} :message-renderers {custom-type renderer}
+      :skills [{:content opts}] :prompts [prompt]
       :tool-call-hooks [...] :tool-result-hooks [...]
       :input-hooks [...] :before-agent-start-hooks [...]
       :ui-calls [args...] :emitted [events...] :model-calls [...]}
@@ -211,6 +235,7 @@
   []
   (let [state (atom {:commands {} :tools {} :handlers {}
                      :flags {} :entry-renderers {} :message-renderers {}
+                     :skills [] :prompts []
                      :tool-call-hooks [] :tool-result-hooks []
                      :input-hooks [] :before-agent-start-hooks []
                      :ui-calls [] :emitted [] :model-calls []})
@@ -267,6 +292,14 @@
              :register-message-renderer! (fn [custom-type renderer]
                                            (swap! state assoc-in [:message-renderers custom-type] renderer)
                                            (fn [] (swap! state update :message-renderers dissoc custom-type)))
+             :register-skill! (fn [raw-content & [opts]]
+                                (swap! state update :skills conj {:content raw-content :opts opts})
+                                (fn [] (swap! state update :skills
+                                              (fn [ss] (remove #(= raw-content (:content %)) ss)))))
+             :register-prompt! (fn [prompt & [opts]]
+                                 (swap! state update :prompts conj (assoc prompt :opts opts))
+                                 (fn [] (swap! state update :prompts
+                                               (fn [ps] (remove #(= prompt (dissoc % :opts)) ps)))))
              :set-model (fn [model]
                           (swap! state update :model-calls conj [:set-model model])
                           (boolean model))

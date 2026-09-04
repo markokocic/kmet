@@ -8,11 +8,13 @@
    and the interactive/loop surfaces.
 
    An extension is a .clj file defining (defn init [api]) in its namespace,
-   or a directory containing an extension.edn manifest:
-     {:name \"my-ext\" :entry \"src/my_ext.clj\"}
-   The manifest lists only the initial namespace (:entry); everything else
-   is required from there. Each extension evaluates in its own isolated SCI
-   context: internal namespaces are served from the extension directory,
+   a directory containing an extension.edn manifest, or a .jar/.zip archive
+   with the same layout at its root:
+     {:name \"my-ext\" :entry my.ext.main}
+   The manifest lists only the initial namespace (:entry, a symbol);
+   everything else is required from there. Each extension evaluates in its
+   own isolated SCI context: internal namespaces are served from the
+   extension artifact (dir or jar) by strict ns-path lookup,
    declared libraries from its deps.edn (resolved in-process via
    borkdude.deps) — so
    different extensions can use different versions of the same library, and
@@ -82,18 +84,18 @@
 (install-provider-event-bridges!)
 
 ;; ─── Extension records ────────────────────────────────────────────────────
-(defrecord Extension [name path entry-ns ctx jars api deregister-fns initialized?])
+(defrecord Extension [name path kind entry-ns ctx jars api deregister-fns initialized?])
 
 (defn- extension-dir-of
   "The extension's own directory: for a dir extension :path IS the
    directory; for a single-file extension it's the file, so the dir is its
-   parent. (Was always the parent — wrong for dir extensions, which broke
-   :extension-dir-relative resource discovery like skills/mcp and
-   skills/clojure-edit.)"
+   parent. nil for jar extensions — a jar has no directory; resources are
+   accessed via io/resource instead (see jar-ext.md)."
   [ext]
-  (str (if (fs/directory? (:path ext))
-         (:path ext)
-         (fs/parent (:path ext)))))
+  (when-not (= :jar (:kind ext))
+    (str (if (fs/directory? (:path ext))
+           (:path ext)
+           (fs/parent (:path ext))))))
 
 ;; ─── Registries (the storage; api capabilities wire into these) ──────────
 (defonce ^:private extensions (atom []))
@@ -671,6 +673,20 @@
      :register-message-renderer! (fn [custom-type renderer]
                                    (register-message-renderer! custom-type renderer)
                                    (track (fn [] (swap! message-renderers dissoc custom-type))))
+     :register-skill! (fn [raw-content & [opts]]
+                        ;; jar-ext.md §5: the extension reads its own bundled
+                        ;; SKILL.md via io/resource and hands the content over,
+                        ;; so jarred skills need no filesystem path
+                        (let [dereg (skills/register-extension-skill!
+                                     raw-content
+                                     (assoc opts :extension name))]
+                          (track dereg)
+                          dereg))
+     :register-prompt! (fn [prompt & [opts]]
+                         (let [dereg (prompts/register-prompt-template!
+                                      (assoc (merge opts prompt) :extension name))]
+                           (track dereg)
+                           dereg))
      :set-model set-model
      :get-thinking-level get-thinking-level
      :set-thinking-level set-thinking-level
@@ -856,14 +872,140 @@
     kmet.libs.yaml
     kmet.libs.clipboard])
 
+(defn- ns-path
+  "The classpath path for NS-SYM: namespace-munged (dashes → underscores),
+   dots as slashes — matching how jars and source dirs store files."
+  [ns-sym]
+  (str/replace (namespace-munge (str ns-sym)) "." "/"))
+
+(def ^:private source-extensions
+  "Source file suffixes probed (in order) for a strict ns-path lookup."
+  [".cljc" ".clj" ".bb"])
+
+(defn- entry-name-ok?
+  "True when RAW (a jar entry name) is a safe relative path: not absolute,
+   no .. segments. Normalizes \\ → / first (the zip spec allows both;
+   mirrors kmet.libs.archive/entry-target)."
+  [raw]
+  (let [rel (str/replace (str raw) "\\" "/")]
+    (not (or (str/blank? rel)
+             (str/starts-with? rel "/")
+             (some #(= ".." %) (str/split rel #"/"))))))
+
+(defn- jar-entry-source
+  "The source string of ENTRY-NAME inside the zip at JAR-PATH, or nil.
+   Opens and closes the ZipFile per call — no handles are held, so unload
+   needs no cleanup."
+  [jar-path entry-name]
+  (let [jar (java.util.jar.JarFile. (str jar-path))]
+    (try
+      (when-let [entry (.getJarEntry jar ^String entry-name)]
+        (when-not (.isDirectory entry)
+          (with-open [is (.getInputStream jar entry)]
+            (slurp is))))
+      (finally (.close jar)))))
+
+(defn- jar-entry-names
+  "The set of safe relative entry names in the zip at JAR-PATH."
+  [jar-path]
+  (let [jar (java.util.jar.JarFile. (str jar-path))]
+    (try
+      (into #{}
+            (comp (map (fn [^java.util.jar.JarEntry e] (.getName e)))
+                  (map #(str/replace % "\\" "/"))
+                  (filter entry-name-ok?))
+            (enumeration-seq (.entries jar)))
+      (finally (.close jar)))))
+
+(defn- jar-ns-set
+  "The set of namespace symbols the jar at JAR-PATH provides (reverse-mapped
+   from its safe .clj/.cljc/.bb entry names)."
+  [jar-path]
+  (into #{}
+        (comp (filter #(re-find #"\.(cljc|clj|bb)$" %))
+              (map #(str/replace % #"\.(cljc|clj|bb)$" ""))
+              (map #(str/replace % "_" "-"))
+              (map #(str/replace % "/" "."))
+              (map symbol))
+        (jar-entry-names jar-path)))
+
+(defn- artifact-source
+  "The source of NS-SYM in ARTIFACT ({:kind :dir/:jar :root}), or nil.
+   Strict ns-path lookup: dirs probe <root>/<ns-path>.<ext> (direct fs
+   probes need no follow-links handling — symlinked roots resolve through
+   the fs); jars probe entry names through a per-call ZipFile. Returns
+   {:source :display}."
+  [{:keys [kind root]} ns-sym]
+  (let [base (ns-path ns-sym)]
+    (if (= :jar kind)
+      (some (fn [ext]
+              (when-let [source (jar-entry-source root (str base ext))]
+                {:source source :display (str root "!/" base ext)}))
+            source-extensions)
+      (some (fn [ext]
+              (let [f (io/file (str root) (str base ext))]
+                (when (.exists f)
+                  {:source (slurp f) :display (str f)})))
+            source-extensions))))
+
+(defn- artifact-owns-ns?
+  "True when NS-SYM is one of ARTIFACT's own namespaces. Strict layout, so
+   membership derives from paths, never file contents: dirs probe the fs,
+   jars check JAR-NS-SET (the entry-name set collected once at load; nil
+   for dirs)."
+  [{:keys [kind root]} jar-ns-set ns-sym]
+  (if (= :jar kind)
+    (contains? jar-ns-set ns-sym)
+    (boolean (some (fn [ext]
+                     (.exists (io/file (str root) (str (ns-path ns-sym) ext))))
+                   source-extensions))))
+
+(defn- deps-of-root
+  "The :deps map from deps.edn under DIR (an artifact-root dir file), or nil."
+  [dir]
+  (let [f (io/file (str dir) "deps.edn")]
+    (when (.exists f)
+      (:deps (edn/read-string (slurp f))))))
+
+(defn- extension-resource-fn
+  "A clojure.java.io/resource replacement scoped to one extension artifact:
+   own artifact first (dir: file URL when present; jar: jar:file:...!/entry
+   URL when the entry exists), then the deps.edn closure jars, then the
+   host classpath. Both arities ([path] [path loader] — the loader is
+   ignored). Host slurp opens file: and jar: URLs via openStream, so
+   extension code reads bundled resources with no extraction."
+  [artifact deps-resolver]
+  (let [host-resource (deref #'clojure.java.io/resource)
+        own (fn [rel]
+              (let [{:keys [kind root]} artifact]
+                (if (= :jar kind)
+                  (when (contains? (jar-entry-names root) rel)
+                    (java.net.URL. (str "jar:" (.toURL (.toURI (io/file root))) "!/" rel)))
+                  (let [f (io/file (str root) rel)]
+                    (when (.exists f)
+                      (io/as-url f))))))]
+    (letfn [(find-it [path]
+              (let [rel (str path)]
+                (or (own rel)
+                    (some (fn [j]
+                            (when (jar-entry-source j rel)
+                              (java.net.URL. (str "jar:" (.toURL (.toURI (io/file j))) "!/" rel))))
+                          (when deps-resolver (deps-resolver)))
+                    (host-resource rel))))]
+      (fn
+        ([path] (find-it path))
+        ([path _loader] (find-it path))))))
+
 (defn- build-context-namespaces
   "The shared namespace map for extension contexts: kmet.extension (the
    contract), the clojure.*/babashka.* builtins (incl. slurp/spit, which
    SCI's builtin clojure.core lacks but bb's env has), and the shared
    library layers kmet.tui.* and kmet.libs.*. Rebuilt per context so
    namespaces required since the last build (the shared library layers)
-   are included."
-  []
+   are included. RESOURCE-FN replaces clojure.java.io/resource with a
+   per-extension artifact-scoped lookup (io/resource shadowing — see
+   extension-resource-fn)."
+  [& [resource-fn]]
   (into {'kmet.extension (ns-interns 'kmet.extension)
          ;; slurp/spit/file-seq are absent from SCI's builtin clojure.core —
          ;; inject the host fns so extensions can read/write files directly
@@ -903,66 +1045,79 @@
                                  (= n "kmet.app.ui.tool-renderers")
                                  (= n "kmet.app.keybindings")
                                  (str/starts-with? n "kmet.libs.")))
-                    [(ns-name ns-obj) (ns-interns ns-obj)])))
+                    [(ns-name ns-obj)
+                     (if (and (= n "clojure.java.io") resource-fn)
+                       (assoc (ns-interns ns-obj) 'resource resource-fn)
+                       (ns-interns ns-obj))])))
               (all-ns))))
 
-(defn- read-ns-form
-  "The (ns ...) form at the start of FILE, or nil when the file doesn't
-   start with one (or can't be read)."
-  [file]
+(defn- ns-form-of-source
+  "The (ns ...) form at the start of the SOURCE string, or nil when there
+   is none (or it can't be read)."
+  [source]
   (try
-    (with-open [rdr (java.io.PushbackReader. (io/reader file))]
+    (with-open [rdr (java.io.PushbackReader. (io/reader (.getBytes ^String source "UTF-8")))]
       (let [form (read rdr)]
         (when (and (list? form) (= 'ns (first form)))
           form)))
     (catch Exception _ nil)))
 
-(defn- read-ns-sym
-  "The namespace symbol of a file's (ns ...) form, or nil."
-  [file]
-  (some-> (read-ns-form file) second))
-
-(defn- scan-ns-files
-  "Map namespace symbol → file for every .clj file under DIR with a
-   (ns ...) form. Follows symlinks — extension dirs are commonly installed
-   as symlinks into a dotfiles/repo checkout, and the glob walk skips them
-   by default (leaving the entry's requires unresolvable)."
-  [dir]
-  (reduce (fn [acc f]
-            (let [f (io/file (str f))]
-              (if-let [ns-sym (read-ns-sym f)]
-                (assoc acc ns-sym f)
-                acc)))
-          {}
-          (fs/glob dir "**/*.clj" {:follow-links true})))
+(defn- jar-archive?
+  "True when F is a regular .jar/.zip file path."
+  [f path]
+  (and (fs/regular-file? f)
+       (let [lower (str/lower-case (str path))]
+         (or (str/ends-with? lower ".jar")
+             (str/ends-with? lower ".zip")))))
 
 (defn- resolve-extension
-  "Resolve PATH into {:name str :entry io.File}. A directory must contain
-   extension.edn {:name :entry} — the manifest lists only the initial
-   namespace; a plain file is the entry itself."
+  "Resolve PATH into {:name str :kind :file/:dir/:jar :artifact map-or-nil
+   :entry-ns symbol-or-nil :file io.File}. :artifact ({:kind :dir/:jar
+   :root str}) is the strict-layout root for manifest extensions; :entry-ns
+   is the manifest :entry symbol. A directory must contain extension.edn;
+   a jar must carry it at its root. A plain file is the entry itself
+   (:entry-ns nil — its ns is read from the file at load)."
   [path]
   (let [f (io/file path)]
-    (if (.isDirectory f)
+    (cond
+      (jar-archive? f path)
+      (let [entries (jar-entry-names (str f))]
+        (when-not (contains? entries "extension.edn")
+          (throw (ex-info (str "Extension archive " path " has no extension.edn")
+                          {:path path})))
+        (let [m (edn/read-string (jar-entry-source (str f) "extension.edn"))
+              entry-ns (:entry m)]
+          (when-not (symbol? entry-ns)
+            (throw (ex-info (str "extension.edn :entry must be a namespace symbol, got: "
+                                 (pr-str entry-ns))
+                            {:path path :manifest m})))
+          {:name (or (:name m) (fs/file-name f))
+           :kind :jar
+           :artifact {:kind :jar :root (str f)}
+           :entry-ns entry-ns}))
+
+      (.isDirectory f)
       (let [manifest-file (io/file f "extension.edn")]
         (when-not (.exists manifest-file)
           (throw (ex-info (str "Extension dir " path " has no extension.edn")
                           {:path path})))
         (let [m (edn/read-string (slurp manifest-file))
-              entry (io/file f (:entry m))]
-          (when-not (and (:entry m) (.exists entry))
-            (throw (ex-info (str "extension.edn :entry not found: " (:entry m))
+              entry-ns (:entry m)]
+          (when-not (symbol? entry-ns)
+            (throw (ex-info (str "extension.edn :entry must be a namespace symbol, got: "
+                                 (pr-str entry-ns))
                             {:path path :manifest m})))
           {:name (or (:name m) (fs/file-name f))
-           :entry entry}))
-      {:name (fs/file-name f)
-       :entry f})))
+           :kind :dir
+           :artifact {:kind :dir :root (str f)}
+           :entry-ns entry-ns}))
 
-(defn- deps-of-dir
-  "The extension dir's :deps map from deps.edn, or nil."
-  [dir]
-  (let [f (io/file (str dir) "deps.edn")]
-    (when (.exists f)
-      (:deps (edn/read-string (slurp f))))))
+      :else
+      {:name (fs/file-name f)
+       :kind :file
+       :artifact nil
+       :entry-ns nil
+       :file f})))
 
 (defn- ns-clause
   "The (:require ...) / (:use ...) / (:require-macros ...) reference form of
@@ -986,19 +1141,20 @@
   "Fail fast with an actionable error when NS-FORM (the entry ns form, or
    any internal extension ns form validated by the load-fn) requires a
    kmet.* namespace outside the shared set (kmet.extension + kmet.tui.* +
-   kmet.libs.*) or the extension's own internal namespaces (NS-FILES, the
-   index built from the extension dir — those resolve regardless of their
-   prefix), or requires babashka.http-client directly (outbound HTTP must
+   kmet.libs.*) or the extension's own internal namespaces (OWNS-NS?, a
+   path-derived predicate — those resolve regardless of their prefix),
+   or requires babashka.http-client directly (outbound HTTP must
    go through kmet.libs.http). Without this the error would be silent:
    sci's require machinery NPEs on a load-fn failure and swallows the
    original exception."
-  [ext-name ns-form tui-namespaces libs-namespaces ns-files]
+  [ext-name ns-form tui-namespaces libs-namespaces owns-ns?]
   (doseq [clause-key [:require :require-macros :use]
           lib (require-libspec-libs (ns-clause ns-form clause-key))]
     (let [s (str lib)]
       (cond
         ;; the extension's own internal namespace — always resolvable
-        (contains? ns-files lib) nil
+        ;; (strict layout: membership derives from paths, not contents)
+        (owns-ns? lib) nil
         (str/starts-with? s "kmet.tui.")
         (when-not (contains? tui-namespaces lib)
           (throw (ex-info
@@ -1125,25 +1281,14 @@
               (reset! jars-atom jars)
               (vreset! resolved jars)))))))
 
-(defn- ns-path
-  "The classpath path for NS-SYM: namespace-munged (dashes → underscores),
-   dots as slashes — matching how jars and source dirs store files."
-  [ns-sym]
-  (str/replace (namespace-munge (str ns-sym)) "." "/"))
-
 (defn- jar-source
-  "The source of NS-SYM inside JAR-PATH, or nil."
+  "The {:file :source} of NS-SYM inside the deps jar at JAR-PATH, or nil."
   [jar-path ns-sym]
-  (let [jar (java.util.jar.JarFile. jar-path)
-        base (ns-path ns-sym)]
-    (try
-      (let [entry (or (.getJarEntry jar (str base ".cljc"))
-                      (.getJarEntry jar (str base ".clj"))
-                      (.getJarEntry jar (str base ".bb")))]
-        (when entry
-          (with-open [is (.getInputStream jar entry)]
-            (slurp is))))
-      (finally (.close jar)))))
+  (let [base (ns-path ns-sym)]
+    (some (fn [ext]
+            (when-let [source (jar-entry-source jar-path (str base ext))]
+              {:file (str jar-path "!/" base ext) :source source}))
+          source-extensions)))
 
 (defn- resource-source
   "The source of NS-SYM from the classpath, or nil."
@@ -1151,30 +1296,28 @@
   (let [base (ns-path ns-sym)]
     (some (fn [ext] (when-let [r (io/resource (str base ext))]
                       {:file (str r) :source (slurp r)}))
-          [".cljc" ".clj" ".bb"])))
+          source-extensions)))
 
 (defn- make-load-fn
   "Per-extension namespace resolver, evaluated inside the extension's
-   context: own files, declared deps (closure resolved lazily on first
+   context: own artifact, declared deps (closure resolved lazily on first
    library require), then bb-bundled classpath namespaces. kmet.* beyond
    the contract and undeclared non-bundled libraries are rejected with
    actionable errors — extensions must depend only on kmet.extension.
 
-   Every own file is require-validated on load (not just the entry
-   namespace): a forbidden/misspelled kmet.* require or a direct
+   Every own-artifact source is require-validated on load (not just the
+   entry namespace): a forbidden/misspelled kmet.* require or a direct
    babashka.http-client require in an internal namespace fails with the
    same actionable messages as the entry check."
-  [ext-name ns-files deps-resolver tui-namespaces libs-namespaces]
+  [ext-name artifact _jar-ns-set owns-ns? deps-resolver tui-namespaces libs-namespaces]
   (fn [{:keys [namespace]}]
-    (or (when-let [f (get ns-files namespace)]
-          (let [source (slurp f)
-                _ (validate-entry-requires! ext-name (read-ns-form f)
-                                            tui-namespaces libs-namespaces
-                                            ns-files)]
-            {:file (str f) :source source}))
+    (or (when-let [{:keys [source display]} (and artifact (artifact-source artifact namespace))]
+          (validate-entry-requires! ext-name (ns-form-of-source source)
+                                    tui-namespaces libs-namespaces
+                                    owns-ns?)
+          {:file display :source source})
         (when-let [jars (and deps-resolver (deps-resolver))]
-          (some (fn [j] (when-let [s (jar-source j namespace)]
-                          {:file (str j) :source s}))
+          (some (fn [j] (jar-source j namespace))
                 jars))
         (when-not (str/starts-with? (str namespace) "kmet.")
           (resource-source namespace))
@@ -1218,30 +1361,39 @@
    imports, shared global namespaces (contract + builtins + the kmet.tui.*
    TUI library + the kmet.libs.* library layer, required first so they
    exist for the injection), and the per-extension load-fn that checks deps
-   — own files, declared deps (resolved lazily on first library require),
-   bb-bundled namespaces, with actionable errors for everything else."
-  [ext-name ns-files deps-resolver]
+   — own artifact, declared deps (resolved lazily on first library require),
+   bb-bundled namespaces, with actionable errors for everything else.
+   RESOURCE-FN replaces clojure.java.io/resource with an artifact-scoped
+   lookup (nil keeps the host resource)."
+  [ext-name artifact jar-ns-set owns-ns? deps-resolver resource-fn]
   (apply require (concat tui-library-namespaces libs-library-namespaces
                          spec-port-namespaces bb-shared-namespaces))
   (sci/init {:classes context-classes
              :imports bb-imports
              :features #{:bb :clj}
-             :namespaces (build-context-namespaces)
-             :load-fn (make-load-fn ext-name ns-files deps-resolver
+             :namespaces (build-context-namespaces resource-fn)
+             :load-fn (make-load-fn ext-name artifact jar-ns-set owns-ns?
+                                    deps-resolver
                                     (shared-tui-namespaces)
                                     (shared-libs-namespaces))}))
 
-(defn- eval-forms!
-  "Evaluate every top-level form of FILE in CTX. *ns* is bound around the
-   whole eval so sci's ns handling cannot leak a namespace change into kmet
-   (a per-form binding would reset sci's current-ns and break alias
+(defn- eval-source!
+  "Evaluate every top-level form of the SOURCE string in CTX. DISPLAY names
+   the origin (file path or jar!/entry) in error messages. *ns* is bound
+   around the whole eval so sci's ns handling cannot leak a namespace change
+   into kmet (a per-form binding would reset sci's current-ns and break alias
    resolution between forms)."
-  [ctx file]
+  [ctx source display]
   (binding [*ns* (or (find-ns 'user) *ns*)]
-    (with-open [r (java.io.PushbackReader. (io/reader file))]
+    (with-open [r (java.io.PushbackReader. (io/reader (.getBytes ^String source "UTF-8")))]
       (loop [form (read r false ::eof)]
         (when-not (= ::eof form)
-          (sci/eval-form ctx form)
+          (try
+            (sci/eval-form ctx form)
+            (catch Exception e
+              (throw (ex-info (str (ex-message e) " (" display ")")
+                              (assoc (ex-data e) :extension-file display)
+                              e))))
           (recur (read r false ::eof)))))))
 
 (defn- extension-var
@@ -1251,20 +1403,21 @@
     (get-in @(:env ctx) [:namespaces entry-ns var-name])))
 
 (defn load-extension!
-  "Load a single extension from PATH (.clj file or dir with extension.edn).
-   Each extension evaluates in its own isolated context; deps.edn jars are
-   served only to that context, so different extensions may pin different
-   versions of the same library. Calls the extension's init with its api.
-   On failure everything is rolled back and {:extension nil :path PATH
-   :error MSG} is returned (PATH names what failed — the result map has no
-   extension name to report)."
+  "Load a single extension from PATH (.clj file, dir with extension.edn,
+   or .jar/.zip archive with the same layout at its root). Each extension
+   evaluates in its own isolated context; deps.edn jars are served only to
+   that context, so different extensions may pin different versions of the
+   same library. Calls the extension's init with its api. On failure
+   everything is rolled back and {:extension nil :path PATH :error MSG} is
+   returned (PATH names what failed — the result map has no extension name
+   to report)."
   [path]
   (let [f (io/file path)
-        {:keys [name entry]} (resolve-extension path)
-        dir (if (fs/directory? f) f (fs/parent f))
+        {:keys [name kind artifact entry-ns file]} (resolve-extension path)
         ext (map->Extension
              {:name name
               :path (str (fs/canonicalize f))
+              :kind kind
               :entry-ns (atom nil)
               :ctx (atom nil)
               :jars (atom [])
@@ -1272,15 +1425,19 @@
               :deregister-fns (atom [])
               :initialized? (atom false)})]
     (try
-      (let [deps (when (fs/directory? f) (deps-of-dir dir))
-            ns-files (when (fs/directory? f) (scan-ns-files (str f)))
-            ctx (create-context name (or ns-files {}) (make-deps-resolver deps (:jars ext)))
-            ;; fail fast on forbidden/misspelled kmet.* requires — sci's
-            ;; require machinery swallows the load-fn error into an NPE
-            _ (validate-entry-requires! name (read-ns-form entry)
-                                        (shared-tui-namespaces)
-                                        (shared-libs-namespaces)
-                                        (or ns-files {}))]
+      (let [deps (when artifact
+                   (if (= :jar kind)
+                     (:deps (edn/read-string
+                             (or (jar-entry-source (:root artifact) "deps.edn") "{}")))
+                     (deps-of-root (:root artifact))))
+            jar-ns-set (when (= :jar kind) (jar-ns-set (:root artifact)))
+            owns-ns? (if artifact
+                       (fn [ns-sym] (artifact-owns-ns? artifact jar-ns-set ns-sym))
+                       (constantly false))
+            deps-resolver (make-deps-resolver deps (:jars ext))
+            ctx (create-context name artifact jar-ns-set owns-ns?
+                                deps-resolver
+                                (when artifact (extension-resource-fn artifact deps-resolver)))]
         (doseq [lib (keys deps)]
           (when (contains? bb-bundled-libs (str lib))
             (binding [*out* *err*]
@@ -1288,22 +1445,46 @@
                        "which babashka bundles — the Maven copy may not run;"
                        "omit it from deps.edn to use the bundled version."))))
         (reset! (:ctx ext) ctx)
-        (eval-forms! ctx entry)
-        (let [ns-sym (read-ns-sym entry)
-              _ (when-not ns-sym
-                  (throw (ex-info (str "Extension " (:name ext)
-                                       " file does not start with (ns ...)")
-                                  {:path path})))
-              init-var (extension-var ext ns-sym 'init)
-              _ (when-not init-var
+        (if artifact
+          (let [{:keys [source display]} (artifact-source artifact entry-ns)]
+            (when-not source
+              (throw (ex-info (str "extension.edn :entry not found: " entry-ns)
+                              {:path path :entry entry-ns})))
+            ;; fail fast on forbidden/misspelled kmet.* requires — sci's
+            ;; require machinery swallows the load-fn error into an NPE
+            (validate-entry-requires! name (ns-form-of-source source)
+                                      (shared-tui-namespaces)
+                                      (shared-libs-namespaces)
+                                      owns-ns?)
+            (eval-source! ctx source display)
+            (let [init-var (extension-var ext entry-ns 'init)]
+              (when-not init-var
+                (throw (ex-info (str "Extension " (:name ext)
+                                     " does not define an init fn")
+                                {:path path})))
+              (reset! (:entry-ns ext) entry-ns)))
+          ;; single-file extension: the file is the entry itself
+          (let [source (slurp file)]
+            (validate-entry-requires! name (ns-form-of-source source)
+                                      (shared-tui-namespaces)
+                                      (shared-libs-namespaces)
+                                      owns-ns?)
+            (eval-source! ctx source (str file))
+            (let [ns-sym (some-> (ns-form-of-source source) second)]
+              (when-not ns-sym
+                (throw (ex-info (str "Extension " (:name ext)
+                                     " file does not start with (ns ...)")
+                                {:path path})))
+              (let [init-var (extension-var ext ns-sym 'init)]
+                (when-not init-var
                   (throw (ex-info (str "Extension " (:name ext)
                                        " does not define an init fn")
-                                  {:path path})))]
-          (reset! (:entry-ns ext) ns-sym)
-          (let [api (create-extension-api ext)]
-            (reset! (:api ext) api)
-            (init-var api)
-            (reset! (:initialized? ext) true))))
+                                  {:path path}))))
+              (reset! (:entry-ns ext) ns-sym))))
+        (let [api (create-extension-api ext)]
+          (reset! (:api ext) api)
+          ((extension-var ext @(:entry-ns ext) 'init) api)
+          (reset! (:initialized? ext) true)))
       (swap! extensions conj ext)
       {:extension (:name ext) :error nil}
       (catch Exception e
@@ -1343,10 +1524,12 @@
   nil)
 
 (defn get-loaded-extensions
-  "Loaded extensions as {:name str :path str :entry-ns symbol
-   :extension-dir str} maps (extension-dir = the extension's own directory)."
+  "Loaded extensions as {:name str :path str :kind :file/:dir/:jar
+   :entry-ns symbol :extension-dir str-or-nil} maps (extension-dir = the
+   extension's own directory; nil for jar extensions — see jar-ext.md)."
   []
   (mapv (fn [ext] {:name (:name ext) :path (:path ext)
+                   :kind (:kind ext)
                    :entry-ns @(:entry-ns ext)
                    :extension-dir (extension-dir-of ext)})
         @extensions))
@@ -1408,21 +1591,28 @@
   (unload-all-extensions!))
 
 (defn load-extensions-from-dir
-  "Load all extensions in DIR (a container): top-level .clj files and
-   subdirectories containing extension.edn. Returns the list of per-extension
-   {:extension name :error} results; failures are also printed as warnings."
+  "Load all extensions in DIR (a container): top-level .clj files, .jar/.zip
+   archives, and subdirectories containing extension.edn. Returns the list of
+   per-extension {:extension name :error} results; failures are also printed
+   as warnings."
   [dir]
   (let [d (io/file dir)]
     (when (fs/directory? d)
       (mapv (fn [entry]
               (let [path (str entry)
+                    lower (str/lower-case path)
                     result (cond
                              (and (fs/regular-file? entry) (str/ends-with? path ".clj"))
                              (load-extension! path)
 
+                             (and (fs/regular-file? entry)
+                                  (or (str/ends-with? lower ".jar")
+                                      (str/ends-with? lower ".zip")))
+                             (load-extension! path)
+
                              (fs/directory? entry)
                              ;; only directories with an extension.edn manifest are
-                             ;; extensions — an extension's own src/ subdirs are
+                             ;; extensions — an extension's own subdirs are
                              ;; loaded via the entry's requires, not here
                              (if (fs/exists? (io/file (str entry) "extension.edn"))
                                (load-extension! path)

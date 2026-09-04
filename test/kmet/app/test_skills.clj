@@ -241,3 +241,45 @@
   (skills/register-skill! "clear-me" "Will be cleared.")
   (skills/clear-skills!)
   (t/is (nil? (skills/get-skill "clear-me"))))
+
+(t/deftest test-register-extension-skill
+  (t/testing "content registration parses, validates and expands from memory"
+    (skills/clear-skills!)
+    (let [dereg (skills/register-extension-skill!
+                 "---\nname: ext-mem\ndescription: In-memory skill\n---\n# Body\nDo it."
+                 {:location "my-ext:skills/ext-mem/SKILL.md" :extension "my-ext"})]
+      (let [loaded (skills/get-skill "ext-mem")]
+        (t/is (some? loaded))
+        (t/is (= "# Body\nDo it." (:body loaded)))
+        (t/is (= "my-ext:skills/ext-mem/SKILL.md" (:location loaded)))
+        (t/is (= "my-ext" (:extension loaded)))
+        (t/is (nil? (:file-path loaded))))
+      (t/is (str/includes? (skills/expand-skill-command "/skill:ext-mem") "Do it."))
+      (t/is (str/includes? (skills/expand-skill-command "/skill:ext-mem")
+                           "self-contained")
+            "extension skills note they have no skill directory")
+      (t/is (str/includes? (skills/format-skills-for-prompt (skills/get-skills))
+                           "my-ext:skills/ext-mem/SKILL.md"))
+      (dereg)
+      (t/is (nil? (skills/get-skill "ext-mem")) "deregister removes the skill")))
+  (t/testing "first wins on collision with a file skill"
+    (skills/clear-skills!)
+    (let [tmp-dir (str "target/test-skills-extcoll-" (System/currentTimeMillis))]
+      (try
+        (io/make-parents (str tmp-dir "/s/SKILL.md"))
+        (spit (str tmp-dir "/s/SKILL.md")
+              "---\nname: dup\ndescription: File version.\n---\nFile body")
+        (skills/load-skills-from-dir tmp-dir)
+        (binding [*err* (java.io.StringWriter.)]
+          (skills/register-extension-skill! "---\nname: dup\ndescription: Ext.\n---\nExt body"
+                                            {:location "e:dup/SKILL.md" :extension "e"}))
+        (t/is (= "File version." (:description (skills/get-skill "dup"))))
+        (finally (fs/delete-tree tmp-dir)
+                 (skills/clear-skills!)))))
+  (t/testing "missing description is rejected"
+    (skills/clear-skills!)
+    (binding [*err* (java.io.StringWriter.)]
+      (skills/register-extension-skill! "---\nname: nodesc\n---\nNo desc"
+                                        {:location "e:nodesc/SKILL.md" :extension "e"}))
+    (t/is (nil? (skills/get-skill "nodesc")))
+    (skills/clear-skills!)))

@@ -1,1 +1,1 @@
-{:name "cljfmt-ext" :entry "src/main.clj"}
+{:name "cljfmt-ext", :entry cljfmt-ext.main}

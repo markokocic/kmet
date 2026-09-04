@@ -88,16 +88,16 @@
 
 ;; ─── Loading (pi: loadTemplateFromFile / loadTemplatesFromDir) ────────────
 
-(defn- load-template-from-file
-  "Load a prompt template from a .md file. Name = filename without .md.
-   Description = frontmatter description, else the first non-empty body line
-   truncated to 60 chars with \"...\" (pi: loadTemplateFromFile).
-   Returns the template map, or nil on read/parse failure."
-  [file-path]
+(defn- make-template-from-content
+  "Build a prompt template map from RAW .md content. LOCATION is the display
+   locator (a file path, or an `ext-name:relative/path` locator for extension
+   templates). EXTENSION is the owning extension name, or nil. Description =
+   frontmatter description, else the first non-empty body line truncated to
+   60 chars with \"...\" (pi: loadTemplateFromFile). Returns the template
+   map, or nil on parse failure."
+  [raw name location extension]
   (try
-    (let [raw (slurp file-path)
-          {:keys [frontmatter body]} (yaml/parse-frontmatter raw)
-          name (str/replace (fs/file-name file-path) #"\.md$" "")
+    (let [{:keys [frontmatter body]} (yaml/parse-frontmatter raw)
           fm-desc (some-> (get frontmatter "description") str str/trim)
           first-line (first (filter #(seq (str/trim %)) (str/split-lines body)))
           description (cond
@@ -109,12 +109,40 @@
       (cond-> {:name name
                :description description
                :content body
-               :file-path (str file-path)}
+               :location (str location)
+               :extension extension
+               :file-path (when (nil? extension) (str location))}
         (seq (str (get frontmatter "argument-hint")))
         (assoc :argument-hint (str (get frontmatter "argument-hint")))))
     (catch Exception _
       ;; pi: loadTemplateFromFile returns null on read/parse failure (silent)
       nil)))
+
+(defn- load-template-from-file
+  "Load a prompt template from a .md file. Name = filename without .md.
+   Returns the template map, or nil on read/parse failure."
+  [file-path]
+  (try
+    (make-template-from-content (slurp file-path)
+                                (str/replace (fs/file-name file-path) #"\.md$" "")
+                                (str file-path)
+                                nil)
+    (catch Exception _
+      nil)))
+
+(defn register-prompt-template!
+  "Register a prompt template from an extension's bundled .md content string
+   (jar-ext.md §5 — the extension reads its own resource via io/resource and
+   hands the content over, so jarred templates need no filesystem path).
+   OPTS: :name (command name), :content (raw .md), :location (display
+   locator, e.g. `my-ext:prompts/foo.md`), :extension (owner name).
+   Returns a deregister fn removing exactly this template."
+  [{:keys [name content location extension]}]
+  (let [t (make-template-from-content content name
+                                      (or location (str (or extension "prompt")))
+                                      extension)]
+    (when t (swap! templates conj t))
+    (fn [] (swap! templates (fn [ts] (remove #(identical? % t) ts))))))
 
 (defn load-prompt-templates-from-dir
   "Load .md prompt templates from a directory (non-recursive, pi:

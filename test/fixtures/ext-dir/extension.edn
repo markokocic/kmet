@@ -1,2 +1,1 @@
-{:name "multi-ext"
- :entry "src/main.clj"}
+{:name "multi-ext", :entry multi-ext.main}

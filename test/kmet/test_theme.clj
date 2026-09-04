@@ -286,3 +286,13 @@
         (theme/on-theme-change nil)
         (theme/set-theme-instance! orig-theme)
         (theme/init-theme! orig-name)))))
+
+(t/deftest test-unregister-theme
+  (let [t (theme/make-theme {:name "tmp-ext-theme" :accent "#ffffff"})]
+    (theme/register-theme! t)
+    (t/is (some? (theme/get-theme-by-name "tmp-ext-theme")))
+    (theme/unregister-theme! "tmp-ext-theme")
+    (t/is (nil? (theme/get-theme-by-name "tmp-ext-theme")))
+    (t/is (some? (theme/get-theme-by-name "dark")) "built-ins untouched")
+    (theme/unregister-theme! "never-there") ;; no-op
+    (t/is (some? (theme/get-theme-by-name "light")))))
