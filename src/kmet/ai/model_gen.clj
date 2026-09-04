@@ -1924,6 +1924,8 @@
    "meta/muse-spark-1.1"               [:openrouter "meta/muse-spark-1.1"]
    "meta/muse-spark-1.2"               [:openrouter "meta/muse-spark-1.2"]
    "meta/muse-spark-1.2-contributor"   [:opencode-go "muse-spark-1.2-contributor"]
+   "meta/muse-spark-1.3"               [:openrouter "meta/muse-spark-1.3"]
+   "meta/muse-spark-1.3-contributor"   [:openrouter "meta/muse-spark-1.3-contributor"]
    "MiniMaxAI/MiniMax-M2.5"            [:qwen-token-plan "MiniMax-M2.5"]
    "MiniMaxAI/MiniMax-M2.7"            [:minimax "MiniMax-M2.7"]
    "MiniMaxAI/MiniMax-M3"              [:minimax "MiniMax-M3"]
