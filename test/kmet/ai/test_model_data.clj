@@ -8,10 +8,12 @@
    drift (uncommitted regenerations, hand-edits) is caught in CI without
    network."
   (:require [babashka.fs :as fs]
+            [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :as t]
             [kmet.ai.model-gen :as mg]
-            [kmet.ai.models :as m]))
+            [kmet.ai.models :as m]
+            [kmet.libs.http :as http]))
 
 (defn- validate-dir
   "Run the generator script's offline validation over DIR (defaults to the
@@ -216,3 +218,99 @@
           (t/is (empty? (mg/validate-committed! dir)))))
       (finally
         (fs/delete-tree dir)))))
+
+(t/deftest test-openrouter-thinking-level-map
+  "pi getOpenRouterThinkingLevelMap (openrouter-reasoning-options.test.ts):
+   OpenRouter's live reasoning metadata (supported_efforts + mandatory) →
+   thinking-level-map. Shares the models.dev effort conversion; :off is
+   \"none\" unless the model mandates reasoning (then nil)."
+  (let [tlm @#'mg/openrouter-thinking-level-map]
+    (t/is (= {:off nil :minimal nil :low "low" :medium nil
+              :high "high" :xhigh nil :max "max"}
+             (tlm {"mandatory" true "default_enabled" true
+                   "supported_efforts" ["max" "high" "low"]
+                   "default_effort" "max"}))
+          "mandatory reasoning pins :off to nil, supported efforts pass through")
+    (t/is (= {:off nil}
+             (tlm {"mandatory" true}))
+          "mandatory without effort metadata still marks :off unavailable")
+    (t/is (= {:off "none" :minimal nil :low "low" :medium nil
+              :high "high" :xhigh nil :max nil}
+             (tlm {"mandatory" false "default_enabled" true
+                   "supported_efforts" ["high" "low"]}))
+          "optional models keep :off available, restricted to supported efforts")
+    (t/is (nil? (tlm {"mandatory" false}))
+          "optional models without effort controls get no metadata")
+    (t/is (nil? (tlm nil)) "missing reasoning metadata → nil")
+    (t/is (nil? (tlm "effort")) "non-map reasoning metadata → nil")))
+
+(defn- openrouter-list-body
+  "Fake OpenRouter /models payload with MODELS (string-keyed maps)."
+  [models]
+  (json/generate-string {"data" models}))
+
+(defn- openrouter-list-entry
+  "One fake OpenRouter model entry; REASONING is the live reasoning
+   metadata map (or nil for models without it)."
+  [id reasoning]
+  (cond-> {"id" id "name" id
+           "supported_parameters" ["tools" "reasoning"]
+           "architecture" {"modality" "text"}
+           "pricing" {"prompt" "0" "completion" "0"
+                      "input_cache_read" "0" "input_cache_write" "0"}
+           "context_length" 1000}
+    reasoning (assoc "reasoning" reasoning)))
+
+(t/deftest test-fetch-openrouter-models-attaches-thinking-map
+  "pi fetchOpenRouterModels: the live reasoning metadata becomes the
+   model's thinking-level-map at fetch time (mandatory muse-spark pins
+   :off to nil); models without the metadata ship without a map."
+  (with-redefs [http/get (fn [_url _opts]
+                           {:status 200
+                            :body (openrouter-list-body
+                                   [(openrouter-list-entry
+                                     "meta/muse-spark-1.3-contributor"
+                                     {"mandatory" true
+                                      "supported_efforts" ["xhigh" "high" "medium"
+                                                           "low" "minimal"]
+                                      "default_effort" "medium"})
+                                    (openrouter-list-entry "plain/model" nil)])})]
+    (let [by-id (into {} (map (juxt :id identity))
+                      (#'mg/fetch-openrouter-models))
+          spark (get by-id "meta/muse-spark-1.3-contributor")
+          plain (get by-id "plain/model")]
+      (t/is (= {:off nil :minimal "minimal" :low "low" :medium "medium"
+                :high "high" :xhigh "xhigh" :max nil}
+               (:thinking-level-map spark))
+            "mandatory spark efforts transfer, :off pinned to nil")
+      (t/is (not (contains? plain :thinking-level-map))
+            "models without reasoning metadata get no map"))))
+
+(t/deftest test-commandcode-muse-spark-13-contributor-ref
+  "The contributor SKU resolves against its contributor counterpart: both
+   1.2 and 1.3 point at the opencode-go entries carrying the verified
+   models.dev effort maps (the 1.3 row briefly pointed at the then map-less
+   openrouter entry and lost its thinking levels)."
+  (let [refs @#'mg/commandcode-canonical-refs]
+    (t/is (= [:opencode-go "muse-spark-1.2-contributor"]
+             (get refs "meta/muse-spark-1.2-contributor")))
+    (t/is (= [:opencode-go "muse-spark-1.3-contributor"]
+             (get refs "meta/muse-spark-1.3-contributor"))))
+  (let [canonical {:id "muse-spark-1.3-contributor" :provider :opencode-go
+                   :api :openai-responses :base-url "https://opencode.ai/zen/go/v1"
+                   :reasoning true :input [:text :image]
+                   :cost {:input 0.1 :output 0.2 :cache-read 0.002 :cache-write 0}
+                   :context-window 1048576 :max-tokens 131072
+                   :thinking-level-map {:high "high" :low "low" :max nil
+                                        :medium "medium" :minimal "minimal"
+                                        :off nil :xhigh "xhigh"}}
+        fetched [{"id" "meta/muse-spark-1.3-contributor"
+                  "name" "Muse Spark 1.3 Contributor"
+                  "context_length" 1048576}]
+        grouped (#'mg/provider-model-index [canonical])
+        out (first (#'mg/process-commandcode fetched grouped {}))]
+    (t/is (= {:high "high" :low "low" :max nil
+              :medium "medium" :minimal "minimal"
+              :off nil :xhigh "xhigh"}
+             (:thinking-level-map out))
+          "the 1.3 contributor keeps its full effort map")))

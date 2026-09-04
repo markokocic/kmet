@@ -601,6 +601,23 @@
       (into (array-map :off (if (contains? supported "none") "none" nil))
             (for [level thinking-levels]
               [level (if (contains? supported (name level)) (name level) nil)])))))
+
+(defn- openrouter-thinking-level-map
+  "pi getOpenRouterThinkingLevelMap: OpenRouter's live reasoning metadata
+   (supported_efforts + mandatory) → {level -> wire string | nil}. Shares
+   the models.dev effort conversion; :off is \"none\" unless the model
+   mandates reasoning (then nil). Returns nil for optional models without
+   effort controls."
+  [reasoning]
+  (when (map? reasoning)
+    (let [supported (get reasoning "supported_efforts")
+          mandatory? (true? (get reasoning "mandatory"))]
+      (if (seq supported)
+        (if-let [tlm (effort-thinking-level-map
+                      [{"type" "effort" "values" supported}])]
+          (assoc tlm :off (if mandatory? nil "none"))
+          (when mandatory? {:off nil}))
+        (when mandatory? {:off nil})))))
 ;; ─── Batch 2: providers on the existing wire APIs (pi loadModelsDevData  ──
 ;;     sections; A.3 thinking formats — zai/together/baseten/ant-ling — and
 ;;     kimi-coding's adaptive thinking stay deferred) ───────────────────────
@@ -867,7 +884,8 @@
   "pi fetchOpenRouterModels: the live OpenRouter catalog — tool-capable
    models only, pricing converted to $/M. Returns kmet-shaped model maps
    with the openrouter thinking-format compat (nested reasoning: {effort}, pi
-   detectOpenAICompletionsCompat)."
+   detectOpenAICompletionsCompat) plus the thinking-level-map from the live
+   reasoning metadata (pi getOpenRouterThinkingLevelMap)."
   []
   (let [resp (http/get "https://openrouter.ai/api/v1/models"
                        {:headers {"User-Agent" "kmet-generate-models"}
@@ -881,25 +899,27 @@
         (throw (ex-info "Invalid OpenRouter models response" {:type :http-error})))
       (for [model models
             :when (some #(= "tools" %) (get model "supported_parameters"))]
-        (let [cost (fn [k] (cost-per-million (get-in model ["pricing" k])))]
-          (array-map :id (get model "id")
-                     :name (or (get model "name") (get model "id"))
-                     :provider :openrouter
-                     :api :openai-completions
-                     :base-url openrouter-base-url
-                     :reasoning (boolean (some #(= "reasoning" %)
-                                               (get model "supported_parameters")))
-                     :input (if (str/includes? (or (get-in model ["architecture" "modality"]) "")
-                                               "image")
-                              [:text :image] [:text])
-                     :cost (array-map :input (cost "prompt")
-                                      :output (cost "completion")
-                                      :cache-read (cost "input_cache_read")
-                                      :cache-write (cost "input_cache_write"))
-                     :context-window (or (get-in model ["top_provider" "context_length"])
-                                         (get model "context_length") 4096)
-                     :max-tokens (or (get-in model ["top_provider" "max_completion_tokens"]) 4096)
-                     :compat (array-map :thinking-format :openrouter)))))))
+        (let [cost (fn [k] (cost-per-million (get-in model ["pricing" k])))
+              tlm (openrouter-thinking-level-map (get model "reasoning"))]
+          (cond-> (array-map :id (get model "id")
+                             :name (or (get model "name") (get model "id"))
+                             :provider :openrouter
+                             :api :openai-completions
+                             :base-url openrouter-base-url
+                             :reasoning (boolean (some #(= "reasoning" %)
+                                                       (get model "supported_parameters")))
+                             :input (if (str/includes? (or (get-in model ["architecture" "modality"]) "")
+                                                       "image")
+                                      [:text :image] [:text])
+                             :cost (array-map :input (cost "prompt")
+                                              :output (cost "completion")
+                                              :cache-read (cost "input_cache_read")
+                                              :cache-write (cost "input_cache_write"))
+                             :context-window (or (get-in model ["top_provider" "context_length"])
+                                                 (get model "context_length") 4096)
+                             :max-tokens (or (get-in model ["top_provider" "max_completion_tokens"]) 4096)
+                             :compat (array-map :thinking-format :openrouter))
+            tlm (assoc :thinking-level-map tlm)))))))
 
 (defn- process-openrouter
   "pi fetchOpenRouterModels + the post-merge openrouter additions/overrides:
@@ -1925,7 +1945,7 @@
    "meta/muse-spark-1.2"               [:openrouter "meta/muse-spark-1.2"]
    "meta/muse-spark-1.2-contributor"   [:opencode-go "muse-spark-1.2-contributor"]
    "meta/muse-spark-1.3"               [:openrouter "meta/muse-spark-1.3"]
-   "meta/muse-spark-1.3-contributor"   [:openrouter "meta/muse-spark-1.3-contributor"]
+   "meta/muse-spark-1.3-contributor"   [:opencode-go "muse-spark-1.3-contributor"]
    "MiniMaxAI/MiniMax-M2.5"            [:qwen-token-plan "MiniMax-M2.5"]
    "MiniMaxAI/MiniMax-M2.7"            [:minimax "MiniMax-M2.7"]
    "MiniMaxAI/MiniMax-M3"              [:minimax "MiniMax-M3"]
