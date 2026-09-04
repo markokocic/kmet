@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-04T07:52:20Z"
+ :generated-at "2026-09-04T16:09:58Z"
  :provider {:id :openrouter
             :name "OpenRouter"
             :env-vars ["OPENROUTER_API_KEY"]
@@ -684,7 +684,7 @@
                          :minimal nil
                          :xhigh "xhigh"}
     :input [:text]
-    :cost {:input 0.088606 :output 0.177212 :cache-read 0.017721 :cache-write 0}
+    :cost {:input 0.08806 :output 0.17612 :cache-read 0.017612 :cache-write 0}
     :context-window 1024000
     :max-tokens 384000
     :compat {:supports-developer-role false
@@ -744,7 +744,7 @@
                          :minimal nil
                          :xhigh "xhigh"}
     :input [:text :image]
-    :cost {:input 0.44 :output 1.32 :cache-read 0.014 :cache-write 0}
+    :cost {:input 0.22 :output 0.66 :cache-read 0.007 :cache-write 0}
     :context-window 1048576
     :max-tokens 384000
     :compat {:supports-developer-role false
@@ -764,7 +764,7 @@
                          :minimal nil
                          :xhigh "xhigh"}
     :input [:text]
-    :cost {:input 1.04226 :output 2.08452 :cache-read 0.086855 :cache-write 0}
+    :cost {:input 1.011984 :output 2.023968 :cache-read 0.084332 :cache-write 0}
     :context-window 1024000
     :max-tokens 384000
     :compat {:supports-developer-role false
@@ -784,7 +784,7 @@
                          :minimal nil
                          :xhigh "xhigh"}
     :input [:text]
-    :cost {:input 1.1154 :output 3.3462 :cache-read 0.03718 :cache-write 0}
+    :cost {:input 0.57948 :output 1.73844 :cache-read 0.019316 :cache-write 0}
     :context-window 1024000
     :max-tokens 384000
     :compat {:supports-developer-role false
@@ -3935,7 +3935,7 @@
     :base-url "https://openrouter.ai/api/v1"
     :reasoning true
     :input [:text]
-    :cost {:input 0.132 :output 0.528 :cache-read 0.033 :cache-write 0}
+    :cost {:input 0.0825 :output 0.33 :cache-read 0.020625 :cache-write 0}
     :context-window 262144
     :max-tokens 128000
     :compat {:supports-developer-role false :thinking-format :openrouter}}
@@ -4422,9 +4422,9 @@
                          :minimal nil
                          :xhigh "xhigh"}
     :input [:text]
-    :cost {:input 0.05 :output 0.16 :cache-read 0.013 :cache-write 0}
+    :cost {:input 0.04998 :output 0.09996 :cache-read 0.009996 :cache-write 0}
     :context-window 1048576
-    :max-tokens 393216
+    :max-tokens 131072
     :compat {:supports-developer-role false
              :requires-reasoning-content-on-assistant-messages true
              :thinking-format :openrouter}}
