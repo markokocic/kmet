@@ -90,7 +90,8 @@
 (t/deftest test-extension-provider-registration
   (testing "api :models register-provider! / unregister-provider! (pi ctx.registerProvider)"
     (let [api ((var extensions/create-extension-api)
-               {:name "prov-test" :path "target/test-ext-prov.clj"})]
+               {:name "prov-test" :path "target/test-ext-prov.clj"
+                :deregister-fns (atom [])})]
       (models/load-catalogs!)
       (models/clear-extension-providers!)
       (try
@@ -174,6 +175,33 @@
       (extensions/unload-all-extensions!)
       (t/is (nil? (tools/get-tool "multi-ext-tool")))
       (t/is (empty? (extensions/get-loaded-extensions))))))
+
+(t/deftest test-unload-removes-provider-registration
+  (extensions/clear-extensions!)
+  (models/load-catalogs!)
+  (models/clear-extension-providers!)
+  (let [dir "target/test-ext-prov-unload"]
+    (fs/delete-tree dir)
+    (fs/create-dirs (str dir "/prov_unload"))
+    (spit (str dir "/extension.edn") "{:name \"prov-unload\" :entry prov-unload.main}\n")
+    (spit (str dir "/prov_unload/main.clj")
+          (str "(ns prov-unload.main\n  (:require [kmet.extension :as ext]))\n"
+               "(defn init [api]\n"
+               "  (ext/models-register-provider! api :prov-unload\n"
+               "    {:base-url \"https://prov-unload.example/v1\" :api :openai-completions\n"
+               "     :api-key \"sk-x\" :models [{:id \"pu-1\"}]}))\n"))
+    (try
+      (let [result (extensions/load-extension! dir)]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+        (t/is (some #(= "pu-1" (:id %)) (extensions/get-all-models))
+              "registered model is visible while loaded")
+        (extensions/unload-all-extensions!)
+        (t/is (not (some #(= "pu-1" (:id %)) (extensions/get-all-models)))
+              "unload removes the provider registration")
+        (t/is (nil? (extensions/get-registered-provider-config :prov-unload))))
+      (finally
+        (models/clear-extension-providers!)
+        (fs/delete-tree dir)))))
 
 (t/deftest test-extension-dir-is-own-directory
   ;; :extension-dir must be the extension's OWN directory — for a dir

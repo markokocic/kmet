@@ -682,6 +682,11 @@ handlers (`:interactive` vs headless) and fall back to `ui-notify`.
 (models/unregister-provider! api :my-provider)
 ```
 
+Provider registrations are removed automatically when the extension
+unloads (like tools, commands, skills and prompts — every registration
+records its deregister fn). Same-id registrations from two extensions
+clobber on unload (last-wins), matching commands/tools behavior.
+
 Providers can register an **OAuth login block** instead of (or alongside)
 `:api-key` (pi: `registerProvider` oauth block — the `/login` command then
 offers the OAuth flow):

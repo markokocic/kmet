@@ -198,7 +198,8 @@
 (defn models-register-provider!
   "Register/replace an extension provider (pi: ctx.registerProvider):
    validated eagerly — a broken config throws without touching stored
-   state — then recomposes builtin + models.edn + extension layers."
+   state — then recomposes builtin + models.edn + extension layers.
+   The registration is removed automatically when the extension unloads."
   [api provider-id config]
   ((:register-provider! (models api)) provider-id config))
 

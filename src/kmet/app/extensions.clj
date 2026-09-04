@@ -573,8 +573,12 @@
    :set-tools-expanded ui-set-tools-expanded})
 
 (defn- api-models
-  "The :models capability map — ctx.models facades."
-  []
+  "The :models capability map — ctx.models facades. TRACK records deregister
+   fns so unload removes exactly what this extension added (provider
+   registrations leak across unload/reload otherwise — they live in the
+   global extension-providers atom, unlike ephemeral UI state which
+   reload resets in bulk)."
+  [track]
   {:get-all get-all-models
    :get-available get-available-models
    :find find-model
@@ -583,7 +587,12 @@
    :get-api-key-and-headers get-api-key-and-headers
    :get-registered-provider-config get-registered-provider-config
    :get-registered-provider-ids get-registered-provider-ids
-   :register-provider! register-provider!
+   :register-provider! (fn [provider-id config]
+                         (let [result (register-provider! provider-id config)]
+                           ;; track only after a successful register — a broken
+                           ;; config throws without touching stored state
+                           (track (fn [] (unregister-provider! provider-id)))
+                           result))
    :unregister-provider! unregister-provider!})
 
 (defn- api-session
@@ -694,7 +703,7 @@
      :send-message! send-message!
      :exec exec
      :ui (api-ui)
-     :models (api-models)
+     :models (api-models track)
      :session (api-session)}))
 
 ;; ─── Isolated extension contexts (sci) ───────────────────────────────────
