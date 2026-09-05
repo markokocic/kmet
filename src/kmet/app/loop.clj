@@ -1046,6 +1046,16 @@ Be precise and concise in your responses."}}]
         sig-buf (atom nil)
         usage-buf (atom nil)
         [tc-add tc-flush] (make-tc-accumulator)
+        ;; The thinking-loop guard's per-call stream cut. Tripping the
+        ;; run-level cancel signal would abort the HTTP stream, but it
+        ;; leaks into follow-up turns (they share the agent signal) — so
+        ;; the guard's cancel rides on call-signal, an OR-view the stream
+        ;; transport derefs each line (SSE) / before each poll (curl),
+        ;; while tool futures keep the run-level agent signal untouched.
+        ;; Read-only — the transport only derefs it, never reset!/add-watch.
+        guard-trip (atom false)
+        call-signal (reify clojure.lang.IDeref
+                      (deref [_] (boolean (or @(:signal agent) @guard-trip))))
         provider @(:provider agent)
         ep (resolve-endpoint agent)
         system (or @(:system-prompt-override agent) @(:system agent))
@@ -1074,7 +1084,7 @@ Be precise and concise in your responses."}}]
       :base-url (:base-url ep)
       :messages messages
       :tools (active-tools agent)
-      :signal (:signal agent)
+      :signal call-signal
       :idle-timeout-ms (:http-idle-timeout-ms @(:cfg agent))
       ;; Whole-request deadline enforced by the transport (HttpRequest.timeout
       ;; / curl --max-time) — pi: timeoutMs ?? httpIdleTimeoutMs. The idle
@@ -1084,29 +1094,39 @@ Be precise and concise in your responses."}}]
       :thinking @(:thinking agent)
       :session-id (some-> (:session agent) :id)
       :on-text (fn [t]
-                 (swap! text-buf str t)
-                 (when on-text (on-text t))
-                 (emit agent {:type :message-update
-                              :message {:role :assistant
-                                        :content [{:type :text :text @text-buf}]}
-                              :delta {:type :text :content t}}))
+                 ;; Suppress stragglers after the promise resolved (e.g. the
+                 ;; thinking-loop guard already settled the call — the stream
+                 ;; aborts on the next line, but same-chunk remainders still
+                 ;; dispatch). Without this they would append into a fresh
+                 ;; streaming bubble after on-done finalized the turn.
+                 (when-not (realized? done-promise)
+                   (swap! text-buf str t)
+                   (when on-text (on-text t))
+                   (emit agent {:type :message-update
+                                :message {:role :assistant
+                                          :content [{:type :text :text @text-buf}]}
+                                :delta {:type :text :content t}})))
       :on-thinking (fn [t]
-                     (swap! thinking-buf str t)
-                     (when on-thinking (on-thinking t))
-                     (emit agent {:type :message-update
-                                  :message {:role :assistant
-                                            :content []
-                                            :thinking @thinking-buf}
-                                  :delta {:type :thinking :content t}})
+                     ;; Same straggler suppression as :on-text (see above).
+                     (when-not (realized? done-promise)
+                       (swap! thinking-buf str t)
+                       (when on-thinking (on-thinking t))
+                       (emit agent {:type :message-update
+                                    :message {:role :assistant
+                                              :content []
+                                              :thinking @thinking-buf}
+                                    :delta {:type :thinking :content t}}))
                      ;; Thinking-loop guard: a repeated reasoning segment
                      ;; (>= 3× within the recent buffer) means the model is
                      ;; stuck in a degenerate reasoning loop — cut the stream
-                     ;; instead of burning tokens. Delivered as an error so
-                     ;; the loop's retry classifier sees it; it must NOT be
-                     ;; retryable (terminal-error! path).
+                     ;; instead of burning tokens. The per-call trip flag aborts
+                     ;; the HTTP/SSE read on the next line; the guard delivers
+                     ;; as an error so the loop's retry classifier sees it; it
+                     ;; must NOT be retryable (terminal-error! path).
                      (when (and (:thinking-loop-guard-enabled @(:cfg agent))
                                 (not (realized? done-promise))
                                 (thinking-loop? @thinking-buf))
+                       (reset! guard-trip true)
                        (deliver done-promise
                                 {:error thinking-loop-error
                                  :text @text-buf
@@ -1117,17 +1137,20 @@ Be precise and concise in your responses."}}]
       ;; signatures arrive as whole blobs (possibly repeated across deltas) —
       ;; last-wins, never concatenated
       :on-signature (fn [sig]
-                      (when sig (reset! sig-buf sig)))
+                      (when (and sig (not (realized? done-promise)))
+                        (reset! sig-buf sig)))
       :on-tool-call (fn [tc]
-                      (tc-add tc)
-                      (emit agent {:type :message-update
-                                   :message {:role :assistant :content []}
-                                   :delta (assoc (select-keys tc [:id :name :arguments :index])
-                                                 :type :tool-call)}))
+                      (when-not (realized? done-promise)
+                        (tc-add tc)
+                        (emit agent {:type :message-update
+                                     :message {:role :assistant :content []}
+                                     :delta (assoc (select-keys tc [:id :name :arguments :index])
+                                                   :type :tool-call)})))
       :on-usage (fn [usage]
                   ;; Provider-native usage map — stored on the assistant
                   ;; message for session persistence (pi: message.usage).
-                  (reset! usage-buf usage))
+                  (when-not (realized? done-promise)
+                    (reset! usage-buf usage)))
       :on-done (fn [reason]
                  (let [tool-calls (tc-flush)]
                    (deliver done-promise

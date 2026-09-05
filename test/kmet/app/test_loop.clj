@@ -1447,11 +1447,16 @@
   ;; explanation (no auto-retry, no red error line).
   (let [events (atom [])
         done-text (atom nil)
+        llm-signal (atom nil)
         agent (loop/make-agent-state
                :on-event (fn [e] (swap! events conj e)))]
     (with-redefs [cfg/get-api-key (fn [_] "test-key")
                   llm/send-message
                   (fn [opts]
+                    ;; The LLM-call signal is the per-call stream cut — the only
+                    ;; transport the SSE loop derefs — so capture it to assert
+                    ;; the guard actually aborts the HTTP stream below.
+                    (reset! llm-signal (:signal opts))
                     (future
                       (when-let [on-thinking (:on-thinking opts)]
                         (dotimes [_ 4]
@@ -1470,7 +1475,11 @@
     (t/is (str/includes? (or @done-text "") "repeated reasoning detected")
           "on-done carries the thinking-guard explanation")
     (t/is (not (str/starts-with? (or @done-text "") "ERR:"))
-          "not routed through the red error path")))
+          "not routed through the red error path")
+    (t/is (true? (boolean @llm-signal))
+          "the guard trips its per-call stream cut — the passed signal derefs true")
+    (t/is (false? @(:signal agent))
+          "the run-level cancel signal stays false — follow-up turns share it and must not inherit a stray cancel")))
 
 (t/deftest test-loop-run-agent-turn-loop-guard-followup-retrips
   ;; A follow-up queued before the run gives the model a fresh guard window:
