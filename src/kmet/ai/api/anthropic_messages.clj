@@ -2,7 +2,7 @@
   "Anthropic messages wire API (pi: api/anthropic-messages.ts)."
   (:require
    [kmet.ai.auth :as auth]
-   [cheshire.core :as json]
+   [kmet.libs.json :as json]
    [kmet.ai.http :as ai-http]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]

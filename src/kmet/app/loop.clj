@@ -72,7 +72,7 @@
    attached to the initial user message; they flow to the provider as OpenAI
    image_url / Anthropic image blocks. Input hooks receive and can transform
    :images (extensions/apply-input-hooks)."
-  (:require [cheshire.core :as json]
+  (:require [kmet.libs.json :as json]
             [clojure.string :as str]
             [kmet.ai.llm :as llm]
             [kmet.app.compaction :as compaction]

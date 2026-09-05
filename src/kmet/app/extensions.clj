@@ -872,6 +872,7 @@
     kmet.libs.hash
     kmet.libs.highlight
     kmet.libs.http
+    kmet.libs.json
     kmet.libs.jsonrpc
     kmet.libs.markdown
     kmet.libs.oauth

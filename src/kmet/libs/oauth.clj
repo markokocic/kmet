@@ -21,7 +21,7 @@
    proxy selection (:env by default) applies automatically. The caller
    supplies token storage, browser opening and interaction fns; this
    namespace never touches the TUI or credential stores."
-  (:require [cheshire.core :as json]
+  (:require [kmet.libs.json :as json]
             [clojure.string :as str]
             [kmet.libs.crypto :as crypto]
             [kmet.libs.http :as http]))

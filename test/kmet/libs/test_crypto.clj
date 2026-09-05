@@ -5,7 +5,7 @@
    use embedded throwaway key material (babashka's class registry cannot
    extract key components at runtime — no RSAPrivateCrtKeySpec /
    .getModulus interop)."
-  (:require [cheshire.core :as json]
+  (:require [kmet.libs.json :as json]
             [clojure.string :as str]
             [clojure.test :as t :refer [deftest is]]
             [kmet.libs.crypto :as crypto]))

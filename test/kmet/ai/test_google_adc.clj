@@ -4,7 +4,7 @@
    endpoint mocked and a real RSA key verifying the JWT signature."
   (:require [clojure.test :as t]
             [babashka.fs :as fs]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.string :as str]
             [kmet.ai.google-adc :as adc]
             [kmet.libs.http :as http]))

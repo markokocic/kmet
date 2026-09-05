@@ -1,7 +1,7 @@
 (ns kmet.ai.api.openai-codex-responses
   "OpenAI Codex Responses wire API (pi: api/openai-codex-responses.ts)."
   (:require
-   [cheshire.core :as json]
+   [kmet.libs.json :as json]
    [kmet.ai.http :as ai-http]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]

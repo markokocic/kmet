@@ -26,7 +26,7 @@
    discovery + extractServers) — JSON host files only (codex config.toml has
    no TOML reader in bb; its config.json path is covered)."
   (:require [babashka.fs :as fs]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.edn :as edn]
             [clojure.string :as str]))
 

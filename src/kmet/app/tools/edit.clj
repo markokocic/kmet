@@ -8,7 +8,7 @@
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [kmet.libs.edit-diff :as edit-diff]))
 
 (defn- normalize-edits
@@ -18,7 +18,7 @@
   [{:keys [edits old-text new-text oldText newText] :as args}]
   (let [parsed (cond
                  (string? edits) (try (let [p (json/parse-string edits true)]
-                                        ;; cheshire parses arrays lazily — realize
+                                        ;; parses arrays lazily — realize
                                         ;; inside the guard so a malformed JSON
                                         ;; string degrades to nil instead of
                                         ;; throwing later in the mapv below

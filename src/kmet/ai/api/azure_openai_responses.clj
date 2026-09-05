@@ -1,7 +1,7 @@
 (ns kmet.ai.api.azure-openai-responses
   "Azure OpenAI responses wire API (pi: api/azure-openai-responses.ts)."
   (:require
-   [cheshire.core :as json]
+   [kmet.libs.json :as json]
    [kmet.ai.http :as ai-http]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]

@@ -8,7 +8,7 @@
    drift (uncommitted regenerations, hand-edits) is caught in CI without
    network."
   (:require [babashka.fs :as fs]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.string :as str]
             [clojure.test :as t]
             [kmet.ai.model-gen :as mg]

@@ -39,7 +39,7 @@
    direct connection; the env seam is testable via a map (proxy-for-url)."
   (:require [babashka.http-client :as http]
             [babashka.process :as proc]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.string :as str]
             [kmet.libs.process :as process]))
 

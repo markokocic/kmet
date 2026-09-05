@@ -1,7 +1,8 @@
 #!/usr/bin/env bb
 ;; Minimal content-length-framed LSP server for lsp-adapter validation.
-;; Self-contained (no kmet classpath): the client runs it with its cwd set
-;; to the workspace root, where repo-relative classpaths don't resolve.
+;; Self-contained except for kmet.libs.json (located via *file* — the client
+;; runs it with its cwd set to the workspace root, where repo-relative
+;; classpaths don't resolve, but the script path is absolute).
 ;;
 ;; Exercises the client: initialize handshake, a server->client
 ;; workspace/configuration probe whose reply writes the marker file passed
@@ -10,7 +11,12 @@
 ;; per didOpen, and the shutdown->exit dance.
 ;;
 ;; Run: bb scripts/fake-lsp-server.bb <marker-path>
-(require '[cheshire.core :as json]
+(require '[babashka.fs :as fs]
+         '[babashka.classpath :as bcp])
+(let [src (str (fs/normalize (fs/path (fs/parent *file*) ".." ".." ".." "src")))]
+  (when (fs/directory? src)
+    (bcp/add-classpath src)))
+(require '[kmet.libs.json :as json]
          '[clojure.string :as str])
 
 (def marker (first *command-line-args*))

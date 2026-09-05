@@ -1,7 +1,7 @@
 (ns kmet.ai.api.google-generative-ai
   "Google Generative AI (Gemini) wire API (pi: api/google-generative-ai.ts)."
   (:require
-   [cheshire.core :as json]
+   [kmet.libs.json :as json]
    [kmet.ai.http :as ai-http]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]

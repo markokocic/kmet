@@ -12,7 +12,7 @@
    constructed ONLY via PKCS8EncodedKeySpec (which resolves): PKCS#1 and
    JWK keys are DER-wrapped into a PKCS#8 PrivateKeyInfo here — pure byte
    assembly, no spec classes needed."
-  (:require [cheshire.core :as json]
+  (:require [kmet.libs.json :as json]
             [clojure.string :as str]))
 
 ;; ─── Base64url ────────────────────────────────────────────────────────────

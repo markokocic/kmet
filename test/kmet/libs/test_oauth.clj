@@ -5,7 +5,7 @@
    loopback callback server, and the RFC 8414 discovery / RFC 7591 DCR /
    token exchange / refresh / RFC 8628 device-start helpers (HTTP mocked
    via with-redefs on fetch-json — no real network)."
-  (:require [cheshire.core :as json]
+  (:require [kmet.libs.json :as json]
             [clojure.string :as str]
             [clojure.test :as t :refer [deftest is]]
             [kmet.libs.crypto :as crypto]

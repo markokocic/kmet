@@ -4,7 +4,7 @@
    server-request auto-replies, EOF vs timeout, graceful close) exercised
    over in-process piped streams — no subprocesses."
   (:require [clojure.test :refer [deftest is testing]]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [kmet.libs.jsonrpc :as jsonrpc]))
 
 ;; ─── Helpers ──────────────────────────────────────────────────────────────

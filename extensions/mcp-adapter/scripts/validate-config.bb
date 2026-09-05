@@ -10,7 +10,7 @@
 ;; ~/.kmet/agent/mcp.edn is never touched.
 (require '[clojure.string :as str]
          '[clojure.java.io :as io]
-         '[cheshire.core :as json]
+         '[kmet.libs.json :as json]
          '[kmet.extension :as ext]
          '[extensions.mcp-adapter.config :as config]
          '[extensions.mcp-adapter.metadata :as metadata]

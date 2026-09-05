@@ -19,7 +19,7 @@
    Search/describe read the metadata cache only (no spawn); call/connect
    ensure a live connection. Every mode returns the kmet tool result shape
    {:content str :is-error bool}."
-  (:require [cheshire.core :as json]
+  (:require [kmet.libs.json :as json]
             [clojure.string :as str]
             [extensions.mcp-adapter.auth :as auth]
             [extensions.mcp-adapter.client :as client]

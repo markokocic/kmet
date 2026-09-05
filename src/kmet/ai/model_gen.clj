@@ -19,7 +19,7 @@
 
 (ns kmet.ai.model-gen
   (:require [babashka.fs :as fs]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.edn :as edn]
             [clojure.string :as str]
             [kmet.libs.edn-writer :as edn-w]

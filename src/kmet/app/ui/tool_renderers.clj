@@ -4,7 +4,7 @@
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [kmet.tui.theme :as theme]
             [kmet.tui.utils :as utils]
             [kmet.tui.components.text :as text]
@@ -275,7 +275,7 @@
   [args]
   (let [parsed (cond
                  (string? (:edits args)) (try (let [p (json/parse-string (:edits args) true)]
-                                                ;; cheshire parses arrays lazily — realize
+                                                ;; parses arrays lazily — realize
                                                 ;; inside the guard so a malformed JSON
                                                 ;; string degrades to nil instead of
                                                 ;; crashing the render preview in the

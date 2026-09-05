@@ -2,7 +2,7 @@
   "Google Vertex AI wire API (pi: api/google-vertex.ts — gemini-2.5+ style
    streamGenerateContent via the regional endpoint)."
   (:require
-   [cheshire.core :as json]
+   [kmet.libs.json :as json]
    [kmet.ai.http :as ai-http]
    [kmet.ai.google-adc :as google-adc]
    [kmet.ai.auth :as auth]

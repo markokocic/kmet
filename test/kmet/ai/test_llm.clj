@@ -1,6 +1,6 @@
 (ns kmet.ai.test-llm
   (:require [clojure.test :as t]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.libs.sse :as sse]

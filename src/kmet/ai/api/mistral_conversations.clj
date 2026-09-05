@@ -1,7 +1,7 @@
 (ns kmet.ai.api.mistral-conversations
   "Mistral Conversations wire API (pi: api/mistral-conversations.ts)."
   (:require
-   [cheshire.core :as json]
+   [kmet.libs.json :as json]
    [kmet.ai.http :as ai-http]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]

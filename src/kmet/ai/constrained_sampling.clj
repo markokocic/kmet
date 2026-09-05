@@ -11,7 +11,7 @@
    keys (keyword keys are normalized at the entry points)."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
-            [cheshire.core :as json]))
+            [kmet.libs.json :as json]))
 
 (def ^:private unsupported-strict-schema-keys
   "JSON-schema keywords pi rejects in strict mode."

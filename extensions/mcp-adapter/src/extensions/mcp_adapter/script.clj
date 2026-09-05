@@ -27,7 +27,7 @@
    :calls with ok false / error \"incomplete\" (pi parity)."
   (:require [babashka.fs :as fs]
             [babashka.process :as proc]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [extensions.mcp-adapter.output-guard :as guard]
@@ -77,7 +77,9 @@
 
 (def ^:private runtime-source
   (str "(ns mcp-script-runtime)\n"
-       "(require '[cheshire.core :as json] '[clojure.string :as str])\n"
+       "(require '[babashka.classpath :as bcp])\n"
+       "(when-let [cp (System/getenv \"KMET_CLASSPATH\")] (bcp/add-classpath cp))\n"
+       "(require '[kmet.libs.json :as json] '[clojure.string :as str])\n"
        "(def tools-ns-path (first *command-line-args*))\n"
        "(def console-ns-path (second *command-line-args*))\n"
        "(def code-path (nth *command-line-args* 2))\n"
@@ -352,7 +354,10 @@
             code-path (write-temp-script "script" (str code))
             p (proc/process [bb runtime-path tools-path console-path code-path]
                             {:in :stream :out :stream :err :stream
-                             :env (into {} (System/getenv))})
+                             :env (assoc (into {} (System/getenv))
+                                         ;; the child runs bare bb (no -cp): hand it the
+                                         ;; host's classpath so it can require kmet.libs.json
+                                         "KMET_CLASSPATH" (System/getProperty "java.class.path"))})
             pid (process/process-pid p)
             done (promise)
             output (atom [])

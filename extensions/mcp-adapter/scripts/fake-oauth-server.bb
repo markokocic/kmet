@@ -23,7 +23,14 @@
 ;;
 ;; Usage: bb fake-oauth-server.bb [port]
 ;; Prints "PORT <n>" on stdout.
-(require '[cheshire.core :as json]
+;; Locate the kmet source tree (the fakes run as bare bb children with no
+;; -cp) so JSON can go through kmet.libs.json like everywhere else.
+(require '[babashka.fs :as fs]
+         '[babashka.classpath :as bcp])
+(let [src (str (fs/normalize (fs/path (fs/parent *file*) ".." ".." ".." "src")))]
+  (when (fs/directory? src)
+    (bcp/add-classpath src)))
+(require '[kmet.libs.json :as json]
          '[clojure.string :as str]
          '[clojure.java.io :as io])
 

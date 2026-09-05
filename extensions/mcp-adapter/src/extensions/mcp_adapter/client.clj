@@ -26,7 +26,7 @@
    the wait loop continues. Every request!/notify! touches :last-used so
    the idle reaper can disconnect unused servers."
   (:require [babashka.process :as proc]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.core.async :as async]
             [clojure.java.io :as io]
             [clojure.string :as str]

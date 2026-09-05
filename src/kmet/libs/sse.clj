@@ -9,7 +9,7 @@
    Babashka-compatible Clojure equivalent exists."
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
-            [cheshire.core :as json]))
+            [kmet.libs.json :as json]))
 
 (defn parse-sse-line
   "Parse one SSE line. Returns [event-name data] — exactly one is non-nil

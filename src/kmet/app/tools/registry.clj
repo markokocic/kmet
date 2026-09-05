@@ -1,6 +1,6 @@
 (ns kmet.app.tools.registry
   "Tool registry — built-in tool map, custom tool registration, schema conversion, execution."
-  (:require [cheshire.core :as json]
+  (:require [kmet.libs.json :as json]
             [kmet.app.tools.tool :as tool]
             [kmet.app.tools.read :as read]
             [kmet.app.tools.write :as write]

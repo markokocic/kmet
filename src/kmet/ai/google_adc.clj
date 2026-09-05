@@ -10,7 +10,7 @@
    cached per credentials file with a 5-minute expiry window (pi's SDK
    caches similarly)."
   (:require [babashka.fs :as fs]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.string :as str]
             [kmet.libs.http :as http]))
 

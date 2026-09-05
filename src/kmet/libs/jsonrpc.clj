@@ -26,9 +26,10 @@
    input pipe stalls writers indefinitely; bounded by close! closing the
    streams underneath.
 
-   Self-contained: only babashka.process, cheshire.core and clojure.* — no
-   kmet.* requires (kmet.libs.test-self-contained)."
-  (:require [cheshire.core :as json]
+   Self-contained: only babashka.process and clojure.* (JSON via
+   kmet.libs.json, a sibling lib) — no kmet.* requires
+   (kmet.libs.test-self-contained)."
+  (:require [kmet.libs.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [babashka.process :as proc]))

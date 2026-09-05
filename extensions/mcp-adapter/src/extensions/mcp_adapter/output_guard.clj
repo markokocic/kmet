@@ -15,7 +15,7 @@
    1/true/yes/on enables. Image content is not part of kmet's string
    results — the pass-through case does not apply."
   (:require [babashka.fs :as fs]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.string :as str]))
 
 (def default-max-bytes (* 50 1024))

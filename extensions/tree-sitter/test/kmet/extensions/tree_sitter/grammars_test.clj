@@ -1,6 +1,6 @@
 (ns kmet.extensions.tree-sitter.grammars-test
   (:require [babashka.fs :as fs]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [are deftest is testing]]
             [kmet.extensions.tree-sitter.fetch :as fetch]

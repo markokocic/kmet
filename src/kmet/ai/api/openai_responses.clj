@@ -1,7 +1,7 @@
 (ns kmet.ai.api.openai-responses
   "OpenAI Responses wire API (pi: api/openai-responses.ts + openai-responses-shared.ts)."
   (:require
-   [cheshire.core :as json]
+   [kmet.libs.json :as json]
    [kmet.ai.http :as ai-http]
    [kmet.libs.sse :as sse]
    [clojure.string :as str]
@@ -106,7 +106,7 @@
                             (cond-> {:type "function_call"
                                      :call_id (normalize-id-part call-id)
                                      :name (:name tc)
-                                     :arguments (cheshire.core/generate-string (:arguments tc))}
+                                     :arguments (json/generate-string (:arguments tc))}
                               item-id (assoc :id item-id))))))]
       (when (seq blocks) blocks))
 

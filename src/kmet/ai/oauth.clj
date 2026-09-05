@@ -26,7 +26,7 @@
    with the mcp-adapter extension; this namespace keeps the provider flows
    and thin delegations (the private aliases below preserve the vars the
    tests with-redef)."
-  (:require [cheshire.core :as json]
+  (:require [kmet.libs.json :as json]
             [clojure.string :as str]
             [kmet.libs.http :as http]
             [kmet.libs.oauth :as oauth-lib]))

@@ -7,7 +7,7 @@
    [kmet.ai.attribution :as attribution]
    [kmet.ai.auth :as auth]
    [kmet.libs.dynamic-value :as dynamic-value]
-   [cheshire.core :as json]
+   [kmet.libs.json :as json]
    [kmet.libs.http :as lib-http]
    [kmet.ai.models :as models]
    [kmet.libs.usage :as usage]
@@ -302,7 +302,7 @@
                                                {:id (normalize-openai-tool-call-id (:id tc) provider)
                                                 :type "function"
                                                 :function {:name (:name tc)
-                                                           :arguments (cheshire.core/generate-string
+                                                           :arguments (json/generate-string
                                                                        (:arguments tc))}})
                                              (:tool-calls m))))]
                       ;; pi: some providers require "either content or
@@ -357,7 +357,7 @@
                                                       {:id (normalize-openai-tool-call-id (:id tc) provider)
                                                        :type "function"
                                                        :function {:name (:name tc)
-                                                                  :arguments (cheshire.core/generate-string
+                                                                  :arguments (json/generate-string
                                                                               (:arguments tc))}})
                                                     (:tool-calls m))))]
                       ;; skip empty assistant messages (pi: providers

@@ -14,7 +14,7 @@
   (:require [babashka.classpath :as bcp]
             [babashka.fs :as fs]
             [babashka.process :as p]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
