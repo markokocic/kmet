@@ -18,8 +18,8 @@ Source of truth: `src/kmet/tui/tui.md` (package docs),
 `src/kmet/tui/terminal.clj` (the only file that must be rewritten),
 `src/kmet/libs/terminal.clj` + `src/kmet/tui/keys.clj` (port verbatim),
 `src/kmet/tui/core.clj` (input/render loop to reimplement against).
-Jolt API refs: `jolt-lang.net/docs/native-interop.html`,
-`/docs/api/ffi.html`, `/docs/host-interop.html`.
+Jolt API refs: `jolt-lang.github.io/docs/native-interop.html`,
+`docs/host-interop.html`.
 Companion: `jolt-port.md` (whole-repo port report; this file is its TUI
 deep-dive).
 
@@ -122,16 +122,20 @@ needs a `free` on every path (prefer the `with-*` scoped macros).
 ;; Inside a project, prefer deps.edn (next block).
 ```
 
-`deps.edn` — shape per Native Interop guide + CHANGELOG: per-OS candidate
-vectors tried in order; `:optional` skips when missing (probe with
-`ffi/loaded?`); `:static` bakes the archive into `jolt build`.
-libc/POSIX needs no declaration at all — process symbols resolve through
-the boot's global handle (`host/chez/java/ffi.ss:33-46`):
+`deps.edn` — shape per Native Interop guide + `deps.clj`/`main.clj`:
+per-OS candidate vectors tried in order (`:darwin`/`:linux`/`:windows`,
+`:mac` aliases `:darwin`); `:optional` skips when missing (probe with
+`ffi/loaded?`); `:process` uses process symbols (libc/POSIX — no file);
+`:static` bakes the archive into `jolt build`.
+libc/POSIX needs no declaration at all — call `(ffi/load-library)` (or
+`nil`) for the boot's global handle (`ffi.ss`: re-loading the global
+handle would re-promote it above `:jolt/native` handles — the boot
+loads it once, and the boringssl lesson in the same file is why):
 
 ```clojure
 {:jolt/native [{:name "kernel32" :windows ["kernel32.dll"]}]}
 ;; without deps.edn: (ffi/load-library {:darwin "…" :linux "…" :windows "…"})
-;; (per-OS map, :mac aliases :darwin; vectors = ordered candidates), or
+;; (per-OS map; vectors = ordered candidates per `ffi-candidate-list`), or
 ;; (ffi/load-library) / (ffi/load-library nil) for process symbols only.
 ```
 
@@ -156,9 +160,10 @@ thing) expand inline. Signatures must be literal; trailing option is
 (ffi/defcfn c-read-cap "read" [:int :pointer :size_t] :ssize_t {:blocking true :capture-native-error true})
 ```
 
-Type keywords (`stdlib/jolt/ffi.clj:19-29`; note this checkout's `ffi.clj`
-is arena-based — zeroed alloc; `(alloc n)` caller-owned + `free`, `(alloc
-arena n)` arena-owned): `:int :uint :long :ulong :int64 :uint64 :size_t
+Type keywords (`ffi.clj:19-29`; arena-based — zeroed alloc; caller-owned
+`(alloc n)` + `free`, arena-owned `(alloc arena n)` / `confined-arena`
+(one thread) / `shared-arena` (any thread) closed by `close-arena` or
+`with-arena`): `:int :uint :long :ulong :int64 :uint64 :size_t
 :ssize_t :iptr :uptr :double :float :pointer :string :bool :void :uint8
 (`:u8`/`:byte`) `:char`, plus exact widths `:int8`/`:i8 :int16`/`:short
 :uint16`/`:ushort :int32 :uint32`. `:bool` is one-byte `_Bool` (jolt
@@ -180,26 +185,28 @@ cell:
 
 Memory (`ffi.clj:678-1260`): caller-owned `(alloc n)` + `free`, or
 arena-owned `(alloc arena n)` / `confined-arena` (one thread) /
-`shared-arena` (any thread) closed by `with-open`. Scopes returning the
-body value: `with-alloc`, `with-out`, `with-layout`, `with-c-string`,
-`with-c-string-array`. `sizeof` / `alignof` take a keyword or compiled
-layout. `read`/`write`: **value BEFORE offset** (`(write p t v)` / `(write
-p t v off)` — babashka.ffi order). `read-array`/`write-array` have typed
-forms; `read-into!` fills an existing buffer (streaming reads);
-`byte-buffer` shares memory zero-copy. `layout` takes a LITERAL descriptor
+`shared-arena` (any thread) closed by `with-open`-style `close-arena`.
+Scopes returning the body value: `with-alloc`, `with-out`, `with-layout`,
+`with-c-string`, `with-c-string-array`. `sizeof` / `alignof` take a keyword
+or compiled layout. `read`/`write`: **value BEFORE offset** (`(write p t v)`
+/ `(write p t v off)` — babashka.ffi order). No `ffi/copy` confusion:
+`read-array`/`write-array` move scalar arrays element-wise (one-byte
+widths as one block copy); `read-bytes`/`write-bytes` encode/decode UTF-8;
+`read-into!` fills an existing buffer (streaming reads); `byte-buffer`
+shares memory zero-copy. `layout` takes a LITERAL descriptor
 (macros need it at compile time — `(layout d)` on a runtime value has
 nothing to compile); unions `[:union …]` read as a pointer to the bytes.
-`string->ptr`/`ptr->string` round-trip nil. `null`/`null?`, `loaded?`,
-`defining-libraries` (duplicate-symbol probe — RTLD_LOCAL keeps natives
-apart, `ffi.clj:60-100`). errno: `(ffi/errno)` immediately after the
+`string->ptr`/`ptr->string` round-trip nil. `null`/`null?` (host-provided),
+`loaded?`, `defining-libraries` (duplicate-symbol probe — RTLD_LOCAL keeps
+natives apart; `ffi.ss` scoped-loader section). errno: `(ffi/errno)` immediately after the
 failing call (allocation/park/FFI in between may overwrite),
 `(ffi/errno-message e?)`.
 
 OS detection uses the shimmed `System/getProperty` / `System/getenv`
-(`host/chez/java/host-static-methods.ss`: `os.name` answers `"Mac OS X"` /
-`"Windows"` / `"Linux"`; `getenv` with no args returns the whole map, one
-arg the value or nil; `java.io.tmpdir` answers `$TMPDIR` else `/tmp` —
-still pass an explicit dir, kmet's `libs.http/temp-dir` pattern):
+(`host-static-methods.ss`: `os.name` answers `"Mac OS X"` / `"Windows"` /
+`"Linux"` from Chez's machine-type; `getenv` with no args returns the whole
+map, one arg the value or nil; `java.io.tmpdir` answers `$TMPDIR` else `/tmp`
+— still pass an explicit dir, kmet's `libs.http/temp-dir` pattern):
 
 ```clojure
 (defn windows? []
@@ -221,17 +228,18 @@ Notes and traps:
 - Callbacks into Jolt (a `qsort` comparator, a signal handler) use
   `ffi/foreign-callable` (macro) + `ffi/free-callable`, or arena-owned
   `ffi/callback` (no explicit release). `:collect-safe` goes on the
-  CALLABLE when C invokes it from a thread parked in a `:blocking` call
-  (e.g. GUI main loop); omit it for same-thread callbacks (qsort
-  comparator) — it costs an activation per call. `export!` publishes entry
-  points for `jolt build --library` (resolved via `jolt_lookup` after
-  `jolt_library_init`; single thread, `jolt_library_shutdown` to tear
-  down).
+  CALLABLE when C invokes it from a thread jolt never started OR from a
+  jolt thread parked in a `:blocking` call (e.g. GUI main loop); omit it
+  for same-thread callbacks (qsort comparator) — it costs an activation
+  per call. Without it on a foreign/parked thread the process dies with a
+  nonrecoverable memory fault. `export!` publishes entry points for `jolt
+  build --library` (resolved via `jolt_lookup` after `jolt_library_init`;
+  single thread, `jolt_library_shutdown` to tear down).
 - Windows caveat: `process.ss` notes the FFI surface is missing on some
-  Windows machine types, and `:jolt/native` + cross `--target` builds don't
-  mix yet (`build.ss:1237`, CHANGELOG:7519). Test a `kernel32` `defcfn` on
-  real Windows early; declare the dll under `:windows` (or `load-library`
-  the `{:windows …}` map). Fallback is a tiny C helper in `native/` baked
+  Windows machine types (Chez `open-process-ports` fallback there), and
+  cross `--target` builds retarget only step 4 under the target pack's Chez
+  (`build.ss`). Test a `kernel32` `defcfn` on real Windows early; declare
+  the dll under `:windows` (or `load-library` the `{:windows …}` map). Fallback is a tiny C helper in `native/` baked
   via `:static {:archive …}` — the same role as pi-tui's vendored
   `win32-console-mode.node` (3 KB, one function). Natives load RTLD_LOCAL
   and resolve per-handle (never shadowed by system libs — the boringssl
@@ -506,32 +514,31 @@ exclude bracketed paste content (MAC addresses contain `:3F`).
 
 ## 9. Concurrency + host-shim mapping
 
-Verified against a full checkout at `~/src/cvstree/jolt`
-(`host/chez/java/concurrency.ss`,
-`host/chez/java/host-static-methods.ss`, `host/chez/locks.ss`,
+Verified against the checkout at `~/jolt` (`023285d2`, 2026-09-05;
+`host/chez/java/concurrency.ss`, `host-static-methods.ss`, `locks.ss`,
 `jolt-core/clojure/core/30-macros.clj:117`). Carriers differ, so pick by
-blocking shape: `future`/`thread` = real OS thread, shared heap (blocking
-FFI, `read(2)`, sleeps go here); `go`/`io-thread` = fiber (channel ops
-park, but a blocking FFI call or `Thread/sleep` pins the carrier —
-`fibers-pool-test` case 6 pins exactly this). Mapping for `core.clj`'s
-idioms:
+blocking shape: `future` = real OS thread, shared heap (blocking FFI,
+`read(2)`, sleeps go here); fiber (`go`/`io-thread`/`jolt.fibers/spawn`) =
+multiplexed carrier (channel ops and `deref` park, but a blocking FFI call
+or `Thread/sleep` pins the carrier — `fibers.clj` header pins exactly
+this). Mapping for `core.clj`'s idioms:
 
 | kmet (bb/JVM) | Jolt |
 |---|---|
 | `future` body on thread pool | `future` on a real OS thread, shared heap — reader + timers translate directly |
-| `(Thread/sleep ms)` | real and interruptible on OS threads (private CV wait — cancel throws `InterruptedException` out of it, JVM-style); on a fiber it sleeps the carrier and a mid-nap interrupt lands only at wake (known divergence). Sleeps belong in `future`s, never in `go` blocks |
+| `(Thread/sleep ms)` | interruptible sleep on OS threads (same door as `TimeUnit.sleep`); on a fiber it pins the carrier — `fibers.clj` header (“park-capable waits — channel ops, deref, `jolt.socket`/`jolt.process` IO — are the ones to use inside a body”). Sleeps belong in `future`s, never in `go`/fiber bodies |
 | `future-cancel` | real `cancel(true)` (`concurrency.ss:182-208`): marks cancelled+done (derefs throw `CancellationException`) **and interrupts the worker** — a thread parked in an interruptible wait (`Thread/sleep`, future/promise deref, `CountDownLatch`, blocking-queue ops) is thrown out promptly; running compute sees it via `Thread/interrupted` / `.isInterrupted`. Caveat: a thread parked in a `:blocking` FFI call only notices when the call returns to Scheme (same file, interrupt section) — like the JVM not killing native code. So cancel *does* stop sleeping flush timers; it does *not* unblock a parked `read(2)` — `stop!` still needs a wakeup byte / fd close (§5) |
-| `locking` | **present** (`clojure.core/locking` → `jolt.host/with-monitor`, per-object reentrant monitor). Fiber-aware by design: the OS mutex is held only across the enter/exit decision while an owner *field* carries exclusion, so a parked fiber keeps its hold and a fiber contender parks instead of blocking its carrier. Usable for `dispatch-lock` — but keep the body short, non-sleeping, and park-free where avoidable; generation counters (§7.5) stay the primary stale-timer defense, cancel the backup |
+| `locking` | **present** (`clojure.core/locking` → `jolt.host/with-monitor`, per-object reentrant monitor). NOT fiber-aware: `locks.ss` exists precisely because an OS mutex across a fiber switch loses exclusion either way (unwind releases mid-section; no-unwind lets a carrier-mate walk in). `with-monitor` is that same monitor with a dynamic-wind release plus park-rewind handling — usable for `dispatch-lock`, but keep the body short, non-sleeping, and park-free; generation counters (§7.5) stay the primary stale-timer defense, cancel the backup |
 | `System/getenv` | shimmed — keep (`KMET_*` flags translate to env reads) |
 | `ProcessBuilder` + `stty` snapshot/restore | replace with §5 FFI (no subprocess on the hot path) |
 | `StringBuilder` + `.append/.charAt/.length` | shimmed (`append/toString/length/charAt/setLength`) — keep, verify arities |
 | `java.util.Base64` (OSC-52) | shimmed — keep |
 | `Pattern/compile/quote/split`, `MULTILINE` | shimmed — keep, but re-run key/response regex tests under irregex |
 | `LocalDateTime/now` log timestamps, `ProcessHandle/.pid` log names | shape differs: time values live behind the time lib (`Instant`/`LocalDateTime` autoloaded core types per host-interop); pid via the `ProcessHandle` shim (`process.ss:1009` `.pid`) — verify call shapes on the checkout before porting log paths |
-| `(io/writer path :append true)` + `with-open` + `.write` | reshaped, not absent: `jolt-io-writer` takes ONE arg (no opts, `io.ss:1186`) and `spit` takes `:append` (`io.ss:1045`). Crash/write logs become `(spit path text :append true)`; `with-open` exists (`30-macros.clj:186`); `FileWriter`/`file-writer` answers `.write`/`.append`/`.flush`/`.close` (accumulates, persists on flush/close) |
-| `babashka.fs` (`directory?`, `cwd`, `file-separator`, …) | present via vendored submodule + `jolt.bb.fs` supplement (`loader.ss:88,121`); vendor/ ships empty — run `git submodule update --init` and confirm each fn |
+| `(io/writer path :append true)` + `with-open` + `.write` | reshaped, not absent: `jolt-io-writer` takes ONE arg (no opts) and `spit` takes `:append` (both verified in `io.ss`; non-append `spit` is temp-file+rename, append writes in place). Crash/write logs become `(spit path text :append true)`; `with-open` exists (`30-macros.clj:186`, closes via `__close`); `FileWriter`/`file-writer` persists on flush/close |
+| `babashka.fs` (`directory?`, `cwd`, `file-separator`, …) | present via install roots + `jolt.bb.fs` supplement (`loader.ss`: supplement loads after `babashka.fs`; install copy always wins over a project copy); vendor/ pins verified — `fs` v0.5.34 + `process` v0.6.25 = exactly kmet's `deps.edn` |
 | `String.getBytes` (OSC-52 `libs/terminal.clj:257`) | present and charset-aware (`natives-str.ss:381`) — keep, or use `ffi/write-bytes` |
-| `clojure.java.io` (`reader`/`writer`/`file`/`input-stream`/…) | present as vars (`io.ss`/`io-streams.ss` `def-var! "clojure.java.io" …`) — keep call sites, verify arities |
+| `clojure.java.io` (`reader`/`writer`/`file`/`input-stream`/…) | present as vars (`io.ss`/`io-streams.ss` `def-var! "clojure.java.io" …` — note: `writer`/`input-stream`/`output-stream` are defined in BOTH files, streams file wins at load; `resource` takes an optional ignored loader arg) — keep call sites, verify arities |
 
 STM (`ref`/`dosync`/`alter`) is present; agents are real async (per-agent
 serialized dispatch on worker threads, `await`/`await-for`,
@@ -567,10 +574,13 @@ before widgets.
 - Windows: no extra DLLs — `kernel32.dll` is always present; bind directly.
 - Optional tiny C helper (pi-tui's `win32-console-mode.node` pattern): only
   if the Windows FFI surface proves missing (§4 caveat); ship via
-  `:jolt/native :static` so `jolt build` bakes it in while `run`/`repl`
-  still load dynamically.
+  `:jolt/native` `:static {:archive …}` so `jolt build` cc-links it in while
+  `run`/`repl` still load dynamically (a `:static`-only spec is skipped at
+  `run` with a warning).
 - `jolt build` gives the single self-contained executable (runtime + app +
-  static natives); needs only `cc` at build time.
+  static natives); linking needs Chez's kernel dev files (`libkernel.a`,
+  `scheme.h`) + `cc` — both ship with the prebuilt jolt binary, NOT with
+  distro `chezscheme` packages (per README).
 
 ---
 
