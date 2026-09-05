@@ -1402,7 +1402,7 @@
   (t/is (nil? (:requires-reasoning-content-on-assistant-messages
                (:compat (m/get-model :opencode "glm-5.2")))))
   (t/is (nil? (:requires-reasoning-content-on-assistant-messages
-               (:compat (m/get-model :github-copilot "claude-sonnet-4.5"))))))
+               (:compat (first (m/get-models :github-copilot)))))))
 
 ;; ─── Regression: openai-completions trailing usage chunk (footer tokens/cost) ──
 

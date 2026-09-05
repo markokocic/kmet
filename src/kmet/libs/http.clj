@@ -510,8 +510,8 @@
     (loop []
       (let [[status headers] (parse-dump-header header-file)
             pending? (or (nil? status)
-                          (and (redirect-so-far? status headers)
-                               (follow-redirects? opts)))
+                         (and (redirect-so-far? status headers)
+                              (follow-redirects? opts)))
             alive? (try (-> proc-map :proc .isAlive) (catch Exception _ true))]
         (if (and pending? alive? (< (System/currentTimeMillis) deadline))
           (do (Thread/sleep 100) (recur))

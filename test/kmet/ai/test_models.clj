@@ -223,7 +223,8 @@
     (t/is (every? some? (map #(m/get-model (:id %) (:id (first (:models %)))) providers))
           "every provider's first model is reachable via get-model")
     (t/testing "copilot models carry static headers (COPILOT_STATIC_HEADERS)"
-      (let [copilot (m/get-model :github-copilot "claude-sonnet-4.5")]
+      (let [copilot (first (filter :headers (m/get-models :github-copilot)))]
+        (t/is (some? copilot) "at least one copilot model carries static headers")
         (t/is (= "GitHubCopilotChat/0.35.0" (get-in copilot [:headers "User-Agent"]))))
       (t/is (nil? (:headers (m/get-model :deepseek "deepseek-v4-pro")))))))
 (t/deftest test-catalog-validation

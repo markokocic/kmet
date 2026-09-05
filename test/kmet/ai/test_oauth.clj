@@ -578,14 +578,15 @@
       (testing "no stored credential → all models"
         (t/is (= all (count (models/get-available :github-copilot)))))
       (testing "oauth credential filters by available-model-ids"
-        (with-redefs [auth/get-credentials
-                      (fn [] {:github-copilot
-                              {:type :oauth :access "a" :refresh "r"
-                               :expires 9999999999999
-                               :available-model-ids ["claude-sonnet-4"]}})]
-          (let [available (models/get-available :github-copilot)]
-            (t/is (= ["claude-sonnet-4"] (mapv :id available))
-                  "only the account's models remain")))
+        (let [mid (:id (first (:models p)))]
+          (with-redefs [auth/get-credentials
+                        (fn [] {:github-copilot
+                                {:type :oauth :access "a" :refresh "r"
+                                 :expires 9999999999999
+                                 :available-model-ids [mid]}})]
+            (let [available (models/get-available :github-copilot)]
+              (t/is (= [mid] (mapv :id available))
+                    "only the account's models remain"))))
         (testing "malformed available-model-ids → full list"
           (with-redefs [auth/get-credentials
                         (fn [] {:github-copilot
