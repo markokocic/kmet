@@ -3,7 +3,14 @@
    `ctx.ui.editor` like pi — the api's :ui map only carries :custom (mount
    extension-built components), and kmet's SelectList already has builtin
    fuzzy filtering, so the pi branch/commit pickers simplify to a framed
-   SelectList inside an overlay dialog.
+   SelectList inside a dock dialog.
+
+   Mounting follows pi: `ctx.ui.select` and bare `ctx.ui.custom` replace
+   the editor dock — they never overlay the transcript — so every dialog
+   here mounts via ui-custom with no overlay options. The host swaps the
+   dialog into the editor dock (clearing the editor area instead of
+   compositing over transcript lines), focuses it, and restores the editor
+   on close.
 
    Each dialog returns a result via the ui-custom `close` callback.
    Cancel = `close nil` (or escape)."
@@ -13,51 +20,83 @@
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.hiccup :as h]
+            [kmet.tui.keybindings :as kb]
             [kmet.tui.components.input :as input]
             [kmet.tui.components.select-list :as select-list]))
 
 ;; ─── Framed dialog shell ───────────────────────────────────────────────
 
-(defn- framed-overlay
-  "Compile a top/bottom-bordered dialog tree: title, body, hint. TH is
-   the live theme map. BODY and HINT are kmet.tui.hiccup elements that
-   compile-tree will turn into real components."
-  [th title body-element hint-element]
+(defn- framed-dialog
+  "Compile a top/bottom-bordered dialog tree. TH is the live theme map.
+   TITLE is the dialog title (pi: accent-bold for ExtensionSelector /
+   pi-review custom frames, plain accent for ExtensionInput /
+   ExtensionEditor frames). BODY and HINT are kmet.tui.hiccup elements
+   that compile-tree will turn into real components.
+
+   The kmet frame carries a blank line between border and title (a
+   deliberate deviation from pi's ExtensionSelectorComponent, which
+   places them adjacent) — shared with kmet's own
+   kmet.app.ui.dialogs/frame kit for a consistent look."
+  [th title body-element hint-element & [{:keys [bold-title?]
+                                          :or {bold-title? true}}]]
   (h/compile-tree
    [:container {}
     [:dynamic-border {:color-fn (fn [s] (theme/fg th :accent s))}]
+    [:spacer {:lines 1}]
     [:text {:padding-x 1 :padding-y 0}
-     (theme/fg th :accent (theme/bold title))]
+     (if bold-title?
+       (theme/fg th :accent (theme/bold title))
+       (theme/fg th :accent title))]
     [:spacer {:lines 1}]
     body-element
     [:spacer {:lines 1}]
     [:text {:padding-x 1 :padding-y 0} (theme/fg th :dim hint-element)]
+    [:spacer {:lines 1}]
     [:dynamic-border {:color-fn (fn [s] (theme/fg th :accent s))}]]))
 
+(defn- select-hint
+  "Plain-text hint for the `ctx.ui.select`-equivalent dialogs (pi:
+   ExtensionSelectorComponent: rawKeyHint(↑↓, navigate) +
+   keyHint(confirm, select) + keyHint(cancel, cancel)), resolved against
+   the live keybindings. The frame styles it dim."
+  []
+  (let [kmgr (kb/get-global-keybindings)
+        confirm (or (kb/key-text kmgr "tui.select.confirm") "enter")
+        cancel (or (kb/key-text kmgr "tui.select.cancel") "escape")]
+    (str "↑↓ navigate  " confirm " select  " cancel " cancel")))
+
+(defn- review-list-theme
+  "pi-review's per-dialog SelectList theme (review.ts: selectedPrefix /
+   selectedText accent, description muted, scrollInfo dim, noMatch
+   warning). The shared get-select-list-theme stays pi's muted/muted
+   pair (theme.ts getSelectListTheme) — only review dialogs override
+   the last two."
+  [th]
+  (assoc (theme/get-select-list-theme th)
+         :scroll-info (fn [s] (theme/fg th :dim s))
+         :no-match (fn [s] (theme/fg th :warning s))))
+
 (defn- run-dialog
-  "Mount FACTORY via (ext/ui-custom) and deref the resulting promise,
-   defaulting to DEFAULT on nil or when no UI is available (headless).
-   FACTORY is a (fn [tui th kb close] ...) that returns a component and
-   calls CLOSE with the result. OVERLAY-OPTS are forwarded to ui-custom."
-  [api factory default & [overlay-opts]]
-  (if-let [p (ext/ui-custom
-              api factory
-              (merge {:overlay true
-                      :overlay-options {:anchor :center :width 82}}
-                     overlay-opts))]
+  "Mount FACTORY via (ext/ui-custom) in the editor dock (pi: bare
+   ctx.ui.custom / ctx.ui.select replace the editor — never an overlay)
+   and deref the resulting promise, defaulting to DEFAULT on nil or when
+   no UI is available (headless). FACTORY is a (fn [tui th kb close] ...)
+   that returns a component and calls CLOSE with the result."
+  [api factory default]
+  (if-let [p (ext/ui-custom api factory)]
     (try (deref p 60000 default)
          (catch Exception _ default))
     default))
 
 ;; ─── Dialog components (IFocusable forwarding) ─────────────────────────
 
-(defcomponent ReviewSelectDialog nil [overlay select-list focused?-atom]
-  (render [this width] (protocols/render (:overlay this) width))
+(defcomponent ReviewSelectDialog nil [container select-list focused?-atom]
+  (render [this width] (protocols/render (:container this) width))
   (handle-input [this data] (protocols/handle-input (:select-list this) data))
   (invalidate [this]
-    (protocols/invalidate (:overlay this)))
+    (protocols/invalidate (:container this)))
   (dispose [this]
-    (h/dispose-tree! (:overlay this))))
+    (protocols/dispose (:container this))))
 
 (extend-type ReviewSelectDialog
   protocols/IFocusable
@@ -66,13 +105,13 @@
     (reset! (:focused?-atom this) val)
     (protocols/set-focused! (:select-list this) val)))
 
-(defcomponent ReviewInputDialog nil [overlay input-comp focused?-atom]
-  (render [this width] (protocols/render (:overlay this) width))
+(defcomponent ReviewInputDialog nil [container input-comp focused?-atom]
+  (render [this width] (protocols/render (:container this) width))
   (handle-input [this data] (protocols/handle-input (:input-comp this) data))
   (invalidate [this]
-    (protocols/invalidate (:overlay this)))
+    (protocols/invalidate (:container this)))
   (dispose [this]
-    (h/dispose-tree! (:overlay this))))
+    (protocols/dispose (:container this))))
 
 (extend-type ReviewInputDialog
   protocols/IFocusable
@@ -88,14 +127,12 @@
    dropped). Items carry :value, :label, :description; the toggle row
    is appended dynamically."
   [{:value :uncommitted
-    :label "Review uncommitted changes"
-    :description ""}
+    :label "Review uncommitted changes"}
    {:value :base-branch
     :label "Review against a base branch"
     :description "(local)"}
    {:value :commit
-    :label "Review a commit"
-    :description ""}
+    :label "Review a commit"}
    {:value :folder
     :label "Review a folder (or more)"
     :description "(snapshot, not diff)"}])
@@ -141,18 +178,18 @@
         (let [sl (select-list/make-select-list
                   items
                   :height (min 10 (count items))
-                  :theme (theme/get-select-list-theme th)
+                  :theme (review-list-theme th)
                   :no-match-text "  No matching presets"
                   :on-select (fn [item] (close (:value item)))
                   :on-escape (fn [] (close nil)))
               _ (select-list/select-list-set-selected! sl initial)
-              overlay (framed-overlay
-                       th "Select a review preset"
-                       [:container {} sl]
-                       "Press enter to confirm or esc to go back")]
+              container (framed-dialog
+                         th "Select a review preset"
+                         [:container {} sl]
+                         "Press enter to confirm or esc to go back")]
           (map->ReviewSelectDialog
            {:kind nil
-            :overlay overlay
+            :container container
             :select-list sl
             :focused?-atom (atom false)})))
       nil))))
@@ -172,17 +209,17 @@
      (let [sl (select-list/make-select-list
                branches
                :height (min 10 (count branches))
-               :theme (theme/get-select-list-theme th)
+               :theme (review-list-theme th)
                :no-match-text "  No matching branches"
                :on-select (fn [item] (close item))
                :on-escape (fn [] (close nil)))
-           overlay (framed-overlay
-                    th title
-                    [:container {} sl]
-                    "Type to filter • enter to select • esc to cancel")]
+           container (framed-dialog
+                      th title
+                      [:container {} sl]
+                      "Type to filter • enter to select • esc to cancel")]
        (map->ReviewSelectDialog
         {:kind nil
-         :overlay overlay
+         :container container
          :select-list sl
          :focused?-atom (atom false)})))
    nil))
@@ -200,17 +237,17 @@
      (let [sl (select-list/make-select-list
                commits
                :height (min 10 (count commits))
-               :theme (theme/get-select-list-theme th)
+               :theme (review-list-theme th)
                :no-match-text "  No matching commits"
                :on-select (fn [item] (close item))
                :on-escape (fn [] (close nil)))
-           overlay (framed-overlay
-                    th "Select commit to review"
-                    [:container {} sl]
-                    "Type to filter • enter to select • esc to cancel")]
+           container (framed-dialog
+                      th "Select commit to review"
+                      [:container {} sl]
+                      "Type to filter • enter to select • esc to cancel")]
        (map->ReviewSelectDialog
         {:kind nil
-         :overlay overlay
+         :container container
          :select-list sl
          :focused?-atom (atom false)})))
    nil))
@@ -219,47 +256,59 @@
 
 (defn show-text-input!
   "Mount a single-line text input dialog. INITIAL is the pre-filled
-   value. Returns the trimmed string, or nil on cancel/empty."
+   value, cursor placed after it (pi: LabelInput). Returns the trimmed
+   string on submit, or nil on cancel. Note: an all-whitespace submit is
+   NOT treated as cancel — the folder picker needs to distinguish blank
+   (re-prompt, pi parity for empty editor submits) from esc. Title is
+   plain accent (pi: ExtensionInputComponent / ExtensionEditorComponent
+   use fg accent without bold)."
   [api title initial _placeholder]
   (run-dialog
    api
    (fn [_tui th _kb close]
      (let [inp (input/make-input)
-           _ (input/input-set-value! inp initial)
-           _ (input/input-set-cursor! inp (count (or initial "")))
+           _ (when (seq initial)
+               (input/input-set-value! inp initial)
+               (input/input-set-cursor! inp (count (or initial ""))))
            _ (input/input-set-on-submit!
               inp (fn [v] (close (str/trim v))))
            _ (input/input-set-on-escape!
               inp (fn [] (close nil)))
-           overlay (framed-overlay th title inp
-                                   "Enter to confirm · esc to cancel")]
+           container (framed-dialog th title inp
+                                    "Enter to confirm · esc to cancel"
+                                    {:bold-title? false})]
        (map->ReviewInputDialog
         {:kind nil
-         :overlay overlay
+         :container container
          :input-comp inp
          :focused?-atom (atom false)})))
    nil))
 
 (defn show-folder-input!
   "Show the folder paths input. Returns a vector of trimmed paths, or
-   nil on cancel / empty input. Pi uses a multi-line editor; we use a
-   single-line input with space-separated paths to keep the kmet.tui
-   surface minimal — paths rarely span newlines in practice."
+   nil on esc/timeout (pi: cancel). A blank submit re-prompts the same
+   dialog (pi: showFolderInput returns null on empty paths and the
+   selector loop re-prompts). Single-line input splitting on whitespace
+   (pi's editor is multi-line: \"space-separated or one per line\") —
+   paths rarely span newlines in practice."
   [api]
-  (let [raw (show-text-input! api
-                              "Enter folders/files to review (space-separated)"
-                              "."
-                              "e.g. src docs")]
-    (when (and raw (not (str/blank? raw)))
-      (let [paths (->> (str/split raw #"\s+")
-                       (map str/trim)
-                       (remove str/blank?)
-                       vec)]
-        (when (seq paths) paths)))))
+  (loop []
+    (let [raw (show-text-input! api
+                                "Enter folders/files to review (space-separated)"
+                                "."
+                                "e.g. src docs")]
+      (when (some? raw)
+        (let [paths (->> (str/split raw #"\s+")
+                         (map str/trim)
+                         (remove str/blank?)
+                         vec)]
+          (if (seq paths) paths (recur)))))))
 
 (defn show-custom-instructions-input!
   "Show the custom review instructions editor. Returns the trimmed
-   string, or nil on cancel / empty input."
+   string, or nil on cancel / empty input (pi: showReviewSelector —
+   empty custom instructions are \"not changed\", not a cancel that
+   aborts the preset loop)."
   [api]
   (let [raw (show-text-input! api
                               "Custom review instructions (applies to all reviews)"
@@ -272,8 +321,8 @@
    (pi: \"Start review in:\" selector). Returns :empty-branch or
    :current-session, or nil on cancel/timeout."
   [api]
-  (let [items [{:value :empty-branch :label "Empty branch" :description ""}
-               {:value :current-session :label "Current session" :description ""}]
+  (let [items [{:value :empty-branch :label "Empty branch"}
+               {:value :current-session :label "Current session"}]
         height (count items)]
     (run-dialog
      api
@@ -281,17 +330,17 @@
        (let [sl (select-list/make-select-list
                  items
                  :height height
-                 :theme (theme/get-select-list-theme th)
+                 :theme (review-list-theme th)
                  :no-match-text "  No matching options"
                  :on-select (fn [item] (close (:value item)))
                  :on-escape (fn [] (close nil)))
-             overlay (framed-overlay
-                      th "Start review in:"
-                      [:container {} sl]
-                      "↑↓ navigate • enter to select • esc to cancel")]
+             container (framed-dialog
+                        th "Start review in:"
+                        [:container {} sl]
+                        (select-hint))]
          (map->ReviewSelectDialog
           {:kind nil
-           :overlay overlay
+           :container container
            :select-list sl
            :focused?-atom (atom false)})))
      nil)))
@@ -302,9 +351,9 @@
    \"Return and summarize\"]). Returns one of :return-only
    :return-and-fix :return-and-summarize, or nil on cancel/timeout."
   [api]
-  (let [items [{:value :return-only :label "Return only" :description ""}
-               {:value :return-and-fix :label "Return and fix findings" :description ""}
-               {:value :return-and-summarize :label "Return and summarize" :description ""}]
+  (let [items [{:value :return-only :label "Return only"}
+               {:value :return-and-fix :label "Return and fix findings"}
+               {:value :return-and-summarize :label "Return and summarize"}]
         height (count items)]
     (run-dialog
      api
@@ -312,17 +361,17 @@
        (let [sl (select-list/make-select-list
                  items
                  :height height
-                 :theme (theme/get-select-list-theme th)
+                 :theme (review-list-theme th)
                  :no-match-text "  No matching options"
                  :on-select (fn [item] (close (:value item)))
                  :on-escape (fn [] (close nil)))
-             overlay (framed-overlay
-                      th "Finish review:"
-                      [:container {} sl]
-                      "↑↓ navigate • enter to select • esc to cancel")]
+             container (framed-dialog
+                        th "Finish review:"
+                        [:container {} sl]
+                        (select-hint))]
          (map->ReviewSelectDialog
           {:kind nil
-           :overlay overlay
+           :container container
            :select-list sl
            :focused?-atom (atom false)})))
      nil)))

@@ -299,9 +299,11 @@
         (do (if custom-set?
               (do (set-review-custom-instructions! api nil)
                   (ext/ui-notify api "Custom review instructions removed" :info))
-              (when-let [text (dlg/show-custom-instructions-input! api)]
-                (set-review-custom-instructions! api text)
-                (ext/ui-notify api "Custom review instructions saved" :info)))
+              (let [text (dlg/show-custom-instructions-input! api)]
+                (if (and (some? text) (not (str/blank? text)))
+                  (do (set-review-custom-instructions! api text)
+                      (ext/ui-notify api "Custom review instructions saved" :info))
+                  (ext/ui-notify api "Custom review instructions not changed" :info))))
             (recur))
 
         (= :uncommitted picked)
@@ -341,8 +343,7 @@
             (let [items (mapv (fn [c]
                                 {:value (:sha c)
                                  :label (str (subs (:sha c) 0 (min 7 (count (:sha c))))
-                                             " " (:title c))
-                                 :description ""})
+                                             " " (:title c))})
                               commits)
                   picked-item (dlg/show-commit-selector! api items)]
               (if picked-item
@@ -352,9 +353,15 @@
                 (recur)))))
 
         (= :folder picked)
-        (if-let [paths (dlg/show-folder-input! api)]
-          {:type :folder :paths paths}
-          (recur))
+        ;; nil = esc (back to the preset picker, pi: showReviewSelector
+        ;; `break`); [] = blank submit (loop the folder input, pi:
+        ;; showFolderInput returns null on empty paths and the selector
+        ;; loop re-prompts)
+        (let [paths (dlg/show-folder-input! api)]
+          (cond
+            (nil? paths) (recur)
+            (empty? paths) (recur)
+            :else {:type :folder :paths paths}))
 
         :else nil))))
 
@@ -545,8 +552,7 @@
 (defn- navigate-back [_api ctx origin summarize?]
   (try
     (let [result ((:navigate-tree ctx) origin
-                                       (cond-> {:label "code-review"}
-                                         true (assoc :summarize (boolean summarize?))
+                                       (cond-> {:summarize (boolean summarize?)}
                                          summarize? (assoc :custom-instructions
                                                            prompts/review-summary-prompt
                                                            :replace-instructions true)))]
@@ -593,7 +599,10 @@
           (do (clear-review-state! api)
               (case action
                 :return-and-summarize
-                (do (ext/ui-set-editor-text api "Act on the review findings")
+                (do (when (str/blank? (or (try (ext/ui-get-editor-text api)
+                                               (catch Exception _ ""))
+                                          ""))
+                      (ext/ui-set-editor-text api "Act on the review findings"))
                     (ext/ui-notify api "Review complete! Returned and summarized." :info)
                     :ok)
 
@@ -613,11 +622,15 @@
     (spawn
      (fn []
        (try
-         (when-let [choice (dlg/show-end-review-selector! api)]
-           (case choice
-             :return-and-summarize (end-review! api ctx :return-and-summarize)
-             :return-and-fix (end-review! api ctx :return-and-fix)
-             :return-only (end-review! api ctx :return-only)))
+         (if-not (= :interactive (:mode ctx))
+           (ext/ui-notify api "End-review requires interactive mode" :error)
+           (let [choice (dlg/show-end-review-selector! api)]
+             (if (nil? choice)
+               (ext/ui-notify api "Cancelled. Use /end-review to try again." :info)
+               (case choice
+                 :return-and-summarize (end-review! api ctx :return-and-summarize)
+                 :return-and-fix (end-review! api ctx :return-and-fix)
+                 :return-only (end-review! api ctx :return-only)))))
          (catch Exception e
            (ext/ui-notify api (str "Review failed: " (or (ex-message e) (str e))) :error))
          (finally

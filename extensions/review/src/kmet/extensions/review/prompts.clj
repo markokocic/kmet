@@ -39,7 +39,7 @@
   "Review the code changes introduced by commit {sha}. Provide prioritized, actionable findings.")
 
 (def folder-review-prompt
-  "Review the code in the following paths: {paths}. This is a snapshot review (not a diff). Read the files directly in these paths and provide prioritized, actionable findings.")
+  "Review the code in the following paths: [{paths}]. This is a snapshot review (not a diff). Read the files directly in these paths and provide prioritized, actionable findings.")
 
 ;; ─── Token replacement (pi: buildReviewPrompt) ──────────────────────────
 

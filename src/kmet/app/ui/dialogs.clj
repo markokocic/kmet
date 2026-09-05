@@ -109,16 +109,17 @@
     (protocols/set-focused! (:input-comp this) val)))
 
 (defn make-input-dialog
-  "Create a one-line input dialog. TITLE — dialog title; ON-SUBMIT receives
-   the entered string; ON-CANCEL fires on escape. TH — theme map.
-   PREFILL — optional initial text (default \"\")."
+  "Create a one-line input dialog over an Input. TITLE — dialog title;
+   ON-SUBMIT receives the trimmed string; ON-CANCEL fires on escape. TH —
+   theme map. PREFILL — optional initial text (default \"\") with the
+   cursor placed after it (pi: LabelInput)."
   [title on-submit on-cancel th & [prefill]]
   (let [inp (input/make-input)
         _ (when (seq prefill)
             (input/input-set-value! inp prefill)
             ;; pi: LabelInput places the cursor after the prefilled text
             (reset! (:cursor-atom inp) (count prefill)))
-        _ (input/input-set-on-submit! inp on-submit)
+        _ (input/input-set-on-submit! inp (fn [v] (on-submit (str/trim v))))
         _ (input/input-set-on-escape! inp on-cancel)]
     (map->InputDialog
      {:container (frame th title inp

@@ -65,6 +65,15 @@
 (defn- normalize-single-line [text]
   (clojure.string/trim (clojure.string/replace text #"[\r\n]+" " ")))
 
+(defn- non-blank-desc
+  "Pi: description only takes the two-column layout when non-blank — an
+   empty (or whitespace-only) description renders no second column, so
+   the label takes the full width instead of reserving padding."
+  [desc]
+  (when (seq desc)
+    (let [s (normalize-single-line desc)]
+      (when (seq s) s))))
+
 (defn- primary-column-width
   "Pi: getPrimaryColumnWidth — widest primary value + gap, clamped to the
    configured bounds (default 32)."
@@ -174,8 +183,7 @@
           (let [col-width (primary-column-width filtered min-col max-col)]
             (doseq [[idx item] (map-indexed vector visible)]
               (let [global-idx (+ idx start-idx)
-                    desc (when (:description item)
-                           (normalize-single-line (:description item)))]
+                    desc (non-blank-desc (:description item))]
                 (vswap! lines conj
                         (render-item item (= global-idx selected) width desc theme
                                      col-width truncate-fn))))))
