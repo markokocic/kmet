@@ -12,6 +12,7 @@
    dynamic providers yet, so pi's refreshModels machinery is not ported."
   (:require [babashka.fs :as fs]
             [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [kmet.ai.auth :as auth]
             [kmet.ai.models :as models]
@@ -217,8 +218,22 @@
 
 ;; ─── Catalog loading (pi image-models.generated.ts, committed EDN) ─────────
 
+(defn- catalog-resource-dir
+  "Directory of the bundled image-model catalog: the classpath resource dir
+   in a dev checkout (src/ on the bb classpath), or nil inside a packaged
+   binary where the catalog lives zipped in the uberjar / appended jar.
+   Resolving from io/resource instead of (fs/cwd) keeps kmet working when
+   started from any directory — not just the project root."
+  []
+  (when-let [r (io/resource "kmet/ai/image_model_data/image-models.edn")]
+    (try
+      (when (= "file" (.getProtocol r))
+        (str (fs/parent (fs/path (.toURI r)))))
+      (catch Exception _ nil))))
+
 (def ^:private catalog-dir
-  (str (fs/path (fs/cwd) "src" "kmet" "ai" "image_model_data")))
+  (or (catalog-resource-dir)
+      (str (fs/path (fs/cwd) "src" "kmet" "ai" "image_model_data"))))
 
 (def ^:private required-model-keys
   [:id :name :api :provider :base-url :input :output :cost])

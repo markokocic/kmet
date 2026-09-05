@@ -9,6 +9,7 @@
    registerProvider trivial (pi: MutableModels.setProvider)."
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
+            [clojure.java.io :as io]
             [babashka.classpath :as bcp]
             [babashka.fs :as fs]
             [kmet.config :as cfg]
@@ -188,10 +189,28 @@
 
 ;; ─── Catalog loading (pi: generated providers/data/*.json) ─────────────────
 
+(defn- catalog-resource-dir
+  "Directory URL of the bundled provider catalogs: the classpath resource
+   dir in a dev checkout (src/ on the bb classpath), or nil inside a packaged
+   binary where catalogs live zipped in the uberjar / appended jar. Resolving
+   from io/resource instead of (fs/cwd) keeps kmet working when started from
+   any directory — not just the project root."
+  []
+  (when-let [r (io/resource "kmet/ai/model_data/manifest.edn")]
+    (try
+      (when (= "file" (.getProtocol r))
+        (str (fs/parent (fs/path (.toURI r)))))
+      (catch Exception _ nil))))
+
 (def model-data-dir
-  "Directory of committed provider catalog EDN files (resolved from the
-   project root — the bb tasks and the app always run from there)."
-  (str (fs/path (fs/cwd) "src" "kmet" "ai" "model_data")))
+  "Directory of committed provider catalog EDN files. Prefer the classpath
+   resource dir (dev checkout: src/ on the bb classpath) so kmet starts from
+   any cwd; falls back to the legacy cwd-relative path when the resource is
+   unavailable (e.g. a bare REPL without the classpath set). Inside a packaged
+   binary the catalogs live zipped in the uberjar — fs/exists? is false there
+   and load-bundled-providers reads them via jar-resources instead."
+  (or (catalog-resource-dir)
+      (str (fs/path (fs/cwd) "src" "kmet" "ai" "model_data"))))
 
 (def ^:dynamic *models-cache-dir*
   "User-level provider catalog cache, written by `kmet --generate-models`
