@@ -69,7 +69,8 @@
          show-status-indicator! clear-status-indicator! stop-anim-timer!
          maybe-show-cache-miss-notice!
          make-widget-area-above make-widget-area-below
-         send-message submit-message apply-hooks)
+         send-message submit-message apply-hooks
+         queue-follow-up-text!)
 
 ;; ─── Global config ref ────────────────────────────────────────────────────
 
@@ -992,6 +993,31 @@
                    :else
                    (do (debug/log "/continue command")
                        (start-agent-run! cs)))))})
+  (register-builtin-command!
+   ;; pi: no equivalent — /followup is the slash-command form of Alt+Enter
+   ;; (app.message.followUp), letting the follow-up text ride the args
+   ;; instead of the editor
+   {:name "followup"
+    :description "Queue a follow-up message (like Alt+Enter)"
+    :argument-hint "<message>"
+    :handler (fn [cs args]
+               (let [text (str/trim args)]
+                 (if (seq text)
+                   ;; Alt+Enter semantics with the args as the text: during
+                   ;; compaction the text queues as follow-up (extension
+                   ;; commands execute immediately); while the agent runs it
+                   ;; joins the follow-up queue (processed after the run
+                   ;; settles, shown in the pending display); when idle it
+                   ;; submits like a regular message.
+                   (when (= :queued (queue-follow-up-text! cs text))
+                     (ui/chat-history-show-status!
+                      (:chat-history cs)
+                      "Queued follow-up message")
+                     (tui/tui-request-render (:tui cs)))
+                   (ui/chat-history-add-message!
+                    (:chat-history cs)
+                    {:role :info :label "Follow-up"
+                     :content "Usage: /followup <message>"}))))})
   (register-builtin-command!
    {:name "tree"
     :description "Navigate session tree (switch branches)"
@@ -2642,6 +2668,37 @@
               (queue-compaction-message! cs trimmed :steer))
           (submit-message cs trimmed))))))
 
+(defn- queue-follow-up-text!
+  "Queue TEXT as a follow-up, exactly like Alt+Enter would with the text
+   in the editor (pi: followUp): during compaction extension commands
+   execute immediately and everything else queues as a follow-up for after
+   compaction; while the agent runs the text queues into the follow-up
+   queue (processed after the run settles — drained by the run's outer
+   loop); when idle it submits like a regular Enter. Shared by
+   handle-follow-up (Alt+Enter) and the /followup command. Returns
+   :executed | :compaction | :queued | :submitted."
+  [cs text]
+  (cond
+    ;; Queue input during compaction (pi: handleFollowUp → isCompacting
+    ;; → extension commands execute immediately via prompt(), everything
+    ;; else queues as followUp).
+    @(:compacting? @(:agent-state cs))
+    (if (extension-command? text)
+      (do (execute-extension-command! text) :executed)
+      (do (queue-compaction-message! cs text :follow-up) :compaction))
+
+    @(:running-turn? cs)
+    ;; Pi: handleFollowUp queues a follow-up (processed after the run
+    ;; settles). Not added to the chat here — like steering, it appears
+    ;; as a user message when the loop consumes it (:message-start,
+    ;; pi: message_start → addMessageToChat).
+    (do (agent/follow-up! @(:agent-state cs) text)
+        (update-pending-messages! cs)
+        :queued)
+
+    :else
+    (do (handle-submit cs text) :submitted)))
+
 (defn- handle-follow-up
   "Pi: handleFollowUp — Alt+Enter. While the agent is running, queue the
    editor text as a follow-up (processed after the run settles); when idle,
@@ -2652,25 +2709,7 @@
     (when (seq text)
       (editor/editor-push-history! ed text)
       (editor-text-set! ed "")
-      (cond
-        ;; Queue input during compaction (pi: handleFollowUp → isCompacting
-        ;; → extension commands execute immediately via prompt(), everything
-        ;; else queues as followUp).
-        @(:compacting? @(:agent-state cs))
-        (if (extension-command? text)
-          (execute-extension-command! text)
-          (queue-compaction-message! cs text :follow-up))
-
-        @(:running-turn? cs)
-        ;; Pi: handleFollowUp queues a follow-up (processed after the run
-        ;; settles). Not added to the chat here — like steering, it appears
-        ;; as a user message when the loop consumes it (:message-start,
-        ;; pi: message_start → addMessageToChat).
-        (do (agent/follow-up! @(:agent-state cs) text)
-            (update-pending-messages! cs))
-
-        :else
-        (handle-submit cs text))
+      (queue-follow-up-text! cs text)
       (tui/tui-request-render (:tui cs)))))
 
 (defn- restore-queued-messages!

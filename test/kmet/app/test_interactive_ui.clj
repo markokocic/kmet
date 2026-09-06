@@ -936,6 +936,85 @@
       (t/is (empty? @(:compaction-queued cs)) "not queued")
       (commands/clear-commands!))))
 
+;; ─── /followup command (pi: no equivalent — slash form of Alt+Enter) ──────
+
+(deftest test-followup-command-registered
+  (testing "/followup is a real builtin inside register-builtin-commands!"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [c (commands/find-command "followup")]
+      (t/is (some? c) "followup registered")
+      (t/is (= "Queue a follow-up message (like Alt+Enter)" (:description c)))
+      (t/is (= "<message>" (:argument-hint c)) "arg hint shown")
+      (t/is (some? (:handler c)) "followup has a handler"))))
+
+(deftest test-followup-command-queues-while-running
+  (testing "/followup <text> while the agent runs queues the args as a
+            follow-up (pi: handleFollowUp semantics) — nothing reaches the
+            chat or context until the loop consumes it"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [cs (compaction-cs)]
+      (reset! (:running-turn? cs) true)
+      (with-redefs [tui/tui-request-render (fn [_] nil)
+                    ui/chat-history-show-status! (fn [_ _] nil)]
+        ((:handler (commands/find-command "followup")) cs "do the thing"))
+      (let [{:keys [steering follow-up]} (agent/queued-messages @(:agent-state cs))]
+        (t/is (= [] steering) "not steered into the running turn")
+        (t/is (= ["do the thing"] follow-up) "args queued as follow-up"))
+      (t/is (empty? @(:messages @(:agent-state cs)))
+            "message NOT sent to the agent context yet"))))
+
+(deftest test-followup-command-submits-when-idle
+  (testing "/followup <text> while idle starts a run with the args as the
+            message — Alt+Enter's idle path (pi: handleFollowUp → submit)"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [cs (compaction-cs)
+          started (atom [])]
+      (with-redefs [ui/chat-history-add-message! (fn [_ _] nil)
+                    ui/chat-history-start-streaming! (fn [_] nil)
+                    agent/run-agent-turn (fn [a opts] (reset! started [a opts]) (future))
+                    inter/activate-working-indicator! (fn [_] nil)
+                    inter/start-anim-timer! (fn [_] nil)
+                    inter/update-footer! (fn [_] nil)
+                    tui/tui-request-render (fn [_] nil)]
+        ((:handler (commands/find-command "followup")) cs "wrap it up"))
+      (t/is (seq @started) "run-agent-turn called")
+      (t/is (= "wrap it up" (get-in @started [1 :message]))
+            "run carries the args as the message")
+      (let [{:keys [steering follow-up]} (agent/queued-messages @(:agent-state cs))]
+        (t/is (empty? steering) "nothing queued")
+        (t/is (empty? follow-up) "nothing queued")))))
+
+(deftest test-followup-command-queues-during-compaction
+  (testing "/followup <text> during compaction queues as follow-up (pi:
+            handleFollowUp → queueCompactionMessage(text, followUp))"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [cs (compaction-cs)]
+      (reset! (:compacting? @(:agent-state cs)) true)
+      (with-redefs [tui/tui-request-render (fn [_] nil)
+                    ui/chat-history-show-status! (fn [_ _] nil)]
+        ((:handler (commands/find-command "followup")) cs "later msg"))
+      (t/is (= [{:text "later msg" :mode :follow-up}]
+               @(:compaction-queued cs))
+            "queued with follow-up mode"))))
+
+(deftest test-followup-command-blank-args-usage
+  (testing "/followup with no args shows usage instead of queueing anything"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [cs (compaction-cs)
+          msg (atom nil)]
+      (reset! (:running-turn? cs) true)
+      (with-redefs [ui/chat-history-add-message! (fn [_ m] (reset! msg m))]
+        ((:handler (commands/find-command "followup")) cs ""))
+      (t/is (= "Usage: /followup <message>" (:content @msg))
+            "usage info shown")
+      (t/is (empty? (:follow-up (agent/queued-messages @(:agent-state cs))))
+            "nothing queued for blank args"))))
+
 (deftest test-cancel-two-step-during-midrun-compaction
   (testing "escape during a mid-run compaction aborts the compaction first;
             a second escape then cancels the turn (pi: compaction_start
