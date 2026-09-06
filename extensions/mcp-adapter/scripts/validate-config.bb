@@ -4,11 +4,12 @@
 ;; template creation, enable/disable write round-trip (incl. the
 ;; lower-source-disabled case), metadata cache, and loading the entry
 ;; against create-nullable-api (proxy tool, /mcp command, event
-;; registrations, resources-discover skill path).
+;; registrations, register-skill! skill).
 ;;
 ;; Config paths are redirected to temp files via with-redefs — the real
 ;; ~/.kmet/agent/mcp.edn is never touched.
 (require '[clojure.string :as str]
+         '[babashka.fs :as fs]
          '[clojure.java.io :as io]
          '[kmet.libs.json :as json]
          '[kmet.extension :as ext]
@@ -143,7 +144,7 @@
 
 ;; ─── Phase 2 config: include/exclude, keywords, host adoption ─────────────
 
-(defn test-phase2-config [global project]
+(defn test-phase2-config [global _project]
   (println "\n── phase-2 config ──")
   (spit global (pr-str {:mcp-servers
                         {"srv" {:command "npx"
@@ -213,12 +214,14 @@
       (check "mcp command registered" (contains? (:commands s) "mcp"))
       (check "session-start handler" (seq (get-in s [:handlers :session-start])))
       (check "session-shutdown handler" (seq (get-in s [:handlers :session-shutdown])))
-      (check "resources-discover handler" (seq (get-in s [:handlers :resources-discover])))
-      (let [skill (first (get-in s [:handlers :resources-discover]))]
-        (check "resources-discover returns skill path"
-               (let [result (skill {:type :resources-discover} {})]
-                 (and (vector? (:skill-paths result))
-                      (str/ends-with? (first (:skill-paths result)) "/skills/mcp")))))
+      (check "no resources-discover handler (skills self-register)"
+             (empty? (get-in s [:handlers :resources-discover])))
+      (let [skill (first (:skills s))]
+        (check "mcp skill self-registered"
+               (and (some? skill)
+                    (= "mcp-adapter:skills/mcp/SKILL.md"
+                       (get-in skill [:opts :location]))
+                    (str/includes? (str (:content skill)) "name: mcp"))))
       (let [cmd (get-in s [:commands "mcp"])]
         (check "mcp command completions"
                (let [items ((:get-argument-completions cmd) "con")]

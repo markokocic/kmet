@@ -24,7 +24,8 @@
          '[extensions.lsp-adapter.runtime :as runtime]
          '[extensions.lsp-adapter.tools :as tools]
          '[extensions.lsp-adapter.panel :as panel]
-         '[kmet.tui.protocols :as protocols])
+         '[kmet.tui.protocols :as protocols]
+         '[kmet.tui.utils :as u])
 
 (def failures (atom 0))
 
@@ -45,7 +46,7 @@
 ;; -- detect: invariants ---------------------------------------------------
 
 (check "every builtin-claimed extension has a languageId entry"
-       (let [claimed (mapcat :extensions detect/builtin-descriptors)]
+       (let [claimed (mapcat :extensions (detect/effective-servers {}))]
          (every? #(contains? detect/language-ids %) claimed)))
 
 (check "filename markers resolve"
@@ -91,16 +92,18 @@
       eff (detect/effective-servers {})
       claim (first (detect/claiming eff (str proj "/nested/deep/f.clj") proj))]
   (check "marker walk-up finds the project root"
-         (= (fs/canonicalize proj) (:root claim))))
+         (= (fs/canonicalize proj) (:root claim)))
+  (fs/delete-tree tmp))
 
 (let [tmp (tmp-dir)
       _ (fs/create-dirs (str tmp "/js"))
       _ (spit (str tmp "/deno.json") "{}")
       _ (spit (str tmp "/js/a.ts") "let x = 1")
       claims (detect/claiming (detect/effective-servers {})
-                              (str tmp "/js/a.ts") (str tmp))]
+                              (str tmp "/js/a.ts") tmp)]
   (check "exclude marker hands the tree off (tsserver not claimed)"
-         (empty? claims)))
+         (empty? claims))
+  (fs/delete-tree tmp))
 
 (let [tmp (tmp-dir)
       outside (str tmp "/outside")
@@ -109,7 +112,8 @@
       claim (first (detect/claiming (detect/effective-servers {})
                                     (str outside "/a.rb") "/definitely/not/cwd"))]
   (check "file outside cwd attaches at its own directory"
-         (= (fs/canonicalize outside) (:root claim))))
+         (= (fs/canonicalize outside) (:root claim)))
+  (fs/delete-tree tmp))
 
 ;; -- uri building ----------------------------------------------------------
 ;; path->uri must survive two hostile environments: kmet evaluates
@@ -214,31 +218,31 @@
   (runtime/set-on-change! st (fn [] (swap! changes inc)))
   (try
     (check "definition returns a shaped location"
-           (let [out (tools/execute st nil
-                                    {:operation "definition"
-                                     :filePath sample :line 1 :character 1})]
+           (let [out (:content (tools/execute st nil
+                                              {:operation "definition"
+                                               :filePath sample :line 1 :character 1}))]
              (and (str/includes? out "\u2500\u2500 fake (")
                   (str/includes? out "sample.txt:5:3"))))
     (check "hover shapes contents"
-           (str/includes? (tools/execute st nil {:operation "hover"
-                                                 :filePath sample :line 1
-                                                 :character 1})
+           (str/includes? (:content (tools/execute st nil {:operation "hover"
+                                                           :filePath sample :line 1
+                                                           :character 1}))
                           "hover docs for fake"))
     (check "documentSymbol flattens with kind names"
-           (let [out (tools/execute st nil {:operation "documentSymbol"
-                                            :filePath sample})]
+           (let [out (:content (tools/execute st nil {:operation "documentSymbol"
+                                                      :filePath sample}))]
              (and (str/includes? out "alpha fn")
                   (str/includes? out "beta var"))))
     (check "references lists two sites"
-           (let [out (tools/execute st nil {:operation "references"
-                                            :filePath sample :line 1
-                                            :character 1})]
+           (let [out (:content (tools/execute st nil {:operation "references"
+                                                      :filePath sample :line 1
+                                                      :character 1}))]
              (and (str/includes? out "sample.txt:10:1")
                   (str/includes? out "sample.txt:12:2"))))
     (check "incoming calls compose prepare+incoming"
-           (let [out (tools/execute st nil {:operation "incomingCalls"
-                                            :filePath sample :line 1
-                                            :character 1})]
+           (let [out (:content (tools/execute st nil {:operation "incomingCalls"
+                                                      :filePath sample :line 1
+                                                      :character 1}))]
              (and (str/includes? out "caller fn")
                   (str/includes? out "(1 site)"))))
     (check "server->client configuration probe was auto-answered"
@@ -250,12 +254,15 @@
     (check "diagnostics push is collected and rendered"
            (let [deadline (+ (System/currentTimeMillis) 5000)]
              (loop []
-               (let [out (tools/execute st nil {:operation "diagnostics"
-                                                :filePath sample})]
+               (let [out (:content (tools/execute st nil {:operation "diagnostics"
+                                                          :filePath sample}))]
                  (or (str/includes? out "ERROR [1:1] fake diagnostic")
                      (and (< (System/currentTimeMillis) deadline)
                           (do (Thread/sleep 100) (recur))))))))
     (check "broken server fails fast and sticks"
+           ;; execute returns {:content :details} since structured results
+           ;; (Rev 2): failures surface as content text, so the probe reads
+           ;; :content and the stickiness asserts a fast second miss.
            (let [_ (runtime/set-config!
                     st (assoc-in cfg [:servers "missing"]
                                  {:command ["definitely-not-a-real-bin-xyz"]
@@ -263,13 +270,13 @@
                  _ (spit (str dir "/m.zzz") "x")
                  attempt (fn []
                            (let [t0 (System/currentTimeMillis)
-                                 out (try (tools/execute st nil
-                                                         {:operation "definition"
-                                                          :filePath (str dir "/m.zzz")
-                                                          :line 1 :character 1})
+                                 out (try (:content (tools/execute st nil
+                                                                   {:operation "definition"
+                                                                    :filePath (str dir "/m.zzz")
+                                                                    :line 1 :character 1}))
                                           (catch Exception e (ex-message e)))]
                              [out (- (System/currentTimeMillis) t0)]))
-                 [out1 ms1] (attempt)
+                 [out1 _ms1] (attempt)
                  [out2 ms2] (attempt)]
              (and (string? out1) (string? out2)
                   (str/includes? out1 "not installed")
@@ -299,11 +306,16 @@
                                                 (reset! restarted n)
                                                 (runtime/clear-broken! st n))
                                   :refresh-fn (fn [] (reset! refreshed true))})
-          rendered (protocols/render comp 70)]
+          rendered (protocols/render comp 70)
+          ;; render returns a vector of ANSI-styled lines: join + strip
+          ;; before asserting (the hints line styles each key with
+          ;; theme/italic, so "esc close" never appears contiguously).
+          stripped (str/join "\n" (map u/strip-ansi-codes rendered))]
       (check "panel renders rows, icons and hints"
-             (and (str/includes? rendered "fake")
-                  (str/includes? rendered "\u2717")   ;; broken icon
-                  (str/includes? rendered "esc close")))
+             (and (str/includes? stripped "fake")
+                  (str/includes? stripped "\u2717")   ;; broken icon
+                  (str/includes? stripped "esc")
+                  (str/includes? stripped "close")))
       ;; selection wraps inside the full registry row count
       (protocols/handle-input comp "\u001b[B")
       (check "selection stays in range after down"
@@ -344,11 +356,12 @@
                              :extensions ["txt"]
                              :root-markers ["root-marker.txt"]}}}
       st (runtime/new-state nil cfg)
-      f #'entry/status-text]
+      f #'entry/status-text
+      tmp (tmp-dir)]
   (check "idle fleet stays out of the footer"
          (nil? (f st)))
-  (swap! (:conns st) assoc ["fake" (str (tmp-dir))]
-         {:client nil :name "fake" :root (tmp-dir)
+  (swap! (:conns st) assoc ["fake" tmp]
+         {:client nil :name "fake" :root tmp
           :docs (atom {}) :diags (atom {})})
   ;; total includes the builtin registry now, so assert the shape:
   ;; exactly one connected of however many the fleet holds
@@ -356,7 +369,8 @@
          (let [out (f st)] (and out (re-find #"^LSP 1/\d+$" out))))
   (check "footer clears when nothing is configured"
          (nil? (do (runtime/set-config! st {})
-                   (f st)))))
+                   (f st))))
+  (fs/delete-tree tmp))
 
 (check "shutdown-all disconnects everything"
        (let [{:keys [dir cfg sample]} (temp-project)
