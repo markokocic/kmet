@@ -232,6 +232,19 @@
                                             (range 4))
                                       1000)))))
 
+(t/deftest test-high-byte-alt-key-conversion
+  ;; pi StdinBuffer.process: a lone high byte (> 127, e.g. Alt+x as 0xF8
+  ;; from legacy terminals/IMEs) becomes ESC + (byte - 128) for
+  ;; parseKeypress compat. Runs before the paste-burst decision so the
+  ;; converted bytes participate in burst tracking like real ESC pairs.
+  (let [norm #(let [rc (atom []) sl (atom nil)]
+                ((var kmet.tui.core/normalize-input-batch!) % rc sl))]
+    (t/is (= "\u001bx" (norm (str (char 248)))) "0xF8 → ESC x (alt+x)")
+    (t/is (= "hi\u001bx" (norm (str "hi" (char 248)))) "mixed ascii + high byte")
+    (t/is (= "\u001b\u001b" (norm (str (char 155)))) "0x9B → ESC ESC")
+    (t/is (= "abc" (norm "abc")) "plain ascii untouched")
+    (t/is (= "" (norm "")) "empty batch stays empty")))
+
 (t/deftest test-paste-input-decision
   (let [recent (burst-chars 3 5 \return 1000)
         now 1000]
@@ -578,6 +591,29 @@
       ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
       (t/is (= "\nhi" (editor/editor-get-text ed)) "control + run inserted")
       (t/is (= "\u001b[A" (last @dispatched)) "arrow key dispatched")
+      (t/is (= "" @buf) "buffer drained")))
+  (testing "WezTerm kitty quirk: raw ESC + CSI-u release splits (pi parity)"
+    ;; WezTerm sends Escape press as a raw ESC byte and release as a full
+    ;; CSI-u sequence; "\u001b\u001b" alone parses as ctrl+alt+[, which
+    ;; would swallow the CSI-u tail as literal text. Split when another
+    ;; ESC-prefixed sequence follows (pi extractCompleteSequences).
+    (let [tui (core/create-tui nil)
+          buf (atom "\u001b\u001b[27;5;97~")
+          dispatched (atom [])]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (t/is (= ["\u001b" "\u001b[27;5;97~"] @dispatched)
+            "ESC first, release sequence intact")
+      (t/is (= "" @buf) "buffer drained")
+      (t/is (= "escape" (keys/parse-key "\u001b")) "head is Escape")
+      (t/is (some? (keys/parse-key "\u001b[27;5;97~")) "tail still parses")))
+  (testing "a bare ESC ESC pair still parses as one key (no over-split)"
+    (let [tui (core/create-tui nil)
+          buf (atom "\u001b\u001b")
+          dispatched (atom [])]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (t/is (= ["\u001b\u001b"] @dispatched) "pair dispatched whole")
       (t/is (= "" @buf) "buffer drained"))))
 
 (t/deftest test-incomplete-sequence-flush-timeouts
