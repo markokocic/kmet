@@ -213,23 +213,26 @@
         ;; Paste start marker. A nested START while already buffering is
         ;; literal paste content (pi treats everything between the first
         ;; START and first END as data): fall through to the buffering leg
-        ;; instead of resetting.
+        ;; instead of resetting. pi strips only the first START
+        ;; (String.replace with a string pattern).
         (and (clojure.string/includes? data "\u001b[200~")
              (not= @paste-state :buffering))
         (do (reset! paste-state :buffering)
             (reset! paste-buffer "")
-            (let [remaining (clojure.string/replace data "\u001b[200~" "")]
+            (let [remaining (clojure.string/replace-first data "\u001b[200~" "")]
               (when (seq remaining)
                 (protocols/handle-input this remaining)))
             nil)
 
-        ;; Inside paste buffer
+        ;; Inside paste buffer. Trailing input after END (pi: remaining +
+        ;; recursive handleInput) re-enters dispatch instead of dropping.
         (= @paste-state :buffering)
         (do (swap! paste-buffer str data)
             (let [buf @paste-buffer
                   end-idx (clojure.string/index-of buf "\u001b[201~")]
               (when (and end-idx (>= end-idx 0))
                 (let [paste-text (subs buf 0 end-idx)
+                      remaining (subs buf (+ end-idx (count "\u001b[201~")))
                       ;; pi: handlePaste removes newlines (single-line input),
                       ;; tabs become 4 spaces
                       clean (clojure.string/replace paste-text #"\r\n|\r|\n" "")
@@ -240,7 +243,9 @@
                   (reset! cursor-atom (+ cursor (count clean)))
                   ;; Only leave buffering once the end marker arrives
                   (reset! paste-state :idle)
-                  (reset! paste-buffer ""))))
+                  (reset! paste-buffer "")
+                  (when (seq remaining)
+                    (protocols/handle-input this remaining)))))
             nil)
 
         ;; Escape / Cancel

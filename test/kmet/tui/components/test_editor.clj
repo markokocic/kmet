@@ -453,7 +453,19 @@
     (core/handle-input e (str "\u001b[200~" big "\u001b[201~"))
     (t/is (clojure.string/includes? (editor/editor-get-text e) "[paste #1 +15 lines"))
     (t/is (= 1 (count @(:paste-store e))))
-    (t/is (= big (editor/editor-get-paste e 1)))))
+    (t/is (= big (editor/editor-get-paste e 1))))
+  ;; pi: large paste = >10 lines OR >1000 chars (chars variant marker)
+  (let [e (editor/make-editor)
+        big (apply str (repeat 1200 "x"))]
+    (core/handle-input e (str "\u001b[200~" big "\u001b[201~"))
+    (t/is (clojure.string/includes? (editor/editor-get-text e) "[paste #1 1200 chars"))
+    (t/is (= big (editor/editor-get-paste e 1))))
+  ;; 10 lines / 1000 chars exactly is still inline (pi: strictly greater)
+  (let [e (editor/make-editor)
+        ten (clojure.string/join "\n" (repeat 10 "ab"))]
+    (core/handle-input e (str "\u001b[200~" ten "\u001b[201~"))
+    (t/is (= ten (editor/editor-get-text e)) "boundary stays inline")
+    (t/is (empty? @(:paste-store e)))))
 
 (t/deftest test-editor-paste-marker-atomic-backspace
   (let [e (editor/make-editor)
@@ -499,7 +511,8 @@
 (t/deftest test-editor-paste-csi-u
   (let [e (editor/make-editor)]
     (core/handle-input e (str "\u001b[200~" "abc\u001b[97;5u" "def" "\u001b[201~"))
-    (t/is (= "abc\u0001def" (editor/editor-get-text e)))))
+    (t/is (= "abcdef" (editor/editor-get-text e))
+          "decoded ctrl byte filtered (pi: decode, then <32 filter)")))
 
 (t/deftest test-editor-paste-smart-path-spacing
   (let [e (editor/make-editor)]
@@ -535,6 +548,25 @@
     (doseq [c "draft"] (core/handle-input e (str c)))
     (core/handle-input e (ctrl 16))
     (t/is (= "draft" (editor/editor-get-text e)) "no history, no change")))
+
+(t/deftest test-editor-paste-exits-history-browsing
+  ;; pi handlePaste calls exitHistoryBrowsing: pasting while browsing
+  ;; history commits to the browsed text and leaves browsing mode.
+  (let [e (editor/make-editor)]
+    (editor/editor-push-history! e "hello")
+    (editor/editor-push-history! e "world")
+    (doseq [c "draft"] (core/handle-input e (str c)))
+    (core/handle-input e (ctrl 16))
+    (t/is (= "world" (editor/editor-get-text e)))
+    (core/handle-input e (str "\u001b[200~" "PASTE" "\u001b[201~"))
+    (t/is (= "PASTEworld" (editor/editor-get-text e))
+          "paste lands at cursor (history browse parks cursor at col 0)")
+    (t/is (= -1 @(:history-idx e)) "browsing mode exited")
+    (t/is (nil? @(:history-draft e)) "draft discarded")
+    (core/handle-input e (ctrl 16))
+    (t/is (= "world" (editor/editor-get-text e))
+          "next browse starts from history top, not the paste")
+    (t/is (= ["PASTEworld"] (:lines @(:history-draft e))) "fresh draft captured")))
 
 ;; ─── Dynamic height ───────────────────────────────────────────────────────
 

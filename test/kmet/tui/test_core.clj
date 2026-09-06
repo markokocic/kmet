@@ -318,10 +318,12 @@
 
 (t/deftest test-bracketed-paste-unaffected
   (testing "bracketed paste still buffers and normalizes via handle-paste"
+    ;; pi split("\n"): the trailing \r normalizes to a trailing newline,
+    ;; which split keeps as an empty final line.
     (let [{:keys [editor submitted]}
           (pasted-editor (paste-chars "\u001b[200~ab\r\ncd\r\u001b[201~" 5 1000))]
       (t/is (= [] @submitted))
-      (t/is (= "ab\ncd" (editor/editor-get-text editor))))))
+      (t/is (= "ab\ncd\n" (editor/editor-get-text editor))))))
 
 ;; ─── Paste-marker buffering (regression: text sharing a buffer pass with
 ;;      a marker was dropped) ────────────────────────────────────────────────
@@ -383,6 +385,14 @@
       (t/is (= ["\u001b"] @dispatched) "genuine Escape still works")
       (t/is (= "" @buf) "buffer consumed"))))
 
+(defn- feed-batches!
+  "Feed each BATCH whole in one pass (like the real reader's drain)."
+  [tui buf batches]
+  (doseq [b batches]
+    (swap! (:input-generation tui) inc)
+    (swap! buf str b)
+    ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)))
+
 (defn- batched-editor
   "TUI with a focused editor; feeds each BATCH whole in one pass (like the
    real reader's drain) and returns {:editor ed :buf buf :submitted}."
@@ -394,10 +404,7 @@
     (core/tui-add-child tui ed)
     (core/tui-set-focus tui ed)
     (editor/editor-set-on-submit! ed (fn [t] (reset! submitted t)))
-    (doseq [b batches]
-      (swap! (:input-generation tui) inc)
-      (swap! buf str b)
-      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf))
+    (feed-batches! tui buf batches)
     {:editor ed :buf buf :submitted submitted}))
 
 (t/deftest test-batched-bracketed-paste-commits-in-one-pass
@@ -418,9 +425,10 @@
       (t/is (= "helloxy" (editor/editor-get-text editor)) "no fused paste+keys")
       (t/is (= "" @buf))))
   (testing "a pasted CR becomes a newline in the editor, not a submit"
-    (let [{:keys [editor buf submitted]} (batched-editor ["\u001b[200~line1\rline2\u001b[201~"])]
+    (let [{:keys [editor buf submitted]} (batched-editor ["\u001b[200~line1\rline2\u001b[201~" "x"])]
       (t/is (nil? @submitted) "paste never submits")
-      (t/is (= "line1\nline2" (editor/editor-get-text editor)))
+      (t/is (= "line1\nline2x" (editor/editor-get-text editor))
+            "CR splits lines, x appends after the paste")
       (t/is (= "" @buf))))
   (testing "text before START stays outside the paste"
     (let [{:keys [editor buf]} (batched-editor ["ab\u001b[200~cd\u001b[201~ef"])]
@@ -470,22 +478,20 @@
           buf (atom "")]
       (core/tui-add-child tui inp)
       (core/tui-set-focus tui inp)
-      (doseq [b ["\u001b[200~hello\u001b[201~" "x"]]
-        (swap! (:input-generation tui) inc)
-        (swap! buf str b)
-        ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf))
+      (feed-batches! tui buf ["\u001b[200~hello\u001b[201~" "x"])
       (t/is (= "hellox" (input/input-get-value inp)) "no fused paste+keys")
       (t/is (= "" @buf) "nothing left waiting for a later key")))
   (testing "back-to-back pastes in one batch both commit"
     (let [{:keys [editor buf]} (batched-editor ["\u001b[200~one\u001b[201~\u001b[200~two\u001b[201~"])]
       (t/is (= "onetwo" (editor/editor-get-text editor)))
       (t/is (= "" @buf))))
-  (testing "a nested START inside paste content is literal (pi parity)"
-    ;; pi treats everything between the first START and first END as data:
-    ;; a nested START must not reset the buffer and drop content.
+  (testing "a nested START inside paste content does not drop content"
+    ;; Everything between the first START and first END is paste data: a
+    ;; nested START must not reset the buffer. (The editor additionally
+    ;; strips control bytes, so the raw ESC byte does not survive there.)
     (let [{:keys [editor buf]} (batched-editor ["\u001b[200~a\u001b[200~b\u001b[201~"])]
-      (t/is (= "a\u001b[200~b" (editor/editor-get-text editor))
-            "nested marker preserved literally")
+      (t/is (= "a[200~b" (editor/editor-get-text editor))
+            "content kept, control bytes filtered")
       (t/is (= "" @buf))))
   (testing "a nested START is literal in the input box too"
     (let [tui (core/create-tui nil)
@@ -493,10 +499,7 @@
           buf (atom "")]
       (core/tui-add-child tui inp)
       (core/tui-set-focus tui inp)
-      (doseq [b ["\u001b[200~a\u001b[200~b\u001b[201~"]]
-        (swap! (:input-generation tui) inc)
-        (swap! buf str b)
-        ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf))
+      (feed-batches! tui buf ["\u001b[200~a\u001b[200~b\u001b[201~"])
       (t/is (= "a\u001b[200~b" (input/input-get-value inp))
             "nested marker preserved literally")
       (t/is (= "" @buf)))))

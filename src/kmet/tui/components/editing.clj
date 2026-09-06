@@ -455,6 +455,14 @@
       (clojure.string/replace "\r" "\n")
       (clojure.string/replace "\t" "    ")))
 
+(defn filter-paste-printable
+  "Keep printable characters plus newlines (pi handlePaste filteredText):
+   chars below 32 other than newline are control bytes, not paste content.
+   Runs after decode + normalize so decoded control bytes (e.g. CSI-u) are
+   filtered too — pi decodes first, then filters, so only newlines survive."
+  [text]
+  (apply str (filter #(or (= % \newline) (>= (int %) 32)) text)))
+
 (defn smart-path-spacing
   "If text starts with a path marker (/ ~ .) and prev-char is a word character,
    prepend a space so the pasted path doesn't merge with the preceding word.

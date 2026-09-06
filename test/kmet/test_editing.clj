@@ -260,6 +260,13 @@
   (t/is (= "word" (edit/smart-path-spacing "word" "a")) "non-path start unchanged")
   (t/is (= "x" (edit/smart-path-spacing "x" "a"))))
 
+(t/deftest test-filter-paste-printable
+  ;; pi handlePaste: decode, normalize, then keep only \n and >= 32.
+  (t/is (= "abdef\nghi" (edit/filter-paste-printable "ab\u0001\u001bdef\nghi"))
+        "control bytes and ESC stripped, newlines kept")
+  (t/is (= "" (edit/filter-paste-printable "\u0007\u0008")))
+  (t/is (= "plain" (edit/filter-paste-printable "plain"))))
+
 (t/deftest test-paste-marker-predicate
   (t/is (edit/paste-marker? "[paste #1 +3 lines — ctrl+o to expand]"))
   (t/is (not (edit/paste-marker? "hello")))

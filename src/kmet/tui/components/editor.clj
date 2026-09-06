@@ -793,44 +793,55 @@
 
 ;; ─── Paste markers
 
+(defn- exit-history-browsing!
+  "Leave history browsing without touching text (pi exitHistoryBrowsing)."
+  [editor]
+  (reset! (:history-idx editor) -1)
+  (reset! (:history-draft editor) nil))
+
 (defn- handle-paste [editor text]
   (cancel-autocomplete editor)
+  (exit-history-browsing! editor)
   (let [state @(:state-atom editor) lines (:lines state) cl (:cursor-line state)
         cc (:cursor-col state)
         prev-char (when (pos? cc) (subs (nth lines cl "") (dec cc) cc))
-        text (edit/smart-path-spacing (edit/normalize-paste-text text) prev-char)
-        paste-lines (clojure.string/split-lines text)
-        line-count (count paste-lines)]
-    (push-undo-state editor)
-    (reset! (:last-action editor) nil)
-    (reset! (:redo-stack editor) [])
-    (if (<= line-count 10)
-      (let [first-line (first paste-lines) rest-lines (rest paste-lines)
-            cur-line (nth lines cl "")
-            new-cur-line (str (subs cur-line 0 cc) first-line (subs cur-line cc))
-            remaining (subs cur-line cc)
-            new-lines (if (empty? rest-lines)
-                        (assoc lines cl new-cur-line)
-                        (vec (concat (subvec lines 0 cl)
-                                     [(str (subs cur-line 0 cc) first-line)]
-                                     (mapv (fn [l] l) rest-lines)
-                                     (when (seq remaining) [remaining])
-                                     (subvec lines (inc cl)))))]
-        (if (empty? rest-lines)
-          ;; Single-line paste — cursor lands after the pasted text
+        text (edit/smart-path-spacing (edit/filter-paste-printable (edit/normalize-paste-text text)) prev-char)
+        paste-lines (clojure.string/split text #"\n" -1)
+        line-count (count paste-lines)
+        total-chars (count text)]
+    (when (seq text)
+      (push-undo-state editor)
+      (reset! (:last-action editor) nil)
+      (reset! (:redo-stack editor) [])
+      (if (and (<= line-count 10) (<= total-chars 1000))
+        (let [first-line (first paste-lines) rest-lines (rest paste-lines)
+              cur-line (nth lines cl "")
+              new-cur-line (str (subs cur-line 0 cc) first-line (subs cur-line cc))
+              remaining (subs cur-line cc)
+              new-lines (if (empty? rest-lines)
+                          (assoc lines cl new-cur-line)
+                          (vec (concat (subvec lines 0 cl)
+                                       [(str (subs cur-line 0 cc) first-line)]
+                                       (mapv (fn [l] l) rest-lines)
+                                       (when (seq remaining) [remaining])
+                                       (subvec lines (inc cl)))))]
+          (if (empty? rest-lines)
+            ;; Single-line paste — cursor lands after the pasted text
+            (swap! (:state-atom editor) assoc
+                   :lines new-lines :cursor-col (+ cc (count first-line)))
+            (swap! (:state-atom editor) assoc
+                   :lines new-lines :cursor-line (+ cl (count rest-lines))
+                   :cursor-col (count (last rest-lines)))))
+        (let [n (swap! (:paste-counter editor) inc)
+              marker (if (> line-count 10)
+                       (str "[paste #" n " +" line-count " lines — ctrl+o to expand]")
+                       (str "[paste #" n " " total-chars " chars — ctrl+o to expand]"))
+              cur-line (nth lines cl "")
+              new-cur-line (str (subs cur-line 0 cc) marker (subs cur-line cc))]
+          (swap! (:paste-store editor) assoc n text)
           (swap! (:state-atom editor) assoc
-                 :lines new-lines :cursor-col (+ cc (count first-line)))
-          (swap! (:state-atom editor) assoc
-                 :lines new-lines :cursor-line (+ cl (count rest-lines))
-                 :cursor-col (count (last rest-lines)))))
-      (let [n (swap! (:paste-counter editor) inc)
-            marker (str "[paste #" n " +" line-count " lines — ctrl+o to expand]")
-            cur-line (nth lines cl "")
-            new-cur-line (str (subs cur-line 0 cc) marker (subs cur-line cc))]
-        (swap! (:paste-store editor) assoc n text)
-        (swap! (:state-atom editor) assoc
-               :lines (assoc lines cl new-cur-line) :cursor-col (+ cc (count marker)))))
-    (when-let [cb @(:on-change editor)] (cb (editor-get-text editor)))))
+                 :lines (assoc lines cl new-cur-line) :cursor-col (+ cc (count marker)))))
+      (when-let [cb @(:on-change editor)] (cb (editor-get-text editor))))))
 
 ;; ─── Character jump mode
 
@@ -1216,25 +1227,31 @@
           ;; A nested START while already buffering is literal paste content
           ;; (pi treats everything between the first START and first END as
           ;; data): fall through to the buffering leg instead of resetting.
+          ;; pi strips only the first START (String.replace, string pattern).
           (and (clojure.string/includes? data "\u001b[200~")
                (not= @paste-state :buffering))
           (do (reset! paste-state :buffering)
               (reset! paste-buffer "")
-              (let [remaining (clojure.string/replace data "\u001b[200~" "")]
+              (let [remaining (clojure.string/replace-first data "\u001b[200~" "")]
                 (when (seq remaining)
                   (protocols/handle-input this remaining)))
               nil)
 
+          ;; Trailing input after END (pi: remaining + recursive handleInput)
+          ;; re-enters dispatch instead of dropping.
           (= @paste-state :buffering)
           (do (swap! paste-buffer str data)
               (let [buf @paste-buffer
                     end-idx (clojure.string/index-of buf "\u001b[201~")]
                 (when (and end-idx (>= end-idx 0))
-                  (let [paste-text (subs buf 0 end-idx)]
-                    (handle-paste this (edit/decode-csi-u paste-text)))
-                  ;; Only leave buffering once the end marker arrives
-                  (reset! paste-state :idle)
-                  (reset! paste-buffer "")))
+                  (let [paste-text (subs buf 0 end-idx)
+                        remaining (subs buf (+ end-idx (count "\u001b[201~")))]
+                    (handle-paste this (edit/decode-csi-u paste-text))
+                    ;; Only leave buffering once the end marker arrives
+                    (reset! paste-state :idle)
+                    (reset! paste-buffer "")
+                    (when (seq remaining)
+                      (protocols/handle-input this remaining)))))
               nil)
 
           ;; Autocomplete dropdown — intercept only dropdown keys; other
