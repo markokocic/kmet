@@ -1,33 +1,12 @@
 {:schema-version 1
- :generated-at "2026-09-02T23:43:15Z"
+ :generated-at "2026-09-06T20:10:23Z"
  :provider {:id :cerebras
             :name "Cerebras"
             :env-vars ["CEREBRAS_API_KEY"]
             :default-model "zai-glm-4.7"}
  :models
  {:openai-completions
-  {"gemma-4-31b"
-   {:id "gemma-4-31b"
-    :name "Gemma 4 31B IT"
-    :provider :cerebras
-    :api :openai-completions
-    :base-url "https://api.cerebras.ai/v1"
-    :reasoning true
-    :thinking-level-map {:high "HIGH"
-                         :low nil
-                         :max nil
-                         :medium nil
-                         :minimal "MINIMAL"
-                         :off nil
-                         :xhigh nil}
-    :input [:text :image]
-    :cost {:input 0.99 :output 1.49 :cache-read 0 :cache-write 0}
-    :context-window 131072
-    :max-tokens 40960
-    :compat {:supports-store false
-             :supports-developer-role false
-             :max-tokens-field :max-tokens}}
-   "gpt-oss-120b"
+  {"gpt-oss-120b"
    {:id "gpt-oss-120b"
     :name "GPT OSS 120B"
     :provider :cerebras
@@ -45,6 +24,27 @@
     :cost {:input 0.35 :output 0.75 :cache-read 0 :cache-write 0}
     :context-window 131072
     :max-tokens 40960
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
+   "qwen-3.8-27b"
+   {:id "qwen-3.8-27b"
+    :name "Qwen3.8 27B"
+    :provider :cerebras
+    :api :openai-completions
+    :base-url "https://api.cerebras.ai/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max nil
+                         :medium "medium"
+                         :minimal nil
+                         :off "none"
+                         :xhigh nil}
+    :input [:text :image]
+    :cost {:input 0.99 :output 1.49 :cache-read 0 :cache-write 0}
+    :context-window 65536
+    :max-tokens 32768
     :compat {:supports-store false
              :supports-developer-role false
              :max-tokens-field :max-tokens}}}}}

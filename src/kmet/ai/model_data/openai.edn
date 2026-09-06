@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-02T23:43:15Z"
+ :generated-at "2026-09-06T20:10:23Z"
  :provider {:id :openai
             :name "OpenAI"
             :env-vars ["OPENAI_API_KEY"]
@@ -484,6 +484,31 @@
              :supports-openai-grammar-tools true
              :supports-tool-search true
              :supports-additional-tools true
+             :supports-explicit-prompt-cache-mode true}}
+   "gpt-6-astra"
+   {:id "gpt-6-astra"
+    :name "GPT-6 Astra"
+    :provider :openai
+    :api :openai-responses
+    :base-url "https://api.openai.com/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 10
+           :tiers [{:input 20 :input-tokens-above 272000 :output 75 :cache-read 2 :cache-write 25}]
+           :output 50
+           :cache-read 1
+           :cache-write 12.5}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:supports-strict-mode true
+             :supports-openai-grammar-tools true
              :supports-explicit-prompt-cache-mode true}}
    "gpt-realtime-2.1"
    {:id "gpt-realtime-2.1"

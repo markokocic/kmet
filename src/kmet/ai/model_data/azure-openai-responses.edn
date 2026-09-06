@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-02T23:43:15Z"
+ :generated-at "2026-09-06T20:10:23Z"
  :provider {:id :azure-openai-responses
             :name "Azure OpenAI"
             :env-vars ["AZURE_OPENAI_API_KEY"]
@@ -424,6 +424,25 @@
                          :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 2.5}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:supports-openai-grammar-tools true}}
+   "gpt-6-astra"
+   {:id "gpt-6-astra"
+    :name "GPT-6 Astra"
+    :provider :azure-openai-responses
+    :api :azure-openai-responses
+    :base-url ""
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 10 :output 50 :cache-read 1 :cache-write 12.5}
     :context-window 1050000
     :max-tokens 128000
     :compat {:supports-openai-grammar-tools true}}

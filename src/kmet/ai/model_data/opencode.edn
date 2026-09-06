@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-02T23:43:15Z"
+ :generated-at "2026-09-06T20:10:23Z"
  :provider {:id :opencode
             :name "OpenCode (Zen)"
             :env-vars ["OPENCODE_API_KEY"]
@@ -314,6 +314,28 @@
              :supports-developer-role false
              :requires-reasoning-content-on-assistant-messages true
              :max-tokens-field :max-tokens}}
+   "deepseek-v4-flash-vision-exp"
+   {:id "deepseek-v4-flash-vision-exp"
+    :name "DeepSeek V4 Flash Vision Exp"
+    :provider :opencode
+    :api :openai-completions
+    :base-url "https://opencode.ai/zen/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low nil
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text :image]
+    :cost {:input 0.14 :output 0.28 :cache-read 0.028 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 384000
+    :compat {:supports-store false
+             :supports-developer-role false
+             :requires-reasoning-content-on-assistant-messages true
+             :max-tokens-field :max-tokens}}
    "deepseek-v4-pro"
    {:id "deepseek-v4-pro"
     :name "DeepSeek V4 Pro"
@@ -380,6 +402,48 @@
                          :xhigh nil}
     :input [:text]
     :cost {:input 1.4 :output 4.4 :cache-read 0.26 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 131072
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
+   "glm-5.3"
+   {:id "glm-5.3"
+    :name "GLM-5.3"
+    :provider :opencode
+    :api :openai-completions
+    :base-url "https://opencode.ai/zen/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text]
+    :cost {:input 1.4 :output 4.4 :cache-read 0.26 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 131072
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
+   "glm-5.3-flash"
+   {:id "glm-5.3-flash"
+    :name "GLM-5.3-Flash"
+    :provider :opencode
+    :api :openai-completions
+    :base-url "https://opencode.ai/zen/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text :image]
+    :cost {:input 0.15 :output 0.5 :cache-read 0.03 :cache-write 0}
     :context-window 1000000
     :max-tokens 131072
     :compat {:supports-store false
@@ -949,6 +1013,30 @@
     :max-tokens 128000
     :compat {:session-affinity-format :openai-nosession
              :supports-openai-grammar-tools true}}
+   "gpt-6-astra"
+   {:id "gpt-6-astra"
+    :name "GPT-6 Astra"
+    :provider :opencode
+    :api :openai-responses
+    :base-url "https://opencode.ai/zen/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal nil
+                         :off nil
+                         :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 10
+           :tiers [{:input 20 :input-tokens-above 272000 :output 75 :cache-read 2 :cache-write 25}]
+           :output 50
+           :cache-read 1
+           :cache-write 12.5}
+    :context-window 1050000
+    :max-tokens 128000
+    :compat {:session-affinity-format :openai-nosession
+             :supports-openai-grammar-tools true}}
    "grok-4.5"
    {:id "grok-4.5"
     :name "Grok 4.5"
@@ -1044,6 +1132,25 @@
                          :xhigh "xhigh"}
     :input [:text :image]
     :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 131072
+    :compat {:session-affinity-format :openai-nosession}}
+   "muse-spark-1.3"
+   {:id "muse-spark-1.3"
+    :name "Muse Spark 1.3"
+    :provider :opencode
+    :api :openai-responses
+    :base-url "https://opencode.ai/zen/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium "medium"
+                         :minimal "minimal"
+                         :off nil
+                         :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 1.25 :output 4.25 :cache-read 0.15 :cache-write 0}
     :context-window 1048576
     :max-tokens 131072
     :compat {:session-affinity-format :openai-nosession}}

@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-04T07:52:20Z"
+ :generated-at "2026-09-06T20:10:23Z"
  :provider {:id :vercel-ai-gateway
             :name "Vercel AI Gateway"
             :env-vars ["AI_GATEWAY_API_KEY"]
@@ -953,6 +953,28 @@
    "inclusionai/ling-3.0-flash-fin-free"
    {:id "inclusionai/ling-3.0-flash-fin-free"
     :name "Ling 3.0 Flash Fin (Free)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 256000
+    :max-tokens 32000}
+   "inclusionai/ling-3.0-flash-sante"
+   {:id "inclusionai/ling-3.0-flash-sante"
+    :name "Ling 3.0 Flash Sante"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 256000
+    :max-tokens 32000}
+   "inclusionai/ling-3.0-flash-sante-free"
+   {:id "inclusionai/ling-3.0-flash-sante-free"
+    :name "Ling 3.0 Flash Sante (Free)"
     :provider :vercel-ai-gateway
     :api :anthropic-messages
     :base-url "https://ai-gateway.vercel.sh"
@@ -1998,7 +2020,7 @@
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
     :input [:text :image]
-    :cost {:input 0.4 :output 2.4 :cache-read 0.04 :cache-write 0.25}
+    :cost {:input 0.4 :output 2.4 :cache-read 0.04 :cache-write 0.5}
     :context-window 1050000
     :max-tokens 128000}
    "openai/gpt-5.6-sol"
@@ -2022,7 +2044,7 @@
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
     :input [:text :image]
-    :cost {:input 4 :output 20 :cache-read 0.4 :cache-write 2.5}
+    :cost {:input 4 :output 20 :cache-read 0.4 :cache-write 5}
     :context-window 1050000
     :max-tokens 128000}
    "openai/gpt-5.6-terra"
@@ -2046,7 +2068,29 @@
     :reasoning true
     :thinking-level-map {:xhigh "xhigh"}
     :input [:text :image]
-    :cost {:input 4 :output 24 :cache-read 0.4 :cache-write 2.5}
+    :cost {:input 4 :output 24 :cache-read 0.4 :cache-write 5}
+    :context-window 1050000
+    :max-tokens 128000}
+   "openai/gpt-6-astra"
+   {:id "openai/gpt-6-astra"
+    :name "GPT-6 Astra"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 10 :output 50 :cache-read 1 :cache-write 12.5}
+    :context-window 1050000
+    :max-tokens 128000}
+   "openai/gpt-6-astra-fast"
+   {:id "openai/gpt-6-astra-fast"
+    :name "GPT-6 Astra (Fast)"
+    :provider :vercel-ai-gateway
+    :api :anthropic-messages
+    :base-url "https://ai-gateway.vercel.sh"
+    :reasoning true
+    :input [:text :image]
+    :cost {:input 20 :output 100 :cache-read 2 :cache-write 25}
     :context-window 1050000
     :max-tokens 128000}
    "openai/gpt-oss-120b"
