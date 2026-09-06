@@ -413,8 +413,9 @@ works for dir installs, symlinked checkouts and unexpanded jars:
 Rules: resources are referenced by exact shipped names — directory listing
 inside jars is unsupported. Skills/prompts registered this way are
 self-contained single files (no relative refs); the host stores the body in
-memory and discloses extension skills via `/skill:name` expansion (`name:path`
-locations never go through the `read` tool). Themes need no new api:
+memory and serves extension skills through the `read` tool under their
+`name:path` location (pass the `<location>` verbatim) as well as via
+`/skill:name` expansion. Themes need no new api:
 `kmet.tui.theme` is shared by reference — call `make-theme` +
 `register-theme!` in `init` and `unregister-theme!` on unload. Every
 registration returns a deregister fn tracked for automatic unload.

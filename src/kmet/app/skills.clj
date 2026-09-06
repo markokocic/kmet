@@ -14,6 +14,7 @@
             [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.debug :as debug]
+            [kmet.app.tools.read :as read]
             [kmet.app.tools.registry :as tools-registry]
             [kmet.libs.yaml :as yaml]))
 
@@ -76,6 +77,7 @@
         {:skill {:name name
                  :description description
                  :body body
+                 :raw raw
                  :location (str location)
                  :extension extension
                  :file-path (when (nil? extension) (str location))
@@ -94,6 +96,7 @@
   (swap! skills conj {:name name
                       :description description
                       :body nil
+                      :raw nil
                       :location nil
                       :extension nil
                       :file-path nil
@@ -183,7 +186,9 @@
    and hands the content over, so jarred skills need no filesystem path).
    OPTS: :location (display locator, e.g. `my-ext:skills/mcp/SKILL.md`),
    :fallback-name (when frontmatter has no name), :extension (owner name).
-   Same validation/collision rules as dir loading (first wins). Returns a
+   Same validation/collision rules as dir loading (first wins). The body is
+   served through the read tool under :location (pass it verbatim) as well
+   as /skill:name expansion. Returns a
    deregister fn removing exactly this skill."
   [raw-content {:keys [location fallback-name extension]}]
   (let [{:keys [skill diagnostics]} (parse-skill-content raw-content
@@ -201,6 +206,26 @@
           (println (str "Warning: skill collision at " (:path collision) ": "
                         (:message collision))))))
     (fn [] (swap! skills (fn [ss] (remove #(identical? % skill) ss))))))
+
+(defn- skill-content-for-path
+  "The SKILL.md text for RAW-PATH when it names a registered extension
+   skill locator, or nil. Matches the exact <location> (e.g.
+   `my-ext:skills/foo/SKILL.md`) and a cwd-joined absolute form (the model
+   may join the location onto the working directory). File skills need no
+   handling — they exist on disk."
+  [raw-path]
+  (let [p (str raw-path)]
+    (some (fn [s]
+            (when (and (:extension s) (seq (:location s)))
+              (let [loc (str (:location s))]
+                (when (or (= p loc)
+                          (str/ends-with? p (str "/" loc)))
+                  (or (:raw s) (:body s))))))
+          @skills)))
+
+;; tools.read cannot require this namespace (skills -> registry -> read
+;; would cycle), so the locator resolver is pushed there at load time.
+(read/set-skill-content-resolver! (fn [p] (skill-content-for-path p)))
 
 (defn get-skills
   []
@@ -271,9 +296,9 @@
     (if (empty? visible)
       ""
       (str "\n\nThe following skills provide specialized instructions for specific tasks.\n"
-           "Use the read tool to load a skill's file when the task matches its description.\n"
+           "Use the read tool with the skill's exact <location> path to load its SKILL.md when the task matches its description.\n"
            "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n"
-           "Extension skills (locations like `ext-name:relative/path`) are self-contained — disclose them with `/skill:name` expansion instead of the read tool; they have no skill directory.\n"
+           "Extension skills (locations like `ext-name:relative/path`) are served by the read tool from memory — pass the <location> string verbatim as the read path; they have no skill directory for relative refs.\n"
            "\n<available_skills>\n"
            (str/join "\n"
                      (map (fn [s]

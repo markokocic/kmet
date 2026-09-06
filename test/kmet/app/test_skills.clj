@@ -283,3 +283,32 @@
                                         {:location "e:nodesc/SKILL.md" :extension "e"}))
     (t/is (nil? (skills/get-skill "nodesc")))
     (skills/clear-skills!)))
+
+(t/deftest test-extension-skill-readable-via-read-tool
+  (t/testing "extension skill bodies load through the read tool under their location"
+    (skills/clear-skills!)
+    (let [dereg (skills/register-extension-skill!
+                 "---\nname: read-me\ndescription: Readable skill\n---\n# Body\nDo it."
+                 {:location "my-ext:skills/read-me/SKILL.md" :extension "my-ext"})]
+      (try
+        (t/testing "exact location resolves"
+          (let [result (tools/execute-tool "read" {:path "my-ext:skills/read-me/SKILL.md"})]
+            (t/is (not (:is-error result)))
+            (t/is (str/includes? (:content result) "Do it."))))
+        (t/testing "cwd-joined absolute locator resolves (model verbatim join)"
+          (let [result (tools/execute-tool "read" {:path (str (fs/cwd) "/my-ext:skills/read-me/SKILL.md")})]
+            (t/is (not (:is-error result)))
+            (t/is (str/includes? (:content result) "Do it."))))
+        (t/testing "offset/limit apply to skill reads"
+          (let [result (tools/execute-tool "read" {:path "my-ext:skills/read-me/SKILL.md" :offset 1 :limit 1})]
+            (t/is (not (:is-error result)))
+            (t/is (str/includes? (:content result) "---"))))
+        (t/testing "unknown locator still reports File not found"
+          (let [result (tools/execute-tool "read" {:path "my-ext:skills/nope/SKILL.md"})]
+            (t/is (:is-error result))
+            (t/is (str/includes? (:content result) "File not found"))))
+        (t/testing "deregistered skill no longer resolves"
+          (dereg)
+          (let [result (tools/execute-tool "read" {:path "my-ext:skills/read-me/SKILL.md"})]
+            (t/is (:is-error result))))
+        (finally (skills/clear-skills!))))))

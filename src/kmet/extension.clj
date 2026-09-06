@@ -126,7 +126,8 @@
    filesystem path. OPTS: :location (display locator, e.g.
    `my-ext:skills/mcp/SKILL.md`), :fallback-name (when frontmatter has no
    name). Jar skills must be self-contained single files (no relative
-   refs). Returns a deregister fn."
+   refs). The host serves the body through the read tool under :location
+   and through /skill:name expansion. Returns a deregister fn."
   [api raw-content & [opts]]
   ((:register-skill! api) raw-content opts))
 

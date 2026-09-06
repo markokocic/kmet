@@ -209,6 +209,28 @@
 
 ;; ─── Tool implementation ───────────────────────────────────────────────────
 
+;; Extension skill content resolver (set by kmet.app.skills). read cannot
+;; require skills (skills -> registry -> read would cycle), so skills pushes
+;; a locator resolver here at load time. Extension skills (ext:path locators,
+;; jar artifacts) have no filesystem path — the <location> in
+;; <available_skills> resolves through read from memory instead.
+(defonce ^:private skill-content-resolver (atom nil))
+
+(defn set-skill-content-resolver!
+  "Set the fn serving extension skill bodies through read. F receives the
+   raw read path and returns the SKILL.md text, or nil when the path is not
+   a known extension skill locator."
+  [f]
+  (reset! skill-content-resolver f)
+  nil)
+
+(defn- resolve-skill-text
+  "The in-memory SKILL.md text for RAW-PATH when it names a registered
+   extension skill locator, or nil."
+  [raw-path]
+  (when-let [f @skill-content-resolver]
+    (try (f raw-path) (catch Exception _ nil))))
+
 (defn execute
   "Read file contents with optional offset/limit (1-indexed, pi: read.ts).
    For image files, returns the image data in :images and a text
@@ -220,11 +242,17 @@
         {:content "File not found: " :is-error true}
         (let [cwd (str (fs/cwd))
               abs-path (resolve-read-path (str raw-path) cwd)
-              f (io/file abs-path)]
-          (if-not (fs/exists? f)
+              f (io/file abs-path)
+              on-disk? (file-exists? abs-path)
+              ;; Extension skills (ext:path locators) have no filesystem
+              ;; path — serve their in-memory body so the <location> in
+              ;; <available_skills> loads through read directly.
+              skill-text (when-not on-disk? (resolve-skill-text (str raw-path)))
+              all-bytes (cond skill-text (.getBytes ^String skill-text "UTF-8")
+                              on-disk? (fs/read-all-bytes f))]
+          (if (nil? all-bytes)
             {:content (str "File not found: " raw-path) :is-error true}
-            (let [all-bytes (fs/read-all-bytes f)
-                  mime-type (detect-supported-image-mime-type all-bytes)]
+            (let [mime-type (detect-supported-image-mime-type all-bytes)]
               (if mime-type
                 ;; Image file — return base64 (pi: processImage would resize; we return raw)
                 (let [base64-data (.encodeToString (Base64/getEncoder) all-bytes)]
