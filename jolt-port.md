@@ -108,6 +108,18 @@ thread) needs the new transport. `jsonrpc.clj` (409 LOC, MCP stdio
 transport) rides `babashka.process` pipes — portable *if* `jolt.process`
 covers spawn + async pipe IO + `destroy-tree` (verified: `process.ss` implements `ProcessHandle` descendant tracking behind `destroy-tree`; still probe pipe-streaming + Windows behavior).
 
+**Decision (2026-09-09):** after probing, Jolt routes **all** HTTP through
+the existing curl transport — not `jolt-lang/http-client`. Rationale:
+the curl path already handles direct connections, proxies, streaming
+(`:as :stream`), cancel (`:signal`), and idle timeouts, and it uses only
+`babashka.process` + `java.io.File` + `java.lang.Process` (all verified
+on Jolt). `jolt-lang/http-client` covers only the unproxied, non-stream
+slice and would still need curl for streaming/proxy/cancel — so a single
+transport is simpler. Implemented in `libs/http.clj` via `#?(:jolt ...)`
+reader conditionals: the java.net.http transport is JVM-only, and Jolt
+falls through to `curl-request` for every request. Verified: GET/POST
+return status=200 on both Jolt and JVM/bb.
+
 ### B2. Subprocess/process management (`libs/process.clj`, bash tool, MCP stdio)
 
 kmet leans on `babashka.process` hard: `proc/process` (19 uses), `shell`,
@@ -162,7 +174,7 @@ the core agent must work before extensions matter.
 
 | # | kmet surface | Jolt answer (verified on checkout) | size |
 |---|---|---|---|
-| M1 | `cheshire` (56 `parse-string`/`generate-string` call sites across 25 files in `ai/`, `libs/`, `app/` — re-counted 2026-09-05) | **no JSON lib in stdlib** — biggest pure-logic gap. Write a `kmet.libs.json` (or vendor data.json) over string ops; Jolt strings/regexes suffice. Streaming tool-call arg accumulation in `sse.clj` needs incremental parsing — keep the shape, swap the parser | new ~500-800 LOC lib |
+| M1 | `cheshire` (56 `parse-string`/`generate-string` call sites across 25 files in `ai/`, `libs/`, `app/` — re-counted 2026-09-05) | **no JSON lib in stdlib** — biggest pure-logic gap. Write a `kmet.libs.json` (or vendor data.json) over string ops; Jolt strings/regexes suffice. Streaming tool-call arg accumulation in `sse.clj` needs incremental parsing — keep the shape, swap the parser. **Note:** `http.clj` is already ported (curl path via `#?(:jolt ...)`); it's blocked at load only by this M1 dep. | new ~500-800 LOC lib |
 | M2 | `tui/terminal.clj` (JLine raw/timed-reads/size) + `core.clj` reader/timers/resize/drain | termios FFI (Unix) + kernel32 FFI (Windows); `future` reader + `locking` + gen-counters — see `jolt-tui.md` §§4–7,9. Evaluated 2026-09-06: `jolt-lang/glimmer-tui` (ncursesw via FFI, Unix-only, fullscreen `initscr` takeover) rejected — wrong architecture for the inline ANSI/scrollback model; JLine stays on bb (`jolt-tui.md` §2 decision) | rewrite ~500 LOC (Jolt only) |
 | M3 | `libs/crypto.clj` (315 LOC: RSA/EC `KeyFactory`, `SHA256withRSA/ECDSA` `Signature`) + `libs/aws_sigv4.clj` (204 LOC: `MessageDigest` SHA-256, `Mac` HmacSHA256, `HexFormat`, `Normalizer`?) — grep the exact class list before the FFI design | OpenSSL FFI following `mvn_http.clj`'s libcrypto/libssl loading (note macOS boringssl SIGABRT hazard — explicit Homebrew paths only); RSA via libcrypto; `SecureRandom` via OS source | rewrite ~500 LOC |
 | M4 | `libs/oauth.clj` + `ai/oauth.clj` + `ai/google_adc.clj` (browser launch, localhost callback server, token cache) | `ServerSocket` shim exists (host-interop lists it, gated on `(require 'jolt.socket)`); browser launch via `jolt.process`; token cache via `spit`/`slurp` | adapt ~1k LOC |
@@ -180,7 +192,52 @@ the core agent must work before extensions matter.
 
 ---
 
-## 4. What ports mostly as-is (the good news)
+## 4. Verified `libs/` status (2026-09-09)
+
+Cold-ran every `kmet.libs.*` namespace under Jolt (`jolt v0.8.3`, threaded
+Chez 10.x) — require + load each, then run its test suite (or probe its
+public fns when no test file exists). Result: **18 of 26 load and run, 8
+need work.**
+
+| lib | status | notes |
+|-----|--------|-------|
+| `archive` | 🔴 | `java.util.zip.ZipOutputStream` ctor missing (M5) |
+| `aws_sigv4` | 🔴 | `javax.crypto.Mac`, `java.security.MessageDigest` (M3) |
+| `clipboard` | 🟢 | uses `babashka.process`, works |
+| `concurrent` | 🟢 | `spawn` returns `Thread`; works |
+| `context` | 🟢 | tests pass (11/11) |
+| `crypto` | 🔴 | requires `cheshire` (M1) |
+| `diff` | 🟢 | pure, works |
+| `dynamic_value` | 🟢 | tests pass (53/53) |
+| `edit_diff` | 🟢 | uses `java.text.Normalizer`, `java.util.regex.Pattern`; works |
+| `edn_store` | 🟢 | tests pass (40/40) |
+| `edn_writer` | 🟢 | pure, works |
+| `hash` | 🟢 | pure, works |
+| `highlight` | 🟢 | tests pass (139/139) |
+| `hooks` | 🟢 | pure, works |
+| `http` | 🟡 | **ported** — routes Jolt through curl transport via `#?(:jolt ...)` reader conditionals; JVM keeps java.net.http. Blocked at load only by transitive `kmet.libs.json` → cheshire (M1) |
+| `json` | 🔴 | requires `cheshire` (M1) |
+| `jsonrpc` | 🔴 | requires `cheshire` (M1) |
+| `markdown` | 🟢 | tests pass (137/137) |
+| `oauth` | 🔴 | requires `cheshire` (M1) |
+| `process` | 🟢 | uses `babashka.process`; works |
+| `reakt` | 🟢 | tests pass (30/30) |
+| `sse` | 🔴 | requires `cheshire` (M1) |
+| `terminal` | 🟢 | uses `java.time`, `java.lang.ProcessHandle`, `java.util.Base64`, `clojure.java.io`; works |
+| `terminal_image` | 🟢 | tests pass (41/41) |
+| `usage` | 🟢 | pure, works |
+| `yaml` | 🟡 | 19/20 tests pass; `test-numbers` fails — Jolt reads `99999999999999999999999` as bigint, bb's `parse-long` returns nil so it stays a string |
+
+**8 blocked libs** trace to two missing pieces: `cheshire` (6 libs:
+crypto, http, json, jsonrpc, oauth, sse) and JVM crypto/zip (2 libs:
+archive, aws_sigv4). The http port is functionally complete — it's
+blocked at load time only because `kmet.libs.json` still requires
+cheshire. Once M1 ships, those 6 libs drop to 🟢 with no further http
+changes.
+
+---
+
+## 5. What ports mostly as-is (the good news)
 
 - **Pure logic** (~60–70% of LOC): `libs/{diff,edit_diff,yaml,markdown,highlight,usage,hash,context,edn_writer,dynamic_value,hooks,concurrent}`, `ai/api/*` request builders (all 10 provider wire formats — pure data transformation), `ai/{models,model_config,constrained_sampling,attribution,hooks}`, `libs/reakt`, `tui/{hiccup,macros,protocols,keys,keybindings,utils,theme}` + all 21 components, most of `app/{session,compaction,skills,prompts,commands,event_bus,keybindings,model_resolver}`, tools `{find,grep,ls,read}` (fs ops via `jolt.fs`).
 - **`babashka.fs` → `jolt.fs`**: vendored + supplemented (`jolt.bb.fs`), same API minus zip. The 39 `fs/` call sites (`exists?`, `path`, `cwd`, `canonicalize`, `glob`, `create-dirs`, …) transfer almost mechanically.
@@ -201,7 +258,7 @@ the core agent must work before extensions matter.
 6. **Packaging + tooling** (1–2 wks): `jolt build` pipeline replacing `build.clj`, test runner `^:slow` split, lint/format gates, model generators.
 7. **Extensions** (open-ended): B3 redesign decision; port shipped extensions after.
 
-Estimate honesty: stages 1–3 are predictable port labor; B1's remaining work is the streaming + proxy + cancel wrapper around `jolt-lang/http-client` (adopted 2026-09-06 for the direct non-stream slice — the old curl-vs-OpenSSL-native choice is gone) plus the curl-subprocess transport for `:as :stream`/proxied requests; B3 is a research spike before it is labor.
+Estimate honesty: B1 transport is **decided** (curl-only on Jolt, java.net.http on JVM via `#?(:clj ...)` reader conditionals — `http.clj` ported and verified, 2026-09-09). Remaining B1 work is `sse.clj` (pure parsing, port the logic) + `libs.oauth`/`ai.oauth`/`ai.google_adc` (M4, needs `jolt.socket`). M1 (cheshire) is the biggest remaining gap — blocks 6 libs from loading. B3 is a research spike before it is labor.
 
 ---
 
