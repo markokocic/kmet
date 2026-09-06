@@ -164,7 +164,7 @@ and must satisfy `kmet.libs.test-self-contained`.
 Dependencies allowed: `kmet.extension`, `kmet.tui.*`, `kmet.libs.*`
 (including `kmet.libs.http` — the outbound-HTTP boundary; direct
 `babashka.http-client` requires are rejected), `clojure.*`, `babashka.*`,
-`cheshire.core` + `clojure.core.async`. **No `deps.edn` needed** (all libs
+`clojure.data.json` + `clojure.core.async`. **No `deps.edn` needed** (all libs
 are bb-bundled and resolved from the bb classpath). Reused existing libs:
 `kmet.libs.process` (stdio spawn + tree-kill), `kmet.libs.sse` (SSE parsing,
 both transports), `kmet.libs.file-lock` conventions (atomic cache/token
@@ -304,7 +304,7 @@ Notifications received mid-request are consumed/dropped; stale responses
 - Reuse `kmet.libs.process` for process management: `track-pid!` on spawn,
   `collect-descendant-pids` + `kill-process-tree!` on disconnect/shutdown
   (npx-style servers spawn children — a bare `proc/stop` orphans them).
-- Reader thread: buffered stdout lines → `cheshire` parse → push to a
+- Reader thread: buffered stdout lines → `clojure.data.json` parse → push to a
   core.async channel (capacity 128); `::eof` marker + close on EOF.
 - Stderr drained into a bounded tail (last 20 lines) for diagnostics.
 - `request!`: write newline-delimited JSON with `:id`, `alts!!` until the
@@ -837,13 +837,10 @@ landed and every deliberate deviation from the text above.
     `mcp({connect})`/`/mcp connect` bypass the window and clear the
     failure on success, and status shows `failed Ns ago — reason`
     (reverting to the normal label after expiry).
-15. **`cheshire.core` is injected into extension contexts** — the loader's
-    context-injection filter gained the `cheshire.` prefix
-    (`src/kmet/app/extensions.clj`; the filter's own comment already
-    documented that cheshire "stays injected", the whitelist just lacked
-    it). The plan's "bundled cheshire.core" dependency note therefore
-    holds; cheshire's Maven copy fails to evaluate in sci (Jackson
-    classnames), so the injected bundled copy is the only working path.
+15. **`clojure.data.json` is injected into extension contexts** — the loader's
+    context-injection filter includes the `clojure.data.json` prefix
+    (`src/kmet/app/extensions.clj`). data.json's Maven copy runs fine under
+    SCI, so it is injected by reference for identity sharing.
     This was validated by loading the extension through the real
     `kmet.app.extensions/load-extension!` in a headless runner and driving
     the `mcp` tool against the fake stdio server from inside the sci

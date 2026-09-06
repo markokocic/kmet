@@ -174,7 +174,7 @@ the core agent must work before extensions matter.
 
 | # | kmet surface | Jolt answer (verified on checkout) | size |
 |---|---|---|---|
-| M1 | `cheshire` (56 `parse-string`/`generate-string` call sites across 25 files in `ai/`, `libs/`, `app/` — re-counted 2026-09-05) | **no JSON lib in stdlib** — biggest pure-logic gap. Write a `kmet.libs.json` (or vendor data.json) over string ops; Jolt strings/regexes suffice. Streaming tool-call arg accumulation in `sse.clj` needs incremental parsing — keep the shape, swap the parser. **Note:** `http.clj` is already ported (curl path via `#?(:jolt ...)`); it's blocked at load only by this M1 dep. | new ~500-800 LOC lib |
+| M1 | `clojure.data.json` (the swap from `cheshire` → `data.json` is done — `kmet.libs.json` now aliases `clojure.data.json` directly) | **no JSON lib in stdlib** — biggest pure-logic gap. Write a `kmet.libs.json` over string ops; Jolt strings/regexes suffice. Streaming tool-call arg accumulation in `sse.clj` needs incremental parsing — keep the shape, swap the parser. **Note:** `http.clj` is already ported (curl path via `#?(:jolt ...)`); it's blocked at load only by this M1 dep. | new ~500-800 LOC lib |
 | M2 | `tui/terminal.clj` (JLine raw/timed-reads/size) + `core.clj` reader/timers/resize/drain | termios FFI (Unix) + kernel32 FFI (Windows); `future` reader + `locking` + gen-counters — see `jolt-tui.md` §§4–7,9. Evaluated 2026-09-06: `jolt-lang/glimmer-tui` (ncursesw via FFI, Unix-only, fullscreen `initscr` takeover) rejected — wrong architecture for the inline ANSI/scrollback model; JLine stays on bb (`jolt-tui.md` §2 decision) | rewrite ~500 LOC (Jolt only) |
 | M3 | `libs/crypto.clj` (315 LOC: RSA/EC `KeyFactory`, `SHA256withRSA/ECDSA` `Signature`) + `libs/aws_sigv4.clj` (204 LOC: `MessageDigest` SHA-256, `Mac` HmacSHA256, `HexFormat`, `Normalizer`?) — grep the exact class list before the FFI design | OpenSSL FFI following `mvn_http.clj`'s libcrypto/libssl loading (note macOS boringssl SIGABRT hazard — explicit Homebrew paths only); RSA via libcrypto; `SecureRandom` via OS source | rewrite ~500 LOC |
 | M4 | `libs/oauth.clj` + `ai/oauth.clj` + `ai/google_adc.clj` (browser launch, localhost callback server, token cache) | `ServerSocket` shim exists (host-interop lists it, gated on `(require 'jolt.socket)`); browser launch via `jolt.process`; token cache via `spit`/`slurp` | adapt ~1k LOC |
@@ -206,7 +206,7 @@ need work.**
 | `clipboard` | 🟢 | uses `babashka.process`, works |
 | `concurrent` | 🟢 | `spawn` returns `Thread`; works |
 | `context` | 🟢 | tests pass (11/11) |
-| `crypto` | 🔴 | requires `cheshire` (M1) |
+| `crypto` | 🔴 | requires data.json (M1) |
 | `diff` | 🟢 | pure, works |
 | `dynamic_value` | 🟢 | tests pass (53/53) |
 | `edit_diff` | 🟢 | uses `java.text.Normalizer`, `java.util.regex.Pattern`; works |
@@ -215,20 +215,20 @@ need work.**
 | `hash` | 🟢 | pure, works |
 | `highlight` | 🟢 | tests pass (139/139) |
 | `hooks` | 🟢 | pure, works |
-| `http` | 🟡 | **ported** — routes Jolt through curl transport via `#?(:jolt ...)` reader conditionals; JVM keeps java.net.http. Blocked at load only by transitive `kmet.libs.json` → cheshire (M1) |
-| `json` | 🔴 | requires `cheshire` (M1) |
-| `jsonrpc` | 🔴 | requires `cheshire` (M1) |
+| `http` | 🟡 | **ported** — routes Jolt through curl transport via `#?(:jolt ...)` reader conditionals; JVM keeps java.net.http. Blocked at load only by transitive `kmet.libs.json` → data.json (M1) |
+| `json` | 🔴 | requires data.json (M1) |
+| `jsonrpc` | 🔴 | requires data.json (M1) |
 | `markdown` | 🟢 | tests pass (137/137) |
-| `oauth` | 🔴 | requires `cheshire` (M1) |
+| `oauth` | 🔴 | requires data.json (M1) |
 | `process` | 🟢 | uses `babashka.process`; works |
 | `reakt` | 🟢 | tests pass (30/30) |
-| `sse` | 🔴 | requires `cheshire` (M1) |
+| `sse` | 🔴 | requires data.json (M1) |
 | `terminal` | 🟢 | uses `java.time`, `java.lang.ProcessHandle`, `java.util.Base64`, `clojure.java.io`; works |
 | `terminal_image` | 🟢 | tests pass (41/41) |
 | `usage` | 🟢 | pure, works |
 | `yaml` | 🟡 | 19/20 tests pass; `test-numbers` fails — Jolt reads `99999999999999999999999` as bigint, bb's `parse-long` returns nil so it stays a string |
 
-**8 blocked libs** trace to two missing pieces: `cheshire` (6 libs:
+**8 blocked libs** trace to two missing pieces: `clojure.data.json` (6 libs:
 crypto, http, json, jsonrpc, oauth, sse) and JVM crypto/zip (2 libs:
 archive, aws_sigv4). The http port is functionally complete — it's
 blocked at load time only because `kmet.libs.json` still requires
@@ -258,7 +258,7 @@ changes.
 6. **Packaging + tooling** (1–2 wks): `jolt build` pipeline replacing `build.clj`, test runner `^:slow` split, lint/format gates, model generators.
 7. **Extensions** (open-ended): B3 redesign decision; port shipped extensions after.
 
-Estimate honesty: B1 transport is **decided** (curl-only on Jolt, java.net.http on JVM via `#?(:clj ...)` reader conditionals — `http.clj` ported and verified, 2026-09-09). Remaining B1 work is `sse.clj` (pure parsing, port the logic) + `libs.oauth`/`ai.oauth`/`ai.google_adc` (M4, needs `jolt.socket`). M1 (cheshire) is the biggest remaining gap — blocks 6 libs from loading. B3 is a research spike before it is labor.
+Estimate honesty: B1 transport is **decided** (curl-only on Jolt, java.net.http on JVM via `#?(:clj ...)` reader conditionals — `http.clj` ported and verified, 2026-09-09). Remaining B1 work is `sse.clj` (pure parsing, port the logic) + `libs.oauth`/`ai.oauth`/`ai.google_adc` (M4, needs `jolt.socket`). M1 (clojure.data.json) is the biggest remaining gap — blocks 6 libs from loading. B3 is a research spike before it is labor.
 
 ---
 

@@ -127,7 +127,7 @@ underscores, dots → slashes; `.clj` → `.cljc` → `.bb` fallback):
 
 ```clojure
 ;; deps.edn (optional)
-{:deps {cheshire/cheshire {:mvn/version "11.5.3"}}}
+{:deps {cheshire/cheshire {:mvn/version "11.5.3"}}} ;; or just use kmet.libs.json
 ```
 
 The manifest lists only the initial namespace — `:entry`, a namespace symbol
@@ -183,7 +183,7 @@ resolves, every `.clj` ns matches its path, `deps.edn` carries only
 
 An extension directory may declare its own library dependencies in a
 `deps.edn`; the extension's `ns` form can then require them normally
-(`[cheshire.core :as json]`). kmet resolves the declared dependencies — the
+(`[clojure.data.json :as json]` or simply `[kmet.libs.json :as json]`). kmet resolves the declared dependencies — the
 complete transitive closure — and serves them **only to that extension's
 evaluation context**. Every extension runs in its own isolated context:
 
@@ -251,7 +251,7 @@ Extension code runs in an isolated SCI context without `future`/`pmap`/`pcalls` 
 - Babashka only runs libraries it supports: pure-Clojure code using classes
   it exposes. Libraries needing `definterface`, `deftype` with non-protocol
   interfaces, or unexposed Java classes fail to load — in plain bb too.
-- Libraries babashka ships adapted (`cheshire`, `core.async`, `data.json`,
+- Libraries babashka ships adapted (`core.async`, `data.json`,
   `tools.reader`, ..., and the whole `clojure.data.xml` family, whose Maven
   copy uses `definline` — unsupported by SCI) usually cannot be replaced by
   their raw Maven versions; kmet warns when an extension pins one. Omit them

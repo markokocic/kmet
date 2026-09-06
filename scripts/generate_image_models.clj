@@ -11,7 +11,7 @@
 
 (ns generate-image-models
   (:require [babashka.fs :as fs]
-            [cheshire.core :as json]
+            [kmet.libs.json :as json]
             [clojure.edn :as edn]
             [kmet.libs.edn-writer :as edn-w]
             [kmet.libs.http :as http]))

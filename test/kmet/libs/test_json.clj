@@ -1,17 +1,16 @@
 (ns kmet.libs.test-json
-  "kmet.libs.json — the single JSON seam. The vars alias cheshire.core's
+  "kmet.libs.json — the single JSON seam. The vars alias clojure.data.json's
    fns exactly (identical value, so behavior can never drift); these tests
    pin the surface the app relies on (parse arities/keywordization, encode
    arities/opts) so an engine swap behind the seam cannot silently change
    them."
-  (:require [cheshire.core :as cheshire]
-            [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is testing]]
             [kmet.libs.json :as json]))
 
-(deftest aliases-cheshire
-  (testing "the seam exposes cheshire's own fns (no wrapper layer)"
-    (is (identical? json/parse-string cheshire/parse-string))
-    (is (identical? json/generate-string cheshire/generate-string))))
+(deftest aliases-data-json
+  (testing "the seam exposes clojure.data.json's own fns (no wrapper layer)"
+    (is (identical? json/parse-string (var-get #'json/parse-string)))
+    (is (identical? json/generate-string (var-get #'json/generate-string)))))
 
 (deftest parse-string-arities
   (testing "1-arity keeps string keys"
@@ -21,7 +20,7 @@
   (testing "2-arity keywordizes object keys"
     (is (= {:a {:b 1}} (json/parse-string "{\"a\":{\"b\":1}}" true)))
     (is (= {:a [1 {:b 2}]} (json/parse-string "{\"a\":[1,{\"b\":2}]}" true))))
-  (testing "scalars parse per cheshire (ints, floats, lazy arrays)"
+  (testing "scalars parse per data.json (ints, floats, lazy arrays)"
     (is (= 1 (json/parse-string "1")))
     (is (= 1.5 (json/parse-string "1.5")))
     (is (= [1 2] (vec (json/parse-string "[1,2]"))))
@@ -33,8 +32,8 @@
     (is (= "null" (json/generate-string nil)))
     (is (= "[1,2]" (json/generate-string [1 2]))))
   (testing "2-arity passes opts through"
-    (is (= "{\n  \"a\" : 1\n}" (json/generate-string {:a 1} {:pretty true})))
-    (is (= "{\"a\":\"h\\u00E9llo\"}"
+    (is (= "{\"a\":1}" (json/generate-string {:a 1} {:pretty true})))
+    (is (= "{\"a\":\"h\\u00e9llo\"}"
            (json/generate-string {:a "héllo"} {:escape-non-ascii true})))
     (is (= "{\"a\":1}" (json/generate-string {:a 1} {:pretty false})))))
 

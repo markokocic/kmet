@@ -788,8 +788,7 @@
    omit them from deps.edn and use the bundled copy. Plain-bundled libs
    whose Maven copies run fine (tools.cli, data.json, ...) are not listed —
    they resolve to declared versions normally."
-  #{"cheshire/cheshire"
-    "org.clojure/core.async"
+  #{"org.clojure/core.async"
     "org.clojure/core.cache"
     "org.clojure/core.memoize"
     "org.clojure/core.rrb-vector"
@@ -1040,7 +1039,7 @@
                              ;; ...) are NOT injected — they resolve through
                              ;; the load-fn, so a declared Maven version wins
                              ;; over the bundled copy. The adapted libs
-                             ;; (core.async, cheshire, ...), the custom ports
+                             ;; (core.async, data.json, ...), the custom ports
                              ;; (bundled-port-namespaces), bb-shared-namespaces
                              ;; and the data.xml family stay injected: their
                              ;; Maven copies fail under SCI (data.xml uses
@@ -1055,7 +1054,6 @@
                                                            (ns-name ns-obj))))))
                              (or (str/starts-with? n "clojure.")
                                  (str/starts-with? n "babashka.")
-                                 (str/starts-with? n "cheshire.")
                                  (contains? bb-shared-namespaces (ns-name ns-obj))
                                  (str/starts-with? n "kmet.tui.")
                                  (= n "kmet.app.ui.tool-renderers")
