@@ -186,8 +186,7 @@ for a full gate. The default validation loop is the changed-file tasks above.
 - **SCI gotcha**: `(satisfies? SomeProto reify-instance)` can return false
   under Babashka even when methods are registered — dispatch through the
   protocol's multimethod instead (see tui.md §5.1).
-- **Fully supported**: Linux, WSL, Windows, Termux (Android)
-- **macOS**: supported too, but no way to test there — expect untested rough edges
+- **Fully supported**: Linux, macOS, Windows, WSL, Termux (Android)
 - **Primary dev environment**: Termux on Android — glibc babashka via `ld-linux-aarch64.so.1 --library-path`.
   Do not set `LD_LIBRARY_PATH` globally; use the glibc linker directly when on Termux.
 - **No `/tmp` on Termux**: there is no `/tmp` directory — `$TMPDIR` is `$PREFIX/tmp`

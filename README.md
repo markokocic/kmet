@@ -12,7 +12,8 @@ cataloged LLM providers (opencode-go, deepseek, anthropic, google, openai,
 openrouter, mistral, bedrock, ...) — the model registry, catalogs, auth and
 wire APIs are a port of pi's provider subsystem (see `models.md`). The agent
 has filesystem tools (read, write, edit, bash, grep, find, ls) plus skills,
-extensions and prompt templates.
+extensions and prompt templates. Fully cross-platform: runs on Linux, macOS,
+Windows, WSL, and Termux (Android).
 
 ### Features
 
@@ -29,6 +30,7 @@ extensions and prompt templates.
   `models.md` port), `--list-models`, model resolution/cycling, cost display,
   custom providers via `models.edn`, OAuth logins (Copilot, Codex, Anthropic,
   OpenRouter), and an image-model registry (`kmet.app.image-models`)
+- **Cross-platform** — Linux, macOS, Windows, WSL, and Termux (Android)
 
 ## Prerequisites
 
