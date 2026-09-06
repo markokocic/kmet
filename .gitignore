@@ -16,6 +16,9 @@ pom.xml.asc
 # Babashka
 /.bb
 
+# Jolt
+/.jolt/
+
 # Build artifacts
 dist/
 

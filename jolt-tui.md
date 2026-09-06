@@ -83,6 +83,15 @@ Replacing JLine therefore means reimplementing, per platform:
 On bb/JVM there is no reason to do this (re-solve solved bugs to save a
 bundled dep). On Jolt there is no JVM, so it is mandatory — §§4–5 below.
 
+Decision (2026-09-06, probed on bb 1.13.220 / libffi 3.8.0): JLine stays
+the bb default — bundled 4.3.1, zero packaging cost, and the baud-`0` +
+aarch64 close-deadlock workarounds already hold. `babashka.ffi` can express
+the same §§4–6 bindings (translation in §14), but replacing JLine with it
+is rejected: same ~1wk Unix + 2–4wk Windows effort as the Jolt adapter for
+zero gain. If built at all, it is an opt-in `FfiTerminal` *alongside*
+`JLineTerminal` behind `ITerminal` (Unix first), as a Jolt-port validation
+rig — never a deletion until Windows parity + a release of soak.
+
 ---
 
 ## 3. Rendering: portable, port as-is
@@ -581,6 +590,26 @@ before widgets.
   static natives); linking needs Chez's kernel dev files (`libkernel.a`,
   `scheme.h`) + `cc` — both ship with the prebuilt jolt binary, NOT with
   distro `chezscheme` packages (per README).
+- `jolt-lang/glimmer-tui` (evaluated 2026-09-06): the one Jolt terminal lib
+  — terminal backend for `glimmer`, painting through `ncursesw` via
+  `jolt.ffi` (ncurses 6.0 subset only; `deps.edn :jolt/native` lists
+  `:darwin`/`:linux`, no `:windows` — Unix-only). Requires jolt ≥0.7.24
+  (#728: older jolts exported the kernel's own ncurses symbols, so an
+  FFI-loaded ncursesw bound back into them → `initscr` "Error opening
+  terminal" or segfault; fixed with `--exclude-libs` in `build.ss`).
+  Rejected as the kmet backend: fullscreen `initscr` takeover vs the inline
+  ANSI/scrollback model, ncurses `wgetch` codes vs Kitty/modifyOtherKeys/
+  OSC/2026-sync/images, indexed colour only, no bracketed-paste decode,
+  macOS mouse ABI v1 has no wheel-down, and `initscr` exits the process on
+  failure. Steal its FFI idioms (`setlocale` LC dance,
+  `setupterm`-before-`initscr` probing, `raw`/`noecho`/`keypad`/`wtimeout`,
+  MEVENT offsets, per-platform mouse shift) and its screen-map headless-test
+  pattern — not the backend.
+- ncurses ships nowhere *with* Jolt: Linux links it dynamic (`-lncurses
+  -ltinfo`; minimal containers may need `apt install libncursesw6`), macOS
+  uses the dyld shared cache, Windows (`ta6nt`) links none (cross kernels
+  are often `--disable-curses` — Console API instead), Termux satisfies the
+  Linux candidates from the OS lib.
 
 ---
 
@@ -634,3 +663,39 @@ before widgets.
 5. Differential-render loop, overlays, focus/modality, drain-on-exit.
 6. Widget library (input/editor/select/settings lists) on the ported core;
    mouse tracking (`libs.terminal` constants already cover the protocol).
+
+---
+
+## 14. Appendix: the same §§4–6 approach on Babashka (evaluated, not adopted)
+
+Technically possible — probed 2026-09-06 on Termux (glibc bb 1.13.220,
+`libffi` 3.8.0): variadic `ioctl` binds and calls, `tcgetattr` binds,
+thread-local errno readable via `__errno_location` + `strerror` (returned
+25 `ENOTTY` correctly), `read` binds, `GetConsoleMode` resolves to nil on
+Linux without crashing. API translation (`jolt.ffi` → `babashka.ffi`, per
+the `babashka/ffi` guide):
+
+- `alloc` *requires* an arena (`confined` one thread / `shared`
+  cross-thread / `global` process lifetime), released with `with-open` —
+  no `free`/`with-alloc`. Never pass confined segments across threads.
+- No `:blocking` annotation and no `errno` primitive: read errno manually
+  on the same thread immediately after the call (`__errno_location` glibc /
+  `__error` macOS / `_errno` Windows) — fine for startup checks, fiddly for
+  per-read `EAGAIN`/`EINTR` classification.
+- Variadic `ioctl`/`fcntl` via `:&` always go through libffi (~1µs —
+  irrelevant at 16ms poll); plain ≤6-arg signatures hit the trampoline set
+  (~30ns). `stop!` still needs a wakeup-byte/fd-close: `future-cancel`
+  cannot unblock a parked native `read`, same caveat as §9, undocumented here.
+- Windows type traps: `:long`/`:ulong` are always 64-bit but C `long` /
+  `DWORD` is 32-bit → use `:int`/`:uint`; `:bool` is 1-byte `_Bool` but
+  `BOOL` is 4-byte → use `:int`; `HANDLE` → `:pointer`. Callbacks via
+  `ffi/callback` are arena-owned (≤4 args / 2 doubles, or 6 int/pointer; no
+  `:float`; return `:void`/int/`:pointer`/`:double`) and must never let
+  exceptions escape.
+- Floors: `babashka.ffi` is experimental; the musl/fully-static fallback
+  binary has **no libffi** (hard failure where today's binary still runs);
+  JVM runs will eventually need `--enable-native-access` (JEP 472 `deny`
+  default). Concepts transfer to Jolt; code does not (arenas vs `free`, no
+  `:blocking`, different callback form). Any prototype validates against the
+  §7 pipeline with the pty capture scripts (`scripts/pty_capture.py` +
+  `term_dump.py`).

@@ -8,8 +8,10 @@ differences,building-and-deps}`. Items marked "verified" were checked
 against that tree (`stdlib/`, `host/chez/java/`, `vendor/`, `jolt-core/`);
 the rest is code reasoning, not a running port.
 
-**Bottom line**: a full port is a multi-month project with 3 hard blockers
-(HTTP/SSE transport, subprocess/process management, extension isolation)
+**Bottom line**: a full port is a multi-month project with 2 hard blockers
+(subprocess/process management, extension isolation) plus the HTTP/SSE
+wrapper workstream (direct non-stream rides `jolt-lang/http-client`; stream +
+proxy + cancel still needs the curl-subprocess transport — see B1)
 and ~15 medium rewrites. A staged port is viable: pure layers first
 (`libs` minus I/O → `ai/api` builders → `reakt`/`hiccup`/components), then
 the terminal adapter, then transports, then the agent loop + tools, with the
@@ -51,19 +53,54 @@ kmet funnels ALL outbound HTTP through `kmet.libs.http` (enforced by
 requests + raw `curl` subprocess for SOCKS/https-scheme proxies, streaming
 bodies, idle-timeout readers. Every LLM call in every provider rides this.
 
-Jolt has **no HTTP client library**: `stdlib/` has `jolt/mvn_http.clj`
-(TLS-via-OpenSSL FFI, Maven-fetch shaped — not a general client),
-`jolt/socket.clj` (blocking IPv4 TCP over POSIX sockets via FFI, 800 LOC),
-`jolt/process.clj` (thin re-export of vendored `babashka.process`).
-So the port must build a client on one of:
+Jolt has `jolt-lang/http-client` (verified 2026-09-06 against `main`):
+`clj-http-lite` on a hand-rolled HTTP/1.1 stack — BSD sockets via `jolt.ffi`
+(`jolt.http.net`), TLS/memory-BIO OpenSSL (`jolt.http.tls`), `libz`
+(`jolt.http.zlib`), exposed as `java.net.URL`/`HttpURLConnection` shims
+(`jolt.http.platform`) plus a `java.net.http` shim with live
+`send`/`sendAsync`, over which `babashka.http-client` runs
+(`test/jolt/http/babashka_test.clj`: GET/POST/headers/`:as :bytes/:stream`
+pass). Requires jolt ≥0.8.x + system `libz`/OpenSSL. 60 clj-http-lite tests
++ timeout/bhc/zlib suites green. This replaces the old option (a)
+(hand-roll sockets+TLS) — do not write that code, depend on this.
 
-- (a) `jolt.socket` + OpenSSL FFI (mirroring `mvn_http`'s TLS) — full
-  control, large work: TLS, chunked/SSE framing, redirects, timeouts,
-  proxy (incl. SOCKS), connection reuse;
-- (b) `curl` subprocess via `jolt.process` — much smaller, inherits proxy
-  parity for free, but streaming + cancel + timeout semantics must be
-  rebuilt over pipes, and Windows needs a bundled curl;
-- (c) hybrid: (b) first for all transports, (a) later for the hot path.
+It covers the unproxied, non-streaming slice only (catalog fetches in
+`model_gen.clj`, OAuth/ADC token posts in `libs/oauth.clj`/`ai/oauth.clj`/
+`ai/google_adc.clj`, `image_models.clj`, `build.clj` downloads). It is NOT
+a drop-in for `kmet.libs.http`:
+
+- **No true streaming.** `perform!`/`net-http-send` both `recv-all` until
+  EOF, then wrap in `make-bais`. `:as :stream` is buffered-then-wrapped,
+  not incremental — the provider hot path (`api/*` → `:as :stream` →
+  `sse.clj` line-by-line with idle-timeout + `abort-fn` + `signal`) gets no
+  tokens until completion.
+- **Timeout model mismatch.** kmet has one per-request `:timeout` (total
+  deadline). The lib has `:conn-timeout` (per-address) + `:socket-timeout`
+  (per-read inactivity) + process-wide `set-max-response-ms!` (nil
+  default). Per-read timeouts do not bound a trickling peer; the total cap
+  is global, so concurrent LLM calls cannot each set it without racing.
+- **No proxy.** No `HTTP(S)_PROXY`/`ALL_PROXY`/`SOCKS_PROXY`/`NO_PROXY` —
+  `build-request` dials host:port directly. kmet's proxy-selection logic
+  ports as-is, but the transport still needs building.
+- **No cancel/abort.** No `signal` atom, no `abort!`/`close!` handle —
+  `perform!` closes in `finally` with nothing to kill mid-read.
+- Minor: `:as :bytes` vs clj-http `:byte-array`; throw shape is
+  `ex-info "clj-http: status …"` not `{:type :http-error}`; redirects only
+  for GET/HEAD; HTTP/1.1 + `Connection: close` always; `net-http-send`
+  hardcodes read-timeout 30000. Transport error classes reuse JVM names
+  (`UnknownHostException`/`ConnectException`/`SocketTimeoutException`/…),
+  so `transport-error-message`'s by-class classifier mostly survives.
+
+So the port keeps `kmet.libs.http`'s contract (opts, lowercased headers,
+`:http-error`/`:transport-error`, `proxy-for-url`) and routes direct +
+non-stream through the lib (prefer the `babashka.http-client`-over-shim
+path to minimize call-site churn), keeping the curl-subprocess transport
+(old option (b)) for `:as :stream` and proxied requests. Upstream proposals
+worth making: true streaming body, per-request total deadline, proxy env
+support. Probes before committing: Termux `libssl.so.3`/`libz.so.1`
+`:jolt/native` resolution; `:as :stream` buffering against a trickling
+server; bhc path over real https (bhctest is plaintext-only); concurrent
+requests under the process-wide cap.
 
 `sse.clj` itself is mostly pure parsing/state-machine (port the logic);
 only its body reader (`io/reader` over the response stream + idle-timeout
@@ -126,7 +163,7 @@ the core agent must work before extensions matter.
 | # | kmet surface | Jolt answer (verified on checkout) | size |
 |---|---|---|---|
 | M1 | `cheshire` (56 `parse-string`/`generate-string` call sites across 25 files in `ai/`, `libs/`, `app/` — re-counted 2026-09-05) | **no JSON lib in stdlib** — biggest pure-logic gap. Write a `kmet.libs.json` (or vendor data.json) over string ops; Jolt strings/regexes suffice. Streaming tool-call arg accumulation in `sse.clj` needs incremental parsing — keep the shape, swap the parser | new ~500-800 LOC lib |
-| M2 | `tui/terminal.clj` (JLine raw/timed-reads/size) + `core.clj` reader/timers/resize/drain | termios FFI (Unix) + kernel32 FFI (Windows); `future` reader + `locking` + gen-counters — see `jolt-tui.md` §§4–7,9 | rewrite ~500 LOC |
+| M2 | `tui/terminal.clj` (JLine raw/timed-reads/size) + `core.clj` reader/timers/resize/drain | termios FFI (Unix) + kernel32 FFI (Windows); `future` reader + `locking` + gen-counters — see `jolt-tui.md` §§4–7,9. Evaluated 2026-09-06: `jolt-lang/glimmer-tui` (ncursesw via FFI, Unix-only, fullscreen `initscr` takeover) rejected — wrong architecture for the inline ANSI/scrollback model; JLine stays on bb (`jolt-tui.md` §2 decision) | rewrite ~500 LOC (Jolt only) |
 | M3 | `libs/crypto.clj` (315 LOC: RSA/EC `KeyFactory`, `SHA256withRSA/ECDSA` `Signature`) + `libs/aws_sigv4.clj` (204 LOC: `MessageDigest` SHA-256, `Mac` HmacSHA256, `HexFormat`, `Normalizer`?) — grep the exact class list before the FFI design | OpenSSL FFI following `mvn_http.clj`'s libcrypto/libssl loading (note macOS boringssl SIGABRT hazard — explicit Homebrew paths only); RSA via libcrypto; `SecureRandom` via OS source | rewrite ~500 LOC |
 | M4 | `libs/oauth.clj` + `ai/oauth.clj` + `ai/google_adc.clj` (browser launch, localhost callback server, token cache) | `ServerSocket` shim exists (host-interop lists it, gated on `(require 'jolt.socket)`); browser launch via `jolt.process`; token cache via `spit`/`slurp` | adapt ~1k LOC |
 | M5 | `libs/archive.clj` (46 LOC, `ZipFile` read) + `sse.clj:854` (`CRC32`) + `models.clj:344,381` (`ZipFile` classpath scan) + `extensions.clj:910,921` (`JarFile` probes) + `build.clj:227,245,389` (`ZipOutputStream` uberjar/pack-extension) | `jolt.fs` explicitly EXCLUDES zip/gzip ("java.util.zip not shimmed yet"). Options: miniz FFI, `unzip`/`zip` subprocess, or drop archive support from build/pack-extension. `jolt build` replaces the bb-binary+catted-uberjar packaging entirely — `build.clj` (460 LOC) is rewritten anyway | rewrite build; archive via FFI or subprocess. Note: `jolt build` linking needs Chez's kernel development files (`libkernel.a`, `scheme.h`) + `cc` — both ship with the prebuilt jolt binary, NOT with distro `chezscheme` packages (per README) |
@@ -164,7 +201,7 @@ the core agent must work before extensions matter.
 6. **Packaging + tooling** (1–2 wks): `jolt build` pipeline replacing `build.clj`, test runner `^:slow` split, lint/format gates, model generators.
 7. **Extensions** (open-ended): B3 redesign decision; port shipped extensions after.
 
-Estimate honesty: stages 1–3 are predictable port labor; B1's transport choice dominates the schedule (curl-subprocess weeks vs OpenSSL-native months for parity); B3 is a research spike before it is labor.
+Estimate honesty: stages 1–3 are predictable port labor; B1's remaining work is the streaming + proxy + cancel wrapper around `jolt-lang/http-client` (adopted 2026-09-06 for the direct non-stream slice — the old curl-vs-OpenSSL-native choice is gone) plus the curl-subprocess transport for `:as :stream`/proxied requests; B3 is a research spike before it is labor.
 
 ---
 
