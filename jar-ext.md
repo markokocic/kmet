@@ -226,10 +226,11 @@ the prompt per turn anyway).
   diagnostics (stderr warnings) as dir loading.
 - `expand-skill-command`: prefer in-memory `:body`, fall back to slurping
   `:file-path`. `format-skills-for-prompt`: render `:location` (either
-  kind). Preamble tweak (behavior change, same change): filesystem skills
-  load via the `read` tool, extension skills (`name:path` locations)
-  disclose via `/skill:name` expansion — the current text ("use the read
-  tool...") is wrong for jar skills.
+  kind). Extension skills are served through the `read` tool from memory
+  under their `name:path` location (pass `<location>` verbatim) as well as
+  via `/skill:name` expansion — the preamble says so (follow-up fix:
+  the original plan disclosed extension skills via expansion only, but the
+  `<location>` the prompt exposes is only loadable when `read` serves it).
 - Existing `register-skill!` (programmatic name+description) stays.
 
 ### 5.2 Prompts (`src/kmet/app/prompts.clj`)
@@ -339,5 +340,4 @@ the prompt per turn anyway).
 
 No cache/expansion, no `lib/*.jar` bundling, no `META-INF`/signing
 handling, no version ranges beyond `deps.edn`, no zip listing APIs, no
-multi-file jar skills, no `read`-tool support for `name:path` locations
-(disclosure is `/skill:name` expansion), no `deps.edn` `:paths`.
+multi-file jar skills, no `deps.edn` `:paths`.

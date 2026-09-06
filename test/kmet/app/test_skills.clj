@@ -299,6 +299,10 @@
           (let [result (tools/execute-tool "read" {:path (str (fs/cwd) "/my-ext:skills/read-me/SKILL.md")})]
             (t/is (not (:is-error result)))
             (t/is (str/includes? (:content result) "Do it."))))
+        (t/testing "backslash-joined locator resolves (Windows path join)"
+          (let [result (tools/execute-tool "read" {:path "C:\\work\\my-ext:skills/read-me/SKILL.md"})]
+            (t/is (not (:is-error result)))
+            (t/is (str/includes? (:content result) "Do it."))))
         (t/testing "offset/limit apply to skill reads"
           (let [result (tools/execute-tool "read" {:path "my-ext:skills/read-me/SKILL.md" :offset 1 :limit 1})]
             (t/is (not (:is-error result)))

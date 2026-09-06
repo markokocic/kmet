@@ -211,10 +211,11 @@
   "The SKILL.md text for RAW-PATH when it names a registered extension
    skill locator, or nil. Matches the exact <location> (e.g.
    `my-ext:skills/foo/SKILL.md`) and a cwd-joined absolute form (the model
-   may join the location onto the working directory). File skills need no
+   may join the location onto the working directory). Backslashes normalize
+   to `/` first so Windows-joined paths resolve. File skills need no
    handling — they exist on disk."
   [raw-path]
-  (let [p (str raw-path)]
+  (let [p (str/replace (str raw-path) "\\" "/")]
     (some (fn [s]
             (when (and (:extension s) (seq (:location s)))
               (let [loc (str (:location s))]
