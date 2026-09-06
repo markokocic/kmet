@@ -210,8 +210,12 @@
     (let [value @value-atom
           cursor @cursor-atom]
       (cond
-        ;; Paste start marker
-        (clojure.string/includes? data "\u001b[200~")
+        ;; Paste start marker. A nested START while already buffering is
+        ;; literal paste content (pi treats everything between the first
+        ;; START and first END as data): fall through to the buffering leg
+        ;; instead of resetting.
+        (and (clojure.string/includes? data "\u001b[200~")
+             (not= @paste-state :buffering))
         (do (reset! paste-state :buffering)
             (reset! paste-buffer "")
             (let [remaining (clojure.string/replace data "\u001b[200~" "")]

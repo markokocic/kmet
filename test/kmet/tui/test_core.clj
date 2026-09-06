@@ -479,6 +479,26 @@
   (testing "back-to-back pastes in one batch both commit"
     (let [{:keys [editor buf]} (batched-editor ["\u001b[200~one\u001b[201~\u001b[200~two\u001b[201~"])]
       (t/is (= "onetwo" (editor/editor-get-text editor)))
+      (t/is (= "" @buf))))
+  (testing "a nested START inside paste content is literal (pi parity)"
+    ;; pi treats everything between the first START and first END as data:
+    ;; a nested START must not reset the buffer and drop content.
+    (let [{:keys [editor buf]} (batched-editor ["\u001b[200~a\u001b[200~b\u001b[201~"])]
+      (t/is (= "a\u001b[200~b" (editor/editor-get-text editor))
+            "nested marker preserved literally")
+      (t/is (= "" @buf))))
+  (testing "a nested START is literal in the input box too"
+    (let [tui (core/create-tui nil)
+          inp (input/make-input)
+          buf (atom "")]
+      (core/tui-add-child tui inp)
+      (core/tui-set-focus tui inp)
+      (doseq [b ["\u001b[200~a\u001b[200~b\u001b[201~"]]
+        (swap! (:input-generation tui) inc)
+        (swap! buf str b)
+        ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf))
+      (t/is (= "a\u001b[200~b" (input/input-get-value inp))
+            "nested marker preserved literally")
       (t/is (= "" @buf)))))
 
 (t/deftest test-split-bracketed-paste-inserts-text

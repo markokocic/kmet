@@ -1213,7 +1213,11 @@
           ;; Paste handling takes precedence over key dispatch so streamed
           ;; bracketed-paste content (including \r, escape, and CSI-u encoded
           ;; control bytes) is buffered literally instead of triggering actions.
-          (clojure.string/includes? data "\u001b[200~")
+          ;; A nested START while already buffering is literal paste content
+          ;; (pi treats everything between the first START and first END as
+          ;; data): fall through to the buffering leg instead of resetting.
+          (and (clojure.string/includes? data "\u001b[200~")
+               (not= @paste-state :buffering))
           (do (reset! paste-state :buffering)
               (reset! paste-buffer "")
               (let [remaining (clojure.string/replace data "\u001b[200~" "")]
