@@ -1020,9 +1020,11 @@
    ctrl+a arriving as Esc then \"[27;5;97~\"). Consume only the lone ESC
    itself: a non-lone buffer is never consumed here (partial CSI/mouse
    prefixes stay buffered for the remainder; see schedule-incomplete-flush!).
-   A complete dispatchable sequence always dispatches. Returns true when
-   dispatched (the caller clears the buffer), false when the fragment stays
-   pending."
+   A complete dispatchable sequence always dispatches, and complete but
+   unrecognized garbage is cleared here. Returns true when the buffer was
+   consumed (dispatched OR garbage-cleared — the caller clears again,
+   idempotently), false when the fragment stays pending. Buffers holding
+   paste markers are never garbage-collected (the paste leg owns them)."
   [tui buf-atom armed-gen]
   (let [content @buf-atom]
     (when (seq content)
@@ -1044,15 +1046,24 @@
             (dispatch-input! tui content)
             true)
 
-        ;; Complete but unrecognized ESC sequence — garbage. Returning true
-        ;; makes the caller clear the buffer so it can never grow and swallow
-        ;; subsequent input (see the ESC branch of process-input-buffer!).
-        ;; complete-sequence? already excludes partial CSI prefixes (a bare
-        ;; "\u001b[" parses as alt+[ but is structurally incomplete), so
-        ;; they can never take this branch and corrupt a stalled sequence.
+        ;; Paste markers are owned by the paste leg (pi emits paste content
+        ;; outside the timeout path): never garbage-collect a buffer holding
+        ;; them — hold for the reader instead.
+        (or (clojure.string/includes? content PASTE-START)
+            (clojure.string/includes? content PASTE-END))
+        false
+
+        ;; Complete but unrecognized ESC sequence — garbage. Clear it here
+        ;; (the caller also clears on a true return — idempotent) so the
+        ;; buffer can never grow and swallow subsequent input (see the ESC
+        ;; branch of process-input-buffer!). complete-sequence? already
+        ;; excludes partial CSI prefixes (a bare "\u001b[" parses as alt+[
+        ;; but is structurally incomplete), so they can never take this
+        ;; branch and corrupt a stalled sequence.
         (and (not= content "\u001b")
              (keys/complete-sequence? content))
-        true
+        (do (reset! buf-atom "")
+            true)
 
         :else false))))
 
@@ -1089,14 +1100,17 @@
                   ;; idleness check itself lives in dispatch-buffer!
                   ;; (generation check #2 under the lock), closing the race
                   ;; where input lands between this check and the dispatch.
+                  ;; The return is honored (belt-and-braces: dispatch-buffer!
+                  ;; already clears what it consumes, so this second clear
+                  ;; is a no-op) so a consumed buffer can never stall
+                  ;; until the next key.
                   (when (= gen @(:input-generation tui))
                     (locking dispatch-lock
                       ;; Re-check idleness UNDER the lock, then let
                       ;; dispatch-buffer! re-read + consume under this same
                       ;; lock, so the buffer can neither be stolen from the
                       ;; reader nor dispatched twice.
-                      (when (= gen @(:input-generation tui))
-                        (dispatch-buffer! tui buf gen))))
+                      (when (= gen @(:input-generation tui)) (when (dispatch-buffer! tui buf gen) (reset! buf "")))))
                   (catch Exception _))
                 (when (identical? @fut-box @(:incomplete-flush-timer tui))
                   (reset! (:incomplete-flush-timer tui) nil)))]

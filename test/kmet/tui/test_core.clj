@@ -612,6 +612,26 @@
       (t/is (= [] @dispatched))
       (t/is (= "\u001b[" @buf) "failed flush leaves the buffer intact"))))
 
+(t/deftest test-flush-timer-clears-complete-garbage
+  (testing "pi parity: StdinBuffer.flush emits the whole buffer, so complete garbage can never stall"
+    (let [tui (core/create-tui nil)
+          buf (atom "\u001b[999~")
+          dispatched (atom [])]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      (t/is (true? ((var kmet.tui.core/dispatch-buffer!) tui buf @(:input-generation tui)))
+            "garbage reports consumed")
+      (t/is (= [] @dispatched) "garbage is dropped, not dispatched")
+      (t/is (= "" @buf) "buffer cleared — nothing stalls until the next key")))
+  (testing "a flush timer never garbage-collects a buffer holding markers"
+    (let [tui (core/create-tui nil)
+          buf (atom "q\u001b[200~hi")
+          dispatched (atom [])]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      (t/is (false? ((var kmet.tui.core/dispatch-buffer!) tui buf @(:input-generation tui)))
+            "marker buffer reports pending")
+      (t/is (= [] @dispatched) "nothing dispatched")
+      (t/is (= "q\u001b[200~hi" @buf) "buffer intact for the paste leg"))))
+
 (t/deftest test-flush-timer-never-steals-reader-input
   ;; A stale flush still dispatches the ambiguous byte to listeners, but the
   ;; delivery guard in dispatch-input! shields the focused component when the
