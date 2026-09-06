@@ -1135,18 +1135,63 @@
           (cond
             (empty? s) nil
 
-            ;; Paste markers — dispatch immediately. Text around the marker
-            ;; stays buffered in arrival order (pi emits pre-marker sequences,
-            ;; then enters paste mode with everything after the marker).
-            (and (>= (count s) 6)
-                 (or (clojure.string/includes? s PASTE-START)
-                     (clojure.string/includes? s PASTE-END)))
-            (let [marker (if (clojure.string/includes? s PASTE-START) PASTE-START PASTE-END)
-                  idx (clojure.string/index-of s marker)
+            ;; Paste markers — dispatch in arrival order with surrounding
+            ;; text (pi emits pre-marker sequences, then enters paste mode
+            ;; with everything after the marker). Text before the marker is
+            ;; re-processed first so it can never land inside the paste;
+            ;; text after the marker is re-processed right after dispatching
+            ;; it, so a paste sharing one batch is committed in the same
+            ;; pass instead of waiting for the next keypress. A lone split
+            ;; head (WSL/conpty stalls deliver "\u001b" alone) falls
+            ;; through to the ESC branch and waits for its remainder there.
+            (or (clojure.string/includes? s PASTE-START)
+                (clojure.string/includes? s PASTE-END))
+            (let [start-idx (clojure.string/index-of s PASTE-START)
+                  end-idx (clojure.string/index-of s PASTE-END)
+                  [marker idx] (cond
+                                 (and (some? start-idx) (some? end-idx))
+                                 (if (<= start-idx end-idx)
+                                   [PASTE-START start-idx]
+                                   [PASTE-END end-idx])
+                                 (some? start-idx) [PASTE-START start-idx]
+                                 (some? end-idx) [PASTE-END end-idx])
                   before (subs s 0 idx)
                   after (subs s (+ idx (count marker)))]
-              (reset! buf (str before after))
-              (dispatch-input! tui marker))
+              ;; Text before the marker drains first so it can never land
+              ;; inside the paste; the marker is then committed against an
+              ;; empty buffer (a held partial CSI prefix there waits through
+              ;; the ESC branch, never dispatching early). After dispatching
+              ;; the marker, the text after it re-processes in the same pass
+              ;; — a paste sharing one batch commits now instead of waiting
+              ;; for the next keypress. When `before` is still waiting (a
+              ;; held partial), the marker + after stay buffered behind it
+              ;; so no marker overtakes a pending key. Each recursion
+              ;; consumes a marker, so this terminates at the empty case.
+              (reset! buf before)
+              (when (seq @buf)
+                (process-input-buffer! tui read-fn buf))
+              (cond
+                ;; A lone ESC ahead of a marker is a pressed Escape key (an
+                ;; ESC that were a key head would carry its tail next, not
+                ;; marker bytes) — deliver it now, then the marker, so a
+                ;; fast Escape-then-paste batch can't starve behind the
+                ;; hold guard below (the armed lone-ESC flush would
+                ;; otherwise garbage-collect the combined buffer).
+                (= @buf "\u001b")
+                (do (clear-incomplete-flush! tui)
+                    (reset! buf "")
+                    (dispatch-input! tui "\u001b")
+                    (dispatch-input! tui marker)
+                    (reset! buf after)
+                    (when (seq @buf)
+                      (process-input-buffer! tui read-fn buf)))
+                (seq @buf)
+                (swap! buf str marker after)
+                :else
+                (do (dispatch-input! tui marker)
+                    (swap! buf str after)
+                    (when (seq @buf)
+                      (process-input-buffer! tui read-fn buf)))))
 
           ;; ESC-prefixed: dispatch only complete sequences (pi: a complete
           ;; CSI/SS3/OSC/mouse sequence, or a meta key). The buffer may hold

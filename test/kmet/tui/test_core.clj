@@ -2,7 +2,8 @@
   (:require [clojure.test :as t :refer [testing]]
             [kmet.tui.core :as core]
             [kmet.tui.keys :as keys]
-            [kmet.tui.components.editor :as editor]))
+            [kmet.tui.components.editor :as editor]
+            [kmet.tui.components.input :as input]))
 
 (defn- leaf
   "A focusable leaf component with a focused?-atom (like the editor)."
@@ -334,31 +335,194 @@
     ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
     @dispatched))
 
+(t/deftest test-split-paste-marker-head-waits-for-remainder
+  ;; WSL/conpty stalls can split "\u001b[200~" across reads (the lone
+  ;; "\u001b" head arrives, the tail 50ms+ later). The head must wait
+  ;; for its remainder in the ESC branch — never dispatch as Escape, or it
+  ;; corrupts into a phantom Escape + literal-text leak ("[200~" typed,
+  ;; paste swallowed until a later key).
+  (testing "a lone ESC head is held, not dispatched"
+    (let [tui (core/create-tui nil)
+          buf (atom "\u001b")]
+      (t/is (= [] (feed-buf! tui buf)) "head held for the remainder")
+      (t/is (= "\u001b" @buf) "head stays buffered")
+      (swap! buf str "[200~")
+      (t/is (= ["\u001b[200~"] (feed-buf! tui buf)) "tail completes the marker")
+      (t/is (= "" @buf) "buffer drained")))
+  (testing "a partial marker prefix is held, not dispatched"
+    (let [tui (core/create-tui nil)
+          buf (atom "\u001b[20")]
+      (t/is (= [] (feed-buf! tui buf)) "prefix held for the remainder")
+      (t/is (= "\u001b[20" @buf) "prefix stays buffered")
+      (swap! buf str "0~hello")
+      (t/is (= ["\u001b[200~" "hello"] (feed-buf! tui buf)) "marker then text, in order")
+      (t/is (= "" @buf) "buffer drained")))
+  (testing "an ambiguous \u001b[2 still takes the ESC branch (F12, not a marker)"
+    (let [tui (core/create-tui nil)
+          buf (atom "\u001b[2")
+          dispatched (atom [])]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (Thread/sleep 80)
+      (t/is (= [] @dispatched) "incomplete prefix never dispatches")
+      (t/is (= "\u001b[2" @buf) "still buffered")
+      (swap! buf str "4~")
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (t/is (= ["\u001b[24~"] @dispatched) "F12 dispatched as one sequence"))))
+
+(t/deftest test-lone-esc-still-fires-as-escape
+  (testing "a lone ESC with no follow-up still fires as Escape"
+    (let [tui (core/create-tui nil)
+          buf (atom "\u001b")
+          dispatched (atom [])]
+      (swap! (:input-listeners tui) conj (fn [data] (swap! dispatched conj data) nil))
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (let [deadline (+ (System/currentTimeMillis) 600)]
+        (while (and (empty? @dispatched) (< (System/currentTimeMillis) deadline))
+          (Thread/sleep 5)))
+      (t/is (= ["\u001b"] @dispatched) "genuine Escape still works")
+      (t/is (= "" @buf) "buffer consumed"))))
+
+(defn- batched-editor
+  "TUI with a focused editor; feeds each BATCH whole in one pass (like the
+   real reader's drain) and returns {:editor ed :buf buf :submitted}."
+  [batches]
+  (let [tui (core/create-tui nil)
+        ed (editor/make-editor)
+        buf (atom "")
+        submitted (atom nil)]
+    (core/tui-add-child tui ed)
+    (core/tui-set-focus tui ed)
+    (editor/editor-set-on-submit! ed (fn [t] (reset! submitted t)))
+    (doseq [b batches]
+      (swap! (:input-generation tui) inc)
+      (swap! buf str b)
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf))
+    {:editor ed :buf buf :submitted submitted}))
+
+(t/deftest test-batched-bracketed-paste-commits-in-one-pass
+  ;; The reported bug: a whole paste coalesced into one reader batch showed
+  ;; nothing until later keys were pressed (the remainder sat unprocessed
+  ;; in buf). Every split below must commit in the same pass — and later
+  ;; keys must insert only themselves.
+  (testing "whole paste in one batch commits immediately"
+    (let [{:keys [editor buf]} (batched-editor ["\u001b[200~hello\u001b[201~"])]
+      (t/is (= "hello" (editor/editor-get-text editor)))
+      (t/is (= "" @buf) "nothing left waiting for a later key")))
+  (testing "START+content in one batch, END split off"
+    (let [{:keys [editor buf]} (batched-editor ["\u001b[200~hello" "\u001b[201~"])]
+      (t/is (= "hello" (editor/editor-get-text editor)))
+      (t/is (= "" @buf))))
+  (testing "a following keypress inserts only itself"
+    (let [{:keys [editor buf]} (batched-editor ["\u001b[200~hello\u001b[201~" "x" "y"])]
+      (t/is (= "helloxy" (editor/editor-get-text editor)) "no fused paste+keys")
+      (t/is (= "" @buf))))
+  (testing "a pasted CR becomes a newline in the editor, not a submit"
+    (let [{:keys [editor buf submitted]} (batched-editor ["\u001b[200~line1\rline2\u001b[201~"])]
+      (t/is (nil? @submitted) "paste never submits")
+      (t/is (= "line1\nline2" (editor/editor-get-text editor)))
+      (t/is (= "" @buf))))
+  (testing "text before START stays outside the paste"
+    (let [{:keys [editor buf]} (batched-editor ["ab\u001b[200~cd\u001b[201~ef"])]
+      (t/is (= "abcdef" (editor/editor-get-text editor)))
+      (t/is (= "" @buf))))
+  (testing "an arrow key sharing a batch with a paste keeps arrival order"
+    ;; A complete key followed by a paste in one buffer: the key drains
+    ;; through the ESC branch first, then the paste commits — all in the
+    ;; same pass.
+    (let [tui (core/create-tui nil)
+          buf (atom "\u001b[A\u001b[200~hi\u001b[201~")
+          dispatched (feed-buf! tui buf)]
+      (t/is (= ["\u001b[A" "\u001b[200~" "hi" "\u001b[201~"] dispatched)
+            "key first, then the paste, in order")
+      (t/is (= "" @buf) "buffer drained")))
+  (testing "a held key fragment ahead of the paste is not overtaken"
+    ;; A stalled CSI head (e.g. an arrow key split across reads) holds the
+    ;; buffer through the ESC branch; a paste marker arriving behind it
+    ;; must stay buffered there too — the marker never overtakes a
+    ;; pending key. Once the tail arrives the key dispatches first, then
+    ;; the paste behind it.
+    (let [tui (core/create-tui nil)
+          buf (atom "\u001b[\u001b[200~hi\u001b[201~")]
+      (t/is (= [] (feed-buf! tui buf)) "partial head holds everything")
+      (t/is (= "\u001b[\u001b[200~hi\u001b[201~" @buf) "nothing dispatched early")
+      (swap! buf str "A")
+      ;; Tail "A" lands after the paste bytes, so the stranded head can
+      ;; never complete "A" anymore: the ESC branch fires it as Escape via
+      ;; its flush timer once the test's later input bumps the generation.
+      ;; What matters here: nothing dispatched early and nothing overtakes.
+      (t/is (= [] (feed-buf! tui buf)) "still held, no overtake")
+      (t/is (= "\u001b[\u001b[200~hi\u001b[201~A" @buf)
+            "arrival order preserved")))
+  (testing "Escape-then-paste in one batch can't starve behind the hold"
+    ;; A pressed Escape immediately followed by a paste (one coalesced
+    ;; batch): the lone ESC drains as Escape first, then the paste commits
+    ;; in the same pass — and nothing is left for the flush timer to
+    ;; garbage-collect into a freeze.
+    (let [{:keys [editor buf]} (batched-editor ["\u001b\u001b[200~hi\u001b[201~"])]
+      (Thread/sleep 150)
+      (t/is (= "hi" (editor/editor-get-text editor)) "paste committed")
+      (t/is (= "" @buf) "buffer drained, flush timer has nothing to eat")))
+  (testing "the input box commits a coalesced paste in the same pass"
+    ;; The bug hits both editor and input box via the shared reader path.
+    (let [tui (core/create-tui nil)
+          inp (input/make-input)
+          buf (atom "")]
+      (core/tui-add-child tui inp)
+      (core/tui-set-focus tui inp)
+      (doseq [b ["\u001b[200~hello\u001b[201~" "x"]]
+        (swap! (:input-generation tui) inc)
+        (swap! buf str b)
+        ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf))
+      (t/is (= "hellox" (input/input-get-value inp)) "no fused paste+keys")
+      (t/is (= "" @buf) "nothing left waiting for a later key")))
+  (testing "back-to-back pastes in one batch both commit"
+    (let [{:keys [editor buf]} (batched-editor ["\u001b[200~one\u001b[201~\u001b[200~two\u001b[201~"])]
+      (t/is (= "onetwo" (editor/editor-get-text editor)))
+      (t/is (= "" @buf)))))
+
+(t/deftest test-split-bracketed-paste-inserts-text
+  ;; A bracketed paste split across reads (marker head, content, end marker
+  ;; each arriving separately) still inserts the pasted text — the paste is
+  ;; never swallowed waiting for a later key.
+  (testing "head, content, and end marker each arrive alone"
+    (let [tui (core/create-tui nil)
+          ed (editor/make-editor)
+          _ (do (core/tui-add-child tui ed)
+                (core/tui-set-focus tui ed))
+          buf (atom "\u001b")]
+      (feed-buf! tui buf)
+      (t/is (= "\u001b" @buf) "head held")
+      (swap! buf str "[200~")
+      (feed-buf! tui buf)
+      (swap! buf str "pasted")
+      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (swap! buf str "\u001b[201~")
+      (feed-buf! tui buf)
+      (t/is (= "pasted" (editor/editor-get-text ed))))))
+
 (t/deftest test-paste-marker-preserves-surrounding-text
   ;; Text can share a buffer pass with a paste marker when a held interceptor
   ;; fragment flushes back into the buffer ahead of fresh input. Everything
-  ;; around the marker must stay buffered in arrival order — previously any
-  ;; content AFTER the marker was silently discarded.
-  (testing "content after the start marker stays buffered"
+  ;; around the marker is processed in arrival order in the same pass.
+  (testing "content after the start marker is dispatched in the same pass"
     (let [tui (core/create-tui nil)
           buf (atom "\u001b[200~abc")]
-      (t/is (= ["\u001b[200~"] (feed-buf! tui buf)) "marker dispatched")
-      (t/is (= "abc" @buf) "trailing text preserved")))
-  (testing "text before the marker stays buffered ahead of post-marker text"
+      (t/is (= ["\u001b[200~" "abc"] (feed-buf! tui buf)) "marker then text")
+      (t/is (= "" @buf) "buffer drained")))
+  (testing "text before the marker is dispatched ahead of post-marker text"
     (let [tui (core/create-tui nil)
           buf (atom "q\u001b[200~hi")]
-      (t/is (= ["\u001b[200~"] (feed-buf! tui buf)))
-      (t/is (= "qhi" @buf) "arrival order kept")))
+      (t/is (= ["q" "\u001b[200~" "hi"] (feed-buf! tui buf)))
+      (t/is (= "" @buf) "arrival order kept, buffer drained")))
   (testing "the end marker completes the paste of everything between"
     (let [tui (core/create-tui nil)
           ed (editor/make-editor)
           _ (do (core/tui-add-child tui ed)
                 (core/tui-set-focus tui ed))
           buf (atom "\u001b[200~hello")]
-      (feed-buf! tui buf)                 ; marker; "hello" stays buffered
-      ;; deliver the preserved text as one printable run (the reader now
-      ;; drains whole bursts), then the end marker
-      ((var kmet.tui.core/process-input-buffer!) tui (fn [_] -2) buf)
+      (feed-buf! tui buf)                 ; marker + text in one pass
+      ;; deliver the end marker
       (reset! buf "\u001b[201~")
       (feed-buf! tui buf)
       (t/is (= "hello" (editor/editor-get-text ed))))))
