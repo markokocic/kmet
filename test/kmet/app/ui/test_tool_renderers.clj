@@ -6,6 +6,7 @@
   (:require [clojure.string :as str]
             [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
+            [kmet.tui.utils :as utils]
             [kmet.app.ui.tool-renderers :as r]
             [kmet.tui.theme :as theme]))
 
@@ -15,7 +16,7 @@
   "Render a renderer result headlessly, ANSI-stripped."
   [comp width]
   (when comp
-    (mapv #(clojure.string/replace % #"\u001b\[[0-9;]*[a-zA-Z]" "")
+    (mapv utils/strip-ansi-codes
           (core/render comp width))))
 
 (deftest test-read-call

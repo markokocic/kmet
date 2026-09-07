@@ -8,7 +8,7 @@
             [kmet.tui.components.markdown :as md]))
 
 (defn- strip-ansi [s]
-  (clojure.string/replace s #"\u001b\[[0-9;]*m" ""))
+  (u/strip-ansi-codes s))
 
 ;; ─── Construction ───────────────────────────────────────────────────────────
 
@@ -545,36 +545,43 @@
         (timg/set-capabilities! prev)))))
 
 (t/deftest test-markdown-kitchen-sink
-  ;; One document exercising every block type end-to-end
-  (let [src (str/join "\n"
-                      ["# Title"
-                       ""
-                       "Some **bold** and *italic* with `code` and [link](http://x)."
-                       ""
-                       "| col a | col b |"
-                       "|:------|-------:|"
-                       "| 1 | 2 |"
-                       ""
-                       "- item one"
-                       "  - nested"
-                       "- item two"
-                       ""
-                       "> quote"
-                       ""
-                       "```clojure"
-                       "(defn f [] 1)"
-                       "```"
-                       ""
-                       "---"])
-        lines (mapv strip-ansi (core/render (md/make-markdown src :padding-x 0) 30))
-        all (str/join "\n" lines)]
-    (doseq [needle ["Title" "bold" "italic" "code" "link" "(http://x)"
-                    "┌" "col a" "│ 1"
-                    "• item one" "    • nested" "• item two"
-                    "▎quote"
-                    "```clojure" "(defn f [] 1)"
-                    "───"]]
-      (t/is (str/includes? all needle) (str "missing: " needle)))))
+  ;; One document exercising every block type end-to-end.
+  ;; Pinned to hyperlinks=false: with OSC 8 support pi renders only the
+  ;; clickable link label, so the "(url)" fallback text is absent by design.
+  (let [prev (timg/get-capabilities)]
+    (try
+      (timg/set-capabilities! {:images nil :true-color true :hyperlinks false})
+      (let [src (str/join "\n"
+                          ["# Title"
+                           ""
+                           "Some **bold** and *italic* with `code` and [link](http://x)."
+                           ""
+                           "| col a | col b |"
+                           "|:------|-------:|"
+                           "| 1 | 2 |"
+                           ""
+                           "- item one"
+                           "  - nested"
+                           "- item two"
+                           ""
+                           "> quote"
+                           ""
+                           "```clojure"
+                           "(defn f [] 1)"
+                           "```"
+                           ""
+                           "---"])
+            lines (mapv strip-ansi (core/render (md/make-markdown src :padding-x 0) 30))
+            all (str/join "\n" lines)]
+        (doseq [needle ["Title" "bold" "italic" "code" "link" "(http://x)"
+                        "┌" "col a" "│ 1"
+                        "• item one" "    • nested" "• item two"
+                        "▎quote"
+                        "```clojure" "(defn f [] 1)"
+                        "───"]]
+          (t/is (str/includes? all needle) (str "missing: " needle))))
+      (finally
+        (timg/set-capabilities! prev)))))
 
 ;; ─── Robustness: malformed input must never throw ──────────────────────────
 
