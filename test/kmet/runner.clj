@@ -1,5 +1,5 @@
 (ns kmet.runner
-  "Test runner with per-test slow isolation.
+  "Test runner for both hosts (babashka and jolt).
 
    Slow tests are marked with ^:slow on the deftest (tests that wait real
    wall-clock time: sleeps, terminal-query timeouts; real network calls; and
@@ -8,13 +8,24 @@
    ^:slow tests. Both are selected at the individual test level — no whole
    namespaces are excluded.
 
-   Test namespaces load lazily: the full run requires all of them; a
-   filtered run (`bb test test-llm-loaded` or
-   `bb test-ext kmet.app.test-loop/test-…`) loads only the namespaces it
-   needs, so single-test runs skip most of the require phase."
+   The runner is TOLERANT: every test namespace is required inside a try.
+   A namespace that cannot load under the host (a babashka-internal
+   require, a JDK class gap, a java.time.* gap — jolt-port.md M1/M6) is
+   reported and skipped, never fatal; the remaining namespaces run. This
+   is what lets the same runner serve `bb test` and `jolt test` while the
+   Jolt port is staged.
+
+   Engine differences: on babashka, each test var runs with stdout/stderr
+   captured (replayed on failure, discarded on pass) and the counters are
+   per-run refs. Jolt's clojure.test port has no per-var ref counters and
+   no host output capture — jolt counts into its own process-wide
+   `clojure.test/counters` atom, which the runner reads as before/after
+   deltas (see run-ns-vars-jolt). The ^:slow split and per-var filters
+   work identically on both hosts: a namespace that loads has its vars
+   selected by ^:slow metadata, and jolt's clojure.test/test-vars applies
+   each namespace's :once/:each fixtures exactly like the bb engine."
   (:require [clojure.string :as str]
-            [clojure.test :as t]
-            [kmet.ai.models :as models]))
+            [clojure.test :as t]))
 
 (def all-namespaces
   "Every test namespace. The slow/fast split happens per test var via ^:slow
@@ -125,22 +136,31 @@
     kmet.test-core
     kmet.test-changed])
 
-(defn- ns-vars
-  "Require NS-SYM (lazily) and return all its interned test vars."
+(defn- try-require
+  "Require NS-SYM; returns nil on success, the throwable on failure."
   [ns-sym]
-  (require ns-sym)
-  (vals (ns-interns ns-sym)))
+  (try (require ns-sym) nil
+       (catch Throwable e e)))
 
-(defn- selected-vars
-  "All test vars whose :slow metadata matches the requested selection."
-  [slow?]
-  (for [ns-sym all-namespaces
-        v (ns-vars ns-sym)
-        :when (and (:test (meta v))
-                   (if slow?
-                     (:slow (meta v))
-                     (not (:slow (meta v)))))]
-    v))
+(defn- load-failure-message
+  "One-line reason NS-SYM failed to load (deepest cause message first)."
+  [e]
+  (loop [e e]
+    (if-let [c (.getCause e)]
+      (recur c)
+      (or (.getMessage e) (str e)))))
+
+(defn- ns-vars-of
+  "Load NS-SYM and return {:vars [test vars]} on success, or
+   {:vars [] :unloaded [NS-SYM message]} when it cannot load."
+  [ns-sym]
+  (if-let [e (try-require ns-sym)]
+    {:vars [] :unloaded [ns-sym (load-failure-message e)]}
+    {:vars (vals (ns-interns ns-sym))}))
+
+(defn- test-var? [v slow?]
+  (and (:test (meta v))
+       (if slow? (:slow (meta v)) (not (:slow (meta v))))))
 
 (defn- var-matches-filter?
   "True when a test var matches any filter (plain name or ns/var)."
@@ -151,49 +171,66 @@
                (= % (str ns-full "/" vn)))
           filters)))
 
-(defn- filtered-vars
-  "The test vars matching FILTERS, loading namespaces lazily. Plain-name
-   filters scan all-namespaces in order and stop once every plain filter
-   has matched at least one var — so `bb test test-llm-loaded` requires
-   only the namespaces up to the first match, not all 76. ns/var filters
-   load only their own namespace."
-  [filters]
-  (let [filters (map str filters)
-        plain (remove #(str/includes? % "/") filters)]
-    (if (seq plain)
-      (loop [nss all-namespaces
-             remaining (set plain)
-             acc []]
-        (if-let [ns-sym (first nss)]
-          (let [vars (ns-vars ns-sym)
-                acc (into acc (filter #(var-matches-filter? % filters)) vars)
-                remaining (apply disj remaining
-                                 (keep #(when (some (fn [f] (= f (name (:name (meta %))))) plain)
-                                          (name (:name (meta %))))
-                                       vars))]
-            (if (seq remaining)
-              (recur (rest nss) remaining acc)
-              (distinct acc)))
-          (distinct acc)))
-      ;; all filters are ns/var — load exactly those namespaces
-      (->> filters
-           (map #(let [slash (str/index-of % "/")]
-                   [(symbol (subs % 0 slash)) (subs % (inc slash))]))
-           (mapcat (fn [[ns-sym var-name]]
-                     (filter #(= var-name (name (:name (meta %))))
-                             (ns-vars ns-sym))))
-           distinct))))
+(defn- select-vars
+  "Load every namespace (or, with FILTERS, the ones needed to answer them)
+   and return {:vars [matching test vars] :unloaded [[ns message] ...]}.
+   Unloadable namespaces are reported, never fatal. With no FILTERS the
+   slow? flag selects ^:slow vs non-slow vars; filters match by var name
+   (any namespace) or ns/var and ignore slow?."
+  ([slow?] (select-vars slow? nil))
+  ([slow? filters]
+   (if-not (seq filters)
+     (reduce (fn [acc ns-sym]
+               (let [{vars :vars unloaded :unloaded} (ns-vars-of ns-sym)]
+                 (cond-> acc
+                   unloaded (update :unloaded conj unloaded)
+                   :always (update :vars into (filter #(test-var? % slow?)) vars))))
+             {:vars [] :unloaded []}
+             all-namespaces)
+     ;; filtered: plain names scan all-namespaces in order and stop once
+     ;; every plain filter has matched (so `bb test test-llm-loaded`
+     ;; requires only the namespaces up to the first match); ns/var filters
+     ;; load exactly their namespace.
+     (let [filters (map str filters)
+           plain (remove #(str/includes? % "/") filters)]
+       (if (seq plain)
+         (loop [nss all-namespaces
+                remaining (set plain)
+                acc {:vars [] :unloaded []}]
+           (if-let [ns-sym (first nss)]
+             (let [{vars :vars unloaded :unloaded} (ns-vars-of ns-sym)
+                   acc (cond-> acc
+                         unloaded (update :unloaded conj unloaded)
+                         :always (update :vars into
+                                         (filter #(var-matches-filter? % filters))
+                                         vars))
+                   remaining (apply disj remaining
+                                    (keep #(when (some (fn [f] (= f (name (:name (meta %)))))
+                                                       plain)
+                                             (name (:name (meta %))))
+                                          vars))]
+               (if (seq remaining)
+                 (recur (rest nss) remaining acc)
+                 acc))
+             acc))
+         (reduce (fn [acc filter-str]
+                   (let [slash (str/index-of filter-str "/")
+                         ns-sym (symbol (subs filter-str 0 slash))
+                         var-name (subs filter-str (inc slash))
+                         {vars :vars unloaded :unloaded} (ns-vars-of ns-sym)]
+                     (cond-> acc
+                       unloaded (update :unloaded conj unloaded)
+                       :always (update :vars into
+                                       (filter #(= var-name (name (:name (meta %))))
+                                               vars)))))
+                 {:vars [] :unloaded []}
+                 filters))))))
 
-(defn- join-fixtures*
-  "Compose fixture fns. bb's join-fixtures only works with >= 2 fixtures:
-   with 0 it throws an arity error, with exactly 1 it tries to reduce over
-   the fn as a collection. Handle those cases directly."
-  [fixtures]
-  (let [fxs (or fixtures [])]
-    (case (count fxs)
-      0 (fn [f] (f))
-      1 (first fxs)
-      (apply t/join-fixtures fxs))))
+(def jolt?
+  "True when running under the jolt host (its clojure.test port differs from
+   babashka's: no ref-based per-run counters, no ^:slow split, its own
+   process-wide counters and per-namespace fixtures/registry)."
+  (boolean (find-var 'clojure.core/*jolt-version*)))
 
 (defn- plural
   "N + label, singular for 1."
@@ -201,8 +238,7 @@
   (str n " " (if (= 1 n) singular plural)))
 
 (defn- fmt-summary
-  "One-line test summary with zero counts omitted: tests always, then
-   assertions/failures/errors only when nonzero."
+  "One-line test summary with zero counts omitted."
   [n-test n-pass n-fail n-error]
   (str/join ", "
             (cond-> [(plural n-test "test" "tests")]
@@ -218,23 +254,37 @@
     (str (long ms) " ms")
     (format "%.1f s" (/ ms 1000.0))))
 
-(defn- test-var-with-capture
-  "Run one test var with stdout/stderr captured, replaying the captured
-   output when the var fails (so diagnostics from the code under test stay
-   visible next to the failure report) and discarding it on success."
-  [v]
+(defn- capture-streams!
+  "Point System/out and System/err at fresh byte streams; returns the
+   saved originals and the writers to replay later."
+  []
   (let [out-baos (java.io.ByteArrayOutputStream.)
         err-baos (java.io.ByteArrayOutputStream.)
         out-writer (java.io.OutputStreamWriter. out-baos "UTF-8")
         err-writer (java.io.OutputStreamWriter. err-baos "UTF-8")
-        out-stream (java.io.PrintStream. out-baos true "UTF-8")
-        err-stream (java.io.PrintStream. err-baos true "UTF-8")
         saved-out System/out
-        saved-err System/err
+        saved-err System/err]
+    (System/setOut (java.io.PrintStream. out-baos true "UTF-8"))
+    (System/setErr (java.io.PrintStream. err-baos true "UTF-8"))
+    {:saved-out saved-out :saved-err saved-err
+     :out-writer out-writer :err-writer err-writer
+     :out-baos out-baos :err-baos err-baos}))
+
+(defn- restore-streams!
+  "Restore System/out/err saved by capture-streams!."
+  [{:keys [saved-out saved-err]}]
+  (System/setOut saved-out)
+  (System/setErr saved-err))
+
+(defn- test-var-with-capture
+  "Run one test var with stdout/stderr captured: replay the captured
+   output when the var fails (so diagnostics from the code under test stay
+   visible next to the failure report), discard it on success."
+  [v]
+  (let [{:keys [out-writer err-writer out-baos err-baos] :as streams}
+        (capture-streams!)
         counters-before @t/*report-counters*]
     (try
-      (System/setOut out-stream)
-      (System/setErr err-stream)
       (binding [*out* out-writer
                 *err* err-writer
                 t/*test-out* out-writer]
@@ -249,19 +299,26 @@
           (when (seq err) (binding [*out* *err*] (print err))))
         (flush))
       (finally
-        (System/setOut saved-out)
-        (System/setErr saved-err)))))
+        (restore-streams! streams)))))
+
+(defn- join-fixtures*
+  "Compose fixture fns. bb's join-fixtures only works with >= 2 fixtures:
+   with 0 it throws an arity error, with exactly 1 it tries to reduce over
+   the fn as a collection. Handle those cases directly."
+  [fixtures]
+  (let [fxs (or fixtures [])]
+    (case (count fxs)
+      0 (fn [f] (f))
+      1 (first fxs)
+      (apply t/join-fixtures fxs))))
 
 (defn- run-ns-vars
-  "Run the selected vars of a namespace, applying its fixtures like
-   clojure.test/test-ns: :once fixtures wrap the namespace run, :each
-   fixtures wrap every test var. Prints a summary line with elapsed time
-   for the namespace. (bb's clojure.test/test-vars is broken — it silently
-   drops vars — so we drive test-var directly.)
-
-   Each test var runs with stdout/stderr captured: output written by the
-   code under test is discarded when the var passes (no noise on a green
-   run) and replayed before the standard failure report when it fails."
+  "Run the selected vars of one namespace, applying its :once fixtures
+   around the namespace and :each fixtures around every var, like
+   clojure.test/test-ns. Prints a summary line with elapsed time.
+   Each var runs with stdout/stderr captured (see test-var-with-capture).
+   (bb's clojure.test/test-vars silently drops vars — we drive test-var
+   directly, and jolt's port shares the shape.)"
   [ns-sym vars]
   (let [ns-obj (find-ns ns-sym)
         before @t/*report-counters*
@@ -283,28 +340,80 @@
       (println (str "  " (fmt-summary n-test n-pass n-fail n-error)
                     " (" (fmt-duration elapsed-ms) ")")))))
 
+(defn- run-ns-vars-jolt
+  "Run the selected vars of one namespace on jolt. Jolt's clojure.test port
+   has no per-var ref counters and no host output capture; clojure.test/
+   test-vars applies the ns's :once/:each fixtures and test-var through
+   jolt's own process-wide counters atom. Prints the same per-namespace
+   header/summary as the bb engine."
+  [ns-sym vars]
+  (let [counters (var-get (requiring-resolve (quote clojure.test/counters)))
+        before @counters
+        start-ms (System/currentTimeMillis)]
+    (println "\nTesting" (ns-name (find-ns ns-sym)))
+    (t/test-vars vars)
+    (let [after @counters
+          n-test (- (:test after) (:test before))
+          n-pass (- (:pass after) (:pass before))
+          n-fail (- (:fail after) (:fail before))
+          n-error (- (:error after) (:error before))
+          elapsed-ms (- (System/currentTimeMillis) start-ms)]
+      (println (str "  " (fmt-summary n-test n-pass n-fail n-error)
+                    " (" (fmt-duration elapsed-ms) ")")))))
+
 (defn- run-selected
-  "Run selected test vars, grouped by namespace so fixtures apply per ns."
+  "Run selected test vars, grouped by namespace so fixtures apply per ns.
+   Engine-specific: bb runs each var with output capture and per-run ref
+   counters (see run-ns-vars); jolt's port counts into its own process-wide
+   `counters` atom and has no host output capture (see run-ns-vars-jolt).
+   Returns the aggregate {:test :pass :fail :error} map."
   [vars]
-  (doseq [[ns-sym ns-vars] (sort-by key (group-by (comp ns-name :ns meta) vars))]
-    (run-ns-vars ns-sym ns-vars)))
+  (if jolt?
+    ;; jolt's counters atom is process-wide and cumulative — the aggregate
+    ;; is the delta across the whole run (per-ns deltas come from
+    ;; run-ns-vars-jolt's own before/after reads).
+    (let [counters (var-get (requiring-resolve (quote clojure.test/counters)))
+          before @counters]
+      (doseq [[ns-sym ns-vars] (sort-by key (group-by (comp ns-name :ns meta) vars))]
+        (run-ns-vars-jolt ns-sym ns-vars))
+      (let [after @counters]
+        {:test (- (:test after) (:test before))
+         :pass (- (:pass after) (:pass before))
+         :fail (- (:fail after) (:fail before))
+         :error (- (:error after) (:error before))}))
+    (binding [t/*report-counters* (ref t/*initial-report-counters*)]
+      (doseq [[ns-sym ns-vars] (sort-by key (group-by (comp ns-name :ns meta) vars))]
+        (run-ns-vars ns-sym ns-vars))
+      @t/*report-counters*)))
+
+(defn- report-unloaded
+  "Print the unloadable-namespace list."
+  [unloaded]
+  (when (seq unloaded)
+    (println "\nNamespaces that could not load (skipped):")
+    (doseq [[ns-sym msg] unloaded]
+      (println "  " ns-sym " — " msg))))
 
 (defn- run-and-summarize
-  "Run VARS, print the summary, exit with status 0/1. When MARK-VALIDATED?
-   and everything passed, records the changed-files baseline (kmet.changed)."
-  [vars mark-validated?]
+  "Run the selected test vars, print the summary, exit with status 0/1.
+   Unloaded carries [[ns message] ...] for the skip report — printed only
+   on a full run (REPORT-SKIPS?), since a filtered run's scan stops at the
+   first namespace answering the filter and the skips seen before it are
+   irrelevant noise. When MARK-VALIDATED? and everything passed, records
+   the changed-files baseline (kmet.changed — bb only)."
+  [{:keys [vars unloaded]} mark-validated? report-skips?]
   (let [start-ms (System/currentTimeMillis)
-        ;; suites always exercise the committed catalogs — a fresh user-level
-        ;; model cache (~/.kmet/agent/models-cache) must not change results
-        results (binding [t/*report-counters* (ref t/*initial-report-counters*)
-                          models/*use-models-cache* false]
-                  (run-selected vars)
-                  @t/*report-counters*)
+        models-var (try (requiring-resolve 'kmet.ai.models/*use-models-cache*)
+                        (catch Throwable _ nil))
+        results (if (and (not jolt?) models-var)
+                  (with-bindings {models-var false} (run-selected vars))
+                  (run-selected vars))
         n-tests (:test results)
         n-assertions (+ (:pass results) (:fail results) (:error results))
         total-ms (- (System/currentTimeMillis) start-ms)
         fails (:fail results)
         errs (:error results)]
+    (when report-skips? (report-unloaded unloaded))
     (println (str "\nRan " n-tests " tests containing " n-assertions " assertions in "
                   (fmt-duration total-ms) "."))
     (when (pos? (+ fails errs))
@@ -314,7 +423,7 @@
                                   (cond-> [(str (:pass results) " passed")]
                                     (pos? fails) (conj (str fails " failed"))
                                     (pos? errs) (conj (plural errs "error" "errors")))))
-    (when (and mark-validated? (zero? (+ fails errs)))
+    (when (and (not jolt?) mark-validated? (zero? (+ fails errs)))
       (try ((requiring-resolve 'kmet.changed/mark-validated!))
            (catch Throwable e
              (.println System/err
@@ -324,25 +433,28 @@
 
 (defn -main
   "Run the test suites.
-   slow? selects ^:slow vs non-slow vars; nil means filter by var name only.
+   slow? selects ^:slow vs non-slow vars (`bb test` false, `bb test-ext`
+   true; `jolt test` false, `jolt test-ext` true — the same split works on
+   both hosts because ^:slow var metadata is preserved under jolt).
    Remaining args are test var filters (plain name or ns/var): when given,
-   only matching vars run, regardless of :slow (e.g. `bb test test-tool-bash`
+   only matching vars run, regardless of slow? (e.g. `bb test test-tool-bash`
    or `bb test-ext kmet.app.test-loop/test-loop-parallel-tool-execution`).
-   A full run without filters (either suite) records the changed-files
-   baseline after a green result, so `bb test-changed` sees a clean slate."
+   A full run without filters records the changed-files baseline after a
+   green result, so `bb test-changed` sees a clean slate."
   [slow? & filters]
-  (run-and-summarize (if (seq filters)
-                       (filtered-vars filters)
-                       (selected-vars slow?))
-                     (empty? filters)))
+  (let [selection (select-vars slow? (seq filters))]
+    (run-and-summarize selection (empty? filters) (empty? filters))))
 
 (defn run-ns-syms
   "Run the test vars of NS-SYMS matching SLOW? (true = ^:slow only, false =
    non-slow only), for `bb test-ext-changed` / `bb test-changed`."
   [ns-syms slow?]
-  (run-and-summarize
-   (for [ns-sym ns-syms
-         v (ns-vars ns-sym)
-         :when (and (:test (meta v)) (= slow? (boolean (:slow (meta v)))))]
-     v)
-   false))
+  (let [{vars :vars unloaded :unloaded}
+        (reduce (fn [acc ns-sym]
+                  (let [{vars :vars unloaded :unloaded} (ns-vars-of ns-sym)]
+                    (cond-> acc
+                      unloaded (update :unloaded conj unloaded)
+                      :always (update :vars into (filter #(test-var? % slow?)) vars))))
+                {:vars [] :unloaded []}
+                ns-syms)]
+    (run-and-summarize {:vars vars :unloaded unloaded} false true)))
