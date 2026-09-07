@@ -91,6 +91,26 @@
         [:text {:padding-x 1 :padding-y 0}
          (str "\n" (str/join "\n" parts))]))))
 
+(defn- elapsed-tree
+  "Live elapsed-time element for a running command: muted Elapsed Xs
+   under the spinner, ticking once a second via the :now-ms stamp."
+  [t started-at now-ms]
+  (let [elapsed-ms (max 0 (- (or now-ms started-at) started-at))]
+    [:text {:padding-x 1 :padding-y 0}
+     (str "\n" (theme/fg t :muted
+                         (str "Elapsed "
+                              (format "%.1f" (float (/ elapsed-ms 1000)))
+                              "s")))]))
+
+(defn- stop-tickers!
+  "Cancel the 80ms frame driver and the 1s elapsed ticker, if present.
+   Shared by set-complete! and dispose."
+  [comp]
+  (doseq [k [:ticker-atom :elapsed-ticker-atom]]
+    (when-let [tk @(get comp k)]
+      (future-cancel tk)
+      (reset! (get comp k) nil))))
+
 ;; ─── Fn-component body ─────────────────────────────────────────────────────
 ;; Reads the state atom (plus the expansion toggle and theme) through
 ;; tracked derefs, so swaps re-derive the tree exactly once and an idle UI
@@ -98,11 +118,11 @@
 ;; identity across passes and never disposes it.
 
 (defn- bash-body
-  "The bash transcript as a hiccup tree over STATE-ATOM.
-   EXPANDED-ATOM is the per-component toggle; TOOLS-EXPANDED-ATOM is the
-   chat-wide toggle (nil when unlinked). SPINNER-COMP is the long-lived
-   spinner record, spliced while running."
-  [state-atom expanded-atom tools-expanded-atom spinner-comp]
+  "The bash transcript as a hiccup tree over STATE-ATOM. NOW-ATOM
+   re-stamps once a second while running (pi: the Loader interval) so
+   the Elapsed line ticks during silent runs. SPINNER-COMP is the
+   long-lived spinner record, spliced while running."
+  [state-atom now-atom expanded-atom tools-expanded-atom spinner-comp]
   (fn [_props]
     (let [st (r/tracked-deref state-atom)
           command (:command st)
@@ -114,6 +134,7 @@
           started-at (:started-at st)
           ended-at (:ended-at st)
           exclude? (:exclude? st)
+          now-ms (r/tracked-deref now-atom)
           expanded? (or (r/tracked-deref expanded-atom)
                         (when tools-expanded-atom
                           (r/tracked-deref tools-expanded-atom)))
@@ -133,7 +154,9 @@
        (header-tree t color-key command)
        (output-tree t display-lines preview-lines expanded? width)
        (if (= status :running)
-         spinner-comp
+         [:container {}
+          spinner-comp
+          (elapsed-tree t started-at now-ms)]
          (status-tree t status exit-code hidden-line-count expanded?
                       truncated truncation full-output-path
                       started-at ended-at))])))
@@ -141,10 +164,13 @@
 ;; ─── Record ────────────────────────────────────────────────────────────────
 ;; Transparent wrapper (tui.md section 3.2): uncached, so the spinner leaf
 ;; paints on every driven frame. The memoization boundary is the root's
-;; reaction.
+;; reaction. Pi's component keeps the bordered box too (DynamicBorder top
+;; + content + DynamicBorder bottom); the box frame is chrome around the
+;; running spinner, not a pending/error background like tool calls have.
 
 (defcomponent BashExecutionComponent :bash
               [state-atom
+               now-atom
                expanded-atom tools-expanded-atom
                ;; Set-once children in atoms, like sibling message
                ;; components (:box holds (atom b)) — never swapped after
@@ -152,6 +178,7 @@
                spinner-comp
                root
                ticker-atom
+               elapsed-ticker-atom
                done-atom]
   (render [_this width]
     (let [st @state-atom
@@ -179,9 +206,7 @@
     ;; Idempotent: safe to call twice (chat-history-clear! disposes message
     ;; components, and the record may also be disposed directly).
     (reset! done-atom true)
-    (when-let [tk @ticker-atom]
-      (future-cancel tk)
-      (reset! ticker-atom nil))
+    (stop-tickers! _this)
     (protocols/dispose @root)))
 
 ;; ─── Construction ─────────────────────────────────────────────────────────
@@ -218,17 +243,20 @@
             :interval-ms FRAME-INTERVAL-MS
             :spinner-color-fn (fn [x] (theme/fg (theme/get-current-theme) color-key x))
             :message-color-fn (fn [x] (theme/fg (theme/get-current-theme) :muted x)))
-        root (hiccup/root (bash-body state-atom expanded-atom
+        now-atom (atom (System/currentTimeMillis))
+        root (hiccup/root (bash-body state-atom now-atom expanded-atom
                                      tools-expanded-atom sp))
         done-atom (atom false)
         comp (map->BashExecutionComponent
               {:kind :bash
                :state-atom state-atom
+               :now-atom now-atom
                :expanded-atom expanded-atom
                :tools-expanded-atom tools-expanded-atom
                :spinner-comp (atom sp)
                :root (atom root)
                :ticker-atom (atom nil)
+               :elapsed-ticker-atom (atom nil)
                :done-atom done-atom})]
     ;; Pi Loader parity: drive frames at 80ms while :running. The root's
     ;; reaction stays idle (no body re-runs) — each driven frame just
@@ -250,6 +278,24 @@
                       ;; setInterval survives callback throws)
                       (try
                         (macros/schedule-frame!)
+                        (catch Exception _))
+                      (recur))))
+                (catch InterruptedException _)
+                (catch Exception _))))
+    ;; Pi renderResult parity: re-stamp :now-ms once a second while
+    ;; running so the Elapsed line ticks during silent runs (the body
+    ;; reads it tracked, so only these stamps re-derive the tree).
+    ;; Self-exits on completion; set-complete!/dispose cancels it.
+    (reset! (:elapsed-ticker-atom comp)
+            (future
+              (try
+                (loop []
+                  (Thread/sleep 1000)
+                  (if (or @done-atom (not= :running (:status @state-atom)))
+                    nil
+                    (do
+                      (try
+                        (reset! now-atom (System/currentTimeMillis))
                         (catch Exception _))
                       (recur))))
                 (catch InterruptedException _)
@@ -301,14 +347,12 @@
                                     :else :complete))
              truncation (assoc :truncation truncation)
              full-output-path (assoc :full-output-path full-output-path))))
-  ;; Stop the spinner and the frame driver. done-atom stays false: a
+  ;; Stop the spinner and both tickers. done-atom stays false: a
   ;; second set-complete! is not a legal call (the run is over), and the
-  ;; status check already exits the driver.
+  ;; status checks already exit the drivers.
   (when-let [sp @(:spinner-comp comp)]
     (spinner/spinner-stop! sp))
-  (when-let [tk @(:ticker-atom comp)]
-    (future-cancel tk)
-    (reset! (:ticker-atom comp) nil)))
+  (stop-tickers! comp))
 
 (defn dispose-pending-bash!
   "Dispose pending bash components parked outside the chat (e.g. /new while

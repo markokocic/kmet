@@ -14,7 +14,11 @@
     (t/is (seq lines))
     (t/is (= 40 (u/visible-width (first lines))) "top border spans the width")
     (t/is (= 40 (u/visible-width (last lines))) "bottom border spans the width")
-    (t/is (some #(clojure.string/includes? % "$ sleep 1") lines) "command header shown")))
+    (t/is (some #(clojure.string/includes? % "$ sleep 1") lines) "command header shown")
+    (t/is (some #(clojure.string/includes? % "Running") lines) "spinner shown while running")
+    (t/is (some #(clojure.string/includes? % "Elapsed") lines) "elapsed shown while running")
+    (be/bash-execution-set-complete! c 0 false)
+    (protocols/dispose c)))
 
 (t/deftest test-bash-execution-render-with-output
   ;; Collapsed preview renders the last lines plus the expand hint.
@@ -52,6 +56,26 @@
       (be/bash-execution-set-complete! c 0 false)
       (t/is (nil? @(:ticker-atom c)) "completion clears the driver")
       (t/is (future-cancelled? driver) "driver future is cancelled"))))
+
+(t/deftest test-bash-execution-elapsed-ticks-while-running
+  (t/testing "1s elapsed ticker (pi renderResult setInterval parity) re-stamps while :running; completion clears it"
+    (let [c (be/make-bash-execution :command "sleep 5")
+          ticker @(:elapsed-ticker-atom c)]
+      (t/is (some? ticker) "elapsed ticker starts with the component")
+      (t/is (future? ticker))
+      (protocols/render c 40)
+      (let [before @(:now-atom c)]
+        (Thread/sleep 1200)
+        (t/is (> @(:now-atom c) before) "now re-stamped after ~1s")
+        (t/is (some #(clojure.string/includes? % "Elapsed") (protocols/render c 40))
+              "elapsed line renders while running"))
+      (let [ticker @(:elapsed-ticker-atom c)]
+        (be/bash-execution-set-complete! c 0 false)
+        (t/is (nil? @(:elapsed-ticker-atom c)) "completion clears the elapsed ticker")
+        (t/is (future-cancelled? ticker) "elapsed ticker future is cancelled")
+        (t/is (some #(clojure.string/includes? % "Took") (protocols/render c 40))
+              "took line renders after completion"))
+      (protocols/dispose c))))
 
 (t/deftest test-bash-execution-borders-flush
   ;; Every content line — preview output, blank separator, status — must be

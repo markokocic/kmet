@@ -116,6 +116,7 @@
               "extensions are told the runtime is torn down before the swap (pi: teardownCurrent)")
           (is (true? @(:done-atom parked-bash)) "/new stops the parked bash frame driver")
           (is (nil? @(:ticker-atom parked-bash)) "/new cancels the parked driver future")
+          (is (nil? @(:elapsed-ticker-atom parked-bash)) "/new cancels the parked elapsed ticker")
           (is (empty? @pending-bash) "parked bash refs are dropped"))
         (finally
           (event-bus/clear-event-listeners!)
