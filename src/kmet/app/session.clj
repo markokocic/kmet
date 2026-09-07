@@ -6,7 +6,8 @@
             [clojure.java.io :as io]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [babashka.fs :as fs]))
+            [babashka.fs :as fs])
+  (:import [java.io InputStreamReader]))
 
 ;; ─── Session record ─────────────────────────────────────────────────────────
 ;; :lock (a ReentrantLock) serializes all file mutations (pi:
@@ -167,7 +168,7 @@
    Returns {:lines [..] :ends-with-newline? bool}; the final line is
    included even without a trailing newline."
   [path]
-  (with-open [r (io/reader path :encoding "UTF-8")]
+  (with-open [r (InputStreamReader. (io/input-stream path) "UTF-8")]
     (let [cbuf (char-array read-buffer-size)]
       (loop [pending "" lines []]
         (let [n (.read r cbuf)]
@@ -210,7 +211,7 @@
    (reduced nil), the read stops and nil is returned (early exit for
    headerless files — nil is never a valid accumulator)."
   [path f init]
-  (with-open [r (io/reader path :encoding "UTF-8")]
+  (with-open [r (InputStreamReader. (io/input-stream path) "UTF-8")]
     (let [cbuf (char-array read-buffer-size)]
       (loop [pending "" acc init]
         (let [n (.read r cbuf)]
@@ -1223,7 +1224,7 @@
    scan limit), or unreadable files."
   [path]
   (try
-    (with-open [r (io/reader path :encoding "UTF-8")]
+    (with-open [r (InputStreamReader. (io/input-stream path) "UTF-8")]
       (let [sb (StringBuilder.)
             cbuf (char-array header-read-buffer-size)]
         (loop [scanned 0]
