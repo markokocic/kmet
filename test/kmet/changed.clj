@@ -46,11 +46,12 @@
        sort))
 
 (defn- dir-clj-files
-  "Every .clj file under DIR — top level and nested. java.nio's glob
-   `**/*.clj` requires at least one directory level, so top-level files
-   (e.g. extensions/tools.clj) need the `*.clj` pattern too."
+  "Every .clj/.cljc file under DIR — top level and nested. java.nio's glob
+   `**/*.cljc` requires at least one directory level, so top-level files
+   (e.g. extensions/tools.clj) need the `*.cljc` pattern too."
   [dir]
-  (concat (fs/glob dir "*.clj") (fs/glob dir "**/*.clj")))
+  (concat (fs/glob dir "*.clj") (fs/glob dir "**/*.clj")
+          (fs/glob dir "*.cljc") (fs/glob dir "**/*.cljc")))
 
 (defn- mtime-changed-files
   "src/test/extensions .clj files modified after the baseline timestamp
@@ -72,9 +73,9 @@
     (mtime-changed-files)))
 
 (defn changed-clj-files
-  "Changed .clj files under src/, test/ and extensions/."
+  "Changed .clj/.cljc files under src/, test/ and extensions/."
   []
-  (filter #(re-matches #"(?:src|test|extensions)/.*\.clj" %) (changed-files)))
+  (filter #(re-matches #"(?:src|test|extensions)/.*\.clj[c]?" %) (changed-files)))
 
 (defn mark-validated!
   "Record 'all gates green as of now' for the mtime fallback. No-op with git."
@@ -93,7 +94,7 @@
   [path]
   (symbol
    (-> path
-       (str/replace #"\.clj$" "")
+       (str/replace #"\.clj[c]?$" "")
        (str/replace "_" "-")
        (str/replace "/" ".")
        (str/replace #"^src\.|^test\." ""))))

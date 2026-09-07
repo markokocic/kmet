@@ -9,7 +9,7 @@
 
 (defn- lib-files []
   (->> (fs/list-dir "src/kmet/libs")
-       (filter #(str/ends-with? (str %) ".clj"))
+       (filter #(re-find #"\.clj[ca]?$" (str %)))
        (map str)))
 
 (defn- kmet-requires [path]

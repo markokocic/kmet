@@ -46,7 +46,7 @@ External deps (`deps.edn` + `bb.edn`): `babashka/fs`, `babashka/process`
 
 ## 2. Hard blockers (need design + substantial new code)
 
-### B1. HTTP/SSE transport (`libs/http.clj` 725 LOC + `libs/sse.clj` 1084 LOC)
+### B1. HTTP/SSE transport (`libs/http.cljc` 725 LOC + `libs/sse.clj` 1084 LOC)
 
 kmet funnels ALL outbound HTTP through `kmet.libs.http` (enforced by
 `test-http-boundary`): `babashka.http-client` (java.net.http) for plain
@@ -115,7 +115,7 @@ the curl path already handles direct connections, proxies, streaming
 `babashka.process` + `java.io.File` + `java.lang.Process` (all verified
 on Jolt). `jolt-lang/http-client` covers only the unproxied, non-stream
 slice and would still need curl for streaming/proxy/cancel — so a single
-transport is simpler. Implemented in `libs/http.clj` via `#?(:jolt ...)`
+transport is simpler. Implemented in `libs/http.cljc` via `#?(:jolt ...)`
 reader conditionals: the java.net.http transport is JVM-only, and Jolt
 falls through to `curl-request` for every request. Verified: GET/POST
 return status=200 on both Jolt and JVM/bb.
@@ -174,7 +174,7 @@ the core agent must work before extensions matter.
 
 | # | kmet surface | Jolt answer (verified on checkout) | size |
 |---|---|---|---|
-| M1 | `clojure.data.json` (the swap from `cheshire` → `data.json` is done — `kmet.libs.json` now aliases `clojure.data.json` directly) | **no JSON lib in stdlib** — biggest pure-logic gap. Write a `kmet.libs.json` over string ops; Jolt strings/regexes suffice. Streaming tool-call arg accumulation in `sse.clj` needs incremental parsing — keep the shape, swap the parser. **Note:** `http.clj` is already ported (curl path via `#?(:jolt ...)`); all 26 libs now load and test green on bb/JVM. M1 is now purely a Jolt-stdlib gap | new ~500-800 LOC lib |
+| M1 | `clojure.data.json` (the swap from `cheshire` → `data.json` is done — `kmet.libs.json` now aliases `clojure.data.json` directly) | **no JSON lib in stdlib** — biggest pure-logic gap. Write a `kmet.libs.json` over string ops; Jolt strings/regexes suffice. Streaming tool-call arg accumulation in `sse.clj` needs incremental parsing — keep the shape, swap the parser. **Note:** `http.cljc` is already ported (curl path via `#?(:jolt ...)`); all 26 libs now load and test green on bb/JVM. M1 is now purely a Jolt-stdlib gap | new ~500-800 LOC lib |
 | M2 | `tui/terminal.clj` (JLine raw/timed-reads/size) + `core.clj` reader/timers/resize/drain | termios FFI (Unix) + kernel32 FFI (Windows); `future` reader + `locking` + gen-counters — see `jolt-tui.md` §§4–7,9. Evaluated 2026-09-06: `jolt-lang/glimmer-tui` (ncursesw via FFI, Unix-only, fullscreen `initscr` takeover) rejected — wrong architecture for the inline ANSI/scrollback model; JLine stays on bb (`jolt-tui.md` §2 decision) | rewrite ~500 LOC (Jolt only) |
 | M3 | `libs/crypto.clj` (315 LOC: RSA/EC `KeyFactory`, `SHA256withRSA/ECDSA` `Signature`) + `libs/aws_sigv4.clj` (204 LOC: `MessageDigest` SHA-256, `Mac` HmacSHA256, `HexFormat`, `Normalizer`?) — grep the exact class list before the FFI design | OpenSSL FFI following `mvn_http.clj`'s libcrypto/libssl loading (note macOS boringssl SIGABRT hazard — explicit Homebrew paths only); RSA via libcrypto; `SecureRandom` via OS source | rewrite ~500 LOC |
 | M4 | `libs/oauth.clj` + `ai/oauth.clj` + `ai/google_adc.clj` (browser launch, localhost callback server, token cache) | `ServerSocket` shim exists (host-interop lists it, gated on `(require 'jolt.socket)`); browser launch via `jolt.process`; token cache via `spit`/`slurp` | adapt ~1k LOC |
@@ -258,7 +258,7 @@ biggest bb-side blocker; M1 is now purely a Jolt-stdlib gap.
 6. **Packaging + tooling** (1–2 wks): `jolt build` pipeline replacing `build.clj`, test runner `^:slow` split, lint/format gates, model generators.
 7. **Extensions** (open-ended): B3 redesign decision; port shipped extensions after.
 
-Estimate honesty: B1 transport is **decided** (curl-only on Jolt, java.net.http on JVM via `#?(:clj ...)` reader conditionals — `http.clj` ported and verified, 2026-09-09). Remaining B1 work is `sse.clj` (pure parsing, port the logic) + `libs.oauth`/`ai.oauth`/`ai.google_adc` (M4, needs `jolt.socket`). M1 (clojure.data.json) is resolved on bb/JVM — all 26 libs load and test green. The remaining M1 gap is Jolt's stdlib (no JSON lib) — blocks json/jsonrpc/sse from loading under Jolt only. B3 is a research spike before it is labor.
+Estimate honesty: B1 transport is **decided** (curl-only on Jolt, java.net.http on JVM via `#?(:clj ...)` reader conditionals — `http.cljc` ported and verified, 2026-09-09). Remaining B1 work is `sse.clj` (pure parsing, port the logic) + `libs.oauth`/`ai.oauth`/`ai.google_adc` (M4, needs `jolt.socket`). M1 (clojure.data.json) is resolved on bb/JVM — all 26 libs load and test green. The remaining M1 gap is Jolt's stdlib (no JSON lib) — blocks json/jsonrpc/sse from loading under Jolt only. B3 is a research spike before it is labor.
 
 ---
 
