@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-06T20:10:23Z"
+ :generated-at "2026-09-07T21:04:07Z"
  :provider {:id :vercel-ai-gateway
             :name "Vercel AI Gateway"
             :env-vars ["AI_GATEWAY_API_KEY"]
@@ -1225,17 +1225,6 @@
     :cost {:input 0.3 :output 1.2 :cache-read 0.06 :cache-write 0.375}
     :context-window 204800
     :max-tokens 131000}
-   "minimax/minimax-m2.7-free"
-   {:id "minimax/minimax-m2.7-free"
-    :name "MiniMax M2.7 (Free)"
-    :provider :vercel-ai-gateway
-    :api :anthropic-messages
-    :base-url "https://ai-gateway.vercel.sh"
-    :reasoning true
-    :input [:text]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 196608
-    :max-tokens 196608}
    "minimax/minimax-m2.7-highspeed"
    {:id "minimax/minimax-m2.7-highspeed"
     :name "MiniMax M2.7 High Speed"
@@ -1258,17 +1247,6 @@
     :cost {:input 0.3 :output 1.2 :cache-read 0.06 :cache-write 0}
     :context-window 512000
     :max-tokens 512000}
-   "minimax/minimax-m3-free"
-   {:id "minimax/minimax-m3-free"
-    :name "MiniMax M3 (Free)"
-    :provider :vercel-ai-gateway
-    :api :anthropic-messages
-    :base-url "https://ai-gateway.vercel.sh"
-    :reasoning true
-    :input [:text :image]
-    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
-    :context-window 1048576
-    :max-tokens 1048576}
    "mistral/codestral"
    {:id "mistral/codestral"
     :name "Mistral Codestral"
