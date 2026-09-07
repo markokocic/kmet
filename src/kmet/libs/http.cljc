@@ -37,7 +37,7 @@
    through curl with full status/headers parity. Proxy selection is
    transparent — callers never see the transport. `:proxy :none` forces a
    direct connection; the env seam is testable via a map (proxy-for-url)."
-  (:require #?(:jolt nil :clj [babashka.http-client :as http] :default nil)
+  (:require #?@(:jolt [] :clj [[babashka.http-client :as http]] :default [])
             [babashka.process :as proc]
             [kmet.libs.json :as json]
             [clojure.string :as str]
@@ -294,62 +294,60 @@
 
 ;; ─── Transport: java.net.http (babashka.http-client) ─────────────────────
 ;; JVM-only: Jolt routes everything through the curl path below.
-#?@(:jolt nil
-    :clj [(def ^:private client-cache
-            "babashka.http-client clients keyed by [proxy mode], so repeated
+#?(:clj (do (def ^:private client-cache
+              "babashka.http-client clients keyed by [proxy mode], so repeated
              requests reuse connections instead of rebuilding a client per call.
              Private — callers never see clients."
-            (atom {}))
+              (atom {}))
 
-          (defn- java-client
-            "A babashka.http-client client routing through an HTTP proxy (used
+            (defn- java-client
+              "A babashka.http-client client routing through an HTTP proxy (used
              for http/https proxies; SOCKS goes through curl instead)."
-            [p mode]
-            (http/client (cond-> {:proxy {:type :http :host (:host p) :port (:port p)}
-                                  :follow-redirects mode}
-                           (:user p) (assoc :authenticator
-                                            (cond-> {:user (:user p)}
-                                              (:pass p) (assoc :pass (:pass p)))))))
+              [p mode]
+              (http/client (cond-> {:proxy {:type :http :host (:host p) :port (:port p)}
+                                    :follow-redirects mode}
+                             (:user p) (assoc :authenticator
+                                              (cond-> {:user (:user p)}
+                                                (:pass p) (assoc :pass (:pass p)))))))
 
-          (defn- client-for
-            "The cached client for a proxy map (nil = direct connection) and
+            (defn- client-for
+              "The cached client for a proxy map (nil = direct connection) and
              follow mode. Direct clients start from http/default-client-opts so
              they keep the implicit default's headers (accept, gzip, user-agent)."
-            [p mode]
-            (let [key [(when p [(:url p) (:scheme p) (:user p) (:pass p)]) mode]]
-              (or (get @client-cache key)
-                  (let [c (if p
-                            (java-client p mode)
-                            (http/client (assoc http/default-client-opts
-                                                :follow-redirects mode)))]
-                    (swap! client-cache assoc key c)
-                    c))))
+              [p mode]
+              (let [key [(when p [(:url p) (:scheme p) (:user p) (:pass p)]) mode]]
+                (or (get @client-cache key)
+                    (let [c (if p
+                              (java-client p mode)
+                              (http/client (assoc http/default-client-opts
+                                                  :follow-redirects mode)))]
+                      (swap! client-cache assoc key c)
+                      c))))
 
-          (defn- native-request
-            "One request over java.net.http. THROW? is applied here so both
+            (defn- native-request
+              "One request over java.net.http. THROW? is applied here so both
              transports raise the same http-error shape; transport exceptions are
              wrapped (babashka surfaces them as raw JVM exceptions with no
              ex-data). P is the resolved proxy (nil = direct) — the request
              routes through the cached client for that proxy."
-            [opts throw? p]
-            (let [native-opts (cond-> (dissoc opts :url :throw? :signal :proxy :follow-redirects)
-                                true (assoc :throw false))]
-              (try
-                (let [resp (http/request (assoc native-opts
-                                                :url (:url opts)
-                                                :client (client-for p (:follow-redirects opts))))
-                      status (:status resp)]
-                  (if (and throw? (>= status 400))
-                    (throw (http-error status (:headers resp) (:body resp)))
-                    {:status status :headers (:headers resp) :body (:body resp)}))
+              [opts throw? p]
+              (let [native-opts (cond-> (dissoc opts :url :throw? :signal :proxy :follow-redirects)
+                                  true (assoc :throw false))]
+                (try
+                  (let [resp (http/request (assoc native-opts
+                                                  :url (:url opts)
+                                                  :client (client-for p (:follow-redirects opts))))
+                        status (:status resp)]
+                    (if (and throw? (>= status 400))
+                      (throw (http-error status (:headers resp) (:body resp)))
+                      {:status status :headers (:headers resp) :body (:body resp)}))
                 ;; an http-error thrown above must pass through unwrapped
-                (catch clojure.lang.ExceptionInfo e
-                  (if (= :http-error (:type (ex-data e)))
-                    (throw e)
-                    (throw (transport-error e))))
-                (catch Exception e
-                  (throw (transport-error e))))))]
-    :default nil)
+                  (catch clojure.lang.ExceptionInfo e
+                    (if (= :http-error (:type (ex-data e)))
+                      (throw e)
+                      (throw (transport-error e))))
+                  (catch Exception e
+                    (throw (transport-error e))))))))
 
 ;; ─── Transport: curl (SOCKS / https-scheme proxies) ───────────────────────
 
