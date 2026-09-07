@@ -4,6 +4,11 @@
         ;; in-process Maven closure resolution for extension deps.edn
         ;; (0.0.21 = last version without the clojure-tools installer)
         borkdude/deps.clj {:mvn/version "0.0.21"}
-        org.clojure/data.json {:mvn/version "2.4.0"}}
+        org.clojure/data.json {:mvn/version "2.4.0"}
+        ;; java.time formatting/zone layer on Jolt (DateTimeFormatter,
+        ;; ZoneId/ZoneOffset, ZonedDateTime — RFC 0008; inert on bb/JVM,
+        ;; where the JDK already provides these classes)
+        io.github.jolt-lang/time {:git/url "https://github.com/jolt-lang/time.git"
+                                  :git/sha "8030de28d6cda6096896c3e653babdbc8105499c"}}
  :aliases
  {:dev {:extra-paths ["test"]}}}
