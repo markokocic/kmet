@@ -402,21 +402,45 @@
    has no per-var ref counters and no host output capture; clojure.test/
    test-vars applies the ns's :once/:each fixtures and test-var through
    jolt's own process-wide counters atom. Prints the same per-namespace
-   header/summary as the bb engine."
+   header/summary as the bb engine.
+
+   Jolt-specific: test-vars runs on a future with a per-namespace timeout.
+   A namespace whose test infrastructure hangs on Jolt (JDK classes with
+   missing methods — e.g. java.net.Socket's OutputStream only has write(int),
+   not write(byte[]); or java.io.DataInputStream lacking a ctor — crash the
+   helper thread and leave curl/threads blocked forever) would otherwise
+   stall the whole run. The timeout lets the runner report and move on;
+   future-cancel interrupts the worker thread."
   [ns-sym vars]
   (let [counters (var-get (requiring-resolve (quote clojure.test/counters)))
         before @counters
-        start-ms (System/currentTimeMillis)]
+        start-ms (System/currentTimeMillis)
+        ;; future + deref-with-timeout so a hung namespace can't block forever.
+        ;; deref returns the future's value (::ok or a Throwable) or ::timeout.
+        f (future
+            (try
+              (t/test-vars vars)
+              ::ok
+              (catch Throwable e e)))
+        deref-result (deref f 15000 ::timeout)]
+    (when (= ::timeout deref-result)
+      (future-cancel f))
     (println "\nTesting" (ns-name (find-ns ns-sym)))
-    (t/test-vars vars)
     (let [after @counters
           n-test (- (:test after) (:test before))
           n-pass (- (:pass after) (:pass before))
           n-fail (- (:fail after) (:fail before))
           n-error (- (:error after) (:error before))
           elapsed-ms (- (System/currentTimeMillis) start-ms)]
-      (println (str "  " (fmt-summary n-test n-pass n-fail n-error)
-                    " (" (fmt-duration elapsed-ms) ")")))))
+      (cond
+        (= ::timeout deref-result)
+        (println (str "  TIMED OUT after " (fmt-duration 15000)
+                      " — test infrastructure hung (likely a JDK class gap on Jolt)"))
+        (instance? Throwable deref-result)
+        (println (str "  ERROR: " (.getMessage deref-result)))
+        :else
+        (println (str "  " (fmt-summary n-test n-pass n-fail n-error)
+                      " (" (fmt-duration elapsed-ms) ")"))))))
 
 (defn- run-selected
   "Run selected test vars, grouped by namespace so fixtures apply per ns.
