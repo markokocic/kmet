@@ -13,7 +13,14 @@
    require, a JDK class gap, a java.time.* gap — jolt-port.md M1/M6) is
    reported and skipped, never fatal; the remaining namespaces run. This
    is what lets the same runner serve `bb test` and `jolt test` while the
-   Jolt port is staged.
+   Jolt port is staged. On a full run every unloadable namespace is listed
+   with its load failure reason; on a filtered run the list holds only the
+   requested namespaces that failed to load.
+
+   Filters select tests: a plain var name (e.g. `test-tool-bash`), an ns/var
+   pair (e.g. `kmet.app.test-loop/my-test`), or a whole namespace
+   (a known test ns, a dotted ns name, or ns/ with an empty var part).
+   Whole-namespace filters select by slow?; var filters ignore slow?.
 
    Engine differences: on babashka, each test var runs with stdout/stderr
    captured (replayed on failure, discarded on pass) and the counters are
@@ -171,12 +178,89 @@
                (= % (str ns-full "/" vn)))
           filters)))
 
+(defn- split-filters
+  "Split FILTERS into {:named [ns/var ...] :nss [ns ...] :plain [var ...]}.
+   A bare filter naming a known test namespace (or containing a dot) is a
+   whole-namespace request; anything else bare is a var name. An ns/var
+   filter with an empty var part counts as a whole-namespace request."
+  [filters]
+  (let [known (set all-namespaces)]
+    (reduce (fn [acc f]
+              (let [f (str f)]
+                (if-let [slash (str/index-of f "/")]
+                  (let [var-part (subs f (inc slash))]
+                    (if (seq var-part)
+                      (update acc :named conj f)
+                      (update acc :nss conj (subs f 0 slash))))
+                  (if (or (contains? known (symbol f)) (str/includes? f "."))
+                    (update acc :nss conj f)
+                    (update acc :plain conj f)))))
+            {:named [] :nss [] :plain []}
+            filters)))
+
+(defn- select-requested-nss
+  "Load NSS whole-namespace requests, selecting vars by SLOW?."
+  [nss slow?]
+  (reduce (fn [acc ns-str]
+            (let [ns-sym (symbol ns-str)
+                  {vars :vars unloaded :unloaded} (ns-vars-of ns-sym)]
+              (cond-> acc
+                unloaded (update :unloaded conj unloaded)
+                :always (update :vars into (filter #(test-var? % slow?)) vars))))
+          {:vars [] :unloaded []}
+          nss))
+
+(defn- select-plain-filters
+  "Scan namespaces in order for plain var-name FILTERS, stopping once every
+   unmatched filter has answered. UNMATCHED is the set of plain names still
+   seeking their first match; plain names matched by whole-namespace requests
+   are already satisfied."
+  [filters unmatched]
+  (loop [nss all-namespaces
+         remaining unmatched
+         acc {:vars [] :unloaded []}]
+    (if (or (nil? (first nss)) (empty? remaining))
+      acc
+      (let [ns-sym (first nss)
+            {vars :vars unloaded :unloaded} (ns-vars-of ns-sym)
+            matched (keep #(when (and (contains? remaining (name (:name (meta %))))
+                                      (var-matches-filter? % filters))
+                             (name (:name (meta %))))
+                          vars)]
+        (recur (rest nss)
+               (apply disj remaining matched)
+               (cond-> acc
+                 unloaded (update :unloaded conj unloaded)
+                 :always (update :vars into (filter #(var-matches-filter? % filters)) vars)))))))
+
+(defn- select-named-filters
+  "Load exactly the namespaces referenced by ns/var NAMED filters and return
+   the matching vars. Like plain var filters, ns/var filters ignore slow?."
+  [named]
+  (reduce (fn [acc filter-str]
+            (let [slash (str/index-of filter-str "/")
+                  ns-sym (symbol (subs filter-str 0 slash))
+                  var-name (subs filter-str (inc slash))
+                  {vars :vars unloaded :unloaded} (ns-vars-of ns-sym)]
+              (cond-> acc
+                unloaded (update :unloaded conj unloaded)
+                :always (update :vars into
+                                (filter #(and (:test (meta %))
+                                              (= var-name (name (:name (meta %))))))
+                                vars))))
+          {:vars [] :unloaded []}
+          named))
+
 (defn- select-vars
   "Load every namespace (or, with FILTERS, the ones needed to answer them)
    and return {:vars [matching test vars] :unloaded [[ns message] ...]}.
    Unloadable namespaces are reported, never fatal. With no FILTERS the
-   slow? flag selects ^:slow vs non-slow vars; filters match by var name
-   (any namespace) or ns/var and ignore slow?."
+   slow? flag selects ^:slow vs non-slow vars. Whole-namespace filters
+   (a known test ns, a dotted ns name, or ns/ with an empty var part)
+   select by slow?; var filters (plain names or ns/var) ignore slow?.
+   The :unloaded list holds only explicitly requested namespaces (whole
+   ns requests and ns/var filters) — namespaces scanned incidentally for
+   plain var names are never reported. :filters echoes the raw FILTERS."
   ([slow?] (select-vars slow? nil))
   ([slow? filters]
    (if-not (seq filters)
@@ -187,44 +271,16 @@
                    :always (update :vars into (filter #(test-var? % slow?)) vars))))
              {:vars [] :unloaded []}
              all-namespaces)
-     ;; filtered: plain names scan all-namespaces in order and stop once
-     ;; every plain filter has matched (so `bb test test-llm-loaded`
-     ;; requires only the namespaces up to the first match); ns/var filters
-     ;; load exactly their namespace.
-     (let [filters (map str filters)
-           plain (remove #(str/includes? % "/") filters)]
-       (if (seq plain)
-         (loop [nss all-namespaces
-                remaining (set plain)
-                acc {:vars [] :unloaded []}]
-           (if-let [ns-sym (first nss)]
-             (let [{vars :vars unloaded :unloaded} (ns-vars-of ns-sym)
-                   acc (cond-> acc
-                         unloaded (update :unloaded conj unloaded)
-                         :always (update :vars into
-                                         (filter #(var-matches-filter? % filters))
-                                         vars))
-                   remaining (apply disj remaining
-                                    (keep #(when (some (fn [f] (= f (name (:name (meta %)))))
-                                                       plain)
-                                             (name (:name (meta %))))
-                                          vars))]
-               (if (seq remaining)
-                 (recur (rest nss) remaining acc)
-                 acc))
-             acc))
-         (reduce (fn [acc filter-str]
-                   (let [slash (str/index-of filter-str "/")
-                         ns-sym (symbol (subs filter-str 0 slash))
-                         var-name (subs filter-str (inc slash))
-                         {vars :vars unloaded :unloaded} (ns-vars-of ns-sym)]
-                     (cond-> acc
-                       unloaded (update :unloaded conj unloaded)
-                       :always (update :vars into
-                                       (filter #(= var-name (name (:name (meta %))))
-                                               vars)))))
-                 {:vars [] :unloaded []}
-                 filters))))))
+     (let [strs (map str filters)
+           {:keys [named nss plain]} (split-filters strs)
+           ns-sel (when (seq nss) (select-requested-nss nss slow?))
+           satisfied (into #{} (map (fn [v] (name (:name (meta v)))) (:vars ns-sel)))
+           still-plain (remove satisfied plain)
+           plain-sel (when (seq still-plain) (select-plain-filters strs (set still-plain)))
+           named-sel (when (seq named) (select-named-filters named))
+           vars (vec (distinct (concat (:vars ns-sel) (:vars plain-sel) (:vars named-sel))))
+           unloaded (vec (distinct (concat (:unloaded ns-sel) (:unloaded named-sel))))]
+       {:vars vars :unloaded unloaded :filters (vec strs)}))))
 
 (def jolt?
   "True when running under the jolt host (its clojure.test port differs from
@@ -387,21 +443,34 @@
       @t/*report-counters*)))
 
 (defn- report-unloaded
-  "Print the unloadable-namespace list."
-  [unloaded]
-  (when (seq unloaded)
-    (println "\nNamespaces that could not load (skipped):")
-    (doseq [[ns-sym msg] unloaded]
-      (println "  " ns-sym " — " msg))))
+  "Print the unloadable-namespace list, prefixed by HEADER when given."
+  ([unloaded] (report-unloaded unloaded "Namespaces that could not load (skipped):"))
+  ([unloaded header]
+   (when (seq unloaded)
+     (println (str "\n" header))
+     (doseq [[ns-sym msg] unloaded]
+       (println "  " ns-sym " — " msg)))))
+
+(defn- report-no-match
+  "Print why a filtered run matched no test vars. UNLOADED holds the
+   requested namespaces that failed to load (nil when all requested
+   namespaces loaded); FILTERS are the raw filter strings."
+  [unloaded filters]
+  (println (str "\nNo test vars matched: " (str/join " " (map str filters)) "."))
+  (if (seq unloaded)
+    (report-unloaded unloaded "Requested namespace(s) failed to load (no tests could run):")
+    (println "No requested namespaces failed to load — no test vars matched the filter and slow? selection.")))
 
 (defn- run-and-summarize
   "Run the selected test vars, print the summary, exit with status 0/1.
-   Unloaded carries [[ns message] ...] for the skip report — printed only
-   on a full run (REPORT-SKIPS?), since a filtered run's scan stops at the
-   first namespace answering the filter and the skips seen before it are
-   irrelevant noise. When MARK-VALIDATED? and everything passed, records
+   SELECTION carries {:vars :unloaded :filters}; :unloaded holds the
+   requested namespaces that failed to load (full run: every unloadable
+   namespace). The skip report prints on a full run and on a filtered run
+   that matched vars; a filtered run that matched no vars names the filters
+   instead and, when a requested namespace failed to load, surfaces its reason.
+   When MARK-VALIDATED? and everything passed, records
    the changed-files baseline (kmet.changed — bb only)."
-  [{:keys [vars unloaded]} mark-validated? report-skips?]
+  [{:keys [vars unloaded filters]} mark-validated?]
   (let [start-ms (System/currentTimeMillis)
         models-var (try (requiring-resolve 'kmet.ai.models/*use-models-cache*)
                         (catch Throwable _ nil))
@@ -413,7 +482,10 @@
         total-ms (- (System/currentTimeMillis) start-ms)
         fails (:fail results)
         errs (:error results)]
-    (when report-skips? (report-unloaded unloaded))
+    (when (or (empty? filters) (seq vars))
+      (report-unloaded unloaded))
+    (when (and (seq filters) (empty? vars))
+      (report-no-match unloaded filters))
     (println (str "\nRan " n-tests " tests containing " n-assertions " assertions in "
                   (fmt-duration total-ms) "."))
     (when (pos? (+ fails errs))
@@ -436,14 +508,17 @@
    slow? selects ^:slow vs non-slow vars (`bb test` false, `bb test-ext`
    true; `jolt test` false, `jolt test-ext` true — the same split works on
    both hosts because ^:slow var metadata is preserved under jolt).
-   Remaining args are test var filters (plain name or ns/var): when given,
-   only matching vars run, regardless of slow? (e.g. `bb test test-tool-bash`
-   or `bb test-ext kmet.app.test-loop/test-loop-parallel-tool-execution`).
+   Remaining args are filters: plain test var names (`bb test test-tool-bash`),
+   ns/var pairs (`bb test-ext kmet.app.test-loop/my-test`), or whole
+   namespaces (`bb test kmet.tui.test-fuzzy`, or ns/ with a trailing slash).
+   Whole-namespace filters select by slow?; var filters ignore slow?.
+   The skip report lists unloadable namespaces (full run: all of them;
+   filtered run: only the requested ones) with the load failure reason.
    A full run without filters records the changed-files baseline after a
    green result, so `bb test-changed` sees a clean slate."
   [slow? & filters]
   (let [selection (select-vars slow? (seq filters))]
-    (run-and-summarize selection (empty? filters) (empty? filters))))
+    (run-and-summarize selection (empty? filters))))
 
 (defn run-ns-syms
   "Run the test vars of NS-SYMS matching SLOW? (true = ^:slow only, false =
@@ -457,4 +532,4 @@
                       :always (update :vars into (filter #(test-var? % slow?)) vars))))
                 {:vars [] :unloaded []}
                 ns-syms)]
-    (run-and-summarize {:vars vars :unloaded unloaded} false true)))
+    (run-and-summarize {:vars vars :unloaded unloaded} false)))
