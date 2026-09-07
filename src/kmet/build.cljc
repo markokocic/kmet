@@ -11,7 +11,7 @@
    (/proc/self/exe resolves to ld-linux). For a termux host we therefore emit a
    companion launcher script that unsets LD_PRELOAD, execs via
    $PREFIX/glibc/lib/ld-linux-*.so.1 and passes --jar <self> explicitly."
-  (:require [babashka.classpath :as bcp]
+  (:require #?@(:jolt nil :clj [[babashka.classpath :as bcp]])
             [babashka.fs :as fs]
             [babashka.process :as p]
             [kmet.libs.json :as json]

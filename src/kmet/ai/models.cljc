@@ -7,10 +7,10 @@
    never from ad-hoc provider switches. Providers are data — an EDN blob
    registered in an atom — which is what later makes extension
    registerProvider trivial (pi: MutableModels.setProvider)."
-  (:require [clojure.edn :as edn]
+  (:require #?@(:jolt nil :clj [[babashka.classpath :as bcp]])
+            [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.java.io :as io]
-            [babashka.classpath :as bcp]
             [babashka.fs :as fs]
             [kmet.config :as cfg]
             [kmet.ai.auth :as auth]

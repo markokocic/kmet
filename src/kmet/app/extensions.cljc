@@ -25,10 +25,10 @@
    Extensions load at startup (core.clj), are re-loaded by /reload, and can
    be unloaded/reloaded at runtime via unload-extension! /
    reload-extensions!."
-  (:require [clojure.java.io :as io]
+  (:require #?@(:jolt nil :clj [[babashka.classes]])
+            [clojure.java.io :as io]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [babashka.classes]
             [babashka.fs :as fs]
             [babashka.process :as proc]
             [borkdude.deps :as bdeps]
