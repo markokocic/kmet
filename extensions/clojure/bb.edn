@@ -1,7 +1,11 @@
 {:paths ["src" "test" "../../src"]
  :deps {dev.weavejester/cljfmt {:mvn/version "0.16.5"
                                 :exclusions [rewrite-clj/rewrite-clj]}
-        parinferish/parinferish {:mvn/version "0.8.0"}}
+        parinferish/parinferish {:mvn/version "0.8.0"}
+        ;; clojure-edit loads kmet.app.ui.tool-renderers (../../src), whose
+        ;; kmet.libs.json seam requires clojure.data.json — a Maven lib, not
+        ;; bb-bundled, so it must be on this standalone test classpath.
+        org.clojure/data.json {:mvn/version "2.4.0"}}
  :tasks
  {test {:doc "Run clojure extension tests (args: test namespace names)"
         :task (let [nss (or (some->> *command-line-args* (map symbol))
