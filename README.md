@@ -107,6 +107,7 @@ bb run --print "list files in current directory"
 | `/quit` | Exit kmet |
 | `/help` | Show help |
 | `/model <provider:model[:thinking]>` | Switch model (Ctrl+L opens a selector; an unmatched term opens the selector pre-filled with it) |
+| `/thinking [level]` | Set thinking level — bare: selector with search, ✓ current, `· default` marker (Enter selects, Ctrl+S sets as default); with a level arg: apply it directly |
 | `/scoped-models` | Enable/disable/reorder the models Ctrl+P cycles through (Ctrl+S saves to settings) |
 | `/settings` | Settings menu — thinking level, hide-thinking, retry (enabled / max retries / base delay), theme |
 | `/login [provider]` | Configure provider auth — API key, or OAuth: Copilot device-code, Codex browser/device, Anthropic & OpenRouter browser PKCE |
@@ -125,6 +126,7 @@ bb run --print "list files in current directory"
 | `Ctrl+D` | Exit when editor is empty |
 | `Ctrl+C` | Clear editor (twice to quit) |
 | `Ctrl+L` | Select model |
+| `Shift+Tab` | Cycle thinking level |
 | `Ctrl+P` / `Shift+Ctrl+P` | Cycle scoped models (`--models` / `/scoped-models`) |
 | `Ctrl+Up/Down` | Scroll chat viewport |
 

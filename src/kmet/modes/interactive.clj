@@ -27,6 +27,7 @@
             [kmet.app.ui.scoped-models-selector :refer [show-scoped-models-selector]]
             [kmet.app.ui.settings-selector :refer [show-settings]]
             [kmet.app.ui.session-selector :refer [show-session-selector]]
+            [kmet.app.ui.thinking-selector :as thinking-selector]
             [kmet.app.ui.tree-selector :refer [show-session-tree]]
             [kmet.app.ui.footer :as footer]
             [kmet.app.ui.footer-data-provider :as fdp]
@@ -299,6 +300,56 @@
       (term/set-title! @term title))))
 
 ;; ─── Command handling ──────────────────────────────────────────────────────
+
+(defn- apply-thinking-level!
+  "Apply a thinking level selection (pi selectThinkingLevel): set the agent's
+   level — the session records a :thinking-level-change entry (pi appends to
+   the session transcript; /resume restores it), push the level into the
+   footer and the editor border color, and report via a status line. When
+   PERSIST? the level is additionally saved as [:thinking] in settings.edn,
+   the default for future sessions (pi options.persist →
+   settingsManager.setDefaultThinkingLevel — kmet's Ctrl+S path; kmet's own
+   Shift+Tab cycle and /settings row persist unconditionally, this command
+   follows pi)."
+  [cs level persist?]
+  (let [ag @(:agent-state cs)]
+    (agent/set-thinking-level! ag level)
+    (sync-footer-model! cs)
+    (update-editor-border-color! cs level)
+    (ui/chat-history-show-status!
+     (:chat-history cs)
+     (str (if persist? "Default thinking level: " "Thinking level: ")
+          (name level)))
+    (when persist?
+      (cfg/save-setting! [:thinking] level))))
+
+(defn- handle-thinking-command!
+  "pi handleThinkingCommand: a bare /thinking mounts the level selector; an
+   argument applies the matching level directly — matched case-insensitively
+   against the current model's supported levels, with a warning listing the
+   available levels on a miss (pi showError)."
+  [cs search-term]
+  (let [levels (thinking-selector/available-levels cs)]
+    (if (str/blank? search-term)
+      ;; pi opens the selector even for non-reasoning models (only :off
+      ;; listed); kmet's cycle parity — a single-level model gets the same
+      ;; status as Shift+Tab instead of a one-row selector
+      (if (<= (count levels) 1)
+        (ui/chat-history-show-status! (:chat-history cs)
+                                      "Current model does not support thinking")
+        (thinking-selector/show-thinking-selector
+         cs
+         :on-select (fn [level] (apply-thinking-level! cs level false))
+         :on-persist (fn [level] (apply-thinking-level! cs level true))))
+      (let [wanted (str/lower-case (str/trim search-term))
+            level (first (filter #(= (name %) wanted) levels))]
+        (if level
+          (apply-thinking-level! cs level false)
+          (ui/show-warning!
+           (:chat-history cs)
+           (str "Unknown thinking level \"" search-term
+                "\". Available levels: "
+                (str/join ", " (map name levels)) ".")))))))
 
 (defn- help-text
   "Help message derived from the live command registry."
@@ -930,6 +981,21 @@
             ;; catalogs are static — no catalog refresh on a miss)
             (show-model-selector cs args)))
         (show-model-selector cs)))})
+  (register-builtin-command!
+   {:name "thinking"
+    :description "Set thinking level"
+    :argument-hint "<level>"
+    :get-argument-completions
+    (fn [prefix]
+      (let [items (mapv (fn [l] {:value (name l)
+                                 :label (name l)
+                                 :description (thinking-selector/level-description l)})
+                        shared/thinking-levels)]
+        (if (str/blank? prefix)
+          items
+          (fuzzy/fuzzy-filter items prefix
+                              (fn [it] (str (:value it) " " (:description it)))))))
+    :handler (fn [cs args] (handle-thinking-command! cs args))})
   (register-builtin-command!
    {:name "scoped-models"
     :description "Enable/disable models for Ctrl+P cycling"

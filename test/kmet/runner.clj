@@ -137,6 +137,7 @@
     kmet.app.ui.test-loaded-resources
     kmet.app.ui.test-scoped-models-selector
     kmet.app.ui.test-model-selector
+    kmet.app.ui.test-thinking-selector
     kmet.app.ui.test-session-selector
     kmet.app.ui.test-fork-selector
     kmet.app.ui.test-tree-selector

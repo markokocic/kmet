@@ -75,7 +75,7 @@ provider streaming + dynamic model refresh).
 
 ### 3. Slash commands
 
-kmet covers: settings, model, scoped-models, export (HTML), import, share, copy, name,
+kmet covers: settings, model, thinking, scoped-models, export (HTML), import, share, copy, name,
 session, hotkeys, fork, clone, tree, login, logout, new, compact, resume, continue,
 reload, quit, help, tools, theme — full parity with pi's built-in command set.
 

@@ -21,6 +21,7 @@
             [kmet.app.ui.dock :as dock]
             [kmet.app.ui.model-catalog :as model-catalog]
             [kmet.app.ui.model-selector :as model-selector]
+            [kmet.app.ui.thinking-selector :as thinking-selector]
             [kmet.ai.models :as m]
             [kmet.ai.auth :as auth]
             [kmet.app.loop :as agent]
@@ -187,6 +188,130 @@
             (with-redefs [model-selector/show-model-selector (fn [_ & [term]] (reset! selector-term term))]
               ((:handler (commands/find-command "model")) cs "nope")
               (t/is (= "nope" @selector-term) "selector opened with the failed term"))))))))
+
+;; ─── /thinking command ──────────────────────────────────────────────────────
+
+(deftest test-thinking-command-registered
+  (testing "/thinking is a real builtin inside register-builtin-commands!"
+    (commands/clear-commands!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [c (commands/find-command "thinking")]
+      (t/is (some? c) "thinking registered")
+      (t/is (= "Set thinking level" (:description c)))
+      (t/is (= "<level>" (:argument-hint c)))
+      (t/is (some? (:handler c)) "thinking has a handler")
+      (t/is (some? (:get-argument-completions c))
+            "thinking completes its level argument"))))
+
+(deftest test-thinking-command-arg-sets-level
+  (testing "/thinking <level> applies the level to the session (pi
+            selectThinkingLevel without persist — no settings write)"
+    (commands/clear-commands!)
+    (m/load-catalogs!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [ag (agent/make-agent-state :provider :deepseek :model "deepseek-v4-pro")
+          status (atom nil)
+          saved (atom ::none)
+          cs {:agent-state (atom ag)
+              :chat-history nil
+              :editor (editor/make-editor)
+              :footer-comp nil
+              :footer-provider nil
+              :config cfg/default-config
+              :tui nil}]
+      (with-redefs [ui/chat-history-show-status! (fn [_ m] (reset! status m))
+                    model-selector/sync-footer-model! (fn [_] nil)
+                    cfg/save-setting! (fn [_ _] (reset! saved ::called))
+                    tui/tui-request-render (fn [_])]
+        (testing "a supported level applies"
+          ((:handler (commands/find-command "thinking")) cs "high")
+          (t/is (= :high @(:thinking ag)) "agent thinking level set")
+          (t/is (= "Thinking level: high" @status) "status reports the level")
+          (t/is (= ::none @saved) "plain Enter does not persist the default"))
+        (testing "matching is case-insensitive"
+          ((:handler (commands/find-command "thinking")) cs "MAX")
+          (t/is (= :max @(:thinking ag))))
+        (testing "an unsupported level warns with the available list"
+          (let [warning (atom nil)]
+            (with-redefs [ui/show-warning! (fn [_ m] (reset! warning m))]
+              ((:handler (commands/find-command "thinking")) cs "medium")
+              (t/is (= "Unknown thinking level \"medium\". Available levels: off, high, max."
+                       @warning)
+                    "warns listing the model's levels")
+              (t/is (= :max @(:thinking ag)) "thinking unchanged"))))))))
+
+(deftest test-thinking-command-bare-opens-selector
+  (testing "bare /thinking mounts the level selector for a reasoning model;
+            a model without supported levels gets the cycle status"
+    (commands/clear-commands!)
+    (m/load-catalogs!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [status (atom nil)
+          sel-ref (atom nil)
+          reasoning-cs {:agent-state (atom (agent/make-agent-state :provider :deepseek
+                                                                   :model "deepseek-v4-pro"))
+                        :chat-history nil
+                        :editor (editor/make-editor)
+                        :footer-comp nil
+                        :footer-provider nil
+                        :config cfg/default-config
+                        :tui nil}
+          plain-cs {:agent-state (atom (agent/make-agent-state :provider :ghost
+                                                               :model "unknown-model"))
+                    :chat-history nil
+                    :editor (editor/make-editor)
+                    :config cfg/default-config
+                    :tui nil}]
+      (with-redefs [ui/chat-history-show-status! (fn [_ m] (reset! status m))
+                    chat-history/chat-history-add-message! (fn [_ _] nil)
+                    ;; deterministic default — must not depend on the real
+                    ;; ~/.kmet/agent/settings.edn on the dev machine
+                    thinking-selector/default-thinking-level (fn [_] :off)
+                    dock/mount! (capture-mount! sel-ref)
+                    tui/tui-set-focus (fn [_ _])
+                    tui/tui-request-render (fn [_])]
+        (testing "reasoning model → the selector mounts"
+          ((:handler (commands/find-command "thinking")) reasoning-cs "")
+          (t/is (some? @sel-ref) "selector mounted")
+          (t/is (= [:off :high :max] (thinking-selector/thinking-selector-get-levels @sel-ref))
+                "selector lists the model's supported levels"))
+        (testing "unknown model → only :off → the cycle status, no selector"
+          ((:handler (commands/find-command "thinking")) plain-cs "")
+          (t/is (= "Current model does not support thinking" @status)))))))
+
+(deftest test-thinking-selector-persist-wiring
+  (testing "the mounted selector's Ctrl+S path runs the mode's persist logic:
+            agent level set + [:thinking] saved to settings (pi Ctrl+S →
+            selectThinkingLevel(level, true))"
+    (commands/clear-commands!)
+    (m/load-catalogs!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [ag (agent/make-agent-state :provider :deepseek :model "deepseek-v4-pro")
+          saved (atom nil)
+          sel-ref (atom nil)
+          cs {:agent-state (atom ag)
+              :chat-history nil
+              :editor (editor/make-editor)
+              :footer-comp nil
+              :footer-provider nil
+              :config cfg/default-config
+              :tui nil}]
+      (with-redefs [ui/chat-history-show-status! (fn [_ _] nil)
+                    thinking-selector/default-thinking-level (fn [_] :off)
+                    cfg/save-setting! (fn [path value] (reset! saved [path value]))
+                    model-selector/sync-footer-model! (fn [_] nil)
+                    dock/mount! (capture-mount! sel-ref)
+                    tui/tui-set-focus (fn [_ _])
+                    tui/tui-request-render (fn [_])]
+        ((:handler (commands/find-command "thinking")) cs "")
+        (let [sel @sel-ref]
+          (t/is (some? sel) "selector mounted")
+          ;; current :off (default) → move to :high (index 1) → Ctrl+S
+          (protocols/handle-input sel "\u001b[B")
+          (protocols/handle-input sel "\u0013")
+          (t/is (= [[:thinking] :high] @saved)
+                "Ctrl+S saves [:thinking] <level> to settings")
+          (t/is (= :high @(:thinking ag)) "agent thinking level set"))))))
 
 ;; ─── /continue command ─────────────────────────────────────────────────────
 
