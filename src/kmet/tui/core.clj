@@ -1391,30 +1391,21 @@
    rewritten to \n; the LF half of a rewritten CRLF dropped). RECENT-CHARS
    and SWALLOW-LF are updated as a side effect, mirroring the per-char loop
    they replaced. Doing this once per batch instead of per char keeps large
-   pastes O(n) — the per-char path appended to a growing string (O(n^2)).
-   Single high bytes (> 127) become ESC + (byte - 128) first (pi
-   StdinBuffer.process, parseKeypress compat): some terminals/IMEs deliver
-   Alt+key as one high byte rather than an ESC-prefixed pair."
+   pastes O(n) — the per-char path appended to a growing string (O(n^2))."
   [batch recent-chars swallow-lf]
   (let [out (StringBuilder.)
         now (System/currentTimeMillis)]
     (doseq [c batch]
-      ;; Single high bytes (> 127) expand to two chars here so the
-      ;; converted pair flows through the identical decision + burst
-      ;; tracking below (pi converts the whole chunk up front).
-      (doseq [c (if (> (int c) 127)
-                  [(char 27) (char (- (int c) 128))]
-                  [c])]
-        (let [{:keys [append drop new-swallow-lf]}
-              (paste-input-decision c now @recent-chars @swallow-lf)]
-          (reset! swallow-lf new-swallow-lf)
-          (swap! recent-chars
-                 (fn [ts]
-                   (-> (conj ts [now c])
-                       (->> (filter (fn [[t _]] (>= t (- now paste-burst-ms)))))
-                       vec)))
-          (when-not drop
-            (.append out append)))))
+      (let [{:keys [append drop new-swallow-lf]}
+            (paste-input-decision c now @recent-chars @swallow-lf)]
+        (reset! swallow-lf new-swallow-lf)
+        (swap! recent-chars
+               (fn [ts]
+                 (-> (conj ts [now c])
+                     (->> (filter (fn [[t _]] (>= t (- now paste-burst-ms)))))
+                     vec)))
+        (when-not drop
+          (.append out append))))
     (str out)))
 
 (defn- start-input-reader [tui]

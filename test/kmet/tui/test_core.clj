@@ -232,16 +232,12 @@
                                             (range 4))
                                       1000)))))
 
-(t/deftest test-high-byte-alt-key-conversion
-  ;; pi StdinBuffer.process: a lone high byte (> 127, e.g. Alt+x as 0xF8
-  ;; from legacy terminals/IMEs) becomes ESC + (byte - 128) for
-  ;; parseKeypress compat. Runs before the paste-burst decision so the
-  ;; converted bytes participate in burst tracking like real ESC pairs.
+(t/deftest test-multibyte-input-passes-through
   (let [norm #(let [rc (atom []) sl (atom nil)]
                 ((var kmet.tui.core/normalize-input-batch!) % rc sl))]
-    (t/is (= "\u001bx" (norm (str (char 248)))) "0xF8 → ESC x (alt+x)")
-    (t/is (= "hi\u001bx" (norm (str "hi" (char 248)))) "mixed ascii + high byte")
-    (t/is (= "\u001b\u001b" (norm (str (char 155)))) "0x9B → ESC ESC")
+    (t/is (= "ф" (norm "ф")) "single cyrillic char untouched")
+    (t/is (= "привет" (norm "привет")) "cyrillic word untouched")
+    (t/is (= "café" (norm "café")) "latin with accent untouched")
     (t/is (= "abc" (norm "abc")) "plain ascii untouched")
     (t/is (= "" (norm "")) "empty batch stays empty")))
 
