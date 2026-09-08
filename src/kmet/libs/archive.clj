@@ -4,7 +4,13 @@
    Host-evaluated with full Java interop and shared by reference, so
    extension SCI contexts — where instance methods on JDK inner classes
    such as ZipFile$ZipFileInflaterInputStream are not callable — get zip
-   support through one audited zip-slip guard instead of reimplementing it."
+   support through one audited zip-slip guard instead of reimplementing it.
+
+   bb-only: extraction runs on java.util.zip, which the jolt host does not
+   provide, and no jolt runtime code calls it (kmet.build is bb-only;
+   extensions are disabled on jolt) — extract-zip! fails fast with ::bb-only
+   under jolt. When extension jars light up on jolt they materialize to
+   directories via unzip (jolt's own mvn-jar model) instead of this path."
   (:require [babashka.fs :as fs]
             [clojure.java.io :as io]
             [clojure.string :as str]))
@@ -30,8 +36,12 @@
 (defn extract-zip!
   "Extract every file entry of zip-path under dest-dir, creating nested
    dirs as needed. Returns the seq of extracted paths (no permission
-   preservation — callers chmod as needed)."
+   preservation — callers chmod as needed). bb-only: throws ::bb-only on
+   the jolt host (java.util.zip; no jolt callers)."
   [zip-path dest-dir]
+  (when (boolean (find-var 'clojure.core/*jolt-version*))
+    (throw (ex-info "kmet.libs.archive/extract-zip! is bb-only — the jolt host has no java.util.zip"
+                    {:type ::bb-only})))
   (let [dest (fs/canonicalize dest-dir {:nofollow-links true})]
     (fs/create-dirs dest)
     (with-open [zf (java.util.zip.ZipFile. (fs/file zip-path))]

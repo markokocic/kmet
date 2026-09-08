@@ -10,7 +10,12 @@
    dynamic linker, which also breaks bb's own appended-jar detection
    (/proc/self/exe resolves to ld-linux). For a termux host we therefore emit a
    companion launcher script that unsets LD_PRELOAD, execs via
-   $PREFIX/glibc/lib/ld-linux-*.so.1 and passes --jar <self> explicitly."
+   $PREFIX/glibc/lib/ld-linux-*.so.1 and passes --jar <self> explicitly.
+
+   bb-only: packaging runs on babashka.classpath and java.util.zip, which the
+   jolt host does not provide — the entry points (uberjar*, -main,
+   pack-extension!) fail fast with ::bb-only under jolt, and the jolt build
+   packager is separate (jolt-port.md M5/M6)."
   (:require #?@(:jolt nil :clj [[babashka.classpath :as bcp]])
             [babashka.fs :as fs]
             [babashka.process :as p]
@@ -28,6 +33,17 @@
 (def ^:private dist-dir "dist")
 (def ^:private jar-path "target/kmet.jar")
 (def ^:private main-class "kmet.core")
+
+(defn- bb-only!
+  "Throw ::bb-only when invoked under the jolt host. kmet.build is the
+   babashka packaging pipeline (babashka.classpath classpath, java.util.zip
+   uberjar); jolt has neither, and `jolt build` packages a self-contained
+   image instead — callers on jolt get a fast, explicit failure rather than
+   an unresolved-var or zip-ctor crash."
+  [what]
+  (when (boolean (find-var 'clojure.core/*jolt-version*))
+    (throw (ex-info (str what " is bb-only — the jolt host has no classpath/zip machinery")
+                    {:type ::bb-only}))))
 
 ;; ─── Target table ──────────────────────────────────────────────────────────
 ;;
@@ -213,6 +229,7 @@
    bb-builtin; keeping all jars is simpler than filtering). Dependency
    manifests and signatures are skipped so ours wins. Returns absolute path."
   []
+  (bb-only! "kmet.build/uberjar*")
   (fs/create-dirs (fs/parent jar-path))
   (let [tmp (str jar-path ".part")
         seen (volatile! #{})
@@ -382,6 +399,7 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
    (default <name>.jar in the cwd). Deterministic sorted order, / entry
    separators, no META-INF. Returns the output path string."
   [src-dir & [out-path]]
+  (bb-only! "kmet.build/pack-extension!")
   (let [{:keys [name]} (pack-verify! src-dir)
         root (fs/canonicalize src-dir)
         out (str (or out-path (str name ".jar")))]
@@ -433,6 +451,7 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
    memory on constrained devices). A fresh uberjar (target/kmet.jar) is
    always rebuilt first so artifacts never bundle stale sources."
   [& args]
+  (bb-only! "kmet.build/-main (bb build)")
   (let [{:keys [targets all? force? no-smoke? help?]} (parse-args args)]
     (when help?
       (println (:doc (meta #'-main)))

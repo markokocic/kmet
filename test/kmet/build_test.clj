@@ -1,10 +1,14 @@
 (ns kmet.build-test
+  ;; Every test here exercises the bb-only packaging pipeline (kmet.build:
+  ;; uberjar/build/pack-extension over babashka.classpath + java.util.zip).
+  ;; All vars carry ^:bb-only — kmet.runner runs them under bb and skips
+  ;; them on the jolt host, whose packager is a separate rewrite (M5/M6).
   (:require [babashka.fs :as fs]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [kmet.build :as build]))
 
-(deftest slug-for-maps-os-arch-to-release-assets
+(deftest ^:bb-only slug-for-maps-os-arch-to-release-assets
   (is (= "linux-aarch64-static" (build/slug-for "linux" "aarch64")))
   (is (= "linux-aarch64-static" (build/slug-for "Linux" "arm64")))
   (is (= "linux-amd64-static" (build/slug-for "Linux" "amd64")))
@@ -15,7 +19,7 @@
     (is (nil? (build/slug-for "SunOS" "sparc")))
     (is (nil? (build/slug-for "Linux" "riscv64")))))
 
-(deftest normalize-slug-expands-shorthands
+(deftest ^:bb-only normalize-slug-expands-shorthands
   ;; "linux-amd64" is its own table entry (glibc variant); hosts default to
   ;; the static variant via slug-for
   (is (= "linux-amd64" (build/normalize-slug "linux-amd64")))
@@ -24,7 +28,7 @@
   (is (= "windows-amd64" (build/normalize-slug "windows-amd64")))
   (is (nil? (build/normalize-slug "atari-2600"))))
 
-(deftest parse-args-collects-targets-and-flags
+(deftest ^:bb-only parse-args-collects-targets-and-flags
   (is (= {:targets [] :all? false :force? false :no-smoke? false :help? false}
          (build/parse-args [])))
   (is (= {:targets ["linux-aarch64-static"] :all? true :force? true :no-smoke? false :help? false}
@@ -33,13 +37,13 @@
           :all? false :force? false :no-smoke? false :help? true}
          (build/parse-args ["macos-aarch64" "--help" "windows-amd64"]))))
 
-(deftest parse-args-rejects-bad-input
+(deftest ^:bb-only parse-args-rejects-bad-input
   (is (thrown-with-msg? Exception #"unknown target"
                         (build/parse-args ["plan9"])))
   (is (thrown-with-msg? Exception #"unknown option"
                         (build/parse-args ["--wat"]))))
 
-(deftest version-prefers-tag-then-date-hash-then-dev
+(deftest ^:bb-only version-prefers-tag-then-date-hash-then-dev
   (testing "tag pointing at HEAD wins (v prefix stripped)"
     (with-redefs [build/git-out (fn [& args]
                                   (if (= (take 2 args) (list "describe" "--tags"))
@@ -57,13 +61,13 @@
     (with-redefs [build/git-out (constantly nil)]
       (is (= "dev" (build/version))))))
 
-(deftest artifact-base-includes-bb-version-before-slug
+(deftest ^:bb-only artifact-base-includes-bb-version-before-slug
   (is (= "kmet-1.2.3-bb1.13.219-linux-aarch64-static"
          (build/artifact-base "1.2.3" "1.13.219" "linux-aarch64-static")))
   (is (= "kmet-20260903-abc1234-bb1.13.219-windows-amd64"
          (build/artifact-base "20260903-abc1234" "1.13.219" "windows-amd64"))))
 
-(deftest extract-archive-zip-slip-guard
+(deftest ^:bb-only extract-archive-zip-slip-guard
   ;; The containment check must reject entries that escape the destination
   ;; dir and accept legitimate ones (regression: the guard was inverted —
   ;; fs/starts-with? takes (path prefix) — so the real bb.exe release zip
@@ -100,7 +104,7 @@
       (finally
         (fs/delete-tree tmp)))))
 
-(deftest pack-extension-verifies-and-packs
+(deftest ^:bb-only pack-extension-verifies-and-packs
   (testing "packs the real clojure artifact root"
     (let [out "target/test-pack-clojure.jar"]
       (fs/delete-if-exists out)
@@ -130,7 +134,7 @@
                             (build/pack-extension! dir "target/test-pack-str.jar")))
       (fs/delete-tree dir))))
 
-(deftest pack-extension-roundtrip-loads
+(deftest ^:bb-only pack-extension-roundtrip-loads
   (testing "packed jar of the clojure extension loads (fast: reused closure)"
     (let [out "target/test-pack-roundtrip.jar"]
       (fs/delete-if-exists out)

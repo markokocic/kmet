@@ -8,6 +8,13 @@
    ^:slow tests. Both are selected at the individual test level — no whole
    namespaces are excluded.
 
+   A deftest marked ^:bb-only exercises bb-only behavior (kmet.build's
+   packaging, kmet.libs.archive's zip extraction — babashka.classpath and
+   java.util.zip are bb/JVM-only): it runs under `bb test` and is skipped on
+   the jolt host. The namespace still loads there (a load gap would report it
+   unloaded), so calling a bb-only entry point under jolt surfaces as a fast
+   ::bb-only ex-info from the guarded function, not a crash.
+
    The runner is TOLERANT: every test namespace is required inside a try.
    A namespace that cannot load under the host (a babashka-internal
    require, a JDK class gap, a java.time.* gap — jolt-port.md M1/M6) is
@@ -167,8 +174,17 @@
     {:vars [] :unloaded [ns-sym (load-failure-message e)]}
     {:vars (vals (ns-interns ns-sym))}))
 
+(def jolt?
+  "True when running under the jolt host (its clojure.test port differs from
+   babashka's: no ref-based per-run counters, no ^:slow split, its own
+   process-wide counters and per-namespace fixtures/registry)."
+  (boolean (find-var 'clojure.core/*jolt-version*)))
+
 (defn- test-var? [v slow?]
   (and (:test (meta v))
+       ;; ^:bb-only vars run only under bb — the jolt host filters them out
+       ;; of whole-namespace selection (var filters ignore bb-only, like slow?)
+       (or (not jolt?) (not (:bb-only (meta v))))
        (if slow? (:slow (meta v)) (not (:slow (meta v))))))
 
 (defn- var-matches-filter?
@@ -283,12 +299,6 @@
            vars (vec (distinct (concat (:vars ns-sel) (:vars plain-sel) (:vars named-sel))))
            unloaded (vec (distinct (concat (:unloaded ns-sel) (:unloaded named-sel))))]
        {:vars vars :unloaded unloaded :filters (vec strs)}))))
-
-(def jolt?
-  "True when running under the jolt host (its clojure.test port differs from
-   babashka's: no ref-based per-run counters, no ^:slow split, its own
-   process-wide counters and per-namespace fixtures/registry)."
-  (boolean (find-var 'clojure.core/*jolt-version*)))
 
 (defn- plural
   "N + label, singular for 1."
@@ -485,7 +495,7 @@
   (println (str "\nNo test vars matched: " (str/join " " (map str filters)) "."))
   (if (seq unloaded)
     (report-unloaded unloaded "Requested namespace(s) failed to load (no tests could run):")
-    (println "No requested namespaces failed to load — no test vars matched the filter and slow? selection.")))
+    (println "No requested namespaces failed to load — no test vars matched the filter and the slow?/bb-only selection.")))
 
 (defn- run-and-summarize
   "Run the selected test vars, print the summary, exit with status 0/1.
@@ -541,7 +551,11 @@
    The skip report lists unloadable namespaces (full run: all of them;
    filtered run: only the requested ones) with the load failure reason.
    A full run without filters records the changed-files baseline after a
-   green result, so `bb test-changed` sees a clean slate."
+   green result, so `bb test-changed` sees a clean slate.
+   ^:bb-only vars (bb-only behavior — kmet.build / kmet.libs.archive) run
+   under bb and are dropped from whole-namespace selection on jolt; var
+   filters ignore bb-only too, so an explicit request runs and reports the
+   underlying ::bb-only error."
   [slow? & filters]
   (let [selection (select-vars slow? (seq filters))]
     (run-and-summarize selection (empty? filters))))

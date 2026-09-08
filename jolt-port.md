@@ -148,7 +148,7 @@ the core agent must work before extensions matter.
 | M2 | `tui/terminal.clj` (JLine raw/timed-reads/size) + `core.clj` reader/timers/resize/drain | termios FFI (Unix) + kernel32 FFI (Windows); `future` reader + `locking` + gen-counters — see `jolt-tui.md` §§4–7,9. Evaluated 2026-09-06: `jolt-lang/glimmer-tui` (ncursesw via FFI, Unix-only, fullscreen `initscr` takeover) rejected — wrong architecture for the inline ANSI/scrollback model; JLine stays on bb (`jolt-tui.md` §2 decision) | rewrite ~500 LOC (Jolt only) |
 | M3 | `libs/crypto.clj` (315 LOC: RSA/EC `KeyFactory`, `SHA256withRSA/ECDSA` `Signature`) + `libs/aws_sigv4.clj` (213 LOC: `MessageDigest` SHA-256, `Mac` HmacSHA256, `HexFormat`, `Normalizer`?) — grep the exact class list before the FFI design | OpenSSL FFI following `mvn_http.clj`'s libcrypto/libssl loading (note macOS boringssl SIGABRT hazard — explicit Homebrew paths only); RSA via libcrypto; `SecureRandom` via OS source. Check the `io.github.jolt-lang/crypto` git dep in `deps.edn` first (RFC 0014 shims may already cover the call sites) | rewrite ~500 LOC |
 | M4 | `libs/oauth.clj` (611) + `ai/oauth.clj` (1012) + `ai/google_adc.clj` (121) — browser launch, localhost callback server, token cache | `ServerSocket` shim exists (`stdlib/jolt/socket.clj`, gated on `(require 'jolt.socket)`); browser launch via `jolt.process`; token cache via `spit`/`slurp` | adapt ~1.7k LOC |
-| M5 | `libs/archive.clj` (46 LOC, `ZipFile` read) + `sse.clj:854-56` (`CRC32`) + `extensions.cljc:910,921` (`JarFile` probes) + `build.cljc:227,245,389` (`ZipOutputStream` uberjar/pack-extension). (`ai/models.clj` needs no zip work — catalogs load via `io/resource`, which answers file:/jar:/embedded URLs alike.) | `jolt.fs` explicitly EXCLUDES zip/gzip (`stdlib/jolt/fs.clj:12`: "java.util.zip not shimmed yet"). Options: miniz FFI, `unzip`/`zip` subprocess, or drop archive support from build/pack-extension. `jolt build` replaces the bb-binary+catted-uberjar packaging entirely — `build.cljc` (460 LOC) is rewritten anyway | rewrite build; archive via FFI or subprocess. Note: `jolt build` linking needs Chez's kernel development files (`libkernel.a`, `scheme.h`) + `cc` — both ship with the prebuilt jolt binary, NOT with distro `chezscheme` packages (per README) |
+| M5 | `libs/archive.clj` (46 LOC, `ZipFile` read) + `sse.clj:854-56` (`CRC32`) + `extensions.cljc:910,921` (`JarFile` probes) + `build.cljc:227,245,389` (`ZipOutputStream` uberjar/pack-extension). (`ai/models.clj` needs no zip work — catalogs load via `io/resource`, which answers file:/jar:/embedded URLs alike.) | `jolt.fs` explicitly EXCLUDES zip/gzip (`stdlib/jolt/fs.clj:12`: "java.util.zip not shimmed yet"). **DECIDED 2026-09-08: bb-only until the `jolt build` rewrite** — `build.cljc`/`libs/archive.clj` entry points throw `::bb-only` under Jolt, their tests carry `^:bb-only` (the runner skips them there); zip/jar work defers to extension-jar materialization via unzip (jolt's own mvn-jar model) | rewrite build; archive via FFI or subprocess. Note:
 | M6 | `build.cljc` uberjar assembly (`bcp/get-classpath`, `ZipOutputStream` resource listing) + model-catalog embedding | No classpath concept; `jolt build` embeds source roots differently. Model catalogs (`ai/model_data/` + manifest) become embedded resources — `io.ss` has `register-embedded-resource!` and `io/resource` answers a `java.net.URL` from both disk and a built image | adapt ~200 LOC |
 | M7 | `libs/clipboard.clj`, `libs/terminal_image.clj` (Base64 — shimmed, keep), OSC-52/kitty-graphics emit | clipboard via platform subprocesses (`pbcopy`/`xclip`/`clip`) through `jolt.process`; image protocols are pure emit logic | small |
 | M8 | `config.clj` (XDG paths, EDN load/save, file watching?) | `jolt.fs` (vendored `babashka.fs`, minus zip) covers paths; `spit`/`slurp`/EDN portable; watcher → poll (same as `tui.theme`) | adapt |
@@ -174,7 +174,7 @@ are the 2026-09-08 snapshot — re-run before building from them).
 
 | lib | bb/JVM | Jolt | notes |
 |-----|--------|------|-------|
-| `archive` | 🟢 | 🔴 | `java.util.zip.ZipOutputStream` ctor missing on Jolt (M5) |
+| `archive` | 🟢 | 🔴 | bb-only on Jolt (2026-09-08, M5): `::bb-only` entry guard + `^:bb-only` tests; zip work deferred to extension-jar materialization (unzip) |
 | `aws_sigv4` | 🟢 | 🔴 | `javax.crypto.Mac`, `java.security.MessageDigest` (M3) |
 | `clipboard` | 🟢 | 🟢 | uses `babashka.process`, works |
 | `concurrent` | 🟢 | 🟢 | `spawn` returns `Thread`; works |
@@ -203,9 +203,10 @@ are the 2026-09-08 snapshot — re-run before building from them).
 | `yaml` | 🟢 | 🟡 | bb: 20/20; Jolt: 19/20 — `test-numbers` fails (bigint vs string) |
 
 **bb/JVM: all green (27).** Jolt: json/jsonrpc/sse (M1: no JSON lib in
-Jolt stdlib), crypto/aws_sigv4 (M3: JVM crypto classes), archive (M5:
-java.util.zip) need work. The cheshire → data.json swap removed the
-biggest bb-side blocker; M1 is now purely a Jolt-stdlib gap.
+Jolt stdlib) and crypto/aws_sigv4 (M3: JVM crypto classes) need work;
+archive (M5) is bb-only on jolt since 2026-09-08. The cheshire →
+data.json swap removed the biggest bb-side blocker; M1 is now purely a
+Jolt-stdlib gap.
 
 ---
 
