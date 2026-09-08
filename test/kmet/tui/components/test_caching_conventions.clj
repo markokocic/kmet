@@ -36,6 +36,7 @@
    "InputDialog"       :transparent-parent
    "ModelSelector"              :transparent-parent
    "ScopedModelsSelector"       :transparent-parent
+   "ThinkingSelector"           :transparent-parent
    "AuthSelector"               :transparent-parent
    "AuthMethodSelector"         :transparent-parent
    "LoginDialog"                :transparent-parent
@@ -134,7 +135,7 @@
    when components are added or removed; a mismatch means the scan below
    silently lost forms (a scanner regression), so the convention checks
    would otherwise pass vacuously."
-  45)
+  46)
 
 (deftest caching-conventions
   (let [checked (atom [])]
