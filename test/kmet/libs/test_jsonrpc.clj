@@ -11,9 +11,10 @@
 
 (defn- pipe-pair
   "Two connected pipe ends {:in :out} — writes to :out are readable from
-   :in across threads."
+   :in across threads. (The buffer-size ctor arg is JVM-only — Jolt's
+   PipedInputStream takes no size, so connect the no-arg pair.)"
   []
-  (let [in (java.io.PipedInputStream. 65536)
+  (let [in (java.io.PipedInputStream.)
         out (java.io.PipedOutputStream. in)]
     {:in in :out out}))
 
