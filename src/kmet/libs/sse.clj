@@ -9,6 +9,7 @@
    Babashka-compatible Clojure equivalent exists."
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
+            [kmet.libs.hash :as hash]
             [kmet.libs.json :as json]))
 
 (defn parse-sse-line
@@ -851,11 +852,10 @@
           (bit-and (aget ba (inc offset)) 0xFF)))
 
 (defn- crc32
-  "CRC-32 of a byte array (java.util.zip.CRC32)."
+  "CRC-32 of a byte array (delegates to kmet.libs.hash/crc32 — pure
+   Clojure, works on both babashka and Jolt)."
   [ba]
-  (let [c (java.util.zip.CRC32.)]
-    (.update c ba 0 (alength ba))
-    (.getValue c)))
+  (hash/crc32 ba))
 
 (defn- slice
   "Byte-array copy of ba[from, to)."

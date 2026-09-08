@@ -1,6 +1,7 @@
 (ns kmet.libs.test-sse
   (:require [clojure.test :as t]
             [clojure.string :as str]
+            [kmet.libs.hash :as hash]
             [kmet.libs.sse :as sse]))
 
 ;; ─── Event parsing ─────────────────────────────────────────────────────────
@@ -637,9 +638,7 @@
    (bit-and (bit-shift-right n 8) 0xFF) (bit-and n 0xFF)])
 (defn- bedrock-u16-be [n] [(bit-and (bit-shift-right n 8) 0xFF) (bit-and n 0xFF)])
 (defn- bedrock-crc [bytes]
-  (let [c (java.util.zip.CRC32.)]
-    (.update c bytes 0 (alength bytes))
-    (.getValue c)))
+  (hash/crc32 bytes))
 (defn- bedrock-ba [ints] (byte-array (map #(bit-and (long %) 0xFF) ints)))
 (defn- bedrock-header [name value]
   (let [nb (map int (.getBytes name "UTF-8"))

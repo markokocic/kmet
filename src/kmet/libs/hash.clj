@@ -1,5 +1,7 @@
 (ns kmet.libs.hash
-  "Deterministic hashing helpers (pi: packages/ai/src/utils/hash.ts).")
+  "Deterministic hashing helpers (pi: packages/ai/src/utils/hash.ts).
+   Pure Clojure — no JDK interop — so this namespace loads on both
+   babashka and Jolt.")
 
 (defn- imul
   "32-bit signed multiply (JS Math.imul — babashka has no builtin; the
@@ -33,3 +35,30 @@
                     (imul (bit-xor h1 (ushr32 h1 13)) 3266489909))]
     (str (Long/toString (bit-and h2 0xFFFFFFFF) 36)
          (Long/toString (bit-and h1 0xFFFFFFFF) 36))))
+
+(def ^:private crc32-table
+  "Precomputed CRC-32 table (polynomial 0xEDB88320). Pure Clojure — replaces
+   java.util.zip.CRC32 on Jolt, where that class is not shimmed."
+  (vec (map (fn [n]
+              (loop [c n i 0]
+                (if (< i 8)
+                  (recur (if (bit-test c 0)
+                           (bit-xor 0xEDB88320 (unsigned-bit-shift-right c 1))
+                           (unsigned-bit-shift-right c 1))
+                         (inc i))
+                  c)))
+            (range 256))))
+
+(defn crc32
+  "CRC-32 of a byte array (ISO 3309 / ITU-T V.42, the same checksum
+   java.util.zip.CRC32 computes). Pure Clojure — works on both babashka
+   and Jolt. Returns an unsigned 32-bit result as a long."
+  [ba]
+  (let [len (alength ba)]
+    (loop [i 0 crc 0xFFFFFFFF]
+      (if (< i len)
+        (let [idx (bit-and (bit-xor crc (bit-and (aget ba i) 0xFF)) 0xFF)]
+          (recur (inc i)
+                 (bit-xor (unsigned-bit-shift-right crc 8)
+                          (nth crc32-table idx))))
+        (bit-xor crc 0xFFFFFFFF)))))
