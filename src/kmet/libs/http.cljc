@@ -435,7 +435,7 @@
 (defn- curl-argv
   "Full curl argv. Prefixed with setsid when available so the process is its
    own group leader — kill-process-tree!'s group kill then works reliably.
-   --max-time follows :timeout (ms → s, min 1) when set; an explicitly
+   --max-time follows :timeout (fractional s, min 0.1) when set; an explicitly
    nil timeout (disabled) omits it; absent gets the curl-timeout-seconds
    default. -L unless :never (default :normal); --compressed for
    transparent gzip (babashka parity); --fail-with-body so HTTP >= 400 exits
@@ -445,7 +445,7 @@
   (let [timeout-ms (:timeout opts)
         max-time (cond
                    (nil? timeout-ms) nil
-                   (pos? timeout-ms) (max 1 (quot (+ timeout-ms 999) 1000))
+                   (pos? timeout-ms) (max 0.1 (/ timeout-ms 1000.0))
                    :else curl-timeout-seconds)
         get? (= :get (:method opts))
         args (into (cond-> ["curl" "-sS" "-N" "--fail-with-body"

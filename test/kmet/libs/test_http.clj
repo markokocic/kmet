@@ -497,7 +497,7 @@
             (t/is (str/includes? (:body r) "/final")))))
       (finally (close)))))
 
-(t/deftest test-curl-redirect-slow-second-hop
+(t/deftest ^:slow test-curl-redirect-slow-second-hop
   ;; Hop 1's 302 sits alone in the dump-header file while a slow hop 2 is
   ;; still in flight (GitHub releases behind a proxy behave exactly like
   ;; this): the reported status must be the FINAL hop's. Without the
@@ -580,11 +580,21 @@
 (t/deftest test-curl-abort
   ;; abort! must kill the curl process tree (the sse read loop's cancel
   ;; path); close! then reaps/untracks. With the cancel signal fired,
-  ;; close! skips the mid-stream transport-error report.
+  ;; close! skips the mid-stream transport-error report. The server sends
+  ;; headers + a partial body immediately, then stalls mid-body (never
+  ;; completing the declared Content-Length): the GET returns on the
+  ;; headers, so abort!/close! genuinely run mid-stream. (Sleeping before
+  ;; the headers would make the GET itself wait out the sleep — slow and
+  ;; testing nothing.)
   (let [[base close] (start-server
                       (fn [s _ _ _]
-                        (Thread/sleep 10000)
-                        (respond s "200 OK" "never" {})))]
+                        (let [b (.getBytes "partial")
+                              head (str "HTTP/1.1 200 OK\r\n"
+                                        "Content-Length: 100\r\n\r\n")]
+                          (.write (.getOutputStream s) (.getBytes head))
+                          (.write (.getOutputStream s) b)
+                          (.flush (.getOutputStream s))
+                          (Thread/sleep 60000))))]
     (try
       (with-socks-proxy
         (fn []
