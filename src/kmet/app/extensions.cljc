@@ -31,8 +31,8 @@
             [clojure.string :as str]
             [babashka.fs :as fs]
             [babashka.process :as proc]
-            [borkdude.deps :as bdeps]
-            [sci.core :as sci]
+            #?@(:jolt nil :clj [[borkdude.deps :as bdeps]])
+            #?@(:jolt nil :clj [[sci.core :as sci]])
             [kmet.ai.models :as models]
             [kmet.ai.hooks :as ai-hooks]
             [kmet.app.commands :as commands]
@@ -828,13 +828,15 @@
 (def ^:private runtime-classes
   "Classes that must be registered by their RUNTIME identity: sci resolves
    instance-method calls against the exact class of the object, and JDK\n   factory methods return internal wrappers (e.g. MessageDigest/getInstance\n   returns a $Delegate$CloneableDelegate) whose names are not loadable via\n   Class/forName under babashka's interceptor. Captured as live Class\n   objects instead — extend when another bundled library needs more."
-  [(class (java.security.MessageDigest/getInstance "SHA-256"))
-   (.getSuperclass (class (java.security.MessageDigest/getInstance "SHA-256")))])
+  #?(:jolt []
+     :clj [(class (java.security.MessageDigest/getInstance "SHA-256"))
+           (.getSuperclass (class (java.security.MessageDigest/getInstance "SHA-256")))]))
 
 (defonce ^:private context-classes
-  (let [from-bb (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
-                              (remove #(str/starts-with? (.getName ^Class %) "[")
-                                      (babashka.classes/all-classes))))
+  (let [from-bb #?(:jolt {}
+                     :clj (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
+                                  (remove #(str/starts-with? (.getName ^Class %) "[")
+                                          (babashka.classes/all-classes)))))
         runtime (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
                               runtime-classes))]
     (merge from-bb runtime)))
@@ -1248,25 +1250,30 @@
             (str/includes? entry (str "repository/" (str/replace g "." "/") "/" a "/"))))
         bundled-artifacts))
 
-(defn- closure-jars
-  "The complete transitive jar set for DEPS-MAP, computed in-process via
-   borkdude.deps (the tools.deps port) — no subprocess, no global classpath
-   changes, nothing written outside ~/.m2. Resolution failures throw
-   (borkdude.deps' default *exit-fn* would kill the process)."
-  [deps-map]
-  (let [cp (with-out-str
-             (binding [*print-namespace-maps* false
-                       bdeps/*exit-fn* (fn [{:keys [message]}]
-                                         (throw (ex-info (or message "deps resolution failed")
-                                                         {:deps deps-map})))]
-               (bdeps/-main "-Srepro" "-Spath"
-                            "-Sdeps" (pr-str {:deps deps-map
-                                              :mvn/repos {"clojars" {:url "https://repo.clojars.org/"}}})
-                            "-Sdeps-file" "__kmet_no_deps__.edn")))]
-    (->> (str/split (str/trim cp) (re-pattern (System/getProperty "path.separator")))
-         (filter #(or (str/includes? % ".m2") (str/includes? % ".gitlibs")))
-         (remove bundled-artifact?)
-         vec)))
+#?(:jolt
+     (defn- closure-jars
+       "Stub on Jolt — extension loading is disabled."
+       [_deps-map] [])
+     :clj
+     (defn- closure-jars
+       "The complete transitive jar set for DEPS-MAP, computed in-process via
+        borkdude.deps (the tools.deps port) — no subprocess, no global classpath
+        changes, nothing written outside ~/.m2. Resolution failures throw
+        (borkdude.deps' default *exit-fn* would kill the process)."
+       [deps-map]
+       (let [cp (with-out-str
+                  (binding [*print-namespace-maps* false
+                            bdeps/*exit-fn* (fn [{:keys [message]}]
+                                              (throw (ex-info (or message "deps resolution failed")
+                                                              {:deps deps-map})))]
+                    (bdeps/-main "-Srepro" "-Spath"
+                                 "-Sdeps" (pr-str {:deps deps-map
+                                                   :mvn/repos {"clojars" {:url "https://repo.clojars.org/"}}})
+                                 "-Sdeps-file" "__kmet_no_deps__.edn")))]
+         (->> (str/split (str/trim cp) (re-pattern (System/getProperty "path.separator")))
+              (filter #(or (str/includes? % ".m2") (str/includes? % ".gitlibs")))
+              (remove bundled-artifact?)
+              vec))))
 
 (defonce ^:private jars-cache (atom {}))
 
@@ -1435,7 +1442,9 @@
    returned (PATH names what failed — the result map has no extension name
    to report)."
   [path]
-  (let [f (io/file path)
+  (if (find-var 'clojure.core/*jolt-version*)
+    {:extension nil :path path :error "Extensions not supported on Jolt"}
+    (let [f (io/file path)
         {:keys [name kind artifact entry-ns file]} (resolve-extension path)
         ext (map->Extension
              {:name name
@@ -1523,7 +1532,7 @@
         {:extension nil
          :path path
          :error (or (ex-message e)
-                    (str "load failed: " (.getName (class e))))}))))
+                    (str "load failed: " (.getName (class e))))})))))
 
 (defn unload-extension!
   "Unload an extension: shutdown (if initialized), deregister everything it
@@ -1627,8 +1636,10 @@
    per-extension {:extension name :error} results; failures are also printed
    as warnings."
   [dir]
-  (let [d (io/file dir)]
-    (when (fs/directory? d)
+  (if (find-var 'clojure.core/*jolt-version*)
+    []
+    (let [d (io/file dir)]
+      (when (fs/directory? d)
       (mapv (fn [entry]
               (let [path (str entry)
                     lower (str/lower-case path)
@@ -1655,7 +1666,7 @@
                     (println "Warning: Failed to load extension" path ":"
                              (:error result))))
                 result))
-            (sort-by str (fs/list-dir d))))))
+            (sort-by str (fs/list-dir d)))))))
 
 (defn reload-extensions!
   "Unload all loaded extensions, then load from DIRS. Returns the list of
@@ -1663,6 +1674,8 @@
    custom footer/header/editor, dialogs) is reset first (pi: reload calls
    resetExtensionUI before reloading)."
   [dirs]
-  (ui-call :reset)
-  (unload-all-extensions!)
-  (mapcat load-extensions-from-dir dirs))
+  (if (find-var 'clojure.core/*jolt-version*)
+    []
+    (do (ui-call :reset)
+        (unload-all-extensions!)
+        (mapcat load-extensions-from-dir dirs))))
