@@ -12,13 +12,22 @@
 (def ^:private getenv
   (fn [k] (System/getenv k)))
 
+(defn- bytes->hex
+  "Lowercase hex of a byte array (portable replacement for
+   HexFormat/of+formatHex — java.util.HexFormat is unshimmed on Jolt)."
+  [bytes]
+  (let [sb (StringBuilder.)]
+    (doseq [b bytes]
+      (.append sb (format "%02x" (bit-and b 0xff))))
+    (str sb)))
+
 (defn sha256-hex
   "Hex-encoded SHA-256 of a UTF-8 string (public — the request builders
    hash the payload for x-amz-content-sha256)."
   [s]
   (let [md (java.security.MessageDigest/getInstance "SHA-256")
         bytes (.digest md (.getBytes s "UTF-8"))]
-    (.formatHex (java.util.HexFormat/of) bytes)))
+    (bytes->hex bytes)))
 
 (defn- hmac
   "HMAC-SHA256 of data with key (byte arrays)."
@@ -30,7 +39,7 @@
 (defn- hmac-hex
   "Hex-encoded HMAC-SHA256 of a string with a byte-array key."
   [key s]
-  (.formatHex (java.util.HexFormat/of) (hmac key (.getBytes s "UTF-8"))))
+  (bytes->hex (hmac key (.getBytes s "UTF-8"))))
 
 (defn- uri-encode
   "Percent-encode a URI path segment (AWS canonical-uri encoding: encode

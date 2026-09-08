@@ -10,14 +10,28 @@
             [clojure.string :as str]
             [kmet.libs.aws-sigv4 :as aws]))
 
+(defn- hex->bytes
+  "Parse lowercase hex into a byte array (portable replacement for
+   HexFormat/of+parseHex — java.util.HexFormat is unshimmed on Jolt)."
+  [hex]
+  (let [hex (str hex)
+        n (/ (count hex) 2)
+        out (byte-array n)]
+    (dotimes [i n]
+      (aset out i (unchecked-byte (Integer/parseInt (subs hex (* 2 i) (+ (* 2 i) 2)) 16))))
+    out))
+
 (defn- hmac-sha256
   "HMAC-SHA256 hex of a UTF-8 string with a byte-array key (independent
    reimplementation for the key-chain check)."
   [key s]
   (let [mac (javax.crypto.Mac/getInstance "HmacSHA256")]
     (.init mac (javax.crypto.spec.SecretKeySpec. key "HmacSHA256"))
-    (.formatHex (java.util.HexFormat/of)
-                (.doFinal mac (.getBytes s "UTF-8")))))
+    (let [bytes (.doFinal mac (.getBytes s "UTF-8"))
+          sb (StringBuilder.)]
+      (doseq [b bytes]
+        (.append sb (format "%02x" (bit-and b 0xff))))
+      (str sb))))
 
 (def ^:private example-secret "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY")
 
@@ -26,9 +40,9 @@
   ;; service iam) — the chain order and AWS4 prefix are the security-critical
   ;; parts; the test recomputes the same chain with the documented formula.
   (let [k-date (hmac-sha256 (.getBytes (str "AWS4" example-secret) "UTF-8") "20150830")
-        k-region (hmac-sha256 (.parseHex (java.util.HexFormat/of) k-date) "us-east-1")
-        k-service (hmac-sha256 (.parseHex (java.util.HexFormat/of) k-region) "iam")
-        k-signing (hmac-sha256 (.parseHex (java.util.HexFormat/of) k-service) "aws4_request")]
+        k-region (hmac-sha256 (hex->bytes k-date) "us-east-1")
+        k-service (hmac-sha256 (hex->bytes k-region) "iam")
+        k-signing (hmac-sha256 (hex->bytes k-service) "aws4_request")]
     ;; the AWS docs list this exact value for the example's kSigning
     (t/is (= "c4afb1cc5771d871763a393e44b703571b55cc28424d1a5e86da6ed3c154a4b9"
              k-signing)
