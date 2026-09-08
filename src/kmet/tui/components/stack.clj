@@ -5,7 +5,8 @@
    is a single flat document, like pi's main-screen model: when the total
    exceeds the terminal height the render loop scrolls it natively into the
    terminal scrollback, keeping the viewport pinned to the document end."
-  (:require [kmet.tui.protocols :as protocols]))
+  (:require [kmet.tui.protocols :as protocols]
+            [kmet.libs.num :as num]))
 
 ;; ─── Stack entries ─────────────────────────────────────────────────────────
 
@@ -34,7 +35,7 @@
   (cond
     (nil? v) fallback
     (not (number? v)) fallback
-    (not (Double/isFinite (double v))) fallback
+    (not (num/finite? v)) fallback
     :else (max 0 (long (Math/floor (double v))))))
 
 (defn- clamp-size

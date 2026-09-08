@@ -121,6 +121,7 @@
     kmet.libs.test-http
     kmet.libs.test-archive
     kmet.libs.test-aws-sigv4
+    kmet.libs.test-num
     kmet.libs.test-context
     kmet.app.ui.test-chat-history
     kmet.app.ui.test-user-message

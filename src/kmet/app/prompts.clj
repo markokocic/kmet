@@ -16,14 +16,22 @@
 
 ;; ─── Argument parsing (pi: parseCommandArgs) ──────────────────────────────
 
+(def ^:private js-space-separators
+  "JS \\s space separators beyond what Character/isWhitespace covers:
+   the NBSP-family (Zs) minus the no-break spaces isWhitespace already
+   excludes, plus the Zl/Zp line/paragraph separators and the FEFF BOM.
+   Character/isSpaceChar (Zs+Zl+Zp) is unshimmed on Jolt, so the set is
+   explicit (pi: /\\s/ in parseCommandArgs)."
+  #{\u00a0 \u1680 \u2000 \u2001 \u2002 \u2003 \u2004 \u2005 \u2006 \u2007
+    \u2008 \u2009 \u200a \u2028 \u2029 \u202f \u205f \u3000 \ufeff})
+
 (defn- js-whitespace?
   "True for characters JS /\\s/ treats as whitespace: Java's
    Character/isWhitespace misses the NBSP-family (incl. U+FEFF BOM), so union
-   with isSpaceChar plus U+FEFF (pi: /\\s/ in parseCommandArgs)."
+   with the explicit separator set (pi: /\\s/ in parseCommandArgs)."
   [c]
   (or (Character/isWhitespace c)
-      (Character/isSpaceChar c)
-      (= c \ufeff)))
+      (contains? js-space-separators c)))
 
 (defn parse-command-args
   "Parse command arguments respecting quoted strings (bash-style, pi:

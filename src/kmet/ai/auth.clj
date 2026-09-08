@@ -16,6 +16,7 @@
             [kmet.libs.edn-store :as cred]
             [kmet.libs.dynamic-value :as dynamic-value]
             [kmet.libs.hooks :as hooks]
+            [kmet.libs.num :as num]
             [kmet.ai.google-adc :as google-adc]))
 
 ;; ─── Env var table (pi env-api-keys.ts) ────────────────────────────────────
@@ -119,8 +120,7 @@
        (if (= :oauth (:type credential))
          (and (string? (:access credential))
               (string? (:refresh credential))
-              (number? (:expires credential))
-              (Double/isFinite (:expires credential)))
+              (num/finite? (:expires credential)))
          (or (nil? (:key credential)) (string? (:key credential))))))
 
 (defn load-auth!
