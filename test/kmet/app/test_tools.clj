@@ -1,6 +1,7 @@
 (ns kmet.app.test-tools
   (:require [clojure.string :as str]
             [clojure.test :as t]
+            [babashka.fs :as fs]
             [kmet.app.tools.core :as tools]
             [kmet.ai.api.shared :as schema-shared]
             [kmet.app.tools.bash :as bash-tool]
@@ -117,7 +118,10 @@
     (let [result (tools/execute-tool "edit" {:path "target/test-tools-edit-bom.txt"
                                              :edits [{:old-text "line2" :new-text "LINE2"}]})]
       (t/is (not (:is-error result)))
-      (t/is (= "\uFEFFline1\nLINE2" (slurp "target/test-tools-edit-bom.txt"))))))
+      ;; slurp strips the BOM on Jolt (Chez transcoded port), so compare
+      ;; raw bytes: EF BB BF + the edited content.
+      (t/is (= (seq (.getBytes "\uFEFFline1\nLINE2" "UTF-8"))
+               (seq (fs/read-all-bytes "target/test-tools-edit-bom.txt")))))))
 
 (t/deftest test-tool-edit-fuzzy-match
   (t/testing "trailing whitespace differences match fuzzily (pi normalizeForFuzzyMatch)"
@@ -251,8 +255,11 @@
           result (bash-exec/truncate-tail s :max-bytes 10)
           content (:content result)]
       (t/is (:truncated result))
-      (t/is (not (re-find #"[\udc00-\udfff]" content))
-            "no lone low surrogate in truncated output")
+      ;; pi skips the incomplete UTF-8 char, so the cut lands on a whole
+      ;; char boundary: only the 9 trailing y's survive (9 bytes ≤ 10).
+      ;; (No lone-surrogate regex: Jolt strings are codepoint-indexed and
+      ;; its regex engine rejects surrogate ranges at compile time.)
+      (t/is (= "yyyyyyyyy" content))
       ;; pi skips the incomplete UTF-8 char, so emoji is dropped
       (t/is (not (str/includes? content "\uFFFD")) "no replacement char")
       (t/is (<= (bash-exec/byte-length content) 10) "output fits byte limit"))))

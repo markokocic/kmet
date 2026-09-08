@@ -51,8 +51,18 @@
         (let [f (io/file path)]
           (if-not (fs/exists? f)
             {:content (str "File not found: " path) :is-error true}
-            (let [content (slurp f)
-                  {:keys [bom text]} (edit-diff/strip-bom content)
+            (let [raw (fs/read-all-bytes f)
+                  ;; Jolt's (String. bytes "UTF-8") strips a leading BOM
+                  ;; (Chez transcoded port); detect it on the raw bytes so
+                  ;; strip-bom/restore still round-trips on both hosts.
+                  has-bom (and (>= (alength raw) 3)
+                               (= -17 (aget raw 0)) (= -69 (aget raw 1)) (= -65 (aget raw 2)))
+                  content (String. (if has-bom
+                                     (java.util.Arrays/copyOfRange raw 3 (alength raw))
+                                     raw)
+                                   "UTF-8")
+                  {:keys [text]} (edit-diff/strip-bom content)
+                  bom (if has-bom "\uFEFF" "")
                   original-ending (edit-diff/detect-line-ending text)
                   normalized (edit-diff/normalize-to-lf text)
                   {:keys [new-content]}

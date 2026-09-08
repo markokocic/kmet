@@ -75,9 +75,12 @@
   (str/replace file-path #"(?i) (AM|PM)\." (str narrow-nb-space "$1.")))
 
 (defn- try-nfd-variant
-  "Pi: tryNFDVariant — NFD normalize (macOS stores filenames NFD)."
+  "Pi: tryNFDVariant — NFD normalize (macOS stores filenames NFD).
+   Best-effort: java.text.Normalizer is unshimmed on Jolt, where the
+   path passes through unchanged."
   [file-path]
-  (Normalizer/normalize file-path Normalizer$Form/NFD))
+  (try (Normalizer/normalize file-path Normalizer$Form/NFD)
+       (catch Exception _ file-path)))
 
 (defn- try-curly-quote-variant
   "Pi: tryCurlyQuoteVariant — replace straight apostrophe with U+2019."
