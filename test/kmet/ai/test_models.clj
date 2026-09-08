@@ -248,23 +248,6 @@
                                                      :models {:openai-completions
                                                               {"m" {:id "m" :name "M"}}}})))))
 
-;; ─── Manifest (pi: modelDataManifest) ──────────────────────────────────────
-
-(t/deftest test-manifest-matches-committed-catalogs
-  (t/is (m/manifest-matches?)
-        "committed manifest.edn covers the committed catalog files (regenerate
-         the manifest when catalogs change)"))
-
-(t/deftest test-compute-manifest-shape
-  (let [manifest (m/compute-manifest)]
-    (t/is (= 1 (:schema-version manifest)))
-    (t/is (re-matches #"[0-9a-f]{64}" (:structure-hash manifest)))
-    (t/is (map? (:files manifest)))
-    (t/testing "every catalog file is covered, manifest.edn excluded"
-      (t/is (every? #(re-matches #".+\.edn" %) (keys (:files manifest))))
-      (t/is (not (contains? (:files manifest) "manifest.edn")))
-      (t/is (every? #(re-matches #"[0-9a-f]{64}" %) (vals (:files manifest)))))))
-
 ;; ─── get-available (auth check = auth/configured?, Phase 3) ───────────────
 
 (t/deftest test-get-available
@@ -691,12 +674,9 @@
       (m/load-catalogs!))))
 
 (t/deftest test-fresh-cache-wins
-  ;; `kmet --generate-models` writes one <provider>.edn per provider +
-  ;; manifest.edn (same layout as the committed model_data); load-catalogs!
-  ;; prefers that directory when strictly newer than the bundled catalogs.
   (let [dir (str (fs/create-temp-dir {:dir "target" :prefix "model-cache-test-"}))
         catalog {:schema-version 1
-                 :generated-at "2026-08-09T00:00:00Z"
+                 :generated-at "2999-01-01T00:00:00Z"
                  :provider {:id :scratchcache :name "Scratch Cache"
                             :env-vars ["SCRATCH_CACHE_KEY"] :default-model "c1"}
                  :models {:openai-completions
@@ -708,10 +688,8 @@
                                  :context-window 1000 :max-tokens 100}}}}]
     (try
       (spit (str dir "/scratchcache.edn") (pr-str catalog))
-      (spit (str dir "/manifest.edn") "{}")
-      ;; strictly newer than the bundled model_data mtimes
-      (fs/set-last-modified-time (str dir "/scratchcache.edn")
-                                 (+ (System/currentTimeMillis) 120000))
+      (spit (str dir "/manifest.edn")
+            (pr-str {:schema-version 1 :generated-at "2999-01-01T00:00:00Z"}))
       (binding [m/*use-models-cache* true
                 m/*models-cache-dir* dir]
         (t/is (= dir (m/fresh-model-cache)))
@@ -723,13 +701,8 @@
         (m/load-catalogs!)))))
 
 (t/deftest test-stale-or-incomplete-cache-ignored
-  ;; A generation older than the bundled data, or one without its
-  ;; manifest.edn, never wins — the bundled catalogs load.
   (let [dir (str (fs/create-temp-dir {:dir "target" :prefix "model-cache-test-"}))
-        future-ms (+ (System/currentTimeMillis) 120000)
-        write-cache (fn [{:keys [manifest mtime]}]
-                      ;; start from a clean slate so the manifest of a
-                      ;; previous sub-case can't leak into the next one
+        write-cache (fn [{:keys [manifest generated-at]}]
                       (fs/delete-tree dir)
                       (fs/create-dirs dir)
                       (spit (str dir "/scratchcache.edn")
@@ -738,16 +711,15 @@
                                                 :env-vars [] :default-model nil}
                                      :models {}}))
                       (when manifest
-                        (spit (str dir "/manifest.edn") "{}")
-                        (fs/set-last-modified-time (str dir "/manifest.edn") mtime))
-                      (fs/set-last-modified-time (str dir "/scratchcache.edn") mtime))]
+                        (spit (str dir "/manifest.edn")
+                              (pr-str {:schema-version 1 :generated-at generated-at}))))]
     (try
-      (write-cache {:manifest true :mtime 1000000000000})
+      (write-cache {:manifest true :generated-at "2000-01-01T00:00:00Z"})
       (binding [m/*use-models-cache* true
                 m/*models-cache-dir* dir]
         (t/is (nil? (m/fresh-model-cache)) "stale generation ignored")
         (t/is (contains? (m/load-catalogs!) :deepseek) "bundled catalogs win"))
-      (write-cache {:manifest false :mtime future-ms})
+      (write-cache {:manifest false})
       (binding [m/*use-models-cache* true
                 m/*models-cache-dir* dir]
         (t/is (nil? (m/fresh-model-cache)) "generation without manifest ignored"))
@@ -756,13 +728,11 @@
         (m/load-catalogs!)))))
 
 (t/deftest test-unusable-cache-falls-back-to-bundled
-  ;; A corrupt cache must not break startup: warning + bundled catalogs win.
   (let [dir (str (fs/create-temp-dir {:dir "target" :prefix "model-cache-test-"}))]
     (try
       (spit (str dir "/scratchcache.edn") "{{{ not edn")
-      (spit (str dir "/manifest.edn") "{}")
-      (fs/set-last-modified-time (str dir "/scratchcache.edn")
-                                 (+ (System/currentTimeMillis) 120000))
+      (spit (str dir "/manifest.edn")
+            (pr-str {:schema-version 1 :generated-at "2999-01-01T00:00:00Z"}))
       (binding [m/*use-models-cache* true
                 m/*models-cache-dir* dir]
         (let [providers (m/load-catalogs!)]
@@ -771,4 +741,3 @@
       (finally
         (fs/delete-tree dir)
         (m/load-catalogs!)))))
-

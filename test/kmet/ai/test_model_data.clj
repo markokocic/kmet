@@ -12,7 +12,6 @@
             [clojure.string :as str]
             [clojure.test :as t]
             [kmet.ai.model-gen :as mg]
-            [kmet.ai.models :as m]
             [kmet.libs.http :as http]))
 
 (defn- validate-dir
@@ -34,11 +33,6 @@
     (t/is (empty? errors)
           (str "committed catalogs failed strict validation:\n"
                (str/join "\n" errors)))))
-
-(t/deftest test-manifest-covers-committed-catalogs
-  (t/is (m/manifest-matches?)
-        "manifest.edn covers the committed catalog files (regenerate the
-         manifest when catalogs change)"))
 
 ;; ─── Negative paths (the offline gate must fail loudly on broken data) ─────
 

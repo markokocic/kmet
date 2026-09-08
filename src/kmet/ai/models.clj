@@ -7,8 +7,7 @@
    never from ad-hoc provider switches. Providers are data — an EDN blob
    registered in an atom — which is what later makes extension
    registerProvider trivial (pi: MutableModels.setProvider)."
-  (:require #?@(:jolt nil :clj [[babashka.classpath :as bcp]])
-            [clojure.edn :as edn]
+  (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.java.io :as io]
             [babashka.fs :as fs]
@@ -189,28 +188,38 @@
 
 ;; ─── Catalog loading (pi: generated providers/data/*.json) ─────────────────
 
-(defn- catalog-resource-dir
-  "Directory URL of the bundled provider catalogs: the classpath resource
-   dir in a dev checkout (src/ on the bb classpath), or nil inside a packaged
-   binary where catalogs live zipped in the uberjar / appended jar. Resolving
-   from io/resource instead of (fs/cwd) keeps kmet working when started from
-   any directory — not just the project root."
-  []
-  (when-let [r (io/resource "kmet/ai/model_data/manifest.edn")]
-    (try
-      (when (= "file" (.getProtocol r))
-        (str (fs/parent (fs/path (.toURI r)))))
-      (catch Exception _ nil))))
+(defn- catalog-resource
+  "Bundled catalog content by file name (e.g. \"deepseek.edn\",
+   \"manifest.edn\"), read through io/resource so the same code serves a dev
+   checkout (src/ on the classpath), the packaged uberjar (zipped entries),
+   and a built image (embedded resources) — slurp opens file:, jar: and
+   embedded URLs alike. Throws ex-info when the resource is missing."
+  [fname]
+  (let [res (str "kmet/ai/model_data/" fname)]
+    (if-let [r (io/resource res)]
+      (try (slurp r)
+           (catch Exception e
+             (throw (ex-info (str "Catalog " fname " is unreadable")
+                             {:type :catalog-invalid :file fname} e))))
+      (throw (ex-info (str "Catalog " fname " is missing from resources")
+                      {:type :catalog-invalid :file fname})))))
 
-(def model-data-dir
-  "Directory of committed provider catalog EDN files. Prefer the classpath
-   resource dir (dev checkout: src/ on the bb classpath) so kmet starts from
-   any cwd; falls back to the legacy cwd-relative path when the resource is
-   unavailable (e.g. a bare REPL without the classpath set). Inside a packaged
-   binary the catalogs live zipped in the uberjar — fs/exists? is false there
-   and load-bundled-providers reads them via jar-resources instead."
-  (or (catalog-resource-dir)
-      (str (fs/path (fs/cwd) "src" "kmet" "ai" "model_data"))))
+(defonce ^:private catalog-cache (atom {}))
+
+(declare validate-catalog!)
+
+(defn- load-catalog-resource
+  "Read + validate one bundled catalog file (parsed result cached — the
+   bundled catalogs are static at runtime, and tests reload them many
+   times, so a fresh EDN parse per load-catalogs! is pure waste)."
+  [fname]
+  (let [cached (get @catalog-cache fname)]
+    (if (some? cached)
+      cached
+      (let [data (edn/read-string (catalog-resource fname))]
+        (validate-catalog! fname data)
+        (swap! catalog-cache assoc fname data)
+        data))))
 
 (def ^:dynamic *models-cache-dir*
   "User-level provider catalog cache, written by `kmet --generate-models`
@@ -224,37 +233,6 @@
    The test runner binds it false so suites always exercise the committed
    catalogs regardless of the local machine's cache state."
   true)
-
-(defn- builtin-oauth
-  "The OAuthAuth record for a builtin catalog provider (pi: the provider
-   factories declare auth.oauth — kmet attaches them at catalog load).
-   model-ids is a thunk over the provider's loaded models so the enable-all
-   login step has the catalog list (pi imports GITHUB_COPILOT_MODELS
-   statically)."
-  [provider]
-  (case (:id provider)
-    :github-copilot
-    (oauth/make-github-copilot-oauth
-     (fn [] (mapv :id (:models provider))))
-    :openai-codex
-    (oauth/make-openai-codex-oauth)
-    :anthropic
-    (oauth/make-anthropic-oauth)
-    :openrouter
-    (oauth/make-open-router-oauth)
-    nil))
-
-(defn- read-edn-file
-  "Parse an EDN file as data, nil when unreadable."
-  [path]
-  (try (edn/read-string (slurp path))
-       (catch Exception _ nil)))
-
-;; Parsed catalog blobs keyed by file path → {:mtime ms :size bytes :data}.
-;; The committed catalogs are static at runtime, and tests reload them many
-;; times, so a fresh EDN parse per load-catalogs! is pure waste; the cache
-;; invalidates on any file change (mtime+size).
-(defonce ^:private catalog-cache (atom {}))
 
 (def ^:private required-model-keys
   [:id :name :provider :api :base-url :reasoning :input :cost
@@ -296,30 +274,36 @@
         (throw (ex-info (str "Catalog " file " has model " (first dup) " in more than one api group")
                         {:type :catalog-invalid :file file :model (first dup)}))))))
 
+(defn- builtin-oauth
+  "The OAuthAuth record for a builtin catalog provider (pi: the provider
+   factories declare auth.oauth — kmet attaches them at catalog load).
+   model-ids is a thunk over the provider's loaded models so the enable-all
+   login step has the catalog list (pi imports GITHUB_COPILOT_MODELS
+   statically)."
+  [provider]
+  (case (:id provider)
+    :github-copilot
+    (oauth/make-github-copilot-oauth
+     (fn [] (mapv :id (:models provider))))
+    :openai-codex
+    (oauth/make-openai-codex-oauth)
+    :anthropic
+    (oauth/make-anthropic-oauth)
+    :openrouter
+    (oauth/make-open-router-oauth)
+    nil))
+
 (defn- catalog-files
-  "Catalog EDN paths under DIR (excludes manifest.edn), sorted by filename."
-  [dir]
-  (->> (fs/list-dir dir)
-       (filter fs/regular-file?)
-       (map fs/file)
-       (filter #(str/ends-with? (str %) ".edn"))
-       (remove #(= "manifest.edn" (fs/file-name %)))
-       (sort-by fs/file-name)))
+  "Bundled catalog file names from the manifest's :files map (excludes
+   manifest.edn itself), sorted."
+  []
+  (let [manifest (edn/read-string (catalog-resource "manifest.edn"))]
+    (sort (remove #(= "manifest.edn" %) (keys (:files manifest))))))
 
 (defn- load-catalog-file
-  "Read + validate one catalog file (parsed result cached by mtime+size);
-   nil when missing."
+  "Read + validate one catalog file (parsed result cached by load-catalog-resource)."
   [file]
-  (let [path (str file)
-        stat {:mtime (fs/last-modified-time file) :size (fs/size file)}
-        cached (get @catalog-cache path)]
-    (if (= stat (select-keys cached [:mtime :size]))
-      (:data cached)
-      (let [data (read-edn-file path)]
-        (when data
-          (validate-catalog! file data)
-          (swap! catalog-cache assoc path (assoc stat :data data))
-          data)))))
+  (load-catalog-resource (str file)))
 
 (defn- catalog->provider
   "Build a Provider record from a catalog blob: provider info from the
@@ -334,89 +318,55 @@
                           :api-types api-types
                           :models model-records))))
 
-(defn jar-resources
-  "Parsed EDN resources under classpath dir (e.g. \"kmet/ai/model_data\") as
-   [{:name base-name :data value}] sorted by name. Reads from zip-shaped
-   classpath entries — the packaged uberjar, or a catted babashka binary whose
-   appended jar IS its classpath. Returns [] when nothing matches, which is
-   the normal case in a dev checkout: there the catalogs load from disk."
-  [dir ext]
-  (->> (str/split (bcp/get-classpath) (re-pattern (System/getProperty "path.separator")))
-       (remove fs/directory?)
-       (mapcat (fn [cp]
-                 (try
-                   (with-open [zf (java.util.zip.ZipFile. (fs/file cp))]
-                     (->> (enumeration-seq (.entries zf))
-                          (filter (fn [e]
-                                    (let [n (.getName e)]
-                                      (and (str/starts-with? n (str dir "/"))
-                                           (not (.isDirectory e))
-                                           (str/ends-with? n ext)))))
-                          (mapv (fn [e]
-                                  {:name (fs/file-name (.getName e))
-                                   :data (with-open [in (.getInputStream zf e)]
-                                           (edn/read-string (slurp in)))}))))
-                   (catch Exception _ nil))))
-       (sort-by :name)))
-
-(defn- newest-mtime-ms
-  "Newest last-modified time (epoch ms) among DIR's top-level .edn files,
-   nil when the directory is missing or holds none."
-  [dir]
-  (when (fs/directory? dir)
-    (let [ts (->> (fs/list-dir dir)
-                  (filter fs/regular-file?)
-                  (filter #(str/ends-with? (str %) ".edn"))
-                  (map #(-> (fs/last-modified-time %) (.toMillis))))]
-      (when (seq ts) (apply max ts)))))
-
-(defn- bundled-mtime
-  "Freshness marker of the bundled catalogs (epoch ms): in a dev checkout
-   the newest mtime under model-data-dir; in a packaged binary (catalogs
-   inside the uberjar / catted babashka binary) the mtime of the classpath
-   entry carrying them. nil when neither applies."
+(defn- catalog-generation
+  "The :generated-at timestamp of the bundled manifest (nil when unreadable)
+   — the freshness marker of the bundled catalogs."
   []
-  (if (fs/exists? model-data-dir)
-    (newest-mtime-ms model-data-dir)
-    (->> (str/split (bcp/get-classpath) (re-pattern (System/getProperty "path.separator")))
-         (remove fs/directory?)
-         (keep (fn [cp]
-                 (try
-                   (with-open [zf (java.util.zip.ZipFile. (fs/file cp))]
-                     (when (some #(str/starts-with? (.getName %) "kmet/ai/model_data/")
-                                 (enumeration-seq (.entries zf)))
-                       (-> (fs/last-modified-time cp) (.toMillis))))
-                   (catch Exception _ nil))))
-         seq
-         (apply max))))
+  (try (:generated-at (edn/read-string (catalog-resource "manifest.edn")))
+       (catch Exception _ nil)))
+
+(defn- dir-generation
+  "The :generated-at timestamp of the manifest.edn in DIR (nil when the
+   directory holds no complete generation)."
+  [dir]
+  (let [f (fs/file dir "manifest.edn")]
+    (when (fs/exists? f)
+      (try (:generated-at (edn/read-string (slurp f)))
+           (catch Exception _ nil)))))
 
 (defn fresh-model-cache
-  "*models-cache-dir when usable: it must hold a complete generation (at
-   least one catalog .edn plus its manifest.edn) whose newest mtime is
-   strictly newer than the bundled catalogs' — so an upgrade that ships
-   newer model data wins over a stale cache until `kmet --generate-models`
-   refreshes it (pi remote-catalog semantics: the persisted overlay applies
-   only over older locally generated data). nil otherwise."
+  "*models-cache-dir when usable: it must hold a complete generation (a
+   manifest.edn with a :generated-at timestamp) strictly newer than the
+   bundled catalogs' — so an upgrade that ships newer model data wins over a
+   stale cache until `kmet --generate-models` refreshes it (pi
+   remote-catalog semantics: the persisted overlay applies only over older
+   locally generated data). nil otherwise."
   []
   (when *use-models-cache*
-    (let [dir *models-cache-dir*
-          cache-mtime (newest-mtime-ms dir)]
-      (when (and cache-mtime
-                 (fs/exists? (fs/path dir "manifest.edn")))
-        (when-let [bundled (bundled-mtime)]
-          (when (> cache-mtime bundled)
-            dir))))))
+    (let [cache-gen (dir-generation *models-cache-dir*)]
+      (when cache-gen
+        (when-let [bundled (catalog-generation)]
+          (when (pos? (compare cache-gen bundled))
+            *models-cache-dir*))))))
 
 (defn- load-dir-providers
   "Provider map from catalog EDN files directly under DIR (throws on an
    unreadable/invalid catalog — callers fall back to the bundled data)."
   [dir]
   (into {}
-        (for [f (catalog-files dir)
-              :let [data (or (load-catalog-file f)
-                             (throw (ex-info (str "Catalog " f " is unreadable")
-                                             {:type :catalog-invalid :file (str f)})))]]
-          [(:id (:provider data)) (catalog->provider data)])))
+        (for [fname (->> (fs/list-dir dir)
+                         (filter fs/regular-file?)
+                         (map fs/file)
+                         (filter #(str/ends-with? (str %) ".edn"))
+                         (remove #(= "manifest.edn" (fs/file-name %)))
+                         (sort-by fs/file-name)
+                         (map str))
+              :let [data (try (edn/read-string (slurp fname))
+                              (catch Exception _
+                                (throw (ex-info (str "Catalog " fname " is unreadable")
+                                                {:type :catalog-invalid :file fname}))))]]
+          (do (validate-catalog! fname data)
+              [(:id (:provider data)) (catalog->provider data)]))))
 
 ;; Startup calls load-catalogs! more than once (directly, then through
 ;; load-models-config!) — announce a newly-adopted cache source only on the
@@ -424,16 +374,12 @@
 (defonce ^:private announced-cache (atom nil))
 
 (defn- load-bundled-providers
-  "The pristine built-in providers: catalogs on disk in a dev checkout;
-   packaged binary: loaded from the classpath resources instead."
+  "The pristine built-in providers, read from the bundled catalog resources."
   []
-  (if (fs/exists? model-data-dir)
-    (load-dir-providers model-data-dir)
-    (into {}
-          (for [{:keys [name data]} (jar-resources "kmet/ai/model_data" ".edn")
-                :when (not= "manifest.edn" name)]
-            (do (validate-catalog! name data)
-                [(:id (:provider data)) (catalog->provider data)])))))
+  (into {}
+        (for [fname (catalog-files)
+              :let [data (load-catalog-file fname)]]
+          [(:id (:provider data)) (catalog->provider data)])))
 
 (defn load-catalogs!
   "Load all provider catalogs into the registry, replacing whatever was
@@ -468,58 +414,6 @@
     (reset! builtins-atom providers)
     (reset! providers-atom providers)
     providers))
-
-;; ─── Manifest (pi: scripts/model-data.ts createModelDataManifest) ─────────
-
-(defn- sha256-hex
-  "sha256 hex digest of a string (pi: createHash('sha256')) — MessageDigest
-   is the portable babashka way."
-  [s]
-  (let [md (java.security.MessageDigest/getInstance "SHA-256")]
-    (format "%064x" (BigInteger. 1 (.digest md (.getBytes s "UTF-8"))))))
-
-(defn- catalog-structure
-  "Canonical sorted {provider -> sorted {model-id -> api}} over the catalog
-   files (pi: ModelDataStructure). Used for the structure hash."
-  []
-  (into (sorted-map)
-        (for [f (catalog-files model-data-dir)
-              :let [data (load-catalog-file f)
-                    pid (name (get-in data [:provider :id]))]]
-          [pid (into (sorted-map)
-                     (for [[api models] (:models data)
-                           [mid _] models]
-                       [(name mid) (name api)]))])))
-
-(defn- structure-hash
-  "sha256 of the canonical printed structure (pi: modelDataStructureHash over
-   JSON.stringify — pr-str of the sorted map is the EDN equivalent)."
-  []
-  (sha256-hex (pr-str (catalog-structure))))
-
-(defn compute-manifest
-  "The manifest that the committed catalog files should be covered by
-   (pi: createModelDataManifest): :structure-hash over the canonical sorted
-   {provider -> {model-id -> api}} plus a sha256 per catalog file.
-   :generated-at is metadata, not part of the identity."
-  []
-  {:schema-version 1
-   :generated-at nil
-   :structure-hash (structure-hash)
-   :files (into (sorted-map)
-                (for [f (catalog-files model-data-dir)]
-                  [(fs/file-name f) (sha256-hex (slurp f))]))})
-
-(defn manifest-matches?
-  "True when the committed manifest.edn covers the current catalog files
-   (structure hash + file hashes match; pi's manifest check catches
-   uncommitted regenerations)."
-  []
-  (let [committed (read-edn-file (str (fs/path model-data-dir "manifest.edn")))
-        current (compute-manifest)]
-    (and (map? committed)
-         (= (:structure-hash committed) (:structure-hash current))
-         (= (:files committed) (:files current)))))
 
 ;; ─── Provider composition (pi: ModelRuntime rebuildProviders /           ──
 ;;    recomposeProvider / registerProvider / registerNativeProvider /        ──
