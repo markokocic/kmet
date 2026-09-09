@@ -251,13 +251,7 @@
                       word-char? (boolean (re-find #"^\w" last-char))]
                   (loop [i (dec trimmed)]
                     (if (<= i 0) [cl 0]
-                        (let [c (subs line i (inc i))
-                              is-word (re-find #"^\w" c)
-                              is-space (re-find #"^\s" c)]
-                          (cond
-                            is-space (if word-char? (inc i) (recur (dec i)))
-                            word-char? (if is-word (recur (dec i)) (inc i))
-                            :else (if is-word (inc i) (recur (dec i))))))))))
+                        (let [c (subs line i (inc i)) is-word (re-find #"^\w" c) is-space (re-find #"^\s" c)] (cond is-space (if word-char? [cl (inc i)] (recur (dec i))) word-char? (if is-word (recur (dec i)) [cl (inc i)]) :else (if is-word [cl (inc i)] (recur (dec i))))))))))
           (if (> cl 0)
             (let [prev-line (get editor-lines (dec cl) "")]
               (if (zero? (count prev-line))
@@ -269,13 +263,7 @@
                             word-char? (boolean (re-find #"^\w" last-char))]
                         (loop [i (dec trimmed)]
                           (if (<= i 0) [(dec cl) 0]
-                              (let [c (subs prev-line i (inc i))
-                                    is-word (re-find #"^\w" c)
-                                    is-space (re-find #"^\s" c)]
-                                (cond
-                                  is-space (if word-char? (inc i) (recur (dec i)))
-                                  word-char? (if is-word (recur (dec i)) (inc i))
-                                  :else (if is-word (inc i) (recur (dec i))))))))))))
+                              (let [c (subs prev-line i (inc i)) is-word (re-find #"^\w" c) is-space (re-find #"^\s" c)] (cond is-space (if word-char? [(dec cl) (inc i)] (recur (dec i))) word-char? (if is-word (recur (dec i)) [(dec cl) (inc i)]) :else (if is-word [(dec cl) (inc i)] (recur (dec i))))))))))))
             [0 0]))))))
 
 (defn- word-boundary-right [editor-lines cursor-line cursor-col]

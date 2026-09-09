@@ -101,6 +101,30 @@
     (core/handle-input e "Z")
     (t/is (= "XhelloZ" (editor/editor-get-text e)))))
 
+(t/deftest test-editor-cursor-word-left-right
+  (let [e (editor/make-editor)]
+    (doseq [c "hello world foo"] (core/handle-input e (str c)))
+    (core/handle-input e "[1;5D") ;; ctrl+left
+    (core/handle-input e "|")
+    (t/is (= "hello world |foo" (editor/editor-get-text e)))
+    (core/handle-input e "[1;5D")
+    (core/handle-input e "|")
+    (t/is (= "hello world| |foo" (editor/editor-get-text e))))
+  (let [e (editor/make-editor)]
+    (doseq [c "hello world foo"] (core/handle-input e (str c)))
+    (core/handle-input e "[H") ;; home
+    (core/handle-input e "[1;5C") ;; ctrl+right
+    (core/handle-input e "|")
+    (t/is (= "hello| world foo" (editor/editor-get-text e))))
+  (let [e (editor/make-editor)]
+    (doseq [c "abc def"] (core/handle-input e (str c)))
+    (core/handle-input e (ctrl 10)) ;; newline
+    (doseq [c "ghi"] (core/handle-input e (str c)))
+    (core/handle-input e "[1;5D")
+    (core/handle-input e "[1;5D")
+    (core/handle-input e "|")
+    (t/is (= "abc |def\nghi" (editor/editor-get-text e)))))
+
 ;; ─── Undo / Redo ──────────────────────────────────────────────────────────
 
 (t/deftest test-editor-undo-typing
