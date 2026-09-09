@@ -170,6 +170,11 @@
       (finally (close)))))
 
 (t/deftest test-native-request-json
+  ;; request-json defaults to :method :post with no :body. curl-argv feeds
+  ;; non-GET bodies via --data-binary @- only when :body is present — a
+  ;; bodyless POST gets plain -X POST, so curl never waits on stdin (a nil
+  ;; :in never EOFs on the jolt host; this test would hang forever there
+  ;; before the fix, taking the whole test-http namespace down with it).
   (let [[base close] (start-server
                       (fn [s _ _ _] (respond s "200 OK" "{\"a\":1}" {})))]
     (try
@@ -412,6 +417,23 @@
             (t/is (= 200 (:status r)))
             (t/is (= "streamed" (slurp (:body r))))
             (http/close! r))))
+      (finally (close)))))
+
+(t/deftest test-curl-bodiless-post
+  ;; request-json defaults to :method :post with no :body. The curl
+  ;; transport must not emit --data-binary @- for a bodyless non-GET —
+  ;; curl reads stdin to EOF for @-, and a nil :in never EOFs on the
+  ;; jolt host, so the request (and with it the whole test-http
+  ;; namespace under the runner's 15 s ns timeout) would hang forever.
+  ;; A plain -X POST must round-trip instead. Regression test: runs the
+  ;; curl transport on bb (via the socks proxy) and on jolt (all traffic
+  ;; is curl).
+  (let [[base close] (start-server
+                      (fn [s _ _ _] (respond s "200 OK" "{\"a\":1}" {})))]
+    (try
+      (with-socks-proxy
+        (fn []
+          (t/is (= {:a 1} (:body (http/request-json (str base "/x")))))))
       (finally (close)))))
 
 (t/deftest test-curl-throw-false

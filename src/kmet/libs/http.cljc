@@ -456,7 +456,14 @@
    the user environment can never leak in: --proxy \"\" for direct
    requests, --proxy <clean-url> for proxied ones; --noproxy \"\" always
    (curl must not consult its own env no_proxy either). Proxy credentials
-   travel via proxy-user in the config file, never argv."
+   travel via proxy-user in the config file, never argv.
+
+   A non-GET carries --data-binary @- ONLY when :body is present: curl
+   reads stdin to EOF for @-, and a nil :in never EOFs on the jolt host
+   (inherited stdin), so a bodiless POST would hang forever. Without any
+   data option curl sends no body and never touches stdin (and adds no
+   Content-Type — --data would force the form-urlencoded default, which
+   the native transport does not send for a bodyless request)."
   [url opts p config-file header-file]
   (let [timeout-ms (:timeout opts)
         max-time (cond
@@ -475,7 +482,10 @@
                      true (conj "--compressed"))
                    (concat
                     (when-not get?
-                      ["-X" (str/upper-case (name (:method opts))) "--data-binary" "@-"])
+                      (let [m (str/upper-case (name (:method opts)))]
+                        (if (nil? (:body opts))
+                          ["-X" m]
+                          ["-X" m "--data-binary" "@-"])))
                     [url]))]
     (if-let [setsid @process/setsid-path]
       (into [setsid] args)
