@@ -23,8 +23,15 @@
                      (str/ends-with? host ".cognitiveservices.azure.com")
                      (str/ends-with? host ".ai.azure.com"))
                  (contains? #{"" "/" "/openai" "/openai/v1/responses"} path))
-          (str (java.net.URI. (.getScheme u) (.getUserInfo u) host (.getPort u)
-                              "/openai/v1" nil nil))
+          ;; Rebuild scheme://[userinfo@]host[:port]/openai/v1 by hand: jolt
+          ;; has no multi-arg java.net.URI ctor (jolt-port.md M15), and the
+          ;; single-arg parse + getters above are portable.
+          (str (or (some-> u .getScheme) "https")
+               "://"
+               (when-some [ui (some-> u .getUserInfo)] (str ui "@"))
+               host
+               (let [p (.getPort u)] (when (pos? (or p 0)) (str ":" p)))
+               "/openai/v1")
           trimmed))
       (catch Exception _ trimmed))))
 
