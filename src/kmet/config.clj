@@ -8,6 +8,7 @@
             [babashka.fs :as fs]
             [kmet.tui.theme :as theme]
             [kmet.ai.auth :as auth]
+            [kmet.libs.http :as http]
             [kmet.libs.edn-store :as eds]))
 
 ;; ─── Defaults ───────────────────────────────────────────────────────────────
@@ -33,6 +34,9 @@
    ;; pi: timeoutMs ?? httpIdleTimeoutMs — the whole-request deadline the
    ;; transport enforces; nil = use the idle timeout, 0 disables (idle fallback)
    :http-total-timeout-ms nil
+   ;; outbound HTTP transport: :platform (default — babashka.http-client
+   ;; where possible, curl fallback) or :curl (everything through curl)
+   :http-transport :platform
    :show-cache-miss-notices false
    ;; pi: queue drain modes (:all | :one-at-a-time)
    :steering-mode :all
@@ -64,6 +68,8 @@
   #{:session-dir :extensions-dir :skills-dir :prompts-dir :themes-dir})
 
 (def deep-merge eds/deep-merge)
+
+(declare get-http-transport)
 
 (defn- resolve-path
   "Resolve a path value relative to its scope dir. ~ and absolute paths pass
@@ -161,6 +167,11 @@
         with-env (cond-> base
                    env-provider (assoc :provider env-provider)
                    env-model (assoc :model env-model))]
+    ;; Runtime knobs from the merged config (precedent: auth/load-auth!
+    ;; above — load-config is the single choke point every entry mode
+    ;; passes through, so the transport setting applies in interactive
+    ;; and print mode alike).
+    (http/set-transport! (get-http-transport with-env))
     with-env))
 
 ;; ─── Config accessors ──────────────────────────────────────────────────────
@@ -197,6 +208,16 @@
    kmet.libs.edn-settings/save-edn-setting!."
   [path value]
   (eds/save-edn-setting! (global-settings-path) path value))
+
+(defn get-http-transport
+  "Outbound HTTP transport mode (see kmet.libs.http/set-transport!):
+   :platform (default) — babashka.http-client where possible, curl
+   fallback where it cannot serve (SOCKS/https-scheme proxies; live
+   streams on Jolt); :curl — every request through curl. Invalid values
+   fall back to :platform."
+  [config]
+  (let [v (get config :http-transport :platform)]
+    (if (contains? #{:platform :curl} v) v :platform)))
 
 (defn get-hide-thinking-block
   "Pi: getHideThinkingBlock — whether thinking blocks are hidden by default."

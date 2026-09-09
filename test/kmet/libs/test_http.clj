@@ -1,7 +1,10 @@
 (ns kmet.libs.test-http
   "Unit + integration tests for kmet.libs.http — the single outbound HTTP
-   boundary (proxy parsing, transport selection, native/curl parity,
-   structured errors, cancellation)."
+   boundary (proxy parsing, transport selection, structured errors,
+   cancellation). Every request contract runs under BOTH transport modes
+   (see the transport-mode coverage section): :platform —
+   babashka.http-client where possible, curl fallback — and :curl — every
+   request through curl."
   (:require [clojure.string :as str]
             [clojure.test :as t]
             [kmet.libs.http :as http]))
@@ -123,9 +126,50 @@
   (t/is (http/no-proxy-match? ["*"] "anything.example" 80))
   (t/is (http/no-proxy-match? ["[::1]"] "::1" 80)))
 
-;; ─── Native transport (java.net.http) ─────────────────────────────────────
+;; ─── Transport-mode coverage (both transports for every use case) ────────
+;; The :http-transport user setting picks the transport (see
+;; kmet.libs.http/set-transport!): :platform (default) uses
+;; babashka.http-client wherever it can serve — curl only for the
+;; fallback cases: SOCKS/https-scheme proxies, and live :as :stream
+;; feeds on Jolt — while :curl routes every request through curl.
+;; The request-contract tests below run under BOTH modes; the curl-path
+;; regressions force :curl explicitly (platform mode would route them
+;; natively). A fixture restores :platform before every test so a
+;; failed test can never leak :curl into its neighbours.
 
-(t/deftest test-native-get
+(defn- with-transport
+  "Run F with the transport mode set; :platform is restored afterwards
+   (whatever F does)."
+  [mode f]
+  (http/set-transport! mode)
+  (try (f) (finally (http/set-transport! :platform))))
+
+(defmacro deftest-transports
+  "A deftest whose BODY runs once per transport mode (see with-transport),
+   each under its own (testing \"transport <mode>\") block so a failure
+   names the mode."
+  [name & body]
+  `(t/deftest ~name
+     (doseq [mode# [:platform :curl]]
+       (with-transport mode# (fn [] (t/testing (str "transport " (name mode#)) ~@body))))))
+
+(defmacro deftest-curl
+  "A deftest whose BODY runs with the curl transport forced — for
+   regressions of the curl path itself that platform mode would route
+   through babashka.http-client (process lifecycle, argv hygiene, gzip)."
+  [name & body]
+  `(t/deftest ~name
+     (with-transport :curl (fn [] ~@body))))
+
+(t/use-fixtures :each (fn [f] (http/set-transport! :platform) (f)))
+
+;; ─── Request contract (every use case × every transport mode) ─────────────
+;; The dual-mode tests below run under :platform (babashka.http-client;
+;; curl fallback for SOCKS/https-scheme proxies and Jolt streams) and
+;; :curl (everything through curl) — see the transport-mode coverage
+;; section above for the macros.
+
+(deftest-transports test-get
   (let [[base close] (start-server
                       (fn [s _ _ _] (respond s "200 OK" "hello" {"X-Custom" "abc"})))]
     (try
@@ -135,7 +179,7 @@
         (t/is (= "abc" (get (:headers r) "x-custom"))))
       (finally (close)))))
 
-(t/deftest test-native-headers-lowercased
+(deftest-transports test-headers-lowercased
   (let [[base close] (start-server
                       (fn [s _ _ _] (respond s "200 OK" "ok" {"X-Custom" "abc"})))]
     (try
@@ -143,7 +187,7 @@
                (:headers (http/get (str base "/") {}))))
       (finally (close)))))
 
-(t/deftest test-native-method-and-body
+(deftest-transports test-method-and-body
   (let [[base close] (start-server
                       (fn [s req-line headers _]
                         (respond s "200 OK"
@@ -157,7 +201,7 @@
         (t/is (str/ends-with? (:body r) "|application/json")))
       (finally (close)))))
 
-(t/deftest test-native-json-body-encoding
+(deftest-transports test-json-body-encoding
   (let [[base close] (start-server
                       (fn [s _ headers rdr]
                         (let [len (Long/parseLong (get headers "content-length" "0"))
@@ -169,7 +213,7 @@
         (t/is (= "{\"a\":1}" (:body r))))
       (finally (close)))))
 
-(t/deftest test-native-request-json
+(deftest-transports test-request-json
   ;; request-json defaults to :method :post with no :body. curl-argv feeds
   ;; non-GET bodies via --data-binary @- only when :body is present — a
   ;; bodyless POST gets plain -X POST, so curl never waits on stdin (a nil
@@ -181,7 +225,7 @@
       (t/is (= {:a 1} (:body (http/request-json (str base "/x")))))
       (finally (close)))))
 
-(t/deftest test-native-throw-true
+(deftest-transports test-throw-true
   (let [[base close] (start-server
                       (fn [s _ _ _] (respond s "400 Bad Request" "oops" {"X-Custom" "abc"})))]
     (try
@@ -192,7 +236,7 @@
         (t/is (= "abc" (get (:headers (ex-data e)) "x-custom"))))
       (finally (close)))))
 
-(t/deftest test-native-throw-false
+(deftest-transports test-throw-false
   (let [[base close] (start-server
                       (fn [s _ _ _] (respond s "400 Bad Request" "oops" {})))]
     (try
@@ -201,7 +245,7 @@
         (t/is (= "oops" (:body r))))
       (finally (close)))))
 
-(t/deftest test-native-bytes
+(deftest-transports test-bytes
   (let [[base close] (start-server
                       (fn [s _ _ _] (respond s "200 OK" "ABCDEFGHIJKLMNOP" {})))]
     (try
@@ -211,7 +255,7 @@
         (t/is (java.util.Arrays/equals expected (:body r))))
       (finally (close)))))
 
-(t/deftest test-native-stream
+(deftest-transports test-stream
   (let [[base close] (start-server
                       (fn [s _ _ _] (respond s "200 OK" "streamed" {})))]
     (try
@@ -221,7 +265,7 @@
         (http/close! r))
       (finally (close)))))
 
-(t/deftest test-native-transport-error
+(deftest-transports test-transport-error
   ;; a port that is (almost certainly) closed: bind an ephemeral port and
    ;; close it again. Must stay above 1024 (unprivileged) — connecting to
    ;; a low port does not reliably fail across platforms.
@@ -232,7 +276,7 @@
     (t/is (= :transport-error (:type (ex-data e))))
     (t/is (str/includes? (ex-message e) "network error"))))
 
-(t/deftest test-native-timeout-ms
+(deftest-transports test-timeout-ms
   (let [[base close] (start-server
                       (fn [s _ _ _]
                         (Thread/sleep 5000)
@@ -243,7 +287,7 @@
         (t/is (str/includes? (ex-message e) "network error")))
       (finally (close)))))
 
-(t/deftest test-native-follow-redirects
+(deftest-transports test-follow-redirects
   ;; one server: /start → 302 Location: /final; /final → 200 with the
   ;; request line echoed. A followed redirect issues both requests.
   (let [[base close] (start-server
@@ -263,7 +307,7 @@
         (t/is (str/includes? (:body r) "/final")))
       (finally (close)))))
 
-;; ─── Curl transport (SOCKS/https proxies) — needs curl on PATH ─────────────
+;; ─── SOCKS/https-scheme proxies (the curl fallback) ───────────────────────
 
 ;; ─── Local SOCKS5 proxy (minimal RFC 1928 server) ─────────────────────────
 ;; A real SOCKS5 proxy so the curl transport (SOCKS/https-scheme proxies
@@ -400,34 +444,30 @@
         (f))
       (finally (stop)))))
 
-(t/deftest test-curl-missing
+;; ─── Curl-path regressions (force the curl transport) ─────────────────────
+;; The request contract above covers every use case under :curl too; the
+;; tests here regress curl-path mechanics that :platform mode would route
+;; natively (missing-curl error, process lifecycle, gzip), plus the
+;; proxy-subject ones (explicit socks map, argv hygiene) that exercise
+;; the :platform SOCKS fallback end-to-end.
+
+(deftest-curl test-curl-missing
+  ;; the :curl transport needs curl on PATH — a missing curl surfaces as
+  ;; the structured :curl-not-found error, not a raw process crash
   (with-redefs [http/curl-available? (delay false)]
-    (let [e (try (http/get "http://x" {:proxy {:scheme "socks5h" :host "h" :port 1
-                                               :url "socks5h://h:1"}})
-                 (catch Exception e e))]
+    (let [e (try (http/get "http://x" {}) (catch Exception e e))]
       (t/is (= :curl-not-found (:type (ex-data e)))))))
 
-(t/deftest test-curl-stream
-  (let [[base close] (start-server
-                      (fn [s _ _ _] (respond s "200 OK" "streamed" {})))]
-    (try
-      (with-socks-proxy
-        (fn []
-          (let [r (http/get (str base "/") {:as :stream})]
-            (t/is (= 200 (:status r)))
-            (t/is (= "streamed" (slurp (:body r))))
-            (http/close! r))))
-      (finally (close)))))
-
-(t/deftest test-curl-bodiless-post
+(deftest-transports test-curl-bodiless-post
   ;; request-json defaults to :method :post with no :body. The curl
   ;; transport must not emit --data-binary @- for a bodyless non-GET —
   ;; curl reads stdin to EOF for @-, and a nil :in never EOFs on the
   ;; jolt host, so the request (and with it the whole test-http
   ;; namespace under the runner's 15 s ns timeout) would hang forever.
-  ;; A plain -X POST must round-trip instead. Regression test: runs the
-  ;; curl transport on bb (via the socks proxy) and on jolt (all traffic
-  ;; is curl).
+  ;; A plain -X POST must round-trip instead. Runs through the local
+  ;; SOCKS proxy — in :platform mode that IS the curl fallback; in
+  ;; :curl mode the curl transport behind a proxy. (The direct,
+  ;; unproxied variant is test-request-json below.)
   (let [[base close] (start-server
                       (fn [s _ _ _] (respond s "200 OK" "{\"a\":1}" {})))]
     (try
@@ -436,19 +476,10 @@
           (t/is (= {:a 1} (:body (http/request-json (str base "/x")))))))
       (finally (close)))))
 
-(t/deftest test-curl-throw-false
-  (let [[base close] (start-server
-                      (fn [s _ _ _] (respond s "400 Bad Request" "oops" {})))]
-    (try
-      (with-socks-proxy
-        (fn []
-          (let [r (http/get (str base "/") {:throw? false})]
-            (t/is (= 400 (:status r)))
-            (t/is (= "oops" (:body r))))))
-      (finally (close)))))
-
 (t/deftest test-curl-direct-proxy-map
   ;; an explicit parsed-proxy map routes through curl directly (no env)
+  ;; — in :platform mode this is the SOCKS fallback, and it doubles as
+  ;; the socks-proxy e2e for the remaining curl-path tests.
   (let [[base close] (start-server
                       (fn [s _ _ _] (respond s "200 OK" "via-proxy" {})))
         [port stop] (start-socks-proxy)]
@@ -460,39 +491,7 @@
         (t/is (= "via-proxy" (:body r))))
       (finally (stop) (close)))))
 
-(t/deftest test-curl-bytes
-  (let [[base close] (start-server
-                      (fn [s _ _ _] (respond s "200 OK" "ABCDEFGHIJKLMNOP" {})))]
-    (try
-      (with-socks-proxy
-        (fn []
-          (let [r (http/get (str base "/") {:as :bytes})
-                expected (.getBytes "ABCDEFGHIJKLMNOP" "UTF-8")]
-            (t/is (= 200 (:status r)))
-            (t/is (java.util.Arrays/equals expected (:body r))))))
-      (finally (close)))))
-
-(t/deftest test-curl-follow-redirects
-  (let [[base close] (start-server
-                      (fn [s req-line _ _]
-                        (if (str/includes? req-line "/start")
-                          (let [b (.getBytes "moved")
-                                head (str "HTTP/1.1 302 Found\r\n"
-                                          "Location: /final\r\n"
-                                          "Content-Length: " (count b) "\r\n\r\n")]
-                            (sock-write s (.getBytes head))
-                            (sock-write s b)
-                            (.flush (.getOutputStream s)))
-                          (respond s "200 OK" req-line {}))))]
-    (try
-      (with-socks-proxy
-        (fn []
-          (let [r (http/get (str base "/start") {:follow-redirects :normal})]
-            (t/is (= 200 (:status r)))
-            (t/is (str/includes? (:body r) "/final")))))
-      (finally (close)))))
-
-(t/deftest test-native-follow-redirects-default
+(deftest-transports test-follow-redirects-default
   ;; Absent :follow-redirects follows (the documented default).
   (let [[base close] (start-server
                       (fn [s req-line _ _]
@@ -511,8 +510,8 @@
         (t/is (str/includes? (:body r) "/final")))
       (finally (close)))))
 
-(t/deftest test-native-no-follow
-  ;; Explicit disable is honored on the native path (per-mode clients).
+(deftest-transports test-no-follow
+  ;; Explicit disable is honored on both transports (no -L / :never).
   (let [[base close] (start-server
                       (fn [s req-line _ _]
                         (if (str/includes? req-line "/start")
@@ -530,28 +529,8 @@
           (t/is (= 302 (:status r)) (str "expected no follow for " (pr-str fr)))))
       (finally (close)))))
 
-(t/deftest test-curl-follow-redirects-default
-  ;; Absent :follow-redirects must follow, per the documented default
-  ;; (regression: curl-argv only sent -L when the key was present, so proxied
-  ;; downloads of redirecting URLs failed with the 302 status).
-  (let [[base close] (start-server
-                      (fn [s req-line _ _]
-                        (if (str/includes? req-line "/start")
-                          (let [b (.getBytes "moved")
-                                head (str "HTTP/1.1 302 Found\r\n"
-                                          "Location: /final\r\n"
-                                          "Content-Length: " (count b) "\r\n\r\n")]
-                            (sock-write s (.getBytes head))
-                            (sock-write s b)
-                            (.flush (.getOutputStream s)))
-                          (respond s "200 OK" req-line {}))))]
-    (try
-      (with-socks-proxy
-        (fn []
-          (let [r (http/get (str base "/start") {})]
-            (t/is (= 200 (:status r)))
-            (t/is (str/includes? (:body r) "/final")))))
-      (finally (close)))))
+;; covered by the dual-mode test-follow-redirects-default (curl mode
+;; regresses the absent-key -L behavior directly)
 
 (t/deftest ^:slow test-curl-redirect-slow-second-hop
   ;; Hop 1's 302 sits alone in the dump-header file while a slow hop 2 is
@@ -578,41 +557,14 @@
             (t/is (str/includes? (:body r) "final-body")))))
       (finally (close)))))
 
-(t/deftest test-curl-no-follow
-  ;; Explicit disable is honored on the curl path (no -L).
-  (let [[base close] (start-server
-                      (fn [s req-line _ _]
-                        (if (str/includes? req-line "/start")
-                          (let [b (.getBytes "moved")
-                                head (str "HTTP/1.1 302 Found\r\n"
-                                          "Location: /final\r\n"
-                                          "Content-Length: " (count b) "\r\n\r\n")]
-                            (sock-write s (.getBytes head))
-                            (sock-write s b)
-                            (.flush (.getOutputStream s)))
-                          (respond s "200 OK" req-line {}))))]
-    (try
-      (with-socks-proxy
-        (fn []
-          (doseq [fr [:never false]]
-            (let [r (http/get (str base "/start") {:throw? false :follow-redirects fr})]
-              (t/is (= 302 (:status r)) (str "expected no follow for " (pr-str fr)))))))
-      (finally (close)))))
+;; covered by the dual-mode test-no-follow (curl mode regresses no -L)
 
-(t/deftest test-curl-timeout-ms
-  (let [[base close] (start-server
-                      (fn [s _ _ _]
-                        (Thread/sleep 5000)
-                        (respond s "200 OK" "late" {})))]
-    (try
-      (with-socks-proxy
-        (fn []
-          (let [e (try (http/get (str base "/") {:timeout 300}) (catch Exception e e))]
-            (t/is (= :transport-error (:type (ex-data e)))))))
-      (finally (close)))))
+;; covered by the dual-mode test-timeout-ms (curl mode enforces the total
+;; deadline via --max-time)
 
-(t/deftest ^:bb-only test-curl-compression
+(deftest-curl ^:bb-only test-curl-compression
   ;; --compressed: a gzip Content-Encoding response arrives decompressed
+  ;; (bb-only: java.util.zip is unavailable on Jolt)
   (let [[base close] (start-server
                       (fn [s _ _ _]
                         (let [body "hello gzip world"
@@ -627,13 +579,11 @@
                             (sock-write s b)
                             (.flush (.getOutputStream s))))))]
     (try
-      (with-socks-proxy
-        (fn []
-          (let [r (http/get (str base "/") {})]
-            (t/is (= "hello gzip world" (:body r))))))
+      (let [r (http/get (str base "/") {})]
+        (t/is (= "hello gzip world" (:body r))))
       (finally (close)))))
 
-(t/deftest test-curl-abort
+(deftest-curl test-curl-abort
   ;; abort! must kill the curl process tree (the sse read loop's cancel
   ;; path); close! then reaps/untracks. With the cancel signal fired,
   ;; close! skips the mid-stream transport-error report. The server sends
@@ -641,7 +591,8 @@
   ;; completing the declared Content-Length): the GET returns on the
   ;; headers, so abort!/close! genuinely run mid-stream. (Sleeping before
   ;; the headers would make the GET itself wait out the sleep — slow and
-  ;; testing nothing.)
+  ;; testing nothing.) Runs with the curl transport forced — platform
+  ;; mode would stream natively on bb.
   (let [[base close] (start-server
                       (fn [s _ _ _]
                         (let [b (.getBytes "partial")
@@ -652,18 +603,16 @@
                           (.flush (.getOutputStream s))
                           (Thread/sleep 60000))))]
     (try
-      (with-socks-proxy
-        (fn []
-          (let [signal (atom false)
-                r (http/get (str base "/") {:as :stream :signal signal})]
-            (t/is (= 200 (:status r)))
-            (reset! signal true)
-            (http/abort! r)
-            (http/close! r) ;; must not throw (signal fired)
-            (t/is (nil? (http/close! r)) "close! returns nil"))))
+      (let [signal (atom false)
+            r (http/get (str base "/") {:as :stream :signal signal})]
+        (t/is (= 200 (:status r)))
+        (reset! signal true)
+        (http/abort! r)
+        (http/close! r) ;; must not throw (signal fired)
+        (t/is (nil? (http/close! r)) "close! returns nil"))
       (finally (close)))))
 
-(t/deftest test-curl-close-early
+(deftest-curl test-curl-close-early
   ;; a stream whose body is truncated mid-transfer must surface as a
   ;; transport failure from close! (not a false clean EOF): the server
   ;; sends Content-Length: 100 but only 10 bytes, then keeps the socket
@@ -680,13 +629,11 @@
                           (.flush (.getOutputStream s))
                           (Thread/sleep 60000))))]
     (try
-      (with-socks-proxy
-        (fn []
-          (let [r (http/get (str base "/") {:as :stream})]
-            (t/is (= 200 (:status r)))
-            (t/is (thrown-with-msg? Exception #"Proxy request failed"
-                                    (http/close! r))
-                  "truncated body reported as transport failure"))))
+      (let [r (http/get (str base "/") {:as :stream})]
+        (t/is (= 200 (:status r)))
+        (t/is (thrown-with-msg? Exception #"Proxy request failed"
+                                (http/close! r))
+              "truncated body reported as transport failure"))
       (finally (close)))))
 
 (t/deftest test-curl-no-credentials-in-argv

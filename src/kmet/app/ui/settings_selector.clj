@@ -16,6 +16,7 @@
             [kmet.app.ui.dock :as dock]
             [kmet.app.ui.model-selector :as model-selector]
             [kmet.config :as cfg]
+            [kmet.libs.http :as http]
             [kmet.tui.hiccup :as h]
             [kmet.tui.core :as tui]
             [kmet.tui.protocols :as protocols]
@@ -122,6 +123,12 @@
                      :label "HTTP total timeout"
                      :value (format-total-timeout total-ms)
                      :values (mapv :label http-total-timeout-choices)}
+                    {:id :http-transport
+                     :label "HTTP transport"
+                     ;; the runtime knob is the truth (applied at config
+                     ;; load and on change) — not the settings file
+                     :value (name (http/get-transport))
+                     :values (mapv name http/transport-modes)}
                     (bool-row :cache-miss-notices "Cache miss notices"
                               (cfg/get-show-cache-miss-notices config))
                     {:id :tree-filter-mode
@@ -215,6 +222,10 @@
                                                http-total-timeout-choices))]
                              (agent/set-http-total-timeout-ms! ag ms)
                              (cfg/save-setting! [:http-total-timeout-ms] ms))
+                           :http-transport
+                           (let [mode (keyword value)]
+                             (http/set-transport! mode)
+                             (cfg/save-setting! [:http-transport] mode))
                            ;; read live at emit time — no runtime state needed
                            :cache-miss-notices
                            (cfg/save-setting! [:show-cache-miss-notices] (= value "true"))

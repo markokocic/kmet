@@ -25,6 +25,11 @@
      {:type :http-error      :status :headers :body}    ;; HTTP >= 400
      {:type :transport-error :cause ...}                ;; connect/DNS/timeout/...
 
+   The transport itself is a process-wide user knob (set-transport!):
+   :platform (default) — babashka.http-client wherever it can serve, curl
+   only for the fallback cases (SOCKS/https-scheme proxies, and live
+   :as :stream feeds on Jolt); :curl — every request through curl.
+
    `transport-error-message` classifies raw JVM exceptions (the retry
    classifier's stable \"network error\" token), so callers never depend on
    transport-specific exception types.
@@ -358,7 +363,9 @@
 (def ^:private curl-timeout-seconds 120)
 
 (def curl-available?
-  "Resolved once: true when curl is on PATH (the SOCKS transport needs it)."
+  "Resolved once: true when curl is on PATH (the curl transport needs it
+   — every request in :curl mode, SOCKS/https-scheme proxies and Jolt
+   streams in :platform mode)."
   (delay
     (try
       (let [r @(proc/process ["sh" "-c" "command -v curl"]
@@ -601,7 +608,7 @@
    the tree on cancel)."
   [url opts p throw?]
   (when-not @curl-available?
-    (throw (ex-info "curl not found on PATH — required for SOCKS proxies (install curl or use an HTTP proxy)"
+    (throw (ex-info "curl not found on PATH — required for the curl transport and SOCKS/https-scheme proxies (install curl, or switch back to the platform HTTP transport)"
                     {:type :curl-not-found})))
   (let [header-file (curl-header-file)
         config-file (curl-config-file (:headers opts) p)
@@ -651,6 +658,32 @@
         (cleanup-curl! pid header-file config-file)
         (throw e)))))
 
+;; ─── Transport selection (user setting) ──────────────────────────────────
+
+(def ^:private transport-atom (atom :platform))
+
+(def transport-modes
+  "The selectable HTTP transport modes (see set-transport!): :platform and
+   :curl."
+  [:platform :curl])
+
+(defn get-transport
+  "The active transport mode (see set-transport!)."
+  []
+  @transport-atom)
+
+(defn set-transport!
+  "Choose the transport for all subsequent requests (the /settings HTTP
+   transport row and the config's :http-transport key call this):
+   :platform (default) — babashka.http-client wherever it can serve, curl
+   fallback where it cannot (SOCKS/https-scheme proxies; live :as :stream
+   feeds on Jolt — the java.net.http shim buffers a body fully before
+   returning, so an endless SSE feed never returns there); :curl — every
+   request through the curl transport (requires curl on PATH). Anything
+   else falls back to :platform."
+  [t]
+  (reset! transport-atom (if (some #{t} transport-modes) t :platform)))
+
 ;; ─── Public API ───────────────────────────────────────────────────────────
 
 (defn- resolve-proxy
@@ -681,7 +714,9 @@
                           tree mid-stream)
      :proxy            — :env (default) | :none | explicit proxy map
 
-   Returns {:status n :headers {...} :body ...}. Transport failures throw
+   The transport is selected process-wide (set-transport!): :platform
+   (default) or :curl (everything through curl). Returns {:status n
+   :headers {...} :body ...}. Transport failures throw
    {:type :transport-error} (wrapping the cause). Stream responses (:as
    :stream) must be finished with http/close! (after reading, or to
    abandon) or http/abort! (cancel)."
@@ -693,7 +728,11 @@
         opts (-> opts
                  (assoc :throw? nil) ;; strip, normalized below
                  (normalize-follow-redirects))
-        p (resolve-proxy (:url opts) (:proxy opts))]
+        p (resolve-proxy (:url opts) (:proxy opts))
+        ;; :curl mode routes every request through curl-request (the
+        ;; user's explicit choice); platform mode uses the native
+        ;; babashka.http-client transport unless the proxy needs curl.
+        curl? (or (= :curl @transport-atom) (and p (curl-proxy? p)))]
         ;; Jolt: babashka.http-client runs unmodified over the
         ;; jolt-lang/http-client java.net.http shims (RFC 0014) — the
         ;; native transport works for direct and http-proxy traffic.
@@ -701,10 +740,10 @@
         ;; (curl-proxy?) and live streams — the shim reads a response
         ;; body in full before returning, so an endless SSE feed
         ;; (:as :stream) never returns there (jolt-port.md B1).
-    #?(:jolt (if (or (and p (curl-proxy? p)) (= :stream (:as opts)))
+    #?(:jolt (if (or curl? (= :stream (:as opts)))
                (curl-request (:url opts) opts p throw?)
                (native-request opts throw? p))
-       :clj (if (and p (curl-proxy? p))
+       :clj (if curl?
               (curl-request (:url opts) opts p throw?)
               (native-request opts throw? p))
        :default (curl-request (:url opts) opts p throw?))))

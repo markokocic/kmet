@@ -5,6 +5,11 @@
  ;; :jolt branches are invisible to it by design — the :clj pass covers the
  ;; code babashka actually runs, which is what bb lint validates.
  :cljc {:features [:clj]}
+ ;; test_http's deftest-transports/deftest-curl wrap clojure.test/deftest to
+ ;; run each scenario under every HTTP transport mode — analyze them as
+ ;; plain deftests so the defined test vars resolve.
+ :lint-as {kmet.libs.test-http/deftest-transports clojure.test/deftest
+           kmet.libs.test-http/deftest-curl clojure.test/deftest}
  ;; extensions/*.clj declare kmet.extensions.* namespaces that can never match
  ;; their extensions/... paths (clj-kondo derives the expected ns from the file
  ;; path), so the namespace-name-mismatch linter is off repo-wide; all other

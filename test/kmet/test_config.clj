@@ -5,6 +5,7 @@
             [clojure.java.io :as io]
             [babashka.fs :as fs]
             [kmet.config :as cfg]
+            [kmet.libs.http :as http]
             [kmet.ai.auth :as auth]))
 
 ;; ─── Defaults ──────────────────────────────────────────────────────────────
@@ -274,6 +275,35 @@
   (t/is (= :all (cfg/get-tree-filter-mode {:tree-filter-mode :all})))
   (t/is (= :default (cfg/get-tree-filter-mode {:tree-filter-mode :bogus}))
         "invalid values fall back to :default"))
+
+;; ─── HTTP transport (pi: no counterpart — kmet's transport knob) ──────────
+
+(t/deftest test-get-http-transport
+  (t/is (= :platform (cfg/get-http-transport {}))
+        "defaults to :platform")
+  (t/is (= :platform (cfg/get-http-transport cfg/default-config)))
+  (t/is (= :curl (cfg/get-http-transport {:http-transport :curl})))
+  (t/is (= :platform (cfg/get-http-transport {:http-transport :platform})))
+  (t/is (= :platform (cfg/get-http-transport {:http-transport :bogus}))
+        "invalid values fall back to :platform")
+  (t/is (= :platform (cfg/get-http-transport {:http-transport nil}))
+        "nil falls back to :platform"))
+
+(t/deftest test-load-config-applies-http-transport
+  ;; load-config is the startup choke point — it applies the merged
+  ;; :http-transport to the runtime knob (kmet.libs.http/set-transport!)
+  (try
+    (http/set-transport! :curl)
+    (cfg/load-config :no-env? true :no-settings? true)
+    (t/is (= :platform (http/get-transport))
+          "default config reapplies :platform")
+    (http/set-transport! :platform)
+    (with-redefs-fn {#'cfg/load-edn-file (fn [_] {:http-transport :curl})}
+      (fn []
+        (cfg/load-config :no-env? true)
+        (t/is (= :curl (http/get-transport))
+              "user :http-transport :curl is applied")))
+    (finally (http/set-transport! :platform))))
 
 (t/deftest test-get-retry-settings
   (t/testing "defaults when :retry is absent"

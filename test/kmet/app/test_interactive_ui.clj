@@ -25,6 +25,7 @@
             [kmet.ai.models :as m]
             [kmet.ai.auth :as auth]
             [kmet.app.loop :as agent]
+            [kmet.libs.http :as http]
             [kmet.app.session :as session]
             [kmet.app.ui.footer-data-provider :as fdp]
             [babashka.fs :as fs]
@@ -603,9 +604,9 @@
         (let [sl @sl-ref]
           (t/is (some? sl) "settings list shown")
           ;; row order: auto-compact steering follow-up http-idle
-          ;; http-total cache-miss tree-filter thinking ... — navigate to
-          ;; the thinking row
-          (dotimes [_ 7]
+          ;; http-total http-transport cache-miss tree-filter thinking … —
+          ;; navigate to the thinking row
+          (dotimes [_ 8]
             (protocols/handle-input sl "\u001b[B"))
           ;; Enter (pi: activateItem) cycles the selected row
           (protocols/handle-input sl "\r")
@@ -639,11 +640,11 @@
         (t/is (= 3 (:max-retries @(:cfg ag))) "default retry wired at startup")
         ((:handler (commands/find-command "settings")) cs "")
         (let [sl @sl-ref]
-          ;; rows 0..14: auto-compact steering follow-up http-idle
-          ;; http-total cache-miss tree-filter thinking hide-thinking
-          ;; editor-pad output-pad autocomplete auto-retry max-retries
-          ;; base-delay
-          (dotimes [_ 12]
+          ;; rows 0..15: auto-compact steering follow-up http-idle
+          ;; http-total http-transport cache-miss tree-filter thinking
+          ;; hide-thinking editor-pad output-pad autocomplete auto-retry
+          ;; max-retries base-delay
+          (dotimes [_ 13]
             (protocols/handle-input sl "\u001b[B")) ;; down → auto-retry
           (protocols/handle-input sl "\r") ;; enter — auto-retry true -> false
           (t/is (= 0 (:max-retries @(:cfg ag))) "disabled retry gates max-retries to 0")
@@ -658,6 +659,46 @@
           (protocols/handle-input sl "\r") ;; enter — 2000 -> 4000
           (t/is (= 4000 (:base-delay-ms @(:cfg ag))) "base delay applies live")
           (t/is (= [[:retry :base-delay-ms] 4000] @saved) "base delay persisted"))))))
+
+(deftest test-settings-http-transport-row
+  (testing "/settings HTTP transport row switches the runtime transport
+            (platform → curl → platform) and persists"
+    (install-app-keybindings!)
+    (commands/clear-commands!)
+    (m/load-catalogs!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [ag (agent/make-agent-state :provider :opencode-go :model "deepseek-v4-flash")
+          cs {:agent-state (atom ag)
+              :chat-history nil
+              :footer-comp nil
+              :footer-provider nil
+              :config cfg/default-config
+              :tui nil}
+          sl-ref (atom nil)
+          saved (atom nil)]
+      (with-redefs [auth/configured? (fn [_] true)
+                    ui/chat-history-get-thinking-hidden (fn [_] false)
+                    cfg/save-setting! (fn [path value] (reset! saved [path value]))
+                    dock/mount! (capture-mount! sl-ref)
+                    tui/tui-set-focus (fn [_ _])
+                    tui/tui-request-render (fn [_])]
+        (try
+          (http/set-transport! :platform)
+          ((:handler (commands/find-command "settings")) cs "")
+          (let [sl @sl-ref]
+            ;; rows 0..5: auto-compact steering follow-up http-idle
+            ;; http-total http-transport — navigate to the transport row
+            (dotimes [_ 5]
+              (protocols/handle-input sl "\u001b[B"))
+            (protocols/handle-input sl "\r") ;; platform -> curl
+            (t/is (= :curl (http/get-transport))
+                  "row switches the runtime transport")
+            (t/is (= [[:http-transport] :curl] @saved)
+                  "transport persisted to settings")
+            (protocols/handle-input sl "\r") ;; curl -> platform
+            (t/is (= :platform (http/get-transport))
+                  "cycling back to platform"))
+          (finally (http/set-transport! :platform)))))))
 
 ;; ─── /theme command ───────────────────────────────────────────────────────
 

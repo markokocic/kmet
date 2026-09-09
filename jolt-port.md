@@ -73,6 +73,10 @@ response returns, so an endless SSE feed (`api/*` hot path) never returns
 and `:as :stream` requests stay on `curl-request` — and SOCKS/https-scheme
 proxies (same `curl-proxy?` split the JVM side already has). `http.cljc`
 now dispatches `:jolt` exactly like `:clj` plus that stream carve-out.
+The transport is also a user setting (`settings.edn` `:http-transport`,
+`/settings` HTTP transport row): `:platform` (default, as above) or
+`:curl` — every request through curl on both hosts; `test-http` covers
+every request contract under both modes on both hosts (Jolt: 25/90).
 Verified: deps.edn carries `org.babashka/http-client` 0.4.24 +
 `io.github.jolt-lang/http-client` (git `4744256f83e5`); its transitive
 `jolt-lang/jolt-crypto` pin (`44da69` — same repo as the direct
@@ -193,7 +197,7 @@ that depended on M1. Jolt side (re-verified 2026-09-09, `jolt v0.8.5`): **json/j
 | `hash` | 🟢 | 🟢 | pure, works |
 | `highlight` | 🟢 | 🟢 | tests pass (139/139) |
 | `hooks` | 🟢 | 🟢 | pure, works |
-| `http` | 🟢 | 🟡 | **ported** — Jolt runs direct/http-proxy traffic through babashka.http-client over the jolt-lang/http-client shims (deps.edn: org.babashka/http-client 0.4.24 + io.github.jolt-lang/http-client), curl for SOCKS/https-scheme proxies and `:as :stream` (see B1). test-http 32/74 green on Jolt. Loads on bb |
+| `http` | 🟢 | 🟡 | **ported** — Jolt runs direct/http-proxy traffic through babashka.http-client over the jolt-lang/http-client shims (deps.edn: org.babashka/http-client 0.4.24 + io.github.jolt-lang/http-client), curl for SOCKS/https-scheme proxies and `:as :stream` (see B1); the `:http-transport` setting can force curl for everything. test-http 25/90 green on Jolt (every contract under both modes). Loads on bb |
 | `json` | 🟢 | 🟢 | Jolt 2026-09-09: 4 tests/18 assertions green — data.json resolves via deps.edn (M1 closed) |
 | `jsonrpc` | 🟢 | 🟢 | Jolt 2026-09-09: 17 tests/41 assertions green (M1 closed) |
 | `markdown` | 🟢 | 🟢 | tests pass (137/137) |
