@@ -4,6 +4,7 @@
   (:require [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.app.loop :as agent]
+            [kmet.app.session :as session]
             [kmet.ai.models :as models]
             [kmet.app.skills :as skills]
             [kmet.app.tools.core :as tools]
@@ -70,11 +71,18 @@
                              (mapcat identity system-prompt-opts))
         resolved-provider (or provider (cfg/get-provider config))
         resolved-model (or model (models/resolve-config-model config))
+        ;; A session record (pi print-mode's AgentSessionRuntime always has
+        ;; one — sessionManager.getSessionId drives the opencode
+        ;; x-opencode-session attribution headers and the openai-responses
+        ;; prompt_cache_key; the zen free tier rejects requests without a
+        ;; session id: "OpenCode's free tier can only be used in OpenCode")
+        session (session/create-session (cfg/get-session-dir config))
         ag (agent/make-agent-state
             :model resolved-model
             :provider resolved-provider
             :system system-prompt
             :system-prompt-opts system-prompt-opts
+            :session session
             :before-tool-call extension-before-tool-call
             :after-tool-call extension-after-tool-call
             ;; pi: retry settings (settings.edn :retry block — enabled gates
