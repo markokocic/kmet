@@ -402,13 +402,15 @@
   "A temp curl --config file carrying the sensitive request parts — headers
    (Authorization, proxy credentials) must never appear in process argv
    (visible via ps on shared hosts). The file is owner-only (Java's
-   createTempFile default) and deleted by close!/the sync path."
+   createTempFile default) and deleted by close!/the sync path. The proxy
+   itself rides --proxy on argv (see curl-argv); only proxy-user lives here."
   [headers p]
   (let [f (java.io.File/createTempFile "kmet-curl-" ".conf" (temp-dir))
         escape (fn [s] (str/replace s #"([\\\"])" "\\\\$1"))
         lines (concat
                (map (fn [[k v]] (str "header = \"" (escape (str k ": " v)) "\"")) headers)
-               (when p [(str "proxy = \"" (escape (:url p)) "\"")]))]
+               (when (:user p)
+                 [(str "proxy-user = \"" (escape (str (:user p) (when (:pass p) (str ":" (:pass p))))) "\"")]))]
     (.deleteOnExit f)
     (spit f (str/join "\n" lines))
     f))
@@ -432,6 +434,17 @@
                          (nil? fr) :normal
                          :else fr))))
 
+(defn- proxy-clean-url
+  "The proxy URL without credentials (scheme://host:port, IPv6 bracketed)
+   for curl's --proxy argv switch: set explicitly on the command line so
+   the user environment's proxy variables can never leak in. Credentials
+   travel via proxy-user in the config file, never argv (see
+   curl-config-file and test-curl-no-credentials-in-argv)."
+  [p]
+  (let [bare (str/replace (or (:host p) "") #"^\[|\]$" "")
+        host-str (if (str/includes? bare ":") (str "[" bare "]") bare)]
+    (str (:scheme p) "://" host-str ":" (:port p))))
+
 (defn- curl-argv
   "Full curl argv. Prefixed with setsid when available so the process is its
    own group leader — kill-process-tree!'s group kill then works reliably.
@@ -439,10 +452,11 @@
    nil timeout (disabled) omits it; absent gets the curl-timeout-seconds
    default. -L unless :never (default :normal); --compressed for
    transparent gzip (babashka parity); --fail-with-body so HTTP >= 400 exits
-   22 with the error body on stdout. P is the resolved proxy (nil = direct):
-   direct requests pass --noproxy \"*\" so env proxies never leak in, while
-   proxied requests pass --noproxy \"\" so the config-file proxy applies.
-   Sensitive bits live in the config file, never argv."
+   22 with the error body on stdout. Proxy control is explicit on argv so
+   the user environment can never leak in: --proxy \"\" for direct
+   requests, --proxy <clean-url> for proxied ones; --noproxy \"\" always
+   (curl must not consult its own env no_proxy either). Proxy credentials
+   travel via proxy-user in the config file, never argv."
   [url opts p config-file header-file]
   (let [timeout-ms (:timeout opts)
         max-time (cond
@@ -451,7 +465,8 @@
                    :else curl-timeout-seconds)
         get? (= :get (:method opts))
         args (into (cond-> ["curl" "-sS" "-N" "--fail-with-body"
-                            "--noproxy" (if p "" "*")
+                            "--proxy" (if p (proxy-clean-url p) "")
+                            "--noproxy" ""
                             "-K" (.getPath config-file)
                             "--dump-header" (.getPath header-file)]
                      max-time (conj "--max-time" (str max-time))

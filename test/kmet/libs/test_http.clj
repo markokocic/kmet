@@ -16,6 +16,10 @@
   [s b]
   (.write (.getOutputStream s) b 0 (alength b)))
 
+(defn- out-write
+  [out b]
+  (.write out b 0 (alength b)))
+
 (defn- respond
   "Write an HTTP/1.1 response to socket S."
   [s status body hdrs]
@@ -213,7 +217,13 @@
       (finally (close)))))
 
 (t/deftest test-native-transport-error
-  (let [e (try (http/get "http://127.0.0.1:1" {}) (catch Exception e e))]
+  ;; a port that is (almost certainly) closed: bind an ephemeral port and
+   ;; close it again. Must stay above 1024 (unprivileged) — connecting to
+   ;; a low port does not reliably fail across platforms.
+  (let [ss (java.net.ServerSocket. 0)
+        port (.getLocalPort ss)
+        _ (.close ss)
+        e (try (http/get (str "http://127.0.0.1:" port) {}) (catch Exception e e))]
     (t/is (= :transport-error (:type (ex-data e))))
     (t/is (str/includes? (ex-message e) "network error"))))
 
@@ -316,7 +326,7 @@
           (when-not (or (neg? v) (not= 5 v))
             (let [nmethods (.read in)]
               (dotimes [_ nmethods] (.read in))
-              (.write out (byte-array [5 0]))
+              (out-write out (byte-array [5 0]))
               (.flush out)
               (let [v (.read in)
                     _ (when (and (not (neg? v)) (not= 5 v))
@@ -332,7 +342,7 @@
                       t-in (.getInputStream target)
                       t-out (.getOutputStream target)
                       c-in (.getInputStream client)]
-                  (.write out (byte-array [5 0 0 1 127 0 0 1 0 0]))
+                  (out-write out (byte-array [5 0 0 1 127 0 0 1 0 0]))
                   (.flush out)
                   (let [p1 (doto (Thread. #(pump c-in t-out)) (.setDaemon true))
                         p2 (doto (Thread. #(pump t-in out)) (.setDaemon true))]
@@ -579,7 +589,7 @@
             (t/is (= :transport-error (:type (ex-data e)))))))
       (finally (close)))))
 
-(t/deftest test-curl-compression
+(t/deftest ^:bb-only test-curl-compression
   ;; --compressed: a gzip Content-Encoding response arrives decompressed
   (let [[base close] (start-server
                       (fn [s _ _ _]
