@@ -209,9 +209,18 @@
 (def ^:private zwj-cp 0x200D)
 
 (defn- codepoint-len
-  "Number of chars the code point at index i occupies (2 when astral)."
+  "Number of string elements the code point at index I of S spans: 2 only
+   when I is a high surrogate paired with a low surrogate (bb/JVM UTF-16
+   strings); 1 on jolt, where every element is a full code point. Derived
+   from the string itself, so the width walkers are index-model-agnostic."
   [s i]
-  (if (>= (code-point-at s i) 0x10000) 2 1))
+  (let [c (int (nth s i))]
+    (if (and (<= 0xD800 c 0xDBFF)
+             (< (inc i) (count s))
+             (let [l (int (nth s (inc i)))]
+               (<= 0xDC00 l 0xDFFF)))
+      2
+      1)))
 
 (defn- skip-vs16
   "Index past any U+FE0F (emoji variation selector) starting at I of S."
@@ -324,7 +333,7 @@
                                    (<= (+ @total (char-width (code-point-at s i))) target))
                           (let [cp (code-point-at s i)
                                 w (char-width cp)
-                                nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
+                                nchars (codepoint-len s i)]
                             (swap! sb str (subs s i (+ i nchars)))
                             (swap! total + w)
                             (recur (+ i nchars)))))]
@@ -339,7 +348,7 @@
                       (recur end total (str pending code))
                       (let [cp (code-point-at s i)
                             w (char-width cp)
-                            nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
+                            nchars (codepoint-len s i)]
                         (if (<= (+ total w) target)
                           (do (.append sb pending)
                               (.append sb (subs s i (+ i nchars)))
@@ -528,7 +537,7 @@
                              (recur (+ j (count m)) total)
                              (let [cp (code-point-at word j)
                                    w (char-width cp)
-                                   nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)]
+                                   nchars (codepoint-len word j)]
                                ;; Stop only once the piece has visible content —
                                ;; never emit an empty piece (e.g. a styled word
                                ;; starting with a 2-wide char at max-width 1).
@@ -651,7 +660,7 @@
         (apply str result)
         (let [cp (code-point-at s i)
               w (char-width cp)
-              nchars (if (and (>= cp 0x10000) (<= cp 0x10FFFF)) 2 1)
+              nchars (codepoint-len s i)
               char-str (subs s i (+ i nchars))]
           (if (>= col (+ start-col length))
             (apply str result)
