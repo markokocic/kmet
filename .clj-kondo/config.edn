@@ -1,4 +1,4 @@
-{:exclude-files "(test/fixtures/|extensions/.*/target/).*"
+{:exclude-files "(test/fixtures/|extensions/.*/target/|jolt/).*"
  ;; kmet's .cljc files (e.g. kmet.libs.http) use reader conditionals for the
  ;; two supported runtimes: :clj = babashka, :jolt = Jolt (jolt-port.md B1).
  ;; clj-kondo analyzes .cljc only as the standard :clj/:cljs dialects, so the

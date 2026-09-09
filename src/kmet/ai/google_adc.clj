@@ -14,6 +14,13 @@
             [clojure.string :as str]
             [kmet.libs.http :as http]))
 
+;; (jolt only) Install kmet's JDK shims before this file's class references
+;; (java.security.Signature "SHA256withRSA", Base64/getMimeDecoder) analyze.
+;; See kmet.libs.crypto for the full rationale; the require is guarded by
+;; the jolt-version marker so bb never sees jolt.* namespaces.
+(when (find-var 'clojure.core/*jolt-version*)
+  (require 'jolt.kmet.providers))
+
 (def ^:private token-url "https://oauth2.googleapis.com/token")
 (def ^:private cloud-platform-scope "https://www.googleapis.com/auth/cloud-platform")
 

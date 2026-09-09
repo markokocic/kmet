@@ -1,0 +1,34 @@
+{;; kmet's RFC 0014 provider lib (see README.md in this dir): the JDK
+ ;; classes the jolt ecosystem does not supply that kmet's crypto/oauth/ADC
+ ;; paths need — RSA (io.github.jolt-lang/crypto is EC-only by design),
+ ;; java.util.Base64 MIME decoding, java.net.http.HttpTimeoutException.
+ ;;
+ ;; The native libs (libcrypto/libssl) and the EC/symmetric java.* classes
+ ;; come from io.github.jolt-lang/crypto, which jolt.kmet.providers REQUIRES
+ ;; as its first form — the load order is structural: jolt.crypto's
+ ;; deps.edn :jolt/native loads the OpenSSL libraries its FFI bindings (and
+ ;; ours) resolve against at load, and its install! registers the classes
+ ;; this ns extends. jolt dedupes natives by :name, so no redeclaration here.
+ ;;
+ ;; Inert on bb/JVM: nothing in the bb classpath ever requires a jolt.kmet.*
+ ;; namespace (kmet's guarded requires check for *jolt-version* first).
+ :jolt/min-version "0.8.0"
+
+ :paths ["src"]
+
+ ;; The classes this lib installs (RFC 0014). jolt autoloads the install
+ ;; namespace when a DEPENDENT namespace references one of these while it is
+ ;; unregistered — the deterministic answer to the load-order trap this
+ ;; setup exists to defuse: jolt.crypto's install! registers EC-only
+ ;; Signature/KeyPairGenerator/KeyFactory as a side effect of ITS autoload
+ ;; (javax.crypto.Mac/Cipher), and once registered a class never triggers a
+ ;; provider lookup again. Claiming the classes here makes our install ns —
+ ;; which loads jolt.crypto first and re-registers with RSA support — run
+ ;; before any reference binds to the EC-only registrations.
+ ;;
+ ;; java.util.Base64 is deliberately absent: the runtime implements the
+ ;; class, so a claim would be refused — getMimeDecoder is added at install.
+ :jolt/provides {jolt.kmet.providers ["java.security.Signature"
+                                      "java.security.KeyPairGenerator"
+                                      "java.security.KeyFactory"
+                                      "java.net.http.HttpTimeoutException"]}}
