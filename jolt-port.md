@@ -159,7 +159,7 @@ the core agent must work before extensions matter.
 |---|---|---|---|
 | M1 | `clojure.data.json` (the swap from `cheshire` → `data.json` is done — `kmet.libs.json` now aliases `clojure.data.json` directly) | **RESOLVED 2026-09-09 — no JSON lib needed:** `org.clojure/data.json` is a `deps.edn` Maven dep and Jolt resolves Maven deps itself, so `kmet.libs.json` loads unchanged on Jolt. Verified green on Jolt `v0.8.5`: `test-json` (4 tests/18 assertions), `test-jsonrpc` (17/41), `test-sse` (33/109). **Note:** `http.cljc` is already ported (curl path via `#?(:jolt ...)`); all 27 libs now load and test green on bb/JVM. M1 is closed (data.json works on both hosts) | done — no new lib |
 | M2 | `tui/terminal.clj` (JLine raw/timed-reads/size) + `core.clj` reader/timers/resize/drain | termios FFI (Unix) + kernel32 FFI (Windows); `future` reader + `locking` + gen-counters — see `jolt-tui.md` §§4–7,9. Evaluated 2026-09-06: `jolt-lang/glimmer-tui` (ncursesw via FFI, Unix-only, fullscreen `initscr` takeover) rejected — wrong architecture for the inline ANSI/scrollback model; JLine stays on bb (`jolt-tui.md` §2 decision) | rewrite ~500 LOC (Jolt only) |
-| M3 | `libs/crypto.clj` (315 LOC: RSA/EC `KeyFactory`, `SHA256withRSA/ECDSA` `Signature`) + `libs/aws_sigv4.clj` (213 LOC: `MessageDigest` SHA-256, `Mac` HmacSHA256, `HexFormat`, `Normalizer`?) — grep the exact class list before the FFI design | OpenSSL FFI following `mvn_http.clj`'s libcrypto/libssl loading (note macOS boringssl SIGABRT hazard — explicit Homebrew paths only); RSA via libcrypto; `SecureRandom` via OS source. The `io.github.jolt-lang/crypto` git dep is in `deps.edn` (RFC 0014). **Verified 2026-09-09:** the symmetric half holds — `test-aws-sigv4` fully green on Jolt (5 tests/18 assertions), so `MessageDigest`/`Mac` are covered. The asymmetric half still gaps — `test-crypto` on Jolt: 10 tests, 2 pass, 8 fail in key-parse/sign paths: `KeyPairGenerator` has no provider (`No dependency provides java.security.KeyPairGenerator … :jolt/provides … (RFC 0014)`), `Base64/getMimeDecoder` is unshimmed (PEM/PKCS parse), and JWK hits `No matching field found: toByteArray for class java.lang.Long`. Re-verified in the 2026-09-09 full-suite run (§8): 10 tests, 2 pass, 1 failure (`test-parse-private-key-rejects-garbage` — `getMimeDecoder`) + 7 errors (4× `getMimeDecoder`, 2× JWK `toByteArray`-on-Long, 1× `KeyPairGenerator`); the same `KeyPairGenerator` gap surfaces in `ai.test-google-adc` (service-account flow) and `libs.test-oauth/test-jwt-bearer-token` | rewrite ~500 LOC |
+| M3 | `libs/crypto.clj` (315 LOC: RSA/EC `KeyFactory`, `SHA256withRSA/ECDSA` `Signature`) + `libs/aws_sigv4.clj` (213 LOC: `MessageDigest` SHA-256, `Mac` HmacSHA256, `HexFormat`, `Normalizer`?) — grep the exact class list before the FFI design | OpenSSL FFI following `mvn_http.clj`'s libcrypto/libssl loading (note macOS boringssl SIGABRT hazard — explicit Homebrew paths only); RSA via libcrypto; `SecureRandom` via OS source. The `io.github.jolt-lang/crypto` git dep is in `deps.edn` (RFC 0014). **Verified 2026-09-09:** the symmetric half holds — `test-aws-sigv4` fully green on Jolt (5 tests/18 assertions), so `MessageDigest`/`Mac` are covered. The asymmetric half still gaps — `test-crypto` on Jolt: 10 tests, 2 pass, 8 fail in key-parse/sign paths: `KeyPairGenerator` has no provider (`No dependency provides java.security.KeyPairGenerator … :jolt/provides … (RFC 0014)`), `Base64/getMimeDecoder` is unshimmed (PEM/PKCS parse), and JWK hits `No matching field found: toByteArray for class java.lang.Long`. The `Base64/getMimeDecoder` half is now covered by kmet's own `jolt/` provider lib (§9). Re-verified in the 2026-09-09 full-suite run (§8): 10 tests, 2 pass, 1 failure (`test-parse-private-key-rejects-garbage` — `getMimeDecoder`) + 7 errors (4× `getMimeDecoder`, 2× JWK `toByteArray`-on-Long, 1× `KeyPairGenerator`); the same `KeyPairGenerator` gap surfaces in `ai.test-google-adc` (service-account flow) and `libs.test-oauth/test-jwt-bearer-token` | rewrite ~500 LOC |
 | M4 | `libs/oauth.clj` (611) + `ai/oauth.clj` (1012) + `ai/google_adc.clj` (121) — browser launch, localhost callback server, token cache | `ServerSocket` shim exists (`stdlib/jolt/socket.clj`, gated on `(require 'jolt.socket)`); browser launch via `jolt.process`; token cache via `spit`/`slurp`. **Verified 2026-09-09:** `test-oauth` on Jolt: 26 tests, 1 failure + 1 error — `test-callback-server` times out (localhost callback; `ServerSocket` shim is gated on `(require 'jolt.socket)`) and `test-jwt-bearer-token` fails on the M3 `KeyPairGenerator` gap. **Callback server FIXED** (commit `596f439`, 2026-09-09: jolt's `readLine` keeps the trailing `\r`, so the header-block end arrived as `"\r"` — truthy — and the reader blocked one line past the headers forever; plus a socket-shim read gap); re-verified in the full-suite run (§8): 26 tests/65 assertions, **1 error only** (`test-jwt-bearer-token`, M3). `ai.oauth` still fails `test-copilot-login-invalid-domain` (JOLT-1 — jolt's single-arg `URI` ctor accepts illegal characters instead of throwing, so junk GitHub-Enterprise domains pass validation and die in curl) | adapt ~1.7k LOC |
 | M5 | `libs/archive.clj` (46 LOC, `ZipFile` read) + `sse.clj` CRC-32 (pure-Clojure `libs/hash.clj/crc32` since the port — Bedrock frame tests green on Jolt, no zip work) + `extensions.cljc:910,921` (`JarFile` probes) + `build.cljc:227,245,389` (`ZipOutputStream` uberjar/pack-extension). (`ai/models.clj` needs no zip work — catalogs load via `io/resource`, which answers file:/jar:/embedded URLs alike.) | `jolt.fs` explicitly EXCLUDES zip/gzip (`stdlib/jolt/fs.clj:12`: "java.util.zip not shimmed yet"). **DECIDED 2026-09-08: bb-only until the `jolt build` rewrite** — `build.cljc`/`libs/archive.clj` entry points throw `::bb-only` under Jolt, their tests carry `^:bb-only` (the runner skips them there); zip/jar work defers to extension-jar materialization via unzip (jolt's own mvn-jar model) | rewrite build; archive via FFI or subprocess. Note:
 | M6 | `build.cljc` uberjar assembly (`bcp/get-classpath`, `ZipOutputStream` resource listing) + model-catalog embedding | No classpath concept; `jolt build` embeds source roots differently. Model catalogs (`ai/model_data/` + manifest) become embedded resources — `io.ss` has `register-embedded-resource!` and `io/resource` answers a `java.net.URL` from both disk and a built image | adapt ~200 LOC |
@@ -301,9 +301,14 @@ bb-jolt.md's suggested workaround) behind `ansi-code-at` and truncate's
 assertions; cause 4 fixed by hand-building the azure URL (no multi-arg
 URI ctor); cause 7's call sites actually fixed (`tree_selector.clj`
 positional `true` → `:strict? true`; `test_track.clj` dangling `:a` args
-dropped). Full re-run: 1928 tests / 12081 assertions, **11 failures + 16
-errors remain** (causes 1, 3, 5, 6, 8, 9 + `caching-conventions`' `.region`);
-bb full suite still green.
+dropped). **Cause 1 (partial) — the `jolt/` RFC 0014 provider lib (§9):**
+`jolt.kmet.providers` (requires `jolt.crypto` first) now supplies
+`Base64/getMimeDecoder` (PEM decoding) and the `HttpTimeoutException` ctor
+(full JDK contract incl. the `IOException` hierarchy edge) — the
+parse-private-key failure and the llm transport-error error are green.
+Re-run after that: 1928 tests / 12081 assertions, **10 failures + 15 errors
+remain** (deterministic; cause 1's RSA/JWK `.toByteArray` gaps, causes 3,
+5, 6, 8, 9 + `caching-conventions`' `.region` error); bb full suite still green.
 
 Causes 1 and 2 match the previously documented gaps (M3/M4, JOLT-3/JOLT-4);
 **causes 3, 4, 8, 9 are new findings** — cause 3 (string indexing) and 4
@@ -324,8 +329,77 @@ stable over 5 full runs. Mechanism unpinned — rare timing/state interaction
 (~10% per full run), possibly a leaked reaction from an earlier namespace
 firing `schedule-frame!` into the test's hook.
 
-**Status:** after the cause-2/4/7 workarounds, 27 deterministic issues
-remain (11 F + 16 E): causes 1/5/6 + the `.region` error are jolt shim gaps
-(bb-jolt.md JOLT-1/JOLT-2/JOLT-4 + M3/M4/M15); causes 3/8/9 need either
-jolt host fixes (`parse-long`, `format %g`) or kmet-side portability work
-(M16 — make the grapheme/width scans index-model-agnostic).
+**Status:** after the cause-2/4/7 workarounds and the cause-1 `jolt/`
+provider lib (§9), 25 deterministic issues remain (10 F + 15 E): cause 1's
+RSA + JWK `.toByteArray` gaps (M3, next in `jolt/`), causes 5/6 + the
+`.region` error are jolt shim gaps (bb-jolt.md JOLT-1/JOLT-2/JOLT-4 +
+M4/M15); causes 3/8/9 need either jolt host fixes (`parse-long`,
+`format %g`) or kmet-side portability work (M16 — make the grapheme/width
+scans index-model-agnostic).
+
+---
+
+## 9. `jolt/` — kmet's RFC 0014 provider lib
+
+A self-contained library in the repo root (`jolt/deps.edn` + `jolt/src/`,
+README in `jolt/README.md`) that supplies JDK classes the jolt ecosystem
+does not supply, declared the RFC 0014 way: kmet's root `deps.edn` pulls it
+in as `jolt.kmet/providers {:local/root "jolt"}`, and `jolt/deps.edn`
+carries the `:jolt/provides` claims. It is **inert on bb/JVM** — no bb
+classpath namespace requires a `jolt.*` ns, clj-kondo excludes the dir.
+
+### Why it exists (cause 1 of §8)
+
+jolt.crypto (io.github.jolt-lang/crypto) covers symmetric crypto + **EC**
+keygen/signature only — its own tests pin the RSA rejection — and jolt core
+lacks `Base64/getMimeDecoder` and a `HttpTimeoutException` ctor. kmet's
+production Google-ADC login (RS256) and the RS256 JWT paths cannot run on
+jolt until RSA exists.
+
+### Load order — the trap and the fix
+
+jolt autoloads a `:jolt/provides` install namespace only while the
+referenced class is **unregistered**. But jolt.crypto's `install!`
+registers EC-only `Signature`/`KeyPairGenerator`/`KeyFactory` as a side
+effect of ITS autoload (any `javax.crypto.Mac`/`Cipher` reference), and a
+registered class never triggers a provider lookup again — so a namespace
+that compiled after jolt.crypto loaded would bind the EC-only versions and
+RSA would be unreachable. `jolt.kmet.providers` therefore:
+
+1. requires `jolt.crypto` as its **first form** (its `:jolt/native`
+   libcrypto load + EC/symmetric registrations always precede ours;
+   `__register-class-statics!` merges into the class's shared table,
+   re-registered members last-wins);
+2. is claimed in `jolt/deps.edn` `:jolt/provides` for the asymmetric
+   classes + `HttpTimeoutException` (deterministic first-reference
+   autoload);
+3. is additionally forced by **guarded requires** in the src nses that
+   reference the classes directly (`kmet.libs.crypto`, `kmet.ai.google-adc`):
+   `(when (find-var 'clojure.core/*jolt-version*) (require 'jolt.kmet.providers))`
+   as the first form after the ns — covers the poisoned case and classes
+   that cannot be claimed (`java.util.Base64`: jolt refuses claims on
+   classes it implements; missing members are added at install).
+
+This pattern is the AGENTS.md convention for any future consumer.
+
+### Provided (verified against the bb/JVM reference)
+
+| shim | notes |
+|---|---|
+| `java.util.Base64/getMimeDecoder` | pure-Clojure MIME decode (non-alphabet chars discarded, JDK rules), returns the same `[B` type core's decoder returns |
+| `java.net.http.HttpTimeoutException` ctor | `jolt.host/throwable` + `register-class-supers!` edge to `java.io.IOException` — `instance?`/`catch` on Throwable/Exception/IOException match the JVM; `toString`/`ex-message`/`getCause` identical; only the `String` ctor exists, as on the JDK |
+
+Green on jolt after this: `libs.test-crypto/test-parse-private-key-rejects-garbage`,
+`ai.test-llm/test-llm-transport-error-message`; the EC tests (`pkcs8-ec`,
+`sign-jwt-es256`) moved past the Base64 gap onto the `.toByteArray` blocker.
+
+### Roadmap (next)
+
+- **RSA** — re-register `Signature`/`KeyPairGenerator`/`KeyFactory` statics
+  with an RSA+EC dispatcher (EC delegates by rebuilding jolt.crypto's
+  tagged tables; RSA via libcrypto `EVP`, the same FFI seam). Unblocks the
+  RS256 tests + production Google-ADC/oauth RS256 on jolt.
+- **JWK `.toByteArray`** — kmet's DER builders call `.toByteArray` on
+  values jolt models as `Long`/`BigInt` when small (jwk-ec/jwk-rsa and the
+  EC tests): a portable bigint→two's-complement-bytes helper in
+  `kmet.libs.crypto` (pure code, works on both hosts).

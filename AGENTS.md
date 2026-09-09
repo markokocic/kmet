@@ -127,10 +127,36 @@ extensions/ — Shipped opt-in extensions (single .clj files or manifest dirs;
               kmet.extension contract): extensions/extensions.md — MUST be
               kept up to date with any behavior it describes
 
+jolt/      — kmet's RFC 0014 provider lib (Jolt-only; see the contract below).
+              Own deps.edn + src/jolt/kmet/providers.clj, pulled in from the
+              root deps.edn as {:local/root "jolt"}. Inert on bb/JVM: no bb
+              classpath namespace requires jolt.*, and clj-kondo excludes it.
+
 Root-level files: core.clj (CLI entry, arg parsing, mode dispatch), config.clj
 (configuration loading), debug.clj (debug/error logging), extension.clj (the
 extension contract root: namespaces extensions depend on, init/shutdown, api).
 ```
+
+### jolt/ — the RFC 0014 provider contract
+`jolt/` supplies JDK classes the jolt ecosystem lacks (details: jolt/README.md,
+jolt-port.md §9): currently `java.util.Base64/getMimeDecoder` and the
+`java.net.http.HttpTimeoutException` ctor; RSA + the JWK bigint conversion are
+planned. `jolt.kmet.providers` requires `jolt.crypto` as its FIRST form —
+libcrypto natives and jolt.crypto's EC/symmetric registrations must exist
+before ours (registrations merge into the class tables; re-registered members
+are last-wins). Convention: a src ns whose forms reference a class jolt lacks
+(or one jolt.crypto registered EC-only — `Signature`/`KeyPairGenerator`/
+`KeyFactory`) adds the guarded require as its first form after the ns:
+
+```clojure
+(when (find-var 'clojure.core/*jolt-version*)
+  (require 'jolt.kmet.providers))
+```
+
+Never rely on the `:jolt/provides` autoload alone: jolt autoloads a provider
+only while the referenced class is UNREGISTERED, and jolt.crypto's `install!`
+registers its classes as a side effect of any `Mac`/`Cipher` autoload — the
+guarded require is what makes the shims deterministic.
 
 ### Layer boundaries
 - **`kmet.libs.*`** — generic, self-contained. **Must not require any kmet.*
