@@ -119,15 +119,14 @@
   ;; so its cached lines must survive a fresh-but-equal vector write and
   ;; bust on a genuinely different one.
   (let [sl (sl/make-select-list [{:id :a :label "Alpha"}
-                                 {:id :b :label "Beta"}]
-                                :a)
+                                 {:id :b :label "Beta"}])
         r1 (core/render sl 60)]
     ;; fresh vector, equal content → identical? misses, = catches → hit
     (reset! (:items-atom sl) [{:id :a :label "Alpha"} {:id :b :label "Beta"}])
     (t/is (identical? r1 (core/render sl 60))
           "cache survives fresh-but-equal collection write"))
   ;; a genuinely different collection still invalidates
-  (let [sl (sl/make-select-list [{:id :a :label "Alpha"}] :a)]
+  (let [sl (sl/make-select-list [{:id :a :label "Alpha"}])]
     (core/render sl 60)
     (reset! (:items-atom sl) [{:id :a :label "Changed!"}])
     (t/is (some #(.contains % "Changed!") (core/render sl 60)))))

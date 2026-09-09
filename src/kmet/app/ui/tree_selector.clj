@@ -636,7 +636,7 @@
     (mapv (fn [{:keys [gutter body]}]
             (let [line (if (and horizontal-scroll (pos? horizontal-scroll))
                          (str gutter
-                              (:text (u/slice-with-width body horizontal-scroll viewport-width true))
+                              (:text (u/slice-with-width body horizontal-scroll viewport-width :strict? true))
                               "\u001b[0m")
                          (str gutter body))]
               (u/truncate-to-width line width "")))
