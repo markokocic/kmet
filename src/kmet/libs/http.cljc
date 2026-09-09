@@ -37,7 +37,9 @@
    through curl with full status/headers parity. Proxy selection is
    transparent — callers never see the transport. `:proxy :none` forces a
    direct connection; the env seam is testable via a map (proxy-for-url)."
-  (:require #?@(:jolt [] :clj [[babashka.http-client :as http]] :default [])
+  (:require #?@(:jolt [[babashka.http-client :as http]]
+                :clj [[babashka.http-client :as http]]
+                :default [])
             [babashka.process :as proc]
             [kmet.libs.json :as json]
             [clojure.string :as str]
@@ -293,7 +295,9 @@
            {:type :http-error :status status :headers headers :body body}))
 
 ;; ─── Transport: java.net.http (babashka.http-client) ─────────────────────
-;; JVM-only: Jolt routes everything through the curl path below.
+;; Both hosts: babashka.http-client natively on bb/JVM, unmodified over the
+;; jolt-lang/http-client shims on Jolt (see request). Only the SOCKS/stream
+;; carve-outs route through the curl path below.
 #?(:clj (do (def ^:private client-cache
               "babashka.http-client clients keyed by [proxy mode], so repeated
              requests reuse connections instead of rebuilding a client per call.
@@ -690,11 +694,16 @@
                  (assoc :throw? nil) ;; strip, normalized below
                  (normalize-follow-redirects))
         p (resolve-proxy (:url opts) (:proxy opts))]
-    ;; Jolt routes everything through curl (no babashka.http-client): the
-    ;; java.net.http transport is JVM-only and proxied/socks traffic
-    ;; already needs curl, so a single transport is simpler and the curl
-    ;; path works for direct connections too.
-    #?(:jolt (curl-request (:url opts) opts p throw?)
+        ;; Jolt: babashka.http-client runs unmodified over the
+        ;; jolt-lang/http-client java.net.http shims (RFC 0014) — the
+        ;; native transport works for direct and http-proxy traffic.
+        ;; Two carve-outs stay on curl: SOCKS/https-scheme proxies
+        ;; (curl-proxy?) and live streams — the shim reads a response
+        ;; body in full before returning, so an endless SSE feed
+        ;; (:as :stream) never returns there (jolt-port.md B1).
+    #?(:jolt (if (or (and p (curl-proxy? p)) (= :stream (:as opts)))
+               (curl-request (:url opts) opts p throw?)
+               (native-request opts throw? p))
        :clj (if (and p (curl-proxy? p))
               (curl-request (:url opts) opts p throw?)
               (native-request opts throw? p))

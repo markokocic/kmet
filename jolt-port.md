@@ -56,34 +56,41 @@ kmet funnels ALL outbound HTTP through `kmet.libs.http` (enforced by
 requests + raw `curl` subprocess for SOCKS/https-scheme proxies, streaming
 bodies, idle-timeout readers. Every LLM call in every provider rides this.
 
-**Decision: Jolt routes ALL HTTP through the existing curl transport.**
-Implemented in `libs/http.cljc` via `#?(:jolt ...)` reader conditionals:
-the java.net.http transport is JVM-only, and Jolt falls through to
-`curl-request` for every request. Rationale: the curl path already handles
-direct connections, proxies, streaming (`:as :stream`), cancel (`:signal`),
-and idle timeouts, and it uses only `babashka.process` + `java.io.File` +
-`java.lang.Process`. `jolt-lang/http-client` (evaluated 2026-09-06:
-`clj-http-lite` on a hand-rolled HTTP/1.1 stack — sockets via `jolt.ffi`,
-TLS/OpenSSL, libz, exposed as `java.net.URL`/`HttpURLConnection` +
-`java.net.http` shims) was rejected as the Jolt transport: it covers only
-the unproxied, non-streaming slice (no true streaming — `perform!`/`net-http-send`
-both `recv-all` to EOF, so `:as :stream` is buffered-then-wrapped; no proxy
-env support; no cancel/`signal`; per-read rather than total timeouts), and
-the provider hot path (`api/*` → `:as :stream` → `sse.clj` line-by-line with
-idle-timeout + `abort-fn` + `signal`) needs exactly what it lacks — so curl
-would still be required alongside it, and a single transport is simpler.
-Worth proposing upstream: true streaming body, per-request total deadline,
-proxy env support.
+**Decision (revised 2026-09-09): native `babashka.http-client` on Jolt over the
+`jolt-lang/http-client` shims; curl only for SOCKS/https-scheme proxies and
+live `:as :stream` feeds.** The 2026-09-06 rejection below predated the
+library's `java.net.http` work. Latest main (`4744256f83e5`, 2026-09-09) runs
+`org.babashka/http-client` 0.4.24 unmodified from Maven over `jolt.http.jdk`
+(RFC 0014 `:jolt/provides`): real `:proxy` routing (absolute-form http,
+CONNECT-tunnelled https), `:follow-redirects` `:never`/`:normal`/`:always`
+with https→http downgrade refusal, `:ssl-context` incl. `{:insecure true}` +
+PKCS#12 stores, `:authenticator`, `:cookie-handler`, `:connect-timeout` +
+per-request total `:timeout`, pooled connections with stale-peer retry, and
+`CompletableFuture` async on jolt's own pool (no caller `:executor`, no
+HTTP/2 on the wire — `:version :http2` degrades to 1.1). What still keeps
+curl on Jolt: **live streams** — the shim reads a body in full before the
+response returns, so an endless SSE feed (`api/*` hot path) never returns
+and `:as :stream` requests stay on `curl-request` — and SOCKS/https-scheme
+proxies (same `curl-proxy?` split the JVM side already has). `http.cljc`
+now dispatches `:jolt` exactly like `:clj` plus that stream carve-out.
+Verified: deps.edn carries `org.babashka/http-client` 0.4.24 +
+`io.github.jolt-lang/http-client` (git `4744256f83e5`); its transitive
+`jolt-lang/jolt-crypto` pin (`44da69` — same repo as the direct
+`io.github.jolt-lang/crypto` dep at `5effcc89`) lands both shas on the jolt
+classpath with no load conflict observed. test-http 32/74 green on jolt with
+the native slice active (headers/errors/timeout/redirects/bytes parity),
+bb side unchanged (33/75). test-sse re-verified green (streams untouched).
 
 `sse.clj` reader is ported (2026-09-09): the parsing/state-machine needed no changes; the body reader needed three Jolt workarounds, all inside `sse.clj` — `(ArrayBlockingQueue. 65536)` for the idle-deadline queue (`LinkedBlockingQueue` has no ctor on Jolt), a shared `.read` char loop instead of `.readLine` (Jolt's `BufferedReader` ctor is identity, so a passed-through `proxy` Reader has no `readLine` method), and `body->reader` (Jolt's `jolt-io-reader` rejects `proxy` Readers with `Cannot open <reify> as a Reader`, so Reader bodies bypass `io/reader`; `(.close rdr)` is failure-tolerant for the same reason). `test-sse` is fully green on Jolt (33 tests/109 assertions, `jolt v0.8.5`). `jsonrpc.clj` (409 LOC, MCP stdio
 transport) rides `babashka.process` pipes — portable *if* `jolt.process`
 covers spawn + async pipe IO + `destroy-tree` (verified: `process.ss` implements `ProcessHandle` descendant tracking behind `destroy-tree`; still probe pipe-streaming + Windows behavior).
 
-**Done (curl-only, `http.cljc` ported):** the port keeps
+**Done (transport split, `http.cljc`):** the port keeps
 `kmet.libs.http`'s contract (opts, lowercased headers,
-`:http-error`/`:transport-error`, `proxy-for-url`); Jolt falls through to
-`curl-request` for every request, the JVM keeps java.net.http for direct
-traffic. Verified: GET/POST return status=200 on Jolt (cold-run probes).
+`:http-error`/`:transport-error`, `proxy-for-url`). Jolt runs direct and
+http-proxy traffic through babashka.http-client over the jolt shims (see
+the revised decision above); curl survives only for SOCKS/https-scheme
+proxies and `:as :stream`. Verified: full test-http green on both hosts.
 
 **Done (sse reader, 2026-09-09):** see above — `test-sse` 33/109 green on Jolt; no `http.cljc` changes needed (production `:body` values are real streams).
 
@@ -186,7 +193,7 @@ that depended on M1. Jolt side (re-verified 2026-09-09, `jolt v0.8.5`): **json/j
 | `hash` | 🟢 | 🟢 | pure, works |
 | `highlight` | 🟢 | 🟢 | tests pass (139/139) |
 | `hooks` | 🟢 | 🟢 | pure, works |
-| `http` | 🟢 | 🟡 | **ported** — routes Jolt through curl transport via `#?(:jolt ...)` reader conditionals; JVM keeps java.net.http. Loads on bb |
+| `http` | 🟢 | 🟡 | **ported** — Jolt runs direct/http-proxy traffic through babashka.http-client over the jolt-lang/http-client shims (deps.edn: org.babashka/http-client 0.4.24 + io.github.jolt-lang/http-client), curl for SOCKS/https-scheme proxies and `:as :stream` (see B1). test-http 32/74 green on Jolt. Loads on bb |
 | `json` | 🟢 | 🟢 | Jolt 2026-09-09: 4 tests/18 assertions green — data.json resolves via deps.edn (M1 closed) |
 | `jsonrpc` | 🟢 | 🟢 | Jolt 2026-09-09: 17 tests/41 assertions green (M1 closed) |
 | `markdown` | 🟢 | 🟢 | tests pass (137/137) |

@@ -14,6 +14,17 @@
         ;; (MessageDigest, Mac, Cipher, SecureRandom, EC Signature/
         ;; KeyPairGenerator/KeyFactory — RFC 0014; inert on bb/JVM)
         io.github.jolt-lang/crypto {:git/url "https://github.com/jolt-lang/crypto.git"
-                                    :git/sha "5effcc89a3258499a79a2a3d69edad9e7800d1bf"}}
+                                    :git/sha "5effcc89a3258499a79a2a3d69edad9e7800d1bf"}
+        ;; babashka.http-client on Jolt: the jolt-lang/http-client library's
+        ;; java.net.http shims (RFC 0014 :jolt/provides over BSD sockets +
+        ;; OpenSSL + libz via jolt.ffi) run the real org.babashka/http-client
+        ;; Maven artifact unmodified. The mvn dep feeds the jolt classpath
+        ;; (bb has http-client built in; plain JVM clojure gets it too).
+        ;; kmet.libs.http routes direct/http-proxy traffic through it on
+        ;; Jolt — curl stays only for SOCKS/https-scheme proxies and live
+        ;; :as :stream feeds (jolt-port.md B1).
+        org.babashka/http-client {:mvn/version "0.4.24"}
+        io.github.jolt-lang/http-client {:git/url "https://github.com/jolt-lang/http-client.git"
+                                         :git/sha "4744256f83e5cf9d3692f4f91e3d7df3c6d41da8"}}
  :aliases
  {:dev {:extra-paths ["test"]}}}
