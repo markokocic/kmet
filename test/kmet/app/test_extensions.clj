@@ -1,7 +1,10 @@
 (ns kmet.app.test-extensions
   "Extension runtime tests: the init/shutdown contract, load/unload/reload
    lifecycle, per-extension deregistration, and the nullable api fixture
-   (kmet.extension/create-nullable-api) for testing extensions in isolation."
+   (kmet.extension/create-nullable-api) for testing extensions in isolation.
+   Tests that evaluate extensions through the SCI loader carry ^:bb-only
+   (extension loading is disabled on Jolt); pure-registry tests run on both
+   hosts."
   (:require [clojure.test :as t :refer [testing]]
             [clojure.string :as str]
             [clojure.java.io :as io]
@@ -145,7 +148,7 @@
 
 ;; ─── Load / unload / reload lifecycle (real runtime) ─────────────────────
 
-(t/deftest test-load-single-file-extension
+(t/deftest ^:bb-only test-load-single-file-extension
   (extensions/clear-extensions!)
   (let [result (extensions/load-extension! "test/fixtures/ext-single/hello_ext.clj")]
     (t/is (nil? (:error result)) (str "loaded: " (:error result)))
@@ -161,7 +164,7 @@
       (t/is (nil? (tools/get-tool "hello-ext-tool")))
       (t/is (nil? (extensions/get-flag "ext-hello"))))))
 
-(t/deftest test-load-manifest-extension
+(t/deftest ^:bb-only test-load-manifest-extension
   (extensions/clear-extensions!)
   (let [result (extensions/load-extension! "test/fixtures/ext-dir")]
     (t/is (nil? (:error result)) (str "loaded: " (:error result)))
@@ -176,7 +179,7 @@
       (t/is (nil? (tools/get-tool "multi-ext-tool")))
       (t/is (empty? (extensions/get-loaded-extensions))))))
 
-(t/deftest test-unload-removes-provider-registration
+(t/deftest ^:bb-only test-unload-removes-provider-registration
   (extensions/clear-extensions!)
   (models/load-catalogs!)
   (models/clear-extension-providers!)
@@ -203,7 +206,7 @@
         (models/clear-extension-providers!)
         (fs/delete-tree dir)))))
 
-(t/deftest test-extension-dir-is-own-directory
+(t/deftest ^:bb-only test-extension-dir-is-own-directory
   ;; :extension-dir must be the extension's OWN directory — for a dir
   ;; extension :path IS the dir, so the old (fs/parent :path) was wrong and
   ;; broke :extension-dir-relative resource discovery (skills/...).
@@ -217,7 +220,7 @@
               (str "got: " (:extension-dir loaded)))))
     (extensions/unload-all-extensions!)))
 
-(t/deftest test-single-file-extension-dir-is-parent
+(t/deftest ^:bb-only test-single-file-extension-dir-is-parent
   (extensions/clear-extensions!)
   (let [result (extensions/load-extension! "test/fixtures/ext-single/hello_ext.clj")]
     (t/is (nil? (:error result)) (str "loaded: " (:error result)))
@@ -228,7 +231,7 @@
               (str "got: " (:extension-dir loaded)))))
     (extensions/unload-all-extensions!)))
 
-(t/deftest test-unload-extension-nil-noop
+(t/deftest ^:bb-only test-unload-extension-nil-noop
   (extensions/clear-extensions!)
   ;; the load result map carries :extension (the name), not the Extension
   ;; record — passing nil to unload-extension! used to throw a cryptic
@@ -240,7 +243,7 @@
       (extensions/unload-all-extensions!)
       (t/is (empty? (extensions/get-loaded-extensions))))))
 
-(t/deftest test-load-manifest-extension-via-symlink
+(t/deftest ^:bb-only test-load-manifest-extension-via-symlink
   ;; extension dirs are commonly installed as symlinks into a repo checkout;
   ;; strict ns-path probes resolve through the linked root or every own-file
   ;; require fails
@@ -260,7 +263,7 @@
           (extensions/unload-all-extensions!)
           (fs/delete-if-exists link))))))
 
-(t/deftest test-extension-context-has-slurp-spit
+(t/deftest ^:bb-only test-extension-context-has-slurp-spit
   ;; slurp/spit are absent from SCI's builtin clojure.core; the context
   ;; injects the host fns (see build-context-namespaces), so extensions
   ;; can read/write files without babashka.fs workarounds
@@ -289,7 +292,7 @@
         (fs/delete-if-exists "target/slurp-ext-out.txt")
         (fs/delete-if-exists "target/slurp-ext-in.txt")))))
 
-(t/deftest test-extension-gets-bundled-tools-reader-port
+(t/deftest ^:bb-only test-extension-gets-bundled-tools-reader-port
   ;; bb's tools.reader is a reduced custom port; the Maven copies have
   ;; deftypes implementing java.io.Closeable and fail under SCI. The
   ;; context injects the port by reference (bundled-port-namespaces), so
@@ -315,7 +318,7 @@
         (extensions/unload-all-extensions!)
         (fs/delete-tree dir)))))
 
-(t/deftest test-extension-gets-bundled-spec-port-and-file-seq
+(t/deftest ^:bb-only test-extension-gets-bundled-spec-port-and-file-seq
   ;; bb's clojure.spec.alpha is a bundled port bb does not preload (unlike
   ;; tools.reader), and its Maven copy fails under SCI (spec.gen.alpha's
   ;; locking2 macro expands monitor-enter, which SCI's core lacks) — the
@@ -352,7 +355,7 @@
         (extensions/unload-all-extensions!)
         (fs/delete-tree dir)))))
 
-(t/deftest ^:slow test-extension-cljfmt-deps-load
+(t/deftest ^:slow ^:bb-only test-extension-cljfmt-deps-load
   ;; regression: an extension pinning cljfmt failed to load with "Unable to
   ;; resolve symbol: monitor-enter" — the Maven spec.alpha/core.specs.alpha
   ;; jars leaked into the closure (bundled-artifact? slash-munged dots in
@@ -375,7 +378,7 @@
                                              {:code "(defn foo [x]\n  (if x\n   1\n   2))"})))))
     (extensions/unload-all-extensions!)))
 
-(t/deftest test-load-missing-require-error
+(t/deftest ^:bb-only test-load-missing-require-error
   ;; a require the loader cannot serve must surface an actionable message,
   ;; not a bare NullPointerException (the load-fn used to call a nil
   ;; deps-resolver when the extension had no deps.edn)
@@ -392,7 +395,7 @@
       (t/is (empty? (extensions/get-loaded-extensions))))
     (fs/delete-tree dir)))
 
-(t/deftest ^:slow test-extension-lib-version-isolation
+(t/deftest ^:slow ^:bb-only test-extension-lib-version-isolation
   (extensions/clear-extensions!)
   (let [ra (extensions/load-extension! "test/fixtures/ext-iso-a")
         rb (extensions/load-extension! "test/fixtures/ext-iso-b")]
@@ -424,7 +427,7 @@
       (t/is (nil? (tools/get-tool "iso-a")))
       (t/is (nil? (tools/get-tool "iso-b"))))))
 
-(t/deftest test-load-failure-rolls-back
+(t/deftest ^:bb-only test-load-failure-rolls-back
   (extensions/clear-extensions!)
   (testing "a file without init fails and leaves no trace"
     (let [dir "target/test-ext-bad"]
@@ -466,7 +469,11 @@
       (t/is (thrown? clojure.lang.ArityException
                      ((extensions/wrap-event-handler (fn [_] :legacy))
                       {:type :agent-end}))
-            "arity-1 handlers fail fast — no legacy shim")))
+            "arity-1 handlers fail fast — no legacy shim"))))
+
+(t/deftest ^:bb-only test-extension-ctx-events-via-bus
+  ;; bb-only: evaluates an extension through the SCI loader, which is
+  ;; disabled on Jolt (load-extension! returns an error stub there).
   (testing "sci handlers receive the ctx through the real bus path"
     (extensions/clear-extensions!)
     (let [dir "target/test-ext-ctx-events"
@@ -507,25 +514,29 @@
       (unsub-a)
       (unsub-b)
       (fs/delete-tree dir))))
-(testing "extension commands carry :extension-handler for ctx dispatch"
-  (extensions/clear-extensions!)
-  (let [dir "target/test-ext-ctx-cmd"]
-    (fs/create-dirs dir)
-    (spit (str dir "/ext.clj")
-          (str "(ns ctx-cmd (:require [kmet.extension :as ext]))\n"
-               "(defn init [api]\n"
-               "  (ext/register-command! api\n"
-               "    {:name \"ctx-test\" :description \"d\"\n"
-               "     :handler (fn [ctx args] {:mode (:mode ctx) :args args})}))\n"))
-    (let [result (extensions/load-extension! (str dir "/ext.clj"))]
-      (t/is (nil? (:error result)) (str "loaded: " (:error result)))
-      (let [c (commands/find-command "ctx-test")]
-        (t/is (fn? (:extension-handler c)))
-        (t/is (= {:mode :print :args "hi"}
-                 ((:extension-handler c) (extensions/build-extension-context) "hi"))))
-      (fs/delete-tree dir))))
+(t/deftest ^:bb-only test-extension-command-ctx-dispatch
+  ;; bb-only: evaluates an extension through the SCI loader, which is
+  ;; disabled on Jolt. (Previously a top-level testing block, so its
+  ;; assertions ran at namespace load instead of as a test.)
+  (testing "extension commands carry :extension-handler for ctx dispatch"
+    (extensions/clear-extensions!)
+    (let [dir "target/test-ext-ctx-cmd"]
+      (fs/create-dirs dir)
+      (spit (str dir "/ext.clj")
+            (str "(ns ctx-cmd (:require [kmet.extension :as ext]))\n"
+                 "(defn init [api]\n"
+                 "  (ext/register-command! api\n"
+                 "    {:name \"ctx-test\" :description \"d\"\n"
+                 "     :handler (fn [ctx args] {:mode (:mode ctx) :args args})}))\n"))
+      (let [result (extensions/load-extension! (str dir "/ext.clj"))]
+        (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+        (let [c (commands/find-command "ctx-test")]
+          (t/is (fn? (:extension-handler c)))
+          (t/is (= {:mode :print :args "hi"}
+                   ((:extension-handler c) (extensions/build-extension-context) "hi"))))
+        (fs/delete-tree dir)))))
 
-(t/deftest test-extension-namespace-isolation
+(t/deftest ^:bb-only test-extension-namespace-isolation
   (extensions/clear-extensions!)
   (let [load (fn [name content]
                (let [dir (str "target/test-ext-iso-" name)]
@@ -602,7 +613,7 @@
         (t/is (str/includes? (:error result) "kmet.libs.http")
               "the rejection names the proxy-aware boundary")))))
 
-(t/deftest ^:slow test-extension-bad-deps-fails-load
+(t/deftest ^:slow ^:bb-only test-extension-bad-deps-fails-load
   (extensions/clear-extensions!)
   (let [dir "target/test-ext-bad-deps"]
     (fs/create-dirs dir)
@@ -617,7 +628,7 @@
         (t/is (empty? (extensions/get-loaded-extensions)))))
     (fs/delete-tree dir)))
 
-(t/deftest test-reload-extensions
+(t/deftest ^:bb-only test-reload-extensions
   (testing "reload-extensions! (container dirs) unloads + reloads"
     (let [container (str "target/test-ext-container-" (System/currentTimeMillis))]
       (fs/create-dirs container)
@@ -867,7 +878,7 @@
         (prompts/clear-prompt-templates!)
         (fs/delete-tree dir)))))
 
-(t/deftest test-jar-extension-load-resource-unload
+(t/deftest ^:bb-only test-jar-extension-load-resource-unload
   ;; jar distribution (jar-ext.md §1): code served from the archive without
   ;; expansion (per-call ZipFile), resources via the shadowed io/resource,
   ;; :extension-dir nil, unload clean.
@@ -950,7 +961,7 @@
         (fs/delete-tree dir)
         (fs/delete-if-exists jar)))))
 
-(t/deftest test-extension-dir-resource-fallback
+(t/deftest ^:bb-only test-extension-dir-resource-fallback
   ;; dir extensions keep :extension-dir + a working io/resource file-URL
   ;; fallback (jar-ext.md §4 — same test jar layout, unpacked).
   (extensions/clear-extensions!)
@@ -977,7 +988,7 @@
         (extensions/unload-all-extensions!)
         (fs/delete-tree dir)))))
 
-(t/deftest test-extension-self-registers-skill-and-prompt
+(t/deftest ^:bb-only test-extension-self-registers-skill-and-prompt
   ;; jar-ext.md §5: extensions self-register bundled content through
   ;; ext/register-skill! / ext/register-prompt! (no host enumeration);
   ;; unload deregisters exactly what the extension added.
@@ -1020,7 +1031,7 @@
         (t/is (nil? (prompts/get-prompt-template "selfreg-tpl")) "unload removes the template")
         (fs/delete-tree dir)))))
 
-(t/deftest test-shipped-extensions-load-from-src
+(t/deftest ^:bb-only test-shipped-extensions-load-from-src
   ;; the repo's own extensions restructured to src/-as-artifact-root
   ;; (jar-ext.md §2): every shipped src/ dir loads through the real runtime.
   (extensions/clear-extensions!)
@@ -1044,7 +1055,7 @@
   (skills/clear-skills!)
   (prompts/clear-prompt-templates!))
 
-(t/deftest ^:slow test-packed-clojure-jar-roundtrip
+(t/deftest ^:slow ^:bb-only test-packed-clojure-jar-roundtrip
   ;; end-to-end jar distribution for a real shipped extension: pack
   ;; extensions/clojure/src with plain zip mechanics, load the jar, run a
   ;; tool, expand its skill, unload. Needs the cljfmt/parinferish closure
