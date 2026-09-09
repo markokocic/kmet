@@ -12,7 +12,7 @@ the rest is code reasoning, not a running port.
 **Bottom line**: a full port is a multi-month project with 2 hard blockers
 (subprocess/process management, extension isolation) plus the HTTP/SSE
 wrapper workstream (decided: curl-subprocess transport for all Jolt HTTP
-— see B1)
+— see B1; sse reader ported 2026-09-09, curl transport still to prove end-to-end)
 and ~15 medium rewrites. A staged port is viable: pure layers first
 (`libs` minus I/O → `ai/api` builders → `reakt`/`hiccup`/components), then
 the terminal adapter, then transports, then the agent loop + tools, with the
@@ -49,7 +49,7 @@ inert on bb/JVM), `dev.weavejester/cljfmt` (tooling only), JLine 4.3.1 (bb-bundl
 
 ## 2. Hard blockers (need design + substantial new code)
 
-### B1. HTTP/SSE transport (`libs/http.cljc` 731 LOC + `libs/sse.clj` 1084 LOC)
+### B1. HTTP/SSE transport (`libs/http.cljc` 754 LOC + `libs/sse.clj` 1114 LOC)
 
 kmet funnels ALL outbound HTTP through `kmet.libs.http` (enforced by
 `test-http-boundary`): `babashka.http-client` (java.net.http) for plain
@@ -75,9 +75,7 @@ would still be required alongside it, and a single transport is simpler.
 Worth proposing upstream: true streaming body, per-request total deadline,
 proxy env support.
 
-`sse.clj` itself is mostly pure parsing/state-machine (port the logic);
-only its body reader (`io/reader` over the response stream + idle-timeout
-thread) needs the new transport. `jsonrpc.clj` (409 LOC, MCP stdio
+`sse.clj` reader is ported (2026-09-09): the parsing/state-machine needed no changes; the body reader needed three Jolt workarounds, all inside `sse.clj` — `(ArrayBlockingQueue. 65536)` for the idle-deadline queue (`LinkedBlockingQueue` has no ctor on Jolt), a shared `.read` char loop instead of `.readLine` (Jolt's `BufferedReader` ctor is identity, so a passed-through `proxy` Reader has no `readLine` method), and `body->reader` (Jolt's `jolt-io-reader` rejects `proxy` Readers with `Cannot open <reify> as a Reader`, so Reader bodies bypass `io/reader`; `(.close rdr)` is failure-tolerant for the same reason). `test-sse` is fully green on Jolt (33 tests/109 assertions, `jolt v0.8.5`). `jsonrpc.clj` (409 LOC, MCP stdio
 transport) rides `babashka.process` pipes — portable *if* `jolt.process`
 covers spawn + async pipe IO + `destroy-tree` (verified: `process.ss` implements `ProcessHandle` descendant tracking behind `destroy-tree`; still probe pipe-streaming + Windows behavior).
 
@@ -86,6 +84,8 @@ covers spawn + async pipe IO + `destroy-tree` (verified: `process.ss` implements
 `:http-error`/`:transport-error`, `proxy-for-url`); Jolt falls through to
 `curl-request` for every request, the JVM keeps java.net.http for direct
 traffic. Verified: GET/POST return status=200 on Jolt (cold-run probes).
+
+**Done (sse reader, 2026-09-09):** see above — `test-sse` 33/109 green on Jolt; no `http.cljc` changes needed (production `:body` values are real streams).
 
 ### B2. Subprocess/process management (`libs/process.clj`, bash tool, MCP stdio)
 
@@ -144,11 +144,11 @@ the core agent must work before extensions matter.
 
 | # | kmet surface | Jolt answer (verified on checkout) | size |
 |---|---|---|---|
-| M1 | `clojure.data.json` (the swap from `cheshire` → `data.json` is done — `kmet.libs.json` now aliases `clojure.data.json` directly) | **no JSON lib in stdlib** — biggest pure-logic gap. Write a `kmet.libs.json` over string ops; Jolt strings/regexes suffice. Streaming tool-call arg accumulation in `sse.clj` needs incremental parsing — keep the shape, swap the parser. **Note:** `http.cljc` is already ported (curl path via `#?(:jolt ...)`); all 27 libs now load and test green on bb/JVM. M1 is now purely a Jolt-stdlib gap | new ~500-800 LOC lib |
+| M1 | `clojure.data.json` (the swap from `cheshire` → `data.json` is done — `kmet.libs.json` now aliases `clojure.data.json` directly) | **RESOLVED 2026-09-09 — no JSON lib needed:** `org.clojure/data.json` is a `deps.edn` Maven dep and Jolt resolves Maven deps itself, so `kmet.libs.json` loads unchanged on Jolt. Verified green on Jolt `v0.8.5`: `test-json` (4 tests/18 assertions), `test-jsonrpc` (17/41), `test-sse` (33/109). **Note:** `http.cljc` is already ported (curl path via `#?(:jolt ...)`); all 27 libs now load and test green on bb/JVM. M1 is closed (data.json works on both hosts) | done — no new lib |
 | M2 | `tui/terminal.clj` (JLine raw/timed-reads/size) + `core.clj` reader/timers/resize/drain | termios FFI (Unix) + kernel32 FFI (Windows); `future` reader + `locking` + gen-counters — see `jolt-tui.md` §§4–7,9. Evaluated 2026-09-06: `jolt-lang/glimmer-tui` (ncursesw via FFI, Unix-only, fullscreen `initscr` takeover) rejected — wrong architecture for the inline ANSI/scrollback model; JLine stays on bb (`jolt-tui.md` §2 decision) | rewrite ~500 LOC (Jolt only) |
-| M3 | `libs/crypto.clj` (315 LOC: RSA/EC `KeyFactory`, `SHA256withRSA/ECDSA` `Signature`) + `libs/aws_sigv4.clj` (213 LOC: `MessageDigest` SHA-256, `Mac` HmacSHA256, `HexFormat`, `Normalizer`?) — grep the exact class list before the FFI design | OpenSSL FFI following `mvn_http.clj`'s libcrypto/libssl loading (note macOS boringssl SIGABRT hazard — explicit Homebrew paths only); RSA via libcrypto; `SecureRandom` via OS source. Check the `io.github.jolt-lang/crypto` git dep in `deps.edn` first (RFC 0014 shims may already cover the call sites) | rewrite ~500 LOC |
-| M4 | `libs/oauth.clj` (611) + `ai/oauth.clj` (1012) + `ai/google_adc.clj` (121) — browser launch, localhost callback server, token cache | `ServerSocket` shim exists (`stdlib/jolt/socket.clj`, gated on `(require 'jolt.socket)`); browser launch via `jolt.process`; token cache via `spit`/`slurp` | adapt ~1.7k LOC |
-| M5 | `libs/archive.clj` (46 LOC, `ZipFile` read) + `sse.clj:854-56` (`CRC32`) + `extensions.cljc:910,921` (`JarFile` probes) + `build.cljc:227,245,389` (`ZipOutputStream` uberjar/pack-extension). (`ai/models.clj` needs no zip work — catalogs load via `io/resource`, which answers file:/jar:/embedded URLs alike.) | `jolt.fs` explicitly EXCLUDES zip/gzip (`stdlib/jolt/fs.clj:12`: "java.util.zip not shimmed yet"). **DECIDED 2026-09-08: bb-only until the `jolt build` rewrite** — `build.cljc`/`libs/archive.clj` entry points throw `::bb-only` under Jolt, their tests carry `^:bb-only` (the runner skips them there); zip/jar work defers to extension-jar materialization via unzip (jolt's own mvn-jar model) | rewrite build; archive via FFI or subprocess. Note:
+| M3 | `libs/crypto.clj` (315 LOC: RSA/EC `KeyFactory`, `SHA256withRSA/ECDSA` `Signature`) + `libs/aws_sigv4.clj` (213 LOC: `MessageDigest` SHA-256, `Mac` HmacSHA256, `HexFormat`, `Normalizer`?) — grep the exact class list before the FFI design | OpenSSL FFI following `mvn_http.clj`'s libcrypto/libssl loading (note macOS boringssl SIGABRT hazard — explicit Homebrew paths only); RSA via libcrypto; `SecureRandom` via OS source. The `io.github.jolt-lang/crypto` git dep is in `deps.edn` (RFC 0014). **Verified 2026-09-09:** the symmetric half holds — `test-aws-sigv4` fully green on Jolt (5 tests/18 assertions), so `MessageDigest`/`Mac` are covered. The asymmetric half still gaps — `test-crypto` on Jolt: 10 tests, 2 pass, 8 fail in key-parse/sign paths: `KeyPairGenerator` has no provider (`No dependency provides java.security.KeyPairGenerator … :jolt/provides … (RFC 0014)`), `Base64/getMimeDecoder` is unshimmed (PEM/PKCS parse), and JWK hits `No matching field found: toByteArray for class java.lang.Long` | rewrite ~500 LOC |
+| M4 | `libs/oauth.clj` (611) + `ai/oauth.clj` (1012) + `ai/google_adc.clj` (121) — browser launch, localhost callback server, token cache | `ServerSocket` shim exists (`stdlib/jolt/socket.clj`, gated on `(require 'jolt.socket)`); browser launch via `jolt.process`; token cache via `spit`/`slurp`. **Verified 2026-09-09:** `test-oauth` on Jolt: 26 tests, 1 failure + 1 error — `test-callback-server` times out (localhost callback; `ServerSocket` shim is gated on `(require 'jolt.socket)`) and `test-jwt-bearer-token` fails on the M3 `KeyPairGenerator` gap | adapt ~1.7k LOC |
+| M5 | `libs/archive.clj` (46 LOC, `ZipFile` read) + `sse.clj` CRC-32 (pure-Clojure `libs/hash.clj/crc32` since the port — Bedrock frame tests green on Jolt, no zip work) + `extensions.cljc:910,921` (`JarFile` probes) + `build.cljc:227,245,389` (`ZipOutputStream` uberjar/pack-extension). (`ai/models.clj` needs no zip work — catalogs load via `io/resource`, which answers file:/jar:/embedded URLs alike.) | `jolt.fs` explicitly EXCLUDES zip/gzip (`stdlib/jolt/fs.clj:12`: "java.util.zip not shimmed yet"). **DECIDED 2026-09-08: bb-only until the `jolt build` rewrite** — `build.cljc`/`libs/archive.clj` entry points throw `::bb-only` under Jolt, their tests carry `^:bb-only` (the runner skips them there); zip/jar work defers to extension-jar materialization via unzip (jolt's own mvn-jar model) | rewrite build; archive via FFI or subprocess. Note:
 | M6 | `build.cljc` uberjar assembly (`bcp/get-classpath`, `ZipOutputStream` resource listing) + model-catalog embedding | No classpath concept; `jolt build` embeds source roots differently. Model catalogs (`ai/model_data/` + manifest) become embedded resources — `io.ss` has `register-embedded-resource!` and `io/resource` answers a `java.net.URL` from both disk and a built image | adapt ~200 LOC |
 | M7 | `libs/clipboard.clj`, `libs/terminal_image.clj` (Base64 — shimmed, keep), OSC-52/kitty-graphics emit | clipboard via platform subprocesses (`pbcopy`/`xclip`/`clip`) through `jolt.process`; image protocols are pure emit logic | small |
 | M8 | `config.clj` (XDG paths, EDN load/save, file watching?) | `jolt.fs` (vendored `babashka.fs`, minus zip) covers paths; `spit`/`slurp`/EDN portable; watcher → poll (same as `tui.theme`) | adapt |
@@ -157,29 +157,27 @@ the core agent must work before extensions matter.
 | M11 | `clojure.spec.alpha` (SCI-context injection only), `clojure.walk` (2 requires: `libs/json.clj:16`, `ai/constrained_sampling.clj:13`), `BigDecimal` (`edn_writer` + SCI class table) | spec: absent from `stdlib/` (verified — declare `org.clojure/spec.alpha` explicitly per README's "terminal dependency" rule, or rewrite the one use); `walk`: present (`stdlib/clojure/walk.clj`, seed-embedded — keep); `BigDecimal`: PRESENT (`host/chez/java/bigdec.ss`: `M` literals + `with-precision` per README — the earlier "absent" claim was wrong; just port the call sites) | small |
 | M12 | `defrecord` (27 files) + `reify` (6 files) + protocols + `deftype` (zero definitions — only comments) | README Differences confirms `deftype`/`defrecord`/`reify`/`extend-protocol`, multimethods, STM, `future`/`promise`/`agent` and `core.async` behave as on the JVM — still verify early: `satisfies?`-on-reify semantics, `defrecord` positional factories, protocol dispatch for `IComponent`/`IFocusable`. The TUI's `satisfies?` avoidance notes (AGENTS.md SCI gotcha) need re-checking on Jolt | verify early, affects everything |
 | M13 | Custom `defcomponent`/`with-let` macros + clj-kondo hooks | Jolt compiles macros normally (self-hosted compiler) — should port; re-verify hygiene/&env behavior (`go`-style passes are async-only, plain macros fine). Kondo hooks keep working (source-level) | verify early |
-| M14 | `java.util.concurrent` — 4 sites: `LinkedBlockingQueue`+`TimeUnit` (`libs/sse.clj:444,462`, idle-deadline reader), `ReentrantLock` (`app/session.clj:154,296`, file-mutation lock), `Callable` (`app/extensions.clj:738`, SCI class table) | `ReentrantLock` is shimmed and `ArrayBlockingQueue` is a real bounded blocking queue (both per `concurrency.ss` comments — verify exact arities on the checkout); `Callable` becomes a fn; `locking` covers the session lock. Rewrite call sites | small |
-| M15 | `java.net.URI/URL/URLEncoder`, `Normalizer`, `Charset`, `HexFormat`, `Instant/DateTimeFormatter/ZoneId`, `PushbackReader`, `StringReader/Writer` | Mostly shimmed (host-interop list + `io.ss`/`io-streams.ss`); URL/URI surface exists (`jolt.socket` gating for sockets); time values via time lib. Verify each call site's exact methods | audit per site |
+| M14 | `java.util.concurrent` — 4 sites: `LinkedBlockingQueue`+`TimeUnit` (`libs/sse.clj` idle-deadline reader — now `ArrayBlockingQueue`, fixed 2026-09-09), `ReentrantLock` (`app/session.clj:154,296`, file-mutation lock), `Callable` (`app/extensions.clj:738`, SCI class table) | **Verified 2026-09-09:** `LinkedBlockingQueue` has NO ctor on Jolt (`No matching ctor found`) — `sse.clj` now uses `(ArrayBlockingQueue. 65536)`; verified `.put`, `.poll n TimeUnit`, `.offer`, `.size`, `.remainingCapacity`, and `TimeUnit/MILLISECONDS`. `ReentrantLock` still assumed shimmed (session lock not yet run on Jolt); `Callable` becomes a fn; `locking` covers the session lock | small |
+| M15 | `java.net.URI/URL/URLEncoder`, `Normalizer`, `Charset`, `HexFormat`, `Instant/DateTimeFormatter/ZoneId`, `PushbackReader`, `StringReader/Writer` | Mostly shimmed (host-interop list + `io.ss`/`io-streams.ss`); URL/URI surface exists (`jolt.socket` gating for sockets); time values via time lib. **Verified 2026-09-09 (reader surface):** `io/reader` rejects `proxy` Readers (`Cannot open <reify> as a Reader` — `jolt-io-reader`, `io.ss:1291`); `BufferedReader` ctor is identity so a proxy Reader lacks `.readLine`/`.close`; `InputStreamReader` over a proxy `InputStream` constructs (reads dispatch to the override); `PipedInputStream` + `io/reader` + `.readLine` works. `sse.clj` works around all three (see B1). Remaining call sites still need per-site audit | audit per site |
 
 ---
 
-## 4. Verified `libs/` status (2026-09-08 snapshot)
+## 4. Verified `libs/` status (2026-09-08 snapshot; json/jsonrpc/sse/crypto/aws_sigv4/oauth re-verified 2026-09-09)
 
 Cold-ran every `kmet.libs.*` namespace under Jolt (`jolt v0.8.5`, threaded
 Chez 10.x) — require + load each, then run its test suite (or probe its
 public fns when no test file exists). On bb/JVM: **all 27
 load and test green** — the cheshire → data.json swap unblocked the libs
-that depended on M1. Jolt side: **most load and run; json/jsonrpc/sse (M1),
-crypto/aws_sigv4 (M3), archive (M5) still gap the Jolt stdlib** (counts below
-are the 2026-09-08 snapshot — re-run before building from them).
+that depended on M1. Jolt side (re-verified 2026-09-09, `jolt v0.8.5`): **json/jsonrpc/sse/aws_sigv4 fully green; crypto partially (M3 asymmetric gaps); oauth partially (M4); archive bb-only (M5)** (counts below — re-verified rows carry a 2026-09-09 note; the rest is still the 2026-09-08 snapshot).
 
 | lib | bb/JVM | Jolt | notes |
 |-----|--------|------|-------|
 | `archive` | 🟢 | 🔴 | bb-only on Jolt (2026-09-08, M5): `::bb-only` entry guard + `^:bb-only` tests; zip work deferred to extension-jar materialization (unzip) |
-| `aws_sigv4` | 🟢 | 🔴 | `javax.crypto.Mac`, `java.security.MessageDigest` (M3) |
+| `aws_sigv4` | 🟢 | 🟢 | Jolt 2026-09-09: 5 tests/18 assertions green — `MessageDigest`/`Mac` via the crypto dep hold (M3 symmetric half done) |
 | `clipboard` | 🟢 | 🟢 | uses `babashka.process`, works |
 | `concurrent` | 🟢 | 🟢 | `spawn` returns `Thread`; works |
 | `context` | 🟢 | 🟢 | tests pass (11/11) |
-| `crypto` | 🟢 | 🔴 | `java.security.KeyFactory`/`Signature` (M3); data.json dep now resolved on bb |
+| `crypto` | 🟢 | 🟡 | Jolt 2026-09-09: 10 tests, 2 pass — still gaps (M3): `KeyPairGenerator` without provider (RFC 0014 `:jolt/provides`), `Base64/getMimeDecoder`, `.toByteArray` on Jolt Long (JWK) |
 | `diff` | 🟢 | 🟢 | pure, works |
 | `dynamic_value` | 🟢 | 🟢 | tests pass (53/53) |
 | `edit_diff` | 🟢 | 🟢 | uses `java.text.Normalizer`, `java.util.regex.Pattern`; works |
@@ -189,24 +187,23 @@ are the 2026-09-08 snapshot — re-run before building from them).
 | `highlight` | 🟢 | 🟢 | tests pass (139/139) |
 | `hooks` | 🟢 | 🟢 | pure, works |
 | `http` | 🟢 | 🟡 | **ported** — routes Jolt through curl transport via `#?(:jolt ...)` reader conditionals; JVM keeps java.net.http. Loads on bb |
-| `json` | 🟢 | 🔴 | data.json resolved on bb; no JSON lib in Jolt stdlib (M1) |
-| `jsonrpc` | 🟢 | 🔴 | data.json resolved on bb; no JSON lib in Jolt stdlib (M1) |
+| `json` | 🟢 | 🟢 | Jolt 2026-09-09: 4 tests/18 assertions green — data.json resolves via deps.edn (M1 closed) |
+| `jsonrpc` | 🟢 | 🟢 | Jolt 2026-09-09: 17 tests/41 assertions green (M1 closed) |
 | `markdown` | 🟢 | 🟢 | tests pass (137/137) |
 | `num` | 🟢 | 🟢 | portable predicates, works |
-| `oauth` | 🟢 | 🔴 | `ServerSocket` shim exists (M4); data.json resolved on bb |
+| `oauth` | 🟢 | 🟡 | Jolt 2026-09-09: 26 tests, 1 failure (callback-server timeout — `ServerSocket` shim gated on `jolt.socket`) + 1 error (JWT signing, M3 `KeyPairGenerator`) |
 | `process` | 🟢 | 🟢 | uses `babashka.process`; works |
 | `reakt` | 🟢 | 🟢 | tests pass (30/30) |
-| `sse` | 🟢 | 🔴 | data.json resolved on bb; no JSON lib in Jolt stdlib (M1) |
+| `sse` | 🟢 | 🟢 | Jolt 2026-09-09: 33 tests/109 assertions green — reader ported (`ArrayBlockingQueue`, `.read` loop, `body->reader`; M1 closed) |
 | `terminal` | 🟢 | 🟢 | uses `java.time`, `java.lang.ProcessHandle`, `java.util.Base64`, `clojure.java.io`; works |
 | `terminal_image` | 🟢 | 🟢 | tests pass (41/41) |
 | `usage` | 🟢 | 🟢 | pure, works |
 | `yaml` | 🟢 | 🟡 | bb: 20/20; Jolt: 19/20 — `test-numbers` fails (bigint vs string) |
 
-**bb/JVM: all green (27).** Jolt: json/jsonrpc/sse (M1: no JSON lib in
-Jolt stdlib) and crypto/aws_sigv4 (M3: JVM crypto classes) need work;
-archive (M5) is bb-only on jolt since 2026-09-08. The cheshire →
-data.json swap removed the biggest bb-side blocker; M1 is now purely a
-Jolt-stdlib gap.
+**bb/JVM: all green (27).** Jolt (2026-09-09): json/jsonrpc/sse/aws_sigv4 green;
+crypto partially green (M3 asymmetric gaps: `KeyPairGenerator`, `Base64/getMimeDecoder`,
+JWK `.toByteArray`); oauth partially (M4: callback-server timeout, JWT signing);
+archive bb-only (M5). M1 is closed — data.json resolves on both hosts.
 
 ---
 
@@ -224,14 +221,14 @@ Jolt-stdlib gap.
 ## 6. Port order (staged, each stage testable)
 
 1. **Prove the substrate** (days): `defrecord`/`reify`/`satisfies?` semantics (M12), macro hygiene (M13), `jolt.fs` fn coverage, `jolt.process` spawn/pipe/kill/timeout matrix (B2), `jolt.socket` reachability, SCI-load smoke (B3 feasibility), `io/resource` + embedded resources (M6).
-2. **Pure libs** (1–2 wks): port the §4 pure set + write `kmet.libs.json` (M1). Headless tests under Jolt's `clojure.test`.
+2. **Pure libs** (1–2 wks): port the §4 pure set (`kmet.libs.json` needs no rewrite — data.json resolves on Jolt, M1 closed). Headless tests under Jolt's `clojure.test`.
 3. **TUI core** (2–3 wks): `keys`→`utils`→`reakt`→`hiccup`→components→theme headless (`render-lines`), then `ITerminal` FFI adapter + input pipeline (`jolt-tui.md` §§5–7). Validate with pty captures.
 4. **HTTP/SSE + providers** (3–5 wks, critical path): B1 transport decision + `sse` port + all 10 `api/` builders + `llm.clj` retry/cancel + auth (M4). First end-to-end: `print` mode (`modes/print.clj`, 102 LOC) answering one prompt — no TUI needed.
 5. **Agent loop + tools** (2–4 wks): `app/loop.clj`, session/compaction, tools (bash/edit/write need care: process + fs + diff), `modes/interactive.clj` wiring.
 6. **Packaging + tooling** (1–2 wks): `jolt build` pipeline replacing `build.cljc`, test runner `^:slow` split, lint/format gates, model generators.
 7. **Extensions** (open-ended): B3 redesign decision; port shipped extensions after.
 
-Estimate honesty: B1 transport is **decided** (curl-only on Jolt, java.net.http on JVM via `#?(:clj ...)` reader conditionals — `http.cljc` ported). Remaining B1 work is `sse.clj` (pure parsing, port the logic) + `libs.oauth`/`ai.oauth`/`ai.google_adc` (M4, needs `jolt.socket`). M1 (clojure.data.json) is resolved on bb/JVM — all 27 libs load and test green. The remaining M1 gap is Jolt's stdlib (no JSON lib) — blocks json/jsonrpc/sse from loading under Jolt only. B3 is a research spike before it is labor.
+Estimate honesty: B1 transport is **decided** (curl-only on Jolt, java.net.http on JVM via `#?(:clj ...)` reader conditionals — `http.cljc` ported). Remaining B1 work is `libs.oauth`/`ai.oauth`/`ai.google_adc` (M4, needs `jolt.socket`) — the `sse.clj` reader is ported (2026-09-09, 33/109 green on Jolt). M1 is closed (data.json on both hosts) — all 27 libs load and test green on bb/JVM, and json/jsonrpc/sse/aws_sigv4 are green on Jolt too. B3 is a research spike before it is labor.
 
 ---
 

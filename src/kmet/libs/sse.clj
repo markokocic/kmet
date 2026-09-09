@@ -314,6 +314,19 @@
       (catch Exception e
         [{:type :error :message (str "Parse error: " (ex-message e))}]))))
 
+(defn- body->reader
+  "Response :body to a java.io.Reader. A body that already IS a Reader
+   (tests pass proxy Readers to fail the read on demand) is used directly:
+   io/reader rejects those on Jolt (\"Cannot open <reify> as a Reader\"),
+   and every consumer here reads via .read only (see
+   make-idle-line-reader), so no BufferedReader wrapper is needed on
+   either host. Anything else (production InputStreams) goes through
+   io/reader as before."
+  [body]
+  (if (instance? java.io.Reader body)
+    body
+    (io/reader body)))
+
 (defn process-responses-stream
   "Read an OpenAI Responses stream response body, buffering multi-line event
    data (like process-anthropic-stream). Calls handler with each parsed
@@ -328,7 +341,7 @@
    before a terminal response event')."
   [response handler signal & [idle-timeout-ms abort-fn]]
   (try
-    (let [rdr (io/reader (:body response))
+    (let [rdr (body->reader (:body response))
           state (atom {:event-name nil :buf "" :slots {} :saw-terminal? false})
           saw-done (atom false)
           end-reason (stream-loop rdr idle-timeout-ms signal abort-fn
@@ -442,7 +455,10 @@
                   in flight on java.net.http streams)
      thread    — the daemon thread, for join-before-close"
   [read-fn idle-ms signal]
-  (let [q (java.util.concurrent.LinkedBlockingQueue.)
+  ;; ArrayBlockingQueue, not LinkedBlockingQueue: Jolt ships a ctor for the
+  ;; former only. The bound only backpressures the daemon (put blocks until
+  ;; the consumer takes); stop interrupts it, so shutdown still releases.
+  (let [q (java.util.concurrent.ArrayBlockingQueue. 65536)
         t (Thread.
            (fn []
              (try
@@ -470,6 +486,13 @@
      (fn [] (.interrupt t))
      t]))
 
+(defn- strip-trailing-cr
+  "Drop a single trailing CR so the .read loop matches .readLine on CRLF
+   input: a kept CR would stop a blank separator line from reading empty
+   and stall Anthropic/Responses event buffering."
+  [s]
+  (if (str/ends-with? s "\r") (subs s 0 (dec (count s))) s))
+
 (defn- read-line-from
   "Assemble one line from an idle-reader read fn. Returns the line string,
    nil at EOF, the read exception when the stream failed, or the reader's
@@ -481,8 +504,8 @@
         (cond
           (instance? Exception c) c
           (or (= :timeout c) (= :aborted c)) c
-          (neg? c) (when (pos? (.length sb)) (str sb)) ;; EOF mid-line
-          (= c (int \newline)) (str sb)
+          (neg? c) (when (pos? (.length sb)) (strip-trailing-cr (str sb))) ;; EOF mid-line
+          (= c (int \newline)) (strip-trailing-cr (str sb))
           :else (do (.append sb (char c)) (recur)))))))
 
 (defn- make-idle-line-reader
@@ -497,7 +520,10 @@
       {:read-line #(read-line-from read-char)
        :stop stop
        :thread thread})
-    {:read-line #(.readLine rdr)
+    ;; No .readLine here: Jolt's BufferedReader ctor returns the wrapped
+    ;; stream, so a proxy Reader has no readLine method. The .read loop
+    ;; serves both hosts (and keeps CR handling identical to the idle path).
+    {:read-line #(read-line-from (fn [] (try (.read rdr) (catch Exception e e))))
      :stop (fn [])
      :thread nil}))
 
@@ -547,7 +573,11 @@
         ((:stop idle))
         (when-let [t (:thread idle)]
           (.join t 2000))
-        (.close rdr)))))
+        ;; proxy Readers implement only the read arities they override —
+        ;; .close dispatches to a missing method on Jolt (the error path
+        ;; owns the resource anyway), so a close failure must not surface
+        ;; as a second event behind the real error.
+        (try (.close rdr) (catch Exception _ nil))))))
 
 (defn- process-data-stream
   "Shared driver for SSE streams whose events arrive on data: lines (OpenAI
@@ -558,7 +588,7 @@
    signal, idle-timeout-ms, abort-fn as in process-openai-stream."
   [response handler signal parse-fn terminal? end-message idle-timeout-ms abort-fn]
   (try
-    (let [rdr (io/reader (:body response))
+    (let [rdr (body->reader (:body response))
           saw-terminal (atom false)
           end-reason (stream-loop rdr idle-timeout-ms signal abort-fn
                                   (fn [line]
@@ -611,7 +641,7 @@
    'Anthropic stream ended before message_stop')."
   [response handler signal & [idle-timeout-ms abort-fn]]
   (try
-    (let [rdr (io/reader (:body response))
+    (let [rdr (body->reader (:body response))
           state (atom {:event-name nil :buf ""})
           ;; pi: message_delta carries the real stop_reason (tool_use /
           ;; max_tokens / ...); message_stop only says the stream ended.
