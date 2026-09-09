@@ -105,15 +105,25 @@ string's first code is not at i.
 
 **kmet impact:** all ANSI-aware scanning in `kmet.tui.utils` that walks a
 styled line code-by-code is wrong past the first code — SGR resets at
-column ≥ 1 are never applied (`sgr-state-at`), OSC-8 truncation keeps
-stray code fragments (`truncate-to-width`), and styled-table slicing
-misaligns (markdown tables). Failing tests: `kmet.test-utils`
-(`test-sgr-state-at`, `test-truncate-to-width-osc-8-close`), plus the
-markdown table alignment/robustness failures.
+column ≥ 1 are never applied (`sgr-state-at`) and OSC-8 truncation keeps
+stray code fragments (`truncate-to-width`) or cuts styled slices short
+(e.g. the tree-selector panning view, whose closing `\u001b[22m` past index 0
+was walked as literal text). Failing tests: `kmet.test-utils`
+(`test-sgr-state-at`, `test-truncate-to-width-osc-8-close`).
 
-**Status:** open. A kmet-side workaround is possible (rewrite the scans
-with `re-seq` over a `subs`-slice, which is index-correct), but `find(int)`
-is core `Matcher` semantics.
+**Note (2026-09-09):** the markdown table alignment/robustness and
+`visible-width` failures previously attributed to this bug are NOT
+Matcher-based — `visible-width` is a pure codepoint loop. They are the
+string code-point-indexing gap (jolt-port.md §8 cause 3 / M16): jolt
+strings index by code point (Chez), kmet's scans assume UTF-16 surrogate
+pairs and over-advance per astral char.
+
+**Status:** open (jolt-side). kmet-side workaround APPLIED 2026-09-09 —
+the anchored-scan idiom was rewritten index-correct in `kmet.tui.utils`
+as suggested here: `match-at` runs no-arg `.find` over a `subs`-slice
+(`ansi-code-at` + truncate's `ansi-at`). `test-sgr-state-at` and
+`test-truncate-to-width-osc-8-close` are green on jolt again; the
+`.region` API gap (JOLT-4) is still open.
 
 ---
 
@@ -164,16 +174,23 @@ positional arg after the options) crashes on Jolt instead of silently
 ignoring the arg.
 
 **kmet impact:** two call sites pass a stray positional argument to
-kwargs-taking fns (`make-select-list` with a dangling selected-id keyword,
-`slice-with-width` with a positional `true` meant as `:strict?`) — dead
-arguments that bb tolerates and Jolt rejects. Failing tests:
+kwargs-taking fns (`make-select-list` with a dangling `:a` keyword in
+`test/kmet/tui/components/test_track.clj`, `slice-with-width` with a
+positional `true` meant as `:strict?` in
+`src/kmet/app/ui/tree_selector.clj:639`) — dead arguments that bb
+tolerates and Jolt rejects. Failing tests:
 `kmet.tui.components.test-track/test-fresh-but-equal-collection-write-keeps-cache`,
 `kmet.app.ui.test-tree-selector/panning-keeps-selected-anchor-readable`.
 (Note: the crash is the *symptom*; the underlying bug is the sloppy call
-sites, which were fixed/flagged in kmet. A conforming Clojure would still
-ignore the trailing arg, so Jolt's throw is the divergence.)
+sites. A conforming Clojure would still ignore the trailing arg, so Jolt's
+throw is the divergence — but the earlier claim that kmet's call sites
+were already cleaned up was wrong: both sites above still existed.)
 
-**Status:** open. kmet-side: call sites cleaned up (no odd trailing args).
+**Status:** open (jolt-side). kmet-side: call sites actually fixed
+2026-09-09 — the dangling `:a` args were dropped and the positional
+`true` became `:strict? true` (the original intent). Both tests are green
+on jolt again (the tree-selector test additionally needed the JOLT-3
+`ansi-code-at` workaround to pass its rendering assertions).
 
 ---
 
