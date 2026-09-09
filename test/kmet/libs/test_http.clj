@@ -8,6 +8,14 @@
 
 ;; ─── Local test server (java.net.ServerSocket, no external deps) ──────────
 
+(defn- sock-write
+  "Write bytes B to socket S. Jolt's SocketOutputStream only implements
+   1-arg write (single byte) and 3-arg write (bytes off len) — the 2-arg
+   whole-array overload is missing (ClassCastException) — so route every
+   test-server write through the 3-arg form, which is valid on both hosts."
+  [s b]
+  (.write (.getOutputStream s) b 0 (alength b)))
+
 (defn- respond
   "Write an HTTP/1.1 response to socket S."
   [s status body hdrs]
@@ -15,18 +23,20 @@
         h (apply str (map (fn [[k v]] (str k ": " v "\r\n")) hdrs))
         head (str "HTTP/1.1 " status " X\r\n" h
                   "Content-Length: " (count b) "\r\n\r\n")]
-    (.write (.getOutputStream s) (.getBytes head))
-    (.write (.getOutputStream s) b)
+    (sock-write s (.getBytes head))
+    (sock-write s b)
     (.flush (.getOutputStream s))))
 
 (defn- read-request
   "Read [req-line headers-map body-reader] off socket S: the request line,
    the headers, and the SAME BufferedReader that consumed the header block
    (a fresh reader on the raw stream would lose buffered body bytes).
-   Lines are trimmed before the blank-line check: Jolt's readLine keeps the
-   trailing \\r, so a bare (seq l) test would read one line past the header
-   block — and Jolt's InputStreamReader pre-buffers the socket, so that
-   extra read consumes the response window (curl then times out)."
+   Lines are trimmed before the blank-line check and header values are
+   trimmed: Jolt's readLine keeps the trailing \\r (the JVM strips it),
+   so a bare (seq l) test would read one line past the header block — and
+   Jolt's InputStreamReader pre-buffers the socket, so that extra read
+   consumes the response window (curl then times out) — and every parsed
+   value would carry a trailing \\r."
   [s]
   (let [rdr (java.io.BufferedReader.
              (java.io.InputStreamReader. (.getInputStream s)))
@@ -35,7 +45,7 @@
       (let [l (.readLine rdr)]
         (if (seq (str/trim (or l "")))
           (recur (if-let [[_ k v] (re-matches #"^([^:]+):\s*(.*)" l)]
-                   (assoc m (str/lower-case k) v)
+                   (assoc m (str/lower-case k) (str/trim v))
                    m))
           [req-line m rdr])))))
 
@@ -228,8 +238,8 @@
                                 head (str "HTTP/1.1 302 Found\r\n"
                                           "Location: /final\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (.write (.getOutputStream s) (.getBytes head))
-                            (.write (.getOutputStream s) b)
+                            (sock-write s (.getBytes head))
+                            (sock-write s b)
                             (.flush (.getOutputStream s)))
                           (respond s "200 OK" req-line {}))))]
     (try
@@ -438,8 +448,8 @@
                                 head (str "HTTP/1.1 302 Found\r\n"
                                           "Location: /final\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (.write (.getOutputStream s) (.getBytes head))
-                            (.write (.getOutputStream s) b)
+                            (sock-write s (.getBytes head))
+                            (sock-write s b)
                             (.flush (.getOutputStream s)))
                           (respond s "200 OK" req-line {}))))]
     (try
@@ -459,8 +469,8 @@
                                 head (str "HTTP/1.1 302 Found\r\n"
                                           "Location: /final\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (.write (.getOutputStream s) (.getBytes head))
-                            (.write (.getOutputStream s) b)
+                            (sock-write s (.getBytes head))
+                            (sock-write s b)
                             (.flush (.getOutputStream s)))
                           (respond s "200 OK" req-line {}))))]
     (try
@@ -478,8 +488,8 @@
                                 head (str "HTTP/1.1 302 Found\r\n"
                                           "Location: /final\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (.write (.getOutputStream s) (.getBytes head))
-                            (.write (.getOutputStream s) b)
+                            (sock-write s (.getBytes head))
+                            (sock-write s b)
                             (.flush (.getOutputStream s)))
                           (respond s "200 OK" req-line {}))))]
     (try
@@ -499,8 +509,8 @@
                                 head (str "HTTP/1.1 302 Found\r\n"
                                           "Location: /final\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (.write (.getOutputStream s) (.getBytes head))
-                            (.write (.getOutputStream s) b)
+                            (sock-write s (.getBytes head))
+                            (sock-write s b)
                             (.flush (.getOutputStream s)))
                           (respond s "200 OK" req-line {}))))]
     (try
@@ -523,8 +533,8 @@
                                 head (str "HTTP/1.1 302 Found\r\n"
                                           "Location: /final\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (.write (.getOutputStream s) (.getBytes head))
-                            (.write (.getOutputStream s) b)
+                            (sock-write s (.getBytes head))
+                            (sock-write s b)
                             (.flush (.getOutputStream s)))
                           (do (Thread/sleep 2000)
                               (respond s "200 OK" "final-body" {})))))]
@@ -545,8 +555,8 @@
                                 head (str "HTTP/1.1 302 Found\r\n"
                                           "Location: /final\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (.write (.getOutputStream s) (.getBytes head))
-                            (.write (.getOutputStream s) b)
+                            (sock-write s (.getBytes head))
+                            (sock-write s b)
                             (.flush (.getOutputStream s)))
                           (respond s "200 OK" req-line {}))))]
     (try
@@ -581,8 +591,8 @@
                                 head (str "HTTP/1.1 200 OK\r\n"
                                           "Content-Encoding: gzip\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (.write (.getOutputStream s) (.getBytes head "ISO-8859-1"))
-                            (.write (.getOutputStream s) b)
+                            (sock-write s (.getBytes head "ISO-8859-1"))
+                            (sock-write s b)
                             (.flush (.getOutputStream s))))))]
     (try
       (with-socks-proxy
@@ -605,8 +615,8 @@
                         (let [b (.getBytes "partial")
                               head (str "HTTP/1.1 200 OK\r\n"
                                         "Content-Length: 100\r\n\r\n")]
-                          (.write (.getOutputStream s) (.getBytes head))
-                          (.write (.getOutputStream s) b)
+                          (sock-write s (.getBytes head))
+                          (sock-write s b)
                           (.flush (.getOutputStream s))
                           (Thread/sleep 60000))))]
     (try
@@ -633,8 +643,8 @@
                         (let [b (.getBytes "streamed")
                               head (str "HTTP/1.1 200 OK\r\n"
                                         "Content-Length: 100\r\n\r\n")]
-                          (.write (.getOutputStream s) (.getBytes head))
-                          (.write (.getOutputStream s) b)
+                          (sock-write s (.getBytes head))
+                          (sock-write s b)
                           (.flush (.getOutputStream s))
                           (Thread/sleep 60000))))]
     (try

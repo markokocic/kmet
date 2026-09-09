@@ -470,7 +470,9 @@
   "Parse curl's --dump-header output into [status headers]: the LAST
    HTTP/1.x or HTTP/2 status line (after -L redirect hops) and the header
    block that follows it, keys lowercased, duplicates joined with ', '
-   (babashka's convention)."
+   (babashka's convention). Values are trimmed: curl writes CRLF line
+   endings and Jolt's regex engine leaves the trailing \\r in the
+   capture, so without the trim every value would carry it."
   [f]
   (let [lines (str/split-lines (slurp f))
         status-idxs (keep-indexed (fn [i l] (when (re-find #"^HTTP/\S+\s+\d{3}" l) i))
@@ -481,8 +483,11 @@
         headers (if (seq status-idxs)
                   (reduce (fn [m l]
                             (if-let [[_ k v] (re-matches #"^([^:]+):\s*(.*)" l)]
-                              (let [k (str/lower-case k)]
-                                (update m k (fnil #(str % ", " v) v)))
+                              (let [k (str/lower-case k)
+                                    v (str/trim v)]
+                                (if (contains? m k)
+                                  (update m k str ", " v)
+                                  (assoc m k v)))
                               m))
                           {}
                           (take-while #(not (str/blank? %))
@@ -542,11 +547,13 @@
 (defn- curl-transport-error
   "Structured transport error for a failed curl run (connect refused, DNS,
    timeout, mid-stream cut, ...): ex-data carries :exit; the message
-   carries curl's stderr."
+   carries curl's stderr, prefixed with the stable 'network error' token
+   so the retry classifier recognizes it (the native path classifies by
+   JVM exception class; curl failures all arrive as process exits)."
   [proc-map]
   (let [result @proc-map
         err (str/trim (or (:err result) ""))]
-    (ex-info (str "Proxy request failed: " err)
+    (ex-info (str "network error: Proxy request failed: " err)
              {:type :transport-error :exit (:exit result) :cause err})))
 
 (defn- cleanup-curl!
@@ -724,8 +731,7 @@
         (cleanup-curl! pid header-file config-file)
         (when (and (not (and signal @signal))
                    (not (contains? #{0 22} exit)))
-          (throw (ex-info (str "Proxy request failed: "
-                               (str/trim (or (:err result) "")))
+          (throw (ex-info (str "network error: Proxy request failed: " (str/trim (or (:err result) "")))
                           {:type :transport-error :exit exit :cause (:err result)})))))
     (when-let [b (:body response)]
       (when (instance? java.io.InputStream b)
