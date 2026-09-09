@@ -234,9 +234,15 @@
   (let [reader (java.io.BufferedReader. (java.io.InputStreamReader. in "UTF-8"))
         request-line (try (.readLine reader) (catch Exception _ nil))]
     (when (seq request-line)
+      ;; Header block ends at the first blank line. The emptiness check must
+      ;; trim: Jolt's readLine keeps the trailing \\r (the JVM strips it), so
+      ;; the blank line arrives as \"\\r\" — a bare (seq line) test would read
+      ;; one line past the header block and block forever waiting for more
+      ;; input (the browser/curl waits for the response → deadlock; test_http
+      ;; read-request carries the same workaround).
       (loop []
         (let [line (try (.readLine reader) (catch Exception _ nil))]
-          (when (and line (seq line)) (recur))))
+          (when (and line (seq (str/trim line))) (recur))))
       (let [[method target] (str/split request-line #"\s+" 3)
             [path query-string] (str/split (or target "") #"\?" 2)]
         {:method (or method "")
@@ -245,7 +251,11 @@
 
 (defn- write-http-response
   "Write an HTTP/1.1 response (status + text/html body, Connection: close)
-   to OUT."
+   to OUT. Writes go through the 3-arg form: Jolt's SocketOutputStream
+   only implements write(int) and write(byte[] off len) — the 2-arg
+   whole-array overload throws ClassCastException there (test_http.clj's
+   sock-write carries the same workaround), so a browser callback would
+   get a connection close with no response page."
   [out {:keys [status body]}]
   (let [status (or status 200)
         reason ({200 "OK" 400 "Bad Request" 404 "Not Found"
@@ -256,9 +266,10 @@
                   "Content-Type: text/html; charset=utf-8\r\n"
                   "Cache-Control: no-store\r\n"
                   "Content-Length: " (alength body-bytes) "\r\n"
-                  "Connection: close\r\n\r\n")]
-    (.write out (.getBytes head "UTF-8"))
-    (.write out body-bytes)
+                  "Connection: close\r\n\r\n")
+        head-bytes (.getBytes head "UTF-8")]
+    (.write out head-bytes 0 (alength head-bytes))
+    (.write out body-bytes 0 (alength body-bytes))
     (.flush out)))
 
 (defn start-callback-server

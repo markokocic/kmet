@@ -73,8 +73,12 @@
         _ (future
             (try
               (with-open [s (java.net.Socket. "127.0.0.1" port)]
-                (.write (.getOutputStream s)
-                        (.getBytes "GET /cb?code=abc HTTP/1.1\r\nHost: x\r\n\r\n" "UTF-8"))
+                ;; 3-arg write: Jolt's SocketOutputStream lacks the 2-arg
+                ;; whole-array overload (ClassCastException) — the browser
+                ;; request bytes must go through the form both hosts share
+                ;; (test_http.clj's sock-write documents the same gap)
+                (let [b (.getBytes "GET /cb?code=abc HTTP/1.1\r\nHost: x\r\n\r\n" "UTF-8")]
+                  (.write (.getOutputStream s) b 0 (alength b)))
                 (.flush (.getOutputStream s))
                 (Thread/sleep 50))
               (catch Exception _ nil)))
