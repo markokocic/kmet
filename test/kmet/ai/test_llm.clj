@@ -1431,7 +1431,7 @@
                            rdr (java.io.BufferedReader.
                                 (java.io.InputStreamReader. (.getInputStream s)))]
                        ;; drain request headers
-                       (while (seq (.readLine rdr)) nil)
+                       (while (seq (str/trim (or (.readLine rdr) ""))) nil)
                        (let [out (.getOutputStream s)
                              stream-body (str "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"
                                               "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
@@ -1479,7 +1479,7 @@
                            rdr (java.io.BufferedReader.
                                 (java.io.InputStreamReader. (.getInputStream s)))]
                        ;; drain request headers, then stall — never respond
-                       (while (seq (.readLine rdr)) nil)
+                       (while (seq (str/trim (or (.readLine rdr) ""))) nil)
                        (Thread/sleep 5000)
                        (.close s))
                      (catch Exception _ nil))))
@@ -1522,7 +1522,7 @@
                      (let [s (.accept ss)
                            rdr (java.io.BufferedReader.
                                 (java.io.InputStreamReader. (.getInputStream s)))]
-                       (while (seq (.readLine rdr)) nil)
+                       (while (seq (str/trim (or (.readLine rdr) ""))) nil)
                        (let [out (.getOutputStream s)]
                          (.write out (.getBytes "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n"))
                          (.flush out)
@@ -1677,8 +1677,7 @@
                  (fn []
                    (try
                      (let [s (.accept ss)
-                           din (java.io.DataInputStream. (.getInputStream s))
-                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. din))
+                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. (.getInputStream s)))
                            ;; capture the request headers + body: read the
                            ;; headers to the blank line, then the
                            ;; Content-Length body (single-line JSON)
@@ -1686,7 +1685,7 @@
                            req-headers (atom {})
                            _ (loop []
                                (let [line (.readLine rdr)]
-                                 (when-not (empty? line)
+                                 (when (seq (str/trim (or line "")))
                                    (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs line 15)))))
                                    (when-let [colon (str/index-of line ":")]
@@ -1699,7 +1698,7 @@
                            ;; Read the body from the SAME reader: the
                            ;; BufferedReader may already hold body bytes past
                            ;; the header terminator in its buffer — reading
-                           ;; din directly would deadlock on those.
+                           ;; the raw stream directly would deadlock on those.
                            body-sb (StringBuilder.)
                            _ (loop [n 0]
                                (if (< n @clen)
@@ -1795,13 +1794,12 @@
                  (fn []
                    (try
                      (let [s (.accept ss)
-                           din (java.io.DataInputStream. (.getInputStream s))
-                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. din))
+                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. (.getInputStream s)))
                            ;; capture the request body (single-line JSON)
                            clen (atom 0)
                            _ (loop []
                                (let [line (.readLine rdr)]
-                                 (when-not (empty? line)
+                                 (when (seq (str/trim (or line "")))
                                    (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs line 15)))))
                                    (recur))))
@@ -2018,13 +2016,12 @@
                  (fn []
                    (try
                      (let [s (.accept ss)
-                           din (java.io.DataInputStream. (.getInputStream s))
-                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. din))
+                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. (.getInputStream s)))
                            clen (atom 0)
                            req-headers (atom {})
                            _ (loop []
                                (let [line (.readLine rdr)]
-                                 (when-not (empty? line)
+                                 (when (seq (str/trim (or line "")))
                                    (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs line 15)))))
                                    (when-let [colon (str/index-of line ":")]
@@ -2037,7 +2034,7 @@
                            ;; Read the body from the SAME reader: the
                            ;; BufferedReader may already hold body bytes past
                            ;; the header terminator in its buffer — reading
-                           ;; din directly would deadlock on those.
+                           ;; the raw stream directly would deadlock on those.
                            body-sb (StringBuilder.)
                            _ (loop [n 0]
                                (if (< n @clen)
@@ -2112,15 +2109,14 @@
                  (fn []
                    (try
                      (let [s (.accept ss)
-                           din (java.io.DataInputStream. (.getInputStream s))
-                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. din))
+                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. (.getInputStream s)))
                            line1 (.readLine rdr)
                            _ (reset! request-line line1)
                            clen (atom 0)
                            req-headers (atom {})
                            _ (loop []
                                (let [line (.readLine rdr)]
-                                 (when-not (empty? line)
+                                 (when (seq (str/trim (or line "")))
                                    (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs line 15)))))
                                    (when-let [colon (str/index-of line ":")]
@@ -2201,15 +2197,14 @@
                  (fn []
                    (try
                      (let [s (.accept ss)
-                           din (java.io.DataInputStream. (.getInputStream s))
-                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. din))
+                           rdr (java.io.BufferedReader. (java.io.InputStreamReader. (.getInputStream s)))
                            line1 (.readLine rdr)
                            _ (reset! request-line line1)
                            clen (atom 0)
                            req-headers (atom {})
                            _ (loop []
                                (let [line (.readLine rdr)]
-                                 (when-not (empty? line)
+                                 (when (seq (str/trim (or line "")))
                                    (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs line 15)))))
                                    (when-let [colon (str/index-of line ":")]
@@ -2298,7 +2293,7 @@
                            clen (atom 0)
                            _ (loop []
                                (let [l (.readLine rdr)]
-                                 (when-not (empty? l)
+                                 (when (seq (str/trim (or l "")))
                                    (when (str/starts-with? (str/lower-case (or l "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs l 15)))))
                                    (recur))))
@@ -2687,7 +2682,7 @@
                              req-headers (atom {})
                              _ (loop []
                                  (let [line (.readLine rdr)]
-                                   (when-not (empty? line)
+                                   (when (seq (str/trim (or line "")))
                                      (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
                                        (reset! clen (Long/parseLong (str/trim (subs line 15)))))
                                      (when-let [colon (str/index-of line ":")]
@@ -2790,7 +2785,7 @@
                            req-headers (atom {})
                            _ (loop []
                                (let [l (.readLine rdr)]
-                                 (when-not (empty? l)
+                                 (when (seq (str/trim (or l "")))
                                    (when (str/starts-with? (str/lower-case (or l "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs l 15)))))
                                    (when-let [colon (str/index-of l ":")]
@@ -2887,7 +2882,7 @@
                            clen (atom 0)
                            _ (loop []
                                (let [l (.readLine rdr)]
-                                 (when-not (empty? l)
+                                 (when (seq (str/trim (or l "")))
                                    (when (str/starts-with? (str/lower-case (or l "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs l 15)))))
                                    (recur))))

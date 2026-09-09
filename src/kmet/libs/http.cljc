@@ -439,9 +439,11 @@
    nil timeout (disabled) omits it; absent gets the curl-timeout-seconds
    default. -L unless :never (default :normal); --compressed for
    transparent gzip (babashka parity); --fail-with-body so HTTP >= 400 exits
-   22 with the error body on stdout. Sensitive bits live in the config
-   file, never argv."
-  [url opts config-file header-file]
+   22 with the error body on stdout. P is the resolved proxy (nil = direct):
+   direct requests pass --noproxy \"*\" so env proxies never leak in, while
+   proxied requests pass --noproxy \"\" so the config-file proxy applies.
+   Sensitive bits live in the config file, never argv."
+  [url opts p config-file header-file]
   (let [timeout-ms (:timeout opts)
         max-time (cond
                    (nil? timeout-ms) nil
@@ -449,7 +451,7 @@
                    :else curl-timeout-seconds)
         get? (= :get (:method opts))
         args (into (cond-> ["curl" "-sS" "-N" "--fail-with-body"
-                            "--noproxy" ""
+                            "--noproxy" (if p "" "*")
                             "-K" (.getPath config-file)
                             "--dump-header" (.getPath header-file)]
                      max-time (conj "--max-time" (str max-time))
@@ -567,7 +569,7 @@
                     {:type :curl-not-found})))
   (let [header-file (curl-header-file)
         config-file (curl-config-file (:headers opts) p)
-        argv (curl-argv url opts config-file header-file)
+        argv (curl-argv url opts p config-file header-file)
         proc-map (proc/process argv {:in (:body opts) :out :stream :err :string})
         pid (process/process-pid proc-map)
         _ (when pid (process/track-pid! pid))

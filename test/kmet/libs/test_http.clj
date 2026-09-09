@@ -22,14 +22,18 @@
 (defn- read-request
   "Read [req-line headers-map body-reader] off socket S: the request line,
    the headers, and the SAME BufferedReader that consumed the header block
-   (a fresh reader on the raw stream would lose buffered body bytes)."
+   (a fresh reader on the raw stream would lose buffered body bytes).
+   Lines are trimmed before the blank-line check: Jolt's readLine keeps the
+   trailing \\r, so a bare (seq l) test would read one line past the header
+   block — and Jolt's InputStreamReader pre-buffers the socket, so that
+   extra read consumes the response window (curl then times out)."
   [s]
   (let [rdr (java.io.BufferedReader.
              (java.io.InputStreamReader. (.getInputStream s)))
         req-line (.readLine rdr)]
     (loop [m {}]
       (let [l (.readLine rdr)]
-        (if (seq l)
+        (if (seq (str/trim (or l "")))
           (recur (if-let [[_ k v] (re-matches #"^([^:]+):\s*(.*)" l)]
                    (assoc m (str/lower-case k) v)
                    m))
@@ -259,21 +263,31 @@
     (catch Exception _ nil))
   (try (.shutdownOutput out) (catch Exception _ nil)))
 
+(defn- read-fully!
+  "Fill BUF from IN, blocking until full; throws on EOF."
+  [in buf]
+  (loop [off 0]
+    (when (< off (alength buf))
+      (let [n (.read in buf off (- (alength buf) off))]
+        (when (neg? n)
+          (throw (Exception. "EOF reading SOCKS5 address")))
+        (recur (+ off n))))))
+
 (defn- read-addr
-  "Read a SOCKS5 address of ATYP from DIS; returns the host string."
-  [dis atyp]
+  "Read a SOCKS5 address of ATYP from IN; returns the host string."
+  [in atyp]
   (case atyp
-    1 (let [b (byte-array 4)] (.readFully dis b)
+    1 (let [b (byte-array 4)] (read-fully! in b)
            (str/join "." (map #(bit-and % 0xff) b)))
-    3 (let [len (.read dis)
-            b (byte-array len)] (.readFully dis b)
+    3 (let [len (.read in)
+            b (byte-array len)] (read-fully! in b)
            (String. b "UTF-8"))
     4 (let [b (byte-array 16)
             words (map (fn [i]
                          (+ (* (bit-and (nth b (* 2 i)) 0xff) 256)
                             (bit-and (nth b (inc (* 2 i))) 0xff)))
                        (range 8))]
-        (.readFully dis b)
+        (read-fully! in b)
         (str/join ":" (map #(format "%02x" %) words)))
     (throw (Exception. "bad atyp"))))
 
@@ -284,24 +298,24 @@
    connection (curl reuses the proxy connection across redirect hops).
    Returns nil on protocol failure."
   [client]
-  (let [dis (java.io.DataInputStream. (.getInputStream client))
+  (let [in (.getInputStream client)
         out (.getOutputStream client)]
     (try
       (loop []
-        (let [v (.read dis)]
+        (let [v (.read in)]
           (when-not (or (neg? v) (not= 5 v))
-            (let [nmethods (.read dis)]
-              (dotimes [_ nmethods] (.read dis))
+            (let [nmethods (.read in)]
+              (dotimes [_ nmethods] (.read in))
               (.write out (byte-array [5 0]))
               (.flush out)
-              (let [v (.read dis)
+              (let [v (.read in)
                     _ (when (and (not (neg? v)) (not= 5 v))
                         (throw (Exception. "bad version")))
-                    cmd (.read dis)
-                    _ (.read dis) ;; reserved
-                    atyp (.read dis)
-                    host (read-addr dis atyp)
-                    port (let [hi (.read dis) lo (.read dis)]
+                    cmd (.read in)
+                    _ (.read in) ;; reserved
+                    atyp (.read in)
+                    host (read-addr in atyp)
+                    port (let [hi (.read in) lo (.read in)]
                            (+ (* hi 256) lo))]
                 (when (not= 1 cmd) (throw (Exception. "not a connect")))
                 (let [target (java.net.Socket. host port)
@@ -643,10 +657,7 @@
                       (fn [s _ _ _] (respond s "200 OK" "ok" {})))
         [port stop] (start-socks-proxy)]
     (try
-      (with-redefs [http/curl-argv (fn [url opts config-file header-file]
-                                     (reset! captured
-                                             (orig-curl-argv url opts config-file header-file))
-                                     @captured)]
+      (with-redefs [http/curl-argv (fn [url opts p config-file header-file] (reset! captured (orig-curl-argv url opts p config-file header-file)) @captured)]
         (http/get (str base "/")
                   {:proxy {:scheme "socks5h" :host "127.0.0.1" :port port
                            :url (str "socks5h://user:secret@127.0.0.1:" port)}
