@@ -16,6 +16,19 @@
 (def ^:private ANSI-CODE-RE
   #"\u001b\[[0-9;]*[a-zA-Z]|\u001b\][^\u0007\u001b\u009c]*(?:\u001b\\|\u0007|\u009c)")
 
+(defn- match-at
+  "Match RE in S starting exactly at index I — the anchored-scan idiom
+   (.find m i) + (= (.start m) i). Runs no-arg .find over (subs s i) so the
+   scan is index-correct on both hosts: jolt's Matcher.find(int) ignores
+   its start argument and always returns the first match (bb-jolt.md JOLT-3).
+   Returns [match-text end] with END absolute in S, nil when nothing starts
+   at I."
+  [re s i]
+  (when (< i (count s))
+    (let [m (re-matcher re (subs s i))]
+      (when (and (.find m) (zero? (.start m)))
+        [(.group m) (+ i (.end m))]))))
+
 ;; pi: SEGMENT_RESET — full SGR + OSC 8 reset appended to every non-image line
 ;; by applyLineResets so a truncated line can never leave active attributes
 ;; or an open hyperlink bleeding into the next line.
@@ -318,11 +331,7 @@
                 (str @sb ellipsis))
               (let [sb (StringBuilder.)
                     n (count s)
-                    ansi-re ANSI-CODE-RE
-                    ansi-at (fn [i]
-                              (let [m (re-matcher ansi-re s)]
-                                (when (and (.find m i) (= (.start m) i))
-                                  [(.group m) (.end m)])))]
+                    ansi-at (fn [i] (match-at ANSI-CODE-RE s i))]
                 (loop [i 0 total 0 pending ""]
                   (if (or (>= i n) (>= total target))
                     (str sb (active-osc-8-close (str sb)) ellipsis)
@@ -658,9 +667,8 @@
   "Return [code length] when an ANSI escape sequence starts at index I of S."
   [s i]
   (when (and (< i (count s)) (= \u001b (nth s i)))
-    (let [m (re-matcher ANSI-CODE-RE s)]
-      (when (and (.find m i) (= (.start m) i))
-        [(.group m) (- (.end m) i)]))))
+    (when-let [[code end] (match-at ANSI-CODE-RE s i)]
+      [code (- end i)])))
 
 (defn slice-with-width
   "Slice LINE's visible columns [start-col, start-col+length), ANSI-aware.
