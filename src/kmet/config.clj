@@ -69,6 +69,8 @@
 
 (def deep-merge eds/deep-merge)
 
+;; load-config (above) applies the merged :http-transport to the runtime
+;; knob; the validated accessor lives with the other accessors below.
 (declare get-http-transport)
 
 (defn- resolve-path

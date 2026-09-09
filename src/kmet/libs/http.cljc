@@ -300,9 +300,10 @@
            {:type :http-error :status status :headers headers :body body}))
 
 ;; ─── Transport: java.net.http (babashka.http-client) ─────────────────────
-;; Both hosts: babashka.http-client natively on bb/JVM, unmodified over the
-;; jolt-lang/http-client shims on Jolt (see request). Only the SOCKS/stream
-;; carve-outs route through the curl path below.
+;; In :platform mode both hosts use babashka.http-client — natively on
+;; bb/JVM, unmodified over the jolt-lang/http-client shims on Jolt — and
+;; only the SOCKS/stream carve-outs route through the curl path below
+;; (:curl mode routes everything there).
 #?(:clj (do (def ^:private client-cache
               "babashka.http-client clients keyed by [proxy mode], so repeated
              requests reuse connections instead of rebuilding a client per call.

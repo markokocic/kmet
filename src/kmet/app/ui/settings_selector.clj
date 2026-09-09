@@ -7,7 +7,8 @@
    cursor, the retry block (settings.edn :retry — enabled / max-retries /
    base-delay-ms, applied live to the agent), the repeat-loop guard
    (settings.edn :loop-guard — enabled / threshold, plus the thinking
-   repeat guard toggle), and a theme row."
+   repeat guard toggle), the HTTP transport row (:platform http-client vs
+   :curl, applied live to kmet.libs.http), and a theme row."
   (:require [kmet.app.loop :as agent]
             [kmet.app.theme-controller :as theme-ctrl]
             [kmet.ai.api.shared :as shared]

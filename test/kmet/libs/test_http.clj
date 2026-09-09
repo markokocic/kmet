@@ -214,11 +214,12 @@
       (finally (close)))))
 
 (deftest-transports test-request-json
-  ;; request-json defaults to :method :post with no :body. curl-argv feeds
-  ;; non-GET bodies via --data-binary @- only when :body is present — a
-  ;; bodyless POST gets plain -X POST, so curl never waits on stdin (a nil
-  ;; :in never EOFs on the jolt host; this test would hang forever there
-  ;; before the fix, taking the whole test-http namespace down with it).
+  ;; request-json defaults to :method :post with no :body. The curl-mode
+  ;; leg must not emit --data-binary @- for a bodyless non-GET — curl
+  ;; reads stdin to EOF for @-, and a nil :in never EOFs on the jolt
+  ;; host, so the request (and with it the whole test-http namespace
+  ;; under the runner's 15 s ns timeout) would hang forever before the
+  ;; fix. A plain -X POST must round-trip instead.
   (let [[base close] (start-server
                       (fn [s _ _ _] (respond s "200 OK" "{\"a\":1}" {})))]
     (try

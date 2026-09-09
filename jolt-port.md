@@ -11,8 +11,8 @@ the rest is code reasoning, not a running port.
 
 **Bottom line**: a full port is a multi-month project with 2 hard blockers
 (subprocess/process management, extension isolation) plus the HTTP/SSE
-wrapper workstream (decided: curl-subprocess transport for all Jolt HTTP
-— see B1; sse reader ported 2026-09-09, curl transport still to prove end-to-end)
+wrapper workstream (B1: babashka.http-client over the jolt-lang shims,
+curl for SOCKS proxies and live streams — sse reader ported 2026-09-09)
 and ~15 medium rewrites. A staged port is viable: pure layers first
 (`libs` minus I/O → `ai/api` builders → `reakt`/`hiccup`/components), then
 the terminal adapter, then transports, then the agent loop + tools, with the
@@ -81,9 +81,9 @@ Verified: deps.edn carries `org.babashka/http-client` 0.4.24 +
 `io.github.jolt-lang/http-client` (git `4744256f83e5`); its transitive
 `jolt-lang/jolt-crypto` pin (`44da69` — same repo as the direct
 `io.github.jolt-lang/crypto` dep at `5effcc89`) lands both shas on the jolt
-classpath with no load conflict observed. test-http 32/74 green on jolt with
-the native slice active (headers/errors/timeout/redirects/bytes parity),
-bb side unchanged (33/75). test-sse re-verified green (streams untouched).
+classpath with no load conflict observed. test-http is green on both hosts
+with every request contract running under both transports (dual-mode suite:
+Jolt 25/90, bb 26/91); test-sse re-verified green (streams untouched).
 
 `sse.clj` reader is ported (2026-09-09): the parsing/state-machine needed no changes; the body reader needed three Jolt workarounds, all inside `sse.clj` — `(ArrayBlockingQueue. 65536)` for the idle-deadline queue (`LinkedBlockingQueue` has no ctor on Jolt), a shared `.read` char loop instead of `.readLine` (Jolt's `BufferedReader` ctor is identity, so a passed-through `proxy` Reader has no `readLine` method), and `body->reader` (Jolt's `jolt-io-reader` rejects `proxy` Readers with `Cannot open <reify> as a Reader`, so Reader bodies bypass `io/reader`; `(.close rdr)` is failure-tolerant for the same reason). `test-sse` is fully green on Jolt (33 tests/109 assertions, `jolt v0.8.5`). `jsonrpc.clj` (409 LOC, MCP stdio
 transport) rides `babashka.process` pipes — portable *if* `jolt.process`
@@ -239,7 +239,7 @@ archive bb-only (M5). M1 is closed — data.json resolves on both hosts.
 6. **Packaging + tooling** (1–2 wks): `jolt build` pipeline replacing `build.cljc`, test runner `^:slow` split, lint/format gates, model generators.
 7. **Extensions** (open-ended): B3 redesign decision; port shipped extensions after.
 
-Estimate honesty: B1 transport is **decided** (curl-only on Jolt, java.net.http on JVM via `#?(:clj ...)` reader conditionals — `http.cljc` ported). Remaining B1 work is `libs.oauth`/`ai.oauth`/`ai.google_adc` (M4, needs `jolt.socket`) — the `sse.clj` reader is ported (2026-09-09, 33/109 green on Jolt). M1 is closed (data.json on both hosts) — all 27 libs load and test green on bb/JVM, and json/jsonrpc/sse/aws_sigv4 are green on Jolt too. B3 is a research spike before it is labor.
+Estimate honesty: B1 transport is **decided** (babashka.http-client on both hosts — native on bb/JVM, over the jolt-lang/http-client shims on Jolt — with curl for SOCKS/https-scheme proxies, Jolt live streams, and the user's `:curl` mode; `http.cljc` ported). Remaining B1 work is `libs.oauth`/`ai.oauth`/`ai.google_adc` (M4, needs `jolt.socket`) — the `sse.clj` reader is ported (2026-09-09, 33/109 green on Jolt). M1 is closed (data.json on both hosts) — all 27 libs load and test green on bb/JVM, and json/jsonrpc/sse/aws_sigv4 are green on Jolt too. B3 is a research spike before it is labor.
 
 ---
 
