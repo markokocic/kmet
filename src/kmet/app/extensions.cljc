@@ -834,9 +834,9 @@
 
 (defonce ^:private context-classes
   (let [from-bb #?(:jolt {}
-                     :clj (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
-                                  (remove #(str/starts-with? (.getName ^Class %) "[")
-                                          (babashka.classes/all-classes)))))
+                   :clj (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
+                                      (remove #(str/starts-with? (.getName ^Class %) "[")
+                                              (babashka.classes/all-classes)))))
         runtime (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
                               runtime-classes))]
     (merge from-bb runtime)))
@@ -1251,29 +1251,29 @@
         bundled-artifacts))
 
 #?(:jolt
-     (defn- closure-jars
-       "Stub on Jolt — extension loading is disabled."
-       [_deps-map] [])
-     :clj
-     (defn- closure-jars
-       "The complete transitive jar set for DEPS-MAP, computed in-process via
+   (defn- closure-jars
+     "Stub on Jolt — extension loading is disabled."
+     [_deps-map] [])
+   :clj
+   (defn- closure-jars
+     "The complete transitive jar set for DEPS-MAP, computed in-process via
         borkdude.deps (the tools.deps port) — no subprocess, no global classpath
         changes, nothing written outside ~/.m2. Resolution failures throw
         (borkdude.deps' default *exit-fn* would kill the process)."
-       [deps-map]
-       (let [cp (with-out-str
-                  (binding [*print-namespace-maps* false
-                            bdeps/*exit-fn* (fn [{:keys [message]}]
-                                              (throw (ex-info (or message "deps resolution failed")
-                                                              {:deps deps-map})))]
-                    (bdeps/-main "-Srepro" "-Spath"
-                                 "-Sdeps" (pr-str {:deps deps-map
-                                                   :mvn/repos {"clojars" {:url "https://repo.clojars.org/"}}})
-                                 "-Sdeps-file" "__kmet_no_deps__.edn")))]
-         (->> (str/split (str/trim cp) (re-pattern (System/getProperty "path.separator")))
-              (filter #(or (str/includes? % ".m2") (str/includes? % ".gitlibs")))
-              (remove bundled-artifact?)
-              vec))))
+     [deps-map]
+     (let [cp (with-out-str
+                (binding [*print-namespace-maps* false
+                          bdeps/*exit-fn* (fn [{:keys [message]}]
+                                            (throw (ex-info (or message "deps resolution failed")
+                                                            {:deps deps-map})))]
+                  (bdeps/-main "-Srepro" "-Spath"
+                               "-Sdeps" (pr-str {:deps deps-map
+                                                 :mvn/repos {"clojars" {:url "https://repo.clojars.org/"}}})
+                               "-Sdeps-file" "__kmet_no_deps__.edn")))]
+       (->> (str/split (str/trim cp) (re-pattern (System/getProperty "path.separator")))
+            (filter #(or (str/includes? % ".m2") (str/includes? % ".gitlibs")))
+            (remove bundled-artifact?)
+            vec))))
 
 (defonce ^:private jars-cache (atom {}))
 
@@ -1445,94 +1445,94 @@
   (if (find-var 'clojure.core/*jolt-version*)
     {:extension nil :path path :error "Extensions not supported on Jolt"}
     (let [f (io/file path)
-        {:keys [name kind artifact entry-ns file]} (resolve-extension path)
-        ext (map->Extension
-             {:name name
-              :path (str (fs/canonicalize f))
-              :kind kind
-              :entry-ns (atom nil)
-              :ctx (atom nil)
-              :jars (atom [])
-              :api (atom nil)
-              :deregister-fns (atom [])
-              :initialized? (atom false)})]
-    (try
-      (let [deps (when artifact
-                   (if (= :jar kind)
-                     (:deps (edn/read-string
-                             (or (jar-entry-source (:root artifact) "deps.edn") "{}")))
-                     (deps-of-root (:root artifact))))
-            jar-info (when (= :jar kind) (jar-namespaces (:root artifact)))
-            owns-ns? (if artifact
-                       (fn [ns-sym] (artifact-owns-ns? artifact jar-info ns-sym))
-                       (constantly false))
-            deps-resolver (make-deps-resolver deps (:jars ext))
-            ctx (create-context name artifact owns-ns?
-                                deps-resolver
-                                (when artifact (extension-resource-fn artifact jar-info deps-resolver)))]
-        (doseq [lib (keys deps)]
-          (when (contains? bb-bundled-libs (str lib))
-            (binding [*out* *err*]
-              (println "Warning: extension" (:name ext) "pins" lib
-                       "which babashka bundles — the Maven copy may not run;"
-                       "omit it from deps.edn to use the bundled version."))))
-        (reset! (:ctx ext) ctx)
-        (if artifact
-          (let [{:keys [source display]} (artifact-source artifact entry-ns)]
-            (when-not source
-              (throw (ex-info (str "extension.edn :entry not found: " entry-ns)
-                              {:path path :entry entry-ns})))
+          {:keys [name kind artifact entry-ns file]} (resolve-extension path)
+          ext (map->Extension
+               {:name name
+                :path (str (fs/canonicalize f))
+                :kind kind
+                :entry-ns (atom nil)
+                :ctx (atom nil)
+                :jars (atom [])
+                :api (atom nil)
+                :deregister-fns (atom [])
+                :initialized? (atom false)})]
+      (try
+        (let [deps (when artifact
+                     (if (= :jar kind)
+                       (:deps (edn/read-string
+                               (or (jar-entry-source (:root artifact) "deps.edn") "{}")))
+                       (deps-of-root (:root artifact))))
+              jar-info (when (= :jar kind) (jar-namespaces (:root artifact)))
+              owns-ns? (if artifact
+                         (fn [ns-sym] (artifact-owns-ns? artifact jar-info ns-sym))
+                         (constantly false))
+              deps-resolver (make-deps-resolver deps (:jars ext))
+              ctx (create-context name artifact owns-ns?
+                                  deps-resolver
+                                  (when artifact (extension-resource-fn artifact jar-info deps-resolver)))]
+          (doseq [lib (keys deps)]
+            (when (contains? bb-bundled-libs (str lib))
+              (binding [*out* *err*]
+                (println "Warning: extension" (:name ext) "pins" lib
+                         "which babashka bundles — the Maven copy may not run;"
+                         "omit it from deps.edn to use the bundled version."))))
+          (reset! (:ctx ext) ctx)
+          (if artifact
+            (let [{:keys [source display]} (artifact-source artifact entry-ns)]
+              (when-not source
+                (throw (ex-info (str "extension.edn :entry not found: " entry-ns)
+                                {:path path :entry entry-ns})))
             ;; fail fast on forbidden/misspelled kmet.* requires — sci's
             ;; require machinery swallows the load-fn error into an NPE.
             ;; The entry source must also declare :entry-ns itself (strict
             ;; layout is enforced at load, not just pack time).
-            (let [ns-form (ns-form-of-source source)]
-              (when-not (= entry-ns (second ns-form))
-                (throw (ex-info (str "Extension " name " strict layout violation: "
-                                     display " declares " (second ns-form)
-                                     ", expected " entry-ns)
-                                {:path path :entry entry-ns})))
-              (validate-entry-requires! name ns-form
-                                        (shared-tui-namespaces)
-                                        (shared-libs-namespaces)
-                                        owns-ns?))
-            (eval-source! ctx source display)
-            (let [init-var (extension-var ext entry-ns 'init)]
-              (when-not init-var
-                (throw (ex-info (str "Extension " (:name ext)
-                                     " does not define an init fn")
-                                {:path path})))
-              (reset! (:entry-ns ext) entry-ns)))
-          ;; single-file extension: the file is the entry itself
-          (let [source (slurp file)]
-            (validate-entry-requires! name (ns-form-of-source source)
-                                      (shared-tui-namespaces)
-                                      (shared-libs-namespaces)
-                                      owns-ns?)
-            (eval-source! ctx source (str file))
-            (let [ns-sym (some-> (ns-form-of-source source) second)]
-              (when-not ns-sym
-                (throw (ex-info (str "Extension " (:name ext)
-                                     " file does not start with (ns ...)")
-                                {:path path})))
-              (let [init-var (extension-var ext ns-sym 'init)]
+              (let [ns-form (ns-form-of-source source)]
+                (when-not (= entry-ns (second ns-form))
+                  (throw (ex-info (str "Extension " name " strict layout violation: "
+                                       display " declares " (second ns-form)
+                                       ", expected " entry-ns)
+                                  {:path path :entry entry-ns})))
+                (validate-entry-requires! name ns-form
+                                          (shared-tui-namespaces)
+                                          (shared-libs-namespaces)
+                                          owns-ns?))
+              (eval-source! ctx source display)
+              (let [init-var (extension-var ext entry-ns 'init)]
                 (when-not init-var
                   (throw (ex-info (str "Extension " (:name ext)
                                        " does not define an init fn")
-                                  {:path path}))))
-              (reset! (:entry-ns ext) ns-sym))))
-        (let [api (create-extension-api ext)]
-          (reset! (:api ext) api)
-          ((extension-var ext @(:entry-ns ext) 'init) api)
-          (reset! (:initialized? ext) true)))
-      (swap! extensions conj ext)
-      {:extension (:name ext) :error nil}
-      (catch Exception e
-        (unload-extension! ext)
-        {:extension nil
-         :path path
-         :error (or (ex-message e)
-                    (str "load failed: " (.getName (class e))))})))))
+                                  {:path path})))
+                (reset! (:entry-ns ext) entry-ns)))
+          ;; single-file extension: the file is the entry itself
+            (let [source (slurp file)]
+              (validate-entry-requires! name (ns-form-of-source source)
+                                        (shared-tui-namespaces)
+                                        (shared-libs-namespaces)
+                                        owns-ns?)
+              (eval-source! ctx source (str file))
+              (let [ns-sym (some-> (ns-form-of-source source) second)]
+                (when-not ns-sym
+                  (throw (ex-info (str "Extension " (:name ext)
+                                       " file does not start with (ns ...)")
+                                  {:path path})))
+                (let [init-var (extension-var ext ns-sym 'init)]
+                  (when-not init-var
+                    (throw (ex-info (str "Extension " (:name ext)
+                                         " does not define an init fn")
+                                    {:path path}))))
+                (reset! (:entry-ns ext) ns-sym))))
+          (let [api (create-extension-api ext)]
+            (reset! (:api ext) api)
+            ((extension-var ext @(:entry-ns ext) 'init) api)
+            (reset! (:initialized? ext) true)))
+        (swap! extensions conj ext)
+        {:extension (:name ext) :error nil}
+        (catch Exception e
+          (unload-extension! ext)
+          {:extension nil
+           :path path
+           :error (or (ex-message e)
+                      (str "load failed: " (.getName (class e))))})))))
 
 (defn unload-extension!
   "Unload an extension: shutdown (if initialized), deregister everything it
@@ -1640,33 +1640,33 @@
     []
     (let [d (io/file dir)]
       (when (fs/directory? d)
-      (mapv (fn [entry]
-              (let [path (str entry)
-                    lower (str/lower-case path)
-                    result (cond
-                             (and (fs/regular-file? entry) (str/ends-with? path ".clj"))
-                             (load-extension! path)
+        (mapv (fn [entry]
+                (let [path (str entry)
+                      lower (str/lower-case path)
+                      result (cond
+                               (and (fs/regular-file? entry) (str/ends-with? path ".clj"))
+                               (load-extension! path)
 
-                             (and (fs/regular-file? entry)
-                                  (or (str/ends-with? lower ".jar")
-                                      (str/ends-with? lower ".zip")))
-                             (load-extension! path)
+                               (and (fs/regular-file? entry)
+                                    (or (str/ends-with? lower ".jar")
+                                        (str/ends-with? lower ".zip")))
+                               (load-extension! path)
 
-                             (fs/directory? entry)
+                               (fs/directory? entry)
                              ;; only directories with an extension.edn manifest are
                              ;; extensions — an extension's own subdirs are
                              ;; loaded via the entry's requires, not here
-                             (if (fs/exists? (io/file (str entry) "extension.edn"))
-                               (load-extension! path)
-                               nil)
+                               (if (fs/exists? (io/file (str entry) "extension.edn"))
+                                 (load-extension! path)
+                                 nil)
 
-                             :else nil)]
-                (when (and result (:error result))
-                  (binding [*out* *err*]
-                    (println "Warning: Failed to load extension" path ":"
-                             (:error result))))
-                result))
-            (sort-by str (fs/list-dir d)))))))
+                               :else nil)]
+                  (when (and result (:error result))
+                    (binding [*out* *err*]
+                      (println "Warning: Failed to load extension" path ":"
+                               (:error result))))
+                  result))
+              (sort-by str (fs/list-dir d)))))))
 
 (defn reload-extensions!
   "Unload all loaded extensions, then load from DIRS. Returns the list of
