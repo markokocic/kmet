@@ -4,6 +4,9 @@
         ;; in-process Maven closure resolution for extension deps.edn
         ;; (0.0.21 = last version without the clojure-tools installer)
         borkdude/deps.clj {:mvn/version "0.0.21"}
+        ;; 2.4.0, NOT 2.5.x: data.json >= 2.5 uses definterface (json.clj
+        ;; InternalPBR), which babashka SCI cannot analyze. The jolt/JVM
+        ;; classpath (deps.edn) may pin 2.5.1.
         org.clojure/data.json {:mvn/version "2.4.0"}}
  :tasks
  {run     {:doc "Run kmet (interactive TUI)"
