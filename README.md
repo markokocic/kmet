@@ -98,6 +98,32 @@ bb run --print "list files in current directory"
                         used at startup when newer than the built-in data
   -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)
   -h, --help            Show this help
+
+### Package subcommands
+
+Install, remove, list and configure **packages** — extensions, skills,
+prompt templates and themes bundled in a local directory or file (pi's
+`install`/`remove`/`list`/`config` with local sources; npm/git package
+installs are not ported):
+
+```sh
+kmet install ./path/to/package [-l]   # add a local dir/file package to settings
+kmet remove ./path/to/package [-l]    # remove it again (alias: kmet uninstall)
+kmet list                             # show configured packages
+kmet config [-l]                      # enable/disable package resources (TUI)
+```
+
+- A **file** source loads as a single extension; a **directory** loads as one
+extension (contains `extension.edn`) or scans its conventional `extensions/`,
+`skills/`, `prompts/`, `themes/` subdirectories (pi package rules).
+- Sources are recorded in `:packages` in `~/.kmet/agent/settings.edn` (global)
+or `.kmet/settings.edn` with `-l` (project), stored relative to the settings
+file. Configured packages load at startup and on `/reload`, after the auto
+resource dirs.
+- `kmet config` opens a TUI listing every package resource with a checkbox;
+space toggles, Tab switches global/project scope (project scope cycles
+inherit/load/unload), typing filters, escape closes. The writes are per-type
+`+path`/`-path` filter entries on the package (pi's object entries).
 ```
 
 ### In-TUI commands
@@ -251,6 +277,17 @@ Create EDN theme files in `~/.kmet/agent/themes/`. See `examples/themes/` for fo
 
 ## Skills & Extensions
 
+- **Packages**: share any mix of extensions, skills, prompt templates and
+  themes as a local directory or file. `kmet install ./package [-l]` records
+  the source in the settings `:packages` list; a package directory loads as a
+  single extension (contains `extension.edn`) or scans its conventional
+  `extensions/`, `skills/`, `prompts/`, `themes/` subdirectories. Filter what a
+  package loads with the object form — `{:source "../pkg" :extensions
+  ["extensions/*.clj" "!extensions/legacy.clj"]}` (plain globs include,
+  `!` excludes, `+path`/`-path` force include/exclude, `[]` disables a type)
+  or use `kmet config`. A project entry with `:autoload false` is a delta over
+  the global entry of the same package (pi's package model — same pattern
+  semantics as pi's `packages.md`).
 - **Skills**: Place `name/SKILL.md` directories (or flat `.md` files) with YAML frontmatter (`name`, `description`) in `~/.kmet/agent/skills/` or `.kmet/skills/` — listed in the system prompt as `<available_skills>`; `/skill:name` loads one on demand (Agent Skills standard, pi-compatible)
 - **Prompt Templates**: Place `.md` files in `~/.kmet/agent/prompts/` or `.kmet/prompts/` — `/name args` expands to the template body with `$1`, `$@`, `${1:-default}`, `${@:N}` placeholders; unknown `/cmd` falls through to the agent (pi-compatible)
 - **Extensions**: Place `.clj` files (or directories with `extension.edn`) in

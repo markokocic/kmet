@@ -23,20 +23,74 @@ provider streaming + dynamic model refresh).
 | Area | pi feature | kmet decision |
 |---|---|---|
 | Additional run modes | `--mode rpc` / `--mode json`, `pi server` / `pi client` / `pi rpc`, `packages/server`, `packages/client`, `packages/protocol` (CBOR), `docs/rpc.md`, `docs/sdk.md` | Not ported — kmet ships interactive + print modes only |
-| Project trust | `core/project-trust.ts`, `core/trust-manager.ts`, `/trust`, `trust-selector.ts`, `--approve`/`--no-approve`, `defaultProjectTrust`, `trust.json` | Not ported — project settings/extensions load unconditionally |
-| Package manager | `core/package-manager.ts`, `package-manager-cli.ts` (`pi install/remove/update/list`), `packages` setting, `npmCommand` | Not ported — resources come from local dirs only |
+| Project trust | `core/project-trust.ts`, `core/trust-manager.ts`, `/trust`, `trust-selector.ts`, `--approve`/`--no-approve`, `defaultProjectTrust`, `trust.json` | Not ported — project settings/extensions load unconditionally (`-a`/`-na` parse as no-ops on the package commands) |
+| Package sources: npm/git | `npm:`/`git:` installs (npm registry + git clone machinery in `core/package-manager.ts`), `pi update`/self-update, temporary `--extension` installs, per-package autoload deltas over npm/git identities | Not ported — kmet packages are local files/directories only (`kmet install ./dir`, `~`, absolute, relative; anything else errors with "Unsupported package source"). The remainder of the package manager IS ported (next section) |
 | Session interop / JSONL | pi JSONL session files, `/export` `.jsonl`, `--export` from JSONL | EDNL-only by design (see `session.md`) — `/export` writes standalone HTML |
+
+## Ported: the local-source package manager (`kmet install/remove/list/config`)
+
+pi `core/package-manager.ts` + `package-manager-cli.ts` + `cli/config-selector.ts`
+→ `kmet.app.packages` + `kmet.package-manager` + `kmet.app.ui.resource-config`
+(+ the runner call sites in `core.clj`, `modes/interactive.clj`, `modes/print.clj`).
+Sources are local **files** (load as one extension) or **directories**
+(one `extension.edn` extension, or conventional `extensions/` `skills/`
+`prompts/` `themes/` subdirectories, or a bare dir as an extension container).
+`kmet install <source> [-l]` validates and records the source in the
+settings `:packages` (stored relative to the scope base dir, pi
+`normalizePackageSourceForSettings`); `remove`/`uninstall` matches by
+resolved identity (pi `packageSourcesMatch`); `list` shows user + project
+sections with installed paths; `config` opens the resource TUI — groups per
+package (scope in the label), per-type subgroups, search, space/enter
+toggles, Tab global/project scope switching with the inherit/load/unload
+tri-state and dimmed inherited rows, escape/ctrl+c close.
+
+Object entries are fully supported with pi's semantics:
+`{:source ... :extensions [...] :skills [...] :prompts [...] :themes [...]}`
+(plain globs include, `!glob` excludes, `+path`/`-path` exact force
+include/exclude, `[]` disables all of a type, absent key loads all) and
+project entries with `:autoload false` apply as deltas over the global entry
+of the same identity. Resolution order/dedupe mirrors pi (project wins;
+delta pairs apply first; first-wins per canonical path; filtered-out items
+stay in the resolution with `:enabled false` so the config list can
+re-enable them). Configured packages load after the auto resource dirs at
+startup, in print mode, and on `/reload`.
+
+Kmet adaptations (deliberate deviations):
+
+- kmet's single-extension dir unit is a directory containing `extension.edn`
+  (pi: `package.json` `pi` manifest or an implicit `extension.ts`); a bare
+  directory without resource subdirs loads as an *extension container*
+  (top-level `.clj`/`.jar`/`.zip`/`extension.edn` items) rather than one
+  extension, and its items are individually filterable.
+- No pi `package.json` manifest — packages use the convention subdirs only,
+  and `extension.edn` dirs ignore per-type filters (the extension owns its
+  bundle, pi file-source behavior).
+- Pattern matching implements minimatch's common subset (`*`, `?`, `**`,
+  `[...]`; no extglobs/braces) against the same match forms as pi (relative
+  path, file name, absolute path; skills also match their parent folder).
+- `config` lists **package resources only**: kmet has no top-level settings
+  resource entries (`settings.extensions` etc.) and its auto resource dirs
+  stay file-managed (pi's top-level/auto groups are omitted). Filter writes
+  target the package's own entry only. Project mode is available whenever
+  `.kmet/` exists or `-l` was passed (no trust gate).
+- Remote (npm/git) entries in settings warn and are skipped at load instead
+  of being auto-installed.
+- `pi update` (extension updates, model-catalog refresh, self-update) is not
+  ported; `kmet --generate-models` covers the model-catalog piece.
 
 ## Gap analysis
 
 ### 1. CLI surface
 
-**Subcommands** (pi has; kmet has none — only flags + `-main` dispatch):
+**Subcommands** — pi's package commands are ported for local sources (see
+“Ported: the local-source package manager”): `kmet install/remove/uninstall/
+list/config` dispatch from `core.clj` to `kmet.package-manager` (pi
+`package-manager-cli.ts`) before generic arg parsing. Still missing:
 
 | pi command | ref |
 |---|---|
 | `pi auth check` / `pi auth print-api-key` / `pi auth print-bearer-token` | `cli/auth-check.ts`, `cli/auth-command.ts`, `cli/credential-print.ts` |
-| `pi config` (resource config TUI) | `cli/config-selector.ts` |
+| `pi update [source|self|--models|--all ...]` | `package-manager-cli.ts` |
 | `pi --export <session-file> [path]` | `main.ts` (`--export`) |
 
 **Flags** — kmet covers `-p/--print`, `-c/--continue`, `-r/--resume`, `--model`,

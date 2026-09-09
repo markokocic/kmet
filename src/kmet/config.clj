@@ -197,10 +197,33 @@
 ;; fields back to the global file (pi: setHideThinkingBlock etc. write to
 ;; ~/.pi/agent/settings.json via SettingsManager.save).
 
+(defn- read-settings-file
+  "The parsed settings map at PATH, or nil when the file is missing,
+   unreadable, or not a map."
+  [path]
+  (let [file (io/file path)]
+    (when (fs/exists? file)
+      (try (let [parsed (edn/read-string (slurp file))]
+             (when (map? parsed) parsed))
+           (catch Exception _ nil)))))
+
 (defn global-settings-path
   "Path of the global settings file (~/.kmet/agent/settings.edn)."
   []
   (expand-path "~/.kmet/agent/settings.edn"))
+
+(defn project-settings-path
+  "Path of the project settings file (.kmet/settings.edn, resolved against
+   the current working directory)."
+  []
+  (str (fs/path (fs/cwd) ".kmet" "settings.edn")))
+
+(defn project-dir
+  "The project settings directory (.kmet, resolved against the current
+   working directory) — the base dir project-scoped package paths and
+   resource entries resolve against (pi: join(cwd, CONFIG_DIR_NAME))."
+  []
+  (str (fs/path (fs/cwd) ".kmet")))
 
 (defn save-setting!
   "Persist a setting to the global settings.edn (pi: SettingsManager.save —
@@ -210,6 +233,25 @@
    kmet.libs.edn-settings/save-edn-setting!."
   [path value]
   (eds/save-edn-setting! (global-settings-path) path value))
+
+(defn save-project-setting!
+  "Persist a setting to the project settings.edn (.kmet/settings.edn) with
+   the same semantics as save-setting! (pi: SettingsManager project-scope
+   setters). Creates the .kmet directory as needed."
+  [path value]
+  (eds/save-edn-setting! (project-settings-path) path value))
+
+(defn read-global-settings-map
+  "The parsed global settings map (~/.kmet/agent/settings.edn), or nil when
+   the file is missing, unreadable, or not a map."
+  []
+  (read-settings-file (global-settings-path)))
+
+(defn read-project-settings-map
+  "The parsed project settings map (.kmet/settings.edn), or nil when the
+   file is missing, unreadable, or not a map."
+  []
+  (read-settings-file (project-settings-path)))
 
 (defn get-http-transport
   "Outbound HTTP transport mode (see kmet.libs.http/set-transport!):
@@ -242,11 +284,7 @@
   "The parsed global settings map, or nil when the file is missing,
    unreadable, or not a map."
   []
-  (let [file (io/file (global-settings-path))]
-    (when (fs/exists? file)
-      (try (let [parsed (edn/read-string (slurp file))]
-             (when (map? parsed) parsed))
-           (catch Exception _ nil)))))
+  (read-settings-file (global-settings-path)))
 
 (defn get-setting-live
   "Live top-level KEY from the global settings file, falling back to the

@@ -116,27 +116,32 @@
       {:skill nil
        :diagnostics [{:type "warning" :message (ex-message e) :path (str file-path)}]})))
 
-(defn- load-skills-dir
-  "pi: loadSkillsFromDirInternal. Discovery rules:
-   - a dir containing SKILL.md is a skill root — load it, do not recurse
-   - otherwise load direct .md children and recurse into subdirectories
-   Hidden entries and node_modules are skipped.
-   Returns seq of {:skill ... :diagnostics ...}."
+(defn- skill-files-in-dir
+  "pi: loadSkillsFromDirInternal discovery walk — a dir containing SKILL.md
+   is a skill root (load it, do not recurse); otherwise direct .md children
+   and then subdirectories (recursion). Hidden entries and node_modules are
+   skipped. Returns the ordered skill file paths."
   [dir]
   (let [entries (try (fs/list-dir dir) (catch Exception _ []))
         skill-md (some #(when (= "SKILL.md" (fs/file-name %)) %) entries)]
     (if skill-md
-      [(load-skill-from-file (str skill-md))]
-      (concat (map #(load-skill-from-file (str %))
+      [(str skill-md)]
+      (concat (map str
                    (filter #(and (fs/regular-file? %)
                                  (str/ends-with? (fs/file-name %) ".md")
                                  (not (str/starts-with? (fs/file-name %) ".")))
                            entries))
-              (mapcat load-skills-dir
+              (mapcat skill-files-in-dir
                       (filter #(and (fs/directory? %)
                                     (not (str/starts-with? (fs/file-name %) "."))
                                     (not= "node_modules" (fs/file-name %)))
                               entries))))))
+
+(defn- load-skills-dir
+  "Parse every discovered skill file under DIR (see skill-files-in-dir).
+   Returns seq of {:skill ... :diagnostics ...}."
+  [dir]
+  (mapv load-skill-from-file (skill-files-in-dir dir)))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────
 
@@ -153,11 +158,37 @@
     (do (swap! skills conj skill)
         nil)))
 
+(defn- add-skill-results!
+  "Register parsed skill results ({:skill ... :diagnostics ...}), collecting
+   collision diagnostics, then print all diagnostics to stderr and return
+   them (pi: keep the first skill on a name collision)."
+  [results]
+  (let [collisions (volatile! [])]
+    (doseq [{:keys [skill]} results]
+      (when skill
+        (when-let [collision (add-skill! skill (:file-path skill))]
+          (vswap! collisions conj collision))))
+    (let [diagnostics (into (vec (mapcat :diagnostics results)) @collisions)]
+      (doseq [{:keys [type message path]} diagnostics]
+        (binding [*out* *err*]
+          (println (str "Warning: skill " type " at " path ": " message))))
+      diagnostics)))
+
 (defn clear-skills!
   "Remove all loaded skills and reset the registry (pi: resourceLoader.reload
    re-discovers from scratch). Used by /reload."
   []
   (reset! skills []))
+
+(defn discover-skill-files
+  "Discover skill files under DIR using pi's discovery rules (a dir
+   containing SKILL.md is a skill root and is not recursed; otherwise direct
+   .md children and subdirectories are walked). Returns the ordered vector
+   of skill file paths (SKILL.md files and flat .md files). Used by the
+   package resource resolver for per-file enable/disable; load-skills-from-dir
+   is the same discovery plus registration."
+  [dir]
+  (skill-files-in-dir (str dir)))
 
 (defn load-skills-from-dir
   "Load skills from a directory using pi's discovery rules. Skills are added
@@ -168,17 +199,15 @@
   (let [d (io/file dir)]
     (if-not (fs/directory? d)
       []
-      (let [results (load-skills-dir (str d))
-            collisions (volatile! [])]
-        (doseq [{:keys [skill]} results]
-          (when skill
-            (when-let [collision (add-skill! skill (:file-path skill))]
-              (vswap! collisions conj collision))))
-        (let [diagnostics (into (vec (mapcat :diagnostics results)) @collisions)]
-          (doseq [{:keys [type message path]} diagnostics]
-            (binding [*out* *err*]
-              (println (str "Warning: skill " type " at " path ": " message))))
-          diagnostics)))))
+      (add-skill-results! (load-skills-dir (str d))))))
+
+(defn load-skills-from-files!
+  "Load skills from explicit skill file paths (SKILL.md files or flat .md
+   files — the package-resource unit, pi: package skills load). Same
+   registration, collision and warning behavior as load-skills-from-dir.
+   Returns the diagnostics."
+  [file-paths]
+  (add-skill-results! (mapv load-skill-from-file file-paths)))
 
 (defn register-extension-skill!
   "Register a skill from an extension's bundled SKILL.md content string

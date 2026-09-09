@@ -11,6 +11,7 @@
             [kmet.libs.context :as context]
             [kmet.app.prompts :as prompts]
             [kmet.app.extensions :as extensions]
+            [kmet.app.packages :as packages]
             [kmet.config :as cfg]))
 
 (defn- extension-before-tool-call
@@ -62,6 +63,8 @@
             (skills/load-skills-from-dir d))
         _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
             (prompts/load-prompt-templates-from-dir d))
+        _ (packages/load-package-skills!)
+        _ (packages/load-package-prompts!)
         system-prompt-opts {:custom-prompt (cfg/get-custom-prompt config)
                             :append-prompt (cfg/get-append-system-prompt config)
                             :context-files (context/load-project-context-files

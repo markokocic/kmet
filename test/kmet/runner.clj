@@ -71,6 +71,9 @@
 
     kmet.app.test-prompts
     kmet.app.test-extensions
+    kmet.app.test-packages
+    kmet.test-package-manager
+    kmet.app.ui.test-resource-config
     kmet.app.test-extensions-ui
     kmet.app.test-interactive-ui
     kmet.app.test-event-bus

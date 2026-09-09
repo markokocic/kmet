@@ -1630,6 +1630,52 @@
   (reset! applied-resource-paths #{})
   (unload-all-extensions!))
 
+(defn registered-extensions
+  "Currently loaded Extension records (the registry vector)."
+  []
+  @extensions)
+
+(defn extension-artifact-paths
+  "Extension artifact paths inside container DIR (a directory): top-level
+   .clj files, .jar/.zip archives, and subdirectories containing
+   extension.edn (a directory without the manifest is an extension's own
+   layout, not an extension). Sorted by path. [] for a missing dir."
+  [dir]
+  (let [d (io/file dir)]
+    (if-not (fs/directory? d)
+      []
+      (->> (fs/list-dir d)
+           (sort-by str)
+           (keep (fn [entry]
+                   (let [path (str entry)
+                         lower (str/lower-case path)]
+                     (cond
+                       (and (fs/regular-file? entry) (str/ends-with? path ".clj")) path
+                       (and (fs/regular-file? entry)
+                            (or (str/ends-with? lower ".jar")
+                                (str/ends-with? lower ".zip"))) path
+                       (and (fs/directory? entry)
+                            (fs/exists? (io/file (str entry) "extension.edn"))) path
+                       :else nil))))
+           vec))))
+
+(defn load-extension-paths!
+  "Load extensions from explicit artifact paths (.clj/.jar/.zip files or
+   extension.edn directories — the package-resource unit, pi: package
+   extensions load). Returns the list of per-extension {:extension name
+   :error} results; failures are also printed as warnings."
+  [paths]
+  (if (find-var 'clojure.core/*jolt-version*)
+    []
+    (mapv (fn [path]
+            (let [result (load-extension! path)]
+              (when (and result (:error result))
+                (binding [*out* *err*]
+                  (println "Warning: Failed to load extension" path ":"
+                           (:error result))))
+              result))
+          paths)))
+
 (defn load-extensions-from-dir
   "Load all extensions in DIR (a container): top-level .clj files, .jar/.zip
    archives, and subdirectories containing extension.edn. Returns the list of
@@ -1640,33 +1686,7 @@
     []
     (let [d (io/file dir)]
       (when (fs/directory? d)
-        (mapv (fn [entry]
-                (let [path (str entry)
-                      lower (str/lower-case path)
-                      result (cond
-                               (and (fs/regular-file? entry) (str/ends-with? path ".clj"))
-                               (load-extension! path)
-
-                               (and (fs/regular-file? entry)
-                                    (or (str/ends-with? lower ".jar")
-                                        (str/ends-with? lower ".zip")))
-                               (load-extension! path)
-
-                               (fs/directory? entry)
-                             ;; only directories with an extension.edn manifest are
-                             ;; extensions — an extension's own subdirs are
-                             ;; loaded via the entry's requires, not here
-                               (if (fs/exists? (io/file (str entry) "extension.edn"))
-                                 (load-extension! path)
-                                 nil)
-
-                               :else nil)]
-                  (when (and result (:error result))
-                    (binding [*out* *err*]
-                      (println "Warning: Failed to load extension" path ":"
-                               (:error result))))
-                  result))
-              (sort-by str (fs/list-dir d)))))))
+        (load-extension-paths! (extension-artifact-paths (str d)))))))
 
 (defn reload-extensions!
   "Unload all loaded extensions, then load from DIRS. Returns the list of

@@ -152,23 +152,39 @@
     (when t (swap! templates conj t))
     (fn [] (swap! templates (fn [ts] (remove #(identical? % t) ts))))))
 
+(defn prompt-template-files-in-dir
+  "Prompt template .md files directly inside DIR (non-recursive, pi:
+   loadTemplatesFromDir discovery). Returns the ordered file paths."
+  [dir]
+  (let [d (io/file dir)]
+    (if-not (fs/directory? d)
+      []
+      (->> (fs/list-dir d)
+           (filter #(and (fs/regular-file? %)
+                         (str/ends-with? (fs/file-name %) ".md")))
+           (map str)
+           vec))))
+
+(defn load-prompt-template-files!
+  "Load prompt templates from explicit .md file paths (the package-resource
+   unit, pi: package prompts load). Adds them to the registry and returns the
+   loaded templates."
+  [file-paths]
+  (let [loaded (volatile! [])]
+    (doseq [f file-paths]
+      (when (str/ends-with? (fs/file-name (str f)) ".md")
+        (when-let [t (load-template-from-file (str f))]
+          (vswap! loaded conj t))))
+    (let [ts @loaded]
+      (swap! templates into ts)
+      ts)))
+
 (defn load-prompt-templates-from-dir
   "Load .md prompt templates from a directory (non-recursive, pi:
    loadTemplatesFromDir). Adds them to the registry; returns the loaded
    templates."
   [dir]
-  (let [d (io/file dir)]
-    (if-not (fs/directory? d)
-      []
-      (let [loaded (volatile! [])]
-        (doseq [f (fs/list-dir d)]
-          (when (and (fs/regular-file? f)
-                     (str/ends-with? (fs/file-name f) ".md"))
-            (when-let [t (load-template-from-file (str f))]
-              (vswap! loaded conj t))))
-        (let [ts @loaded]
-          (swap! templates into ts)
-          ts)))))
+  (load-prompt-template-files! (prompt-template-files-in-dir dir)))
 
 (defn get-prompt-templates
   []

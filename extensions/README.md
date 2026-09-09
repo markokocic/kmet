@@ -8,10 +8,18 @@ is loaded by default.
 
 Extensions load from the global dir (`~/.kmet/agent/extensions/`) and the
 project-local dir (`.kmet/extensions/`) at startup and on `/reload`. Enable
-a shipped extension by symlinking or copying it into one of those:
+a shipped extension by symlinking or copying it into one of those — or
+install it as a **package** with `kmet install <path>` (records the source
+in settings; see README “Package subcommands” and
+`extensions/extensions.md`):
 
 ```bash
-# global (all projects)
+# one-time setup: make the shipped extension a package (user scope)
+kmet install "$PWD/extensions/clojure/src"
+# ...or project scope
+kmet install "$PWD/extensions/clojure/src" --local
+
+# classic way — global (all projects)
 mkdir -p ~/.kmet/agent/extensions
 ln -s "$PWD/extensions/tools.clj" ~/.kmet/agent/extensions/tools.clj
 # directory extension: link its src/ (the artifact root)

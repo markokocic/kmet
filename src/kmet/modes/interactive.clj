@@ -50,6 +50,7 @@
             [kmet.app.commands :as commands]
             [kmet.app.extensions :as extensions]
             [kmet.app.event-bus :as event-bus]
+            [kmet.app.packages :as packages]
             [kmet.tui.autocomplete :as ac]
             [kmet.tui.fuzzy :as fuzzy]
             [kmet.debug :as debug]
@@ -1356,6 +1357,14 @@
               ;; stderr, so failures must be collected for the transcript
               ext-results (mapcat #(extensions/load-extensions-from-dir %)
                                   (cfg/resource-dirs config :extensions-dir ".kmet/extensions"))
+              ;; configured packages reload after the auto dirs (pi: package
+              ;; resources rank below auto-discovered ones); their failures
+              ;; join the reload message like dir ones
+              pkg-ext-results (packages/load-package-extensions!)
+              ext-results (concat ext-results pkg-ext-results)
+              _ (packages/load-package-skills!)
+              _ (packages/load-package-prompts!)
+              _ (packages/load-package-themes!)
               ;; pi: model-runtime.refresh — recompose providers from models.edn
               _ (models/load-models-config!)
               ;; pi: resourceLoader.reload (skills, prompts)
@@ -3201,6 +3210,10 @@
             (skills/load-skills-from-dir d))
         _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
             (prompts/load-prompt-templates-from-dir d))
+        ;; Configured packages load after the auto resource dirs (pi: package
+        ;; resources rank below auto-discovered ones)
+        _ (packages/load-package-skills!)
+        _ (packages/load-package-prompts!)
         system-prompt-opts {:custom-prompt (cfg/get-custom-prompt config)
                             :append-prompt (cfg/get-append-system-prompt config)
                             :context-files (context/load-project-context-files

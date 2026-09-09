@@ -7,6 +7,8 @@
             [kmet.modes.print :as print-mode]
             [kmet.config :as cfg]
             [kmet.app.extensions :as extensions]
+            [kmet.app.packages :as packages]
+            [kmet.package-manager :as package-manager]
             [kmet.ai.image-models :as image-models]
             [kmet.ai.model-gen :as model-gen]
             [kmet.ai.models :as models]
@@ -157,11 +159,18 @@
   (println "  -t, --thinking <level> Thinking level (off, minimal, low, medium, high, xhigh, max)")
   (println "  -h, --help            Show this help")
   (println)
+  (println "Package subcommands:")
+  (println "  install <source>     Add a local package (directory or file) to settings")
+  (println "  remove <source>      Remove a package (alias: uninstall)")
+  (println "  list                 List installed packages")
+  (println "  config               Enable/disable package resources (TUI)")
+  (println)
   (println "Examples:")
   (println "  kmet                    Start interactive TUI")
   (println "  kmet -p \"list files\"    Print response and exit")
   (println "  kmet --model deepseek-v4-flash  Start with a specific model")
-  (println "  kmet @tasks.md         Start with file content"))
+  (println "  kmet @tasks.md         Start with file content")
+  (println "  kmet install ./extensions/my-ext   Install a package"))
 
 ;; ─── Main ──────────────────────────────────────────────────────────────────
 
@@ -251,6 +260,12 @@
   [& args]
   (let [opts (parse-args args)]
 
+    ;; Package subcommands (pi: package-manager-cli dispatch in main.ts —
+    ;; checked before generic arg parsing, since install/remove/list/config
+    ;; are not flags).
+    (when (package-manager/package-command? args)
+      (System/exit (package-manager/run-package-command args)))
+
     (when (:help opts)
       (print-usage)
       (System/exit 0))
@@ -285,6 +300,11 @@
     (let [config (cfg/init!)]
       (doseq [d (cfg/resource-dirs config :extensions-dir ".kmet/extensions")]
         (extensions/load-extensions-from-dir d))
+
+      ;; Configured packages load after the auto resource dirs (pi: package
+      ;; resources rank below auto-discovered ones, so dirs win collisions)
+      (packages/load-package-extensions!)
+      (packages/load-package-themes!)
 
       ;; Extension CLI flags: the collected --flags become readable via
       ;; extensions/get-flag (pi: registerFlag + getFlag).

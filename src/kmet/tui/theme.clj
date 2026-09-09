@@ -541,21 +541,37 @@
   []
   @themes)
 
-(defn- load-edn-file [path]
+(defn load-theme-file!
+  "Load and register a theme from an EDN file at PATH; warnings print to
+   stderr on failure (pi: loadThemeFromPath + register — the package-resource
+   theme load unit)."
+  [path]
   (try
     (register-theme! (load-theme-from-path path))
     (catch Exception e
       (binding [*out* *err*]
         (println "Warning: Failed to load theme" (fs/file-name path) ":" (ex-message e))))))
 
+(defn theme-files-in-dir
+  "Theme .edn files directly inside DIR. Returns the ordered file paths."
+  [dir]
+  (when (fs/directory? dir)
+    (->> (fs/list-dir dir)
+         (filter #(and (fs/regular-file? %)
+                       (str/ends-with? (fs/file-name %) ".edn")))
+         (map str)
+         vec)))
+
+(defn load-theme-paths!
+  "Load and register themes from explicit .edn file paths (the package-
+   resource unit). Same warning behavior as load-theme-file!."
+  [paths]
+  (doseq [p paths] (load-theme-file! p)))
+
 (defn load-themes-from-dir
   "Load all .edn theme files from a directory."
   [dir]
-  (when (fs/directory? dir)
-    (doseq [f (fs/list-dir dir)]
-      (when (and (fs/regular-file? f)
-                 (str/ends-with? (fs/file-name f) ".edn"))
-        (load-edn-file (str f))))))
+  (load-theme-paths! (theme-files-in-dir dir)))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
 ;; Validation (pi: parseThemeJson — required color tokens + name check)
