@@ -1362,8 +1362,6 @@
               ;; join the reload message like dir ones
               pkg-ext-results (packages/load-package-extensions!)
               ext-results (concat ext-results pkg-ext-results)
-              _ (packages/load-package-skills!)
-              _ (packages/load-package-prompts!)
               _ (packages/load-package-themes!)
               ;; pi: model-runtime.refresh — recompose providers from models.edn
               _ (models/load-models-config!)
@@ -1374,6 +1372,10 @@
               _ (prompts/clear-prompt-templates!)
               _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
                   (prompts/load-prompt-templates-from-dir d))
+              ;; configured packages load after the auto resource dirs (pi:
+              ;; package resources rank below auto-discovered ones)
+              _ (packages/load-package-skills!)
+              _ (packages/load-package-prompts!)
               ;; pi: _rebuildSystemPrompt with new sources — the prompt is
               ;; built over the CURRENTLY active tool set (pi:
               ;; getActiveToolNames), so a pre-reload set-active-tools

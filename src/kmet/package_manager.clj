@@ -169,8 +169,9 @@
                 "ported)"))
 
       :else
-      (let [resolved (pkgs/resolve-source-path (:path parsed)
-                                               (if local :project :user))]
+      ;; pi install resolves the source against the cwd (the settings base
+      ;; dir only defines what a stored relative source means)
+      (let [resolved (pkgs/resolve-path (:path parsed) (str (fs/cwd)))]
         (if-not (fs/exists? resolved)
           (err (str "Path does not exist: " resolved))
           (do (pkgs/add-package-to-settings! source {:local local})

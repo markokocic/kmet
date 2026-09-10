@@ -180,6 +180,20 @@
         res (pkgs/resolve-package-items {:packages [root]} {:packages [root]})]
     (t/is (= 2 (count (:skills res))))))
 
+(t/deftest test-resolve-preserves-package-order
+  ;; >8 items of one type must keep the resolution order (package order,
+  ;; discovery order within each) — a state map would reorder them
+  (let [p1 (str (fs/path (tmp-dir) "p1"))
+        p2 (str (fs/path (tmp-dir) "p2"))]
+    (doseq [root [p1 p2]]
+      (fs/create-dirs (str root "/extensions"))
+      (doseq [i (range 10)]
+        (spit (str root "/extensions/e" i ".clj") "(ns x)\n")))
+    (let [res (pkgs/resolve-package-items {:packages [p1 p2]} nil)]
+      (t/is (= (into (mapv #(str "e" % ".clj") (range 10))
+                     (mapv #(str "e" % ".clj") (range 10)))
+               (mapv (comp fs/file-name :path) (:extensions res)))))))
+
 ;; ─── Settings persistence (add / remove / list) ───────────────────────────
 
 (defn- with-isolated-settings
@@ -271,6 +285,13 @@
       (t/is (= "sub/x.clj"
                (pkgs/normalize-source-for-settings (str (fs/path global-dir "sub" "x.clj")) :user))))))
 
+(t/deftest test-normalize-source-at-base-dir
+  (with-isolated-settings
+    (fn [{:keys [global-dir project-dir]}]
+      (t/testing "a source that is the scope base dir stores as \".\" (not blank)"
+        (t/is (= "." (pkgs/normalize-source-for-settings global-dir :user)))
+        (t/is (= "." (pkgs/normalize-source-for-settings project-dir :project)))))))
+
 ;; ─── The package resource loaders ─────────────────────────────────────────
 
 (defn- with-empty-registries
@@ -352,7 +373,56 @@
   (t/testing "double-star crosses directories"
     (let [paths ["/pkg/a/b/c.md" "/pkg/x.md"]]
       (t/is (= 2 (count (pkgs/apply-patterns paths ["**/*.md"] "/pkg"))))
-      (t/is (= 1 (count (pkgs/apply-patterns paths ["a/**/*.md"] "/pkg")))))))
+      (t/is (= 1 (count (pkgs/apply-patterns paths ["a/**/*.md"] "/pkg"))))))
+  (t/testing "trailing double-star matches any depth"
+    (t/is (= 2 (count (pkgs/apply-patterns ["/pkg/skills/a.md" "/pkg/skills/x/y.md"]
+                                           ["skills/**"] "/pkg"))))
+    (t/is (= 2 (count (pkgs/apply-patterns ["/pkg/a/b/c.md" "/pkg/x.md"]
+                                           ["**"] "/pkg")))))
+  (t/testing "wildcards need an explicit dot for hidden segments"
+    (t/is (= 0 (count (pkgs/apply-patterns ["/pkg/.hidden.md"] ["*.md"] "/pkg"))))
+    (t/is (= 1 (count (pkgs/apply-patterns ["/pkg/.hidden.md"] [".*.md"] "/pkg"))))))
+
+(t/deftest test-glob-classes
+  ;; minimatch character-class parity: malformed classes never throw, `[.]`
+  ;; writes the dot itself, a class containing `/` is literal text
+  (let [m (fn [pat paths] (vec (sort (pkgs/apply-patterns paths [pat] "/pkg"))))]
+    (t/testing "[.] is a literal dot, so it matches a hidden segment"
+      (t/is (= ["/pkg/.hidden"] (m "[.]hidden" ["/pkg/.hidden" "/pkg/x"]))))
+    (t/testing "a class that can match other characters keeps the hidden guard"
+      (t/is (= ["/pkg/ax"] (m "[a.]x" ["/pkg/.x" "/pkg/ax"])))
+      (t/is (= ["/pkg/bx"] (m "[!a]x" ["/pkg/.x" "/pkg/bx" "/pkg/ax"]))))
+    (t/testing "malformed classes are literals or never-match (no regex error)"
+      (t/is (= ["/pkg/[]x"] (m "[]x" ["/pkg/[]x" "/pkg/x"])))
+      (t/is (= ["/pkg/[!]"] (m "[!]" ["/pkg/[!]" "/pkg/x"])))
+      (t/is (= ["/pkg/[a"] (m "[a" ["/pkg/[a" "/pkg/a"])))
+      (t/is (empty? (m "[z-a]" ["/pkg/z" "/pkg/a"]))))
+    (t/testing "a reversed range inside a wider class is dropped"
+      (t/is (= ["/pkg/x"] (m "[z-ax]" ["/pkg/x" "/pkg/z" "/pkg/a"]))))
+    (t/testing "a class containing / is literal (minimatch splits on /)"
+      (t/is (= ["/pkg/[a/b].clj"] (m "[a/b].clj" ["/pkg/[a/b].clj" "/pkg/ab.clj"]))))
+    (t/testing "ranges"
+      (t/is (= ["/pkg/a" "/pkg/b" "/pkg/z"]
+               (m "[a-cz]" ["/pkg/a" "/pkg/b" "/pkg/z" "/pkg/d"]))))))
+
+(t/deftest test-delta-entry-without-user-entry-resolves-in-project-scope
+  ;; pi findAutoloadDeltaBase: with no user entry of the same identity the
+  ;; delta entry resolves against its own scope — it used to fall back to
+  ;; the user base dir
+  (with-isolated-settings
+    (fn [{:keys [global-dir project-dir]}]
+      (let [user-pkg (str (fs/path global-dir "pkg"))
+            proj-pkg (str (fs/path project-dir "pkg"))]
+        (doseq [[root file] [[user-pkg "user-ext.clj"] [proj-pkg "proj-ext.clj"]]]
+          (fs/create-dirs (str root "/extensions"))
+          (spit (str root "/extensions/" file) "(ns x)\n"))
+        (let [res (pkgs/resolve-package-items
+                   nil
+                   {:packages [{:source "./pkg" :autoload false
+                                :extensions ["+extensions/proj-ext.clj"]}]})]
+          (t/is (= ["proj-ext.clj"] (mapv (comp fs/file-name :path) (:extensions res))))
+          (t/is (str/starts-with? (:path (first (:extensions res))) proj-pkg))
+          (t/is (every? :enabled (:extensions res))))))))
 
 (t/deftest test-delta-patterns
   (let [paths ["/pkg/extensions/a.clj" "/pkg/extensions/b.clj"]]
@@ -367,3 +437,28 @@
   (let [dir (make-package (tmp-dir))]
     (t/is (= #{(str dir "/skills/root/SKILL.md") (str dir "/skills/flat.md")}
              (set (skills/discover-skill-files (str dir "/skills")))))))
+
+(t/deftest test-single-extension-items-are-not-toggleable
+  (with-isolated-settings
+    (fn [{:keys [global-dir]}]
+      (let [file (str (fs/path global-dir "ext.clj"))]
+        (spit file "(ns x)\n")
+        (t/testing "a file source resolves to a single always-enabled extension"
+          (let [item (first (:extensions (pkgs/resolve-package-items {:packages [file]} nil)))]
+            (t/is (pkgs/single-extension-item? item))
+            (t/is (true? (:enabled item)))
+            (t/testing "toggling it writes nothing"
+              (t/is (false? (pkgs/apply-global-toggle! item false)))
+              (t/is (false? (pkgs/apply-project-override! item :unload)))
+              (t/is (empty? (:packages (pkgs/user-settings-map)))))))
+        (t/testing "an extension.edn directory too"
+          (let [dir (tmp-dir)]
+            (spit (str dir "/extension.edn") "{:name \"pkg-ext\" :entry pkg.ext}\n")
+            (let [item (first (:extensions (pkgs/resolve-package-items {:packages [dir]} nil)))]
+              (t/is (pkgs/single-extension-item? item))
+              (t/is (false? (pkgs/apply-global-toggle! item false))))))
+        (t/testing "conventional package resources stay toggleable"
+          (let [pkg (make-package (tmp-dir))]
+            (t/is (not (pkgs/single-extension-item? (first (:extensions
+                                                            (pkgs/resolve-package-items {:packages [pkg]} nil))))))))))))
+

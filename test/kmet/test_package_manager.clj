@@ -133,6 +133,25 @@
           (t/is (= 0 (:exit r)))
           (t/is (= 1 (count (:packages (edn/read-string (slurp (cfg/global-settings-path))))))))))))
 
+(t/deftest test-install-relative-source-resolves-against-cwd
+  ;; pi install resolves the source against the cwd; the settings base dir
+  ;; only defines what a stored relative source means
+  (with-isolated-settings
+    (fn [_]
+      (let [work (tmp-dir)
+            _ (fs/create-dirs (str work "/pkg"))
+            _ (spit (str work "/pkg/ext.clj") "(ns x)\n")
+            orig (System/getProperty "user.dir")]
+        (try
+          (System/setProperty "user.dir" work)
+          (let [r (run "install" "./pkg")]
+            (t/is (= 0 (:exit r)))
+            (t/is (str/includes? (:out r) "Installed ./pkg"))
+            (t/is (= 1 (count (:packages (edn/read-string
+                                          (slurp (cfg/global-settings-path))))))))
+          (finally
+            (System/setProperty "user.dir" orig)))))))
+
 ;; ─── Remove ────────────────────────────────────────────────────────────────
 
 (t/deftest test-remove

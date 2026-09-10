@@ -6,6 +6,7 @@
             [clojure.string :as str]
             [clojure.edn :as edn]
             [babashka.fs :as fs]
+            [kmet.app.packages :as pkgs]
             [kmet.app.ui.resource-config :as rc]
             [kmet.config :as cfg]
             [kmet.tui.protocols :as protocols]))
@@ -72,6 +73,8 @@
 (def ^:const K-UP "\u001b[A")
 (def ^:const K-TAB "\t")
 (def ^:const K-ESC "\u001b")
+(def ^:const K-PGUP "\u001b[5~")
+(def ^:const K-PGDN "\u001b[6~")
 
 (defn- first-item-row
   "The first :item row of the screen."
@@ -194,6 +197,23 @@
             (t/is (not (map? (first entries)))))))
       {:project {:packages [dir]}})))
 
+(t/deftest test-screen-single-extension-not-toggleable
+  ;; a file source (single extension) ignores per-type filters: the row is
+  ;; marked always loaded and space writes nothing
+  (let [dir (tmp-dir)
+        f (str dir "/ext.clj")]
+    (spit f "(ns ext)\n")
+    (with-settings
+      (fn [ctx]
+        (let [screen (rc/make-resource-config-screen :rows 40)
+              item (:item (first-item-row screen))]
+          (t/is (pkgs/single-extension-item? item))
+          (t/is (some #(str/includes? % "always loaded") (render-lines screen 100)))
+          (protocols/handle-input screen " ")
+          (t/is (true? (:enabled (first-item-row screen))))
+          (t/is (= [f] (user-file-packages ctx)))))
+      {:user {:packages [f]}})))
+
 ;; ─── Search and scope switching ───────────────────────────────────────────
 
 (t/deftest test-screen-query-filter
@@ -217,4 +237,41 @@
           (t/is (= :project (rc/screen-write-scope screen)))
           (protocols/handle-input screen K-TAB)
           (t/is (= :global (rc/screen-write-scope screen)))))
+      {:user {:packages [dir]}})))
+
+(t/deftest test-screen-rows-interleave
+  ;; each package group is followed by its own subgroups and items (pi
+  ;; buildFlatList) — not all group/subgroup headers first
+  (let [a (str (fs/path (tmp-dir) "pkgA"))
+        b (str (fs/path (tmp-dir) "pkgB"))]
+    (doseq [root [a b]]
+      (fs/create-dirs (str root "/extensions"))
+      (spit (str root "/extensions/one.clj") "(ns x)\n"))
+    (with-settings
+      (fn [_]
+        (let [screen (rc/make-resource-config-screen :rows 40)]
+          (t/is (= [:group :subgroup :item :group :subgroup :item]
+                   (mapv :kind (rc/screen-rows screen))))))
+      {:user {:packages [a b]}})))
+
+(t/deftest test-screen-paging
+  ;; page up/down jump maxVisible item rows (pi pageUp/pageDown): the
+  ;; target row is scanned inclusively and headers are skipped
+  (let [dir (str (fs/path (tmp-dir) "pkg"))]
+    (fs/create-dirs (str dir "/extensions"))
+    (doseq [i (range 10)]
+      (spit (str dir "/extensions/e" i ".clj") "(ns x)\n"))
+    (with-settings
+      (fn [_]
+        (let [screen (rc/make-resource-config-screen :rows 16)]
+         ;; 12 rows: group, subgroup, 10 items; maxVisible = 16 - 11 = 5
+          (t/is (= 2 (rc/screen-selected screen)))
+          (protocols/handle-input screen K-PGUP)
+          (t/is (= 2 (rc/screen-selected screen)) "page-up at the first item keeps it")
+          (protocols/handle-input screen K-PGDN)
+          (t/is (= 7 (rc/screen-selected screen)))
+          (protocols/handle-input screen K-PGDN)
+          (t/is (= 11 (rc/screen-selected screen)))
+          (protocols/handle-input screen K-PGUP)
+          (t/is (= 6 (rc/screen-selected screen)))))
       {:user {:packages [dir]}})))

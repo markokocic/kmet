@@ -18,7 +18,9 @@
 
    Only package-origin resources are listed. The screen re-reads the
    settings files after every toggle, so what it shows always matches what
-   the loaders will do on the next start/reload."
+   the loaders will do on the next start/reload. Single-extension packages
+   (a file source or an extension.edn directory) ignore per-type filters,
+   so those rows are marked “always loaded” and cannot be toggled."
   (:require [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.app.keybindings :as app-kb]
@@ -111,11 +113,16 @@
                                (when (seq subs)
                                  (assoc g :subgroups subs)))))
                      groups)
-        rows (vec (concat
-                   (for [g groups] {:kind :group :group g})
-                   (for [g groups, sg (:subgroups g)] {:kind :subgroup :group g :subgroup sg})
-                   (for [g groups, sg (:subgroups g), item (:items sg)]
-                     {:kind :item :group g :subgroup sg :item item})))]
+        rows (vec (mapcat
+                   (fn [g]
+                     (cons {:kind :group :group g}
+                           (mapcat (fn [sg]
+                                     (cons {:kind :subgroup :group g :subgroup sg}
+                                           (map (fn [item]
+                                                  {:kind :item :group g :subgroup sg :item item})
+                                                (:items sg))))
+                                   (:subgroups g))))
+                   groups))]
     {:rows rows
      :item-rows (filterv #(= :item (:kind %)) rows)}))
 
@@ -188,16 +195,21 @@
       (let [item (:item row)
             ov (:override-state row)
             inherited? (:inherited? row)
+            ;; a single-extension package always loads — no filter can
+            ;; disable it (see packages/single-extension-item?)
+            single? (pkgs/single-extension-item? item)
             dimmed? (and (= write-scope :project) inherited? (= ov :inherit))
             cursor (if selected? (th/fg t :accent "> ") "  ")
             name (display-name item)
             name (if (and selected? (not dimmed?)) (th/bold name) name)
-            name (if dimmed? (th/fg t :dim name) name)]
+            name (if dimmed? (th/fg t :dim name) name)
+            suffix (if single?
+                     (th/fg t :muted "  always loaded")
+                     (override-suffix t write-scope ov inherited?))]
         (u/truncate-to-width
          (str cursor "    "
-              (render-checkbox t write-scope ov (:enabled row))
-              " " name
-              (override-suffix t write-scope ov inherited?))
+              (render-checkbox t write-scope (if single? :inherit ov) (:enabled row))
+              " " name suffix)
          width "...")))))
 
 ;; ─── Screen state ─────────────────────────────────────────────────────────
@@ -301,6 +313,17 @@
                (assoc st :selected (find-next-item rows (:selected st) direction))
                st)))))
 
+(defn- page-target
+  "pi pageUp/pageDown scan — the item row at or nearest TARGET in
+   DIRECTION (+1 forward, -1 backward), nil when the scan leaves ROWS."
+  [rows target direction]
+  (let [n (count rows)]
+    (loop [idx target]
+      (cond
+        (or (< idx 0) (>= idx n)) nil
+        (= :item (:kind (nth rows idx))) idx
+        :else (recur (+ idx direction))))))
+
 (defn- page-selection!
   [this data]
   (swap! (:state-atom this)
@@ -308,43 +331,46 @@
            (let [rows (:rows st)
                  max-visible (max 5 (- (:rows-count this) chrome-lines))
                  sel (:selected st)
-                 n (count rows)]
-             (if (seq rows)
-               (assoc st :selected
-                      (find-next-item rows
-                                      (if (keys/matches-key? data "pageUp")
-                                        (max 0 (- sel max-visible))
-                                        (min (max 0 (dec n)) (+ sel max-visible)))
-                                      1))
+                 n (count rows)
+                 up? (keys/matches-key? data "pageUp")
+                 target (if up?
+                          (max 0 (- sel max-visible))
+                          (min (max 0 (dec n)) (+ sel max-visible)))
+                 found (page-target rows target (if up? 1 -1))]
+             (if found
+               (assoc st :selected found)
                st)))))
 
 (defn- toggle-selected!
   "Space/enter on an item row: global scope flips the enabled state (pi
    toggleResource global branch); project scope cycles inherit/load/unload
    (pi getNextOverrideState + setProjectPackageOverride). The row's state
-   updates in place (pi updateItem) — the layout is not re-resolved."
+   updates in place (pi updateItem) — the layout is not re-resolved.
+   Single-extension package rows cannot be toggled (their filters are
+   ignored at resolve time)."
   [this]
   (let [st @(:state-atom this)
         rows (:rows st)
         row (when (seq rows) (nth rows (min (:selected st) (dec (count rows))) nil))]
     (when (and row (= :item (:kind row)))
       (let [item (:item row)]
-        (if (= :global (:write-scope st))
-          (when (= :user (get-in item [:metadata :scope]))
-            (let [enabled (not (:enabled row))]
-              (pkgs/apply-global-toggle! item enabled)
-              (update-row-state! this {:enabled enabled
-                                       :override-state :inherit})))
-          (let [next-state (pkgs/next-override-state (:override-state row)
-                                                     (:inherited-enabled row))]
-            (when (not= next-state (:override-state row))
-              (pkgs/apply-project-override! item next-state)
-              (update-row-state!
-               this
-               {:override-state next-state
-                :enabled (if (= :inherit next-state)
-                           (:inherited-enabled row)
-                           (= :load next-state))}))))))))
+        (when-not (pkgs/single-extension-item? item)
+          (if (= :global (:write-scope st))
+            (when (= :user (get-in item [:metadata :scope]))
+              (let [enabled (not (:enabled row))]
+                (pkgs/apply-global-toggle! item enabled)
+                (update-row-state! this {:enabled enabled
+                                         :override-state :inherit})))
+            (let [next-state (pkgs/next-override-state (:override-state row)
+                                                       (:inherited-enabled row))]
+              (when (not= next-state (:override-state row))
+                (pkgs/apply-project-override! item next-state)
+                (update-row-state!
+                 this
+                 {:override-state next-state
+                  :enabled (if (= :inherit next-state)
+                             (:inherited-enabled row)
+                             (= :load next-state))})))))))))
 
 (defn- refresh-filter!
   "Apply the search input's value to the row list (pi: searchInput change
@@ -494,6 +520,11 @@
   "The screen's current flat rows (tests)."
   [screen]
   (:rows @(:state-atom screen)))
+
+(defn screen-selected
+  "The screen's selected row index (tests)."
+  [screen]
+  (:selected @(:state-atom screen)))
 
 (defn screen-set-write-scope!
   "Switch the write scope (tests; Tab in the UI)."

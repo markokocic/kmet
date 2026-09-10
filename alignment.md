@@ -64,7 +64,8 @@ Kmet adaptations (deliberate deviations):
   extension, and its items are individually filterable.
 - No pi `package.json` manifest — packages use the convention subdirs only,
   and `extension.edn` dirs ignore per-type filters (the extension owns its
-  bundle, pi file-source behavior).
+  bundle, pi file-source behavior); the config screen therefore marks those
+  rows “always loaded” and rejects toggles.
 - Pattern matching implements minimatch's common subset (`*`, `?`, `**`,
   `[...]`; no extglobs/braces) against the same match forms as pi (relative
   path, file name, absolute path; skills also match their parent folder).

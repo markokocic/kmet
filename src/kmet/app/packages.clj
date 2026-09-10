@@ -54,8 +54,8 @@
 
 (defn local-source?
   "True when SOURCE is a local path (pi: isLocalPath — anything that does
-   not start with npm:/git:/github:/http:/https:/ssh:; `git://` URLs are
-   treated as local paths exactly like pi)."
+   not start with npm:/git:/github:/http:/https:/ssh:; `file://` URLs are
+   local paths exactly like pi, while `git://` URLs are remote)."
   [source]
   (let [s (str/trim (str source))]
     (not (some #(str/starts-with? s %) remote-prefixes))))
@@ -123,6 +123,17 @@
   [p]
   (str/replace (str p) "\\" "/"))
 
+(defn- relative-posix
+  "POSIX-relative path from BASE to TARGET: \".\" when TARGET is BASE, the
+   absolute TARGET when the two share no root (Windows drives — pi:
+   path.relative, which returns an absolute path then)."
+  [base target]
+  (try
+    (let [rel (fs/relativize (fs/path (str base)) (fs/path (str target)))]
+      (if (str/blank? (str rel)) "." (posix rel)))
+    (catch Exception _
+      (posix target))))
+
 (defn base-dir-for-scope
   "The directory local sources of SCOPE resolve against (pi:
    getBaseDirForScope): the agent dir for user packages, the .kmet project
@@ -143,12 +154,6 @@
   "The source string of a settings entry (pi: getPackageSourceString)."
   [entry]
   (if (map? entry) (str (:source entry)) (str entry)))
-
-(defn filter-keys-of
-  "Per-type filter keys present on an object entry (pi: PackageFilter)."
-  [entry]
-  (when (map? entry)
-    (set (filter #(contains? resource-types %) (keys entry)))))
 
 (defn autoload-disabled?
   "True when ENTRY is an object entry with :autoload false (pi: a project
@@ -174,12 +179,8 @@
   (let [parsed (parse-source source)]
     (if (= :remote (:kind parsed))
       (str source)
-      (let [resolved (resolve-path (:path parsed) (str (fs/cwd)))
-            rel (fs/relativize (fs/path (base-dir-for-scope scope))
-                               (fs/path resolved))]
-        (if (or (= rel resolved) (nil? rel))
-          "."
-          (posix rel))))))
+      (relative-posix (base-dir-for-scope scope)
+                      (resolve-path (:path parsed) (str (fs/cwd)))))))
 
 (defn- packages-of
   "The :packages entries of a settings map (pi: settings.packages ?? [])."
@@ -294,47 +295,141 @@
 ;; `[...]` character classes; `*`/`?`/`**` do not match a leading dot
 ;; segment unless the pattern segment starts with a dot.
 
+(defn- class-end
+  "Index of the `]` closing the character class opened at IDX, or nil when
+   the class is unclosed or contains a path separator — minimatch splits
+   the pattern on `/` before parsing, so `[.../...]` is literal text.
+   minimatch: a `]` directly after `[`, `[!` or `[^` is a literal member,
+   not the close; `\\]` is escaped."
+  [pattern idx]
+  (let [start (+ idx (if (and (< (inc idx) (count pattern))
+                              (contains? #{\! \^} (nth pattern (inc idx))))
+                       2
+                       1))
+        from (if (= \] (get pattern start)) (inc start) start)
+        end (loop [i from
+                   esc? false]
+              (when (< i (count pattern))
+                (let [c (nth pattern i)]
+                  (cond
+                    esc? (recur (inc i) false)
+                    (= c \\) (recur (inc i) true)
+                    (= c \]) i
+                    :else (recur (inc i) false)))))]
+    (when (and end (not (str/includes? (subs pattern idx end) "/")))
+      end)))
+
+(defn- char-escape
+  "Escape a literal character for a Java regex character class."
+  [c]
+  (if (re-find #"[\\\]\[\^&.\-]" (str c)) (str "\\" c) (str c)))
+
+(defn- class-members
+  "Parse a class body (no leading `!`/`^`) into member specs — `[:char C]`
+   or `[:range A B]` — with minimatch's semantics: `\\X` is the literal X,
+   `x-y` is a range, `x-x` is the single character, a reversed range is
+   dropped. Returns nil when no member remains (minimatch poisons the glob
+   then: it never matches)."
+  [body]
+  (let [n (count body)
+        read-el (fn [i]
+                  (if (and (= \\ (nth body i)) (< (inc i) n))
+                    [(nth body (inc i)) (+ i 2) true]
+                    [(nth body i) (inc i) false]))]
+    (loop [i 0
+           members []]
+      (if (>= i n)
+        (seq members)
+        (let [[c after esc?] (read-el i)
+              [c2 after2] (when (and (not esc?)
+                                     (< (inc after) n)
+                                     (= \- (nth body after)))
+                            (read-el (inc after)))]
+          (cond
+            (nil? c2) (recur after (conj members [:char c]))
+            (> (int c2) (int c)) (recur after2 (conj members [:range c c2]))
+            (= c2 c) (recur after2 (conj members [:char c]))
+            :else (recur after2 members)))))))
+
+(defn- class-string
+  "The Java regex of parsed class MEMBERS (negated? NEG?)."
+  [members neg?]
+  (str "[" (when neg? "^")
+       (str/join (map (fn [[kind a b]]
+                        (if (= kind :range)
+                          (str (char-escape a) "-" (char-escape b))
+                          (char-escape a)))
+                      members))
+       "]"))
+
+(defn- class-regex
+  "Compile the character class opened at IDX in PATTERN. Returns nil when
+   the class is unclosed (minimatch: a literal `[` step), else
+   {:regex R :next-idx N :guard? G} where after-index N resumes scanning
+   and G requests the hidden-segment guard — minimatch omits it for a
+   single positive member like `[.]`, which compiles to a literal."
+  [pattern idx]
+  (when-let [end (class-end pattern idx)]
+    (let [cls (subs pattern (inc idx) end)
+          neg? (or (str/starts-with? cls "!") (str/starts-with? cls "^"))
+          members (class-members (if neg? (subs cls 1) cls))]
+      (cond
+        (nil? members)
+        {:regex "(?!)" :next-idx (inc end) :guard? false}
+
+        (and (not neg?) (= 1 (count members)) (= :char (first (first members))))
+        {:regex (java.util.regex.Pattern/quote (str (second (first members))))
+         :next-idx (inc end)
+         :guard? false}
+
+        :else
+        {:regex (class-string members neg?) :next-idx (inc end) :guard? true}))))
+
 (defn- glob->regex
   "Compile a glob PATTERN to a regex string (segment-aware: `**` may cross
-   separators, `*`/`?` may not, hidden segments need explicit dots)."
+   separators, `*`/`?` may not, and — minimatch's defaults — no wildcard
+   matches a hidden segment unless the pattern writes its dot; a class
+   whose single member is a dot, like `[.]`, writes that dot)."
   [pattern]
   (let [sb (StringBuilder. "^")]
-    (loop [i 0]
+    (loop [i 0
+           seg-start? true]
       (if (>= i (count pattern))
         (str sb "$")
         (let [c (nth pattern i)
-              next? (fn [n] (when (< (+ i n) (count pattern)) (nth pattern (+ i n))))]
+              next? (fn [n] (when (< (+ i n) (count pattern)) (nth pattern (+ i n))))
+              globstar? (and (= c \*) (= \* (next? 1)) seg-start?
+                             (or (nil? (next? 2)) (= \/ (next? 2))))]
           (cond
-            (and (= c \*) (= \* (next? 1)))
-            (do (.append sb "(?:[^/]*/)*")
-                ;; minimatch: `**/` swallows its trailing slash
-                (recur (+ i 2 (if (= \/ (next? 2)) 1 0))))
+            globstar?
+            (if (= \/ (next? 2))
+              (do (.append sb "(?:(?!\\.)[^/]*/)*")
+                  ;; minimatch: `**/` swallows its trailing slash
+                  (recur (+ i 3) true))
+              (do (.append sb "(?:(?!\\.)[^/]*/)*(?!\\.)[^/]*")
+                  (recur (+ i 2) false)))
 
             (= c \*)
-            (do (.append sb "[^/]*")
-                (recur (inc i)))
+            (do (.append sb (if seg-start? "(?!\\.)" ""))
+                (.append sb "[^/]*")
+                (recur (inc i) false))
 
             (= c \?)
-            (do (.append sb "[^/]")
-                (recur (inc i)))
+            (do (.append sb (if seg-start? "(?!\\.)" ""))
+                (.append sb "[^/]")
+                (recur (inc i) false))
 
             (= c \[)
-            ;; character class [...] copied verbatim (validated loosely)
-            (let [end (str/index-of pattern "]" i)]
-              (if end
-                (let [cls (subs pattern (inc i) end)]
-                  (.append sb "[")
-                  (when (str/starts-with? cls "^") (.append sb "^"))
-                  (when (str/starts-with? cls "!") (.append sb "^"))
-                  (.append sb (str/replace cls #"^[!^]" ""))
-                  (.append sb "]")
-                  (recur (inc end)))
-                (do (.append sb (java.util.regex.Pattern/quote (str c)))
-                    (recur (inc i)))))
+            (if-let [{:keys [regex next-idx guard?]} (class-regex pattern i)]
+              (do (when (and guard? seg-start?) (.append sb "(?!\\.)"))
+                  (.append sb regex)
+                  (recur next-idx false))
+              (do (.append sb (java.util.regex.Pattern/quote (str c)))
+                  (recur (inc i) false)))
 
             :else
             (do (.append sb (java.util.regex.Pattern/quote (str c)))
-                (recur (inc i)))))))))
+                (recur (inc i) (= c \/)))))))))
 
 (defn- glob-matcher
   "A fn of one path string returning true when the path matches PATTERN
@@ -526,12 +621,15 @@
 
 (defn- add-resource!
   "Accumulate one resolved resource (pi: addResource — first add wins per
-   canonical path)."
+   canonical path; insertion order is preserved per type)."
   [acc type item]
-  (let [by-type (get @acc type {})
+  (let [by-type (get @acc type)
         key (canonicalize (:path item))]
-    (when-not (contains? by-type key)
-      (swap! acc update type assoc key item))))
+    (when-not (contains? (:items by-type) key)
+      (swap! acc update type
+             (fn [t] (-> t
+                         (assoc-in [:items key] item)
+                         (update :order conj key)))))))
 
 (defn- resolve-local-entry
   "Resolve one local package entry into items (pi:
@@ -544,6 +642,7 @@
         metadata {:source source-string
                   :scope scope
                   :origin :package
+                  :single-extension (or root-file? ext-dir?)
                   :base-dir (if root-file? (str (fs/parent base)) base)}
         filter (entry-filter entry)
         delta? (autoload-disabled? entry)]
@@ -560,14 +659,18 @@
         (doseq [[type paths] discovered]
           (let [patterns (get filter type)
                 ;; pi: filtered-out items stay in the resolution with
-                ;; :enabled false (the config list shows them unchecked)
-                pairs (if delta?
-                        (apply-autoload-disabled-patterns paths patterns base)
-                        (let [enabled (enabled-paths paths patterns base)]
-                          (into {} (map (fn [p] [p (contains? enabled p)])) paths)))]
-            (doseq [[path enabled] pairs]
+                ;; :enabled false (the config list shows them unchecked);
+                ;; delta entries contribute only the paths their patterns
+                ;; mention. Iterate PATHS (discovery order) — the state maps
+                ;; are not insertion-ordered once they exceed 8 entries.
+                states (if delta?
+                         (apply-autoload-disabled-patterns paths patterns base)
+                         (let [enabled (enabled-paths paths patterns base)]
+                           (into {} (map (fn [p] [p (contains? enabled p)])) paths)))]
+            (doseq [path paths
+                    :when (contains? states path)]
               (add-resource! acc type
-                             (->PackageItem path enabled type metadata)))))))))
+                             (->PackageItem path (get states path) type metadata)))))))))
 
 (defn resolve-package-items
   "Resolve the configured packages of USER-SETTINGS and PROJECT-SETTINGS
@@ -580,7 +683,8 @@
                           {:entry entry :scope :project})
                         (for [entry (packages-of (or user-settings {}))]
                           {:entry entry :scope :user}))
-        acc (atom {:extensions {} :skills {} :prompts {} :themes {}})]
+        acc (atom (into {} (for [type resource-types]
+                             [type {:order [] :items {}}])))]
     (doseq [{:keys [entry scope]} (dedupe-entries entries)
             :let [source (source-of entry)
                   parsed (parse-source source)]]
@@ -590,21 +694,21 @@
                    "local directories and files only — skipping"))
         (let [delta? (and (= scope :project) (autoload-disabled? entry))
               ;; pi findAutoloadDeltaBase: a delta entry resolves its path
-              ;; from the user entry of the same identity
-              base-source (if delta?
-                            (or (some (fn [{:keys [entry scope]}]
-                                        (when (and (= scope :user)
-                                                   (= (package-identity (source-of entry) :user)
-                                                      (package-identity source :project)))
-                                          (source-of entry)))
-                                      entries)
-                                source)
-                            source)
-              resolved (resolve-source-path base-source (if delta? :user scope))]
+              ;; from the user entry of the same identity; without one it
+              ;; resolves against its own scope like any other entry
+              delta-base (when delta?
+                           (some (fn [{:keys [entry scope]}]
+                                   (when (and (= scope :user)
+                                              (= (package-identity (source-of entry) :user)
+                                                 (package-identity source :project)))
+                                     (source-of entry)))
+                                 entries))
+              resolved (resolve-source-path (or delta-base source)
+                                            (if delta-base :user scope))]
           (when (fs/exists? resolved)
             (resolve-local-entry acc resolved entry scope source)))))
-    (into {} (for [[type items] @acc]
-               [type (vec (vals items))]))))
+    (into {} (for [[type {:keys [order items]}] @acc]
+               [type (mapv items order)]))))
 
 (defn resolve-configured-packages
   "Resolve the configured packages read from both settings files (the
@@ -706,6 +810,14 @@
       (posix (fs/relativize (fs/path base) (fs/path (:path item))))
       (posix (:path item)))))
 
+(defn single-extension-item?
+  "True when ITEM is the single-extension unit of its package source — a
+   file or an extension.edn directory. Such packages ignore per-type
+   filters (pi: file sources bypass package filters), so they cannot be
+   toggled off: the config screen marks them “always loaded”."
+  [item]
+  (boolean (get-in item [:metadata :single-extension])))
+
 (defn next-override-state
   "pi getNextOverrideState — the tri-state cycle (inherit → load/unload →
    inherit...) driven by the inherited (global) enabled state."
@@ -797,19 +909,23 @@
   "pi togglePackageResource on the user settings file: flip ITEM's enabled
    state by writing +/−PATTERN into the matching package entry (string
    entries become object entries; entries with no remaining filters return
-   to strings). No-op when the package is not found."
+   to strings). No-op when the package is not found, and false for
+   single-extension sources — their filters are ignored at resolve time,
+   so a pattern write would silently do nothing."
   [item enabled]
-  (let [current (user-packages)
-        source (get-in item [:metadata :source])
-        idx (first (keep-indexed (fn [i e]
-                                   (when (= (source-of e) source) i))
-                                 current))]
-    (when idx
-      (cfg/save-setting!
-       [:packages]
-       (set-type-array! current idx (:resource-type item) (item-pattern item)
-                        (if enabled :load :unload)))
-      true)))
+  (if (single-extension-item? item)
+    false
+    (let [current (user-packages)
+          source (get-in item [:metadata :source])
+          idx (first (keep-indexed (fn [i e]
+                                     (when (= (source-of e) source) i))
+                                   current))]
+      (when idx
+        (cfg/save-setting!
+         [:packages]
+         (set-type-array! current idx (:resource-type item) (item-pattern item)
+                          (if enabled :load :unload)))
+        true))))
 
 (defn- override-source-entry
   "pi createPackageOverrideSource — a project-scope delta entry over the
@@ -818,36 +934,37 @@
   [item]
   (let [source (get-in item [:metadata :source])
         item-scope (get-in item [:metadata :scope] :user)
-        resolved (resolve-source-path source item-scope)
-        rel (fs/relativize (fs/path (base-dir-for-scope :project))
-                           (fs/path resolved))]
-    {:source (if (or (= rel resolved) (nil? rel)) "." (posix rel))
+        resolved (resolve-source-path source item-scope)]
+    {:source (relative-posix (base-dir-for-scope :project) resolved)
      :autoload false}))
 
 (defn apply-project-override!
   "pi setProjectPackageOverride — set ITEM's project override STATE
    (:inherit/:load/:unload) in the project settings file. Inherited user
    packages without a project entry get a fresh :autoload false delta
-   entry; cycling back to :inherit removes the override again."
+   entry; cycling back to :inherit removes the override again. False for
+   single-extension sources (their filters are ignored at resolve time)."
   [item state]
-  (when (not= state (override-state-of item (project-packages)))
-    (let [current (project-packages)
-          item-scope (get-in item [:metadata :scope] :user)
-          idx (first (keep-indexed (fn [i e]
-                                     (when (source-matches-scope (source-of e) :project
-                                                                 (get-in item [:metadata :source])
-                                                                 item-scope)
-                                       i))
-                                   current))]
-      (if (and (nil? idx) (= state :inherit))
-        false
-        (let [packages (if idx
-                         current
-                         (conj current (override-source-entry item)))
-              idx (or idx (dec (count packages)))]
-          (cfg/save-project-setting! [:packages]
-                                     (set-type-array! packages idx
-                                                      (:resource-type item)
-                                                      (item-pattern item)
-                                                      state))
-          true)))))
+  (if (single-extension-item? item)
+    false
+    (when (not= state (override-state-of item (project-packages)))
+      (let [current (project-packages)
+            item-scope (get-in item [:metadata :scope] :user)
+            idx (first (keep-indexed (fn [i e]
+                                       (when (source-matches-scope (source-of e) :project
+                                                                   (get-in item [:metadata :source])
+                                                                   item-scope)
+                                         i))
+                                     current))]
+        (if (and (nil? idx) (= state :inherit))
+          false
+          (let [packages (if idx
+                           current
+                           (conj current (override-source-entry item)))
+                idx (or idx (dec (count packages)))]
+            (cfg/save-project-setting! [:packages]
+                                       (set-type-array! packages idx
+                                                        (:resource-type item)
+                                                        (item-pattern item)
+                                                        state))
+            true))))))

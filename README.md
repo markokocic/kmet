@@ -124,6 +124,9 @@ resource dirs.
 space toggles, Tab switches global/project scope (project scope cycles
 inherit/load/unload), typing filters, escape closes. The writes are per-type
 `+path`/`-path` filter entries on the package (pi's object entries).
+Single-extension packages (a file source or an `extension.edn` directory)
+ignore those filters, so their rows are marked *always loaded* and cannot be
+toggled.
 ```
 
 ### In-TUI commands
