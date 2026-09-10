@@ -89,6 +89,7 @@
                args-complete-atom
                render-shell-atom   ;; pi: ToolDefinition.renderShell — :self renders without the outer Box
                image-data-atom       ;; vector of {:data str :mime-type str}
+               image-children-atom   ;; the previous pass's image children (disposed on rebuild)
                last-call-component-atom   ;; component from previous render-call
                last-result-component-atom ;; component from previous render-result
                renderer-state-atom        ;; persistent state for custom renderers
@@ -139,7 +140,13 @@
             image-data @image-data-atom]
       ;; Pi: hide component when no call/render content and no images
         (if (and (nil? call-comp) (nil? result-comp) (not (seq image-data)))
-          []
+          (do
+            ;; images disappeared — drop their children too (a stale
+            ;; ImageBlock would keep its track! watches alive)
+            (doseq [c @image-children-atom]
+              (protocols/dispose c))
+            (reset! image-children-atom [])
+            [])
           (do
           ;; Build inner container
             (container/container-clear container)
@@ -149,13 +156,24 @@
           ;; Build image components from raw data (Pi: spacer + ImageComponent).
           ;; image-block renders the terminal image or, when display is off /
           ;; unsupported, the styled text indicator (pi: getTextOutput).
-            (doseq [img image-data]
-              (container/container-add-child container (spacer/make-spacer 1))
-              (container/container-add-child container
-                                             (image-block/make-image-block
-                                              (:data img) (:mime-type img)
-                                              :fallback-style (fn [thm s]
-                                                                (theme/fg thm :tool-output s)))))
+          ;; The previous pass's image children are disposed first: an
+          ;; ImageBlock subscribes to the image-settings/theme subs, so a
+          ;; dropped instance would keep its track! watches alive forever
+          ;; (zombie watchers, tui.md §5.1). Call/result components are not
+          ;; touched — extension renderers may reuse them via :last-component.
+            (let [children (into []
+                                 (mapcat (fn [img]
+                                           [(spacer/make-spacer 1)
+                                            (image-block/make-image-block
+                                             (:data img) (:mime-type img)
+                                             :fallback-style (fn [thm s]
+                                                               (theme/fg thm :tool-output s)))]))
+                                 image-data)]
+              (doseq [c @image-children-atom]
+                (protocols/dispose c))
+              (reset! image-children-atom children)
+              (doseq [c children]
+                (container/container-add-child container c)))
           ;; Pi: render-shell :self skips outer Box (tool renders its own framing)
             (if (= :self render-shell)
               (let [content-lines (protocols/render container width)]
@@ -183,7 +201,8 @@
     (let [[state] (swap-vals! (:renderer-state-atom _this) dissoc :timer-id)]
       (when-let [id (:timer-id state)]
         (timers/cancel! id)))
-    (protocols/dispose @box)))
+    (protocols/dispose @box)
+    (reset! (:image-children-atom _this) [])))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 ;; Pi: component manages timing internally — no started-at/ended-at passed in.
@@ -217,6 +236,7 @@
                                   :custom-render-call-atom (atom render-call-fn)
                                   :custom-render-result-atom (atom render-result-fn)
                                   :image-data-atom (atom [])
+                                  :image-children-atom (atom [])
                                   :last-call-component-atom (atom nil)
                                   :last-result-component-atom (atom nil)
                                   :renderer-state-atom (atom {})

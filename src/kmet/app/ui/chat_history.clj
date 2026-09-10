@@ -197,7 +197,11 @@
    SkillInvocationMessageComponent). Attached image blocks render inline."
   [msg output-pad tools-expanded-atom]
   (let [text (content->user-text (:content msg ""))
-        images (image-block/content-images (:content msg))]
+        ;; live messages carry image blocks inside :content; the session
+        ;; replay path attaches them as the message's :images (its content is
+        ;; already flattened to text) — accept both
+        images (into (vec (:images msg))
+                     (image-block/content-images (:content msg)))]
     (if-let [block (skills/parse-skill-block text)]
       (skill-message/make-skill-invocation-message
        :skill-block block

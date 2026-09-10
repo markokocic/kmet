@@ -16,6 +16,7 @@
             [kmet.app.ui :as ui]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.editor :as editor]
+            [kmet.libs.terminal-image :as timg]
             [kmet.tui.protocols :as protocols]
             [babashka.fs :as fs]
             [clojure.string :as str]))
@@ -292,6 +293,40 @@
                   "replayed tools show no fabricated duration (pi: startedAt stays undefined)"))
             (is (str/includes? (str/join "\n" (protocols/render (:component t2) 100)) "hi")
                 "result content matched to the right call by id")))
+        (finally (fs/delete-tree sess-dir))))))
+
+(deftest replay-branch-restores-user-images
+  (testing "user-attached images survive replay: content-of flattens the
+            entry's blocks to text, so the image blocks ride the message's
+            :images and the image element renders (regression: resume showed
+            text only while the live path rendered the images)"
+    (let [sess-dir (str "target/test-interactive-replay-images-" (System/currentTimeMillis))
+          sess (session/create-session sess-dir)]
+      (try
+        (session/append-entry sess
+                              {:role :user
+                               :content [{:type :text :text "see:"}
+                                         {:type :image :data "AA" :mime-type "image/png"}]})
+        ;; session files are created lazily on the first assistant message (G4)
+        (session/append-entry sess {:role :assistant
+                                    :content [{:type :text :text "ok"}]})
+        (let [loaded (session/load-session (:file sess))
+              ch (ui/make-chat-history)
+              cs (inter/map->CoreState {:chat-history ch})
+              prev-caps (timg/get-capabilities)]
+          (timg/set-capabilities! {:images nil :true-color true :hyperlinks true})
+          (try
+            ((var inter/replay-branch!) cs loaded)
+            (let [msg (first @(:messages-atom ch))
+                  lines (protocols/render (:component msg) 60)]
+              (is (some? msg))
+              (is (= [{:data "AA" :mime-type "image/png"}] (:images msg))
+                  "image blocks ride the replayed message's :images")
+              (is (str/includes? (str/join "\n" lines) "[Image: [image/png]")
+                  "the image element renders (text indicator without protocol support)")
+              (is (str/includes? (str/join "\n" lines) "see:")
+                  "the text part is unchanged"))
+            (finally (timg/set-capabilities! prev-caps))))
         (finally (fs/delete-tree sess-dir))))))
 
 (deftest replay-branch-marks-errored-tool-calls

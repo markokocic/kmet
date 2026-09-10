@@ -6,6 +6,7 @@
             [kmet.libs.terminal-image :as timg]
             [kmet.tui.theme :as theme]
             [kmet.tui.timers :as timers]
+            [kmet.tui.macros :as macros]
             [kmet.app.ui.subs :as subs]
             [kmet.app.ui.tool-execution :as te]
             [kmet.app.ui.tool-renderers :as renderers]))
@@ -638,3 +639,25 @@
         (finally
           (reset! subs/image-settings-atom prev-settings)
           (timg/set-capabilities! prev-caps))))))
+
+(deftest test-image-children-disposed-on-rebuild
+  (testing "a render that rebuilds the image children disposes the previous
+            ImageBlocks — no zombie track! watches (tui.md §5.1)"
+    (with-image-env
+      {:show-images true :image-width-cells 60}
+      {:images nil :true-color true :hyperlinks true}
+      (fn []
+        (let [c (image-tool)
+              watched? (fn [comp]
+                         (contains? @(deref #'kmet.tui.macros/watch-registry)
+                                    (keyword (str "track!" (System/identityHashCode comp)))))]
+          (core/render c 60)
+          (let [[_old-spacer old-img] @(:image-children-atom c)]
+            (is (watched? old-img) "the rendered image block is watched")
+            (reset! (:expanded-atom c) true)  ;; cache miss → children rebuilt
+            (core/render c 60)
+            (let [[_new-spacer new-img] @(:image-children-atom c)]
+              (is (not (identical? old-img new-img)))
+              (is (not (watched? old-img))
+                  "the previous image block's watches are torn down")
+              (is (watched? new-img) "the new image block is watched"))))))))

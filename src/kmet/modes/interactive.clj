@@ -1582,6 +1582,10 @@
           (ui/chat-history-add-message!
            (:chat-history cs)
            (cond-> {:role role :content (content-of e)}
+             ;; user-attached images replay too — content-of keeps only the
+             ;; text, so the image blocks must ride the message's :images
+             ;; (the live path carries them inside :content)
+             (= role :user) (assoc :images (image-block/content-images (:content e)))
              (= role :info) (assoc :label (:label e))
              ;; pi: CompactionSummaryMessageComponent — compaction and
              ;; branch-summary entries render as labeled boxes
