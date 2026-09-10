@@ -360,9 +360,12 @@
     (r/force-run! rx)
     (r/watch-ref rx :bad (fn [_ _ _ _] (throw (ex-info "watcher boom" {}))))
     (r/watch-ref rx :good (fn [_ _ _o n] (swap! good conj n)))
-    (t/is (= 1 (reset! a 1))
-          "mutator never sees the watcher failure")
-    (r/flush!)
+    ;; The failing watcher prints to stderr — suppress it (hosts without
+    ;; per-var output capture, e.g. jolt, would leak it).
+    (binding [*err* (java.io.StringWriter.)]
+      (t/is (= 1 (reset! a 1))
+            "mutator never sees the watcher failure")
+      (r/flush!))
     (t/is (= [1] @good) "sibling watcher still fired")))
 
 (t/deftest cursor-of-cursor-composes
@@ -786,7 +789,10 @@
     (macros/with-store store
       (macros/register-cleanup! 'good #(swap! log conj :good))
       (macros/register-cleanup! 'bad #(throw (ex-info "cleanup boom" {}))))
-    (macros/destroy-store! store)
+    ;; The throwing cleanup prints to stderr — suppress it (hosts without
+    ;; per-var output capture, e.g. jolt, would leak it).
+    (binding [*err* (java.io.StringWriter.)]
+      (macros/destroy-store! store))
     (t/is (= [:good] @log) "throwing cleanup doesn't block the rest")))
 
 (t/deftest invalidate-forces-next-deref-past-equal-deps

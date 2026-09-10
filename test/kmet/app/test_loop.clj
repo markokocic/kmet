@@ -2344,10 +2344,12 @@
                    (loop/make-agent-state)
                    {:enabled-models nil})]
         (t/is (= [] @(:scoped-models agent))))
-      ;; unresolved patterns are skipped with a stderr warning
-      (let [agent (loop/init-scoped-models!
-                   (loop/make-agent-state)
-                   {:enabled-models ["test-prov/a" "ghost/model"]})]
+      ;; unresolved patterns are skipped with a stderr warning — suppress it
+      ;; (hosts without per-var output capture, e.g. jolt, would leak it)
+      (let [agent (binding [*err* (java.io.StringWriter.)]
+                    (loop/init-scoped-models!
+                     (loop/make-agent-state)
+                     {:enabled-models ["test-prov/a" "ghost/model"]}))]
         (t/is (= ["test-prov/a"] @(:scoped-models agent)))))))
 
 (defn- thinking-model

@@ -690,7 +690,11 @@
       (spit (str dir "/scratchcache.edn") (pr-str catalog))
       (spit (str dir "/manifest.edn")
             (pr-str {:schema-version 1 :generated-at "2999-01-01T00:00:00Z"}))
-      (binding [m/*use-models-cache* true
+      ;; load-catalogs! announces the cache on stdout — suppress it (hosts
+      ;; without per-var output capture, e.g. jolt, would leak it).
+      (binding [*out* (java.io.StringWriter.)
+                *err* (java.io.StringWriter.)
+                m/*use-models-cache* true
                 m/*models-cache-dir* dir]
         (t/is (= dir (m/fresh-model-cache)))
         (let [providers (m/load-catalogs!)]
@@ -733,7 +737,12 @@
       (spit (str dir "/scratchcache.edn") "{{{ not edn")
       (spit (str dir "/manifest.edn")
             (pr-str {:schema-version 1 :generated-at "2999-01-01T00:00:00Z"}))
-      (binding [m/*use-models-cache* true
+      ;; load-catalogs! announces the cache and warns (stderr) when it is
+      ;; unusable — suppress both (hosts without per-var output capture,
+      ;; e.g. jolt, would leak them).
+      (binding [*out* (java.io.StringWriter.)
+                *err* (java.io.StringWriter.)
+                m/*use-models-cache* true
                 m/*models-cache-dir* dir]
         (let [providers (m/load-catalogs!)]
           (t/is (nil? (get providers :scratchcache)))
