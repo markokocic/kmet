@@ -4,9 +4,10 @@ Scope: the whole repo (141 `src` files ≈ 52.6k LOC, 117 test files ≈ 34.9k L
 59 extension source `.clj` files ≈ 17k LOC (+106 `target/` test-fixture
 files — counts re-verified 2026-09-08),
 not just the TUI. Jolt reference is the checkout at `~/jolt/` (`533b04a3`,
-2026-09-08) plus `jolt-lang.github.io/docs/{native-interop,host-interop,
-differences,building-and-deps}`. Items marked "verified" were checked
-against that tree (`stdlib/`, `host/chez/java/`, `vendor/`, `jolt-core/`);
+2026-09-08; re-checked at `c4ebc570` / `v0.8.6-32` and, for B3, at
+`69a6f592`, 2026-09-11) plus `jolt-lang.github.io/docs/{native-interop,
+host-interop,differences,building-and-deps}`. Items marked "verified" were
+checked against that tree (`stdlib/`, `host/chez/java/`, `vendor/`, `jolt-core/`);
 the rest is code reasoning, not a running port.
 
 **Bottom line**: a full port is a multi-month project with 2 hard blockers
@@ -134,22 +135,120 @@ classpath; shared layers (`kmet.extension`, `clojure.*`, `babashka.*`,
 bundled-lib redirection (rewrite-clj, edamame, …), per-extension
 deps.edn, load-fn error handling, classpath-overrides matching bb.
 
-Jolt **can run SCI's source** (`make sci` loads `borkdude/sci` through
-joltc; `scifunctional` runs SCI functional tests) — so porting the
-mechanism is plausible, not impossible (SCI is vendored at `vendor/sci`,
-and `stdlib/clojure/sci/` host-layer stubs (`host_stubs.clj`, `io_stubs.clj`,
-`lang_stubs.clj`) cover its host-layer modules). But:
-SCI-on-Jolt performance for a whole extension ecosystem is unproven;
-`borkdude/deps.clj` (JVM Maven resolution) must be replaced by Jolt's own
-dep fetching (grenadine tree expansion via `vendor/grenadine`, HTTPS fetch
-via `stdlib/jolt/mvn_http.clj`, `~/.m2` sharing — verify the exact
-namespaces + whether they can serve arbitrary Maven closures at
-extension-load time); and the bb-import/bundled-lib tables
-must be rebuilt against Jolt's shim set. Alternative designs worth costing: (1) extensions as plain Jolt
-namespaces, no isolation (loses version isolation); (2) extensions as
-subprocesses over JSON-RPC (the MCP pattern — strong isolation, new
-protocol work); (3) SCI as now. This is the last milestone either way —
-the core agent must work before extensions matter.
+**SCI substrate VERIFIED on Jolt 2026-09-11 (`v0.8.6-32-gc4ebc570`, then
+re-checked on the rebase base `69a6f592` / `main`) — no longer the
+blocker.** `make sci` (pure-Chez source-load gate) exits 0 at 412/424
+(floor 412; its 12 not-ok forms are the gate's curated load-order over a
+curated subset, not host gaps — see the gate's header),
+and `scifunctional` prints `SCI-FUNCTIONAL-TEST OK` (SCI 0.13.53 through the
+ordinary dependency path: `sci/init`, `eval-string*`, persistent/isolated
+contexts). A loader-shaped smoke of kmet's exact surface — host `read` +
+`sci/eval-form` per form, `:load-fn` serving a second namespace,
+`:namespaces` host-var injection, init-var fetch from `@(:env ctx)` — passed
+with **one required change**: vanilla SCI's `eval-form` contract wants
+`sci/binding [sci/ns …]` around the eval loop for `(ns …)` forms; bb
+tolerates the unwrapped host-`*ns*`-only shape `eval-source!` uses today
+(Jolt throws `Can't change/establish root binding of #'clojure.core/*ns*
+with set` from `sci.lang/throw-root-binding`). Timings for a 2-file
+extension: ctx init 45 ms, eval 23 ms, init call 5 ms. Per-extension deps:
+`jolt.deps/resolve-deps` (public, AOT'd into the binary) returns the
+extracted source roots of an arbitrary deps map at runtime and
+`jolt.deps/add-deps` is the `babashka.deps/add-deps` twin — the
+`borkdude.deps/-main -Spath` replacement, verified from the built binary
+(roots: `sci` + `edamame` + `sci.impl.types` + `graal.locking` +
+`tools.reader`). **Version pin: 0.13.53** — the jolt-gated SCI; the latest
+release (0.15.58) does not load on jolt yet (`No such var: clojure.core/Inst`
+loading `sci.impl.core-protocols` — jolt's `clojure.core` lacks the 1.12
+protocol). (The `stdlib/clojure/sci/*_stubs.clj` files are only for
+the pure-Chez `run-sci.ss` harness — the binary loads real SCI source.)
+
+**Interop inside interpreted code — measured, and fixed on a jolt branch
+(2026-09-11).** Extension sources — and every deps.edn library they
+load — run interpreted, and SCI's interpreter routes *both* instance and
+static method calls through `sci.impl.reflector`: `get-methods` delegates to
+`clojure.lang.Reflector/getMethods` and returns real
+`java.lang.reflect.Method` objects that the transliterated
+`invoke-matching-method` matches on (`getParameterTypes`, `getModifiers`,
+`.invoke`, `Compiler/subsumes`). jolt registers only
+`Reflector/invokeConstructor` / `invokeStaticMethod` / `invokeInstanceMethod`
+(all three work when called directly), so stock SCI answers ctors and `str`
+and nothing else: against a `:classes` + `:imports` table,
+`System/currentTimeMillis`, `System/getenv`, `System/getProperty`,
+`Math/round`, `Integer/parseInt`, `Long/parseLong`,
+`Character/isWhitespace`, `Thread/sleep`, `.indexOf`, `.toUpperCase`,
+`.getBytes`, `.getName`, `.getScheme`, `.size` and `.toString` all fail with
+one error (`Reflector/getMethods` called in a shape jolt does not register:
+"incorrect number of arguments 5"). That is not a corner: **16 of 41 `src`
+extension files use interop** (all 16 via `System/` statics —
+`currentTimeMillis` ×31, `getenv` ×20, `getProperty` ×20 — plus instance
+methods: `.indexOf`, `.getBytes`, java.time chains), and loaded libraries do
+too (cljfmt 0.16.5: `java.io.File` in 3 of its 12 sources). No `.-field`
+access anywhere in the corpus (0 hits).
+
+**FIXED on a jolt branch (`agent/sci-reflector`, commit `fcf41977` rebased
+onto main `69a6f592`, 2026-09-11 — upstreamed for review, not merged yet).**
+The clean fix needed no
+SCI patch and no shadow: jolt registers the lookup SCI actually calls,
+`clojure.lang.Reflector/getMethods`, plus the two companions the same path
+needs — `Class.cast` (jolt reports every parameter as `Object`, where the cast
+is the identity; without an arm the lookup fell through to resolving the class
+by name, which raised for `java.lang.Object`) and `Util/sneakyThrow` (the
+rethrow SCI's invoke ends every call with — a throwing method otherwise
+reported "No matching field or method: clojure.lang.Util/sneakyThrow" instead
+of its own exception). `getMethods` answers from the registries
+`Class.getMethods` already reads; for a class whose methods are a `cond` over
+the receiver (String, the collections) it answers with a member carrying the
+dispatch rule — parameter count pinned in a slot, instance calls routed
+through `record-method-dispatch`, statics through `host-static-call`,
+`canAccess` → yes — under the same "jolt reports what its registries know"
+model as `reflect-member-model`. `Method.invoke` also reads a lone nil
+argument array as the empty one (how a reflective caller spells a
+zero-parameter call). **Verified:** the whole interop matrix above is green on
+*stock* SCI 0.13.53 (`System/currentTimeMillis`/`getenv`/`getProperty`,
+`Math/round`, `Integer/parseInt`, `Character/isWhitespace`, `Thread/sleep`,
+`.indexOf`/`.toUpperCase`/`.getBytes`/`.getName`/`.getScheme`/`.size`/
+`.toString`, constructors, `(Thread. (fn [] …))`) and so is kmet's loader shape
+end-to-end
+(`$TMPDIR/kmet-loader-smoke.clj`: `:load-fn` + `:namespaces` injection +
+interop inside an interpreted extension's own source). `make sci` 412/424
+(floor) unchanged; `make scifunctional` and `unit.edn`'s
+`reflect-member-model` (26 rows) gained the cases; `make unit` shows the same
+6 `/tmp`-based failures as `main` (Termux has no `/tmp`). **Rebased onto
+`69a6f592` (2026-09-11) and re-verified there** — byte-identical (`188
+insertions, 7 deletions`), and the gates hold on the new base: `make sci`
+412/424, `scifunctional` OK, `reflect-member-model` 26/26, interop matrix +
+loader smoke green. `make corpus` reports the same 9 crashes (3×
+`ISO-2022-JP`, 2× `Shift_JIS`, 2× `windows-1252` from upstream's `Charset`
+object change, 2× `/tmp/jolt-spit` from the environment) at the same
+5494/5513 on `origin/main` without the patch, so none are attributable to
+it. `make smoke`/`make loaderconf` need a built binary, and `make testbin`
+cannot link on this Termux toolchain (system-Chez iconv), unrelated to
+source. If upstream declines the branch, the fallback stays a ~30-line
+jolt-side shadow of `sci.impl.reflector` on a jolt-only root (verified
+too: `sci/impl/reflector.clj` with `get-methods` → one-element `ArrayList`
+sentinel carrying the class, `maybe-fi-method` → nil, `box-arg` →
+identity) — but note it must never
+sit under `src/`, where bb's classpath would gain a namespace shadowing its
+built-in SCI.
+
+Remaining port items: (a) **the `sci/binding` wrapper** — vanilla SCI wants
+`sci/binding [sci/ns …]` around the eval loop for an `(ns …)` form; bb
+tolerates the unwrapped host-`*ns*`-only shape `eval-source!` uses today, Jolt
+throws `Can't change/establish root binding of #'clojure.core/*ns* with set`
+(`sci.lang/throw-root-binding`). kmet-side, and `#?(:jolt …)`-conditional:
+bb's own `sci/binding` is broken (`Unable to resolve symbol:
+sci.impl.vars/push-thread-bindings`); (b) the class/import tables
+(`context-classes` is bb's `babashka.classes/all-classes` today; jolt exposes
+no class enumeration — an upstream listing API or a curated table — the
+reflector path needs the table populated to reach any class); (c) the
+bb-bundled-lib redirection tables (`bundled-port-namespaces`,
+`bb-shared-namespaces`, rewrite-clj/edamame, `bb-imports`); (d) jar/zip
+extension artifacts (M5); (e) SCI-perf beyond one small extension. Alternative
+designs worth costing: (1) extensions as plain Jolt namespaces, no isolation
+(loses version isolation); (2) extensions as subprocesses over JSON-RPC (the
+MCP pattern — strong isolation, new protocol work); (3) SCI as now. This is
+the last milestone either way — the core agent must work before extensions
+matter.
 
 ---
 
