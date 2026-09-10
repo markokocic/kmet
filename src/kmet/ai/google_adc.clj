@@ -14,10 +14,14 @@
             [clojure.string :as str]
             [kmet.libs.http :as http]))
 
-;; (jolt only) Install kmet's JDK shims before this file's class references
-;; (java.security.Signature "SHA256withRSA", Base64/getMimeDecoder) analyze.
-;; See kmet.libs.crypto for the full rationale; the require is guarded by
-;; the jolt-version marker so bb never sees jolt.* namespaces.
+;; (jolt only) Install kmet's Base64 shim before this file's class references
+;; analyze: java.util.Base64's MIME decoder, the one class in this file that
+;; no :jolt/provides claim can fix (the runtime implements the class, so jolt
+;; refuses the claim — the guarded require is its only install path). The
+;; crypto classes here (Signature "SHA256withRSA", KeyFactory) autoload
+;; jolt.crypto through its own claims since jolt#914. See kmet.libs.crypto
+;; for the full rationale; the require is guarded by the jolt-version marker
+;; so bb never sees jolt.* namespaces.
 (when (find-var 'clojure.core/*jolt-version*)
   (require 'jolt.kmet.providers))
 

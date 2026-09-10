@@ -145,9 +145,13 @@ jolt.crypto provides `Signature`/`KeyPairGenerator`/`KeyFactory` for RSA and
 EC and claims those classes in its own `:jolt/provides` (a class may have a
 single provider); the JWK bigint→DER conversion lives in
 `kmet.libs.crypto/bigint->bytes` (portable, both hosts).
-`jolt.kmet.providers` requires `jolt.crypto` as its FIRST form — libcrypto
-natives and jolt.crypto's registrations must exist before ours (registrations
-merge into the class tables; re-registered members are last-wins).
+`jolt.kmet.providers` requires nothing but `jolt.host` — the `jolt.crypto`
+first-form require was dropped 2026-09-10: it existed only while kmet's
+provider re-registered crypto's classes (last-wins), and a nested load of
+another provider's install ns keeps the OUTER provider's `JOLT_DEBUG` mark,
+which misattributed crypto's registrations to kmet. crypto's classes resolve
+through crypto's own `:jolt/provides` claims (jolt#914; the general nested-
+provider case is jolt#926).
 Convention: a src ns whose forms reference a class jolt lacks adds the
 guarded require as its first form after the ns:
 
@@ -156,11 +160,14 @@ guarded require as its first form after the ns:
   (require 'jolt.kmet.providers))
 ```
 
-Never rely on the `:jolt/provides` autoload alone: jolt autoloads a provider
-only while the referenced class is UNREGISTERED, and jolt.crypto's `install!`
-registers its classes as a side effect of any `Mac`/`Cipher` autoload — the
-guarded require is what makes kmet's own shims (Base64 MIME, the
-transport-exception ctor) deterministic.
+The guard is what installs a member of a class the runtime IMPLEMENTS but
+does not fully supply (`java.util.Base64/getMimeDecoder`): jolt refuses
+claims on implemented classes, so nothing autoloads — `kmet.libs.crypto` and
+`kmet.ai.google-adc` keep the guard for it. Classes kmet or jolt.crypto
+declares in `:jolt/provides` (`HttpTimeoutException`,
+`Signature`/`KeyPairGenerator`/`KeyFactory`) need no guard: since jolt#914
+(PR #924) the claimer's install namespace loads on the first reference,
+whatever loaded first.
 
 ### Layer boundaries
 - **`kmet.libs.*`** — generic, self-contained. **Must not require any kmet.*

@@ -321,10 +321,11 @@ assertions (both JOLT-3/JOLT-4 workarounds REMOVED 2026-09-10, jolt PR
 URI ctor); cause 7's call sites actually fixed (`tree_selector.clj`
 positional `true` → `:strict? true`; `test_track.clj` dangling `:a` args
 dropped). **Cause 1 (partial) — the `jolt/` RFC 0014 provider lib (§9):**
-`jolt.kmet.providers` (requires `jolt.crypto` first) now supplies
-`Base64/getMimeDecoder` (PEM decoding) and the `HttpTimeoutException` ctor
-(full JDK contract incl. the `IOException` hierarchy edge) — the
-parse-private-key failure and the llm transport-error error are green.
+`jolt.kmet.providers` now supplies `Base64/getMimeDecoder` (PEM decoding)
+and the `HttpTimeoutException` ctor (full JDK contract incl. the
+`IOException` hierarchy edge) — the parse-private-key failure and the llm
+transport-error error are green. (It required `jolt.crypto` when this was
+written; that require was dropped 2026-09-10 — see §9.)
 **Cause 3 (string indexing, M16) — fixed kmet-side:** `codepoint-len`
 (utils.clj) now derives the element span of the cp at index I from the
 string itself — 2 only when element I is a high surrogate followed by a
@@ -366,7 +367,10 @@ firing `schedule-frame!` into the test's hook.
 assertions, 0 failures, 0 errors**; re-verified the same day after the
 borders/timers/key-labels work and the resource-resolution port, now
 **2032 tests / 13803 assertions, 0 failures, 0 errors** (the delta is newly
-added tests, not fixed ones). The last two causes closed the same day:
+added tests, not fixed ones). Re-verified once more on the jolt#914 fix build
+(`v0.8.6-29-gf85adb51`, the PR #924 merge): the affected namespaces are green
+(`jolt test kmet.libs.test-crypto kmet.ai.test-google-adc kmet.ai.test-llm` —
+99 tests / 523 assertions). The last two causes closed the same day:
 
 - cause 1's JWK `.toByteArray` (5 E) — `kmet.libs.crypto/bigint->bytes`
   (`8eff434`), a portable quot/rem two's-complement encoder verified
@@ -405,37 +409,72 @@ classpath namespace requires a `jolt.*` ns, clj-kondo excludes the dir.
 
 ### Why it exists (cause 1 of §8)
 
-jolt.crypto (io.github.jolt-lang/crypto) covers symmetric crypto + **EC**
-keygen/signature only — its own tests pin the RSA rejection — and jolt core
+jolt.crypto (io.github.jolt-lang/crypto) covered symmetric crypto + **EC**
+keygen/signature only when this lib was born (its own tests pinned the RSA
+rejection; RSA landed upstream 2026-09-10 — roadmap below) and jolt core
 lacks `Base64/getMimeDecoder` and a `HttpTimeoutException` ctor. kmet's
-production Google-ADC login (RS256) and the RS256 JWT paths cannot run on
-jolt until RSA exists.
+production Google-ADC login (RS256) and the RS256 JWT paths could not run on
+jolt until RSA existed.
 
-### Load order — the trap and the fix
+### Load order — the trap, fixed upstream (jolt#914)
 
-jolt autoloads a `:jolt/provides` install namespace only while the
-referenced class is **unregistered**. But jolt.crypto's `install!`
-registers EC-only `Signature`/`KeyPairGenerator`/`KeyFactory` as a side
-effect of ITS autoload (any `javax.crypto.Mac`/`Cipher` reference), and a
-registered class never triggers a provider lookup again — so a namespace
-that compiled after jolt.crypto loaded would bind the EC-only versions and
-RSA would be unreachable. `jolt.kmet.providers` therefore:
+jolt used to autoload a `:jolt/provides` install namespace only while the
+referenced class was **unregistered**. But jolt.crypto's `install!`
+registers classes as a side effect of ITS autoload (any
+`javax.crypto.Mac`/`Cipher` reference), and a registered class never
+triggered a provider lookup again — so a namespace that compiled after
+jolt.crypto loaded bound crypto's then-EC-only
+`Signature`/`KeyPairGenerator`/`KeyFactory` and RSA was unreachable. Same
+deps.edn, two outcomes decided by compile order — kmet itself showed both
+(`ai.test-google-adc` errored `No dependency provides
+java.security.KeyPairGenerator`, a later `libs.test-crypto` got the EC-only
+shim).
 
-1. requires `jolt.crypto` as its **first form** (its `:jolt/native`
-   libcrypto load + EC/symmetric registrations always precede ours;
-   `__register-class-statics!` merges into the class's shared table,
-   re-registered members last-wins);
-2. is claimed in `jolt/deps.edn` `:jolt/provides` for the asymmetric
-   classes + `HttpTimeoutException` (deterministic first-reference
-   autoload);
-3. is additionally forced by **guarded requires** in the src nses that
-   reference the classes directly (`kmet.libs.crypto`, `kmet.ai.google-adc`):
-   `(when (find-var 'clojure.core/*jolt-version*) (require 'jolt.kmet.providers))`
-   as the first form after the ns — covers the poisoned case and classes
-   that cannot be claimed (`java.util.Base64`: jolt refuses claims on
-   classes it implements; missing members are added at install).
+That is fixed upstream: **jolt#914** closed by **PR #924** (merge
+`f85adb51`, in the `v0.8.6-29`+ builds). A declared provider resolves its
+class whatever loaded first: a registration for a claimed class from a
+non-claimer is **held** until the claimer loads, then replayed through the
+same guard — what the provider implements wins, members it does not answer
+still land — and once the provider has registered a member, a registration
+of that member from anywhere else is **dropped** (with a warning).
+Resolution is a property of the dependency graph now, not of incidental
+load state. `java.util.Base64` is explicitly out of scope: a claim on a
+class the runtime implements is still refused, and a member-miss autoload
+for implemented classes is a separate upstream item.
 
-This pattern is the AGENTS.md convention for any future consumer.
+What that means for kmet's three load-order payloads:
+
+1. the `jolt.crypto` **first-form require** in `jolt.kmet.providers` is
+   **dropped** (2026-09-10): it existed only while kmet's provider
+   re-registered crypto's asymmetric classes last-wins, and it made jolt's
+   `JOLT_DEBUG` diagnostics misattribute crypto's registrations to kmet —
+   a nested load of another provider's install namespace keeps the OUTER
+   provider's `lib-loading-provider` mark, so crypto's `MessageDigest` /
+   `Signature` / … showed up as "`jolt.kmet.providers` registers … without
+   declaring it" (the general case is **jolt#926**, §9). With the require
+   gone, crypto loads on its own first class reference and attributes
+   correctly; the provider now needs only `jolt.host`;
+2. the `jolt/deps.edn` `:jolt/provides` claim (now only
+   `HttpTimeoutException`) autoloads on the **first reference**, whatever
+   registered the class earlier — verified: a bare
+   `(java.net.http.HttpTimeoutException. "x")` loads the provider with no
+   guard at all;
+3. the **guarded requires** in `kmet.libs.crypto` / `kmet.ai.google-adc`
+   remain, but now only for `java.util.Base64`: the claim on it is refused,
+   so the guard is the only thing that installs `getMimeDecoder` before a
+   referencing namespace is analyzed. Verified: without the guard,
+   `No matching field or method: java.util.Base64/getMimeDecoder`. Their
+   crypto half is obsolete — `Signature`/`KeyPairGenerator`/`KeyFactory`
+   are declared by jolt.crypto and autoload it deterministically (verified
+   with no requires at all).
+
+This pattern is the AGENTS.md convention for any future consumer. The
+`JOLT_DEBUG` attribute of the remaining note is open upstream — **jolt#926**
+(both follow-ups to #914: the nested-provider mark and this note). A class
+the runtime IMPLEMENTS gets a "registers … without declaring it" note even
+though jolt refuses a claim on it, so the advice cannot be taken (kmet's
+`java.util.Base64`, jolt.crypto's `SecureRandom`); the same issue covers the
+general nested-provider attribution case.
 
 ### Provided (verified against the bb/JVM reference)
 
@@ -450,12 +489,19 @@ Green on jolt after this: `libs.test-crypto/test-parse-private-key-rejects-garba
 (since closed — see the roadmap below).
 
 **RSA moved out of this lib (2026-09-10):** jolt.crypto provides it now, so
-the provider here is Base64 MIME + `HttpTimeoutException` only. The load-order
-require of jolt.crypto is unchanged and still structural (natives + the
-crypto classes must be installed before our registrations).
+the provider here is Base64 MIME + `HttpTimeoutException` only, and its
+`jolt.crypto` require is gone with the last-wins re-registration that
+justified it (see the load-order section above).
 
 ### Roadmap — CLOSED 2026-09-10 (full jolt suite green)
 
+- **Load-order dependence (jolt#914)** — fixed upstream in **PR #924**
+  (merge `f85adb51`, `v0.8.6-29`+): a declared provider resolves its class
+  whatever loaded first (hold-then-replay for a non-claimer's registration,
+  drop once the provider owns the member). kmet's guarded requires remain,
+  now solely for `java.util.Base64` — claims on runtime-implemented classes
+  are still refused (separate upstream item) — and the now-vestigial
+  `jolt.crypto` require is dropped (see above).
 - **RSA** — landed upstream in **jolt.crypto** (jolt-lang/crypto#8, merge `79ecb3d`): RSA keygen
   (`RSA_new` / `RSA_generate_key_ex` + `EVP_PKEY_set1_RSA`), `SHA*withRSA` in
   `Signature`, RSA in `KeyFactory`, reusing the EVP seam the EC code already

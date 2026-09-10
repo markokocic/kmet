@@ -18,16 +18,22 @@
    broke (.toByteArray) is handled in kmet.libs.crypto/bigint->bytes, which
    works on both hosts.
 
-   LOAD ORDER — why jolt.crypto still loads first. jolt.crypto MUST load
-   before any registration below runs: its deps.edn :jolt/native loads
-   libcrypto/libssl, and its install! registers the crypto java.* classes
-   (__register-class-statics! merges into the class's shared table; a
-   re-registered member is last-wins). The require is the first form in
-   the file, so every load path — jolt's provider autoload (see
-   jolt/deps.edn :jolt/provides) or kmet's guarded requires in
-   kmet.libs.crypto / kmet.ai.google-adc — gets jolt.crypto fully installed
-   before anything here runs."
-  (:require [jolt.crypto]))
+   NO jolt.crypto REQUIRE (dropped 2026-09-10). The first-form require was
+   structural only while this ns re-registered crypto's asymmetric classes
+   (last-wins merge); once those moved to crypto it bought nothing, and it
+   made jolt's JOLT_DEBUG diagnostics misattribute crypto's registrations:
+   a nested load of another provider's install namespace keeps the OUTER
+   provider's lib-loading-provider mark, so crypto's registrations were
+   reported as `jolt.kmet.providers registers MessageDigest/Signature/…
+   without declaring it`. crypto's classes resolve through crypto's own
+   :jolt/provides claims on the first reference (jolt#914), so this ns
+   needs only jolt.host and clojure.core. The nested-load attribution — the
+   reason the require had to go for the diagnostics to read right — is
+   jolt#926.
+
+   java.util.Base64 cannot be claimed (jolt refuses claims on classes the
+   runtime implements), so kmet's guarded requires — kmet.libs.crypto,
+   kmet.ai.google-adc — are that shim's only install path.")
 
 ;; ─── java.util.Base64/getMimeDecoder ──────────────────────────────────────
 ;; jolt core registers getEncoder/getDecoder/getUrlEncoder/getUrlDecoder

@@ -34,8 +34,9 @@
         ;; kmet's own RFC 0014 provider lib (jolt/ dir): the JDK classes the
         ;; jolt ecosystem lacks — Base64 MIME decode and the
         ;; HttpTimeoutException ctor (RSA used to be here; jolt.crypto
-        ;; provides it now). jolt.kmet.providers requires jolt.crypto first
-        ;; (load order is structural). Inert on bb/JVM.
+        ;; provides it now). It requires nothing but jolt.host: crypto's
+        ;; classes resolve through crypto's own :jolt/provides claims
+        ;; (jolt#914). Inert on bb/JVM.
         jolt.kmet/providers {:local/root "jolt"}}
  :aliases
  {:dev {:extra-paths ["test"]}}}

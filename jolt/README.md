@@ -14,34 +14,48 @@ those classes itself. What remains here is what the jolt runtime lacks and
 crypto does not cover: `java.util.Base64/getMimeDecoder` and the
 `java.net.http.HttpTimeoutException` ctor.
 
-## Load order — jolt.crypto first (non-negotiable)
+## No `jolt.crypto` require (dropped 2026-09-10)
 
-`jolt.kmet.providers` requires `jolt.crypto` as its **first form**, and every
-registration happens after that require. That is structural, not incidental:
+`jolt.kmet.providers` requires nothing but `jolt.host`. The first-form
+`jolt.crypto` require was structural only while this lib re-registered
+crypto's asymmetric classes (a last-wins merge that made load order matter);
+since RSA moved to jolt.crypto the re-registration is gone and so is the
+reason for the require. Dropping it also removed a JOLT_DEBUG false positive:
+jolt marks the namespace whose install is loading, and a nested load of
+another provider's install namespace keeps the OUTER provider's mark — with
+the require in place, crypto's registrations were reported as
+`jolt.kmet.providers registers MessageDigest/Signature/… without declaring it`
+under `JOLT_DEBUG` (the general nested-provider case is **jolt#926**).
+jolt#914 (PR #924, `f85adb51`, `v0.8.6-29`+) is what makes
+this safe: a declared provider resolves its class whatever loaded first, and
+jolt.crypto's own `:jolt/provides` claims resolve its classes on the first
+reference.
+
+That the require is gone changes nothing about the crypto classes' load
+order requirements:
 
 - jolt.crypto's `deps.edn` declares `:jolt/native` — libcrypto/libssl load
-  before its namespace; jolt dedupes natives by `:name`, so an app that also
+  with crypto itself; jolt dedupes natives by `:name`, so an app that also
   pulls http-client shares the one copy.
-- jolt.crypto's `install!` registers the crypto `java.*` classes.
-  `__register-class-statics!` **merges** into a class's shared member table
-  with last-wins per member, so registrations extend cleanly.
+- jolt.crypto's `install!` registers the crypto `java.*` classes as its
+  install namespace loads, and RFC 0014 makes what a declared provider
+  implements its own (jolt#914's registration guard: replacing one of its
+  members is dropped).
 - jolt.crypto's own `:jolt/provides` claims `Signature` / `KeyPairGenerator`
   / `KeyFactory` (EC and RSA) and the spec classes — a dependent referencing
   one of those autoloads crypto directly, with no kmet involvement.
 
-Two mechanisms carry kmet's remaining shims:
-
-1. **`jolt/deps.edn` `:jolt/provides`** claims `HttpTimeoutException`,
-   mapping to `jolt.kmet.providers`. The first reference to it autoloads us —
-   and we load jolt.crypto first.
-2. **Guarded requires** in the kmet namespaces that reference the classes
-   directly (`kmet.libs.crypto`, `kmet.ai.google-adc`) — a top-level
-   `(when (find-var 'clojure.core/*jolt-version*) (require 'jolt.kmet.providers))`
-   as the first form after the `ns`. This covers `java.util.Base64`, which
-   cannot be claimed because the runtime implements the class.
-
-`java.util.Base64` is deliberately **not** claimed (jolt refuses claims on
-classes it implements); its missing members are added at install instead.
+The one mechanism left is the **guarded require** in the kmet namespaces
+that reference the classes directly (`kmet.libs.crypto`,
+`kmet.ai.google-adc`) — a top-level
+`(when (find-var 'clojure.core/*jolt-version*) (require 'jolt.kmet.providers))`
+as the first form after the `ns`. It exists for `java.util.Base64` only: a
+claim on it is refused because the runtime implements the class, so the guard
+is the only install path (verified: without it, `No matching field or method:
+java.util.Base64/getMimeDecoder`). The class kmet claims
+(`HttpTimeoutException`) resolves through its own `:jolt/provides` — verified:
+a bare `(java.net.http.HttpTimeoutException. "x")` autoloads the provider
+with no guard at all.
 
 ## What is provided
 
@@ -52,6 +66,17 @@ classes it implements); its missing members are added at install instead.
 
 ## Done upstream / in kmet (2026-09-10)
 
+- **Load-order dependence (jolt#914)** — fixed upstream in jolt PR #924
+  (merge `f85adb51`, `v0.8.6-29`+): a declared provider resolves its class
+  whatever loaded first. kmet's guarded requires are now needed only for
+  `java.util.Base64`; the `HttpTimeoutException` claim and the crypto
+  classes resolve through their own `:jolt/provides`. The nested-require
+  `JOLT_DEBUG` false positives this lib used to show are gone with the
+  `jolt.crypto` require itself (see the section above); the remaining note
+  for `java.util.Base64` is a true statement — the class cannot be claimed,
+  so the guard really is its only install path — but its advice ("declare it
+  in :jolt/provides") is one jolt refuses, which is tracked upstream in
+  **jolt#926** together with the general nested-provider attribution case.
 - **RSA** — now provided by jolt.crypto (merged upstream: jolt-lang/crypto#8,
   merge commit `79ecb3d` — the previous pin was the same tree from the fork):
   RSA keygen via
@@ -69,7 +94,7 @@ classes it implements); its missing members are added at install instead.
 ## Verification
 
 ```sh
-# load order: jolt.crypto before jolt.kmet.providers
+# loads standalone: jolt.host only, no jolt.crypto require
 jolt -e "(require 'jolt.kmet.providers)"
 # shims live:
 jolt -e "(println (String. (.decode (java.util.Base64/getMimeDecoder) \"aGVs\nbG8=\") \"UTF-8\"))"   ; hello
