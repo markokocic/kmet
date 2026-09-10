@@ -235,8 +235,8 @@
         request-line (try (.readLine reader) (catch Exception _ nil))]
     (when (seq request-line)
       ;; Header block ends at the first blank line. The emptiness check must
-      ;; trim: Jolt's readLine keeps the trailing \\r (the JVM strips it), so
-      ;; the blank line arrives as \"\\r\" — a bare (seq line) test would read
+      ;; trim: jolt ≤ v0.8.5's readLine kept the trailing \\r (the JVM strips
+      ;; it; fixed upstream in v0.8.6), so the blank line arrived as \"\\r\" — a bare (seq line) test would read
       ;; one line past the header block and block forever waiting for more
       ;; input (the browser/curl waits for the response → deadlock; test_http
       ;; read-request carries the same workaround).
