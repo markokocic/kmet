@@ -16,11 +16,13 @@
 
 ;; ─── Box record ─────────────────────────────────────────────────────────────
 
-(defcomponent Box nil [children padding-x padding-y bg-fn cache]
+(defcomponent Box nil [children padding-x-atom padding-y-atom bg-fn cache]
   (render [this width]
     (if (empty? @children)
       []
-      (let [content-width (max 1 (- width (* 2 padding-x)))
+      (let [padding-x @padding-x-atom
+            padding-y @padding-y-atom
+            content-width (max 1 (- width (* 2 padding-x)))
             left-pad (apply str (repeat padding-x \space))
             child-lines (mapcat (fn [c]
                                   (map #(str left-pad %) (protocols/render c content-width)))
@@ -50,13 +52,12 @@
 ;; ─── Constructors & helpers ─────────────────────────────────────────────────
 
 (defn make-box
-  ([] (map->Box {:children (atom [])
-                 :padding-x 1 :padding-y 1
-                 :bg-fn (atom nil) :cache (atom nil)}))
+  ([] (make-box 1 1 nil))
   ([padding-x padding-y] (make-box padding-x padding-y nil))
   ([padding-x padding-y bg-fn]
    (map->Box {:children (atom [])
-              :padding-x padding-x :padding-y padding-y
+              :padding-x-atom (atom padding-x)
+              :padding-y-atom (atom padding-y)
               :bg-fn (atom bg-fn) :cache (atom nil)})))
 
 (defn box-add-child [box child]
@@ -73,4 +74,17 @@
 
 (defn box-set-bg-fn [box bg-fn]
   (reset! (:bg-fn box) bg-fn)
+  (reset! (:cache box) nil))
+
+;; Padding is render input (the cache key does not include it — the setters
+;; reset the cache), live so the hiccup :box tag can patch a changed
+;; :padding-x/:padding-y prop in place instead of ignoring it (§2.3).
+(defn box-set-padding-x!
+  [box n]
+  (reset! (:padding-x-atom box) n)
+  (reset! (:cache box) nil))
+
+(defn box-set-padding-y!
+  [box n]
+  (reset! (:padding-y-atom box) n)
   (reset! (:cache box) nil))

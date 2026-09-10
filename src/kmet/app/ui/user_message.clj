@@ -59,14 +59,11 @@
                                     (fn [s] (theme/fg theme :user-message-text s)))))
 
 (defn user-message-set-output-pad!
-  "Rebuild box with new padding, reusing the same content child."
+  "Set the box's horizontal padding in place — the content child and the
+   box's bg-fn (re-applied per render) are untouched."
   [comp n]
   (reset! (:output-pad-atom comp) n)
-  (let [theme (deref s/theme-sub)
-        content @(:content-atom comp)
-        b (box/make-box n 1 #(theme/bg theme :user-message-bg %))]
-    (box/box-add-child b content)
-    (reset! (:box comp) b)))
+  (box/box-set-padding-x! @(:box comp) n))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 

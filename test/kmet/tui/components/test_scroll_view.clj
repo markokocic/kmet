@@ -170,3 +170,56 @@
       (t/is (= 5 (:track-height g)))
       (t/is (= 15 (:max-scroll-top g)))
       (t/is (pos? (:thumb-top g)) "scrolled up → thumb moved down"))))
+
+(t/deftest test-scroll-view-live-prop-setters
+  ;; the setters behind the hiccup :scroll-view apply path (tui.md §2.3):
+  ;; every structural prop is an atom, so a patch is visible immediately
+  (let [sv (sv/make-scroll-view (fake-child ["x"]))]
+    (t/is (true? @(:follow-end?-atom sv)) "constructor default")
+    (sv/scroll-view-set-follow-end! sv false)
+    (t/is (false? @(:follow-end?-atom sv)))
+    (sv/scroll-view-set-primary! sv true)
+    (t/is (true? @(:primary?-atom sv)))
+    (sv/scroll-view-set-overscroll! sv :contain)
+    (t/is (= :contain @(:overscroll-atom sv)))
+    (sv/scroll-view-set-scrollbar-style! sv nil)
+    (t/is (= sv/default-scrollbar-style @(:scrollbar-style-atom sv))
+          "nil style falls back to the default, like construction")
+    (sv/scroll-view-set-scrollbar-hide-delay-ms! sv 250)
+    (t/is (= 250 @(:scrollbar-hide-delay-ms-atom sv)))
+    (sv/scroll-view-set-scrollbar-hide-delay-ms! sv -5)
+    (t/is (zero? @(:scrollbar-hide-delay-ms-atom sv)) "clamped like construction")))
+
+(t/deftest test-scroll-view-follow-end-false-keeps-position
+  ;; an explicit false follow-end (patched in live) must actually stop the
+  ;; end-following: a layout update then keeps the scroll position
+  (let [lines (mapv #(str "line" %) (range 20))
+        sv (sv/make-scroll-view (fake-child lines))]
+    (sv/update-layout! sv 20 5 (fn [] nil))
+    (sv/scroll-to! sv 3)
+    (sv/scroll-view-set-follow-end! sv false)
+    (sv/update-layout! sv 25 5 (fn [] nil))
+    (t/is (= 3 (sv/scroll-top sv)) "the viewport stayed put")))
+
+(t/deftest test-scroll-view-follow-end-flip-stops-following
+  ;; the invariant following-end ⇒ follow-end holds across a live patch:
+  ;; following (pinned to the end) then follow-end → false stops it, so the
+  ;; next layout update keeps the position instead of re-pinning; turning
+  ;; it back on re-engages only when the viewport is already at the end
+  (let [lines (mapv #(str "line" %) (range 20))
+        sv (sv/make-scroll-view (fake-child lines))]
+    (sv/update-layout! sv 20 5 (fn [] nil))
+    (t/is (true? (sv/follows-end? sv)) "following the end after layout")
+    (sv/scroll-view-set-follow-end! sv false)
+    (t/is (false? (sv/follows-end? sv)) "the flip stopped the following")
+    (sv/update-layout! sv 30 5 (fn [] nil))
+    (t/is (= 15 (sv/scroll-top sv)) "not re-pinned to the new end")
+    ;; at the end again → turning it on re-engages
+    (sv/scroll-to-end! sv)
+    (sv/scroll-view-set-follow-end! sv true)
+    (t/is (true? (sv/follows-end? sv)))
+    ;; not at the end → no re-engage
+    (sv/scroll-to! sv 2)
+    (sv/scroll-view-set-follow-end! sv false)
+    (sv/scroll-view-set-follow-end! sv true)
+    (t/is (false? (sv/follows-end? sv)))))

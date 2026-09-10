@@ -32,7 +32,7 @@
    :scroll-view tag can apply it explicitly."
   (fn [text] (str "\u001b[100m" text "\u001b[49m")))
 
-(defcomponent ScrollView nil [child-atom follow-end? primary? overscroll
+(defcomponent ScrollView nil [child-atom follow-end?-atom primary?-atom overscroll-atom
                               scrollbar-atom scrollbar-style-atom scrollbar-hide-delay-ms-atom
                               last-width-atom scroll-top-atom content-height-atom viewport-height-atom
                               following-end-atom request-render-fn-atom
@@ -159,7 +159,7 @@
         (reset! (:scroll-top-atom this) max-scroll)
         (reset! (:scroll-top-atom this) (max 0 (min @(:scroll-top-atom this) max-scroll))))
       ;; Pi: re-engage following when the viewport is already at the bottom.
-      (when (and (:follow-end? this) (= @(:scroll-top-atom this) max-scroll))
+      (when (and @(:follow-end?-atom this) (= @(:scroll-top-atom this) max-scroll))
         (reset! (:following-end-atom this) true))
       (when (<= content-height viewport-height)
         (hide-transient-scrollbar! this))
@@ -205,7 +205,7 @@
               next (max 0 (min max-scroll (+ start requested)))
               moved (- next start)]
           (reset! (:scroll-top-atom this) next)
-          (reset! (:following-end-atom this) (and (:follow-end? this) (= next max-scroll)))
+          (reset! (:following-end-atom this) (and @(:follow-end?-atom this) (= next max-scroll)))
           (when-not (zero? moved)
             (mark-scrollbar-activity! this)
             (when-let [f @(:request-render-fn-atom this)] (f)))
@@ -217,13 +217,13 @@
           next (max 0 (min max-scroll (int scroll-top)))]
       (when-not (= next @(:scroll-top-atom this))
         (reset! (:scroll-top-atom this) next)
-        (reset! (:following-end-atom this) (and (:follow-end? this) (= next max-scroll)))
+        (reset! (:following-end-atom this) (and @(:follow-end?-atom this) (= next max-scroll)))
         (mark-scrollbar-activity! this)
         (when-let [f @(:request-render-fn-atom this)] (f)))
       nil))
 
   (scroll-to-start! [this]
-    (let [following (and (:follow-end? this) (<= @(:content-height-atom this) @(:viewport-height-atom this)))
+    (let [following (and @(:follow-end?-atom this) (<= @(:content-height-atom this) @(:viewport-height-atom this)))
           changed (or (not= 0 @(:scroll-top-atom this))
                       (not= following @(:following-end-atom this)))]
       (reset! (:scroll-top-atom this) 0)
@@ -236,9 +236,9 @@
   (scroll-to-end! [this]
     (let [next (max 0 (- @(:content-height-atom this) @(:viewport-height-atom this)))
           changed (or (not= next @(:scroll-top-atom this))
-                      (not= (:follow-end? this) @(:following-end-atom this)))]
+                      (not= @(:follow-end?-atom this) @(:following-end-atom this)))]
       (reset! (:scroll-top-atom this) next)
-      (reset! (:following-end-atom this) (:follow-end? this))
+      (reset! (:following-end-atom this) @(:follow-end?-atom this))
       (when changed
         (mark-scrollbar-activity! this)
         (when-let [f @(:request-render-fn-atom this)] (f)))
@@ -289,9 +289,9 @@
             :or {follow-end true primary false overscroll :chain
                  scrollbar :hidden scrollbar-hide-delay-ms 1000}}]
   (map->ScrollView {:child-atom (atom child)
-                    :follow-end? follow-end
-                    :primary? primary
-                    :overscroll overscroll
+                    :follow-end?-atom (atom follow-end)
+                    :primary?-atom (atom primary)
+                    :overscroll-atom (atom overscroll)
                     :scrollbar-atom (atom scrollbar)
                     :scrollbar-style-atom (atom (or scrollbar-style default-scrollbar-style))
                     :scrollbar-hide-delay-ms-atom (atom (max 0 (int scrollbar-hide-delay-ms)))
@@ -304,3 +304,35 @@
                     :transient-scrollbar-visible-atom (atom false)
                     :scrollbar-active-atom (atom false)
                     :scrollbar-hide-timer-id-atom (atom nil)}))
+
+;; ─── Live prop setters (the hiccup :scroll-view apply path, tui.md §2.3) ───
+;; Structural props are atoms, so a changed prop patches the live view
+;; instead of being ignored. Each setter coerces like construction.
+
+(defn scroll-view-set-follow-end!
+  "Set the end-following behavior, keeping the invariant following-end ⇒
+   follow-end (pi: followEnd is immutable there; a declarative patch can
+   flip it mid-follow): turning following off stops it now, turning it on
+   re-engages only when the viewport is already at the end."
+  [sv follow-end]
+  (let [follow-end (boolean follow-end)
+        max-scroll (max 0 (- @(:content-height-atom sv)
+                             @(:viewport-height-atom sv)))]
+    (reset! (:follow-end?-atom sv) follow-end)
+    (reset! (:following-end-atom sv)
+            (and follow-end (= max-scroll @(:scroll-top-atom sv))))))
+
+(defn scroll-view-set-primary!
+  [sv primary]
+  (reset! (:primary?-atom sv) (boolean primary)))
+
+(defn scroll-view-set-overscroll!
+  "Set the overscroll policy (:chain | :contain)."
+  [sv overscroll]
+  (reset! (:overscroll-atom sv) (or overscroll :chain)))
+
+(defn scroll-view-set-scrollbar-style! [sv style]
+  (reset! (:scrollbar-style-atom sv) (or style default-scrollbar-style)))
+
+(defn scroll-view-set-scrollbar-hide-delay-ms! [sv ms]
+  (reset! (:scrollbar-hide-delay-ms-atom sv) (max 0 (int ms))))

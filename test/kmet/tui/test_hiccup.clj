@@ -1039,21 +1039,122 @@
     (t/is (= [:init] @log) "one init despite the convergence re-run")
     (t/is (str/includes? (str/join "\n" (core/render r 20)) "x"))))
 
-(t/deftest container-structural-props-are-create-time-for-now
-  ;; documented stage-3 contract (dsl.md §4 pending): padding/gap changes
-  ;; keeps the container INSTANCE — children survive, layout stays as
-  ;; constructed. The §4 props/state migration makes these live.
-  (let [pad (atom 1)
-        ref (h/ref)
-        r2 (h/root (fn [_]
-                     [:box {:key :b :padding-x @pad}
-                      [:text {:padding-x 0 :padding-y 0 :ref ref} "hi"]]))]
-    (core/render r2 20)
-    (let [box1 (deref ref)]
-      (reset! pad 3)
-      (core/render r2 20)
-      (t/is (identical? box1 (deref ref))
-            "structural prop change keeps the container instance"))))
+(t/deftest replaced-ref-handles-are-cleared
+  ;; a ref the element stops declaring is abandoned: the old handle must
+  ;; clear, or it would deref a live component forever (inline refs are
+  ;; the anti-pattern, but neither abandon path may leave a stale handle)
+  (let [r1 (h/ref)
+        r2 (h/ref)
+        n (atom 0)
+        root (h/root (fn [_] [:text {:padding-x 0
+                                     :ref (if (even? @n) r1 r2)} "x"]))]
+    (core/render root 10)
+    (t/is (some? @r1))
+    (t/is (nil? @r2))
+    (reset! n 1)
+    (core/render root 10)
+    (t/is (nil? @r1) "the replaced handle cleared")
+    (t/is (some? @r2) "the new handle filled")
+    ;; re-passing the SAME handle is the hoisted pattern — no churn, still
+    ;; filled on every pass
+    (core/render root 10)
+    (t/is (some? @r2)))
+  ;; and dropping the ref prop entirely clears it too
+  (let [r (h/ref)
+        n (atom 0)
+        root (h/root (fn [_] (if (zero? @n)
+                               [:text {:padding-x 0 :ref r} "x"]
+                               [:text {:padding-x 0} "x"])))]
+    (core/render root 10)
+    (t/is (some? @r))
+    (reset! n 1)
+    (core/render root 10)
+    (t/is (nil? @r) "the dropped handle cleared")
+    ;; the element's later removal still clears the remembered handle
+    (reset! n 0)
+    (core/render root 10)
+    (t/is (some? @r))))
+
+(t/deftest container-structural-props-are-live
+  ;; the §4 props/state migration via the apply path: a changed structural
+  ;; prop patches the container in place — the instance (and its children's
+  ;; state) survives AND the layout follows, instead of being ignored
+  (let [px (atom 1)
+        bref (h/ref)
+        tref (h/ref)
+        root (h/root (fn [_]
+                       [:box {:key :b :ref bref :padding-x (rag/tracked-deref px)}
+                        [:text {:padding-x 0 :padding-y 0 :ref tref} "hi"]]))]
+    (core/render root 20)
+    (let [box1 (deref bref)
+          txt1 (deref tref)]
+      (reset! px 3)
+      (core/render root 20)
+      (t/is (identical? box1 (deref bref))
+            "structural prop change keeps the container instance")
+      (t/is (identical? txt1 (deref tref)) "children survive — no rebuild")
+      (let [lines (mapv str/trimr (core/render root 20))]
+        (t/is (some #(= "   hi" %) lines)
+              "the changed padding took effect in the layout")))))
+
+(t/deftest stack-gap-and-align-are-live
+  ;; the same migration on the stacks: :gap / :align patch in place
+  (let [gap (atom 0)
+        vref (h/ref)
+        vroot (h/root (fn [_] [:v-stack {:ref vref :gap (rag/tracked-deref gap)}
+                               [:text {:padding-x 0 :padding-y 0} "a"]
+                               [:text {:padding-x 0 :padding-y 0} "b"]]))]
+    (core/render vroot 10)
+    (let [vs (deref vref)]
+      (t/is (= 2 (count (core/render vroot 10))))
+      (reset! gap 2)
+      (core/render vroot 10)
+      (t/is (identical? vs (deref vref)))
+      (t/is (= 4 (count (core/render vroot 10)))
+            "the changed gap took effect")))
+  (let [align (atom :stretch)
+        hroot (h/root (fn [_] [:h-stack {:gap 1 :align (rag/tracked-deref align)}
+                               [:text {:padding-x 0 :padding-y 0} "a"]
+                               [:text {:padding-x 0 :padding-y 0} "b\nb2"]]))]
+    (t/is (= ["a   b     " "    b2    "] (core/render hroot 10)))
+    (reset! align :end)
+    (t/is (= ["    b     " "a   b2    "] (core/render hroot 10))
+          "the changed align re-laid the row")))
+
+(t/deftest scroll-view-props-are-live
+  ;; every :scroll-view prop patches through its setter — the instance and
+  ;; its child survive, the behavior follows
+  (let [sref (h/ref)
+        follow (atom true)
+        sb (atom :hidden)
+        delay (atom 1000)
+        root (h/root (fn [_] [:scroll-view {:ref sref
+                                            :follow-end (rag/tracked-deref follow)
+                                            :scrollbar (rag/tracked-deref sb)
+                                            :scrollbar-hide-delay-ms (rag/tracked-deref delay)}
+                              [:text {:padding-x 0 :padding-y 0} "x"]]))]
+    (core/render root 10)
+    (let [sv (deref sref)]
+      (t/is (true? @(:follow-end?-atom sv)))
+      (t/is (= :hidden @(:scrollbar-atom sv)))
+      (reset! follow false)
+      (reset! sb :always)
+      (reset! delay 250)
+      (core/render root 10)
+      (t/is (identical? sv (deref sref)) "props patch, no rebuild")
+      (t/is (false? @(:follow-end?-atom sv)))
+      (t/is (= :always @(:scrollbar-atom sv)))
+      (t/is (= 250 @(:scrollbar-hide-delay-ms-atom sv))))))
+
+(t/deftest scroll-view-tag-follow-end-false-is-honored
+  ;; pre-existing bug: the ctor's (or follow-end true) coerced an explicit
+  ;; false back to true — the shared prop resolver keys off the prop's
+  ;; presence instead
+  (let [sref (h/ref)
+        root (h/root (fn [_] [:scroll-view {:ref sref :follow-end false}
+                              [:text {:padding-x 0 :padding-y 0} "x"]]))]
+    (core/render root 10)
+    (t/is (false? @(:follow-end?-atom (deref sref))))))
 
 (t/deftest string-children-survive-second-pass
   ;; Stage 3 review find: a matched ::string item fell into the passthrough

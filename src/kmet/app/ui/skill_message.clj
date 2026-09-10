@@ -149,17 +149,13 @@
 ;; ─── Public API ────────────────────────────────────────────────────────────
 
 (defn skill-message-set-output-pad!
-  "Rebuild the box with new padding, reusing the children; the trailing user
-   message follows the same padding."
+  "Set the box's horizontal padding in place, reusing the children; the
+   trailing user message follows the same padding."
   [comp n]
   (reset! (:output-pad-atom comp) n)
-  (let [thm (deref s/theme-sub)
-        container @(:inner-container comp)
-        b (box/make-box n 1 #(theme/bg thm :custom-message-bg %))]
-    (box/box-add-child b container)
-    (reset! (:box comp) b)
-    (when-let [um @(:user-message-atom comp)]
-      (um/user-message-set-output-pad! um n))))
+  (box/box-set-padding-x! @(:box comp) n)
+  (when-let [um @(:user-message-atom comp)]
+    (um/user-message-set-output-pad! um n)))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 

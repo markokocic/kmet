@@ -83,11 +83,11 @@
       (is (some #(re-find #"just content" %) plain)))))
 
 (deftest test-set-output-pad
-  (testing "set-output-pad! rebuilds the box with the new horizontal padding"
+  (testing "set-output-pad! patches the live box's horizontal padding"
     (let [c (te/make-tool-execution :name "ls" :content "x" :output-pad 1)]
-      (is (= 1 (:padding-x @(:box c))))
+      (is (= 1 @(:padding-x-atom @(:box c))))
       (te/tool-execution-set-output-pad! c 5)
-      (is (= 5 (:padding-x @(:box c))) "box padding-x updated")
+      (is (= 5 @(:padding-x-atom @(:box c))) "box padding-x updated")
       (let [plain (mapv strip-ansi (core/render c 40))]
         (is (some #(re-find #"^     ls" %) plain)
             "call line indented by the new padding")))))

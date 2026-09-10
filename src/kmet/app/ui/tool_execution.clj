@@ -323,13 +323,10 @@
       (reset! (:renderer-state-atom comp) (dissoc state :timer-id)))))
 
 (defn tool-execution-set-output-pad!
-  "Rebuild the box with the new horizontal padding (render sets the bg-fn)."
+  "Set the box's horizontal padding in place (render sets the bg-fn)."
   [comp n]
   (reset! (:output-pad-atom comp) n)
-  (let [b (box/make-box n 1 nil)
-        inner @(:inner-container comp)]
-    (box/box-add-child b inner)
-    (reset! (:box comp) b)))
+  (box/box-set-padding-x! @(:box comp) n))
 
 (defn tool-execution-mark-execution-started!
   "Mark that tool execution has started (Pi: markExecutionStarted()).

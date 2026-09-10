@@ -28,9 +28,11 @@
    equal props short-circuit to the same instance. Stateful tags declare
    an :apply path (see the tag table): a changed prop patches the live
    instance — state and focus survive — and only a prop the tag cannot
-   express rebuilds it. Containers keep their instance across passes;
-   their structural props (padding/gap) are create-time until the §4
-   props/state migration makes them live.
+   express rebuilds it. Containers keep their instance across passes and
+   reconcile their children in place; their structural props
+   (padding/gap) are live through their own :apply (which must be TOTAL —
+   a container never rebuilds, since a fresh construct starts with an
+   empty child pool and would take the whole subtree's state with it).
 
    Validation is loud per the v1 error contract: unknown tags throw with a
    did-you-mean suggestion, children on a leaf tag throw, duplicate :keys
@@ -154,7 +156,12 @@
 ;;                 prop and its default are the same component) so a
 ;;                 spelling change does not churn a rebuild. Tags without
 ;;                 :apply always rebuild on change (display leaves are
-;;                 identity-free by design).
+;;                 identity-free by design). CONTAINER tags (:box,
+;;                 :v-stack, :h-stack, :scroll-view) are the exception:
+;;                 a container NEVER rebuilds (its children would lose
+;;                 their state), so a container :apply must be TOTAL —
+;;                 express every prop, or (with no :apply on the tag)
+;;                 leave the structural props as constructed.
 ;;
 ;;                 Inside an :apply, a STATE-CARRYING prop is written
 ;;                 through only when it differs from PREV-PROPS, and then
@@ -166,6 +173,21 @@
 ;;
 ;; Adapter ctors destructure known props and ignore extras, EXCEPT the
 ;; pseudo-props :key/:ref which parse strips before ctors ever see them.
+
+(defn- scroll-view-props
+  "Resolve :scroll-view props exactly as construction does — an ABSENT key
+   takes the default, so :follow-end can be declared false (the old
+   (or follow-end true) coerced an explicit false back to true). The ctor
+   and the tag's :apply path share this, so a patch compares and coerces
+   identically."
+  [{:keys [follow-end primary overscroll scrollbar scrollbar-style
+           scrollbar-hide-delay-ms] :as props}]
+  {:follow-end (if (contains? props :follow-end) (boolean follow-end) true)
+   :primary (boolean primary)
+   :overscroll (or overscroll :chain)
+   :scrollbar (or scrollbar :hidden)
+   :scrollbar-style (or scrollbar-style scroll-view/default-scrollbar-style)
+   :scrollbar-hide-delay-ms (or scrollbar-hide-delay-ms 1000)})
 
 (def ^:private tags
   {:text      {:ctor (fn [{:keys [text padding-x padding-y bg-fn]}]
@@ -444,6 +466,20 @@
    :box       {:ctor (fn [{:keys [padding-x padding-y bg-fn]}]
                        (box/make-box
                         (or padding-x 1) (or padding-y 1) bg-fn))
+               :apply (fn [b prev props]
+                        ;; container :apply is TOTAL — every prop is
+                        ;; expressible, so the subtree is never rebuilt over
+                        ;; a prop change (children keep their state). Props
+                        ;; coerce like the ctor (nil ⇒ default).
+                        (let [px (or (:padding-x props) 1)
+                              py (or (:padding-y props) 1)]
+                          (when (not= px (or (:padding-x prev) 1))
+                            (box/box-set-padding-x! b px))
+                          (when (not= py (or (:padding-y prev) 1))
+                            (box/box-set-padding-y! b py))
+                          (when (not= (:bg-fn props) (:bg-fn prev))
+                            (box/box-set-bg-fn b (:bg-fn props)))
+                          true))
                :lens {:get (fn [c] (vec @(:children c)))
                       :put (fn [c items] (reset! (:children c) (mapv :c items)))}}
    :container {:ctor (fn [_props] (container/make-container []))
@@ -453,6 +489,12 @@
                        (v-stack/make-v-stack [] :gap (or gap 0)))
                ;; :entries? — children of this tag may be stack entry maps
                :entries? true
+               :apply (fn [vs prev props]
+                        ;; total, like :box — v-stack-set-gap! normalizes
+                        ;; exactly as the ctor does
+                        (when (not= (or (:gap props) 0) (or (:gap prev) 0))
+                          (v-stack/v-stack-set-gap! vs (or (:gap props) 0)))
+                        true)
                :lens {:get (fn [c] (vec @(:entries-atom c)))
                       :put (fn [c items]
                              (reset! (:entries-atom c)
@@ -462,6 +504,14 @@
                                              :gap (or gap 0)
                                              :align (or align :stretch)))
                :entries? true
+               :apply (fn [hs prev props]
+                        ;; total — the setters normalize as the ctor does
+                        (when (not= (or (:gap props) 0) (or (:gap prev) 0))
+                          (h-stack/h-stack-set-gap! hs (or (:gap props) 0)))
+                        (when (not= (or (:align props) :stretch)
+                                    (or (:align prev) :stretch))
+                          (h-stack/h-stack-set-align! hs (or (:align props) :stretch)))
+                        true)
                :lens {:get (fn [c] (vec @(:entries-atom c)))
                       :put (fn [c items]
                              (reset! (:entries-atom c)
@@ -469,17 +519,42 @@
    ;; Single-child container — the lens keeps exactly one child; more than
    ;; one throws loudly (a scroll view over several roots is a bug, not a
    ;; layout).
-   :scroll-view {:ctor (fn [{:keys [follow-end primary overscroll scrollbar
-                                    scrollbar-style scrollbar-hide-delay-ms]}]
-                         (scroll-view/make-scroll-view
-                          nil
-                          :follow-end (or follow-end true)
-                          :primary (boolean primary)
-                          :overscroll (or overscroll :chain)
-                          :scrollbar (or scrollbar :hidden)
-                          :scrollbar-style (or scrollbar-style
-                                               scroll-view/default-scrollbar-style)
-                          :scrollbar-hide-delay-ms (or scrollbar-hide-delay-ms 1000)))
+   :scroll-view {:ctor (fn [props]
+                         (let [{:keys [follow-end primary overscroll scrollbar
+                                       scrollbar-style scrollbar-hide-delay-ms]}
+                               (scroll-view-props props)]
+                           (scroll-view/make-scroll-view
+                            nil
+                            :follow-end follow-end
+                            :primary primary
+                            :overscroll overscroll
+                            :scrollbar scrollbar
+                            :scrollbar-style scrollbar-style
+                            :scrollbar-hide-delay-ms scrollbar-hide-delay-ms)))
+                 :apply (fn [sv prev props]
+                          ;; total — every prop has a setter that coerces like
+                          ;; the ctor (both sides through scroll-view-props)
+                          (let [np (scroll-view-props props)
+                                pp (scroll-view-props prev)]
+                            (when (not= (:follow-end np) (:follow-end pp))
+                              (scroll-view/scroll-view-set-follow-end!
+                               sv (:follow-end np)))
+                            (when (not= (:primary np) (:primary pp))
+                              (scroll-view/scroll-view-set-primary!
+                               sv (:primary np)))
+                            (when (not= (:overscroll np) (:overscroll pp))
+                              (scroll-view/scroll-view-set-overscroll!
+                               sv (:overscroll np)))
+                            (when (not= (:scrollbar np) (:scrollbar pp))
+                              (scroll-view/set-scrollbar! sv (:scrollbar np)))
+                            (when (not= (:scrollbar-style np) (:scrollbar-style pp))
+                              (scroll-view/scroll-view-set-scrollbar-style!
+                               sv (:scrollbar-style np)))
+                            (when (not= (:scrollbar-hide-delay-ms np)
+                                        (:scrollbar-hide-delay-ms pp))
+                              (scroll-view/scroll-view-set-scrollbar-hide-delay-ms!
+                               sv (:scrollbar-hide-delay-ms np)))
+                            true))
                  :lens {:get (fn [c] (if-let [ch @(:child-atom c)] [ch] []))
                         :put (fn [c items]
                                (when (> (count items) 1)
@@ -941,20 +1016,46 @@
                     :ref (:ref d) :c c :item c :owned true}
              :retire nil})
           (fill-ref! [c]
-            (when-some [r (:ref d)]
-              (-fill-ref! r c)
-              (remember-ref! c r)))]
+            ;; The element's PREVIOUS handle is stale once the element
+            ;; declares a different one (or none): clear it, or an
+            ;; abandoned handle derefs a live component forever. The
+            ;; stamp remembers the handle that must be cleared when the
+            ;; element later leaves (retire-item!).
+            (let [prev-ref (:ref (stamped-meta c))
+                  new-ref (:ref d)]
+              (when (and (some? prev-ref) (not (identical? prev-ref new-ref)))
+                (-fill-ref! prev-ref nil))
+              (when-some [r new-ref]
+                (-fill-ref! r c))
+              (when-not (identical? prev-ref new-ref)
+                (remember-ref! c new-ref))))]
     (case (:kind d)
       ::host
       (let [container? (some? (:lens (:spec d)))
             apply-fn (:apply (:spec d))
-            prev-props (:props (stamped-meta (:c prev)))]
+            prev-props (:props (stamped-meta (:c prev)))
+            props-same? (= (:props d) prev-props)]
         (cond
-          (or container? (= (:props d) prev-props))
+          ;; Containers always keep their instance and reconcile their
+          ;; children in place; their structural props patch through :apply
+          ;; when the tag declares one (§4's props/state migration —
+          ;; padding, gap), staying as constructed otherwise. A container
+          ;; must never take the rebuild branch: a fresh construct starts
+          ;; with an empty child pool, so the whole subtree (and all
+          ;; descendant state) would be lost.
+          container?
           (do (bump! :reuses)
-              (when container?
-                (reconcile-into (:lens (:spec d)) (:c prev) (:nodes d)
-                                (boolean (:entries? (:spec d)))))
+              (reconcile-into (:lens (:spec d)) (:c prev) (:nodes d)
+                              (boolean (:entries? (:spec d))))
+              (when (and apply-fn (not props-same?)
+                         (apply-fn (:c prev) prev-props (:props d)))
+                (bump! :applies)
+                (swap! (:dsl/meta (:c prev)) assoc :props (:props d)))
+              (fill-ref! (:c prev))
+              (keep (:c prev)))
+
+          props-same?
+          (do (bump! :reuses)
               (fill-ref! (:c prev))
               (keep (:c prev)))
 

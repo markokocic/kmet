@@ -31,6 +31,21 @@
         lines (core/render b 10)]
     (t/is (empty? lines))))
 
+(t/deftest test-box-set-padding!
+  ;; padding is live (the hiccup :box apply path): the setters update the
+  ;; layout and reset the hand-rolled cache, so the next render is fresh
+  (let [t1 (text/make-text "hi" 0 0)
+        b (box/make-box 1 1 nil)]
+    (box/box-add-child b t1)
+    (t/is (= 3 (count (core/render b 8))))
+    (box/box-set-padding-y! b 0)
+    (let [lines (core/render b 8)]
+      (t/is (= 1 (count lines)) "padding-y 0 drops the pad rows")
+      (t/is (.contains (first lines) "hi")))
+    (box/box-set-padding-x! b 0)
+    (t/is (.startsWith (first (core/render b 8)) "hi")
+          "padding-x 0 removes the left inset")))
+
 (t/deftest test-box-multiple-children
   (let [t1 (text/make-text "a" 0 0)
         t2 (text/make-text "b" 0 0)

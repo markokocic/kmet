@@ -147,21 +147,26 @@
               "the re-themed rebuild disposed the replaced children")
           (finally (reset! theme/theme-atom (theme/get-theme "dark"))))))))
 
-(deftest test-output-pad-rebuild-disposes-old-container
-  (testing "set-output-pad! replaces the inner container — the old
-            container's children are disposed"
+(deftest test-output-pad-patches-in-place
+  (testing "set-output-pad! patches the live box — the inner container and
+            its children are reused, so nothing is disposed and the watch
+            registry does not move"
     (let [watchers #(count @(deref #'macros/watch-registry))
           c (cm/make-custom-message :label "ext" :content "note")
+          old-box @(:box c)
           old-container @(:inner-container c)]
       (core/render c 60)
-      (let [old-children @(:children old-container)
+      (let [old-children (vec @(:children old-container))
             baseline (watchers)]
         (cm/custom-message-set-output-pad! c 3)
-        (is (every? (fn [child]
-                      (not (contains? @(deref #'macros/watch-registry)
-                                      (keyword (str "track!" (System/identityHashCode child))))))
-                    old-children)
-            "old container children disposed")
+        (is (identical? old-box @(:box c)) "the box was not replaced")
+        (is (identical? old-container @(:inner-container c))
+            "the container was not replaced")
+        (is (= old-children (vec @(:children old-container)))
+            "the content children (and their expansion state) survived")
         (core/render c 60)
         (is (= baseline (watchers))
-            "the rebuilt children settle at the same registry size")))))
+            "an in-place patch touches no watches")
+        (is (some #(str/starts-with? (strip-ansi %) "   [ext]")
+                  (core/render c 60))
+            "the new padding is in the output")))))

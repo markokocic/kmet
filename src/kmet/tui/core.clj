@@ -2139,6 +2139,8 @@
 (def box-remove-child box/box-remove-child)
 (def box-clear box/box-clear)
 (def box-set-bg-fn box/box-set-bg-fn)
+(def box-set-padding-x! box/box-set-padding-x!)
+(def box-set-padding-y! box/box-set-padding-y!)
 (def make-input input/make-input)
 (def input-set-value! input/input-set-value!)
 (def input-get-value input/input-get-value)
@@ -2243,6 +2245,12 @@
 (def scroll-view-scroll-to-end! scroll-view/scroll-to-end!)
 (def scroll-view-scroll-top scroll-view/scroll-top)
 (def scroll-view-follows-end? scroll-view/follows-end?)
+(def scroll-view-set-follow-end! scroll-view/scroll-view-set-follow-end!)
+(def scroll-view-set-primary! scroll-view/scroll-view-set-primary!)
+(def scroll-view-set-overscroll! scroll-view/scroll-view-set-overscroll!)
+(def scroll-view-set-scrollbar-style! scroll-view/scroll-view-set-scrollbar-style!)
+(def scroll-view-set-scrollbar-hide-delay-ms!
+  scroll-view/scroll-view-set-scrollbar-hide-delay-ms!)
 (def render-stack stack/render-stack)
 
 ;; AltScreenFlash — transient messages composited over the screen bottom

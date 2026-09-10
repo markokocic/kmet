@@ -222,15 +222,13 @@ Ownership rides the `:dsl/meta` stamp: everything the DSL constructs carries
 it; foreign records spliced into trees never do and are never disposed.
 Display leaves (Text/Markdown/Spacer/string) with changed props are rebuilt
 rather than mutated — identity-free, their caches absorb rendering;
-containers and fn components keep identity across passes (a container's
-structural props are still create-time — the apply path below is their
-future migration vehicle). A stateful host tag with an `:apply` in its
-tag-table spec takes a third path: the changed props are patched onto the
-live instance (setter calls, `bump! :applies` — §11's counters) and the
-instance is kept; only a falsy return rebuilds. Two rules govern the
-patch. First, the tag's STRUCTURAL props (§2.2 lists which) are checked
-in their constructed form — a nil prop and its default are the same
-component — and decline the patch when they differ. Second, a
+containers and fn components keep identity across passes. A host tag with
+an `:apply` in its tag-table spec takes a third path: the changed props are
+patched onto the live instance (setter calls, `bump! :applies` — §11's
+counters) and the instance is kept; only a falsy return rebuilds. Two
+rules govern the patch. First, the tag's STRUCTURAL props (§2.2 lists
+which) are checked in their constructed form — a nil prop and its default
+are the same component — and decline the patch when they differ. Second, a
 STATE-CARRYING prop (`:value`, `:text`, `:items`, `:expanded?`) is written
 through only when it changed from the previous pass's props AND differs
 from the live value, coerced the way construction coerces it (nil ⇒ the
@@ -242,6 +240,15 @@ survive it (the resetting `select-list-set-items!` /
 `settings-list-set-items!` default is the imperative variant, for a
 genuinely new list). The stamp's recorded props are re-pointed at the
 applied map, so the next equal pass is the plain reuse fast path again.
+
+**Containers have their own rule**: they never take the rebuild branch —
+a fresh construct starts with an empty child pool, so the whole subtree
+(and every descendant's state) would be lost. A container instead always
+reconciles its children in place and patches its structural props through
+its `:apply` (`:box` padding/bg, `:v-stack`/`:h-stack` gap, `:h-stack`
+align, every `:scroll-view` prop) — the §4 props/state migration, landed.
+A container `:apply` is therefore TOTAL; a container tag without one keeps
+its structural props as constructed (the pre-migration behavior).
 One mechanism fills everything: containers are constructed empty and
 filled by the same keyed diff through per-tag children lenses.
 
@@ -266,7 +273,9 @@ record through a ref — a second pseudo-prop beside `:key`:
 Rules:
 
 - refs are created with `(hiccup/ref)`; reconcile fills them on construct
-  and clears on dispose — treat as read-only;
+  and clears them when the element is disposed — or when the element stops
+  declaring that handle (a replaced or dropped `:ref` prop), so an
+  abandoned handle never derefs a live component; treat as read-only;
 - deref only outside render bodies (handlers, effects): nil until first
   reconcile constructs the element;
 - one ref per element instance — sharing across two elements means
@@ -985,7 +994,7 @@ ones are postponed below.
 | R5 | border sets as data | `kmet.tui.border` (§2.8) — `:border` on `:dynamic-border`, `:markdown` (table glyphs), `:editor`; `make-bash-execution :border` |
 | R6 | `^{:key}` metadata | keys read from element metadata as well as the `:key` prop (§2.1) |
 | R3a | key labels | `keys/key-label` + `keybindings/key-label-text` (§7.1) — hints and the tree help render `pgup`/`↑`, replacing the private `prettify-keys` regex pass |
-| R1 | prop→state apply path | a `:apply (fn [comp prev-props props])` spec on the tag table + the apply branch in `reuse-or-build` (§2.3): all seven stateful tags patch the live instance on a changed prop (state and focus survive) and decline to rebuild only when the tag cannot express the prop (`:border`/`:keybindings`, `:enable-search`, `:frames`/`:interval-ms`, a loader's `:spinner` child); state-carrying props are written only when THAT prop changed (live edits survive unrelated changes) and coerce like construction (nil ⇒ default); new `select-list`/`settings-list` setters (`-set-height!`, `-set-on-select!`, `-set-items!`, …) back the patch paths, and `cancellable-loader`'s protocol dispose now stops its spinner (pi: dispose → stop). Container structural props stay create-time — the apply path is their future migration vehicle |
+| R1 | prop→state apply path | a `:apply (fn [comp prev-props props])` spec on the tag table + the apply branch in `reuse-or-build` (§2.3): all seven stateful tags patch the live instance on a changed prop (state and focus survive) and decline to rebuild only when the tag cannot express the prop (`:border`/`:keybindings`, `:enable-search`, `:frames`/`:interval-ms`, a loader's `:spinner` child); state-carrying props are written only when THAT prop changed (live edits survive unrelated changes) and coerce like construction (nil ⇒ default); new `select-list`/`settings-list` setters (`-set-height!`, `-set-on-select!`, `-set-items!`, …) back the patch paths, and `cancellable-loader`'s protocol dispose now stops its spinner (pi: dispose → stop). The §4 props/state migration landed with it: `:box` (`:padding-x`/`:padding-y`/`:bg-fn`), `:v-stack`/`:h-stack` (`:gap`, `:align`) and `:scroll-view` (all six props, via new setters) declare TOTAL applys — containers never rebuild (a fresh construct would lose the subtree), so their structural props are live instead of create-time |
 | R2 | writable cursor | `kmet.libs.reakt/writable-cursor` + `cursor-reset!`/`cursor-swap!` (§3.1): a tracked-read lens that writes back through its source with `assoc-in`, `=`-gated, nested lenses composing, inert once disposed; read-only `cursor` stays the derivation primitive |
 | P1 | skill invocation message | `kmet.app.skills/parse-skill-block` (the inverse of the expander) + `kmet.app.ui.skill-message` — a `/skill:name` block renders as a collapsible `[skill] name (ctrl+o to expand)` message instead of dumping its body into the transcript |
 | P2 | images in chat (TUI half) | `kmet.app.ui.image_block` + the live `ui.subs/image-settings-sub`: tool-result and user/custom-message images render inline, or as the `imageFallback` text indicator when `:show-images` is off / the terminal lacks support; `:terminal {:show-images :image-width-cells}` in `config.clj` + terminal-support-gated `/settings` rows. The wire half landed separately: `images.blockImages` = `app/loop.clj` (`convertToLlmWithBlockImages`) + an ungated `/settings` row; `images.autoResize` stays provider work (tracked in `alignment.md` §2) |

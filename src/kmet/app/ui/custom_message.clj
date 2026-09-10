@@ -132,19 +132,11 @@
   (rebuild-content! comp))
 
 (defn custom-message-set-output-pad!
-  "Rebuild box with new padding, keep spacer."
+  "Set the box's horizontal padding in place — the content container (and
+   the expansion state its children hold) is untouched."
   [comp n]
   (reset! (:output-pad-atom comp) n)
-  (let [theme (deref s/theme-sub)
-        inner-container (container/make-container)
-        b (box/make-box n 1 #(theme/bg theme :custom-message-bg %))]
-    ;; the old container is replaced wholesale — dispose it (children-first)
-    ;; so its children's track! watches/cleanups do not outlive it
-    (protocols/dispose @(:inner-container comp))
-    (box/box-add-child b inner-container)
-    (reset! (:box comp) b)
-    (reset! (:inner-container comp) inner-container)
-    (rebuild-content! comp)))
+  (box/box-set-padding-x! @(:box comp) n))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
