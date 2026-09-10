@@ -25,6 +25,47 @@ deep-dive).
 
 ---
 
+## 0. Status
+
+**The portable core is already there — verified, no code changes.** `jolt
+test` is green (2032 tests / 13803 assertions, `jolt v0.8.6-18-g64bdeff4`,
+2026-09-10): `kmet.libs.reakt`, `kmet.tui.{hiccup,macros,protocols,keys,
+keybindings,utils,theme,border,timers}`, all 21 `kmet.tui.components.*` and
+the `kmet.app.ui.*` layer above them run on Jolt as-is. Nothing in those
+namespaces imports JLine or any other JVM-only class, and the headless
+surface (`hiccup/render-lines`, `core/render`) is what the tests drive —
+so steps 2–3 of §13 below are done, and §10's "port" column for the whole
+component set means *no work required*.
+
+**What remains is everything that touches the real terminal**, and one
+measured red set:
+
+| item | file | state |
+|---|---|---|
+| raw mode, timed reads, live size, restore-on-every-path, Windows console | `kmet/tui/terminal.clj` (§§2, 4–6) | JLine-only today — the one file that must be rewritten |
+| input pipeline: reader thread, resize poll, drain-on-exit, generation-guarded timers | `kmet/tui/core.clj` (§§7, 9) | JVM-bound halves remain |
+| render loop retarget (logic ports; logging to portable I/O) | `kmet/tui/core.clj` (§10) | portable logic, terminal I/O to retarget |
+| mouse tracking | `kmet/libs/terminal.clj` constants are ready | not started |
+
+Concrete failures on Jolt today (`jolt test-ext`), both attributable to the
+missing adapter:
+
+- `kmet.tui.test-render-loop` — **5 tests, 5 errors**
+  (`Unknown class TerminalBuilder`): the suite builds a virtual JLine
+  terminal and drives the private render loop, so it stays red until the
+  adapter exists.
+- `kmet.modes.test-overlay-input-smoke` — **2 failures + 1 error** in a full
+  `jolt test-ext` run (standalone it hangs to the runner's 15 s namespace
+  timeout instead, the error being the interrupting `InterruptedException`):
+  a pty-driven app smoke test where typed text never reaches the editor. It
+  needs the adapter *and* the input pipeline.
+
+The rest of the TUI test suite — every component test, the frame-scheduling
+and reactivity suites, utils/keys/negotiation — is green on Jolt. `bb
+test-ext` is fully green; these two are Jolt-only.
+
+---
+
 ## 1. Architecture overview
 
 pi-tui / kmet separate three concerns. Only the third changes per platform:
@@ -583,19 +624,19 @@ mechanism — timers stay `future` + generation counters.
 | namespace | verdict |
 |---|---|
 | `libs.terminal` (Kitty/OSC constants, negotiation + response parsing) | port logic verbatim; `Base64` shimmed (keep or use `ffi/write-bytes`); log-file names need no `LocalDateTime` (format manually or drop the timestamp) |
-| `tui.keys`, `tui.keybindings`, `tui.utils` (width/wrap/truncate), `libs.reakt`, `tui.hiccup`, `tui.macros`, `tui.protocols`, all `tui.components.*` | portable — port, checking `add-watch`-on-atom and regex spots |
+| `tui.keys`, `tui.keybindings`, `tui.utils` (width/wrap/truncate), `libs.reakt`, `tui.hiccup`, `tui.macros`, `tui.protocols`, `tui.border`, `tui.timers`, all `tui.components.*` | **already green on Jolt, unchanged** (§0) — the `add-watch`-on-atom and regex spots checked out; `test-border`/`test-timers`/`test-hiccup`/`test-track`/`test-reakt-integration` run as-is |
 | `tui.theme` | portable — already polls (`theme.clj:625-647`: "babashka.fs has no watcher"); keep the poll, keep `java.nio` out per the AGENTS.md rule |
 | `tui.terminal` (240 lines) | **rewrite** per §§4–6 behind the same `ITerminal` protocol |
 | `tui.core` input half + start/stop/resize/drain | **reimplement** per §§5–7,9 (reader thread, poll-based resize, generation-guarded timers, restores) |
 | `tui.core` render half (diff, overlays, flashes, Kitty-image ranges, crash/debug logs) | port logic; retarget logging to portable I/O |
 
-Suggested order: `keys` → `utils` → `reakt` → `hiccup` → components →
-theme, all headless-testable through `hiccup/render-lines` (no tty, no
-sleeps — pin the idle-UI invariant: no state change ⇒ zero fn bodies /
-reaction re-runs). Then the `ITerminal` adapter (§§5–6). Then the input
-transport (§7). Validate interactively with the tmux/pty capture scripts
-(`scripts/tmux_capture.sh`, `pty_capture.py`, `term_dump.py` equivalents)
-before widgets.
+Suggested order (revised in §0 — the headless half is already green):
+the `ITerminal` adapter (§§5–6), then the input transport (§7), then the
+render loop's terminal I/O, then mouse. Validate interactively with the
+tmux/pty capture scripts (`scripts/tmux_capture.sh`, `pty_capture.py`,
+`term_dump.py` equivalents). The headless path already pins the idle-UI
+invariant on both hosts: no state change ⇒ zero fn bodies / reaction
+re-runs (`hiccup/render-lines`, no tty, no sleeps).
 
 ---
 
@@ -679,12 +720,19 @@ before widgets.
 1. Prove the FFI slice first: `tcgetattr`/`cfmakeraw`/`tcsetattr` round-trip
    + blocking `read` on Unix; `GetStdHandle`/`GetConsoleMode`/
    `SetConsoleMode` + VT-input on Windows (real Windows host).
-2. Port `keys` + `libs.terminal` with their tests under irregex.
-3. Port `reakt` → `hiccup` → components headless (`render-lines`).
+2. ~~Port `keys` + `libs.terminal` with their tests under irregex.~~
+   **Done** — green on Jolt unchanged (see §0).
+3. ~~Port `reakt` → `hiccup` → components headless (`render-lines`).~~
+   **Done, and better than planned**: no porting was needed — the whole
+   component set and the headless render surface run on Jolt as-is (§0).
 4. Build the `ITerminal` adapter (§§5–6), then the §7 input pipeline.
-5. Differential-render loop, overlays, focus/modality, drain-on-exit.
-6. Widget library (input/editor/select/settings lists) on the ported core;
-   mouse tracking (`libs.terminal` constants already cover the protocol).
+   This unblocks the red `test-render-loop` set (§0).
+5. Retarget the render loop's terminal I/O — overlays, focus/modality and
+   the diff logic are already portable (§10); drain-on-exit and the
+   size/timer plumbing are the JVM-bound halves.
+6. **Widget library: done** (input/editor/select/settings lists are green
+   on Jolt — §0). Remaining here: mouse tracking (`libs.terminal`
+   constants already cover the protocol).
 
 ---
 

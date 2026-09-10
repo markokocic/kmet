@@ -23,7 +23,7 @@ up to date whenever the described behavior changes.
 11. [Debugging rendering](#11-debugging-rendering)
 12. [Testing & performance invariants](#12-testing--performance-invariants)
 13. [Layer boundaries](#13-layer-boundaries)
-14. [Roadmap — borrowed ideas](#14-roadmap--ideas-borrowed-from-glimmer)
+14. [Roadmap](#14-roadmap)
 
 ---
 
@@ -44,6 +44,18 @@ components sit above them**, exactly like React components above `[:div]`.
   reactions over plain atoms; invalidation schedules the next frame.
 - **Output**: every record caches its rendered lines per width; the frame
   loop emits only the diff against the previous frame.
+
+The **transcript lives in the terminal's own scrollback** — this is an
+inline ("main screen") TUI, not an alt-screen one. Output is never confined
+to an owned viewport: the stack renders every component at natural height
+and whatever exceeds the screen scrolls into the native scrollback, which
+the user can browse while streaming continues below. A *full redraw*
+(a shrink, a forced `Ctrl+L`, a mid-diff line changing above the viewport)
+re-emits the whole transcript, so it also clears the scrollback
+(`\u001b[3J`) or the re-emit would duplicate the history. Two consequences
+that shape the rest of this document: components above the viewport must
+not change gratuitously (§3.2's caching rules), and there is no viewport to
+hit-test — mouse support would need a different model.
 
 End-to-end flow:
 
@@ -873,21 +885,26 @@ kmet.libs.*     self-contained (terminal protocol lives here too)
 
 ---
 
-## 14. Roadmap — ideas borrowed from glimmer
+## 14. Roadmap
 
 Sections 1–13 describe current behavior. **The items below are not
 implemented** — this is a plan record, kept so the analysis behind the
 decisions is not lost. When an item lands, fold its behavior into the
 relevant section, add it to the Done table and strike it from the plan.
 
-Origin: [glimmer](https://github.com/jolt-lang/glimmer) — a reactive core +
-reagent-style component model targeting Jolt — and
-[glimmer-tui](https://github.com/jolt-lang/glimmer-tui), its ncursesw
-terminal backend. Both MIT; neither is a dependency. Glimmer's layer is not
-adoptable wholesale: it has no width, no input/focus, no disposal and no
-render cache, and a parent re-render re-invokes every child body — whereas
-kmet's narrower layer already runs on both bb and Jolt. So this is an
-idea-level borrow only.
+Two sources feed it:
+
+- **R items — ideas borrowed from [glimmer](https://github.com/jolt-lang/glimmer)**
+  (a reactive core + reagent-style component model targeting Jolt) and
+  [glimmer-tui](https://github.com/jolt-lang/glimmer-tui), its ncursesw
+  terminal backend. Both MIT; neither is a dependency. Glimmer's layer is
+  not adoptable wholesale: it has no width, no input/focus, no disposal and
+  no render cache, and a parent re-render re-invokes every child body —
+  whereas kmet's narrower layer already runs on both bb and Jolt. So the
+  R items are idea-level borrows only.
+- **P items — pi parity**, the remaining kmet↔pi gaps that belong to this
+  layer (`alignment.md` §2 tracks the full list; its other rendering gaps
+  are postponed, below).
 
 ### Done
 
@@ -898,7 +915,7 @@ idea-level borrow only.
 | R6 | `^{:key}` metadata | keys read from element metadata as well as the `:key` prop (§2.1) |
 | R3a | key labels | `keys/key-label` + `keybindings/key-label-text` (§7.1) — hints and the tree help render `pgup`/`↑`, replacing the private `prettify-keys` regex pass |
 
-### Plan
+### Plan — borrowed from glimmer
 
 | # | borrow | kmet pain point | lands in | size |
 |---|---|---|---|---|
@@ -906,6 +923,25 @@ idea-level borrow only.
 | R2 | writable cursor | `reakt/cursor` is read-only; two-way binding needs an atom + setter callback | `kmet.libs.reakt` | small |
 | R3b | focus-derived help line | nothing shows what the focused component answers to; hint lines are hand-written per dialog | a help-line component + where per-component declarations live | small |
 | R7 | declarative `:overlay` | dialogs are shown imperatively; declaration site ≠ owner | `hiccup.clj` + `tui.core` | large (spike) |
+
+### Plan — pi parity
+
+| # | parity | kmet pain point | lands in | size |
+|---|---|---|---|---|
+| P1 | skill invocation message | the `<skill …>` block kmet already builds renders as raw text: the XML wrapper and the whole skill body dump into the transcript | `app/skills.clj` (parse) + a new `app/ui` message component + the user-message render path | small |
+| P2 | images in chat | images render only in tool executions, and `:show-images` is hardcoded `true` in the renderer context; no settings, no inline/custom-message images | settings + renderer context + message components (`kmet.libs.terminal-image` already has the hard parts) | medium |
+
+### Postponed indefinitely
+
+Decided 2026-09-10: not planned, not tracked further. Recorded so the
+analysis is not redone — revisit only on a concrete user request.
+
+| feature | pi ref | why not |
+|---|---|---|
+| Mermaid diagrams | `markdown.mermaid` setting (`off`/`final`/`streaming`) | needs a layout engine (pi ships a mermaid renderer); terminal payoff is poor and the markdown path is already the largest renderer |
+| LaTeX rendering | `tui/src/latex.ts` | same shape of work as Mermaid, smaller audience |
+| Alt-screen search | `alt-screen-search.ts` | needs a fullscreen/alt-screen mode (below) and the transcript model here is the native scrollback, not an owned viewport |
+| Fullscreen (alt-screen) TUI mode | `--tui-mode` | the opposite of the deliberate inline model (§1: transcript in the native scrollback, `\u001b[3J`-based full redraws); an alt-screen mode would fork the renderer, the scroll model and every overlay/scroll assumption |
 
 ### R1 — prop→state apply path
 
@@ -981,6 +1017,68 @@ portable verbatim: kmet's in-tree layout is line concatenation, with no
 screen coordinates to anchor to. Needs a tree → session hook (a dynamic var
 around a mount, or a per-session registry) — that hook is the spike.
 
+### P1 — skill invocation message
+
+**Pain.** kmet already *produces* pi-identical skill blocks —
+`skills/expand-skill-command` wraps the skill body as
+`<skill name="…" location="…">\n…\n</skill>` with the user's arguments after
+a blank line — but the user message renders as plain text, so the XML
+wrapper and the entire skill body (often hundreds of lines) dump into the
+transcript. pi parses the block and renders a dedicated message instead.
+
+**Parity.** pi's `parseSkillBlock` (a regex over the message text:
+`name`, `location`, `content`, optional trailing `userMessage`) feeding
+`SkillInvocationMessageComponent`: collapsed it is one line —
+`[skill] <name> (ctrl+o to expand)` — and expanded it is a `[skill]` label
+plus a Markdown of `**name**\n\n<content>`, on the custom-message
+background. The trailing user message renders separately (spacer, then a
+normal user message). Interaction is the standard expansion key
+(`app.tools.expand`).
+
+**Proposal.** A `parse-skill-block` in `kmet.app.skills` (regex + trim, next
+to the existing builder so the two stay in step) and a
+`SkillInvocationMessage` component in `kmet.app.ui`, wired where user
+messages render — both the live append path and replay (chat history
+renders the stored text, so the same parse covers both; no session-format
+change, `session.md`'s EDN lock holds). Collapsed/expanded mirrors the
+existing expandable-message pattern; the skill name is displayed, the body
+only on expand.
+
+### P2 — images in chat
+
+**Pain.** Tool-execution images render, but `:show-images` is hardcoded
+`true` in the renderer context (`app/ui/tool_execution.clj`), so there is
+no way to turn them off, and nothing else can carry an image: user and
+custom messages cannot, and the terminal's image capabilities are not
+consulted when a result's content holds an image block.
+
+**Parity.** pi's four settings: `terminal.showImages` (default true; off,
+or a terminal without image support, renders a text indicator —
+`imageFallback(mimeType, dimensions)` — instead of the image),
+`terminal.imageWidthCells` (default 60), `images.autoResize` (default true;
+images resized to 2000×2000 before being sent to a provider) and
+`images.blockImages` (default false; strips every image from provider
+calls). Plus the `show-images-selector` row in the settings UI.
+
+**Proposal.** Split by layer, TUI half first:
+
+- thread a `:show-images` value (setting + capability check) into the
+  renderer context instead of the hardcoded `true`, falling back to
+  `image-fallback` — the plumbing (`libs/terminal-image` capabilities,
+  the `:image` component, the tool-execution image path) already exists;
+- `terminal.show-images` and `terminal.image-width-cells` in
+  `config.clj`, applied by the `:image` component's `:max-width-cells` and
+  the tool-execution renderer;
+- inline images in user/custom messages (the same `:image` element inside
+  the message components);
+- a `/settings` row for `show-images` (the old definition of done in
+  `alignment.md` §6).
+
+The wire half — `images.blockImages` (strip image blocks before a provider
+call) and `images.autoResize` (resize before sending) — touches
+`kmet.ai.*` request building, not this layer; track it with the model /
+provider work, with the settings keys defined once in `config.clj`.
+
 ### Deliberately not borrowing
 
 Recorded so the analysis is not redone:
@@ -1019,8 +1117,10 @@ Recorded so the analysis is not redone:
 
 ### Suggested order
 
-R1 + R2 together: R2 gives R1 its natural call site, and R1 is the
-props/state migration → R7 as a spike, once the tag-table extension path
-has been used once (R5, R6, R3a and R4 have exercised it). R3b waits on
-the declarations decision.
+P1 first (small, self-contained, visible payoff: skill invocations stop
+dumping their bodies into the transcript) → R1 + R2 together: R2 gives R1
+its natural call site, and R1 is the props/state migration → P2 (the TUI
+half; the wire half rides the provider work) → R7 as a spike, once the
+tag-table extension path has been used once (R5, R6, R3a, R4 and P1 have
+exercised it). R3b waits on the declarations decision.
 

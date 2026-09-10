@@ -133,7 +133,7 @@ list/config` dispatch from `core.clj` to `kmet.package-manager` (pi
 | `--prompt-template` | use a prompt template for one run |
 | `--skill` | invoke a skill for one run |
 | `--theme` | theme for one run |
-| `--tui-mode` | `regular` vs experimental `fullscreen` TUI |
+| `--tui-mode` | `regular` vs experimental `fullscreen` TUI — **postponed indefinitely** (the inline-scrollback model is deliberate; `tui.md` §14) |
 | `--verbose` | verbose logging |
 | `--version` | print version |
 
@@ -141,12 +141,12 @@ list/config` dispatch from `core.clj` to `kmet.package-manager` (pi
 
 | Feature | pi ref | kmet status |
 |---|---|---|
-| **Mermaid diagram rendering** | `modes/interactive/components/mermaid.ts` + `markdown.mermaid` setting (`off`/`final`/`streaming`) | Missing |
-| **LaTeX rendering** (`$…$`, `$$…$$`) | `packages/tui/src/latex.ts`, wired in `tui/src/components/markdown.ts` | Missing |
-| **Alt-screen search** (search overlay over the transcript) | `packages/tui/src/alt-screen-search.ts`, `tui-alt-screen.ts` | Missing |
-| **Images in chat** | `terminal.showImages`, `terminal.imageWidthCells`, `images.autoResize`, `images.blockImages` settings; `show-images-selector.ts` | Partial — tool-execution images only; no settings, no inline/custom-message images |
+| **Mermaid diagram rendering** | `modes/interactive/components/mermaid.ts` + `markdown.mermaid` setting (`off`/`final`/`streaming`) | **Postponed indefinitely** (2026-09-10; rationale in `src/kmet/tui/tui.md` §14) |
+| **LaTeX rendering** (`$…$`, `$$…$$`) | `packages/tui/src/latex.ts`, wired in `tui/src/components/markdown.ts` | **Postponed indefinitely** (same) |
+| **Alt-screen search** (search overlay over the transcript) | `packages/tui/src/alt-screen-search.ts`, `tui-alt-screen.ts` | **Postponed indefinitely** (same — needs an alt-screen mode) |
+| **Images in chat** | `terminal.showImages`, `terminal.imageWidthCells`, `images.autoResize`, `images.blockImages` settings; `show-images-selector.ts` | **Planned** — `src/kmet/tui/tui.md` §14 P2. Partial today: tool-execution images only, `:show-images` hardcoded; no settings, no inline/custom-message images. The wire half (`autoResize`, `blockImages`) rides the provider work |
 | **Cache-miss notices** | `showCacheMissNotices` setting | Done — `:show-cache-miss-notices` setting, `session/detect-cache-miss` (pi detectMiss), notice at agent-end (≥ 20k tokens) |
-| **Skill invocation presentation** | `components/skill-invocation-message.ts` | Partial — kmet renders skills as labeled read tool calls (`app/ui/tool_execution.clj`), no dedicated message component |
+| **Skill invocation presentation** | `components/skill-invocation-message.ts` | **Planned** — `src/kmet/tui/tui.md` §14 P1. Partial today: the expanded `<skill …>` block renders as raw text in the user message (the agent's later read of the skill is a labeled read tool call) |
 | **Custom entry rendering** | `registerEntryRenderer` + `components/custom-entry.ts` | Done — `extensions/register-entry-renderer!` + live entry sink; rendered at replay and on append (pi registerEntryRenderer + CustomEntryComponent) |
 
 ### 3. Slash commands
@@ -223,8 +223,9 @@ Full extension API surface (pi `core/extensions/types.ts`) — one remaining gap
   `app.tree.filter.*` ids + `app.tree.editLabel` are now registered keybindings the
   tree selector resolves through the keybindings manager (rebindable)
 - **`/settings` menu breadth** — kmet `/settings` covers thinking/hide-thinking/retry only;
-  **done (theme)**: a theme row (name switch + persist) was added; mermaid/images/tui-mode
-  settings await those features
+  **done (theme)**: a theme row (name switch + persist) was added; the images row lands with
+  `tui.md` §14 P2. The mermaid and tui-mode rows are postponed indefinitely with their
+  features (`tui.md` §14)
 - **Auth selector/dialog components** — pi `login-dialog.ts`, `oauth-selector.ts`,
   `session-selector-search.ts`; kmet's terminal `/login` covers the flows
 - **`packages/agent` (`@earendil-works/pi-agent-core`)** — general-purpose agent library

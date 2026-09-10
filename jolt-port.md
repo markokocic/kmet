@@ -166,7 +166,7 @@ the core agent must work before extensions matter.
 | M7 | `libs/clipboard.clj`, `libs/terminal_image.clj` (Base64 — shimmed, keep), OSC-52/kitty-graphics emit | clipboard via platform subprocesses (`pbcopy`/`xclip`/`clip`) through `jolt.process`; image protocols are pure emit logic | small |
 | M8 | `config.clj` (XDG paths, EDN load/save, file watching?) | `jolt.fs` (vendored `babashka.fs`, minus zip) covers paths; `spit`/`slurp`/EDN portable; watcher → poll (same as `tui.theme`) | adapt |
 | M9 | `debug.clj` (file logging) + crash/render logs | `(spit path text :append true)` (`jolt-io-writer` is 1-arg — `io.ss:1314-1323`; `spit` takes `:append` — `io.ss:1164-1195`); timestamps via the `io.github.jolt-lang/time` dep (already in `deps.edn`) or manual format. Note: Jolt's `java.io.tmpdir` honors `$TMPDIR` (`host-static-methods.ss:1002,1016`), unlike bb's hardcoded `/tmp` — keep the explicit-dir pattern anyway | small |
-| M10 | `bb.edn` tasks (22: `run` + 21: uberjar/build/test/test-ext/changed/test-changed/test-ext-changed/lint-changed/format-changed/format-check-changed/nrepl/check/generate-models/generate-image-models/check-model-data/pack-extension/lint/format/format-check/help) | **DONE (test task):** `kmet.runner` is now host-aware and tolerant — every test namespace is required in a try; unloadable ones (babashka-internal requires like `babashka.classpath`/`babashka.classes`, `java.time.format.DateTimeFormatter` gaps, …) are reported and skipped, the rest run. Per-var `^:slow` split + per-var filters work on BOTH hosts (`jolt test` non-slow / `jolt test-ext` slow; bb.edn `:paths ["src" "test"]` supplies the roots under jolt). Engine: bb = per-var output capture + ref counters; jolt = `clojure.test/test-vars` with jolt's own process-wide `counters` atom read as before/after deltas (`jolt?` = `(find-var 'clojure.core/*jolt-version*)`). **Full-suite run 2026-09-09 (`jolt v0.8.5-36-gbac15682`): all 107 namespaces load — zero unloadable** (the earlier babashka-internal/`java.time` load gaps are gone) and 1928 tests run end-to-end; deterministic result 18 failures + 18 errors, all jolt-only — **11 + 16 after the same-day kmet-side workarounds** for causes 2/4/7 (see §8). Remaining M10 work: `jolt build` packaging, lint/format gates, model generators | mostly done for tests |
+| M10 | `bb.edn` tasks (22: `run` + 21: uberjar/build/test/test-ext/changed/test-changed/test-ext-changed/lint-changed/format-changed/format-check-changed/nrepl/check/generate-models/generate-image-models/check-model-data/pack-extension/lint/format/format-check/help) | **DONE (test task):** `kmet.runner` is now host-aware and tolerant — every test namespace is required in a try; unloadable ones (babashka-internal requires like `babashka.classpath`/`babashka.classes`, `java.time.format.DateTimeFormatter` gaps, …) are reported and skipped, the rest run. Per-var `^:slow` split + per-var filters work on BOTH hosts (`jolt test` non-slow / `jolt test-ext` slow; bb.edn `:paths ["src" "test"]` supplies the roots under jolt). Engine: bb = per-var output capture + ref counters; jolt = `clojure.test/test-vars` with jolt's own process-wide `counters` atom read as before/after deltas (`jolt?` = `(find-var 'clojure.core/*jolt-version*)`). **Full-suite run 2026-09-09 (`jolt v0.8.5-36-gbac15682`): all 107 namespaces load — zero unloadable** (the earlier babashka-internal/`java.time` load gaps are gone) and 1928 tests run end-to-end; deterministic result 18 failures + 18 errors, all jolt-only — **11 + 16 after the same-day kmet-side workarounds** for causes 2/4/7 (see §8). The `^:slow` set is a separate story — **not green on jolt** (§8): 19 F + 7 E, of which 8 reds are TUI-attributable. Remaining M10 work: `jolt build` packaging, lint/format gates, model generators | mostly done for tests; slow-set status in §8 |
 | M11 | `clojure.spec.alpha` (SCI-context injection only), `clojure.walk` (2 requires: `libs/json.clj:16`, `ai/constrained_sampling.clj:13`), `BigDecimal` (`edn_writer` + SCI class table) | spec: absent from `stdlib/` (verified — declare `org.clojure/spec.alpha` explicitly per README's "terminal dependency" rule, or rewrite the one use); `walk`: present (`stdlib/clojure/walk.clj`, seed-embedded — keep); `BigDecimal`: PRESENT (`host/chez/java/bigdec.ss`: `M` literals + `with-precision` per README — the earlier "absent" claim was wrong; just port the call sites) | small |
 | M12 | `defrecord` (27 files) + `reify` (6 files) + protocols + `deftype` (zero definitions — only comments) | README Differences confirms `deftype`/`defrecord`/`reify`/`extend-protocol`, multimethods, STM, `future`/`promise`/`agent` and `core.async` behave as on the JVM — still verify early: `satisfies?`-on-reify semantics, `defrecord` positional factories, protocol dispatch for `IComponent`/`IFocusable`. The TUI's `satisfies?` avoidance notes (AGENTS.md SCI gotcha) need re-checking on Jolt | verify early, affects everything |
 | M13 | Custom `defcomponent`/`with-let` macros + clj-kondo hooks | Jolt compiles macros normally (self-hosted compiler) — should port; re-verify hygiene/&env behavior (`go`-style passes are async-only, plain macros fine). Kondo hooks keep working (source-level) | verify early |
@@ -275,9 +275,26 @@ and `^:bb-only` namespaces (their vars are then filtered out).
 in any of ~18 full runs). The four namespaces that never print a "Testing"
 line are not load failures: `build-test` (10 vars) and `libs.test-archive` (3)
 are all `^:bb-only` (M5), `modes.test-overlay-input-smoke` (2) and
-`tui.test-render-loop` (6) are all `^:slow` (run under `jolt test-ext`).
+`tui.test-render-loop` (5 of its 6 vars are `^:slow`) run under
+`jolt test-ext` — where they **error** on jolt (`Unknown class
+TerminalBuilder`; the suite builds a virtual JLine terminal), not pass;
+see the test-ext paragraph below.
 
-**Result (2026-09-10): 1981 tests / 13277 assertions, deterministic 1 failure + 10
+**Slow set (`jolt test-ext`) is NOT green — 19 F + 7 E (2026-09-10, same
+host).** The non-slow run above says nothing about it: the slow tests are
+the subprocess-, pty- and network-driven ones. Breakdown:
+
+| namespace | reds | cause |
+|---|---|---|
+| `kmet.app.test-tools` | 17 F | jolt-only; the bash/pipe tests (`stdout`+`stderr` merge) — B2 (subprocess pipe semantics), not TUI. Green on bb (10 tests / 22 assertions) |
+| `kmet.tui.test-render-loop` | 5 E | `Unknown class TerminalBuilder` — JLine; needs the jolt-tui ITerminal adapter (`jolt-tui.md` §0) |
+| `kmet.modes.test-overlay-input-smoke` | 2 F + 1 E | pty-driven app smoke test; the 15 s ns timeout interrupts it (`InterruptedException: future deref`). Needs the adapter + input pipeline |
+| `kmet.ai.test-llm` | 1 E | `test-llm-codex-responses-end-to-end` — network e2e, interrupted by the ns timeout |
+
+**TUI-attributable: 8 of the 26 reds** (render-loop + overlay-input-smoke);
+the same two namespaces are covered in `jolt-tui.md` §0.
+
+**Result of the non-slow run (2026-09-10): 1981 tests / 13277 assertions, deterministic 1 failure + 10
 errors — every one jolt-only** (bb is green on the affected namespaces:
 60 tests / 338 assertions). Grouped by common cause:
 
@@ -344,7 +361,10 @@ stable over 5 full runs. Mechanism unpinned — rare timing/state interaction
 firing `schedule-frame!` into the test's hook.
 
 **Status (2026-09-10, final): `jolt test` is GREEN — 1998 tests / 13462
-assertions, 0 failures, 0 errors.** The last two causes closed the same day:
+assertions, 0 failures, 0 errors**; re-verified the same day after the
+borders/timers/key-labels work and the resource-resolution port, now
+**2032 tests / 13803 assertions, 0 failures, 0 errors** (the delta is newly
+added tests, not fixed ones). The last two causes closed the same day:
 
 - cause 1's JWK `.toByteArray` (5 E) — `kmet.libs.crypto/bigint->bytes`
   (`8eff434`), a portable quot/rem two's-complement encoder verified

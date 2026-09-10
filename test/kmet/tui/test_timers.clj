@@ -1,6 +1,6 @@
 (ns kmet.tui.test-timers
-  "Tests for kmet.tui.timers — the loop-owned timer registry (tui.md §14
-   R4). Headless: pump! is driven by hand instead of by the frame loop."
+  "Tests for kmet.tui.timers — the loop-owned timer registry (tui.md
+   §6.1). Headless: pump! is driven by hand instead of by the frame loop."
   (:require [clojure.test :as t]
             [kmet.tui.macros :as macros]
             [kmet.tui.timers :as timers]))
