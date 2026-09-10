@@ -159,10 +159,9 @@ w753I5QsmUWyeA4oShI/eiyxOZ9MxKU9wd70tHhZVWPC/rEA0PfuypCBOA==
                                    bs)]
                           (BigInteger. 1 bs)))
             der-int (fn [n]
-                      (let [bs (.toByteArray n)
-                            content (if (zero? (bit-and (aget bs 0) 0x80))
-                                      bs
-                                      (byte-array (concat [(byte 0)] bs)))]
+                      ;; crypto/bigint->bytes already carries the
+                      ;; two's-complement sign prefix when needed.
+                      (let [content (crypto/bigint->bytes n)]
                         (byte-array (concat [(byte 0x02) (byte (alength content))]
                                             content))))
             r-int (der-int (bigint-of 0))

@@ -49,6 +49,21 @@
              bs)]
     (BigInteger. 1 bs)))
 
+(defn bigint->bytes
+  "Portable BigInteger/.toByteArray: jolt models small bigints as Long and
+   BigInt without .toByteArray (M16), so the DER writers (and the test
+   verifier) cannot call it.
+   Two's-complement big-endian bytes via a quot/rem digit loop — verified
+   byte-identical to .toByteArray on bb/JVM (incl. the 0x00 prefix when the
+   high bit is set). Non-negative inputs only (all DER call sites)."
+  [n]
+  (let [digits (loop [m n acc ()]
+                 (if (zero? m)
+                   (if (seq acc) acc (list 0))
+                   (recur (quot m 256) (conj acc (rem m 256)))))
+        digits (if (>= (first digits) 128) (cons 0 digits) digits)]
+    (byte-array (map unchecked-byte digits))))
+
 (defn- read-der-length
   "DER length at BYTES[i] → [length next-index] (short + long form)."
   [bytes i]
@@ -126,18 +141,15 @@
     (der-tlv 0x06 (byte-array (concat [first-byte] rest)))))
 
 (defn- der-integer
-  "DER INTEGER for a non-negative BigInteger (prepends the sign byte when
-   the high bit is set)."
+  "DER INTEGER for a non-negative BigInteger (bigint->bytes already
+   prepends the sign byte when the high bit is set)."
   [n]
-  (let [bs (.toByteArray n)]
-    (der-tlv 0x02 (if (zero? (bit-and (aget bs 0) 0x80))
-                    bs
-                    (byte-array (concat [(unchecked-byte 0)] bs))))))
+  (der-tlv 0x02 (bigint->bytes n)))
 
 (defn- unsigned-bytes
   "Big-endian bytes of a BigInteger without a leading sign byte."
   [n]
-  (let [bs (.toByteArray n)]
+  (let [bs (bigint->bytes n)]
     (if (and (> (alength bs) 1) (zero? (aget bs 0)))
       (java.util.Arrays/copyOfRange bs 1 (alength bs))
       bs)))
@@ -290,8 +302,8 @@
               (let [out (byte-array width)]
                 (System/arraycopy bs 0 out (- width (alength bs)) (alength bs))
                 out))]
-    (byte-array (concat (pad (strip (.toByteArray r)))
-                        (pad (strip (.toByteArray s)))))))
+    (byte-array (concat (pad (strip (bigint->bytes r)))
+                        (pad (strip (bigint->bytes s)))))))
 
 (defn sign-jwt
   "RFC 7519 JWT signed with :RS256 (default) or :ES256. KEY is a PEM
