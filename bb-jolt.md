@@ -2,9 +2,9 @@
 
 Field reports of Clojure-semantics bugs in Jolt (first observed on
 `jolt v0.8.5-36-gbac15682`, threaded Chez 10.x, 2026-09; re-verified on
-`jolt v0.8.6-18-g64bdeff4`, 2026-09-10 — JOLT-1, JOLT-2 and JOLT-5 are
-fixed there, JOLT-3, JOLT-4 and JOLT-6 still open), each with a minimal
-repro, the expected Clojure/babashka behavior, and the kmet test it broke.
+`jolt v0.8.6-31-g1e5036a5`, 2026-09-10 — JOLT-1..JOLT-5 are fixed there,
+JOLT-6 and JOLT-7 still open), each with a minimal repro, the expected
+Clojure/babashka behavior, and the kmet test it broke.
 All were discovered by running kmet's test suite under Jolt (`jolt test`);
 bb/JVM is the reference implementation (real Clojure semantics).
 
@@ -126,13 +126,14 @@ string code-point-indexing gap (jolt-port.md §8 cause 3 / M16): jolt
 strings index by code point (Chez), kmet's scans assume UTF-16 surrogate
 pairs and over-advance per astral char.
 
-**Status:** open (jolt-side — re-verified still broken on v0.8.6-18-g64bdeff4,
-2026-09-10: `.find(3)` still returns `[true 2 4]`). kmet-side workaround APPLIED 2026-09-09 —
-the anchored-scan idiom was rewritten index-correct in `kmet.tui.utils`
-as suggested here: `match-at` runs no-arg `.find` over a `subs`-slice
-(`ansi-code-at` + truncate's `ansi-at`). `test-sgr-state-at` and
-`test-truncate-to-width-osc-8-close` are green on jolt again; the
-`.region` API gap (JOLT-4) is still open.
+**Status:** FIXED upstream — jolt PR #922 (merge `1e5036a5`,
+`v0.8.6-31-g1e5036a5`+), closing #906. Verified 2026-09-10: `.find(3)`
+returns `[true 4 6]`, and an out-of-range start throws the JVM's
+`IndexOutOfBoundsException` (`Illegal start index`), like bb. kmet-side
+workaround REMOVED with the fix: `match-at` (`kmet.tui.utils`) is back to
+the plain anchored-scan idiom `(.find m i)` + `(= i (.start m))` — no
+`subs`-slice per scan. `test-sgr-state-at` and
+`test-truncate-to-width-osc-8-close` stay green on jolt.
 
 ---
 
@@ -155,7 +156,12 @@ Jolt. Failing test: `kmet.tui.components.test-caching-conventions`
 (ERROR). (That test is source-scanning tooling, so the impact is
 test-infrastructure only, but the API gap is general.)
 
-**Status:** open (re-verified still missing on v0.8.6-18-g64bdeff4, 2026-09-10).
+**Status:** FIXED upstream — same jolt PR #922 (merge `1e5036a5`,
+`v0.8.6-31-g1e5036a5`+), closing #907: `.region`, `.regionStart`,
+`.regionEnd` and the no-arg `.reset` exist, with `^`/`$` anchored at the
+region's edges. Verified 2026-09-10 (repro returns `[true 1 2]`). kmet-side
+workaround REMOVED with the fix: `test-caching-conventions`'
+`top-level-forms` is back to `.region` narrowing to skip escaped chars.
 
 ---
 
@@ -202,7 +208,7 @@ dangling `:a` args were dropped and the positional `true` became
 `:strict? true` (the original intent) — and those fixes STAND (they were
 real sloppy-call bugs, now correct on both hosts). Both tests are green
 on jolt again (the tree-selector test additionally needed the JOLT-3
-`ansi-code-at` workaround to pass its rendering assertions).
+`ansi-code-at` workaround then — removed once #922 fixed `.find(int)`).
 
 ---
 
@@ -246,3 +252,45 @@ an interrupted ns (the curl children are setsid'd group leaders — see
 (CLOEXEC on spawn). Re-run 2026-09-10 (`v0.8.6-18-g64bdeff4`): still no
 manifestation — the full suite completed with no ns timeout, so no orphan
 cascade was observed.
+
+---
+
+## JOLT-7 — `clojure.core/parse-long` returns a BigInt on overflow; the JVM returns nil
+
+**Area:** numeric parsing (`host/chez/natives-num.ss` — `jolt-parse-long`).
+
+**Repro:**
+
+```clojure
+(parse-long "9223372036854775807")    ;; both: 9223372036854775807 (max long — in range)
+(parse-long "9223372036854775808")    ;; bb:   nil
+                                      ;; jolt: 9223372036854775808N
+(parse-long "-9223372036854775809")   ;; bb:   nil
+                                      ;; jolt: -9223372036854775809N
+(class (parse-long "9223372036854775808"))  ;; bb: nil   jolt: clojure.lang.BigInt
+```
+
+**Expected vs actual:** Clojure's `parse-long` is `Long/parseLong` with
+the `NumberFormatException` caught to nil: an out-of-range decimal is not
+a long, the result is nil, and every non-nil result is a Long. Jolt's
+`jolt-parse-long` shape-checks the string (sign + digits, fully anchored)
+then calls Chez `string->number`, which promotes an out-of-range value to
+a bignum instead of failing — the caller gets a `clojure.lang.BigInt`
+where the JVM gets nil. The in-range boundaries (`9223372036854775807`,
+`-9223372036854775808`) parse exactly on both hosts; only overflow
+diverges.
+
+**kmet impact:** `kmet.libs.yaml`'s plain-scalar fallback branches on
+`parse-long`'s nil — an integer-looking scalar that overflows stays a
+string on bb but loads as a BigInt on jolt. Failing test:
+`kmet.libs.test-yaml/test-numbers`. Any `(if-let [n (parse-long s)] …)`
+call site silently changes type category instead of taking the nil branch.
+
+**Status:** open — filed upstream as **[jolt#927](https://github.com/jolt-lang/jolt/issues/927)**
+(re-verified 2026-09-10 on `v0.8.6-31-g1e5036a5`; not covered by jolt's own
+tests either: `test/chez/corpus.edn` has no overflow row for the parse fns
+and `known-divergences.edn` has no entry, so `make certify` cannot see it).
+kmet-side workaround APPLIED 2026-09-09 (`4f900ed`):
+`kmet.libs.num/parse-long` wraps core's and returns the value only when
+it is a `Long`, nil otherwise — both hosts then get JVM semantics. The
+wrapper stays until a jolt fix lands.

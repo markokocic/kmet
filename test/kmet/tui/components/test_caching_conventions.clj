@@ -63,45 +63,49 @@
 (def ^:private special-chars
   "Structural chars the form scanner reacts to: parens, quotes, backslash,
    semicolon, newline (regex matcher walks these; escaped chars are skipped
-   via an ignore-window)."
+   via region narrows)."
   #"[()\"\\;\n]")
 
 (defn- top-level-forms
   "Split SRC into its top-level forms, skipping string/regex literals and
    line comments so parens inside them don't unbalance the scan. A single
    native regex matcher walks the structural chars — the loop runs once per
-   special character, not once per source character. The escape skip is a
-   portable ignore-window: jolt's Matcher has no .region (bb-jolt.md JOLT-4),
-   so instead of narrowing the matcher past the escaped char we remember
-   SKIP (i + 2) and ignore any match before it."
+   special character, not once per source character."
   [src]
   (let [m (re-matcher special-chars src)
         n (count src)]
-    (loop [depth 0 start 0 in-str false in-comment false acc [] skip 0]
+    (loop [depth 0 start 0 in-str false in-comment false acc []]
       (if (.find m)
         (let [i (.start m)
               c (.group m)]
-          (if (< i skip)
-            (recur depth start in-str in-comment acc skip)
-            (cond
-              in-comment
-              (if (= c "\n")
-                (recur depth start false false acc skip)
-                (recur depth start false true acc skip))
-              in-str
-              (if (= c "\\")
-                (recur depth start true false acc (min n (+ i 2)))
-                (recur depth start (not= c "\"") false acc skip))
-              (= c ";") (recur depth start false true acc skip)
-              (= c "\"") (recur depth start true false acc skip)
-              (= c "(") (recur (inc depth) start false false acc skip)
-              (= c ")")
-              (let [d (dec depth)]
-                (if (zero? d)
-                  (recur 0 (inc i) false false
-                         (conj acc (subs src start (inc i))) skip)
-                  (recur d start false false acc skip)))
-              :else (recur depth start false false acc skip))))
+          (cond
+            ;; a comment runs to the end of its line
+            in-comment
+            (if (= c "\n")
+              (recur depth start false false acc)
+              (recur depth start false true acc))
+
+            ;; inside a string only backslash (escape) and the closing
+            ;; quote change state; parens/semicolons/newlines are content
+            in-str
+            (if (= c "\\")
+              (do (.region m (min n (+ i 2)) n)  ;; skip the escaped char
+                  (recur depth start true false acc))
+              (recur depth start (not= c "\"") false acc))
+
+            (= c ";") (recur depth start false true acc)
+            (= c "\"") (recur depth start true false acc)
+            (= c "(") (recur (inc depth) start false false acc)
+
+            (= c ")")
+            (let [d (dec depth)]
+              (if (zero? d)
+                (recur 0 (inc i) false false
+                       (conj acc (subs src start (inc i))))
+                (recur d start false false acc)))
+
+            ;; newline outside a string/comment — plain whitespace
+            :else (recur depth start false false acc)))
         (if (zero? depth) acc (conj acc (subs src start n)))))))
 (defn- strip-leading-comments
   "Remove leading comment lines and whitespace from a form text so the

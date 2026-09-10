@@ -18,16 +18,13 @@
 
 (defn- match-at
   "Match RE in S starting exactly at index I — the anchored-scan idiom
-   (.find m i) + (= (.start m) i). Runs no-arg .find over (subs s i) so the
-   scan is index-correct on both hosts: jolt's Matcher.find(int) ignores
-   its start argument and always returns the first match (bb-jolt.md JOLT-3).
-   Returns [match-text end] with END absolute in S, nil when nothing starts
-   at I."
+   (.find m i) + (= (.start m) i). Returns [match-text end] with END
+   absolute in S, nil when nothing starts at I."
   [re s i]
   (when (< i (count s))
-    (let [m (re-matcher re (subs s i))]
-      (when (and (.find m) (zero? (.start m)))
-        [(.group m) (+ i (.end m))]))))
+    (let [m (re-matcher re s)]
+      (when (and (.find m i) (= i (.start m)))
+        [(.group m) (.end m)]))))
 
 ;; pi: SEGMENT_RESET — full SGR + OSC 8 reset appended to every non-image line
 ;; by applyLineResets so a truncated line can never leave active attributes

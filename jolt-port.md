@@ -172,7 +172,7 @@ the core agent must work before extensions matter.
 | M13 | Custom `defcomponent`/`with-let` macros + clj-kondo hooks | Jolt compiles macros normally (self-hosted compiler) — should port; re-verify hygiene/&env behavior (`go`-style passes are async-only, plain macros fine). Kondo hooks keep working (source-level) | verify early |
 | M14 | `java.util.concurrent` — 4 sites: `LinkedBlockingQueue`+`TimeUnit` (`libs/sse.clj` idle-deadline reader — now `ArrayBlockingQueue`, fixed 2026-09-09), `ReentrantLock` (`app/session.clj:154,296`, file-mutation lock), `Callable` (`app/extensions.clj:738`, SCI class table) | **Verified 2026-09-09:** `LinkedBlockingQueue` has NO ctor on Jolt (`No matching ctor found`) — `sse.clj` now uses `(ArrayBlockingQueue. 65536)`; verified `.put`, `.poll n TimeUnit`, `.offer`, `.size`, `.remainingCapacity`, and `TimeUnit/MILLISECONDS`. `ReentrantLock` still assumed shimmed (session lock not yet run on Jolt); `Callable` becomes a fn; `locking` covers the session lock | small |
 | M15 | `java.net.URI/URL/URLEncoder`, `Normalizer`, `Charset`, `HexFormat`, `Instant/DateTimeFormatter/ZoneId`, `PushbackReader`, `StringReader/Writer` | Mostly shimmed (host-interop list + `io.ss`/`io-streams.ss`); URL/URI surface exists (`jolt.socket` gating for sockets); time values via time lib. **Verified 2026-09-09 (reader surface):** `io/reader` rejects `proxy` Readers (`Cannot open <reify> as a Reader` — `jolt-io-reader`, `io.ss:1291`); `BufferedReader` ctor is identity so a proxy Reader lacks `.readLine`/`.close`; `InputStreamReader` over a proxy `InputStream` constructs (reads dispatch to the override); `PipedInputStream` + `io/reader` + `.readLine` works. `sse.clj` works around all three (see B1). **Verified 2026-09-09 (URI + java.net.http surface, full-suite run §8):** the multi-arg `URI` ctors are missing — the 7-arg ctor throws `incorrect number of arguments 7 to …` (kmet's `azure_openai_responses/normalize-azure-base-url` catch-swallowed it, so Azure base URLs were never forced to `/openai/v1`; 5 failures in `test-llm-azure-url` — **fixed kmet-side 2026-09-09**: the URL is rebuilt by hand from the parsed pieces, no multi-arg ctor); the single-arg ctor gap (JOLT-1 — accepted illegal characters the JDK rejects, bb-jolt.md) is **FIXED upstream in v0.8.6** (verified 2026-09-10: junk URIs throw). The multi-arg ctors are still missing (verified 2026-09-10: both the 7-arg and 4-arg ctors throw `incorrect number of arguments`), so the hand-built azure URL stays. `java.net.http.HttpTimeoutException` exists as a class but has NO ctor (`No matching ctor found`, `test-llm-transport-error-message`). Remaining call sites still need per-site audit | audit per site |
-| M16 | Jolt host string/number/format semantics (kmet's UTF-16-indexing code — §8 cause 3) | Jolt (Chez) strings index by **code point**, not UTF-16 code unit: `(count "👨‍👩‍👧‍👦")` is 7 (one char per astral code point) vs 11 surrogate units on bb/JVM, and `nth` returns the full code point. Every kmet scan that assumes surrogate pairs over-advances by one per astral char: `kmet.tui.utils` grapheme/width machinery (`codepoint-len`, `nchars` = 2 for astral) miscounts ZWJ chains and truncation, and markdown-table slicing runs off the string end — 4 failures + 1 error live (visible-width ZWJ chain, table emoji alignment ×3, robustness `StringIndexOutOfBounds`; bb-jolt.md's JOLT-3 attribution of these is wrong — they are pure index scans, no Matcher). **FIXED kmet-side 2026-09-09** — `codepoint-len` (utils.clj) derives the element span from the string itself, 2 only when index I is a high surrogate followed by a low surrogate — the same pairing test `code-point-at` uses — never from cp magnitude, and the four inline `nchars` sites (truncate-to-width ×2, split-long-word, slice-by-column) now route through it: the walkers step in the host's own element model (a semantic no-op on bb/JVM; 1 per astral cp on Jolt), so the 4 F + 1 E are green on both hosts (§8). Same family: `clojure.core/parse-long` returns a BigInt on overflow where bb/JVM returns nil (yaml plain-scalar fallback keeps the string — `libs.test-yaml/test-numbers`); `format`'s missing `%g` conversion (`UnknownFormatConversionException: 'g'` — model-selector cost lines `(format "%.4g" …)`, 4 errors) is **FIXED upstream in v0.8.6** (verified 2026-09-10 — green with no kmet change) | width scans: done (kmet-side, above); `format %g`: fixed upstream in v0.8.6; remaining host-level fix: `parse-long` overflow |
+| M16 | Jolt host string/number/format semantics (kmet's UTF-16-indexing code — §8 cause 3) | Jolt (Chez) strings index by **code point**, not UTF-16 code unit: `(count "👨‍👩‍👧‍👦")` is 7 (one char per astral code point) vs 11 surrogate units on bb/JVM, and `nth` returns the full code point. Every kmet scan that assumes surrogate pairs over-advances by one per astral char: `kmet.tui.utils` grapheme/width machinery (`codepoint-len`, `nchars` = 2 for astral) miscounts ZWJ chains and truncation, and markdown-table slicing runs off the string end — 4 failures + 1 error live (visible-width ZWJ chain, table emoji alignment ×3, robustness `StringIndexOutOfBounds`; bb-jolt.md's JOLT-3 attribution of these is wrong — they are pure index scans, no Matcher). **FIXED kmet-side 2026-09-09** — `codepoint-len` (utils.clj) derives the element span from the string itself, 2 only when index I is a high surrogate followed by a low surrogate — the same pairing test `code-point-at` uses — never from cp magnitude, and the four inline `nchars` sites (truncate-to-width ×2, split-long-word, slice-by-column) now route through it: the walkers step in the host's own element model (a semantic no-op on bb/JVM; 1 per astral cp on Jolt), so the 4 F + 1 E are green on both hosts (§8). Same family: `clojure.core/parse-long` returns a BigInt on overflow where bb/JVM returns nil (yaml plain-scalar fallback keeps the string — `libs.test-yaml/test-numbers`); `format`'s missing `%g` conversion (`UnknownFormatConversionException: 'g'` — model-selector cost lines `(format "%.4g" …)`, 4 errors) is **FIXED upstream in v0.8.6** (verified 2026-09-10 — green with no kmet change) | width scans: done (kmet-side, above); `format %g`: fixed upstream in v0.8.6; remaining host-level fix: `parse-long` overflow (bb-jolt.md JOLT-7, filed as jolt#927) |
 
 ---
 
@@ -212,7 +212,7 @@ that depended on M1. Jolt side (re-verified 2026-09-09, `jolt v0.8.5`): **json/j
 | `terminal` | 🟢 | 🟢 | uses `java.time`, `java.lang.ProcessHandle`, `java.util.Base64`, `clojure.java.io`; works |
 | `terminal_image` | 🟢 | 🟢 | tests pass (41/41) |
 | `usage` | 🟢 | 🟢 | pure, works |
-| `yaml` | 🟢 | 🟡 | bb: 20/20; Jolt: 19/20 — `test-numbers`: `clojure.core/parse-long` returns a BigInt on overflow where bb/JVM returns nil, so the plain-scalar int fallback keeps a string on bb but yields the BigInt on Jolt (M16) |
+| `yaml` | 🟢 | 🟡 | bb: 20/20; Jolt: 20/20 with kmet's portable `num/parse-long` wrapper (raw core `parse-long` returns a BigInt on overflow where bb/JVM returns nil — M16, bb-jolt.md JOLT-7) |
 
 **bb/JVM: all green (27).** Jolt (2026-09-09): json/jsonrpc/sse/aws_sigv4 green;
 crypto partially green (M3 asymmetric gaps: `KeyPairGenerator`, `Base64/getMimeDecoder`,
@@ -254,7 +254,7 @@ Estimate honesty: B1 transport is **decided** (babashka.http-client on both host
 
 1. **Jolt maturity**: the Chez backend is the only production target (Gambit is demo-grade); the `--library` entry + cross-`--target` flow are young — fine for a CLI, but verify each on the checkout before relying on it.
 2. **Performance**: TUI frame loop (16ms, line diffs, grapheme widths) + token-streaming rates on Chez-interpreted-vs-compiled code — `jolt build` compiles; measure early with a streaming fixture. SCI-for-extensions perf unproven.
-3. **Regex engine**: irregex vs Java — `keys.clj`, response parsers, `utils.clj` wrapping all need their test suites re-run (common patterns fine, edge features differ). **Live divergences (2026-09-09 full-suite run, bb-jolt.md JOLT-3/JOLT-4):** `Matcher.find(int)` ignores the start index (always returns the first match — every anchored-scan idiom `(.find m i)` + `(= (.start m) i)` only matches index 0: SGR-state scans, ANSI/OSC-8 truncation), and `Matcher.region(int,int)` is missing (`test-caching-conventions` crashes). Note: the *width* failures previously blamed on the regex engine are actually the M16 string-indexing gap — see §8 cause 3.
+3. **Regex engine**: irregex vs Java — `keys.clj`, response parsers, `utils.clj` wrapping all need their test suites re-run (common patterns fine, edge features differ). **Regex `Matcher` divergences (bb-jolt.md JOLT-3/JOLT-4; the 2026-09-09 live ones) FIXED upstream** in jolt PR #922 (merge `1e5036a5`, `v0.8.6-31-g1e5036a5`+): `.find(int)` scans from the index (with the JVM's `IndexOutOfBoundsException` outside `[0, length]`), and `.region` / `.regionStart` / `.regionEnd` / the no-arg `.reset` exist. kmet's `subs`-slice `match-at` and the `.region`-free ignore-window were removed with the fix (verified 2026-09-10, both hosts). Note: the *width* failures previously blamed on the regex engine are actually the M16 string-indexing gap — see §8 cause 3.
 4. **`vendor/` pins**: the vendored sources carry no version constants to diff against `deps.edn` — re-verify the `babashka/fs` + `babashka/process` pins by file comparison on any Jolt upgrade.
 5. **Windows**: kmet supports it (Git Bash resolution, `\` zip entries, `fs` separators); Jolt's Windows FFI surface has known gaps (`process.ss`) — Windows is the last platform to light up, after Unix parity.
 6. **No `/tmp` on Termux / `~` expansion / Android IME paste paths**: kmet carries Termux-specific workarounds — re-verify each on Jolt. One is already better: Jolt's `java.io.tmpdir` honors `$TMPDIR` (`host-static-methods.ss:1002,1016`), unlike bb's hardcoded `/tmp` — keep the explicit-dir pattern anyway. Burst-paste detection rides the §7 pipeline, which ports logically.
@@ -301,21 +301,23 @@ errors — every one jolt-only** (bb is green on the affected namespaces:
 | # | cause (jolt gap) | count | failing tests | status |
 |---|---|---|---|---|
 | 1 | JDK class/ctor surface (remainder after the `jolt/` lib + upstream fixes): `KeyPairGenerator`/`Signature` without an RSA provider (4 E — RFC 0014), BigInteger shim as Jolt `Long`/`BigInt` — `.toByteArray` (5 E) | 9 E | `libs.test-crypto` (sign-jwt-rs256 E — KPG RSA; pkcs8-rsa E — Sig SHA256withRSA; jwk-ec, pkcs1-rsa, jwk-rsa E — `.toByteArray` on Long; pkcs8-ec, sign-jwt-es256 E — `.toByteArray` on BigInt), `libs.test-oauth/test-jwt-bearer-token` (KPG RSA), `ai.test-google-adc/test-adc-service-account-flow` (KPG RSA) | M3 — the `getMimeDecoder` + `HttpTimeoutException` halves are covered by the `jolt/` lib (§9); RSA + `.toByteArray` are the roadmap items |
-| 2 | Regex `Matcher` shim (remainder): `.find(int)` ignores the start index (worked around); `.region` missing | 1 E | `tui.components.test-caching-conventions` (E) | JOLT-3 (open, `match-at` workaround) / JOLT-4 (open) — the two utils F's fixed kmet-side (`match-at` slice scan) |
+| 2 | Regex `Matcher` shim: `.find(int)` ignored the start index; `.region` missing | 0 (was 1 E) | ~~`tui.components.test-caching-conventions` (E)~~ — FIXED upstream (jolt PR #922, `1e5036a5`, v0.8.6-31); kmet workarounds removed (`match-at` back to the plain anchored scan, scanner back to `.region`) | JOLT-3/JOLT-4 — closed |
 | 3 | **String indexing: code point vs UTF-16** — Chez strings give full astral code points from `nth`/`count` (7 chars for the family emoji vs 11 surrogate units); kmet's width/grapheme scans assume UTF-16 and over-advance per astral char | 4 F + 1 E | `kmet.test-utils/test-visible-width-zwj-vs16-chain`, `tui.components.test-markdown` (test-markdown-table-emoji-alignment ×3, test-markdown-robustness-across-widths E — `StringIndexOutOfBounds`) | M16 — FIXED kmet-side 2026-09-09 (see below): `codepoint-len` derives the span from the string, not cp magnitude; the 4 F + 1 E are green on both hosts |
 | 4 | `java.net.URI` multi-arg ctors missing (7-arg throws) — azure base-URL normalization catch-swallows it | 5 F | `ai.test-llm/test-llm-azure-url` | M15 — FIXED kmet-side (hand-built URL, no multi-arg ctor) |
 | 5 | ~~edn reader silently drops a trailing `@` after a token — corrupt session lines parse as symbols~~ | 0 (was 4 F) | ~~`app.test-session` (×3 + torn-tail)~~ — FIXED upstream in v0.8.6, green with no kmet change | JOLT-2 — closed |
 | 6 | ~~Single-arg `URI` ctor accepts illegal characters (no throw) — junk domains pass validation, die in curl~~ | 0 (was 1 F) | ~~`ai.test-oauth/test-copilot-login-invalid-domain`~~ — FIXED upstream in v0.8.6, green with no kmet change | JOLT-1 — closed |
 | 7 | ~~kwargs map destructuring throws on an odd trailing arg (Clojure ignores it)~~ | 0 (was 2 E) | ~~test-track + tree-selector~~ — FIXED upstream in v0.8.6; kmet's 2026-09-09 call-site fixes stand (real bugs, correct on both hosts) | JOLT-5 — closed |
 | 8 | ~~`format` has no `%g` conversion — `UnknownFormatConversionException: 'g'`~~ | 0 (was 4 E) | ~~interactive-ui + model-selector cost lines~~ — FIXED upstream in v0.8.6, green with no kmet change | new — M16, closed |
-| 9 | `clojure.core/parse-long` returns a BigInt on overflow (bb/JVM: nil) | 1 F | `libs.test-yaml/test-numbers` | new — M16 |
+| 9 | `clojure.core/parse-long` returns a BigInt on overflow (bb/JVM: nil) | 1 F | `libs.test-yaml/test-numbers` | JOLT-7 (open; jolt#927) — kmet workaround `num/parse-long` |
 
 **kmet-side workarounds applied 2026-09-09 (after this snapshot):** causes
 2 (utils half) + 7 (tree-selector) share the JOLT-3 anchored-scan gap —
 `kmet.tui.utils` gained `match-at` (no-arg `.find` over a `subs`-slice,
 bb-jolt.md's suggested workaround) behind `ansi-code-at` and truncate's
 `ansi-at`, which also unblocked the tree-selector test's rendering
-assertions; cause 4 fixed by hand-building the azure URL (no multi-arg
+assertions (both JOLT-3/JOLT-4 workarounds REMOVED 2026-09-10, jolt PR
+#922 — `match-at` is back to `(.find m i)`, the scanner back to
+`.region`); cause 4 fixed by hand-building the azure URL (no multi-arg
 URI ctor); cause 7's call sites actually fixed (`tree_selector.clj`
 positional `true` → `:strict? true`; `test_track.clj` dangling `:a` args
 dropped). **Cause 1 (partial) — the `jolt/` RFC 0014 provider lib (§9):**
@@ -375,6 +377,11 @@ added tests, not fixed ones). The last two causes closed the same day:
 - cause 2's `.region` (1 E) and cause 9's `parse-long` overflow (1 F) —
   kmet-side workarounds (`4f900ed`): a portable ignore-window in
   `top-level-forms`, and `num/parse-long` (nil on overflow on both hosts).
+  The ignore-window was **removed 2026-09-10** — jolt PR #922 (`1e5036a5`,
+  v0.8.6-31) added `.find(int)` index scanning and `.region`, so the
+  scanner and `kmet.tui.utils/match-at` are back to their plain forms
+  (re-verified on both hosts); the `parse-long` workaround remains
+  (bb-jolt.md JOLT-7 — still open upstream, jolt#927).
 
 Causes 5/6/7/8 had already closed upstream in the v0.8.6 release
 (bb-jolt.md JOLT-1/JOLT-2/JOLT-5 + M16 `format %g` — all re-verified fixed
@@ -461,8 +468,16 @@ crypto classes must be installed before our registrations).
   `.toByteArray`), so bigints jolt models as `Long`/`BigInt` work on both
   hosts.
 
-With those two closed, plus the earlier `num/parse-long` and `.region`
-workarounds (`4f900ed`), **`jolt test` is fully green: 1998 tests / 13462
-assertions, 0 failures, 0 errors** (was 1 F + 10 E). Line counts for the
+With those two closed, plus the earlier `num/parse-long` workaround
+(`4f900ed`; raw core `parse-long` overflow is still open upstream —
+bb-jolt.md JOLT-7, jolt#927), **`jolt test` is fully green: 1998 tests / 13462
+assertions, 0 failures, 0 errors** (was 1 F + 10 E). The companion
+`.region` workaround was removed on 2026-09-10: jolt PR #922 (`1e5036a5`,
+v0.8.6-31) supplied `.find(int)` index scanning and `.region`, and the
+workaround-free kmet passes on both hosts (`kmet.test-utils` +
+`kmet.tui.components.test-caching-conventions` +
+`kmet.app.ui.test-tree-selector` + `kmet.tui.components.test-markdown` /
+`test-truncated-text` + `kmet.tui.test-core`: 155 tests / 5465 assertions
+green under jolt and bb). Line counts for the
 crypto change: ~90 lines of implementation + ~120 lines of tests, verified
 against OpenSSL-generated known-answer vectors.
