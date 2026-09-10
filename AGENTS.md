@@ -140,13 +140,16 @@ extension contract root: namespaces extensions depend on, init/shutdown, api).
 ### jolt/ — the RFC 0014 provider contract
 `jolt/` supplies JDK classes the jolt ecosystem lacks (details: jolt/README.md,
 jolt-port.md §9): currently `java.util.Base64/getMimeDecoder` and the
-`java.net.http.HttpTimeoutException` ctor; RSA + the JWK bigint conversion are
-planned. `jolt.kmet.providers` requires `jolt.crypto` as its FIRST form —
-libcrypto natives and jolt.crypto's EC/symmetric registrations must exist
-before ours (registrations merge into the class tables; re-registered members
-are last-wins). Convention: a src ns whose forms reference a class jolt lacks
-(or one jolt.crypto registered EC-only — `Signature`/`KeyPairGenerator`/
-`KeyFactory`) adds the guarded require as its first form after the ns:
+`java.net.http.HttpTimeoutException` ctor. RSA is no longer in this list —
+jolt.crypto provides `Signature`/`KeyPairGenerator`/`KeyFactory` for RSA and
+EC and claims those classes in its own `:jolt/provides` (a class may have a
+single provider); the JWK bigint→DER conversion lives in
+`kmet.libs.crypto/bigint->bytes` (portable, both hosts).
+`jolt.kmet.providers` requires `jolt.crypto` as its FIRST form — libcrypto
+natives and jolt.crypto's registrations must exist before ours (registrations
+merge into the class tables; re-registered members are last-wins).
+Convention: a src ns whose forms reference a class jolt lacks adds the
+guarded require as its first form after the ns:
 
 ```clojure
 (when (find-var 'clojure.core/*jolt-version*)
@@ -156,7 +159,8 @@ are last-wins). Convention: a src ns whose forms reference a class jolt lacks
 Never rely on the `:jolt/provides` autoload alone: jolt autoloads a provider
 only while the referenced class is UNREGISTERED, and jolt.crypto's `install!`
 registers its classes as a side effect of any `Mac`/`Cipher` autoload — the
-guarded require is what makes the shims deterministic.
+guarded require is what makes kmet's own shims (Base64 MIME, the
+transport-exception ctor) deterministic.
 
 ### Layer boundaries
 - **`kmet.libs.*`** — generic, self-contained. **Must not require any kmet.*

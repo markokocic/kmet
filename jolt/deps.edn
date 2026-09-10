@@ -1,7 +1,10 @@
 {;; kmet's RFC 0014 provider lib (see README.md in this dir): the JDK
  ;; classes the jolt ecosystem does not supply that kmet's crypto/oauth/ADC
- ;; paths need — RSA (io.github.jolt-lang/crypto is EC-only by design),
- ;; java.util.Base64 MIME decoding, java.net.http.HttpTimeoutException.
+ ;; paths need — java.util.Base64 MIME decoding and the
+ ;; java.net.http.HttpTimeoutException ctor. RSA used to be on this list;
+ ;; jolt.crypto provides it (EC and RSA) as of 2026-09, so the claims for
+ ;; java.security.Signature / KeyPairGenerator / KeyFactory are gone — jolt
+ ;; allows a class only one provider, and crypto is it.
  ;;
  ;; The native libs (libcrypto/libssl) and the EC/symmetric java.* classes
  ;; come from io.github.jolt-lang/crypto, which jolt.kmet.providers REQUIRES
@@ -18,17 +21,9 @@
 
  ;; The classes this lib installs (RFC 0014). jolt autoloads the install
  ;; namespace when a DEPENDENT namespace references one of these while it is
- ;; unregistered — the deterministic answer to the load-order trap this
- ;; setup exists to defuse: jolt.crypto's install! registers EC-only
- ;; Signature/KeyPairGenerator/KeyFactory as a side effect of ITS autoload
- ;; (javax.crypto.Mac/Cipher), and once registered a class never triggers a
- ;; provider lookup again. Claiming the classes here makes our install ns —
- ;; which loads jolt.crypto first and re-registers with RSA support — run
- ;; before any reference binds to the EC-only registrations.
- ;;
- ;; java.util.Base64 is deliberately absent: the runtime implements the
- ;; class, so a claim would be refused — getMimeDecoder is added at install.
- :jolt/provides {jolt.kmet.providers ["java.security.Signature"
-                                      "java.security.KeyPairGenerator"
-                                      "java.security.KeyFactory"
-                                      "java.net.http.HttpTimeoutException"]}}
+ ;; unregistered. java.util.Base64 is deliberately absent: the runtime
+ ;; implements the class, so a claim would be refused — getMimeDecoder is
+ ;; added at install. The asymmetric classes are absent too: jolt.crypto
+ ;; provides Signature/KeyPairGenerator/KeyFactory (EC and RSA) itself now,
+ ;; and jolt allows a class only one provider.
+ :jolt/provides {jolt.kmet.providers ["java.net.http.HttpTimeoutException"]}}

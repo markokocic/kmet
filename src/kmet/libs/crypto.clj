@@ -16,10 +16,10 @@
             [clojure.string :as str]))
 
 ;; (jolt only) Install kmet's JDK shims before this file's class references
-;; analyze: jolt.kmet.providers requires jolt.crypto first (its EC/symmetric
-;; registrations + libcrypto natives), then adds what jolt lacks — RSA,
-;; Base64 MIME decode, HttpTimeoutException (see jolt/README.md). A plain
-;; require is impossible (this .clj also loads on bb, where no jolt.*
+;; analyze: jolt.kmet.providers requires jolt.crypto first (its registrations
+;; + libcrypto natives; RSA among them since 2026-09), then adds what jolt
+;; still lacks — Base64 MIME decode, HttpTimeoutException (see jolt/README.md).
+;; A plain require is impossible (this .clj also loads on bb, where no jolt.*
 ;; namespace exists), so the require is guarded by the jolt-version marker
 ;; kmet.runner uses. Must stay the first form after the ns.
 (when (find-var 'clojure.core/*jolt-version*)

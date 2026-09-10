@@ -11,17 +11,18 @@
        registers no constructor; kmet's transport-error classifier keys off
        the simple name.
 
-   Planned (next): RSA KeyPairGenerator/KeyFactory/Signature (jolt.crypto
-   is EC-only — its own tests pin the RSA rejection) and the JWK
-   bigint->DER byte conversion jolt's Long-backed small bigints break
-   (.toByteArray).
+   RSA used to be planned here; jolt.crypto provides it now (EC and RSA
+   keygen/Signature/KeyFactory, 2026-09), so the claims for those classes
+   moved to jolt.crypto's own :jolt/provides — jolt allows a class a single
+   provider. The JWK bigint->DER conversion jolt's Long-backed small bigints
+   broke (.toByteArray) is handled in kmet.libs.crypto/bigint->bytes, which
+   works on both hosts.
 
-   LOAD ORDER — the point of this namespace. jolt.crypto MUST load before
-   any registration below runs: its deps.edn :jolt/native loads
-   libcrypto/libssl (our FFI bindings resolve against them at load) and its
-   install! puts the EC/symmetric java.* classes in the registry this ns
-   extends (__register-class-statics! merges into the class's shared table;
-   a re-registered member is last-wins). The require is the first form in
+   LOAD ORDER — why jolt.crypto still loads first. jolt.crypto MUST load
+   before any registration below runs: its deps.edn :jolt/native loads
+   libcrypto/libssl, and its install! registers the crypto java.* classes
+   (__register-class-statics! merges into the class's shared table; a
+   re-registered member is last-wins). The require is the first form in
    the file, so every load path — jolt's provider autoload (see
    jolt/deps.edn :jolt/provides) or kmet's guarded requires in
    kmet.libs.crypto / kmet.ai.google-adc — gets jolt.crypto fully installed
@@ -111,13 +112,6 @@
   ;; Without the row, instance?/catch on the supertypes miss — jolt's class
   ;; graph is open exactly for this (jolt.host/register-class-supers!, merge
   ;; semantics, idempotent).
-
-  ;; TODO(jolt.kmet): RSA — re-register java.security.Signature /
-  ;; KeyPairGenerator / KeyFactory statics with an RSA+EC dispatcher
-  ;; (EC delegates by rebuilding jolt.crypto's tagged tables; RSA via
-  ;; libcrypto EVP, the same FFI seam). Until then references resolve to
-  ;; jolt.crypto's EC-only registrations, which is deterministic now that
-  ;; this ns loads first.
   (jolt.host/register-class-supers! "java.net.http.HttpTimeoutException"
                                     ["java.io.IOException"])
   nil)
