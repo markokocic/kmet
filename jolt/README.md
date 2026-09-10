@@ -52,7 +52,9 @@ classes it implements); its missing members are added at install instead.
 
 ## Done upstream / in kmet (2026-09-10)
 
-- **RSA** — now provided by jolt.crypto (`feat/rsa`): RSA keygen via
+- **RSA** — now provided by jolt.crypto (merged upstream: jolt-lang/crypto#8,
+  merge commit `79ecb3d` — the previous pin was the same tree from the fork):
+  RSA keygen via
   `RSA_new`/`RSA_generate_key_ex` + `EVP_PKEY_set1_RSA`, `SHA*withRSA` in
   `Signature`, and RSA in `KeyFactory` — all reusing the EVP seam the EC
   code already had. Both kmet RSA tests and the production Google-ADC /

@@ -16,11 +16,10 @@
         ;; OpenSSL-backed javax.crypto/java.security shims on Jolt
         ;; (MessageDigest, Mac, Cipher, SecureRandom, EC + RSA
         ;; Signature/KeyPairGenerator/KeyFactory — RFC 0014; inert on bb/JVM).
-        ;; Pinned to the fork's feat/rsa until the RSA PR (keygen +
-        ;; SHA*withRSA + RSA KeyFactory) lands in jolt-lang/crypto; swap the
-        ;; url + sha to jolt-lang/crypto@<merge sha> when it does.
-        io.github.jolt-lang/crypto {:git/url "https://github.com/markokocic/crypto.git"
-                                    :git/sha "8afd87989e3ec265f8d6d6d281ff0f2c10a172f8"}
+        ;; RSA (keygen + SHA*withRSA + RSA KeyFactory) rides the upstream
+        ;; main as of the PR #8 merge (79ecb3d).
+        io.github.jolt-lang/crypto {:git/url "https://github.com/jolt-lang/crypto.git"
+                                    :git/sha "79ecb3da8c26c76d8934691bc79a0c030104a9f8"}
         ;; babashka.http-client on Jolt: the jolt-lang/http-client library's
         ;; java.net.http shims (RFC 0014 :jolt/provides over BSD sockets +
         ;; OpenSSL + libz via jolt.ffi) run the real org.babashka/http-client
@@ -33,9 +32,10 @@
         io.github.jolt-lang/http-client {:git/url "https://github.com/jolt-lang/http-client.git"
                                          :git/sha "4744256f83e5cf9d3692f4f91e3d7df3c6d41da8"}
         ;; kmet's own RFC 0014 provider lib (jolt/ dir): the JDK classes the
-        ;; jolt ecosystem lacks — RSA (jolt.crypto is EC-only), Base64 MIME
-        ;; decode, HttpTimeoutException ctor. jolt.kmet.providers requires
-        ;; jolt.crypto first (load order is structural). Inert on bb/JVM.
+        ;; jolt ecosystem lacks — Base64 MIME decode and the
+        ;; HttpTimeoutException ctor (RSA used to be here; jolt.crypto
+        ;; provides it now). jolt.kmet.providers requires jolt.crypto first
+        ;; (load order is structural). Inert on bb/JVM.
         jolt.kmet/providers {:local/root "jolt"}}
  :aliases
  {:dev {:extra-paths ["test"]}}}
