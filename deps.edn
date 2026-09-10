@@ -14,10 +14,13 @@
         io.github.jolt-lang/time {:git/url "https://github.com/jolt-lang/time.git"
                                   :git/sha "8030de28d6cda6096896c3e653babdbc8105499c"}
         ;; OpenSSL-backed javax.crypto/java.security shims on Jolt
-        ;; (MessageDigest, Mac, Cipher, SecureRandom, EC Signature/
-        ;; KeyPairGenerator/KeyFactory — RFC 0014; inert on bb/JVM)
-        io.github.jolt-lang/crypto {:git/url "https://github.com/jolt-lang/crypto.git"
-                                    :git/sha "5effcc89a3258499a79a2a3d69edad9e7800d1bf"}
+        ;; (MessageDigest, Mac, Cipher, SecureRandom, EC + RSA
+        ;; Signature/KeyPairGenerator/KeyFactory — RFC 0014; inert on bb/JVM).
+        ;; Pinned to the fork's feat/rsa until the RSA PR (keygen +
+        ;; SHA*withRSA + RSA KeyFactory) lands in jolt-lang/crypto; swap the
+        ;; url + sha to jolt-lang/crypto@<merge sha> when it does.
+        io.github.jolt-lang/crypto {:git/url "https://github.com/markokocic/crypto.git"
+                                    :git/sha "4a5c4166658a89f38368e2607dbd232c2705adb9"}
         ;; babashka.http-client on Jolt: the jolt-lang/http-client library's
         ;; java.net.http shims (RFC 0014 :jolt/provides over BSD sockets +
         ;; OpenSSL + libz via jolt.ffi) run the real org.babashka/http-client
