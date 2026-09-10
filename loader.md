@@ -387,28 +387,244 @@ and `Class/forName(name, false, l)`.
 
 Jolt already has the *shape*: `the-classloader` is a `jhost` record with a
 registered method table (`getResource`, `getResources`, `getParent` → nil,
-`getResourceAsStream`), `getSystemClassLoader`, `clojure.lang.RT/baseLoader`
-and `Thread.getContextClassLoader` all return it, `java.lang.ClassLoader` is
-in the class hierarchy, and `resolve-resource` is the single resource funnel
-walking `(get-source-roots)`. It is one global object; the work is making it
+`getResourceAsStream` — `host/chez/java/io.ss:1492`), `getSystemClassLoader`,
+`clojure.lang.RT/baseLoader` (io.ss:1546) and `Thread.getContextClassLoader`
+(io.ss:1624) all return it, `java.lang.ClassLoader` is already in the class
+hierarchy (`class-hierarchy.ss:864`), and `resolve-resource` (io.ss:1438) is
+the single resource funnel. It is one global object; the work is making it
 per-ctx and wiring the compiler to it.
 
-Three-step evolution (M0–M4 in §9.4): indirection → contexts + delegation →
-classes per ctx → unload → host API. Two design points fixed here:
+Evolution stages are M0–M4 (§9 Phase 3); the subsections below are the
+detailed design for that work.
 
-- **Defining-ctx capture.** Var refs are already ctx-correct for free
-  (`(jolt-var "ns" "name")` is hoisted per def and runs at eval time inside
-  the ctx, so the cell is pinned). Closures that need the ctx capture it in
-  the existing per-def const pool; class-static call sites take it as a
-  hoisted argument. Screen on the IR (the way the existing const-pool
-  wrapper is screened) so plainly-arithmetic closures pay nothing.
-- **Boot vs application classes.** `java.*` implemented by the runtime stays
-  global (shared by delegation — as on the JVM, where `java.util.Base64`
-  cannot be two things). Only RFC 0014 `:jolt/provides` classes and
-  `deftype`/`defrecord` types go per-ctx, including the claim tables and
-  latches. Cross-ctx type/class tokens are **deliberately unequal** (a
-  v1 record instance is not a v2 record instance) and must be pinned in
-  `test/conformance/known-divergences.edn`.
+#### 6.1.1 Naming: "ctx" is taken inside jolt
+
+`host-contract.ss:20` already has `chez-actx` — the *analyze* context — and
+`make-analyze-ctx` (host-contract.ss:21) is constructed at
+`compile-eval.ss:459,619`, `emit-image.ss:252,336,368`, `build.ss:690` and
+host-contract.ss:947. Use **`chez-loader`** for the host-side loader record
+and `*loader*`/`current-loader` for the ambient binding, so "ctx" keeps
+meaning what it means today in that tree.
+
+The analyze ctx **gains a `loader` field** (defaulted to the root loader):
+`hc-resolve-cell` (host-contract.ss:233) and `hc-resolve-global`
+(host-contract.ss:489) then consult the loader's link tables instead of the
+globals — one field, defaulted, at a record already threaded everywhere.
+
+#### 6.1.2 State inventory
+
+| state | site | native scope | stage |
+|---|---|---|---|
+| `var-table`, `ns-cells-index`, `ns-has-vars-set` | rt.ss:893,939,1137 | per-ctx | M0 |
+| `ns-registry` | ns.ss:22 | per-ctx | M0 |
+| `ns-alias-table`, `ns-refer-table`, `ns-refer-all-table`, `-exclude-table`, `ns-core-exclude-table` | ns.ss:44–150 | per-ctx | M0 |
+| `source-roots`, `ldr-ns-replacements` | loader.ss:15,101 | per-ctx | M1 |
+| `rdr-features`, `*data-readers*` scan | reader.ss:984, loader.ss:126 | per-ctx (read-time) | M1 |
+| `loaded-ns` + load state/claims | loader.ss:385,1463 | per-ctx | M1 |
+| AOT memos, read notes | loader.ss:599–955 | per-ctx | M3 |
+| `class-statics-tbl`, `class-ctors-tbl`, `host-methods-tbl`, `mutable-statics-tbl` | host-static.ss:26,60,150,309 | per-ctx (boot classes on root) | M2 |
+| class extensions | class-extensions.ss | per-ctx | M2 |
+| provider tables: `lib-class-providers`, `lib-pending-claims-tbl`, `lib-provider-owned-tbl`, latches | host-static.ss:337–700 | per-ctx | M2 |
+| `type-registry`, `jolt-proto-epoch`, record descriptors | protocols.ss:66,143; records*.ss | per-ctx | M2 |
+| `global-hierarchy`, multimethod tables | refs (clojure.core var), multimethods.ss | per-ctx + dispatch rule (§6.1.5) | M2 |
+| `jch` class hierarchy, reader builtins, embedded source store | class-hierarchy.ss, reader.ss, loader.ss | **global** (boot) | — |
+| `*ns*`, dyn bindings, current source/positions | dyn-binding.ss, compile-eval.ss | per-thread (unchanged) | — |
+
+#### 6.1.3 The pipeline: where the loader plugs in
+
+read → analyze → emit → eval, with one funnel already in place:
+
+- **eval**: `jolt-compile-eval-form` / `-*` (compile-eval.ss:660,665) is the
+  single top-level entry — bind the ambient loader here (M1);
+  `jolt-compile-eval` (compile-eval.ss:714) and `load-string` follow.
+- **analyze**: the analyze ctx carries the loader (§6.1.1). Resolution reads
+  the loader's tables: cells, aliases, refers (hc-resolve-cell), classes
+  (hc-resolve-global), and — on a miss — the loader's provider latch (M2).
+- **read**: `resolve-on-roots`/`find-ns-file`/`ldr-read-source`
+  (loader.ss:340–380) walk the loader's roots; `rdr-features` bind per read.
+- **emit**: `host-static-call`/`host-static-ref`
+  (backend_scheme.clj:2712–2715,3063) take a ctx when the form needs one
+  (§6.1.4); var sites are already hoisted (`hoist-var-cell`,
+  backend_scheme.clj:1010–1030).
+- **load**: `load-namespace`/`require` (loader.ss) run against the loader;
+  the call site passes it or falls back to ambient (§6.1.4).
+
+#### 6.1.4 Two mechanisms: ambient loader + defining capture
+
+**Ambient** (thread parameter, like `chez-current-ns`): bound around the
+analyze+eval of each top-level form and around each file load (M1). This
+covers *everything that happens during the defining evaluation* — nested
+requires, data readers, `deftype`/`defrecord` registration, `defmethod`,
+`register-class-statics!`, provider autoload, `intern`. Those host fns read
+`(current-loader)` at load time and land in the defining loader without any
+API change: the def's init runs inside the ctx by construction.
+
+**Defining capture** covers code that runs *later*. It rides the existing
+per-def cell scope: `emit-with-cells` (backend_scheme.clj:694–712) already
+wraps a def's init in `let*` for the const pool and hoisted cells — add one
+more binding, read once at def time:
+
+```scheme
+(define jv$foo
+  (let* ((_ctx$N (current-loader))   ; NEW — same let*, same pool
+         (cell$1 (jolt-var "ns" "dep")))
+    (lambda (x) (host-static-call _ctx$N "Foo" "bar" cell$1 x))))
+```
+
+Correctness: the def-init evaluates *inside* the defining loader, so
+`(current-loader)` at that moment is the right one; nested lambdas close over
+it through ordinary lexical scope, and re-evaluating the def in another
+loader rebinds it. A closure created later (a fn returned from a fn) still
+closes over the outer def's `_ctx$N`.
+
+**Screening** (the cost gate): walk the IR and bind `_ctx$N` only when the
+form contains `:host-static`/`:host-new`/`:host-static-ref`, a **non-hoisted**
+`:var` site (the `var-cache?`-off paths — seed mint, some built images), or a
+direct call to a dynamic-load var (`require`, `load`, `load-file`,
+`requiring-resolve`, `eval`). Plain arithmetic/seq closures emit byte-identically
+to today. Expect this to be the same shape as the existing `repeat-ops`
+gate (backend_scheme.clj:740) — a predicate, not a rewrite.
+
+**Where capture is impossible** (documented degradation, same as Clojure's
+`baseLoader`): `(apply require …)`, a var holding `require`, a
+`requiring-resolve` reached indirectly. Those use the ambient loader.
+
+**Seed-fixpoint constraint**: the seed mint runs with `set-var-cache!` off
+(backend_scheme.clj:232) and must stay byte-deterministic — the `_ctx$N`
+binding follows `*const-pool*` (backend_scheme.clj:559), so it must be emitted
+only under the same conditions the mint already tolerates. Gate: `selfhost`,
+`make remint`.
+
+#### 6.1.5 Classes, providers, types
+
+- **Boot globals** (shared by delegation, as on the JVM): the core providers
+  `jolt.time.base` / `jolt.socket` (host-static.ss:337), the `jch` hierarchy,
+  every class the runtime implements (`String`, `Base64`, …).
+- **Per-loader**: `class-statics-tbl`/`class-ctors-tbl`/`host-methods-tbl`,
+  mutable statics, class extensions, `type-registry` + protocol epoch +
+  record descriptors, and the RFC 0014 tables — `lib-class-providers`,
+  `lib-pending-claims-tbl`, `lib-provider-owned-tbl`, the one-shot latches.
+  `register-class-provider!` (and `main.clj:101`'s
+  `register-class-providers!`) targets the loader being created; boot
+  providers register on the root.
+- **Provider autoload** (`lib-try-autoload!`, host-static.ss §600–700) consults
+  the loader's pending table, and the install namespace loads *in that
+  loader*; `provider-claim-drop!`/`hold!` keep their meaning per loader.
+- **Cross-loader identity**: two loaders' "same" class/type give distinct
+  tokens; `instance?`/`=` across them is false on purpose (§6.3).
+- **Dispatch is value-directed** (§0.7): `isa?`/`instance?` derive the loader
+  from their (tagged) arguments, not from the caller. Each loader has its own
+  hierarchy; a `derive` in loader A is invisible to loader B. Multimethod
+  tables need nothing extra — a `multifn` lives in a var cell, and cells are
+  per-loader — except for multimethods defined in *shared* (root) namespaces,
+  which stay shared as expected. Until M2 lands, derives leak through the
+  global `global-hierarchy` cell: record it as a divergence and have
+  `run-case-isolation.ss`'s reset as the stopgap.
+
+#### 6.1.6 Load protocol, concurrency, fibers
+
+- The loader's claim protocol (loader.ss:1463–1936: `ldr-load-mu`, marks,
+park/wake, cycle detection, `ldr-mark-loaded!`/`ldr-unmark-loaded!` at
+1211/1216, rollback at 1888) is keyed **(loader, namespace)** — one mark per
+loader, so two loaders may load the same namespace concurrently and each
+rolls back independently.
+- Lock discipline is preserved, not relaxed: the "a LOAD MUST NEVER ACQUIRE
+`stm-lock`" rule and the `ldr-libs-mu` ordering (loader.ss:440–470) stay;
+per-loader mutexes remove cross-loader serialization but every existing edge
+remains. `make lock-check` / `park-lock-check` are the gates.
+- **Fibers**: a load can park (fiber backend), and `dyn-binding.ss` documents
+why thread parameters alone are not enough across a fiber resume (the winder
+pushes a second frame). The ambient loader must survive a fiber parking and
+resuming on a different carrier — this is the one jolt-internal mechanism
+that needs an explicit test (case 9 executed from a `go` block). Reuse
+whatever `chez-current-ns` does; if it is insufficient, the loader binding
+needs the same push/pop treatment the dynamic bindings have.
+
+#### 6.1.7 Resources and the ClassLoader facade
+
+- `resolve-resource` (io.ss:1438) resolves within the ambient loader's roots;
+  `io-note-file-read!` records into that loader's AOT notes.
+- `the-classloader` becomes `(loader->classloader l)` — a `jhost` carrying the
+  loader in its state (like the thread handle carries its id, io.ss:1596), so
+  `getResource`/`getResources`/`getResourceAsStream` resolve in *that* loader
+  and `getParent` returns the delegate's facade (nil at root).
+- Statics: `getSystemClassLoader` → root's facade; `RT/baseLoader` → ambient
+  loader's facade; `Thread.getContextClassLoader` (io.ss:1624) → ambient;
+  `Class.getClassLoader` → the loader that registered the class (carried on
+  the class registration).
+- `io/resource`'s 2-arity (io.ss:1466: "jolt has a single \"classloader\" …
+  so the argument is accepted and ignored") becomes meaningful: an argument
+  that is one of our loader jhosts resolves in its loader; any other value (a
+  library passing some real loader object) keeps today's ambient behavior.
+
+#### 6.1.8 deps and entry points
+
+`jolt.deps/resolve-deps` (deps.clj:1016) is already the per-loader root
+resolver. `apply-project!` (main.clj:120) becomes "build the project loader
+from the resolved map":
+
+```clojure
+{:roots … :provides … :replaces … :features … :natives …}
+  → (make-loader …)   ; roots → source search; provides → claims; …
+```
+
+The root loader is the install roots (loader.ss:38 `ldr-install-roots`).
+jolt.host seams to extend or re-target: `set-source-roots!`/`source-roots`,
+`ns-source`, `load-namespace`, `replace-builtin-ns!`,
+`add-reader-features!`, `register-class-provider!` (loader argument),
+`ctx-for-ns` (host-contract.ss:947). New host vars need
+`jolt-host-manifest.txt` lines and `make manifestcheck`:
+`current-loader`, `with-loader` (if hosted), `loader-roots`,
+`loader-classloader`, `unload-loader!`.
+
+#### 6.1.9 Gotchas (all verified in-tree)
+
+- **Gates that will fail if forgotten**: `make manifestcheck` (any new
+  `jolt.host` var); `make gambitgen`/`gambitgencheck` (`host/gambit/rt-core.ss`
+  mirrors rt.ss, `records-gambit.ss` mirrors records.ss via
+  `gen-records.ss` — M0/M2 touch both mirrors); `make mirror-drift-check`;
+  `make portability-check`, `dead-host-check`, `lock-check`,
+  `park-lock-check` on the M0–M2 host edits; `make remint` only if a
+  seed-listed file changes (only `reader.ss` among these is on the seed list —
+  but an accidental `jolt-core/**` or `clojure.core` edit is not).
+- **AOT cache (M3)**: `aot-cacheable-file` (loader.ss:947) resolves through
+  the *global* `find-ns-file` — must resolve within the loader;
+  `aot-own-key-memo` is keyed by namespace name — key it by
+  (loader, namespace) or by resolved file; `:jolt/features` /
+  `:jolt/replaces` fold into the key (they change what was *compiled*).
+- **Embedded sources**: `embedded-resource-has?`/`resolve-on-roots`
+  (loader.ss:340–360) key by root-relative path — two roots holding
+  `foo/bar.clj` collide. Root-qualify the keys, or declare multi-root
+  loaders source-mode-only in v1.
+- **Tree shaking**: `dce.ss` walks `get-source-roots` — build-time, today
+  single-loader; a multi-loader build needs the closure walked per loader.
+  Note it, don't build it in v1.
+- **State images**: closures are name references
+  (`register-code-value!`/state-image.ss:70–74). An image restored in a
+  different loader would resolve names in the wrong one — record the home
+  loader, or refuse a cross-loader restore.
+- **Direct linking**: a `direct-link?` build emits bare Scheme bindings for
+  app fns (`dl-name`, backend_scheme.clj:3284+), which are loader-independent
+  by construction. Multi-loader evaluation must therefore run with
+  direct-linking off (runtime eval already is; a *built* multi-loader app is
+  not expressible in v1 — record it).
+- **Natives stay global**: `dlopen` is process-wide and jolt dedupes
+  `:jolt/native` by name (deps.clj:1683) — two loaders' lib versions share one
+  `.so`. Declare it; anything with per-version C state is out of scope.
+
+#### 6.1.10 Stages, files, gates
+
+| stage | content | files | gates |
+|---|---|---|---|
+| **M0** indirection | `chez-loader` record owning the M0 rows of §6.1.2; accessors read `(current-loader)`; root loader wraps today's globals; analyze ctx gains the field (defaulted) | rt.ss, ns.ss, host-contract.ss, compile-eval.ss, emit-image.ss, build.ss, loader.ss | `corpus` `unit` `cts` `sbperf` + `manifestcheck` + `gambitgencheck` + `mirror-drift-check`; `remint` only if a seed-listed file was touched |
+| **M1** loaders + propagation | ambient binding at the eval funnel; per-loader roots/loaded-ns/data-readers; defining capture in `emit-with-cells` + screening; `find`/`resolve`/`load` split mapped onto `resolve-on-roots`/link table/`load-namespace` | loader.ss, compile-eval.ss, backend_scheme.clj, reader.ss | above + suite cases 1,2,3,5,6,9,10 (9 from a `go` block too) |
+| **M2** classes | per-loader class/provider/type tables; value-directed dispatch; ctx-tagged tokens; divergence entry | host-static.ss, protocols.ss, records*.ss, multimethods.ss, class-hierarchy.ss (read-only) | above + cases 4,10 + provider autoload inside a loader |
+| **M3** unload + caches | teardown against the `run-case-isolation.ss` list; AOT/embedded/class-path fixes from §6.1.9 | loader.ss, io.ss, build.ss, dce.ss | case 7, 11, 12 + world byte-compare + `aot-cache-smoke` |
+| **M4** host API | per-loader classloader jhost, `RT/baseLoader`, TCCL, `io/resource` 2-arity, `jolt.host` seams (§6.1.8) + `as-classloader` | io.ss, loader.ss, main.clj, jolt.deps.clj | full suite on jolt + `sci`/`scifunctional` stay green |
+
+Each stage is independently mergeable and each must keep the sci backend's
+suite green: the native backend is an upgrade layered on the same protocol,
+never a second semantics.
 
 ### 6.2 Per-ctx deps resolution
 
@@ -568,34 +784,37 @@ upgrades that must satisfy the same suite.
 
 ### Phase 3 — Jolt native backend (the #912 work)
 
+**Detailed design and per-stage file/gate lists: §6.1** (state inventory
+§6.1.2, the two ctx-propagation mechanisms §6.1.4, gotchas §6.1.9, stage
+table §6.1.10). Summary:
+
 Depends on the port reaching the extension system (`jolt-port.md` §B3);
 phases 0–2 already give Jolt isolation through sci.
 
-- **M0 — indirection, zero behaviour change.** Var/ns/loader/class/type
-  tables move behind a ctx record; accessors read `(current-ctx)`; default
-  ctx wraps today's globals. ~100 sites, ~10 files. `make remint` (host
-  sources changed). Gates: `corpus`, `unit`, `cts`, `sbperf`.
-- **M1 — contexts + delegation.** `new-ctx`/`with-ctx`; ctx-aware
-  `resolve-on-roots`/`loaded-ns`/data readers; ctx-aware analyze/eval/emit;
-  the defining-ctx capture in the emitter (const-pool hoist + IR screening);
-  resolve-fn as the delegate step. Acceptance: suite cases 1, 2, 3, 5, 6, 9,
-  10.
-- **M2 — classes per ctx.** Registry tables, class extensions, provider
-  claims/latches, type/protocol/hierarchy tables; boot `java.*` global;
-  ctx-tagged tokens; divergence entry for cross-ctx identity. Acceptance:
-  cases 4, 10 (+ provider autoload inside a ctx).
+- **M0 — indirection, zero behaviour change.** Tables move behind a
+  `chez-loader` record; accessors read the ambient loader; the root loader
+  wraps today's globals; the analyze ctx gains a defaulted `loader` field.
+  ~100 sites, ~10 files. Also `manifestcheck`, `gambitgencheck`,
+  `mirror-drift-check`; `remint` only if a seed-listed file was touched.
+- **M1 — loaders + ctx propagation.** Ambient binding at the eval funnel;
+  per-loader roots/loaded-ns/data readers; defining capture in
+  `emit-with-cells` + IR screening; `find`/`resolve`/`load` mapped onto
+  `resolve-on-roots` / the link table / `load-namespace`; resolve-fn as the
+  delegate step.
+- **M2 — classes per loader.** Registry tables, class extensions, provider
+  claims/latches, type/protocol tables; boot `java.*` global; ctx-tagged
+  tokens; value-directed dispatch; divergence entry for cross-loader
+  identity (and, until then, the hierarchy leak).
 - **M3 — unload + caches.** The `run-case-isolation.ss` snapshot/prune list
   as the checklist; shared-write ledger (class extensions, hierarchy
-  derives); AOT cache fixes (`aot-cacheable-file`/`aot-own-key-memo` must
-  resolve/key per ctx; `:jolt/features`/`:jolt/replaces` into the key);
-  embedded-source keys root-qualified; `set-class-path-provider!` answers
-  the current ctx. Acceptance: case 7, plus a "world returns to its
-  pre-ctx content" byte-compare.
-- **M4 — host API + loader objects.** Per-ctx `the-classloader`,
+  derives); AOT/embedded/class-path fixes (§6.1.9).
+- **M4 — host API + loader objects.** Per-loader `the-classloader`,
   `RT/baseLoader`, TCCL, `(io/resource n loader)` honoring its argument,
-  `jolt.host/new-loader` etc.; `as-classloader`.
-- Gates per M-stage: the corpus/unit/cts/sbperf set plus `make sci` /
-  `scifunctional` (they pin the sci path the extension backend uses).
+  `jolt.host` seams (§6.1.8), `as-classloader`.
+- Gates per M-stage: the corpus/unit/cts/sbperf set (plus the jolt gates in
+  §6.1.9) and the conformance cases named in §6.1.10; `make sci` /
+  `scifunctional` must stay green throughout — they pin the sci path the
+extension backend uses.
 
 ### Phase 4 — promotion to a standalone library
 
