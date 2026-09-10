@@ -18,6 +18,8 @@
             [kmet.app.ui.assistant-message :as am]
             [kmet.app.ui.tool-execution :as te]
             [kmet.app.ui.custom-message :as cm]
+            [kmet.app.ui.skill-message :as skill-message]
+            [kmet.app.skills :as skills]
             [kmet.app.tools.core :as tools]
             [kmet.tui.macros :refer [track! track-deps defcomponent]]))
 
@@ -173,6 +175,24 @@
                                       :padding-x 1 :padding-y 0))
                     :cache-atom (atom nil)}))
 
+(defn- make-user-msg
+  "The component for a :user message. A message whose content is an expanded
+   skill block (`/skill:name …`) renders as a skill invocation message
+   instead of dumping the XML wrapper and the whole skill body into the
+   transcript — the trailing args (if any) stay a normal user message below
+   it, exactly as pi splits the two (pi: parseSkillBlock +
+   SkillInvocationMessageComponent)."
+  [msg output-pad tools-expanded-atom]
+  (let [text (content->display-text (:content msg ""))]
+    (if-let [block (skills/parse-skill-block text)]
+      (skill-message/make-skill-invocation-message
+       :skill-block block
+       :tools-expanded-atom tools-expanded-atom
+       :output-pad output-pad
+       :user-message (when-let [args (:user-message block)]
+                       (um/make-user-message :text args :output-pad output-pad)))
+      (um/make-user-message :text text :output-pad output-pad))))
+
 (defn- make-component-for-msg
   "Create the appropriate component for a message map.
    For tool messages, looks up render functions from the tool registry.
@@ -192,9 +212,7 @@
 
       :else
       (case (:role msg)
-        :user (um/make-user-message
-               :text (content->display-text (:content msg ""))
-               :output-pad output-pad)
+        :user (make-user-msg msg output-pad tools-expanded-atom)
         :assistant (am/make-assistant-message
                   ;; content atoms come from the message map (with-assistant-data
                   ;; created them) — one home, owned by the data layer (§3.2)
@@ -579,6 +597,7 @@
     :assistant (am/assistant-message-set-output-pad! child n)
     :tool (te/tool-execution-set-output-pad! child n)
     :custom (cm/custom-message-set-output-pad! child n)
+    :skill (skill-message/skill-message-set-output-pad! child n)
     nil))
 
 (defn chat-history-set-output-pad!

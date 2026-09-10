@@ -295,6 +295,26 @@
             text))
         text))))
 
+(defn parse-skill-block
+  "Parse a skill block out of message text — the inverse of
+   expand-skill-command (pi: parseSkillBlock). Returns
+   {:name :location :content :user-message}, with :user-message nil when the
+   text carries no trailing message, or nil when TEXT is not a skill block.
+
+   The UI uses this to render an invocation as a dedicated message instead
+   of dumping the XML wrapper and the whole skill body into the transcript;
+   the session still stores the expanded text, so replay re-parses it."
+  [text]
+  (when (string? text)
+    (when-let [m (re-matches #"(?s)^<skill name=\"([^\"]+)\" location=\"([^\"]+)\">\n(.*?)\n</skill>(?:\n\n(.*))?$"
+                             text)]
+      (let [[_ name location content user-message] m
+            user-message (some-> user-message str/trim)]
+        {:name name
+         :location location
+         :content content
+         :user-message (when (seq user-message) user-message)}))))
+
 (defn as-command-maps
   "Skills in slash-command shape for the editor autocomplete provider
    (pi: interactive-mode skillCommandList — /skill:name commands, enabled

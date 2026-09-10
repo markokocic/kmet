@@ -769,8 +769,11 @@ Frame glyphs come from `kmet.tui.border` (§2.8), not from the components:
 `dynamic_border` and `editor` draw a rule, `markdown` its table, and the
 app-layer `bash_execution` its box — each with a `:border` style.
 
-Message-like app components (chat history, tool executions) live in
-`kmet.app.ui.*`, not here — this layer stays generic.
+Message-like app components live in `kmet.app.ui.*`, not here — this layer
+stays generic: chat history, tool executions, and the skill invocation
+message (`skill_message`, which renders a `/skill:name` block as a
+collapsible `[skill] name (ctrl+o to expand)` entry — pi:
+SkillInvocationMessageComponent).
 
 ---
 
@@ -914,6 +917,7 @@ Two sources feed it:
 | R5 | border sets as data | `kmet.tui.border` (§2.8) — `:border` on `:dynamic-border`, `:markdown` (table glyphs), `:editor`; `make-bash-execution :border` |
 | R6 | `^{:key}` metadata | keys read from element metadata as well as the `:key` prop (§2.1) |
 | R3a | key labels | `keys/key-label` + `keybindings/key-label-text` (§7.1) — hints and the tree help render `pgup`/`↑`, replacing the private `prettify-keys` regex pass |
+| P1 | skill invocation message | `kmet.app.skills/parse-skill-block` (the inverse of the expander) + `kmet.app.ui.skill-message` — a `/skill:name` block renders as a collapsible `[skill] name (ctrl+o to expand)` message instead of dumping its body into the transcript |
 
 ### Plan — borrowed from glimmer
 
@@ -928,7 +932,6 @@ Two sources feed it:
 
 | # | parity | kmet pain point | lands in | size |
 |---|---|---|---|---|
-| P1 | skill invocation message | the `<skill …>` block kmet already builds renders as raw text: the XML wrapper and the whole skill body dump into the transcript | `app/skills.clj` (parse) + a new `app/ui` message component + the user-message render path | small |
 | P2 | images in chat | images render only in tool executions, and `:show-images` is hardcoded `true` in the renderer context; no settings, no inline/custom-message images | settings + renderer context + message components (`kmet.libs.terminal-image` already has the hard parts) | medium |
 
 ### Postponed indefinitely
@@ -1017,33 +1020,6 @@ portable verbatim: kmet's in-tree layout is line concatenation, with no
 screen coordinates to anchor to. Needs a tree → session hook (a dynamic var
 around a mount, or a per-session registry) — that hook is the spike.
 
-### P1 — skill invocation message
-
-**Pain.** kmet already *produces* pi-identical skill blocks —
-`skills/expand-skill-command` wraps the skill body as
-`<skill name="…" location="…">\n…\n</skill>` with the user's arguments after
-a blank line — but the user message renders as plain text, so the XML
-wrapper and the entire skill body (often hundreds of lines) dump into the
-transcript. pi parses the block and renders a dedicated message instead.
-
-**Parity.** pi's `parseSkillBlock` (a regex over the message text:
-`name`, `location`, `content`, optional trailing `userMessage`) feeding
-`SkillInvocationMessageComponent`: collapsed it is one line —
-`[skill] <name> (ctrl+o to expand)` — and expanded it is a `[skill]` label
-plus a Markdown of `**name**\n\n<content>`, on the custom-message
-background. The trailing user message renders separately (spacer, then a
-normal user message). Interaction is the standard expansion key
-(`app.tools.expand`).
-
-**Proposal.** A `parse-skill-block` in `kmet.app.skills` (regex + trim, next
-to the existing builder so the two stay in step) and a
-`SkillInvocationMessage` component in `kmet.app.ui`, wired where user
-messages render — both the live append path and replay (chat history
-renders the stored text, so the same parse covers both; no session-format
-change, `session.md`'s EDN lock holds). Collapsed/expanded mirrors the
-existing expandable-message pattern; the skill name is displayed, the body
-only on expand.
-
 ### P2 — images in chat
 
 **Pain.** Tool-execution images render, but `:show-images` is hardcoded
@@ -1117,10 +1093,9 @@ Recorded so the analysis is not redone:
 
 ### Suggested order
 
-P1 first (small, self-contained, visible payoff: skill invocations stop
-dumping their bodies into the transcript) → R1 + R2 together: R2 gives R1
-its natural call site, and R1 is the props/state migration → P2 (the TUI
-half; the wire half rides the provider work) → R7 as a spike, once the
-tag-table extension path has been used once (R5, R6, R3a, R4 and P1 have
-exercised it). R3b waits on the declarations decision.
+R1 + R2 together: R2 gives R1 its natural call site, and R1 is the
+props/state migration → P2 (the TUI half; the wire half rides the provider
+work) → R7 as a spike, once the tag-table extension path has been used once
+(R5, R6, R3a, R4 and P1 have exercised it). R3b waits on the declarations
+decision.
 

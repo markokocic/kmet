@@ -15,6 +15,7 @@
             [kmet.libs.edit-diff :as edit-diff]
             [kmet.libs.highlight :as hl]
             [kmet.app.keybindings :as app-kb]
+            [kmet.app.ui.skill-message :as skill-message]
             [kmet.tui.hiccup :as h]
             [kmet.app.bash-executor :as bash-exec]))
 
@@ -198,19 +199,15 @@
         (theme/fg theme :warning
                   (str ":" start-line (when end-line (str "-" end-line))))))))
 
-(defn- expand-key-text
-  "Pi: keyText('app.tools.expand') — all resolved key chords joined with '/'."
-  []
-  (app-kb/key-text "app.tools.expand"))
-
 (defn- format-compact-read-call
   "Pi: formatCompactReadCall — skill/resources render as labeled read calls
-   with an expand hint instead of a full path."
+   with an expand hint instead of a full path. The skill label and the hint
+   come from the skill message component, so the read call and a
+   `/skill:` invocation's collapsed line cannot diverge."
   [classification tool-name theme range-str]
-  (let [expand-hint (theme/fg theme :dim
-                              (str " (" (expand-key-text) " to expand)"))]
+  (let [expand-hint (skill-message/expand-hint theme)]
     (if (= :skill (:kind classification))
-      (str (theme/fg theme :custom-message-label (theme/bold "[skill] "))
+      (str (skill-message/label theme)
            (theme/fg theme :custom-message-text (:label classification))
            range-str expand-hint)
       (str (theme/fg theme :tool-title

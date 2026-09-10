@@ -141,6 +141,7 @@
     kmet.app.ui.test-tool-renderers
     kmet.app.ui.test-tool-execution
     kmet.app.ui.test-custom-message
+    kmet.app.ui.test-skill-message
     kmet.app.ui.test-bash-execution
     kmet.app.ui.test-dialogs
     kmet.app.ui.test-login-dialog
