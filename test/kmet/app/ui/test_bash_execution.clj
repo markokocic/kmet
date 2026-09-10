@@ -4,6 +4,7 @@
             [kmet.app.ui.bash-execution :as be]
             [kmet.tui.core :as core]
             [kmet.tui.macros :as macros]
+            [kmet.tui.timers :as timers]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.tui.utils :as u]))
@@ -79,29 +80,33 @@
 (t/deftest test-bash-execution-frame-driver
   (t/testing "80ms frame driver (pi Loader setInterval parity) runs while :running; completion cancels it"
     (let [c (be/make-bash-execution :command "sleep 1")
-          driver @(:ticker-atom c)]
-      (t/is (some? driver) "driver starts with the component")
-      (t/is (future? driver))
+          driver @(:ticker-id-atom c)]
+      (t/is (some? driver) "driver armed with the component")
+      (t/is (contains? (timers/scheduled) driver) "it is a live registry timer")
       (be/bash-execution-set-complete! c 0 false)
-      (t/is (nil? @(:ticker-atom c)) "completion clears the driver")
-      (t/is (future-cancelled? driver) "driver future is cancelled"))))
+      (t/is (nil? @(:ticker-id-atom c)) "completion clears the driver")
+      (t/is (not (contains? (timers/scheduled) driver))
+            "completion cancels the registry timer"))))
 
 (t/deftest test-bash-execution-elapsed-ticks-while-running
   (t/testing "1s elapsed ticker (pi renderResult setInterval parity) re-stamps while :running; completion clears it"
     (let [c (be/make-bash-execution :command "sleep 5")
-          ticker @(:elapsed-ticker-atom c)]
-      (t/is (some? ticker) "elapsed ticker starts with the component")
-      (t/is (future? ticker))
+          ticker @(:elapsed-ticker-id-atom c)]
+      (t/is (some? ticker) "elapsed ticker armed with the component")
+      (t/is (contains? (timers/scheduled) ticker))
       (protocols/render c 40)
       (let [before @(:now-atom c)]
+        ;; the loop pumps; headless we pump by hand once the tick is due
         (Thread/sleep 1200)
+        (timers/pump!)
         (t/is (> @(:now-atom c) before) "now re-stamped after ~1s")
         (t/is (some #(clojure.string/includes? % "Elapsed") (protocols/render c 40))
               "elapsed line renders while running"))
-      (let [ticker @(:elapsed-ticker-atom c)]
+      (let [ticker @(:elapsed-ticker-id-atom c)]
         (be/bash-execution-set-complete! c 0 false)
-        (t/is (nil? @(:elapsed-ticker-atom c)) "completion clears the elapsed ticker")
-        (t/is (future-cancelled? ticker) "elapsed ticker future is cancelled")
+        (t/is (nil? @(:elapsed-ticker-id-atom c)) "completion clears the elapsed ticker")
+        (t/is (not (contains? (timers/scheduled) ticker))
+              "completion cancels the registry timer")
         (t/is (some #(clojure.string/includes? % "Took") (protocols/render c 40))
               "took line renders after completion"))
       (protocols/dispose c))))
@@ -143,24 +148,24 @@
         (finally
           (reset! theme/theme-atom (theme/get-theme "dark")))))))
 
-(t/deftest ^:slow test-dispose-stops-frame-driver
+(t/deftest test-dispose-stops-frame-driver
   ;; A component dropped from the chat (e.g. /new while a run is in
   ;; flight) must not keep firing schedule-frame! into the frame hook.
-  ;; Settles 150ms (>80ms period) after dispose, so an in-flight tick past
-  ;; the done check lands inside the settle window, not the assertion window.
+  ;; The loop pumps the registry; here we pump by hand, so the assertion
+  ;; is deterministic — no settle window, no wall-clock race.
   (let [c (be/make-bash-execution :command "sleep 10")
         fired (atom 0)]
     (core/render c 40)
     (macros/set-frame-hook! #(swap! fired inc))
     (try
-      (t/is (pos? (do (Thread/sleep 250) @fired)) "driver fires while running")
+      (t/is (zero? @fired) "nothing fired before a pump")
+      (Thread/sleep 90)
+      (timers/pump!)
+      (t/is (pos? @fired) "driver fires while running")
       (protocols/dispose c)
-      (t/is (nil? @(:ticker-atom c)) "dispose cleared the driver future")
-      ;; Settle: a tick past the done check before dispose can still fire
-      ;; once — wait it out (>80ms period) before capturing the baseline.
-      (Thread/sleep 150)
+      (t/is (nil? @(:ticker-id-atom c)) "dispose cleared the driver")
       (let [n @fired]
-        (Thread/sleep 250)
+        (timers/pump!)
         (t/is (= n @fired) "no frames scheduled after dispose"))
       (finally
         (macros/set-frame-hook! nil)))))
@@ -175,9 +180,9 @@
   (let [c (be/make-bash-execution :command "sleep 10")
         fired (atom 0)]
     (core/render c 40)
-    (when-let [driver @(:ticker-atom c)]
-      (future-cancel driver)
-      (reset! (:ticker-atom c) nil))
+    (when-let [driver @(:ticker-id-atom c)]
+      (timers/cancel! driver)
+      (reset! (:ticker-id-atom c) nil))
     (macros/set-frame-hook! #(swap! fired inc))
     (try
       (be/bash-execution-append-output! c "hello\n")

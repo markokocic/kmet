@@ -356,6 +356,30 @@
            ["\u001b[23~"  "f11"]
            ["\u001b[24~"  "f12"]])))
 
+;; ─── Key labels (display) ─────────────────────────────────────────────
+
+(def ^:private key-labels
+  "Display labels for key names whose canonical spelling is not what a
+   user should read: pi's prettifyKeys table (page names shorten, arrows
+   become glyphs). Anything absent renders as itself."
+  {"pageUp" "pgup" "pageDown" "pgdn"
+   "escape" "esc"
+   "up" "↑" "down" "↓" "left" "←" "right" "→"})
+
+(defn- label-of [k] (get key-labels k k))
+
+(defn key-label
+  "The display label for one key chord — \"ctrl+e\" (unchanged), \"pageUp\" →
+   \"pgup\", \"up\" → \"↑\", \"escape\" → \"esc\". The single source for how a
+   chord is shown to a user, so a hint line and a help bar cannot drift
+   apart. Modifiers pass through with the key part relabelled:
+   \"alt+backspace\" → \"alt+backspace\", \"shift+left\" → \"shift+←\"."
+  [chord]
+  (let [s (str chord)]
+    (if-let [[_ mods k] (re-matches #"(.*\+)(.+)" s)]
+      (str mods (label-of k))
+      (label-of s))))
+
 ;; ─── Key matching ───────────────────────────────────────────────────────────
 
 (declare parse-key)

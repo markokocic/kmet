@@ -8,6 +8,7 @@
    (the main screen scrolls natively); exercised by its own unit tests."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.macros :refer [defcomponent]]
+            [kmet.tui.timers :as timers]
             [kmet.tui.utils :as u]))
 
 (defprotocol IScrollView
@@ -36,7 +37,7 @@
                               last-width-atom scroll-top-atom content-height-atom viewport-height-atom
                               following-end-atom request-render-fn-atom
                               transient-scrollbar-visible-atom scrollbar-active-atom
-                              scrollbar-hide-timer-atom]
+                              scrollbar-hide-timer-id-atom]
   (render [this width]
     ;; Render the child's FULL content — the caller windows it via
     ;; update-layout! + render-window (render itself never clips).
@@ -49,10 +50,10 @@
   (dispose [this]
     ;; cancel our own transient-scrollbar timer BEFORE delegating — a
     ;; disposed scroll-view must not fire a zombie render-request when the
-    ;; pending hide-timer wakes (the §5 zombie-interval pattern)
-    (when-let [t @(:scrollbar-hide-timer-atom this)]
-      (future-cancel t)
-      (reset! (:scrollbar-hide-timer-atom this) nil))
+    ;; pending hide-timer wakes (timers/cancel! is idempotent)
+    (when-let [id @(:scrollbar-hide-timer-id-atom this)]
+      (timers/cancel! id)
+      (reset! (:scrollbar-hide-timer-id-atom this) nil))
     (when-let [child @child-atom]
       (protocols/dispose child))))
 
@@ -63,23 +64,25 @@
   (when (and (= :auto @(:scrollbar-atom this))
              (> @(:content-height-atom this) @(:viewport-height-atom this)))
     (reset! (:transient-scrollbar-visible-atom this) true)
-    (when-let [t @(:scrollbar-hide-timer-atom this)]
-      (future-cancel t)
-      (reset! (:scrollbar-hide-timer-atom this) nil))
-    (when-not @(:scrollbar-active-atom this)
+    ;; a fresh activity tick re-arms the debounce: cancel the pending
+    ;; hide, then arm one (§6.1 — the loop fires it on its next pump)
+    (when-let [id @(:scrollbar-hide-timer-id-atom this)]
+      (timers/cancel! id))
+    (if @(:scrollbar-active-atom this)
+      (reset! (:scrollbar-hide-timer-id-atom this) nil)
       (let [delay @(:scrollbar-hide-delay-ms-atom this)]
-        (reset! (:scrollbar-hide-timer-atom this)
-                (future
-                  (Thread/sleep delay)
-                  (reset! (:transient-scrollbar-visible-atom this) false)
-                  (when-let [f @(:request-render-fn-atom this)] (f))))))))
+        (reset! (:scrollbar-hide-timer-id-atom this)
+                (timers/after! delay
+                               (fn []
+                                 (reset! (:transient-scrollbar-visible-atom this) false)
+                                 (when-let [f @(:request-render-fn-atom this)] (f)))))))))
 
 (defn- hide-transient-scrollbar!
   [this]
   (reset! (:transient-scrollbar-visible-atom this) false)
-  (when-let [t @(:scrollbar-hide-timer-atom this)]
-    (future-cancel t)
-    (reset! (:scrollbar-hide-timer-atom this) nil)))
+  (when-let [id @(:scrollbar-hide-timer-id-atom this)]
+    (timers/cancel! id)
+    (reset! (:scrollbar-hide-timer-id-atom this) nil)))
 
 ;; ─── Scrollbar geometry (pi: getScrollbarGeometry, window-local rows) ─────
 
@@ -300,4 +303,4 @@
                     :request-render-fn-atom (atom nil)
                     :transient-scrollbar-visible-atom (atom false)
                     :scrollbar-active-atom (atom false)
-                    :scrollbar-hide-timer-atom (atom nil)}))
+                    :scrollbar-hide-timer-id-atom (atom nil)}))

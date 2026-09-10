@@ -4,6 +4,7 @@
    request a render) — matching pi's scroll-view.ts semantics."
   (:require [clojure.test :as t]
             [kmet.tui.protocols :as protocols]
+            [kmet.tui.timers :as timers]
             [kmet.tui.components.scroll-view :as sv]))
 
 (defn- fake-child
@@ -107,7 +108,11 @@
     (sv/set-scrollbar! sv :hidden)
     (t/is (= 80 (sv/get-content-width sv 80)))))
 
-(t/deftest ^:slow test-auto-scrollbar-transient-visible
+(t/deftest test-auto-scrollbar-transient-visible
+  ;; transient scrollbar: shown on activity, hidden when its debounce
+  ;; fires. The debounce rides the loop-owned timer registry (§6.1), so
+  ;; a pump stands in for the frame loop — deterministic, no wall-clock
+  ;; race.
   (let [lines (mapv #(str "line" %) (range 10))
         sv (sv/make-scroll-view (fake-child lines) :scrollbar :auto
                                 :scrollbar-hide-delay-ms 50)]
@@ -115,9 +120,42 @@
     (t/is (not (sv/is-scrollbar-visible? sv)))
     (sv/scroll-by! sv -2)
     (t/is (sv/is-scrollbar-visible? sv))
-    ;; the transient scrollbar hides again after the delay
-    (Thread/sleep 120)
-    (t/is (not (sv/is-scrollbar-visible? sv)))))
+    (t/is (false? (timers/pump!)) "not due yet")
+    (t/is (sv/is-scrollbar-visible? sv) "still visible before the delay elapses")
+    (t/is (contains? (timers/scheduled) @(:scrollbar-hide-timer-id-atom sv))
+          "the hide timer is armed")
+    (Thread/sleep 60)
+    (timers/pump!)
+    (t/is (not (sv/is-scrollbar-visible? sv)) "hidden once the debounce fires")))
+
+(t/deftest test-transient-scrollbar-debounce-rearms-and-dispose-cancels
+  ;; repeated activity re-arms the debounce (the component holds at most one
+  ;; id), and dispose cancels it — no zombie render-request
+  (let [lines (mapv #(str "line" %) (range 10))
+        renders (atom 0)
+        sv (sv/make-scroll-view (fake-child lines) :scrollbar :auto
+                                :scrollbar-hide-delay-ms 50)]
+    (sv/update-layout! sv 10 4 #(swap! renders inc))
+    (let [first-id @(:scrollbar-hide-timer-id-atom sv)]
+      (sv/scroll-by! sv -1)
+      (sv/scroll-by! sv -1)
+      (t/is (not= first-id @(:scrollbar-hide-timer-id-atom sv))
+            "each activity tick re-arms under a fresh id")
+      (t/is (not (contains? (timers/scheduled) first-id))
+            "the superseded timer is gone — no debounce pile-up")
+      (t/is (contains? (timers/scheduled) @(:scrollbar-hide-timer-id-atom sv))))
+    (let [pending @(:scrollbar-hide-timer-id-atom sv)
+          before @renders]
+      (protocols/dispose sv)
+      (t/is (not (contains? (timers/scheduled) pending))
+            "dispose cancelled the pending timer")
+      (t/is (nil? @(:scrollbar-hide-timer-id-atom sv)))
+      (Thread/sleep 60)
+      ;; other scroll-views in earlier cases may still hold timers, so the
+      ;; pump's return value says nothing here — what matters is that THIS
+      ;; component's callback is never called again
+      (timers/pump!)
+      (t/is (= before @renders) "a disposed tree is never asked to re-render"))))
 
 (t/deftest test-scrollbar-geometry
   ;; The thumb tracks the scroll position (pi: getScrollbarGeometry).

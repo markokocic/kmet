@@ -3,7 +3,7 @@
    Port of @earendil-works/pi-tui Markdown.
    The tokenizer is kmet.libs.markdown/parse (pure data, no ANSI); this
    component walks the token AST and applies theme, padding, and word-wrap.
-   Table borders come from a kmet.tui.border set (tui.md §14 R5)."
+   Table borders come from a kmet.tui.border set (tui.md §2.8)."
   (:require [clojure.string :as str]
             [kmet.libs.terminal-image :as timg]
             [kmet.tui.border :as border]

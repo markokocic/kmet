@@ -5,6 +5,7 @@
             [kmet.tui.utils :as utils]
             [kmet.libs.terminal-image :as timg]
             [kmet.tui.theme :as theme]
+            [kmet.tui.timers :as timers]
             [kmet.app.ui.tool-execution :as te]
             [kmet.app.ui.tool-renderers :as renderers]))
 
@@ -296,18 +297,20 @@
     (let [c (te/make-tool-execution :name "bash" :args {:command "sleep 5"})]
       (te/tool-execution-mark-execution-started! c)
       (core/render c 60)
-      (let [interval (:interval @(:renderer-state-atom c))]
-        (is (some? interval) "partial execution starts the elapsed ticker")
-        (is (future? interval)))
+      (let [id (:timer-id @(:renderer-state-atom c))]
+        (is (some? id) "partial execution starts the elapsed ticker")
+        (is (contains? (timers/scheduled) id) "it is a live registry timer (§6.1)"))
       ;; tool-execution-end always calls set-error! → ended-at set → clear
-      (te/tool-execution-set-error! c false)
-      (core/render c 60)
-      (is (nil? (:interval @(:renderer-state-atom c)))
-          "completion clears the ticker")
+      (let [id (:timer-id @(:renderer-state-atom c))]
+        (te/tool-execution-set-error! c false)
+        (core/render c 60)
+        (is (nil? (:timer-id @(:renderer-state-atom c)))
+            "completion clears the ticker")
+        (is (not (contains? (timers/scheduled) id)) "…and cancels the timer"))
       ;; a later render (cache miss) must not restart it
       (reset! (:expanded-atom c) true)
       (core/render c 60)
-      (is (nil? (:interval @(:renderer-state-atom c)))
+      (is (nil? (:timer-id @(:renderer-state-atom c)))
           "no ticker after completion"))))
 
 ;; ─── Pi parity: cached edit preview, compact read, tabs, expanded ─────────

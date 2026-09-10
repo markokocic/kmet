@@ -32,6 +32,7 @@
             [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
+            [kmet.tui.timers :as timers]
             [kmet.tui.utils :as u]))
 
 ;; ─── Layout constants (pi: SessionList.maxVisible) ─────────────────────────
@@ -338,25 +339,25 @@
 (defn- clear-status!
   "Drop the header status message and its auto-hide timer."
   [this]
-  (when-let [t @(:timer-atom this)]
-    (future-cancel t)
+  (when-let [id @(:timer-atom this)]
+    (timers/cancel! id)
     (reset! (:timer-atom this) nil))
   (swap! (:state-atom this) dissoc :status))
 
 (defn- set-status!
   "Show a header status message (:info/:error), auto-hidden after MS (pi:
-   SessionSelectorHeader.setStatusMessage)."
+   SessionSelectorHeader.setStatusMessage). The auto-hide rides the
+   loop-owned timer registry (§6.1): it fires on the loop thread and is
+   cancelled by dispose / tui-stop rather than by a parked thread."
   [this type message ms]
   (clear-status! this)
   (swap! (:state-atom this) assoc :status {:type type :message message})
   (when ms
     (reset! (:timer-atom this)
-            (future
-              (try
-                (Thread/sleep ms)
-                (swap! (:state-atom this) dissoc :status)
-                ((:request-render this))
-                (catch InterruptedException _))))))
+            (timers/after! ms
+                           (fn []
+                             (swap! (:state-atom this) dissoc :status)
+                             ((:request-render this)))))))
 
 (defn- hide!
   "Close the selector through the caller-installed close fn (pi: done() —
@@ -810,6 +811,10 @@
           :else
           (do (forward-to-search! this data) nil)))))
   (dispose [this]
+    ;; cancel the pending status auto-hide before the tree goes (§6.1)
+    (when-let [id @(:timer-atom this)]
+      (timers/cancel! id)
+      (reset! (:timer-atom this) nil))
     ;; unwind the content tree's reaction (watch on the state atom) with the
     ;; selector — show-session-selector's done disposes it on editor restore
     (protocols/dispose (:root this))))

@@ -15,6 +15,7 @@
             [kmet.tui.macros :as macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
+            [kmet.tui.timers :as timers]
             [kmet.tui.utils :as u]
             [kmet.tui.components.spinner :as spinner]
             [kmet.app.bash-executor :as bash-exec]
@@ -105,11 +106,12 @@
 
 (defn- stop-tickers!
   "Cancel the 80ms frame driver and the 1s elapsed ticker, if present.
-   Shared by set-complete! and dispose."
+   Shared by set-complete! and dispose. timers/cancel! is idempotent, so a
+   double stop is harmless."
   [comp]
-  (doseq [k [:ticker-atom :elapsed-ticker-atom]]
-    (when-let [tk @(get comp k)]
-      (future-cancel tk)
+  (doseq [k [:ticker-id-atom :elapsed-ticker-id-atom]]
+    (when-let [id @(get comp k)]
+      (timers/cancel! id)
       (reset! (get comp k) nil))))
 
 ;; ─── Fn-component body ─────────────────────────────────────────────────────
@@ -178,8 +180,8 @@
                ;; construction, but uniformly dereferenced.
                spinner-comp
                root
-               ticker-atom
-               elapsed-ticker-atom
+               ticker-id-atom
+               elapsed-ticker-id-atom
                done-atom
                ;; resolved kmet.tui.border set for the chrome (R5), or nil
                ;; for :none (no frame at all — content lines only)
@@ -262,52 +264,35 @@
                :tools-expanded-atom tools-expanded-atom
                :spinner-comp (atom sp)
                :root (atom root)
-               :ticker-atom (atom nil)
-               :elapsed-ticker-atom (atom nil)
+               :ticker-id-atom (atom nil)
+               :elapsed-ticker-id-atom (atom nil)
                :done-atom done-atom
                :border-atom (atom (border/resolve border))})]
-    ;; Pi Loader parity: drive frames at 80ms while :running. The root's
+    ;; Pi Loader parity: drive frames at 80ms while :running, on the loop's
+    ;; own timer registry (§6.1) instead of a parked thread. The root's
     ;; reaction stays idle (no body re-runs) — each driven frame just
     ;; re-renders the uncached spinner leaf, so output chunks and the
-    ;; animation paint promptly even with no output. Self-exits on
-    ;; completion; set-complete!/dispose cancels it promptly. The done
-    ;; check stops the 80ms wakeups once the component leaves the chat
-    ;; (e.g. /new while a run is in flight) instead of firing into a
-    ;; cleared frame hook until the bash process exits.
-    (reset! (:ticker-atom comp)
-            (future
-              (try
-                (loop []
-                  (Thread/sleep FRAME-INTERVAL-MS)
-                  (if (or @done-atom (not= :running (:status @state-atom)))
-                    nil
-                    (do
-                      ;; one bad schedule must not kill the driver (pi's
-                      ;; setInterval survives callback throws)
-                      (try
-                        (macros/schedule-frame!)
-                        (catch Exception _))
-                      (recur))))
-                (catch InterruptedException _)
-                (catch Exception _))))
+    ;; animation paint promptly even with no output. The thunk self-cancels
+    ;; on completion; set-complete!/dispose cancel it promptly, and the
+    ;; done check stops the 80ms wakeups once the component leaves the chat
+    ;; (e.g. /new while a run is in flight) instead of poking a cleared
+    ;; frame hook until the bash process exits.
+    (reset! (:ticker-id-atom comp)
+            (timers/every! FRAME-INTERVAL-MS
+                           (fn []
+                             (if (or @done-atom (not= :running (:status @state-atom)))
+                               (timers/cancel! @(:ticker-id-atom comp))
+                               (macros/schedule-frame!)))))
     ;; Pi renderResult parity: re-stamp :now-ms once a second while
     ;; running so the Elapsed line ticks during silent runs (the body
     ;; reads it tracked, so only these stamps re-derive the tree).
-    ;; Self-exits on completion; set-complete!/dispose cancels it.
-    (reset! (:elapsed-ticker-atom comp)
-            (future
-              (try
-                (loop []
-                  (Thread/sleep 1000)
-                  (if (or @done-atom (not= :running (:status @state-atom)))
-                    nil
-                    (do
-                      (try
-                        (reset! now-atom (System/currentTimeMillis))
-                        (catch Exception _))
-                      (recur))))
-                (catch InterruptedException _)
-                (catch Exception _))))
+    ;; Self-cancels on completion; set-complete!/dispose cancel it.
+    (reset! (:elapsed-ticker-id-atom comp)
+            (timers/every! 1000
+                           (fn []
+                             (if (or @done-atom (not= :running (:status @state-atom)))
+                               (timers/cancel! @(:elapsed-ticker-id-atom comp))
+                               (reset! now-atom (System/currentTimeMillis))))))
     comp))
 
 ;; ─── Public API ────────────────────────────────────────────────────────────

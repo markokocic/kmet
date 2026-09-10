@@ -2,6 +2,7 @@
   (:require [clojure.test :as t]
             [babashka.fs :as fs]
             [kmet.app.keybindings :as kb]
+            [kmet.tui.keys :as keys]
             [kmet.tui.keybindings :as tui-kb]))
 
 (defn- temp-agent-dir
@@ -115,3 +116,47 @@
       (finally
         (cleanup dir)
         (tui-kb/set-global-keybindings! prev-global)))))
+
+(t/deftest test-key-labels-are-shared-and-manager-backed
+  ;; §7.1: one label table for how a chord reads (pageUp → pgup, arrows
+  ;; → glyphs). keys/key-label is the pure single-chord form; the manager
+  ;; level joins labels across an id's chords like key-text does.
+  (t/testing "pure label mapping"
+    (t/is (= "pgup" (keys/key-label "pageUp")))
+    (t/is (= "pgdn" (keys/key-label "pageDown")))
+    (t/is (= "esc" (keys/key-label "escape")))
+    (t/is (= "↑" (keys/key-label "up")))
+    (t/is (= "↓" (keys/key-label "down")))
+    (t/is (= "←" (keys/key-label "left")))
+    (t/is (= "→" (keys/key-label "right")))
+    (t/testing "chords without a label render as themselves"
+      (t/is (= "ctrl+e" (keys/key-label "ctrl+e")))
+      (t/is (= "enter" (keys/key-label "enter")))
+      (t/is (= "a" (keys/key-label "a"))))
+    (t/testing "a modified key relabels its key part only"
+      (t/is (= "alt+backspace" (keys/key-label "alt+backspace")))
+      (t/is (= "shift+←" (keys/key-label "shift+left")))
+      (t/is (= "ctrl+↑" (keys/key-label "ctrl+up")))))
+  (t/testing "manager level: every chord of an id, joined with /"
+    (let [dir (temp-agent-dir)
+          kmgr (kb/create-agent-keybindings-manager dir)]
+      (try
+        (t/is (= ["up"] (tui-kb/get-keys kmgr "tui.editor.cursorUp")))
+        (t/is (= "↑" (tui-kb/key-label-text kmgr "tui.editor.cursorUp")))
+        (t/is (= "pageUp" (tui-kb/key-text kmgr "tui.editor.pageUp"))
+              "key-text stays the raw machine form")
+        (t/is (= "pgup" (tui-kb/key-label-text kmgr "tui.editor.pageUp"))
+              "…while key-label-text is the display form")
+        (t/testing "multi-chord ids join their labels"
+          (t/is (= "alt+left/alt+b" (tui-kb/key-text kmgr "tui.editor.cursorWordLeft")))
+          (t/is (= "alt+←/alt+b" (tui-kb/key-label-text kmgr "tui.editor.cursorWordLeft"))
+                "only the arrow part is relabelled"))
+        (t/is (nil? (tui-kb/key-label-text kmgr "app.not.a.binding")))
+        (finally (cleanup dir)))))
+  (t/testing "user overrides flow through the label form"
+    (let [dir (temp-agent-dir "{\"app.exit\" [\"pageUp\" \"q\"]}")
+          kmgr (kb/create-agent-keybindings-manager dir)]
+      (try
+        (t/is (= "pgup/q" (tui-kb/key-label-text kmgr "app.exit")))
+        (finally (cleanup dir))))))
+

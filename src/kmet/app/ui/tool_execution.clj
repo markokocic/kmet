@@ -7,6 +7,7 @@
   (:require [kmet.app.ui.subs :as s]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
+            [kmet.tui.timers :as timers]
             [kmet.tui.components.box :as box]
             [kmet.tui.components.container :as container]
             [kmet.app.ui.tool-renderers :as renderers]
@@ -163,14 +164,14 @@
   (invalidate [_this]
     (protocols/invalidate @box))
   (dispose [_this]
-    ;; Idempotent: cancel the bash elapsed ticker (a component dropped from
-    ;; the chat — e.g. /new while a tool runs — must not keep a zombie
-    ;; interval invalidating forever), then cascade to the box children.
-    ;; swap-vals! makes the read+remove atomic: a render racing dispose
-    ;; cannot re-park an interval between the deref and the dissoc.
-    (let [[state] (swap-vals! (:renderer-state-atom _this) dissoc :interval)]
-      (when-let [interval (:interval state)]
-        (future-cancel interval)))
+    ;; Idempotent: cancel the running-tool repaint timer (§6.1) — a
+    ;; component dropped from the chat (e.g. /new while a tool runs) must
+    ;; not keep a zombie tick invalidating forever. swap-vals! makes the
+    ;; read+remove atomic: a render racing dispose cannot re-arm a timer
+    ;; between the deref and the dissoc. timers/cancel! is idempotent.
+    (let [[state] (swap-vals! (:renderer-state-atom _this) dissoc :timer-id)]
+      (when-let [id (:timer-id state)]
+        (timers/cancel! id)))
     (protocols/dispose @box)))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
@@ -225,10 +226,10 @@
   (when (nil? @(:ended-at-atom comp))
     (reset! (:ended-at-atom comp) (System/currentTimeMillis)))
   (let [state @(:renderer-state-atom comp)]
-    (when-let [interval (:interval state)]
-      (future-cancel interval))
-    (when (contains? state :interval)
-      (reset! (:renderer-state-atom comp) (dissoc state :interval)))))
+    (when-let [id (:timer-id state)]
+      (timers/cancel! id))
+    (when (contains? state :timer-id)
+      (reset! (:renderer-state-atom comp) (dissoc state :timer-id)))))
 
 (defn tool-execution-set-output-pad!
   "Rebuild the box with the new horizontal padding (render sets the bg-fn)."

@@ -115,8 +115,8 @@
                  @shutdown-events)
               "extensions are told the runtime is torn down before the swap (pi: teardownCurrent)")
           (is (true? @(:done-atom parked-bash)) "/new stops the parked bash frame driver")
-          (is (nil? @(:ticker-atom parked-bash)) "/new cancels the parked driver future")
-          (is (nil? @(:elapsed-ticker-atom parked-bash)) "/new cancels the parked elapsed ticker")
+          (is (nil? @(:ticker-id-atom parked-bash)) "/new cancels the parked driver timer")
+          (is (nil? @(:elapsed-ticker-id-atom parked-bash)) "/new cancels the parked elapsed ticker")
           (is (empty? @pending-bash) "parked bash refs are dropped"))
         (finally
           (event-bus/clear-event-listeners!)
@@ -213,7 +213,7 @@
             "each parallel tool call owns its own component")
         ;; render comp1 → its bash render-result starts the 100ms ticker
         (protocols/render comp1 60)
-        (is (some? (:interval @(:renderer-state-atom comp1)))
+        (is (some? (:timer-id @(:renderer-state-atom comp1)))
             "t1 elapsed ticker running")
         ;; partial update for t1 reaches only comp1
         (h {:type :tool-execution-update :tool-call-id "t1" :content "chunk"
@@ -227,7 +227,7 @@
         (is (nil? (get @pending "t1")) "ended tool removed from pending")
         (is (some? (get @pending "t2")) "other tool stays pending")
         (is (some? @(:ended-at-atom comp1)) "t1 marked ended")
-        (is (nil? (:interval @(:renderer-state-atom comp1)))
+        (is (nil? (:timer-id @(:renderer-state-atom comp1)))
             "t1 elapsed ticker cleared by its own end")
         (is (nil? @(:ended-at-atom comp2)) "t2 still running")
         ;; t2 ends normally

@@ -1,5 +1,5 @@
 (ns kmet.tui.test-border
-  "Tests for kmet.tui.border — the box-drawing glyph sets (tui.md §14 R5):
+  "Tests for kmet.tui.border — the box-drawing glyph sets (tui.md §2.8):
    set data, resolve semantics (loud on typos, :none → nil, map merges over
    :normal), and the assembled frame lines."
   (:require [clojure.test :as t]

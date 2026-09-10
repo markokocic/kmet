@@ -69,6 +69,7 @@ atom change → reaction dirty → queued → frame flush runs it →
 | `kmet.tui.autocomplete` / `fuzzy` | editor autocomplete dropdown, fuzzy matching |
 | `kmet.tui.utils` | text wrapping, visible width, truncation helpers |
 | `kmet.tui.border` | box-drawing glyph sets (frames, rules, table junctions) |
+| `kmet.tui.timers` | loop-owned timer registry (§6.1) |
 
 ---
 
@@ -569,8 +570,37 @@ reactive loop:
 - Manual `tui-request-render` stays valid forever (idempotent); keep it next
   to ordering-sensitive mutations (focus changes, scroll-to-end, overlay
   show/hide) and before mutations nothing else tracks yet.
-- Time-animated components keep their own tick loops; the hook runs inside
-  a watch on the mutating thread and must not throw.
+- The hook runs inside a watch on the mutating thread and must not throw.
+- **Time-driven work uses the timer registry (§6.1)** — not its own thread.
+
+### 6.1 Timers — `kmet.tui.timers`
+
+The one place UI timing lives. The frame loop calls `pump!` once a tick and
+fires whatever is due, so a thunk runs on the **loop thread** — the thread
+that renders — and may touch widgets and component state directly:
+
+```clojure
+(def id (timers/every! 1000 #(swap! now-atom (System/currentTimeMillis))))
+(timers/after! 1500 #(swap! flash-atom dec))     ; one-shot
+(timers/cancel! id)                              ; idempotent
+```
+
+- `after!` fires once, `every!` repeats until cancelled, both return an id.
+- A repeating timer reschedules from **now**, not from a missed due time: a
+  spinner that fell behind must not fire a burst to catch up.
+- A thunk that wants a repaint mutates tracked state (the reactive chain
+  schedules the frame) or calls `macros/schedule-frame!`.
+- A throwing thunk is logged and swallowed; its repeating timer keeps its
+  next tick — the `schedule-frame!` policy.
+- `tui-stop` calls `cancel-all!`, so no timer outlives the session; a
+  component still cancels its own id in `dispose` (that is what keeps a
+  dropped component from poking a dead tree), and `cancel!` is idempotent so
+  a double stop is harmless.
+- Headless tests drive `pump!` by hand — no sleeps, no wall-clock races.
+- **Not for**: I/O timeouts (the input pipeline's sequence/negotiation
+  flushes, OSC-11 query deadlines) and background pollers (the theme-file
+  watcher). Those must work with no loop running, and must not be throttled
+  to the loop's cadence.
 
 ---
 
@@ -621,6 +651,23 @@ live:
 `kmet.tui.core` stays generic: it knows nothing about editors, only about
 the thunk. If the home is unregistered or throws, focus becomes null -
 input drops at the dispatch guard rather than reaching a removed dialog.
+
+### 7.1 Key labels — how a chord is shown
+
+Two forms, one table (`kmet.tui.keys/key-label`):
+
+| form | fn | renders |
+|---|---|---|
+| raw | `keybindings/key-text`, `app-kb/key-text` | `pageUp`, `alt+b` — for settings screens and anything machine-facing |
+| label | `keybindings/key-label-text`, `app-kb/key-label` | `pgup`, `alt+←` — for hints and help lines |
+
+`key-label` maps one chord: `pageUp` → `pgup`, `pageDown` → `pgdn`,
+`escape` → `esc`, `up`/`down`/`left`/`right` → `↑`/`↓`/`←`/`→`; everything
+else renders as itself, and a modified key relabels its key part only
+(`alt+left` → `alt+←`). `keys/key-text`/`key-label-text` join an id's
+chords with `/`. `key-hint` renders through the label form, so a hint line
+and the tree help cannot drift; the tree selector's private prettify pass
+was replaced by the shared table.
 
 ---
 
@@ -802,6 +849,10 @@ invocations.
   re-runs — render a tree twice with no state change between passes;
   invocation counters (§11) must stay flat. This pins the memoization
   contract (reactions + caches + equality no-ops).
+- **Timers are pumped, not slept on** (§6.1): a test drives
+  `timers/pump!` by hand instead of waiting for a real interval, so timer
+  assertions are deterministic. Clean up with `timers/cancel-all!` in a
+  fixture when a case arms timers directly.
 - New test namespaces register in `kmet.runner/all-namespaces`.
 
 ---
@@ -842,8 +893,10 @@ idea-level borrow only.
 
 | # | idea | landed as |
 |---|---|---|
+| R4 | loop-owned timer registry | `kmet.tui.timers` (§6.1) — `after!`/`every!`/`cancel!`/`cancel-all!`, pumped by the frame loop, cancelled by `tui-stop`; the bash driver + elapsed tick, the running-tool repaint, the scrollbar-hide debounce, flash expiry and the selector status auto-hide all ride it |
 | R5 | border sets as data | `kmet.tui.border` (§2.8) — `:border` on `:dynamic-border`, `:markdown` (table glyphs), `:editor`; `make-bash-execution :border` |
 | R6 | `^{:key}` metadata | keys read from element metadata as well as the `:key` prop (§2.1) |
+| R3a | key labels | `keys/key-label` + `keybindings/key-label-text` (§7.1) — hints and the tree help render `pgup`/`↑`, replacing the private `prettify-keys` regex pass |
 
 ### Plan
 
@@ -851,8 +904,7 @@ idea-level borrow only.
 |---|---|---|---|---|
 | R1 | prop→state apply path | stateful-leaf props are create-time → a changed prop rebuilds and drops state | `hiccup.clj` tag table + `reuse-or-build` | medium |
 | R2 | writable cursor | `reakt/cursor` is read-only; two-way binding needs an atom + setter callback | `kmet.libs.reakt` | small |
-| R3 | key labels + focus-derived help | hints are hand-written; chords display as resolved keys | `keybindings.clj` + a help-line component | small |
-| R4 | loop-owned timer registry | ad-hoc intervals, each re-inventing its zombie defense | `tui.core` (loop) | small |
+| R3b | focus-derived help line | nothing shows what the focused component answers to; hint lines are hand-written per dialog | a help-line component + where per-component declarations live | small |
 | R7 | declarative `:overlay` | dialogs are shown imperatively; declaration site ≠ owner | `hiccup.clj` + `tui.core` | large (spike) |
 
 ### R1 — prop→state apply path
@@ -909,45 +961,6 @@ reads must not be able to write.
 
 **Pairs with R1:** `[:settings-row {:value (reakt/cursor cfg [:http-transport])}]`
 is the natural call site, but either is independently useful.
-
-### R3 — key labels + a focus-derived help line
-
-**Pain.** `keybindings.clj` already owns ids, defaults, `:description`s,
-user overrides and conflict detection, and `key-text`/`key-hint` render a
-binding into a hint string — but chords display as resolved keys (`pageUp`,
-`alt+b`), and hints are hand-written per dialog, so they drift. Nothing
-shows what the focused component answers to.
-
-**Borrow.** glimmer-tui's `keys/describe` (label table + modifier
-formatting: `:page-up` → `pgup`, arrows) and its `help` widget: widgets
-declare `:bindings`; the help bar renders whatever is focused, including
-bindings inherited from ancestor containers (a key a widget declines is
-offered to its ancestors, so PageDown reaches the scroll view a focused
-button sits in).
-
-**Proposal.** Stage it. (a) A `describe`-style label fn over kmet's key
-strings, reusing the manager's descriptions — self-contained. (b) An
-optional per-component binding declaration (or a session context map, the
-way `theme-sub` and the focus home already flow) plus a one-line help
-component. (b)'s whole work item is the decision where declarations live.
-
-### R4 — a loop-owned timer registry
-
-**Pain.** Time-driven work is ad-hoc and each site re-invents its zombie
-defense: `tool_execution` races `future-cancel` against `swap-vals!`; the
-scroll-view owns a hide timer; the spinner recomputes its frame from
-wall-clock, and gets its invalidation from whichever component mounts it.
-"Timers/intervals belong in `dispose`" (§5.1) is a rule every new
-component must remember.
-
-**Borrow.** glimmer-tui's `after!`/`every!`/`cancel!`/`cancel-all!`: a
-due-time registry, fired on the loop thread, cancelled wholesale when the
-loop exits.
-
-**Proposal.** A small registry keyed by id holding `{:due :every :f}`,
-fired by the frame loop at its tick, with `cancel-all!` in `tui-stop` (and
-therefore at session teardown). Components that need the old control can
-keep their own, but the norm stops being per-component knowledge.
 
 ### R7 — declarative `:overlay` (spike)
 
@@ -1006,8 +1019,8 @@ Recorded so the analysis is not redone:
 
 ### Suggested order
 
-R4 and R3a (self-contained) → R1 + R2 together: R2 gives R1 its natural
-call site, and R1 is the props/state migration → R7 as a spike, once the
-tag-table extension path has been used once (R5 and R6 have exercised it).
-R3b waits on the declarations decision.
+R1 + R2 together: R2 gives R1 its natural call site, and R1 is the
+props/state migration → R7 as a spike, once the tag-table extension path
+has been used once (R5, R6, R3a and R4 have exercised it). R3b waits on
+the declarations decision.
 

@@ -1,5 +1,5 @@
 (ns kmet.tui.border
-  "Box-drawing glyph sets as data (tui.md §14 R5): one place that says what
+  "Box-drawing glyph sets as data (tui.md §2.8): one place that says what
    a border looks like, so components drawing frames, rules and tables
    cannot drift apart.
 

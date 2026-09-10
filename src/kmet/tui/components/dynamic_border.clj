@@ -2,7 +2,7 @@
   "DynamicBorder — a border line that adjusts to viewport width.
    Port of pi modes/interactive/components/dynamic-border.ts. Renders a
    single horizontal rule spanning the full render width, its glyph taken
-   from a kmet.tui.border set (tui.md §14 R5) and colored via the provided
+   from a kmet.tui.border set (tui.md §2.8) and colored via the provided
    color function. Used to frame dialogs (pi: preset.ts pick dialog,
    BorderedLoader)."
   (:require

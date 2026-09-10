@@ -191,6 +191,15 @@
     (when (seq chords)
       (str/join "/" chords))))
 
+(defn key-label-text
+  "Like key-text, but each chord rendered through keys/key-label — the
+   human-facing form for hints and help bars (\"pgup\", \"↑\"). nil when
+   the id has no binding."
+  [kmgr keybinding-id]
+  (let [chords (get-keys kmgr keybinding-id)]
+    (when (seq chords)
+      (str/join "/" (map keys/key-label chords)))))
+
 (defn key-hint
   "Format a keybinding hint string.
    kmgr    — KeybindingsManager
@@ -199,9 +208,11 @@
    dim-fn  — (fn [s]) -> ANSI-dimmed string
    muted-fn — (fn [s]) -> ANSI-muted string
 
-   Returns \"ctrl+e to expand\" styled with dim/muted colors."
+   Returns \"ctrl+e to expand\" styled with dim/muted colors. The chord is
+   rendered through key-label (pageUp → pgup), so hints read the same way
+   everywhere."
   [kmgr id desc dim-fn muted-fn]
-  (let [k (key-text kmgr id)]
+  (let [k (key-label-text kmgr id)]
     (if k
       (str (dim-fn k) (muted-fn (str " " desc)))
       (muted-fn desc))))

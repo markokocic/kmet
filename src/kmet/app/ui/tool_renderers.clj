@@ -6,6 +6,7 @@
             [babashka.fs :as fs]
             [kmet.libs.json :as json]
             [kmet.tui.theme :as theme]
+            [kmet.tui.timers :as timers]
             [kmet.tui.utils :as utils]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.container :as container]
@@ -813,28 +814,19 @@
             (str/trimr (subs trimmed 0 footer-start))
             trimmed))
         trimmed))]
-    (when
-     (and started-at (nil? ended-at) (nil? (:interval state)))
-      (when
-       (and invalidate set-state!)
-        (set-state!
-         (assoc
-          state
-          :interval
-          (future
-            (try
-              (loop
-               []
-                (Thread/sleep 1000)
-                (try (invalidate) (catch Exception _))
-                (recur))
-              (catch InterruptedException _)))))))
-    (when
-     (or ended-at is-error)
-      (when-let [interval (:interval state)] (future-cancel interval))
-      (when
-       (and set-state! (contains? state :interval))
-        (set-state! (dissoc state :interval))))
+    ;; A running tool ticks its own 1s repaint so elapsed time keeps moving
+    ;; with no output. That tick is a loop-owned timer (§6.1), not a
+    ;; parked future: it fires on the loop thread, only while the loop
+    ;; runs, and tui-stop's cancel-all! means it cannot outlive the
+    ;; session. The id parks in renderer state so completion and dispose
+    ;; can cancel it (both paths here, plus tool_execution's dispose).
+    (when (and started-at (nil? ended-at) (nil? (:timer-id state)))
+      (when (and invalidate set-state!)
+        (set-state! (assoc state :timer-id (timers/every! 1000 invalidate)))))
+    (when (or ended-at is-error)
+      (when-let [id (:timer-id state)] (timers/cancel! id))
+      (when (and set-state! (contains? state :timer-id))
+        (set-state! (dissoc state :timer-id))))
     (when
      (seq output)
       (let

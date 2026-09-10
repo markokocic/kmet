@@ -1143,7 +1143,7 @@
       (reset! scroll-offset-atom scroll-offset)
       (let [visible (subvec visual-lines scroll-offset
                             (min (+ scroll-offset max-visible) (count visual-lines)))
-            ;; the rule glyph comes from the border set (tui.md §14 R5);
+            ;; the rule glyph comes from the border set (tui.md §2.8);
             ;; :none has no rule glyph, so fall back to the default bar
             rule (or (border/rule @border-atom) "─")
             bdr (if @border-fn (@border-fn rule) rule)

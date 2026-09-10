@@ -157,11 +157,11 @@
                                         :component bash-comp})
       (core/render ch 40)
       (is (false? @(:done-atom bash-comp)) "driver armed while mounted")
-      (is (some? @(:ticker-atom bash-comp)) "driver future live while mounted")
+      (is (some? @(:ticker-id-atom bash-comp)) "driver timer armed while mounted")
       (ch/chat-history-clear! ch)
       (is (true? @(:done-atom bash-comp)) "clear tripped the driver done flag")
-      (is (nil? @(:ticker-atom bash-comp)) "clear cancelled the driver future")
-      (is (nil? @(:elapsed-ticker-atom bash-comp)) "clear cancelled the elapsed ticker")
+      (is (nil? @(:ticker-id-atom bash-comp)) "clear cancelled the driver timer")
+      (is (nil? @(:elapsed-ticker-id-atom bash-comp)) "clear cancelled the elapsed ticker")
       (is (= [] (ch/chat-history-get-messages ch)) "messages cleared"))))
 
 (deftest test-tool-expanded-toggle

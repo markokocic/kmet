@@ -6,7 +6,6 @@
    ~/.pi/agent/keybindings.json) and are loaded by create-agent-keybindings-manager."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.config :as cfg]
             [kmet.tui.keybindings :as kb]))
@@ -239,9 +238,17 @@
   (reset! theme-fns-atom {:dim dim-fn :muted muted-fn}))
 
 (defn key-text
-  "Pi: keyText — all resolved key chords for an id joined with '/', or \"\"."
+  "Pi: keyText — all resolved key chords for an id joined with '/', or \"\".
+   Raw chords (\"pageUp\"): this is the machine/settings form. Use key-label
+   for anything a user reads as a hint."
   [id]
   (or (kb/key-text (kb/get-global-keybindings) id) ""))
+
+(defn key-label
+  "All resolved chords for an id, labelled for display and joined with '/'
+   — \"pgup\", \"↑/↓\" — or \"\" when nothing is bound (§7.1)."
+  [id]
+  (or (kb/key-label-text (kb/get-global-keybindings) id) ""))
 
 (defn key-hint
   "Convenience wrapper: renders a keybinding hint using the app's theme.
@@ -253,9 +260,9 @@
      (if (and dim muted)
        (kb/key-hint (kb/get-global-keybindings) id desc dim muted)
        ;; Fallback: plain text
-       (str (key-text id) " " desc))))
+       (str (key-label id) " " desc))))
   ([kmgr id desc]
    (let [{:keys [dim muted]} @theme-fns-atom]
      (if (and dim muted)
        (kb/key-hint kmgr id desc dim muted)
-       (str (str/join "/" (kb/get-keys kmgr id)) " " desc)))))
+       (str (or (kb/key-label-text kmgr id) "") " " desc)))))

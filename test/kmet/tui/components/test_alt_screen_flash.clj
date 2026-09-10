@@ -1,6 +1,7 @@
 (ns kmet.tui.components.test-alt-screen-flash
   (:require [clojure.test :as t]
             [kmet.tui.core :as core]
+            [kmet.tui.timers :as timers]
             [kmet.tui.utils :as u]
             [kmet.tui.components.alt-screen-flash :as asf]))
 
@@ -12,18 +13,22 @@
     (t/is (satisfies? core/IComponent c))
     (t/is (= [] (core/render c 10)) "no flashes initially")))
 
-(t/deftest ^:slow test-flash-renders-inverse-line
+(t/deftest test-flash-renders-inverse-line
   (let [c (asf/make-alt-screen-flash (fn []))]
     (asf/alt-screen-flash! c "Copied!")
     (let [lines (core/render c 20)]
       (t/is (= 1 (count lines)))
       (t/is (re-find #"\u001b\[7m" (first lines)) "inverse video")
       (t/is (re-find #"Copied!" (first lines)))))
-  ;; flashes expire after their duration
+  ;; flashes expire after their duration — the loop pumps; headless we
+  ;; pump by hand, so the assertion is deterministic (no settle window)
   (let [c (asf/make-alt-screen-flash (fn []))]
     (asf/alt-screen-flash! c "x" :duration-ms 20)
     (t/is (= 1 (count (core/render c 20))))
-    (Thread/sleep 60)
+    (t/is (false? (timers/pump!)) "not due yet")
+    (t/is (= 1 (count (core/render c 20))) "still visible before the duration elapses")
+    (Thread/sleep 30)
+    (timers/pump!)
     (t/is (= [] (core/render c 20)) "expired after duration")))
 
 (t/deftest test-multiple-flashes-stack
@@ -41,18 +46,21 @@
     (let [lines (plain (core/render c 12))]
       (t/is (<= (u/visible-width (first lines)) 12)))))
 
-(t/deftest ^:slow test-dispose
+(t/deftest test-dispose
   (let [c (asf/make-alt-screen-flash (fn []))]
     (asf/alt-screen-flash! c "x" :duration-ms 60000)
-    (asf/alt-screen-flash-dispose! c)
-    (t/is (= [] (core/render c 20)) "dispose clears pending flashes")
-    ;; no crash after the pending timer fires
-    (Thread/sleep 30)))
+    (let [id (:timer-id (first @(:entries-atom c)))]
+      (asf/alt-screen-flash-dispose! c)
+      (t/is (= [] (core/render c 20)) "dispose clears pending flashes")
+      (t/is (not (contains? (timers/scheduled) id))
+            "…and cancels the pending expiry — no zombie render-request"))))
 
-(t/deftest ^:slow test-request-render-called
+(t/deftest test-request-render-called
   (let [renders (atom 0)
         c (asf/make-alt-screen-flash #(swap! renders inc))]
     (asf/alt-screen-flash! c "x" :duration-ms 20)
     (t/is (pos? @renders) "flash triggers a render request")
-    (Thread/sleep 60)
-    (t/is (>= @renders 2) "expiry triggers another render request")))
+    (let [n @renders]
+      (Thread/sleep 30)
+      (timers/pump!)
+      (t/is (> @renders n) "expiry triggers another render request"))))

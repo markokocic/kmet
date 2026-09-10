@@ -661,16 +661,15 @@
     :label "cycle" :label-first true}])
 
 (defn- prettify-keys
-  "pi's post-processing of the rendered key text: page names shorten and
-   arrow keys become glyphs (word boundaries keep pgup/pgdn intact)."
+  "pi's post-processing of rendered key text: page names shorten and arrow
+   keys become glyphs. The table lives in kmet.tui.keys/key-label now
+   (§7.1), so this is a map over the CHORDS rather than a regex pass
+   over the joined string (the old word-boundary regexes were a
+   workaround for exactly that; compact-raw-keys has already joined them)."
   [s]
-  (-> s
-      (str/replace #"pageUp" "pgup")
-      (str/replace #"pageDown" "pgdn")
-      (str/replace #"\bleft\b" "←")
-      (str/replace #"\bright\b" "→")
-      (str/replace #"\bup\b" "↑")
-      (str/replace #"\bdown\b" "↓")))
+  (->> (str/split s #"/")
+       (map keys/key-label)
+       (str/join "/")))
 
 (defn- compact-raw-keys
   "pi compactRawKeys — chords sharing a modifier collapse: ctrl+d/t/u/l/a."

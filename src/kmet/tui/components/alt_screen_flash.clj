@@ -8,6 +8,7 @@
    compositeFlashes); the container itself just holds and expires entries."
   (:require
    [kmet.tui.macros :refer [defcomponent]]
+   [kmet.tui.timers :as timers]
    [kmet.tui.utils :as u]
    [kmet.tui.theme :as theme]))
 
@@ -41,28 +42,29 @@
 
 (defn alt-screen-flash!
   "Show a transient inverse-video message for DURATION-MS (default 1000),
-   then remove it and request a re-render (pi: flash)."
+   then remove it and request a re-render (pi: flash). Expiry rides the
+   loop-owned timer registry (§6.1), so it fires on the loop thread while
+   the loop runs and cannot outlive the session (tui-stop cancels all
+   timers)."
   [this message & {:keys [duration-ms]}]
   (let [duration-ms (or duration-ms DEFAULT-DURATION-MS)
         id (swap! (:next-id-atom this) inc)
-        disposed? (atom false)
-        timer (future
-                (try
-                  (Thread/sleep (max 0 duration-ms))
-                  (when-not @disposed?
-                    (swap! (:entries-atom this)
-                           (fn [es] (vec (remove #(= id (:id %)) es))))
-                    (request-render! this))
-                  (catch InterruptedException _)))]
-    (swap! (:entries-atom this) conj {:id id :message message :timer timer})
+        timer-id (timers/after! duration-ms
+                                (fn []
+                                  (swap! (:entries-atom this)
+                                         (fn [es] (vec (remove #(= id (:id %)) es))))
+                                  (request-render! this)))]
+    (swap! (:entries-atom this) conj {:id id :message message :timer-id timer-id})
     (request-render! this)
     nil))
 
 (defn alt-screen-flash-dispose!
-  "Clear all pending flashes immediately (pi: dispose)."
+  "Clear all pending flashes immediately (pi: dispose). Cancels each
+   pending expiry — a flash whose container is gone must not fire a
+   zombie render-request. timers/cancel! is idempotent."
   [this]
-  (doseq [{:keys [timer]} @(:entries-atom this)]
-    (future-cancel timer))
+  (doseq [{:keys [timer-id]} @(:entries-atom this)]
+    (when timer-id (timers/cancel! timer-id)))
   (reset! (:entries-atom this) [])
   (request-render! this)
   nil)

@@ -86,6 +86,7 @@
     kmet.test-editing
     kmet.tui.test-fuzzy
     kmet.tui.test-border
+    kmet.tui.test-timers
     kmet.tui.test-autocomplete
     kmet.tui.test-core
     kmet.libs.test-reakt

@@ -8,6 +8,7 @@
             [kmet.tui.protocols :as protocols]
             [kmet.libs.reakt :as reakt]
             [kmet.tui.terminal :as terminal]
+            [kmet.tui.timers :as timers]
             [kmet.tui.keys :as keys]
             [kmet.tui.utils :as utils]
             [kmet.libs.terminal-image :as img]
@@ -1517,6 +1518,9 @@
   ;; Detach the §3.4 scheduler hook before anything else unwinds: disposed
   ;; components' reactions may still fire watches during teardown.
   (macros/set-frame-hook! nil)
+  ;; §6.1: no timer outlives the session it was armed in. Components may
+  ;; still cancel their own ids afterwards — cancel! is idempotent.
+  (timers/cancel-all!)
   ;; pi: TuiAltScreen.dispose() clears pending flashes on close
   (tui-flash-dispose! tui))
 
@@ -1637,6 +1641,11 @@
         (when @(:running? tui)
           (let [w (.getWidth jline)
                 h (.getHeight jline)]
+            ;; Loop-owned timers (tui.md §6.1): fire whatever is due
+            ;; BEFORE the flush, so an atom a thunk just mutated is brought
+            ;; current in this same tick. Thunks run here, on the loop
+            ;; thread — the only thread allowed to touch widgets.
+            (timers/pump!)
             ;; Frame flush: drain the reaction batch queue (kmet.libs.reakt)
             ;; at the loop's ~16ms cadence — Reagent's animation-frame
             ;; batching. A no-op while nothing is queued (headless tests, no
