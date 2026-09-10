@@ -50,6 +50,15 @@
   [comp]
   @(:last-result-component-atom comp))
 
+(defn- last-image-children
+  "Read the previous pass's image children WITHOUT tracking (see
+   last-call-component): the render body replaces this atom on every cache
+   miss, so a tracked read could never equal the stored value — the cache
+   would miss every frame and the image children would be rebuilt (new kitty
+   image ids, new allocations) on every render."
+  [comp]
+  @(:image-children-atom comp))
+
 (defn- tool-execution-context
   "Build a ToolRenderContext map for the given component and last-component.
    SHOW-IMAGES is whether images render (the :show-images setting AND
@@ -150,6 +159,7 @@
             result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation result-context)
             _ (reset! last-result-component-atom result-comp)
             image-data @image-data-atom
+            prev-image-children (last-image-children this)
             obsolete (into []
                            (remove #(or (identical? % call-comp)
                                         (identical? % result-comp)))
@@ -162,7 +172,7 @@
             ;; duck-typed maps, so disposal goes through dispose-component!)
             (doseq [c obsolete]
               (cda/dispose-component! c))
-            (doseq [c @image-children-atom]
+            (doseq [c prev-image-children]
               (cda/dispose-component! c))
             (reset! image-children-atom [])
             (container/container-clear container)
@@ -191,7 +201,7 @@
                                              :fallback-style (fn [thm s]
                                                                (theme/fg thm :tool-output s)))]))
                                  image-data)]
-              (doseq [c @image-children-atom]
+              (doseq [c prev-image-children]
                 (cda/dispose-component! c))
               (reset! image-children-atom children)
               (doseq [c children]

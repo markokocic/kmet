@@ -5,7 +5,8 @@
             [kmet.tui.core :as core]
             [kmet.libs.terminal-image :as timg]
             [kmet.app.ui.subs :as subs]
-            [kmet.app.ui.custom-message :as cm]))
+            [kmet.app.ui.custom-message :as cm]
+            [kmet.tui.macros :as macros]))
 
 (defn- strip-ansi [s]
   (clojure.string/replace s #"\u001b\[[0-9;]*[a-zA-Z]" ""))
@@ -118,3 +119,49 @@
         (finally
           (reset! subs/image-settings-atom prev-settings)
           (timg/set-capabilities! prev-caps))))))
+
+;; ─── Rebuild disposal (zombie-watch guard) ─────────────────────────────────
+
+(deftest test-collapsible-rebuild-no-watch-leak
+  (testing "expand/collapse rebuilds dispose the replaced children — watch
+            registry stays flat across toggles"
+    (let [watchers #(count @(deref #'macros/watch-registry))
+          c (cm/make-custom-message :label "ext" :content "collapsed text")]
+      (cm/custom-message-set-collapsible-content! c "collapsed text" "expanded text")
+      (core/render c 60)
+      (let [baseline (watchers)]
+        (dotimes [i 6] (cm/custom-message-set-expanded! c (odd? i)) (core/render c 60))
+        (is (= baseline (watchers))
+            "toggling expansion does not accumulate watches")))))
+
+(deftest test-theme-switch-rebuild-no-watch-leak
+  (testing "a theme switch rebuilds the children once and re-caches"
+    (let [watchers #(count @(deref #'macros/watch-registry))
+          c (cm/make-custom-message :label "ext" :content "note")]
+      (core/render c 60)
+      (let [baseline (watchers)]
+        (reset! theme/theme-atom (theme/get-theme "light"))
+        (try
+          (core/render c 60)
+          (is (= baseline (watchers))
+              "the re-themed rebuild disposed the replaced children")
+          (finally (reset! theme/theme-atom (theme/get-theme "dark"))))))))
+
+(deftest test-output-pad-rebuild-disposes-old-container
+  (testing "set-output-pad! replaces the inner container — the old
+            container's children are disposed"
+    (let [watchers #(count @(deref #'macros/watch-registry))
+          c (cm/make-custom-message :label "ext" :content "note")
+          old-container @(:inner-container c)]
+      (core/render c 60)
+      (let [old-children @(:children old-container)
+            baseline (watchers)]
+        (cm/custom-message-set-output-pad! c 3)
+        (is (every? (fn [child]
+                      (not (contains? @(deref #'macros/watch-registry)
+                                      (keyword (str "track!" (System/identityHashCode child))))))
+                    old-children)
+            "old container children disposed")
+        (core/render c 60)
+        (is (= baseline (watchers))
+            "the rebuilt children settle at the same registry size")))))

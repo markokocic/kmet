@@ -7,7 +7,9 @@
             [babashka.fs :as fs]
             [kmet.app.keybindings :as kb]
             [kmet.app.ui.thinking-selector :as ts]
+            [kmet.tui.core :as core]
             [kmet.tui.keybindings :as tui-kb]
+            [kmet.tui.macros :as macros]
             [kmet.tui.protocols :as protocols]))
 
 (defn- selector
@@ -126,3 +128,14 @@
     (press sel "z")
     (press sel "enter")
     (t/is (= ::none @selected) "enter with no matches is a no-op")))
+
+(t/deftest test-navigation-rebuilds-do-not-leak-watches
+  ;; Rows are rebuilt on every navigation (pi updateList) — the replaced rows
+  ;; must be disposed, or each keypress leaks a row-set of track! watches.
+  (let [sel (selector)
+        watchers #(count @(deref #'macros/watch-registry))]
+    (core/render sel 60)
+    (let [baseline (watchers)]
+      (dotimes [_ 6] (press sel "down") (core/render sel 60))
+      (t/is (= baseline (watchers))
+            "steady state: navigation does not accumulate watches"))))

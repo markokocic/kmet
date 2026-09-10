@@ -12,6 +12,7 @@
             [kmet.app.ui.subs :as subs]
             [kmet.tui.core :as core]
             [kmet.tui.keybindings :as kb]
+            [kmet.tui.macros :as macros]
             [kmet.tui.theme :as theme]))
 
 (defn- strip-ansi [s]
@@ -217,3 +218,21 @@
       (is (= (str (sm/label thm) (theme/fg thm :custom-message-text "demo")
                   (sm/expand-hint thm))
              (sm/collapsed-line thm "demo"))))))
+
+(deftest test-expand-collapse-rebuild-no-watch-leak
+  ;; rebuild-content! replaces the [skill] label / body Markdown on every
+  ;; toggle; the replaced children must be disposed (their track! watches
+  ;; would otherwise accumulate per toggle)
+  (let [watchers #(count @(deref #'macros/watch-registry))
+        expand! (fn [comp expanded?]
+                  (reset! (:expanded-atom comp) expanded?)
+                  ((var-get #'kmet.app.ui.skill-message/rebuild-content!) comp expanded?)
+                  (core/render comp 60))
+        comp (sm/make-skill-invocation-message
+              :skill-block {:name "demo" :location "/x" :content "body text"}
+              :tools-expanded-atom (atom false))]
+    (core/render comp 60)
+    (let [baseline (watchers)]
+      (dotimes [i 6] (expand! comp (odd? i)))
+      (is (= baseline (watchers))
+          "toggling expansion does not accumulate watches"))))

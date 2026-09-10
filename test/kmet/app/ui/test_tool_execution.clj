@@ -10,6 +10,7 @@
             [kmet.app.ui.subs :as subs]
             [kmet.app.ui.tool-execution :as te]
             [kmet.app.ui.tool-renderers :as renderers]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.components.text :as text]))
 
 (defn- strip-ansi [s]
@@ -733,3 +734,69 @@
           (core/render c 60))
         (is (= baseline (watchers))
             "steady state: no accumulation across rebuilds")))))
+
+(deftest test-image-children-cache-hit-steady-state
+  (testing "with images the render cache still HITS in steady state: the
+            image-children atom is read untracked, so a body run does not
+            invalidate its own cache (regression: a tracked read of an atom
+            the body resets made the cache miss every frame, rebuilding the
+            image children — new kitty image ids — on every render)"
+    (with-image-env
+      {:show-images true :image-width-cells 60}
+      {:images nil :true-color true :hyperlinks true}
+      (fn []
+        (let [c (image-tool)
+              r1 (core/render c 60)
+              r2 (core/render c 60)
+              r3 (core/render c 60)]
+          (is (identical? r1 r2) "second render is a cache hit")
+          (is (identical? r2 r3) "…and stays a hit")
+          (let [children @(:image-children-atom c)]
+            (is (identical? children @(:image-children-atom c)))
+            (core/render c 60)
+            (is (identical? children @(:image-children-atom c))
+                "image children are not rebuilt on cache hits")))))))
+
+(deftest test-hide-branch-disposes-children
+  (testing "when the component hides (no call/result, no images) the previous
+            renderer outputs AND image children are disposed and the inner
+            container is emptied"
+    (with-image-env
+      {:show-images true :image-width-cells 60}
+      {:images nil :true-color true :hyperlinks true}
+      (fn []
+        (let [first-pass? (atom true)
+              c (te/make-tool-execution
+                 :name "custom"
+                 ;; a call component on the first pass, nil afterwards
+                 :render-call-fn (fn [& _]
+                                   (when (compare-and-set! first-pass? true false)
+                                     (text/make-text "call" 0 0)))
+                 :render-result-fn (fn [& _] nil))]
+          (te/tool-execution-set-images! c [{:data png :mime-type "image/png"}])
+          (core/render c 60)
+          (let [img-children @(:image-children-atom c)]
+            (is (seq img-children))
+            ;; images disappear and the call renderer returns nil → hide
+            (te/tool-execution-set-images! c [])
+            (is (= [] (core/render c 60)) "component hides")
+            (is (empty? @(:children @(:inner-container c)))
+                "the inner container is emptied")
+            (is (not (tracked? (first img-children)))
+                "the dropped image children are disposed")))))))
+
+(deftest test-dispose-disposes-image-children
+  (testing "component dispose disposes the image children (idempotent — the
+            container may have disposed them already)"
+    (with-image-env
+      {:show-images true :image-width-cells 60}
+      {:images nil :true-color true :hyperlinks true}
+      (fn []
+        (let [c (image-tool)]
+          (core/render c 60)
+          (let [img-children @(:image-children-atom c)]
+            (is (seq img-children))
+            (is (tracked? (last img-children)))
+            (protocols/dispose c)
+            (is (not (tracked? (last img-children)))
+                "dispose tears down the image children's watches")))))))
