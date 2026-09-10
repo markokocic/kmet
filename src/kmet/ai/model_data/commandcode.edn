@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-06T20:10:23Z"
+ :generated-at "2026-09-10T06:32:48Z"
  :provider {:id :commandcode
             :name "Command Code"
             :env-vars ["CMD_API_KEY"]
@@ -326,6 +326,19 @@
     :max-tokens 384000
     :compat {:requires-reasoning-content-on-assistant-messages true
              :thinking-format :deepseek}}
+   "deepseek/deepseek-v4.1-flash"
+   {:id "deepseek/deepseek-v4.1-flash"
+    :name "DeepSeek V4.1 Flash"
+    :provider :commandcode
+    :api :openai-completions
+    :base-url "https://api.commandcode.ai/provider/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0.15 :output 0.6 :cache-read 0.003 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 32768
+    :compat {:requires-reasoning-content-on-assistant-messages true
+             :thinking-format :deepseek}}
    "google/gemini-3.1-flash-lite"
    {:id "google/gemini-3.1-flash-lite"
     :name "Gemini 3.1 Flash Lite"
@@ -523,6 +536,17 @@
     :cost {:input 2 :output 12 :cache-read 0.2 :cache-write 2.5}
     :context-window 1050000
     :max-tokens 128000}
+   "inclusionai/ling-3.0-flash-sante:free"
+   {:id "inclusionai/ling-3.0-flash-sante:free"
+    :name "Ling 3.0 Flash Sante"
+    :provider :commandcode
+    :api :openai-completions
+    :base-url "https://api.commandcode.ai/provider/v1"
+    :reasoning false
+    :input [:text]
+    :cost {:input 0 :output 0 :cache-read 0 :cache-write 0}
+    :context-window 262144
+    :max-tokens 32768}
    "meituan/LongCat-2.0:free"
    {:id "meituan/LongCat-2.0:free"
     :name "LongCat 2.0"

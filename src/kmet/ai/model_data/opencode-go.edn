@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-04T07:41:13Z"
+ :generated-at "2026-09-10T06:32:48Z"
  :provider {:id :opencode-go
             :name "OpenCode Go"
             :env-vars ["OPENCODE_API_KEY"]
@@ -33,7 +33,28 @@
     :context-window 1000000
     :max-tokens 131072}}
   :openai-completions
-  {"deepseek-v4-flash"
+  {"deepseek-flash"
+   {:id "deepseek-flash"
+    :name "DeepSeek V4.1 Flash"
+    :provider :opencode-go
+    :api :openai-completions
+    :base-url "https://opencode.ai/zen/go/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off nil
+                         :xhigh nil}
+    :input [:text :image]
+    :cost {:input 0.15 :output 0.6 :cache-read 0.003 :cache-write 0}
+    :context-window 1000000
+    :max-tokens 384000
+    :compat {:supports-store false
+             :supports-developer-role false
+             :max-tokens-field :max-tokens}}
+   "deepseek-v4-flash"
    {:id "deepseek-v4-flash"
     :name "DeepSeek V4 Flash"
     :provider :opencode-go
@@ -48,7 +69,7 @@
                          :off nil
                          :xhigh nil}
     :input [:text]
-    :cost {:input 0.22 :output 0.66 :cache-read 0.007 :cache-write 0}
+    :cost {:input 0.15 :output 0.6 :cache-read 0.003 :cache-write 0}
     :context-window 1000000
     :max-tokens 384000
     :compat {:supports-store false
@@ -71,7 +92,7 @@
                          :off nil
                          :xhigh nil}
     :input [:text :image]
-    :cost {:input 0.22 :output 0.66 :cache-read 0.007 :cache-write 0}
+    :cost {:input 0.15 :output 0.6 :cache-read 0.003 :cache-write 0}
     :context-window 1000000
     :max-tokens 384000
     :compat {:supports-store false
@@ -160,7 +181,7 @@
              :max-tokens-field :max-tokens}}
    "glm-5.3-flash"
    {:id "glm-5.3-flash"
-    :name "GLM-5.3-Flash (2x usage)"
+    :name "GLM-5.3-Flash"
     :provider :opencode-go
     :api :openai-completions
     :base-url "https://opencode.ai/zen/go/v1"
@@ -173,7 +194,7 @@
                          :off nil
                          :xhigh nil}
     :input [:text :image]
-    :cost {:input 0.075 :output 0.25 :cache-read 0.015 :cache-write 0}
+    :cost {:input 0.15 :output 0.5 :cache-read 0.03 :cache-write 0}
     :context-window 1000000
     :max-tokens 131072
     :compat {:supports-store false
@@ -326,27 +347,6 @@
     :cost {:input 0.3 :output 1.2 :cache-read 0.06 :cache-write 0}
     :context-window 204800
     :max-tokens 131072
-    :compat {:supports-store false
-             :supports-developer-role false
-             :max-tokens-field :max-tokens}}
-   "omen-alpha"
-   {:id "omen-alpha"
-    :name "Omen Alpha"
-    :provider :opencode-go
-    :api :openai-completions
-    :base-url "https://opencode.ai/zen/go/v1"
-    :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max nil
-                         :medium nil
-                         :minimal nil
-                         :off nil
-                         :xhigh nil}
-    :input [:text :image]
-    :cost {:input 0.2 :output 0.66 :cache-read 0.04 :cache-write 0}
-    :context-window 500000
-    :max-tokens 128000
     :compat {:supports-store false
              :supports-developer-role false
              :max-tokens-field :max-tokens}}
