@@ -84,24 +84,45 @@
     (t/is (tracked? c))
     (t/is (= ["c" "a" "b"] (mapv str/trim (core/render cont 5))))))
 
-(t/deftest test-container-replace-children-disposes-once-per-instance
-  ;; a dropped instance appearing twice in the old list is disposed once
-  (let [dropped (text/make-text "x" 0 0)
-        keep (text/make-text "k" 0 0)
-        disposed (atom 0)
-        spy (reify
-              protocols/IComponent
-              (render [_ _] [])
-              (handle-input [_ _] nil)
-              (invalidate [_] nil)
-              (dispose [_] (swap! disposed inc)))
-        cont (container/make-container [spy keep])]
-    (container/container-replace-children! cont [keep dropped])
-    (t/is (= 1 @disposed) "disposed exactly once")
-    (t/is (= [keep dropped] @(:children cont)))))
+(defn- spy-component
+  "A minimal IComponent counting dispose calls (for lifecycle assertions)."
+  [counter]
+  (reify
+    protocols/IComponent
+    (render [_ _] [])
+    (handle-input [_ _] nil)
+    (invalidate [_] nil)
+    (dispose [_] (swap! counter inc))))
+
+(t/deftest test-container-replace-children-disposes-each-dropped-once
+  (t/testing "a dropped instance listed twice in the old list is disposed once
+            (non-idempotent foreign disposes must not run twice)"
+    (let [disposed (atom 0)
+          spy (spy-component disposed)
+          keep (text/make-text "k" 0 0)
+          cont (container/make-container [spy spy keep])]
+      (container/container-replace-children! cont [keep])
+      (t/is (= 1 @disposed) "disposed exactly once")
+      (t/is (= [keep] @(:children cont)))))
+  (t/testing "distinct dropped instances are each disposed"
+    (let [disposed (atom 0)
+          a (spy-component disposed)
+          b (spy-component disposed)
+          cont (container/make-container [a b])]
+      (container/container-replace-children! cont [])
+      (t/is (= 2 @disposed)))))
 
 (t/deftest test-container-replace-children-nil-safe
-  (let [t1 (text/make-text "a" 0 0)
-        cont (container/make-container [t1])]
-    (container/container-replace-children! cont [nil])
-    (t/is (= 1 (count @(:children cont))))))
+  (t/testing "a nil entry in the old list is skipped (nothing to release)"
+    (let [t1 (text/make-text "a" 0 0)
+          cont (container/make-container [t1 nil])]
+      (t/is (nil? (try (container/container-replace-children! cont [t1])
+                       nil
+                       (catch Throwable e e)))
+            "no throw on nil")
+      (t/is (= [t1] @(:children cont)))))
+  (t/testing "nil in the NEW list is stored as-is (no dispose attempted)"
+    (let [t1 (text/make-text "a" 0 0)
+          cont (container/make-container [t1])]
+      (container/container-replace-children! cont [nil])
+      (t/is (= 1 (count @(:children cont)))))))

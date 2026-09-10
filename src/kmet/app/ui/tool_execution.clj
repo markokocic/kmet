@@ -59,6 +59,22 @@
   [comp]
   @(:image-children-atom comp))
 
+(defn- as-component
+  "Normalize a renderer's output: an IComponent (the normal case), nil (the
+   renderer contributes nothing), or a duck-typed {:render …} map — the
+   ui-custom component contract, accepted here for symmetry. A duck-typed
+   map is wrapped in a CustomDialogAdapter RECORD: the container/box dispose
+   chain releases children through the IComponent protocol, which cannot see
+   a raw map's :dispose key (and would throw)."
+  [c]
+  (if (and (map? c) (not (record? c)) (fn? (:render c)))
+    (cda/map->CustomDialogAdapter
+     {:render-fn (:render c)
+      :handle-input-fn (:handle-input c)
+      :invalidate-fn (:invalidate c)
+      :dispose-fn (:dispose c)})
+    c))
+
 (defn- tool-execution-context
   "Build a ToolRenderContext map for the given component and last-component.
    SHOW-IMAGES is whether images render (the :show-images setting AND
@@ -151,19 +167,26 @@
             ;; same one back (renderers may return IComponent or nil).
             prev-call (last-call-component this)
             call-context (tool-execution-context this prev-call show-images?)
-            call-comp (render-call-fn name args theme content-width call-context)
+            call-comp (as-component (render-call-fn name args theme content-width call-context))
             _ (reset! last-call-component-atom call-comp)
             truncation @truncation-atom
             prev-result (last-result-component this)
             result-context (tool-execution-context this prev-result show-images?)
-            result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation result-context)
+            result-comp (as-component (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation result-context))
             _ (reset! last-result-component-atom result-comp)
             image-data @image-data-atom
             prev-image-children (last-image-children this)
-            obsolete (into []
-                           (remove #(or (identical? % call-comp)
-                                        (identical? % result-comp)))
-                           [prev-call prev-result])]
+            ;; identity-deduped: a renderer returning one instance for both
+            ;; slots must not be disposed twice
+            obsolete (reduce (fn [acc prev]
+                               (if (or (nil? prev)
+                                       (identical? prev call-comp)
+                                       (identical? prev result-comp)
+                                       (some #(identical? % prev) acc))
+                                 acc
+                                 (conj acc prev)))
+                             []
+                             [prev-call prev-result])]
       ;; Pi: hide component when no call/render content and no images
         (if (and (nil? call-comp) (nil? result-comp) (not (seq image-data)))
           (do

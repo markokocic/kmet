@@ -557,3 +557,67 @@
       (let [lines (plain-lines ch 40)]
         (is (some #(re-find #"prebuilt!" %) lines)
             "the pre-built component's text should be visible, not empty")))))
+
+(deftest test-info-banner-replacement-disposes-previous
+  (testing "replacing the info banner disposes the previous component — its
+            children's track! watches must not outlive it"
+    (let [watchers #(count @(deref #'macros/watch-registry))
+          h (ch/make-chat-history)]
+      (ch/chat-history-set-info-msg! h {:label "a" :content "one"})
+      (core/render h 60)
+      (let [first-banner @(:info-comp-atom h)
+            baseline (watchers)]
+        (is (some? first-banner))
+        (ch/chat-history-set-info-msg! h {:label "b" :content "two"})
+        (core/render h 60)
+        (is (not (identical? first-banner @(:info-comp-atom h))))
+        (is (= baseline (watchers))
+            "the replaced banner's watches were torn down")))))
+
+(deftest test-info-banner-survives-rebuild-with-images
+  (testing "chat-history-rebuild! preserves the banner's content images"
+    (let [prev-caps (timg/get-capabilities)]
+      (try
+        (timg/set-capabilities! {:images nil :true-color true :hyperlinks true})
+        (let [h (ch/make-chat-history)]
+          (ch/chat-history-set-info-msg! h {:label "ext" :content "note"
+                                            :images [{:data "AA" :mime-type "image/png"}]})
+          (core/render h 60)
+          (is (= [{:data "AA" :mime-type "image/png"}]
+                 @(:images-atom @(:info-comp-atom h)))
+              "banner carries the image blocks")
+          (ch/chat-history-rebuild! h [{:role :user :content "hi"}])
+          (let [lines (plain-lines h 60)]
+            (is (some #(re-find #"\[Image: \[image/png\]" %) lines)
+                "the rebuilt banner still renders its image")
+            (is (some #(re-find #"note" %) lines))))
+        (finally (timg/set-capabilities! prev-caps))))))
+
+(deftest test-get-messages-info-entry-carries-images
+  (testing "the banner entry from chat-history-get-messages round-trips images"
+    (let [h (ch/make-chat-history)]
+      (ch/chat-history-set-info-msg! h {:label "ext" :content "note"
+                                        :images [{:data "AA" :mime-type "image/png"}]})
+      (let [info (first (ch/chat-history-get-messages h))]
+        (is (= :info (:role info)))
+        (is (= [{:data "AA" :mime-type "image/png"}] (:images info)))))))
+
+(deftest test-skill-invocation-with-images
+  (testing "images attached to a /skill: invocation render with the trailing
+            args (previously dropped: the skill branch rendered only text)"
+    (let [prev-caps (timg/get-capabilities)
+          block (str "<skill name=\"demo\" location=\"/x/SKILL.md\">\n"
+                     "body\n</skill>\n\nargs here")]
+      (try
+        (timg/set-capabilities! {:images nil :true-color true :hyperlinks true})
+        (let [ch (ch/make-chat-history)]
+          (ch/chat-history-add-message! ch
+                                        {:role :user
+                                         :content [{:type :text :text block}
+                                                   {:type :image :data "AA" :mime-type "image/png"}]})
+          (let [lines (plain-lines ch 60)]
+            (is (some #(re-find #"\[skill\]" %) lines) "skill message rendered")
+            (is (some #(re-find #"args here" %) lines) "args rendered below")
+            (is (some #(re-find #"\[Image: \[image/png\]" %) lines)
+                "the attached image renders")))
+        (finally (timg/set-capabilities! prev-caps))))))

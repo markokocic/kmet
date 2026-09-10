@@ -29,10 +29,19 @@
    lifecycle, tui.md §5.1) — a child removed from a container without
    disposal keeps its track! watches alive forever (zombie watchers). Use
    when the previous children are discarded for good; use
-   container-set-children! when they are being moved or reused."
+   container-set-children! when they are being moved or reused.
+   Identity-based: a child re-added from the old list is left alone, a
+   dropped instance listed twice is disposed once, and nil entries are
+   skipped (they carry nothing to release)."
   [c children]
   (let [children (vec children)
-        dropped (remove (fn [old] (some #(identical? % old) children))
+        dropped (reduce (fn [acc old]
+                          (if (or (nil? old)
+                                  (some #(identical? % old) children)
+                                  (some #(identical? % old) acc))
+                            acc
+                            (conj acc old)))
+                        []
                         @(:children c))]
     (reset! (:children c) children)
     (doseq [old dropped]

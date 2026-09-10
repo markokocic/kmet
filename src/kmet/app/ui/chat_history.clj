@@ -28,12 +28,13 @@
 
 (defn- make-info-msg
   "Create a CustomMessageComponent for the top info banner.
-   Supports :collapsed-content / :expanded-content variants (pi: ExpandableText)
-   and an :expanded? flag to restore a previously expanded banner."
+   Supports :collapsed-content / :expanded-content variants (pi: ExpandableText),
+   an :expanded? flag to restore a previously expanded banner, and :images."
   [msg output-pad]
   (when msg
     (let [comp (cm/make-custom-message :label (:label msg)
                                        :content (:content msg "")
+                                       :images (:images msg)
                                        :output-pad output-pad)]
       (when (and (some? (:collapsed-content msg))
                  (some? (:expanded-content msg)))
@@ -203,12 +204,18 @@
         images (into (vec (:images msg))
                      (image-block/content-images (:content msg)))]
     (if-let [block (skills/parse-skill-block text)]
-      (skill-message/make-skill-invocation-message
-       :skill-block block
-       :tools-expanded-atom tools-expanded-atom
-       :output-pad output-pad
-       :user-message (when-let [args (:user-message block)]
-                       (um/make-user-message :text args :output-pad output-pad)))
+      (let [args (:user-message block)]
+        (skill-message/make-skill-invocation-message
+         :skill-block block
+         :tools-expanded-atom tools-expanded-atom
+         :output-pad output-pad
+         ;; the trailing args render as a user message below; images attached
+         ;; to the invocation ride along with it (image-only attachments get
+         ;; one too, with empty text)
+         :user-message (when (or (seq args) (seq images))
+                         (um/make-user-message :text (or args "")
+                                               :images images
+                                               :output-pad output-pad))))
       (um/make-user-message :text text :images images :output-pad output-pad))))
 
 (defn- make-component-for-msg
@@ -464,8 +471,12 @@
 
 (defn chat-history-set-info-msg!
   "Set or clear the info message at the top.
-   Pass {:label \"...\" :content \"...\"} or nil to clear."
+   Pass {:label \"...\" :content \"...\"} or nil to clear. A replaced banner is
+   disposed (its children's track! watches must not outlive it — the banner
+   may be replaced by lifecycle events, e.g. loaded-resources updates)."
   [ch msg]
+  (when-let [prev @(:info-comp-atom ch)]
+    (try (protocols/dispose prev) (catch Exception _)))
   (if msg
     (when-let [comp (make-info-msg msg @(:output-pad-atom ch))]
       (reset! (:info-comp-atom ch) comp))
@@ -569,7 +580,8 @@
   (let [info @(:info-comp-atom ch)
         info-msg (when info
                    (cond-> {:label @(:label-atom info)
-                            :content @(:content-atom info)}
+                            :content @(:content-atom info)
+                            :images @(:images-atom info)}
                      (cm/custom-message-collapsible? info)
                      (assoc :collapsed-content @(:collapsed-content-atom info)
                             :expanded-content @(:expanded-content-atom info)
@@ -592,7 +604,8 @@
         (when-let [info @(:info-comp-atom ch)]
           [{:role :info
             :label @(:label-atom info)
-            :content @(:content-atom info)}])
+            :content @(:content-atom info)
+            :images @(:images-atom info)}])
         @(:messages-atom ch))
        (remove #(#{:bash :status} (:role %)))
        ;; deref live assistant content atoms (mid-stream reads); finalized

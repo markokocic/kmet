@@ -16,6 +16,16 @@
 (defn- strip-ansi [s]
   (utils/strip-ansi-codes s))
 
+(defn- spy-component
+  "A minimal IComponent counting dispose calls."
+  [counter]
+  (reify
+    protocols/IComponent
+    (render [_ _] [])
+    (handle-input [_ _] nil)
+    (invalidate [_] nil)
+    (dispose [_] (swap! counter inc))))
+
 (deftest test-create
   (testing "create tool execution component"
     (let [c (te/make-tool-execution :name "ls")]
@@ -800,3 +810,52 @@
             (protocols/dispose c)
             (is (not (tracked? (last img-children)))
                 "dispose tears down the image children's watches")))))))
+
+(deftest test-duck-typed-renderer-output
+  (testing "a duck-typed {:render …} renderer output (the ui-custom
+            contract) is wrapped in an adapter record: it renders, reuses
+            via :last-component, and the container/box dispose chain
+            releases it without throwing (a raw map has no protocol impl)"
+    (let [disposed (atom 0)
+          duck (fn [tag]
+                 {:render (fn [_] [tag])
+                  :dispose (fn [] (swap! disposed inc))})
+          made (atom 0)
+          c (te/make-tool-execution
+             :name "custom" :content "out"
+             :render-call-fn (fn [& args]
+                               (let [ctx (last args)]
+                                 (or (:last-component ctx)
+                                     (do (swap! made inc) (duck "duck line"))))))]
+      (let [lines (mapv strip-ansi (core/render c 60))]
+        (is (some #(str/includes? % "duck line") lines)))
+      (let [first-comp @(:last-call-component-atom c)]
+        (is (some? first-comp))
+        ;; cache miss: the renderer's :last-component reuse keeps the wrapper
+        (reset! (:expanded-atom c) true)
+        (core/render c 60)
+        (is (= 1 @made) "wrapped once, reused across passes")
+        (is (identical? first-comp @(:last-call-component-atom c))))
+      (is (= 0 @disposed) "a reused duck output is not disposed")
+      (protocols/dispose c)
+      (is (= 1 @disposed) "component dispose releases the duck output once"))))
+
+(deftest test-same-instance-both-slots-disposed-once
+  (testing "a renderer returning one instance for BOTH slots (call and
+            result) is disposed exactly once when replaced"
+    (let [disposed (atom 0)
+          current (atom nil)
+          renderer (fn [& _] @current)
+          c (te/make-tool-execution
+             :name "custom" :content "out"
+             :render-call-fn renderer
+             :render-result-fn renderer)]
+      (reset! current (spy-component disposed))
+      (core/render c 60)
+      (is (= 0 @disposed))
+      ;; replace both slots with a fresh instance
+      (reset! current (spy-component disposed))
+      (reset! (:expanded-atom c) true)  ;; force a cache miss
+      (core/render c 60)
+      (is (= 1 @disposed)
+          "the dropped shared instance is disposed once, not twice"))))
